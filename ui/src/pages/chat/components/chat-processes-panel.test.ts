@@ -32,36 +32,6 @@ function process(overrides: Partial<SessionsProcessesListResult["processes"][num
   };
 }
 
-function createPanel(sessionKey = "agent:main:parent") {
-  const panel = document.createElement("openclaw-chat-processes-panel");
-  panel.sessionKey = sessionKey;
-  return panel;
-}
-
-function createDetails(sessionKey = "agent:main:parent", desktop = false) {
-  const details = document.createElement("openclaw-chat-details-session");
-  details.props = {
-    sessionKey,
-    currentAgentId: "main",
-    selectedSession: undefined,
-    messages: [],
-    onOpenProcesses: () => {},
-  };
-  details.presented = true;
-  details.desktop = desktop;
-  return details;
-}
-
-const query = (host: HTMLElement, selector: string) => host.querySelector<HTMLElement>(selector);
-const button = (host: HTMLElement, selector: string) =>
-  host.querySelector<HTMLButtonElement>(selector)!;
-async function click(host: HTMLElement & { updateComplete: Promise<unknown> }, selector: string) {
-  button(host, selector).click();
-  await host.updateComplete;
-}
-const stopCalls = (request: ReturnType<typeof vi.fn>) =>
-  request.mock.calls.filter(([method]) => method === "sessions.processes.stop");
-
 function mountProcesses(
   request: Parameters<typeof createTestGatewayClient>[0],
   methods = ["sessions.processes.list", "sessions.processes.stop"],
@@ -79,18 +49,8 @@ function mountProcesses(
   });
   return {
     connection,
-    changed: (sessionKey = "agent:main:parent") =>
-      connection.publishEvent("sessions.processes.changed", { sessionKey, agentId: "main" }),
-    refresh: async (panel: ReturnType<typeof createPanel>) => {
-      connection.publishEvent("sessions.processes.changed", {
-        sessionKey: panel.sessionKey,
-        agentId: "main",
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      await panel.updateComplete;
-    },
-    mount: (...elements: HTMLElement[]) => {
-      provider.append(...elements);
+    mount: (element: HTMLElement) => {
+      provider.append(element);
       document.body.append(provider);
     },
   };
@@ -103,25 +63,44 @@ async function settle(element: { updateComplete: Promise<unknown> }, ms: number)
 
 it.each([false, true])("distinguishes retired vs unlisted (truncated: %s)", async (truncated) => {
   let result: SessionsProcessesListResult = { ...completeList, processes: [process()] };
-  const { refresh, mount } = mountProcesses(() => result);
-  const panel = createPanel();
+  const { connection, mount } = mountProcesses(() => result);
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
   mount(panel);
 
   await settle(panel, 0);
   await panel.updateComplete;
-  await click(panel, ".chat-processes__open");
+  panel.querySelector<HTMLButtonElement>(".chat-processes__open")!.click();
+  await panel.updateComplete;
   expect(panel.textContent).toContain("Compiling");
   result = { ...result, processes: [{ ...result.processes[0]!, tail: "" }] };
-  await refresh(panel);
-  expect(query(panel, ".chat-processes__output-empty")?.textContent).toContain("No output yet");
+  connection.publishEvent("sessions.processes.changed", {
+    sessionKey: "agent:main:parent",
+    agentId: "main",
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  await panel.updateComplete;
+  expect(panel.querySelector(".chat-processes__output-empty")?.textContent).toContain(
+    "No output yet",
+  );
+  expect(
+    panel.querySelector(".chat-processes__output-empty .empty-state__icon svg"),
+  ).not.toBeNull();
   result = { ...completeList, processes: [], truncated };
-  await refresh(panel);
+  connection.publishEvent("sessions.processes.changed", {
+    sessionKey: "agent:main:parent",
+    agentId: "main",
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  await panel.updateComplete;
   expect(panel.textContent).toContain(truncated ? "limited list" : "no longer retained");
   if (truncated) {
     expect(panel.textContent).not.toContain("no longer retained");
   }
-  await click(panel, 'button[aria-label="Back to Processes"]');
-  expect(query(panel, ".chat-processes__list")?.textContent).toContain("No processes");
+  panel.querySelector<HTMLButtonElement>('button[aria-label="Back to Processes"]')!.click();
+  await panel.updateComplete;
+  expect(panel.querySelector(".chat-processes__list")?.textContent).toContain("No processes");
+  expect(panel.querySelector(".chat-processes__list .empty-state__icon svg")).not.toBeNull();
 });
 
 it("keeps Stop separate from opening output and restores list focus after returning", async () => {
@@ -134,28 +113,38 @@ it("keeps Stop separate from opening output and restores list focus after return
   const request = vi.fn((method: string) =>
     method === "sessions.processes.stop" ? stopped.promise : result,
   );
-  const { refresh, mount } = mountProcesses(request);
-  const panel = createPanel();
+  const { connection, mount } = mountProcesses(request);
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
   panel.mobile = true;
   mount(panel);
   await settle(panel, 0);
   await panel.updateComplete;
   const list = panel.querySelector<HTMLDivElement>(".chat-processes__list")!;
   list.scrollTop = 55;
-  const opener = button(panel, 'button[aria-label="Build app"]');
-  const stop = button(panel, 'button[aria-label="Stop Build app"]');
+  const opener = panel.querySelector<HTMLButtonElement>('button[aria-label="Build app"]')!;
+  const stop = panel.querySelector<HTMLButtonElement>('button[aria-label="Stop Build app"]')!;
   stop.click();
   await panel.updateComplete;
+  expect(request).toHaveBeenCalledWith("sessions.processes.stop", {
+    key: "agent:main:parent",
+    agentId: "main",
+    sessionId: "parent-session",
+    processId: "build",
+    instanceId: "build-instance",
+  });
   expect(stop.disabled).toBe(true);
   expect(list.hidden).toBe(false);
   await settle(panel, 0);
   expect(opener.isConnected).toBe(true);
-  expect(query(panel, 'button[aria-label="Build app"]')).toBe(opener);
+  expect(panel.querySelector('button[aria-label="Build app"]')).toBe(opener);
   opener.click();
   await waitForSolid(() => {
-    expect(query(panel, "pre")?.textContent).toBe("Compiling\nReady");
+    expect(panel.querySelector("pre")?.textContent).toBe("Compiling\nReady");
   });
-  const detailStop = button(panel, '.chat-processes__detail button[aria-label="Stop Build app"]');
+  const detailStop = panel.querySelector<HTMLButtonElement>(
+    '.chat-processes__detail button[aria-label="Stop Build app"]',
+  )!;
   expect(detailStop.disabled).toBe(true);
   stopped.resolve({ requested: true });
   await vi.advanceTimersByTimeAsync(0);
@@ -166,13 +155,23 @@ it("keeps Stop separate from opening output and restores list focus after return
     ...result,
     processes: [{ ...result.processes[0]!, status: "killed", endedAt: 5000, canStop: false }],
   };
-  await refresh(panel);
-  expect(query(panel, '.chat-processes__detail button[aria-label="Stop Build app"]')).toBeNull();
-  await click(panel, 'button[aria-label="Back to Processes"]');
+  connection.publishEvent("sessions.processes.changed", {
+    sessionKey: panel.sessionKey,
+    agentId: "main",
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  await panel.updateComplete;
+  expect(
+    panel.querySelector('.chat-processes__detail button[aria-label="Stop Build app"]'),
+  ).toBeNull();
+  panel.querySelector<HTMLButtonElement>('button[aria-label="Back to Processes"]')!.click();
+  await panel.updateComplete;
   expect(list.hidden).toBe(false);
   expect(list.scrollTop).toBe(55);
   expect(document.activeElement).toBe(list);
-  expect(stopCalls(request)).toHaveLength(1);
+  expect(
+    request.mock.calls.filter(([method]) => method === "sessions.processes.stop"),
+  ).toHaveLength(1);
 });
 
 it("retires stop authority immediately and reads the complete replacement scope", async () => {
@@ -188,23 +187,25 @@ it("retires stop authority immediately and reads the complete replacement scope"
     } satisfies SessionsProcessesListResult;
   });
   const { mount } = mountProcesses(request);
-  const panel = createPanel();
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
   mount(panel);
 
   await settle(panel, 0);
-  const stop = button(panel, ".chat-processes__stop");
+  const stop = panel.querySelector<HTMLButtonElement>(".chat-processes__stop")!;
   expect(stop.disabled).toBe(false);
 
   panel.sessionKey = "global";
   panel.agentId = "worker";
   stop.click();
-  expect(stopCalls(request)).toEqual([]);
+  expect(request.mock.calls.filter(([method]) => method === "sessions.processes.stop")).toEqual([]);
   await settle(panel, 0);
   expect(request.mock.calls).toEqual([mainRead, workerRead]);
 });
 
 it("keeps details process observation through refreshes and follows its presented scope", async () => {
-  const request = vi.fn((_method: string, params?: unknown) => {
+  const request = vi.fn((method: string, params?: unknown) => {
+    expect(method).toBe("sessions.processes.list");
     const target = asOptionalRecord(params);
     return {
       ...completeList,
@@ -213,20 +214,30 @@ it("keeps details process observation through refreshes and follows its presente
     } satisfies SessionsProcessesListResult;
   });
   const { mount } = mountProcesses(request, ["sessions.processes.list"]);
-  const details = createDetails();
+  const details = document.createElement("openclaw-chat-details-session");
+  details.props = {
+    sessionKey: "agent:main:parent",
+    currentAgentId: "main",
+    selectedSession: undefined,
+    messages: [],
+    onOpenProcesses: () => {},
+  };
+  details.presented = true;
   mount(details);
   await settle(details, 0);
-  const row = query(details, ".chat-details__process");
+  const row = details.querySelector(".chat-details__process");
   expect(row?.textContent).toContain("Main build");
+  expect(request.mock.calls).toEqual([mainRead]);
 
   details.props = { ...details.props!, messages: [] };
   await settle(details, 0);
-  expect(query(details, ".chat-details__process")).toBe(row);
+  expect(details.querySelector(".chat-details__process")).toBe(row);
   expect(request).toHaveBeenCalledOnce();
 
   details.props = { ...details.props!, sessionKey: "global", currentAgentId: "worker" };
   await settle(details, 0);
-  expect(query(details, ".chat-details__process")?.textContent).toContain("Worker build");
+  expect(request.mock.calls).toEqual([mainRead, workerRead]);
+  expect(details.querySelector(".chat-details__process")?.textContent).toContain("Worker build");
 
   details.presented = false;
   details.props = { ...details.props!, sessionKey: "agent:main:parent", currentAgentId: "main" };
@@ -235,7 +246,8 @@ it("keeps details process observation through refreshes and follows its presente
 
   details.presented = true;
   await settle(details, 0);
-  expect(query(details, ".chat-details__process")?.textContent).toContain("Main build");
+  expect(request.mock.calls).toEqual([mainRead, workerRead, mainRead]);
+  expect(details.querySelector(".chat-details__process")?.textContent).toContain("Main build");
 });
 
 it("keeps the full panel read-error flow while compact Details retains its shared rows", async () => {
@@ -246,36 +258,51 @@ it("keeps the full panel read-error flow while compact Details retains its share
     .mockResolvedValueOnce(result)
     .mockRejectedValueOnce(new Error("Worker reconnecting"))
     .mockReturnValueOnce(retry.promise);
-  const { changed, mount } = mountProcesses(request);
-  const panel = createPanel();
-  const details = createDetails(panel.sessionKey, true);
-  mount(panel, details);
+  const { connection, mount } = mountProcesses(request);
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
+  const details = document.createElement("openclaw-chat-details-session");
+  details.props = {
+    sessionKey: panel.sessionKey,
+    currentAgentId: "main",
+    selectedSession: undefined,
+    messages: [],
+    onOpenProcesses: () => {},
+  };
+  details.presented = true;
+  details.desktop = true;
+  const surfaces = document.createElement("div");
+  surfaces.append(panel, details);
+  mount(surfaces);
   await settle(panel, 0);
   expect(request).toHaveBeenCalledOnce();
   expect(panel.textContent).toContain("Build app");
   expect(details.textContent).toContain("Build app");
-  changed(panel.sessionKey);
+  connection.publishEvent("sessions.processes.changed", {
+    sessionKey: panel.sessionKey,
+    agentId: "main",
+  });
   await settle(panel, 0);
   expect(panel.textContent).not.toContain("Build app");
-  expect(query(panel, '[role="alert"]')?.textContent).toContain("Worker reconnecting");
+  expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Worker reconnecting");
   expect(details.textContent).toContain("Build app");
   expect(details.textContent).not.toContain("Worker reconnecting");
-  button(panel, ".chat-processes__error button").click();
+  panel.querySelector<HTMLButtonElement>(".chat-processes__error button")!.click();
   await settle(panel, 0);
-  expect(query(panel, '[role="alert"]')).toBeNull();
+  expect(panel.querySelector('[role="alert"]')).toBeNull();
   expect(panel.textContent).not.toContain("Build app");
-  expect(query(panel, '[role="status"]')?.getAttribute("aria-label")).toBe("Loading…");
-  expect(query(panel, ".chat-processes__list")?.getAttribute("aria-busy")).toBe("true");
-  expect(query(details, ".chat-details-processes")?.getAttribute("aria-busy")).toBe("true");
+  expect(panel.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Loading…");
+  expect(panel.querySelector(".chat-processes__list")?.getAttribute("aria-busy")).toBe("true");
+  expect(details.querySelector(".chat-details-processes")?.getAttribute("aria-busy")).toBe("true");
   expect(details.textContent).toContain("Build app");
   retry.resolve(result);
   await settle(panel, 0);
   expect(panel.textContent).toContain("Build app");
   expect(details.textContent).toContain("Build app");
-  const opener = button(panel, ".chat-processes__open");
+  const opener = panel.querySelector<HTMLButtonElement>(".chat-processes__open")!;
   opener.click();
-  await waitForSolid(() => expect(query(panel, "pre")?.textContent).toBe("Compiling"));
-  button(panel, 'button[aria-label="Back to Processes"]').click();
+  await waitForSolid(() => expect(panel.querySelector("pre")?.textContent).toBe("Compiling"));
+  panel.querySelector<HTMLButtonElement>('button[aria-label="Back to Processes"]')!.click();
   await waitForSolid(() => expect(document.activeElement).toBe(opener));
   expect(request).toHaveBeenCalledTimes(3);
 });
@@ -294,11 +321,23 @@ it("keeps a shared held read and Stop alive when one presentation moves away", a
     return first.promise;
   });
   const { mount } = mountProcesses(request);
-  const panel = createPanel();
-  const details = createDetails(panel.sessionKey, true);
-  mount(panel, details);
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
+  const details = document.createElement("openclaw-chat-details-session");
+  details.props = {
+    sessionKey: panel.sessionKey,
+    currentAgentId: "main",
+    selectedSession: undefined,
+    messages: [],
+    onOpenProcesses: () => {},
+  };
+  details.presented = true;
+  details.desktop = true;
+  const surfaces = document.createElement("div");
+  surfaces.append(panel, details);
+  mount(surfaces);
   await settle(panel, 0);
-  expect(query(panel, ".chat-processes__list")?.getAttribute("aria-busy")).toBe("true");
+  expect(panel.querySelector(".chat-processes__list")?.getAttribute("aria-busy")).toBe("true");
   expect(request).toHaveBeenCalledOnce();
   panel.presented = false;
   panel.sessionKey = "global";
@@ -318,15 +357,19 @@ it("keeps a shared held read and Stop alive when one presentation moves away", a
   ]);
   panel.presented = true;
   await settle(panel, 0);
-  button(panel, ".chat-processes__stop").click();
+  panel.querySelector<HTMLButtonElement>(".chat-processes__stop")!.click();
   await settle(panel, 0);
-  expect(button(details, ".chat-details-processes__stop").disabled).toBe(true);
+  expect(details.querySelector<HTMLButtonElement>(".chat-details-processes__stop")!.disabled).toBe(
+    true,
+  );
   panel.sessionKey = "global";
   panel.agentId = "worker";
   await settle(panel, 0);
   expect(panel.textContent).toContain("Worker build");
   expect(details.textContent).toContain("Build app");
-  expect(button(details, ".chat-details-processes__stop").disabled).toBe(true);
+  expect(details.querySelector<HTMLButtonElement>(".chat-details-processes__stop")!.disabled).toBe(
+    true,
+  );
   expect(request.mock.calls.filter(([method]) => method === "sessions.processes.list")).toEqual([
     mainRead,
     workerRead,
@@ -334,8 +377,10 @@ it("keeps a shared held read and Stop alive when one presentation moves away", a
   ]);
   stopped.resolve({ requested: false });
   await settle(panel, 0);
-  expect(query(panel, '[role="alert"]')).toBeNull();
-  expect(button(details, ".chat-details-processes__stop").disabled).toBe(false);
+  expect(panel.querySelector('[role="alert"]')).toBeNull();
+  expect(details.querySelector<HTMLButtonElement>(".chat-details-processes__stop")!.disabled).toBe(
+    false,
+  );
 });
 
 it("retires a held Stop before a same-session replacement connection renders", async () => {
@@ -347,10 +392,11 @@ it("retires a held Stop before a same-session replacement connection renders", a
       : { ...completeList, processes: [process({ canStop: true })] },
   );
   const { connection, mount } = mountProcesses(request);
-  const panel = createPanel();
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
   mount(panel);
   await settle(panel, 0);
-  button(panel, ".chat-processes__stop").click();
+  panel.querySelector<HTMLButtonElement>(".chat-processes__stop")!.click();
   await settle(panel, 0);
   const replacement = vi.fn((method: string) =>
     method === "sessions.processes.stop"
@@ -360,7 +406,7 @@ it("retires a held Stop before a same-session replacement connection renders", a
   connection.publish({ client: createTestGatewayClient(replacement) });
   await settle(panel, 0);
   expect(panel.textContent).toContain("Replacement build");
-  const stop = button(panel, ".chat-processes__stop");
+  const stop = panel.querySelector<HTMLButtonElement>(".chat-processes__stop")!;
   expect(stop.disabled).toBe(false);
   stop.click();
   await settle(panel, 0);
@@ -368,13 +414,17 @@ it("retires a held Stop before a same-session replacement connection renders", a
   oldStop.resolve({ requested: false });
   await settle(panel, 0);
   expect(stop.disabled).toBe(true);
-  expect(query(panel, '[role="alert"]')).toBeNull();
+  expect(panel.querySelector('[role="alert"]')).toBeNull();
   nextStop.resolve({ requested: false });
   await settle(panel, 0);
   expect(stop.disabled).toBe(false);
-  expect(query(panel, '[role="alert"]')).not.toBeNull();
-  expect(stopCalls(request)).toHaveLength(1);
-  expect(stopCalls(replacement)).toHaveLength(1);
+  expect(panel.querySelector('[role="alert"]')).not.toBeNull();
+  expect(
+    request.mock.calls.filter(([method]) => method === "sessions.processes.stop"),
+  ).toHaveLength(1);
+  expect(
+    replacement.mock.calls.filter(([method]) => method === "sessions.processes.stop"),
+  ).toHaveLength(1);
 });
 
 it("keeps history in the panel and recovers legacy Details after access denial", async () => {
@@ -386,7 +436,7 @@ it("keeps history in the panel and recovers legacy Details after access denial",
     ],
   };
   let denied = false;
-  const { changed, mount } = mountProcesses(() => {
+  const { connection, mount } = mountProcesses(() => {
     if (denied) {
       throw new GatewayProtocolRequestError({
         code: "FORBIDDEN",
@@ -395,23 +445,38 @@ it("keeps history in the panel and recovers legacy Details after access denial",
     }
     return result;
   });
-  const panel = createPanel("agent:main:preview");
-  const details = createDetails(panel.sessionKey);
-  mount(panel, details);
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:preview";
+  const details = document.createElement("openclaw-chat-details-session");
+  details.props = {
+    sessionKey: panel.sessionKey,
+    currentAgentId: "main",
+    selectedSession: undefined,
+    messages: [],
+    onOpenProcesses: () => {},
+  };
+  details.presented = true;
+  details.desktop = false;
+  const surfaces = document.createElement("div");
+  surfaces.append(panel, details);
+  mount(surfaces);
   await settle(details, 0);
-  expect(query(details, '[data-process-id="build"]')).toBeNull();
+  expect(details.querySelector('[data-process-id="build"]')).toBeNull();
   expect(details.textContent).toContain("Live watch");
-  button(panel, ".chat-processes__finished-toggle").click();
+  panel.querySelector<HTMLButtonElement>(".chat-processes__finished-toggle")!.click();
   await settle(panel, 0);
   expect(panel.textContent).toContain("Completed build");
   denied = true;
-  changed(panel.sessionKey);
+  connection.publishEvent("sessions.processes.changed", {
+    sessionKey: panel.sessionKey,
+    agentId: "main",
+  });
   await settle(details, 0);
-  expect(query(details, '[role="alert"]')?.textContent).toContain("Process access removed");
-  expect(query(details, "[data-process-id]")).toBeNull();
+  expect(details.querySelector('[role="alert"]')?.textContent).toContain("Process access removed");
+  expect(details.querySelector("[data-process-id]")).toBeNull();
   denied = false;
-  button(details, ".chat-summary__automation-retry").click();
+  details.querySelector<HTMLButtonElement>(".chat-summary__automation-retry")!.click();
   await settle(details, 0);
-  expect(query(details, '[role="alert"]')).toBeNull();
+  expect(details.querySelector('[role="alert"]')).toBeNull();
   expect(details.textContent).toContain("Live watch");
 });

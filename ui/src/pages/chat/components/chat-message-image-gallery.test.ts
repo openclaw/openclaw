@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { createImageLightboxGallery } from "../../../components/image-lightbox-gallery.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
@@ -59,6 +61,60 @@ function renderImages(images: ImageBlock[], options: ImageRenderOptions) {
   }
 }
 
+function stubImageDecoding(blobPrefix: string, decode: () => Promise<void>) {
+  let blobIndex = 0;
+  stubObjectUrls(() => `${blobPrefix}-${blobIndex++}`);
+  vi.stubGlobal(
+    "Image",
+    class {
+      src = "";
+      decode = decode;
+    },
+  );
+}
+
+async function whenImageAppears(draw: () => void) {
+  const ready = createDeferred();
+  const observer = new MutationObserver(() => {
+    if (container.querySelector(".chat-message-image")) {
+      ready.resolve();
+    }
+  });
+  observer.observe(container, { childList: true, subtree: true });
+  try {
+    draw();
+    await ready.promise;
+  } finally {
+    observer.disconnect();
+  }
+}
+
+function createGallery() {
+  let controller: ReturnType<typeof createImageLightboxGallery>;
+  let close = () => {};
+  let opened: ImageLightboxItem | undefined;
+  return {
+    get controller() {
+      return controller;
+    },
+    close: () => close(),
+    onOpenImage: vi.fn((item: ImageLightboxItem) => {
+      opened?.release?.();
+      opened = item;
+      close();
+      controller = createRoot((dispose) => {
+        close = dispose;
+        return createImageLightboxGallery();
+      });
+      controller.reset(item.gallery, item);
+    }),
+    dispose: () => {
+      close();
+      opened?.release?.();
+    },
+  };
+}
+
 describe("message image gallery loading", () => {
   it.each([false, true])("reads full original bytes for managed=%s images", async (managed) => {
     const source = managed ? managedSource() : "https://images.example.test/original.png";
@@ -74,14 +130,14 @@ describe("message image gallery loading", () => {
     expect(blob.type).toBe("image/png");
     expect(await blob.text()).toBe("png");
     expect(fetchImage).toHaveBeenCalledOnce();
-    expect(fetchImage).toHaveBeenCalledWith(
+    expect(fetchImage.mock.calls[0]).toEqual([
       source,
       expect.objectContaining(
         managed
           ? { method: "GET", credentials: "same-origin", signal: expect.any(AbortSignal) }
           : { credentials: "same-origin", referrerPolicy: "no-referrer" },
       ),
-    );
+    ]);
   });
 
   it("rejects an unsuccessful original image download", async () => {
@@ -110,14 +166,15 @@ describe("message image gallery loading", () => {
       id: "user-inbound-media-ref",
       __openclaw: { media: [{ path: source, contentType: "image/png", fileName: filename }] },
     });
-    renderMessage(message, "user", {
-      showReasoning: true,
-      resourceBasePath: "/openclaw",
-      assistantAttachmentAuthToken: "test-auth-token",
-      mediaOwner: onMediaChange,
-      onOpenImage,
-    });
-    await waitForSolid(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
+    await whenImageAppears(() =>
+      renderMessage(message, "user", {
+        showReasoning: true,
+        resourceBasePath: "/openclaw",
+        assistantAttachmentAuthToken: "test-auth-token",
+        mediaOwner: onMediaChange,
+        onOpenImage,
+      }),
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const expectedSrc = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-inbound&${new URLSearchParams({ filename })}`;
@@ -141,45 +198,85 @@ describe("message image gallery loading", () => {
     );
   });
 
-  it("loads and retries the selected managed rendition without prefetching neighbors", async () => {
-    vi.useFakeTimers();
-    const source = managedSource();
-    const blobUrl = `blob:gallery-${crypto.randomUUID()}`;
-    stubObjectUrls(() => blobUrl);
-    const fetchDisplay = vi.fn(async () => new Response(null, { status: 503 }));
-    const fetch = vi.fn(async (url: string) =>
-      url.includes("width=960") ? fetchDisplay() : imageResponse(),
-    );
-    vi.stubGlobal("fetch", fetch);
-    const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
-    renderImages(
-      [
-        { url: "data:image/png;base64,cG5n", alt: "First image" },
-        { url: source, alt: "Managed neighbor", fileName: "neighbor.png" },
-      ],
-      { onOpenImage, mediaOwner: onMediaChange },
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
-    tiles[0]!.click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchDisplay).not.toHaveBeenCalled();
-    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-      source.replace(/\/full$/u, "/thumbnail?v=4&width=480"),
-    ]);
-    const load = expectDefined(onOpenImage.mock.calls[0]?.[0].gallery?.items[1], "Neighbor loader");
-    expect(await load(true)).toBeNull();
-    expect(fetchDisplay).toHaveBeenCalledOnce();
-    fetchDisplay.mockImplementation(async () => imageResponse());
-    tiles[1]!.click();
-    const selected = onOpenImage.mock.calls[1]![0];
-    const display = await selected.loadDisplayImage!();
-    expect(display).toMatchObject({ title: "Managed neighbor", src: blobUrl });
-    display?.release?.();
-    selected.release?.();
-    expect(fetchDisplay).toHaveBeenCalledTimes(2);
-    expect(fetch.mock.calls.every(([url]) => url.includes("/thumbnail?v=4&width="))).toBe(true);
-  });
+  it.each(["png", "gif"] as const)(
+    "keeps legacy local %s images on one native source without an upgrade",
+    async (extension) => {
+      const source = "/workspace/legacy-" + crypto.randomUUID() + "." + extension;
+      const fetchMetadata = vi.fn(async () => ticketResponse("legacy-ticket"));
+      vi.stubGlobal("fetch", fetchMetadata);
+      const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+      await whenImageAppears(() =>
+        renderImages([{ url: source, mimeType: "image/" + extension }], {
+          onOpenImage,
+          mediaOwner: onMediaChange,
+        }),
+      );
+      const image = container.querySelector<HTMLImageElement>("img")!;
+      const url = new URL(image.src);
+      expect(url.searchParams.get("source")).toBe(source);
+      expect(url.searchParams.has("variant")).toBe(false);
+      expect(url.searchParams.has("width")).toBe(false);
+      expect(image.getAttribute("srcset")).toBeNull();
+      container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
+      expect(onOpenImage).toHaveBeenCalledOnce();
+      expect(onOpenImage.mock.calls[0]![0].loadDisplayImage).toBeUndefined();
+      expect(fetchMetadata).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["navigation", "tile"] as const)(
+    "does not prefetch neighbors and retries a failed selected rendition via %s",
+    async (action) => {
+      vi.useFakeTimers();
+      const source = managedSource();
+      const blobPrefix = `blob:gallery-${crypto.randomUUID()}`;
+      stubImageDecoding(blobPrefix, async () => {});
+      const fetchDisplay = vi.fn(async () => new Response(null, { status: 503 }));
+      const fetch = vi.fn(async (url: string) =>
+        url.includes("width=960") ? fetchDisplay() : imageResponse(),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const gallery = createGallery();
+      const { onOpenImage, dispose } = gallery;
+      try {
+        renderImages(
+          [
+            { url: "data:image/png;base64,cG5n", alt: "First image" },
+            { url: source, alt: "Managed neighbor", fileName: "neighbor.png" },
+          ],
+          { onOpenImage, mediaOwner: onMediaChange },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
+        tiles[0]!.click();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fetchDisplay).not.toHaveBeenCalled();
+        expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+          source.replace(/\/full$/u, "/thumbnail?v=4&width=480"),
+        ]);
+        expect(await gallery.controller.move(1)).toBe(false);
+        expect(fetchDisplay).toHaveBeenCalledOnce();
+        expect(gallery.controller.peek().current?.title).toBe("First image");
+        expect(gallery.controller.peek().failed).toBe(true);
+        fetchDisplay.mockImplementation(async () => imageResponse());
+        if (action === "navigation") {
+          expect(await gallery.controller.move(1)).toBe(true);
+        } else {
+          tiles[1]!.click();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(onOpenImage).toHaveBeenCalledTimes(2);
+        }
+        expect(fetchDisplay).toHaveBeenCalledTimes(2);
+        expect(gallery.controller.peek().index).toBe(1);
+        expect(gallery.controller.peek().current?.title).toBe("Managed neighbor");
+        expect(gallery.controller.peek().current?.src).toBe(`${blobPrefix}-1`);
+        expect(gallery.controller.peek().failed).toBe(false);
+        expect(fetch.mock.calls.every(([url]) => url.includes("/thumbnail?v=4&width="))).toBe(true);
+      } finally {
+        dispose();
+      }
+    },
+  );
 
   it.each([false, true])(
     "waits for local-image metadata and discards it after owner removal=%s",
