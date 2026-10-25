@@ -3,8 +3,10 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { AgentIdentityResult, AgentsListResult } from "../api/types.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
+import { createAgentCapability } from "../lib/agents/index.ts";
 import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createControlUiComponents } from "./control-ui-components.ts";
 
 it.each([
@@ -81,3 +83,163 @@ it.each([
     expect(onError).not.toHaveBeenCalled();
   },
 );
+
+function countSubscriptionLeases(source: { subscribe(listener: () => void): () => void }) {
+  const subscribe = source.subscribe.bind(source);
+  let active = 0;
+  vi.spyOn(source, "subscribe").mockImplementation((listener) => {
+    const stop = subscribe(listener);
+    active += 1;
+    return () => {
+      active -= 1;
+      stop();
+    };
+  });
+  return () => active;
+}
+
+it("shares SDK avatar source observation across factories without crossing applications", async () => {
+  async function application(prefix: string) {
+    let revision = 1;
+    let roster: AgentsListResult = {
+      defaultId: "writer",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "writer" }, { id: "reader" }],
+    };
+    const avatar = (agentId: string) =>
+      `data:image/png;base64,${btoa(`${prefix}:${agentId}:${revision}`)}`;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "agents.list") {
+        return roster;
+      }
+      if (method === "agent.identity.get") {
+        const { agentId } = params as { agentId: string };
+        return { agentId, avatar: avatar(agentId) };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const gateway = createGateway(createTestGatewayClient(request));
+    const agents = createAgentCapability(gateway);
+    await agents.ensureList();
+    const identities = createAgentIdentityCapability(gateway);
+    const context = {
+      ...createContext(gateway, createSessions("writer", []), roster, [], identities),
+      agents,
+    };
+    const agentLeases = countSubscriptionLeases(agents);
+    const identityLeases = countSubscriptionLeases(identities);
+    const getIdentity = vi.spyOn(identities, "get");
+    const ensureIdentity = vi.spyOn(identities, "ensure");
+    onTestFinished(() => agents.dispose());
+    return {
+      context,
+      avatar,
+      identities,
+      agentLeases,
+      identityLeases,
+      getIdentity,
+      ensureIdentity,
+      refreshIdentities() {
+        revision += 1;
+        identities.invalidate(["writer", "reader"]);
+      },
+      async selectDefaultReader() {
+        roster = { ...roster, defaultId: "reader" };
+        await agents.refreshList();
+      },
+    };
+  }
+  const first = await application("first");
+  const second = await application("second");
+  const onError = vi.fn();
+  const lifetimes = [new AbortController(), new AbortController(), new AbortController()];
+  const factories = [first, first, second].map((app, index) =>
+    createControlUiComponents({
+      current: () => app.context,
+      signal: lifetimes[index].signal,
+      onError,
+    }),
+  );
+  const mounted = factories.flatMap((components, factoryIndex) =>
+    Array.from({ length: 3 }, (_, index) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const handle = components.mountAgentAvatar(container, {
+        agentId: index === 0 ? "" : "writer",
+        label: "Writer",
+      });
+      return { container, handle, factoryIndex };
+    }),
+  );
+  const image = (index: number) =>
+    mounted[index].container.querySelector("img")?.getAttribute("src");
+  onTestFinished(() => {
+    lifetimes.forEach((lifetime) => lifetime.abort());
+    mounted.forEach(({ container }) => container.remove());
+    vi.restoreAllMocks();
+  });
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => {
+    for (let index = 0; index < mounted.length; index += 1) {
+      expect(image(index)).toBe((index < 6 ? first : second).avatar("writer"));
+    }
+    // One native hydration listener plus one shared presentation projection.
+    expect(first.agentLeases()).toBe(2);
+    expect(first.identityLeases()).toBe(2);
+    expect(second.agentLeases()).toBe(2);
+    expect(second.identityLeases()).toBe(2);
+  });
+
+  first.getIdentity.mockClear();
+  first.ensureIdentity.mockClear();
+  first.refreshIdentities();
+  // Hydration remains synchronous and per mounted avatar; the owner deduplicates RPCs.
+  expect(first.ensureIdentity).toHaveBeenCalledTimes(6);
+  // A publication invalidates one shared source, without eagerly rebuilding each binding.
+  expect(first.getIdentity).not.toHaveBeenCalled();
+  await waitForSolid(() => {
+    expect(image(1)).toBe(first.avatar("writer"));
+    expect(image(7)).toBe(second.avatar("writer"));
+  });
+
+  first.ensureIdentity.mockClear();
+  mounted[1].handle.update({ agentId: "reader", label: "Reader updated" });
+  expect(first.ensureIdentity).toHaveBeenCalledWith(["reader"]);
+  await waitForSolid(() => {
+    expect(image(1)).toBe(first.avatar("reader"));
+    expect(mounted[1].container.querySelector("openclaw-agent-avatar")?.option.label).toBe(
+      "Reader updated",
+    );
+    expect(image(2)).toBe(first.avatar("writer"));
+  });
+  await first.selectDefaultReader();
+  await waitForSolid(() => {
+    expect(image(0)).toBe(first.avatar("reader"));
+    expect(image(3)).toBe(first.avatar("reader"));
+    expect(image(2)).toBe(first.avatar("writer"));
+    expect(image(6)).toBe(second.avatar("writer"));
+  });
+
+  lifetimes[0].abort();
+  await waitForSolid(() => {
+    expect(first.agentLeases()).toBe(2);
+    expect(first.identityLeases()).toBe(2);
+  });
+  mounted
+    .filter(({ factoryIndex }) => factoryIndex === 1)
+    .forEach(({ handle }) => handle.dispose());
+  await waitForSolid(() => {
+    expect(first.agentLeases()).toBe(0);
+    expect(first.identityLeases()).toBe(0);
+    expect(second.agentLeases()).toBe(2);
+    expect(second.identityLeases()).toBe(2);
+  });
+  lifetimes[2].abort();
+  await waitForSolid(() => {
+    expect(second.agentLeases()).toBe(0);
+    expect(second.identityLeases()).toBe(0);
+    expect(mounted.every(({ container }) => container.childElementCount === 0)).toBe(true);
+  });
+  expect(onError).not.toHaveBeenCalled();
+});

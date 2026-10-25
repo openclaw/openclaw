@@ -1,5 +1,5 @@
 import { spread } from "@solidjs/web";
-import { createRoot } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type {
   ControlUiComponentHandle,
@@ -10,6 +10,10 @@ import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { listen as listenTo } from "../lib/reactive/listener.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
+import {
+  sharedAgentIdentityProjection,
+  sharedAgentsProjection,
+} from "../lib/reactive/shared-application-projections.ts";
 
 function resolveAppearanceColor(value: string | null | undefined): string {
   const color = normalizeSessionColorValue(value ?? "");
@@ -18,6 +22,41 @@ function resolveAppearanceColor(value: string | null | undefined): string {
   }
   const raw = value?.trim() ?? "";
   return /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/iu.test(raw) ? raw : "";
+}
+
+type AvatarHydrationSubscription = {
+  listeners: Set<() => void>;
+  stop: () => void;
+};
+
+// Hydration remains synchronous for same-ID retries; presentation reads shared
+// projections instead of rebuilding every binding inside this native callback.
+const avatarHydrationSubscriptions = new WeakMap<ApplicationContext, AvatarHydrationSubscription>();
+
+function subscribeAvatarHydration(context: ApplicationContext, notify: () => void) {
+  let subscription = avatarHydrationSubscriptions.get(context);
+  if (!subscription) {
+    const listeners = new Set<() => void>();
+    const publish = () => {
+      for (const listener of listeners) {
+        listener();
+      }
+    };
+    const stops = [context.agents, context.agentIdentity].map((source) =>
+      source.subscribe(publish),
+    );
+    subscription = { listeners, stop: () => stops.forEach((stop) => stop()) };
+    avatarHydrationSubscriptions.set(context, subscription);
+  }
+  const entry = () => notify();
+  subscription.listeners.add(entry);
+  const shared = subscription;
+  return () => {
+    if (shared.listeners.delete(entry) && shared.listeners.size === 0) {
+      shared.stop();
+      avatarHydrationSubscriptions.delete(context);
+    }
+  };
 }
 
 export function createControlUiComponents(options: {
@@ -34,7 +73,10 @@ export function createControlUiComponents(options: {
       context: ApplicationContext,
     ) => { subscribe(notify: () => void): () => void }[] = () => [],
     apply?: (element: HTMLElementTagNameMap[K], props: P) => void,
-    hydrate?: (props: P, context: ApplicationContext) => void,
+    hydrate?: {
+      run(props: P, context: ApplicationContext): void;
+      subscribe(context: ApplicationContext, notify: () => void): () => void;
+    },
   ): (container: HTMLElement, initial: P) => ControlUiComponentHandle<P> {
     return (container, initial) => {
       let props = initial;
@@ -76,25 +118,45 @@ export function createControlUiComponents(options: {
             return props;
           });
           apply?.(element, props);
-          hydrate?.(props, current());
+          hydrate?.run(props, current());
           disposeBindings = createRoot((disposeRoot) => {
-            const presentation = projectSource(current(), {
-              read: () => bindings(props, current),
-              subscribe: (context, notify) => {
-                publish = () => {
-                  hydrate?.(props, current());
-                  notify();
-                };
-                const stops = sources(context).map((source) => source.subscribe(publish));
-                return () => {
-                  publish = () => {};
-                  stops.forEach((stop) => stop());
-                };
+            const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+            publish = () => {
+              hydrate?.run(props, current());
+              setRevision((value) => value + 1);
+            };
+            const readProps = () => {
+              revision();
+              return props;
+            };
+            const context = current();
+            const nativeSources = sources(context);
+            // Gateway binding and admission retain their native synchronous reads.
+            // Agents/Identity presentation reads track the shared projections directly.
+            const native = nativeSources.length
+              ? projectSource(context, {
+                  read: () => bindings(props, current),
+                  subscribe: (_context, notify) => {
+                    const stops = nativeSources.map((source) => source.subscribe(notify));
+                    return () => stops.forEach((stop) => stop());
+                  },
+                  equality: "revision",
+                })
+              : undefined;
+            const stopHydration = hydrate?.subscribe(context, () => hydrate.run(props, current()));
+            spread(
+              loaded,
+              () => {
+                const next = readProps();
+                return native ? native.read() : bindings(next, current);
               },
-              equality: "revision",
-            });
-            spread(loaded, presentation.read, true);
-            return disposeRoot;
+              true,
+            );
+            return () => {
+              publish = () => {};
+              stopHydration?.();
+              disposeRoot();
+            };
           });
           container.append(element);
         })
@@ -129,7 +191,7 @@ export function createControlUiComponents(options: {
       () => import("../components/solid/agent-avatar.tsx"),
       (next, current) => {
         const context = current();
-        const agentsList = context.agents.state.agentsList;
+        const agentsList = sharedAgentsProjection(context.agents).read().agentsList;
         const id = next.agentId || agentsList?.defaultId || "";
         return {
           "prop:option": {
@@ -137,16 +199,19 @@ export function createControlUiComponents(options: {
             label: next.label,
             agent: agentsList?.agents.find((agent) => agent.id === id) ?? { id },
           },
-          "prop:identity": context.agentIdentity.get(id),
+          "prop:identity": sharedAgentIdentityProjection(context.agentIdentity).read().get(id),
         };
       },
       undefined,
-      (context) => [context.agents, context.agentIdentity],
       undefined,
-      (next, context) => {
-        void context.agentIdentity.ensure([
-          next.agentId || context.agents.state.agentsList?.defaultId || "",
-        ]);
+      undefined,
+      {
+        run: (next, context) => {
+          void context.agentIdentity.ensure([
+            next.agentId || context.agents.state.agentsList?.defaultId || "",
+          ]);
+        },
+        subscribe: subscribeAvatarHydration,
       },
     ),
     mountAppearancePicker: component(
@@ -214,7 +279,7 @@ export function createControlUiComponents(options: {
       "openclaw-agent-select",
       () => import("../components/agent-select-registration.ts"),
       (next, current) => {
-        const agents = current().agents.state.agentsList?.agents ?? [];
+        const agents = sharedAgentsProjection(current().agents).read().agentsList?.agents ?? [];
         return {
           "prop:options": next.options.map((option) => ({
             ...option,
@@ -232,8 +297,6 @@ export function createControlUiComponents(options: {
           },
         };
       },
-      undefined,
-      (context) => [context.agents],
     ),
     mountSelectPicker: component(
       "openclaw-select-picker",
@@ -259,12 +322,10 @@ export function createControlUiComponents(options: {
       (next, current) => ({
         "prop:session": next.session,
         "prop:gateway": current().gateway,
-        "prop:agents": current().agents.state.agentsList?.agents ?? [],
+        "prop:agents": sharedAgentsProjection(current().agents).read().agentsList?.agents ?? [],
         "prop:agentIdentity": current().agentIdentity,
         "prop:presented": next.presented,
       }),
-      undefined,
-      (context) => [context.agents],
     ),
     mountDashboard: component(
       "openclaw-plugin-session-dashboard",
