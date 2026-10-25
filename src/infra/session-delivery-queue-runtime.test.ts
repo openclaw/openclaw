@@ -1,10 +1,6 @@
 import { describe, expect, it as baseIt, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -21,6 +17,7 @@ import {
   releaseSessionDeliveryClaim as releaseClaim,
 } from "./session-delivery-queue-storage.js";
 import * as storage from "./session-delivery-queue-storage.js";
+import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
 
 const nativeDrain = recovery.drainPendingSessionDelivery;
 const loadPending = storage.loadPendingSessionDelivery;
@@ -145,19 +142,16 @@ function runtimeFixture(context: OpenClawStateWorkerContext) {
 }
 const it = baseIt.extend<{ runtime: ReturnType<typeof runtimeFixture> }>({
   runtime: ({ task: _task }, use) =>
-    withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
-        const fixture = runtimeFixture(captureOpenClawStateWorkerContext());
-        try {
-          await use(fixture);
-        } finally {
-          // Join owners and admitted work before restoring their environment or deleting the queue.
-          await fixture.close();
-          await fixture.time.scheduler.stop();
-          await closeOpenClawStateDatabaseByPathAsync(fixture.context.admission.databasePath);
-          vi.restoreAllMocks();
-        }
-      });
+    withSessionDeliveryQueue(async (_stateDir, context) => {
+      const fixture = runtimeFixture(context);
+      try {
+        await use(fixture);
+      } finally {
+        // Join admitted work before the queue helper closes its database.
+        await fixture.close();
+        await fixture.time.scheduler.stop();
+        vi.restoreAllMocks();
+      }
     }),
 });
 

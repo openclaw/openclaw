@@ -22,6 +22,7 @@ import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-suppor
 
 const APNS_DEVICE_FIELD = "token";
 const APNS_DEVICE_IDENTIFIER = "abcd1234abcd1234abcd1234abcd1234";
+const privateMarker = "must-not-appear-in-doctor-output";
 const DIRECT = {
   nodeId: "legacy-direct",
   transport: "direct" as const,
@@ -253,56 +254,42 @@ describe("legacy APNs Doctor migration", () => {
     expect(fs.existsSync(sourcePath)).toBe(true);
   });
 
-  it("rejects an empty unexpected field without exposing its later sibling", async () => {
-    const sourcePath = await writeLegacyState({
-      node: directRegistration({ nodeId: "node", "": 1, later: 2 }),
-    });
+  it.each([
+    [
+      "empty field",
+      legacyStore({ node: directRegistration({ nodeId: "node", "": 1, later: 2 }) }),
+      "legacy APNs registration has an unexpected field",
+    ],
+    [
+      "malformed JSON",
+      `{"registrationsByNodeId":{"node":{"value":${privateMarker}}}}`,
+      "legacy JSON store contains invalid JSON",
+    ],
+    [
+      "mismatched node id",
+      legacyStore({ [privateMarker]: directRegistration({ nodeId: "different-node" }) }),
+      /legacy APNs/i,
+    ],
+    [
+      "private field",
+      legacyStore({ node: directRegistration({ nodeId: "node", [privateMarker]: true }) }),
+      /legacy APNs/i,
+    ],
+  ] as const)("rejects %s without exposing legacy data", async (_label, raw, warning) => {
+    const sourcePath = await writeRaw(typeof raw === "string" ? raw : JSON.stringify(raw));
     const result = await migrate();
-    expect(result.warnings).toEqual([
-      "Failed reading legacy APNs state: Error: legacy APNs registration has an unexpected field",
-    ]);
+    if (typeof warning === "string") {
+      expect(result.warnings).toEqual([`Failed reading legacy APNs state: Error: ${warning}`]);
+    } else {
+      expect(result.warnings[0]).toMatch(warning);
+    }
+    expect(result.warnings.join("\n")).not.toContain(privateMarker);
     expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["apns-registrations.json"]);
     await expect(load("node")).resolves.toBeNull();
     expect(receipt("source_key")).toBeUndefined();
   });
 
-  it("sanitizes malformed JSON warnings", async () => {
-    const privateMarker = "must-not-appear-in-doctor-output";
-    const sourcePath = await writeRaw(
-      `{"registrationsByNodeId":{"node":{"nodeId":"node","value":${privateMarker}}}}`,
-    );
-
-    const result = await migrate();
-
-    expect(result.warnings).toEqual([
-      "Failed reading legacy APNs state: Error: legacy JSON store contains invalid JSON",
-    ]);
-    expect(result.warnings.join("\n")).not.toContain(privateMarker);
-    expect(fs.existsSync(sourcePath)).toBe(true);
-  });
-
-  it("sanitizes legacy entry identifiers in warnings", async () => {
-    const privateMarker = "must-not-appear-in-doctor-output";
-    const malformedStores = [
-      legacyStore({ [privateMarker]: directRegistration({ nodeId: "different-node" }) }),
-      legacyStore({ node: directRegistration({ nodeId: "node", [privateMarker]: true }) }),
-    ];
-
-    for (const raw of malformedStores) {
-      await closeStateDatabaseForTest();
-      stateDir = useStateDir();
-      const sourcePath = await writeRaw(JSON.stringify(raw));
-
-      const result = await migrate();
-
-      expect(result.warnings[0]).toMatch(/legacy APNs/i);
-      expect(result.warnings.join("\n")).not.toContain(privateMarker);
-      expect(fs.existsSync(sourcePath)).toBe(true);
-    }
-  });
-
   it("rolls back inserted rows when a later canonical row is invalid", async () => {
-    const privateMarker = "must-not-appear-in-doctor-output";
     const sourcePath = await writeLegacyState({
       "legacy-only": directRegistration({ nodeId: "legacy-only" }),
       [privateMarker]: directRegistration({ nodeId: privateMarker }),

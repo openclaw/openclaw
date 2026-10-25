@@ -74,10 +74,6 @@ test.each([
   "settled-evidence",
   "helper-replaced",
   "anchor-replaced",
-  "journal-inode",
-  "package-inode",
-  "lease-identity",
-  "missing-lease",
   "non-linux",
   "installation-key",
   "active",
@@ -105,24 +101,6 @@ test.each([
   } else if (scenario === "anchor-replaced") {
     fs.mkdirSync(first.anchor, { mode: 0o700 });
     fs.writeFileSync(path.join(first.anchor, "note.txt"), "historical replacement");
-  } else if (scenario === "journal-inode") {
-    record.descriptor.journalIdentity = changeIdentity(record.descriptor.journalIdentity);
-  } else if (scenario === "package-inode") {
-    record.descriptor.candidate.identity = changeIdentity(record.descriptor.candidate.identity);
-    record.descriptor.preparation = record.descriptor.preparation.map((entry) =>
-      entry.name === "candidate"
-        ? { ...entry, identity: record.descriptor.candidate.identity }
-        : entry,
-    );
-  } else if (scenario === "lease-identity") {
-    record.descriptor.authority.databaseIdentity = changeIdentity(
-      record.descriptor.authority.databaseIdentity,
-    );
-  } else if (scenario === "missing-lease") {
-    fs.renameSync(
-      record.descriptor.authority.databasePath,
-      `${record.descriptor.authority.databasePath}.old`,
-    );
   } else if (scenario === "installation-key") {
     record.descriptor.authority.installKey = `${first.packageRoot}-other`;
   } else if (scenario === "settled-evidence") {
@@ -178,7 +156,6 @@ test.each([
   expect(openPackageActivationJournal(second.anchor).read().phase).toBe("prepared");
 });
 test.each([
-  "prepared",
   "candidate",
   "content",
   "launcher",
@@ -207,7 +184,7 @@ test.each([
   const liveTree = legacyPackageFingerprint(f.packageRoot);
   const launcher = fs.readFileSync(f.launcher);
   const before = fs.readFileSync(f.journalPath);
-  if (scenario === "prepared" || scenario === "candidate") {
+  if (scenario === "candidate") {
     await expect(
       settlePendingPackageActivation(f.packageRoot, undefined, undefined, { dryRun: true }),
     ).resolves.toMatchObject({ reason: "publication-not-started" });

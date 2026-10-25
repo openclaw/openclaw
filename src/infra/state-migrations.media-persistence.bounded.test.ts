@@ -33,6 +33,7 @@ import { runLegacyStateMigrationSteps } from "./state-migrations.steps.js";
 const tempDirs: string[] = [];
 afterEach(() => cleanupMediaPersistenceFixtures(tempDirs));
 const content = (event: unknown) => JSON.parse(String(event)).message.content;
+const legacyEntry = '{"sessionId":"retained","updatedAt":1,"memoryFlushCompactionCount":3}';
 const makeEvent = (id: string, extra: Record<string, unknown> = {}, text = id) =>
   createEvent({
     id,
@@ -44,6 +45,40 @@ const makeEvent = (id: string, extra: Record<string, unknown> = {}, text = id) =
       ...extra,
     },
   });
+
+function retainedDatabase(version: 25 | 26) {
+  const stateDir = makeTempDir(tempDirs, `media-bounded-v${version}-`);
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawStateDatabase({ env });
+  const pathname = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  using database = openNodeSqliteDatabase(pathname);
+  database.exec(
+    version === 25
+      ? OPENCLAW_AGENT_SCHEMA_V25_SQL
+      : fs.readFileSync(
+          new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
+          "utf8",
+        ),
+  );
+  database.exec(`PRAGMA user_version = ${version}`);
+  database
+    .prepare(`INSERT INTO schema_meta
+    (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+    VALUES ('primary', 'agent', ?, 'main', ?, 1, 1)`)
+    .run(version, version === 25 ? "2026.9.9" : null);
+  database
+    .prepare(`INSERT INTO session_nodes
+    (session_key, current_session_id, entry_json, entry_valid, updated_at)
+    VALUES ('agent:main:retained', 'retained', ?, 1, 1)`)
+    .run(legacyEntry);
+  database.exec(`INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+    VALUES ('retained', 'agent:main:retained', 1, 1)`);
+  if (version === 26) {
+    fs.chmodSync(pathname, 0o600);
+  }
+  return { stateDir, env, pathname };
+}
 
 function withMaintenance<T>(env: NodeJS.ProcessEnv, run: () => Promise<T>) {
   return withDoctorSqliteMaintenanceLock({
@@ -117,35 +152,7 @@ function readState(file: string) {
 }
 
 it("keeps entry state outside a precommitted version-only migration", async () => {
-  const stateDir = makeTempDir(tempDirs, "media-bounded-precommitted-version-");
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  openOpenClawStateDatabase({ env });
-  const pathname = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
-  fs.mkdirSync(path.dirname(pathname), { recursive: true });
-  const legacyEntry = '{"sessionId":"retained","updatedAt":1,"memoryFlushCompactionCount":3}';
-  {
-    using database = openNodeSqliteDatabase(pathname);
-    database.exec(
-      fs.readFileSync(
-        new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
-        "utf8",
-      ),
-    );
-    database.exec("PRAGMA user_version = 26");
-    database.exec(`
-      INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-        VALUES ('primary', 'agent', 26, 'main', 1, 1);
-    `);
-    database
-      .prepare(
-        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES ('agent:main:retained', 'retained', ?, 1, 1)",
-      )
-      .run(legacyEntry);
-    database.exec(
-      "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES ('retained', 'agent:main:retained', 1, 1)",
-    );
-  }
-  fs.chmodSync(pathname, 0o600);
+  const { stateDir, env, pathname } = retainedDatabase(26);
   const target = { agentId: "main", path: pathname };
   const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({
     env,
@@ -285,11 +292,7 @@ it.each([
 });
 
 it("keeps unrelated legacy content and planner maintenance outside a version migration", async () => {
-  const stateDir = makeTempDir(tempDirs, "media-bounded-version-");
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  openOpenClawStateDatabase({ env });
-  const pathname = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
-  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  const { stateDir, env, pathname } = retainedDatabase(25);
   const event = JSON.stringify(makeEvent("retained", { MediaPath: "/media/retained.png" }));
   const trajectory = JSON.stringify({
     data: { messagesSnapshot: [{ role: "user", MediaPath: "/media/retained.png" }] },
@@ -304,14 +307,7 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
   fs.writeFileSync(archivePath, archive);
   {
     using source = openNodeSqliteDatabase(pathname);
-    source.exec(OPENCLAW_AGENT_SCHEMA_V25_SQL);
     source.exec(`
-      PRAGMA user_version = 25;
-      INSERT INTO schema_meta VALUES ('primary', 'agent', 25, 'main', '2026.9.9', 1, 1);
-      INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at)
-        VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained","updatedAt":1,"memoryFlushCompactionCount":3}', 1, 1);
-      INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
-        VALUES ('retained', 'agent:main:retained', 1, 1);
       INSERT INTO cache_entries (scope, key, value_json, updated_at)
         VALUES ('planner-proof', 'retained', '{}', 1);
     `);
@@ -377,7 +373,7 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
     archive: { archive_blob: new Uint8Array(archive), published_at: null },
     media: undefined,
     directives: undefined,
-    entry: '{"sessionId":"retained","updatedAt":1,"memoryFlushCompactionCount":3}',
+    entry: legacyEntry,
   });
   {
     using current = openNodeSqliteDatabase(currentPath, { readOnly: true });

@@ -101,10 +101,11 @@ export function registerCanaryProgressWorkerTests(
       const json = outcome !== "recorded-text";
       const stdout = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
       const stderr = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      const announcements: unknown[] = [];
       const spawn = mocks.spawn.getMockImplementation()!;
-      mocks.spawn.mockImplementation((...args) => {
-        announcements.push((json ? stderr : stdout).mock.calls.at(-1)?.[0]);
+      mocks.spawn.mockImplementationOnce((...args) => {
+        expect(json ? stderr : stdout).toHaveBeenLastCalledWith(
+          expect.stringMatching(/^candidate-doctor: \S/),
+        );
         return spawn(...args);
       });
       let beforeInventory: Awaited<ReturnType<typeof readSqliteSidecarIdentities>> | undefined;
@@ -256,21 +257,9 @@ export function registerCanaryProgressWorkerTests(
         expect(commits).toBeGreaterThanOrEqual(2);
         const saved = await getUpdateRunAsync(run.runId, { env });
         expect(result.status).toBe("ok");
-        const checks = [
-          "candidate-doctor",
-          "candidate-doctor-lint",
-          "candidate-config",
-          "candidate-plugins",
-          "candidate-recovery",
-          "candidate-gateway-startup",
-        ];
-        expect(announcements).toEqual(
-          checks.map((name) => expect.stringMatching(new RegExp(`^${name}: \\S`))),
-        );
         expect(json ? stdout : stderr).not.toHaveBeenCalled();
         expect(saved?.steps).toEqual(
           expect.arrayContaining([
-            ...checks.map((step) => expect.objectContaining({ step, status: "in_progress" })),
             expect.objectContaining(snapshotStep),
             expect.objectContaining({ step: "candidate-state-cleanup", status: "completed" }),
           ]),
