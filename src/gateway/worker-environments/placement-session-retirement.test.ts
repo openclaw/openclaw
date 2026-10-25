@@ -22,6 +22,7 @@ import {
 function createHarness(records: WorkerSessionPlacementRecord[]) {
   const placements = new Map(records.map((record) => [record.sessionId, record]));
   const destroyed = new Set<string>();
+  const retired: WorkerSessionPlacementRetirement[] = [];
   const resolveSessionEvidence = vi.fn<PlacementSessionEvidenceResolver>(async () => "absent");
   const createSessionEvidenceResolver = vi.fn(
     async (): Promise<PlacementSessionEvidenceResolver> => resolveSessionEvidence,
@@ -53,6 +54,7 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
       throw new Error("placement changed");
     }
     placements.delete(input.sessionId);
+    retired.push(input);
   });
   const retirement = createPlacementSessionRetirement({
     placements: {
@@ -86,14 +88,14 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
     listAsync,
     retireSessionPlacementAsync,
     resolveSessionEvidence,
+    retired,
     retirement,
   };
 }
 
-it("reuses evidence until identity or full invalidation, including receipts during discovery", async () => {
-  const first = localPlacement("session-one");
-  const second = localPlacement("session-two");
-  const harness = createHarness([first, second]);
+it("reuses evidence until invalidation, including receipts during discovery", async () => {
+  const placement = localPlacement("session-current");
+  const harness = createHarness([placement]);
   const uninstall = harness.retirement.installMaintenancePreservation({
     prepareMaintenancePlacements: async () => ({
       placements: [],
@@ -107,22 +109,18 @@ it("reuses evidence until identity or full invalidation, including receipts duri
     await harness.retirement.reconcile();
     expect(harness.listAsync).toHaveBeenCalledTimes(1);
 
-    harness.resolveSessionEvidence.mockResolvedValue("absent");
-    harness.retirement.markPending(first.sessionId);
-    await harness.retirement.reconcile();
-    expect([...harness.placements.keys()]).toEqual([second.sessionId]);
-    expect(harness.listAsync).toHaveBeenCalledOnce();
-
     sessionChanges.emit({ all: true, scope: "config" });
-    harness.resolveSessionEvidence.mockResolvedValue("current");
     harness.listAsync.mockImplementationOnce(async () => {
       sessionChanges.emit({ all: true, scope: "stores" });
-      return [second];
+      return [placement];
     });
     await harness.retirement.reconcile();
     harness.resolveSessionEvidence.mockResolvedValue("absent");
     await harness.retirement.reconcile();
-    expect(harness.placements.size).toBe(0);
+    expect(harness.placements.has(placement.sessionId)).toBe(false);
+    expect(harness.retired).toEqual([
+      { sessionId: placement.sessionId, expectedState: "local", expectedGeneration: 1 },
+    ]);
     expect(harness.forceDestroyEnvironment).not.toHaveBeenCalled();
   } finally {
     uninstall();
@@ -154,6 +152,7 @@ it("retires only ownerless requested placements for absent sessions", async () =
     runId: "requested-owner-run",
   });
   const ownedRequested = await placements.startDispatch(ownedIdentity);
+  const retireSessionPlacement = vi.spyOn(placements, "retireSessionPlacementAsync");
   const forceDestroyEnvironment = vi.fn();
   const warn = vi.fn();
   const retirement = createPlacementSessionRetirement({
@@ -168,6 +167,11 @@ it("retires only ownerless requested placements for absent sessions", async () =
   try {
     await retirement.reconcile();
 
+    expect(retireSessionPlacement).toHaveBeenCalledExactlyOnceWith({
+      sessionId: requested.sessionId,
+      expectedState: "requested",
+      expectedGeneration: requested.generation,
+    });
     expect(placements.get(requested.sessionId)).toBeUndefined();
     expect(placements.get(ownedRequested.sessionId)).toMatchObject({
       state: "requested",
@@ -178,12 +182,40 @@ it("retires only ownerless requested placements for absent sessions", async () =
         runId: ownedClaim.runId,
       },
     });
-    expect(warn).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      `Retired ownerless worker placement ${requested.sessionId} because its authoritative session is absent (requested@${requested.generation})`,
+    );
     expect(forceDestroyEnvironment).not.toHaveBeenCalled();
   } finally {
     await closeStateDatabaseForTest();
     dirs.cleanup();
   }
+});
+
+it("checks only changed placement identities", async () => {
+  const first = localPlacement("session-one");
+  const second = localPlacement("session-two");
+  const harness = createHarness([first, second]);
+  harness.resolveSessionEvidence.mockResolvedValue("current");
+
+  await harness.retirement.reconcile();
+  await harness.retirement.reconcile();
+  await harness.retirement.reconcile();
+
+  expect(harness.listAsync).toHaveBeenCalledOnce();
+  expect(harness.createSessionEvidenceResolver).toHaveBeenCalledExactlyOnceWith(
+    [first, second],
+    undefined,
+  );
+
+  harness.resolveSessionEvidence.mockResolvedValue("absent");
+  harness.retirement.markPending(first.sessionId);
+  await harness.retirement.reconcile();
+
+  expect(harness.createSessionEvidenceResolver).toHaveBeenLastCalledWith([first], undefined);
+  expect(harness.placements.has(first.sessionId)).toBe(false);
+  expect(harness.placements.has(second.sessionId)).toBe(true);
+  expect(harness.listAsync).toHaveBeenCalledOnce();
 });
 
 it.each(["unknown", "read", "write", "teardown"] as const)(
@@ -212,6 +244,7 @@ it.each(["unknown", "read", "write", "teardown"] as const)(
     await harness.retirement.reconcile();
 
     expect(harness.placements.has(placement.sessionId)).toBe(false);
+    expect(harness.retired).toHaveLength(1);
   },
 );
 
@@ -237,4 +270,5 @@ it("retains queued changes across evidence reads", async () => {
   await harness.retirement.reconcile();
 
   expect(harness.placements.has(placement.sessionId)).toBe(false);
+  expect(harness.retired).toHaveLength(1);
 });
