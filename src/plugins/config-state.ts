@@ -55,12 +55,13 @@ export const createNormalizedPluginsConfig = (
 ): NormalizedPluginsConfig => normalizePluginsConfigWithResolverCore(config, normalizePluginId);
 
 export const normalizePluginsConfig = (
-  config?: OpenClawConfig["plugins"],
+  input?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  if (preparedRuntimePluginsConfig && preparedRuntimePluginsConfig.source === config) {
+  if (preparedRuntimePluginsConfig && preparedRuntimePluginsConfig.source === input) {
     return preparedRuntimePluginsConfig.value;
   }
-  if (!config || !isDeeplyFrozenPlainData(config)) {
+  const config = input ?? EMPTY_PLUGINS_CONFIG;
+  if (!isDeeplyFrozenPlainData(config)) {
     return createNormalizedPluginsConfig(config);
   }
   // Captured configs are frozen and cannot change in place, so they share one frozen policy.
@@ -80,6 +81,7 @@ export type ContextEngineOwnerMetadata = {
 let preparedRuntimePluginsConfig:
   | { source: OpenClawConfig["plugins"]; value: NormalizedPluginsConfig }
   | undefined;
+const EMPTY_PLUGINS_CONFIG = Object.freeze({});
 const frozenPluginsConfigs = new WeakMap<
   NonNullable<OpenClawConfig["plugins"]>,
   NormalizedPluginsConfig

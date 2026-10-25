@@ -60,6 +60,27 @@ it("resolves live enablement from prepared policy and refreshes same-object publ
   ).toEqual({ enabled: true });
 });
 
+it("shares absent plugin policy without borrowing a later publication's entries", () => {
+  using normalize = vi.spyOn(normalization, "normalizePluginsConfigWithResolverCore");
+  const captured = captureRuntimeConfig({});
+  for (let i = 0; i < 3; i++) {
+    expect(runtime.resolvePluginConfigObject(captured, "demo")).toBeUndefined();
+    expect(readNormalizedPluginsConfig(captured.plugins).entries).toEqual({});
+  }
+  expect(normalize.mock.calls.length).toBeLessThanOrEqual(1);
+
+  const published = configFor({ demo: { config: { revision: 1 } } });
+  snapshots.setRuntimeConfigSnapshot(published);
+  expect(runtime.resolvePluginConfigObject(published, "demo")).toEqual({ revision: 1 });
+  expect(runtime.resolvePluginConfigObject(captured, "demo")).toBeUndefined();
+
+  snapshots.setRuntimeConfigSnapshot({});
+  normalize.mockClear();
+  expect(runtime.resolvePluginConfigObject(captured, "demo")).toBeUndefined();
+  expect(readNormalizedPluginsConfig().entries).toEqual({});
+  expect(normalize).not.toHaveBeenCalled();
+});
+
 it("keeps public normalized policy mutable without changing the published host policy", () => {
   const pluginConfig = { enabled: false, mode: "strict" };
   const config = configFor({ "google-gemini-cli": { enabled: true, config: pluginConfig } });
