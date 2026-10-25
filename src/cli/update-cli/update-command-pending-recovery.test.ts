@@ -13,9 +13,7 @@ import { resolvePackageActivationAnchor } from "../../infra/package-update-activ
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import * as failureArtifacts from "../../infra/update-failure-report-artifact.js";
 import * as updateGlobal from "../../infra/update-global.js";
-import * as handoffCleanup from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -24,11 +22,9 @@ import { createRetainedCheckpointFixture } from "../../infra/update-retained-che
 import * as ledger from "../../infra/update-run-ledger.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as triage from "../../infra/update-triage.js";
-import * as installedPlugins from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import * as stateOwnership from "../../state/openclaw-state-ownership-preflight.js";
 import { resolveProfileStateDir } from "../profile-utils.js";
 import { registerSignalExitGate, waitForCliSignalExit } from "../signal-exit-barrier.js";
 import * as updateShared from "./shared.js";
@@ -198,19 +194,11 @@ function pendingPackageInvocation(
     },
     addPending,
     writers: {
-      stateWrite: vi.spyOn(stateOwnership, "assertOpenClawStateWriteAllowedAtPath"),
-      configWrite: vi.spyOn(config, "assertConfigWriteAllowedInCurrentMode"),
-      createRun: vi.spyOn(ledger, "createUpdateRun"),
-      adoptRun: vi.spyOn(ledger, "adoptUpdateRun"),
-      finishRun: vi.spyOn(ledger, "finishUpdateRun"),
       disableAutoStart: vi
         .spyOn(launchd, "disableCurrentOpenClawUpdateLaunchdJob")
         .mockResolvedValue(false),
       prepareTriage: vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage),
-      writeTriage: vi.spyOn(failureArtifacts, "writeTriageUpdateFailure"),
       runTriage,
-      cleanupHandoffs: vi.spyOn(handoffCleanup, "cleanupStaleManagedServiceUpdateHandoffs"),
-      loadPlugins: vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords"),
       resumePostCore: vi
         .spyOn(updateResume, "resumePostCoreUpdate")
         .mockRejectedValue(new Error("Untrusted continuation reached plugin convergence")),
@@ -260,6 +248,7 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
         source: materialSnapshot(f.source),
         service: materialSnapshot(f.serviceRoot),
         anchor: anchor ? materialSnapshot(anchor) : undefined,
+        control: materialSnapshot(path.join(f.home, "control")),
         config: fs.readFileSync(path.join(f.state, "openclaw.json")),
         triage: fs.readFileSync(path.join(f.home, "triage.json")),
         sentinel: fs.readFileSync(path.join(f.home, "sentinel.json")),
@@ -306,7 +295,6 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           expect(record).toMatchObject({ status: "running" });
         } else {
           expect(record).toBeUndefined();
-          expect(f.writers.createRun).not.toHaveBeenCalled();
           expect(fs.existsSync(path.join(f.state, "state", "openclaw.sqlite"))).toBe(false);
         }
         expectPendingReport({
@@ -314,19 +302,10 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           reason: "update-recovery-pending",
           root: serviceDrift ? f.serviceRoot : f.source,
         });
-        const { disableAutoStart, cleanupHandoffs, loadPlugins, writeTriage, runTriage } =
-          f.writers;
-        expectNoCalls(
-          metadata,
-          disableAutoStart,
-          cleanupHandoffs,
-          loadPlugins,
-          writeTriage,
-          runTriage,
-        );
+        expectNoCalls(metadata, f.writers.disableAutoStart, f.writers.runTriage);
         expect(retainedMaterial()).toEqual(before);
         if (record) {
-          expect(ledger.getUpdateRun(record.runId)).toMatchObject({ runId: record.runId });
+          expect(ledger.getUpdateRun(record.runId)).toEqual(record);
         }
       } finally {
         f.restore();

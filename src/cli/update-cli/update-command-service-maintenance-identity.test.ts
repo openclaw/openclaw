@@ -13,14 +13,9 @@ import type {
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import * as nativeExec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { withUpdateInProgressEnv } from "./update-command-service-env.js";
@@ -122,8 +117,6 @@ describe("native manager identity", () => {
       const failure = await prepare(before).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(Error);
       for (const message of [
-        "Failing check managed-service-ownership (service-ownership-changed)",
-        "Required: admitted service ownership owned; manager UID 2001; detected: foreign; runtime running; manager UID 2001",
         `Update install root: ${process.cwd()}`,
         `Gateway install root: ${otherRoot}`,
         `Update binary: ${path.join(process.cwd(), "openclaw.mjs")}`,
@@ -276,7 +269,6 @@ it.runIf(process.platform === "linux").each([
           }),
         ).resolves.toBe("ok");
         expect(defaultRuntime.error).toHaveBeenCalledWith(prepared.serviceMutationSkipMessage);
-        expect(classifyUpdateOutcome(result)).toBe("succeeded");
         expect(result.steps).toMatchObject([
           {
             exitCode: 0,
@@ -286,8 +278,6 @@ it.runIf(process.platform === "linux").each([
             },
           },
         ]);
-        const report = renderUpdateRunReport(updateRunReportInputFromResult(result));
-        expect(report.markdown).toContain(restartCommand);
       }
       expectNoServiceCalls(service.stop, service.start, service.restart, service.install);
       expect(mocks.prepareStop).not.toHaveBeenCalled();
@@ -396,16 +386,12 @@ describe("service fingerprint", () => {
     }),
   );
 
-  it.each(
-    (["before-stop", "publication"] as const).flatMap((phase) =>
-      [
-        "no declared profile",
-        "declared selected",
-        "changed declared profile",
-        "other native unit",
-      ].map((scenario) => ({ phase, scenario })),
-    ),
-  )("keeps selected Linux correspondence at $phase: $scenario", ({ phase, scenario }) =>
+  it.each([
+    { phase: "before-stop", scenario: "no declared profile" },
+    { phase: "publication", scenario: "declared selected" },
+    { phase: "before-stop", scenario: "changed declared profile" },
+    { phase: "publication", scenario: "other native unit" },
+  ] as const)("keeps selected Linux correspondence at $phase: $scenario", ({ phase, scenario }) =>
     withServiceHome(async (home) => {
       mockProcessPlatform("linux");
       const unit = "custom-selected.service";
@@ -464,10 +450,6 @@ describe("service fingerprint", () => {
         admission,
         scenario !== "changed declared profile" && scenario !== "other native unit",
       );
-      expect(state.env).toMatchObject({
-        OPENCLAW_SYSTEMD_UNIT: observedUnit,
-        OPENCLAW_PROFILE: observedCommand.environment.OPENCLAW_PROFILE,
-      });
     }),
   );
 

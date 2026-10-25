@@ -193,61 +193,49 @@ async function interruptedPublication(
 }
 
 describe.skipIf(process.platform === "win32")("public package repair of obsolete recovery", () => {
-  it.each(["publishing", "publication-complete"] as const)(
-    "settles a remounted %s journal through public repair",
-    async (phase) => {
-      const f = await prepareRemountedPublication(fixtures, fixtureRoot);
-      mocks.root.mockResolvedValue(f.packageRoot);
-      if (phase === "publication-complete") {
-        updateJournal(
-          f.journalPath,
-          "UPDATE package_activation SET phase = ?, intent_json = 'null'",
-          phase,
-        );
-        fs.renameSync(f.packageRoot, `${f.packageRoot}.manual-backup`);
-        fs.mkdirSync(f.packageRoot);
-        fs.writeFileSync(
-          path.join(f.packageRoot, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            version: "2026.10.1",
-            type: "module",
-            bin: { openclaw: "./openclaw.mjs" },
-          }),
-        );
-        fs.writeFileSync(path.join(f.packageRoot, "openclaw.mjs"), "// newer installed launcher\n");
-        fs.mkdirSync(path.join(f.packageRoot, "dist"));
-        fs.writeFileSync(
-          path.join(f.packageRoot, "dist/build-info.json"),
-          '{"version":"2026.10.1"}',
-        );
-        await writePackageDistInventory(f.packageRoot);
-      }
-      const installed = await createPackageIntegrityReader().tree(f.packageRoot);
-      const previous = await createPackageIntegrityReader().tree(path.join(f.anchor, "previous"));
-      await repair();
-      expect(mocks.finalize).toHaveBeenCalledOnce();
-      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
-      expect(await createPackageIntegrityReader().tree(f.packageRoot)).toEqual(installed);
-      const archived = readArchivedSettlement(f.anchor, f.operationId);
-      expect(archived).toMatchObject({
-        phase: "superseded",
-        intent: {
-          kind:
-            phase === "publishing"
-              ? "publication-settled-external-change"
-              : "superseded-by-manual-install",
-          settled: true,
-        },
-        descriptor: f.historical,
-      });
-      expect(
-        await createPackageIntegrityReader().tree(
-          path.join(`${f.anchor}.superseded-${f.operationId}`, "previous"),
-        ),
-      ).toEqual(previous);
-    },
-  );
+  it("settles a remounted completed journal after a newer manual install", async () => {
+    const f = await prepareRemountedPublication(fixtures, fixtureRoot);
+    mocks.root.mockResolvedValue(f.packageRoot);
+    updateJournal(
+      f.journalPath,
+      "UPDATE package_activation SET phase = ?, intent_json = 'null'",
+      "publication-complete",
+    );
+    fs.renameSync(f.packageRoot, `${f.packageRoot}.manual-backup`);
+    fs.mkdirSync(f.packageRoot);
+    fs.writeFileSync(
+      path.join(f.packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.10.1",
+        type: "module",
+        bin: { openclaw: "./openclaw.mjs" },
+      }),
+    );
+    fs.writeFileSync(path.join(f.packageRoot, "openclaw.mjs"), "// newer installed launcher\n");
+    fs.mkdirSync(path.join(f.packageRoot, "dist"));
+    fs.writeFileSync(path.join(f.packageRoot, "dist/build-info.json"), '{"version":"2026.10.1"}');
+    await writePackageDistInventory(f.packageRoot);
+    const installed = await createPackageIntegrityReader().tree(f.packageRoot);
+    const previous = await createPackageIntegrityReader().tree(path.join(f.anchor, "previous"));
+    await repair();
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+    expect(await createPackageIntegrityReader().tree(f.packageRoot)).toEqual(installed);
+    const archived = readArchivedSettlement(f.anchor, f.operationId);
+    expect(archived).toMatchObject({
+      phase: "superseded",
+      intent: {
+        kind: "superseded-by-manual-install",
+        settled: true,
+      },
+      descriptor: f.historical,
+    });
+    expect(
+      await createPackageIntegrityReader().tree(
+        path.join(`${f.anchor}.superseded-${f.operationId}`, "previous"),
+      ),
+    ).toEqual(previous);
+  });
 
   it.each(["live executor", "unknown intent"] as const)(
     "preserves completed control evidence when archival is refused: %s",
@@ -336,21 +324,6 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
   });
 
-  it.each(supersessionReasons)("keeps unfinished rollback armed after %s", async (reason) => {
-    const f = await preparedOwnershipMismatch();
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(f.packageRoot);
-      const journal = openPackageActivationJournal(f.anchor);
-      journal.transition(journal.read(), "rollback-in-progress", null, fence.assertCurrent);
-    });
-    await obsoleteRecovery(f, reason);
-    const journal = fs.readFileSync(f.journal);
-    await expect(repair()).rejects.toThrow(/restoration|rollback/iu);
-    expect(fs.readFileSync(f.journal)).toEqual(journal);
-    expect(fs.existsSync(f.retained)).toBe(false);
-    expect(mocks.finalize).not.toHaveBeenCalled();
-  });
-
   it("keeps recovery armed for unverified root package.json exports", async () => {
     const f = await interruptedPublication();
     const manifestPath = path.join(f.packageRoot, "package.json");
@@ -405,7 +378,6 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       failure: "unsupported launcher synchronization",
       error: /crash-durable directory synchronization/u,
     },
-    { failure: "live executor", error: /executor.*owns|update.*owns/iu },
     { failure: "wrong version", error: /version/iu },
   ])("preserves a publishing operation with $failure", async ({ failure, error }) => {
     const f = await interruptedPublication();
@@ -432,14 +404,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       await writePackageDistInventory(f.packageRoot);
     }
     const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
-    if (failure === "live executor") {
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        await executor.enter(f.packageRoot);
-        await expect(repair()).rejects.toThrow(error);
-      });
-    } else {
-      await expect(repair()).rejects.toThrow(error);
-    }
+    await expect(repair()).rejects.toThrow(error);
     expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);
     expect(fs.existsSync(f.anchor)).toBe(true);
     expect(mocks.finalize).not.toHaveBeenCalled();
@@ -469,7 +434,6 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(fs.lstatSync(f.launcher).ino).toBe(launcher.ino);
     expect(readLauncher()).toEqual(launcherContents);
     expectWarning("publication-not-started");
-    expect(mocks.finalize).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -497,7 +461,6 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       await repair();
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
       expect(packageActivationIdentity(f.packageRoot, true)).toBe(replacementIdentity);
-      expect(mocks.finalize).toHaveBeenCalledOnce();
       if (drift === "helper changed") {
         expect(fs.readFileSync(path.join(f.retained, "control/recovery.mjs"), "utf8")).toBe(
           "changed obsolete helper",

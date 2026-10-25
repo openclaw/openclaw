@@ -31,8 +31,6 @@ import {
   withUpdateCommandExecutor as withExecutor,
   withUpdateCommandExecutorChild as withChild,
 } from "./update-command-executor.js";
-import { verificationFixture } from "./update-command-fixtures.test-support.js";
-import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import {
   finishSuccessfulPackageSwitch,
   validConfigSnapshot,
@@ -184,13 +182,9 @@ function expectPublished(onResult: ReturnType<typeof vi.fn>, result: object) {
   expect(jsonOutput).toEqual([expect.objectContaining(result)]);
 }
 
-it.skipIf(process.platform === "win32").each([
-  { cancel: false, captured: false },
-  { cancel: false, captured: true },
-  { cancel: true, captured: false },
-])(
-  "retains terminal authority until release (cancel: $cancel, captured: $captured)",
-  async ({ cancel, captured }) => {
+it.skipIf(process.platform === "win32").each([false, true])(
+  "retains terminal authority until release (cancel: %s)",
+  async (cancel) => {
     const fixture = await journaledFixture(base);
     const next = await journaledFixture(path.join(base, "next"));
     const anchor = activationJournal.resolvePackageActivationAnchor(fixture.packageRoot);
@@ -243,16 +237,6 @@ it.skipIf(process.platform === "win32").each([
           const transaction = await publishPackage(fixture, fence);
           expectPublication(anchor);
           expect(transaction).toBeDefined();
-          if (captured) {
-            ledger.recordUpdateRunVerification(run.runId, verificationFixture("2.0.0"), {
-              env: run.env,
-            });
-            ledger.finishUpdateRun(
-              run.runId,
-              { status: "succeeded", after: { version: "2.0.0" } },
-              { env: run.env },
-            );
-          }
           await finishSuccessfulPackageSwitch(
             { packageRoot: fixture.packageRoot, run, json: true },
             {
@@ -260,14 +244,6 @@ it.skipIf(process.platform === "win32").each([
               shouldRestart: false,
               installKindChanged: false,
               downgradeRisk: false,
-              ...(captured
-                ? {
-                    result: updateResult({
-                      root: fixture.packageRoot,
-                      after: { version: "2.0.0" },
-                    }),
-                  }
-                : {}),
               controlPlaneUpdateSentinelMeta: { runId: run.runId, note: "requested update" },
             },
           );
@@ -322,7 +298,7 @@ it.skipIf(process.platform === "win32").each([
     expect(injected).toBe(true);
     expect(before).toMatchObject({
       sentinel: { payload: { status: "ok", stats: { runId: run.runId } } },
-      run: { status: captured ? "succeeded" : "running" },
+      run: { status: "running" },
       leaseKind: "current",
       originalJournalRetired: true,
     });

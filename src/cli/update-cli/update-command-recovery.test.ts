@@ -29,6 +29,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import type { UpdateCommandOptions } from "./shared.js";
 import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
+import { finishParams } from "./update-command-maintenance-fixtures.test-support.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
@@ -159,23 +160,14 @@ it("refuses to serialize live authority into a legacy migrated worker", async ()
   const f = fixture();
   await expect(
     continueMigratedUpdateInFreshProcess(
-      {
+      finishParams({
         opts: f.opts,
-        mutationStarted: true,
         root: f.live,
         result: resultFixture(f.live),
         configSnapshot: createTestConfigSnapshot({}, {}, path.join(f.root, "openclaw.json")),
-        installKindChanged: false,
-        requestedChannel: null,
         storedChannel: null,
-        channel: "stable",
-        downgradeRisk: false,
-        shouldRestart: true,
-        controlPlaneUpdateSentinelMeta: null,
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
         updateStepTimeoutMs: 1000,
-      },
+      }),
       [],
     ),
   ).rejects.toMatchObject({ name: "UpdateCommandRecoveryPendingError" });
