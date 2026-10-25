@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isMainThread, threadId } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { visitSessionMessagesAsync } from "../../gateway/session-transcript-native.test-support.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -14,6 +16,7 @@ import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
 } from "../../infra/sqlite-transaction.js";
+import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -34,6 +37,7 @@ import {
   findTranscriptEventInDatabase,
   loadTranscriptHeaderSync,
   readTranscriptStatsBatchReadOnlySync,
+  readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
 import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-transcript-incremental-read.js";
 import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
@@ -46,6 +50,7 @@ import {
   runSessionColdStorageMaintenance,
 } from "./session-cold-storage.js";
 import { maintenanceConfig } from "./session-cold-storage.test-support.js";
+import * as sqliteTargets from "./session-sqlite-target.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
@@ -255,30 +260,107 @@ it("detects an archive committed before a warm incremental read begins", async (
   });
 });
 
-it("joins caller snapshots and observes the next archive", async () => {
+it("joins caller snapshots without savepoints and observes the next archive", async () => {
   await withRace(async (race) => {
     const read = race.readRows;
     const original = read();
     expect(original.length).toBeGreaterThan(0);
     runSqliteDeferredTransactionSync(race.database.db, () => {
+      const exec = vi.spyOn(race.database.db, "exec");
       expect(read()).toEqual(original);
       race.commitArchive();
       expect(read()).toEqual(original);
+      expect(
+        exec.mock.calls.filter(([sql]) =>
+          /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE|ROLLBACK)\b/iu.test(sql),
+        ),
+      ).toEqual([]);
+      exec.mockRestore();
     });
     expect(() => read()).toThrow(/cold storage/);
   });
 });
 
-it("retains a hot snapshot while matching transcript events across archival", async () => {
+it("attributes slow transcript matching while retaining its hot snapshot", async () => {
+  await withRace(async (race, state) => {
+    const file = state.path("hot-read.log");
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+    let clock = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      const found = findTranscriptEventInDatabase(race.database, race.scope.sessionId, () => {
+        expect(race.database.db.isTransaction).toBe(true);
+        clock += 1_200;
+        race.commitArchive();
+        return true;
+      });
+      expect(found).toMatchObject({ event: { id: "answer" } });
+      expect(race.database.db.isTransaction).toBe(false);
+      expect(() => loadTranscriptHeaderSync(race.scope)).toThrow(/cold storage/);
+      await flushLogger();
+      const holds = (await fs.readFile(file, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((record) => record.message === "slow SQLite transaction hold")
+        .map((record) => record["1"]);
+      expect(holds).toEqual([
+        {
+          async: false,
+          callbackKind: "application-transaction",
+          database: race.database.path,
+          elapsedMs: 1_200,
+          isMainThread,
+          mode: "deferred",
+          operation: "session transcript match read",
+          phases: {
+            beginMs: 0,
+            sqlMs: 1_200,
+            hostAdmissionWaitMs: 0,
+            databaseAdmissionWaitMs: 0,
+            commitMs: 0,
+          },
+          pid: process.pid,
+          threadId,
+          thresholdMs: 1_000,
+        },
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+      await flushLogger();
+      setLoggerOverride(null);
+    }
+  });
+});
+
+it("bounds hot and cold transcript stats selections in batches", async () => {
   await withRace(async (race) => {
-    const found = findTranscriptEventInDatabase(race.database, race.scope.sessionId, () => {
-      expect(race.database.db.isTransaction).toBe(true);
+    const expectedStats = readTranscriptStatsSync(race.scope);
+    const scopes = [race.scope, ...missingScopes(race.scope, 410), race.scope];
+    const read = () => readTranscriptStatsBatchReadOnlySync(scopes);
+    const expected = scopes.map((scope) =>
+      scope.sessionId === race.scope.sessionId ? expectedStats : emptyStats,
+    );
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(race.database.db),
+      ["stats"],
+      (query) =>
+        query.startsWith("select ") &&
+        /"(?:transcript_events|session_transcript_cold_archives|session_windows)"/u.test(query)
+          ? "stats"
+          : null,
+    );
+    try {
+      const first = read();
+      expect(first).toEqual(expected);
+      expect(first[0]).not.toBe(first.at(-1));
       race.commitArchive();
-      return true;
-    });
-    expect(found).toMatchObject({ event: { id: "answer" } });
-    expect(race.database.db.isTransaction).toBe(false);
-    expect(() => loadTranscriptHeaderSync(race.scope)).toThrow(/cold storage/);
+      expect(read()).toEqual(expected);
+      expect(reads.counts.stats).toBeLessThanOrEqual(12);
+      expect(reads.rowCounts.stats).toBeLessThanOrEqual(4);
+    } finally {
+      reads.restore();
+    }
   });
 });
 
@@ -288,11 +370,7 @@ it.each(["batch stats", "search", "mutation", "inventory"] as const)(
     await withRace(async (race) => {
       const read = {
         "batch stats": () =>
-          readTranscriptStatsBatchReadOnlySync([
-            race.scope,
-            ...missingScopes(race.scope, 410),
-            race.scope,
-          ]),
+          readTranscriptStatsBatchReadOnlySync([race.scope, ...missingScopes(race.scope, 10)]),
         search: () => searchSessionTranscripts({ ...race.scope, query: "Original" }),
         mutation: () =>
           readTranscriptMutationStateInTransaction(race.database, race.scope.sessionId),
@@ -302,14 +380,15 @@ it.each(["batch stats", "search", "mutation", "inventory"] as const)(
         kind === "inventory"
           ? { hotTranscripts: 1, coldTranscripts: 0, embeddedArchiveBytes: 0 }
           : read();
-      const marker = {
-        inventory: 'from "session_windows" as "window"',
-        mutation: 'from "session_windows"',
-        "batch stats": 'from "transcript_events"',
-        search: '"session_transcript_cold_archives"',
-      }[kind];
       race.commitAfterMarkerRead(
-        (query) => query.includes(marker) && (kind !== "inventory" || query.includes("count(*)")),
+        (query) =>
+          kind === "inventory"
+            ? query.includes('from "session_windows" as "window"') && query.includes("count(*)")
+            : kind === "mutation"
+              ? query.includes('from "session_windows"')
+              : kind === "batch stats"
+                ? query.includes('from "transcript_events"')
+                : query.includes('"session_transcript_cold_archives"'),
         kind === "batch stats"
           ? () => {
               race.writer
@@ -372,16 +451,25 @@ it("preserves partial-store stats, UTF-8 bytes, and batch scope-cache freshness"
           ? { eventCount: 7, maxSeq: 22, sizeBytes: 8181 }
           : emptyStats,
     );
-    const result = readTranscriptStatsBatchReadOnlySync(scopes);
-    expect(result).toEqual(expected);
-    expect(result[0]).not.toBe(result.at(-1));
-    database.db.exec("DROP TABLE transcript_events");
-    expect(readTranscriptStatsBatchReadOnlySync(scopes)).toEqual(scopes.map(() => null));
-    const absent = { ...scope, storePath: state.statePath("missing.sqlite") };
-    expect(
-      readTranscriptStatsBatchReadOnlySync(ids.map((sessionId) => ({ ...absent, sessionId }))),
-    ).toEqual(ids.map(() => null));
-    await expect(fs.stat(absent.storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    const resolve = vi.spyOn(sqliteTargets, "resolveSqliteTargetFromSessionStorePath");
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        resolve.mockClear();
+        const result = readTranscriptStatsBatchReadOnlySync(scopes);
+        expect(result).toEqual(expected);
+        expect(result[0]).not.toBe(result.at(-1));
+        expect(resolve).toHaveBeenCalledOnce();
+      }
+      database.db.exec("DROP TABLE transcript_events");
+      expect(readTranscriptStatsBatchReadOnlySync(scopes)).toEqual(scopes.map(() => null));
+      const absent = { ...scope, storePath: state.statePath("missing.sqlite") };
+      expect(
+        readTranscriptStatsBatchReadOnlySync(ids.map((sessionId) => ({ ...absent, sessionId }))),
+      ).toEqual(ids.map(() => null));
+      await expect(fs.stat(absent.storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      resolve.mockRestore();
+    }
   });
 });
 
