@@ -1,6 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import type { Model } from "../../../../src/llm/types.js";
+import { buildProviderStreamFamilyHooks } from "../../../../src/plugin-sdk/provider-stream.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
@@ -17,20 +21,67 @@ import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-sett
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { setChatRunOwner } from "./history-merge.ts";
 
-type ControlsState = Awaited<ReturnType<typeof createControlsFixture>>["state"];
-const speedButton = (container: HTMLElement, value: string) =>
-  container.querySelector<HTMLButtonElement>(`[data-chat-speed-option="${value}"]`)!;
-const thinkingSlider = (container: HTMLElement) =>
-  container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
-function expectPatch(state: ControlsState, values: Record<string, unknown>) {
-  expect(state.request).toHaveBeenCalledWith("sessions.patch", expect.objectContaining(values));
-}
-function patches(state: ControlsState, field?: string) {
-  return state.request.mock.calls.filter(
-    ([method, params]) =>
-      method === "sessions.patch" &&
-      (!field || (params && typeof params === "object" && field in params)),
+// mock-isolation: Vite's jsdom URLs are not file URLs; load the unchanged SQL as a raw asset.
+vi.mock("../../../../src/state/openclaw-agent-schema.js", async () => ({
+  OPENCLAW_AGENT_SCHEMA_SQL: (await import("../../../../src/state/openclaw-agent-schema.sql?raw"))
+    .default,
+}));
+
+// mock-isolation: The native loader requires a file URL; Vite supplies the same SQL as a raw asset.
+vi.mock("../../../../src/state/openclaw-state-schema.js", async () => ({
+  OPENCLAW_STATE_SCHEMA_SQL: (await import("../../../../src/state/openclaw-state-schema.sql?raw"))
+    .default,
+}));
+
+const requests = vi.hoisted(() => [] as unknown[]);
+vi.mock("openai", () => ({
+  default: class MockOpenAI {
+    responses = {
+      create: (request: unknown) => {
+        requests.push(request);
+        throw new Error("captured before sending");
+      },
+    };
+  },
+}));
+
+async function captureSpeedRequest(cfg: OpenClawConfig, sessionEntry: GatewaySessionRow) {
+  const model: Model<"openai-responses"> = {
+    id: "gpt-test-a",
+    name: "Speed fixture",
+    provider: "openai",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 100_000,
+    maxTokens: 4096,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  const wrap = buildProviderStreamFamilyHooks("openai-responses-defaults").wrapStreamFn;
+  if (!wrap) {
+    throw new Error("Expected OpenAI request wrapper");
+  }
+  const stream = wrap({
+    streamFn: createOpenAIResponsesTransportStreamFn(),
+    provider: model.provider,
+    modelId: model.id,
+    config: cfg,
+    extraParams: {
+      ...cfg.agents?.defaults?.models?.["openai/gpt-test-a"]?.params,
+      fastMode: sessionEntry.fastMode,
+    },
+  });
+  if (!stream) {
+    throw new Error("Expected wrapped SDK stream");
+  }
+  const output = await stream(
+    model,
+    { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+    { apiKey: "synthetic-test-key" },
   );
+  expect((await output.result()).errorMessage).toBe("captured before sending");
+  return requests.at(-1);
 }
 
 async function createControlsFixture(
@@ -38,7 +89,10 @@ async function createControlsFixture(
   sharingRole: GatewaySessionRow["sharingRole"] = "owner",
   globalTarget?: { sessionKey: string; rowAgentId: string },
 ) {
-  const selectedSession: GatewaySessionRow & { sessionId: string } = {
+  const speedPreference: Pick<GatewaySessionRow, "fastMode" | "effectiveFastMode"> = {
+    fastMode: false,
+  };
+  const selectedSession = {
     key: globalTarget ? "global" : "agent:main:existing",
     ...(globalTarget ? { agentId: globalTarget.rowAgentId } : {}),
     kind: globalTarget ? "global" : "direct",
@@ -47,7 +101,7 @@ async function createControlsFixture(
     model: "gpt-test-a",
     modelProvider: "openai",
     thinkingLevel: "low",
-    fastMode: false,
+    ...speedPreference,
     thinkingLevels: [
       { id: "low", label: "Low" },
       { id: "high", label: "High" },
@@ -58,7 +112,7 @@ async function createControlsFixture(
       { id: "standard", label: "Standard", contextWindow: 100000 },
       { id: "extended", label: "Extended", contextWindow: 200000 },
     ],
-  };
+  } satisfies GatewaySessionRow;
   const sessionsResult = { ...createSessionsListResult(), sessions: [selectedSession] };
   const fixtureHost = makeChatHost({
     sessionKey: globalTarget?.sessionKey ?? selectedSession.key,
@@ -125,40 +179,64 @@ async function createControlsFixture(
   await waitForSolid(() =>
     expect(container.querySelector("[data-chat-thinking-slider]")).not.toBeNull(),
   );
-  return { state, selectedSession, controls, container };
+  return { state, selectedSession, access, controls, container };
 }
 
 describe("chat pane model-setting permissions", () => {
-  it("persists an explicit Standard preference instead of treating inherited Standard as a no-op", async () => {
-    const { state, selectedSession, container } =
-      await createControlsFixture("operator.sessions.write");
-    delete selectedSession.fastMode;
-    selectedSession.effectiveFastMode = false;
-    renderPaneModelControl(renderControls(state).composerControls, container);
-    const standard = speedButton(container, "off");
-    expect(standard.getAttribute("aria-checked")).toBe("true");
-    expect(standard.disabled).toBe(false);
-    expect(state.request).not.toHaveBeenCalled();
-    state.request.mockImplementation(async (method, params) => {
-      if (method === "sessions.patch") {
-        expect(params).toMatchObject({ fastMode: false });
-        selectedSession.fastMode = false;
-        return { ok: true, key: selectedSession.key, entry: selectedSession };
-      }
-      return { ...createSessionsListResult(), sessions: [selectedSession] };
-    });
-    standard.click();
-    await getPendingChatPickerPatch(state, state.sessionKey);
-    expectPatch(state, {
-      key: selectedSession.key,
-      expectedSessionId: selectedSession.sessionId,
-      fastMode: false,
-    });
-    state.request.mockClear();
-    renderPaneModelControl(renderControls(state).composerControls, container);
-    speedButton(container, "off").click();
-    expect(state.request).not.toHaveBeenCalled();
-  });
+  it.each(["flex", "auto"])(
+    "persists Standard over inherited %s through the SDK request",
+    async (tier) => {
+      const { state, selectedSession, container } =
+        await createControlsFixture("operator.sessions.write");
+      delete selectedSession.fastMode;
+      selectedSession.effectiveFastMode = false;
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { models: { "openai/gpt-test-a": { params: { serviceTier: tier } } } },
+        },
+      };
+      renderPaneModelControl(renderControls(state).composerControls, container);
+      const standard = container.querySelector<HTMLButtonElement>(
+        '[data-chat-speed-option="off"]',
+      )!;
+      expect(standard.getAttribute("aria-checked")).toBe("true");
+      expect(standard.disabled).toBe(false);
+      expect(state.request).not.toHaveBeenCalled();
+      expect(await captureSpeedRequest(cfg, selectedSession)).toMatchObject({ service_tier: tier });
+      state.request.mockImplementation(async (method, params) => {
+        if (method === "sessions.patch") {
+          if (
+            !params ||
+            typeof params !== "object" ||
+            !("fastMode" in params) ||
+            params.fastMode !== false
+          ) {
+            throw new Error("Expected explicit Standard patch");
+          }
+          selectedSession.fastMode = params.fastMode;
+          return { ok: true, key: selectedSession.key, entry: selectedSession };
+        }
+        return { ...createSessionsListResult(), sessions: [selectedSession] };
+      });
+      standard.click();
+      await getPendingChatPickerPatch(state, state.sessionKey);
+      expect(state.request).toHaveBeenCalledWith(
+        "sessions.patch",
+        expect.objectContaining({
+          key: selectedSession.key,
+          expectedSessionId: selectedSession.sessionId,
+          fastMode: false,
+        }),
+      );
+      expect(await captureSpeedRequest(cfg, selectedSession)).toMatchObject({
+        service_tier: "default",
+      });
+      state.request.mockClear();
+      renderPaneModelControl(renderControls(state).composerControls, container);
+      container.querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!.click();
+      expect(state.request).not.toHaveBeenCalled();
+    },
+  );
   it.each([
     { value: "off", saved: false },
     { value: "on", saved: true },
@@ -178,22 +256,25 @@ describe("chat pane model-setting permissions", () => {
         serviceTiers: ["default", "priority", "ultrafast"],
       };
       renderPaneModelControl(renderControls(state).composerControls, container);
-      speedButton(container, value).click();
+      container
+        .querySelector<HTMLButtonElement>('[data-chat-speed-option="' + value + '"]')!
+        .click();
       await getPendingChatPickerPatch(state, state.sessionKey);
-      expectPatch(state, {
-        key: selectedSession.key,
-        fastMode: saved,
-        expectedSessionId: selectedSession.sessionId,
-      });
+      expect(state.request).toHaveBeenCalledWith(
+        "sessions.patch",
+        expect.objectContaining({
+          key: selectedSession.key,
+          fastMode: saved,
+          expectedSessionId: selectedSession.sessionId,
+        }),
+      );
       expect(
         state.request.mock.calls.some(
           ([method]) => method === "chat.abort" || method === "chat.send",
         ),
       ).toBe(false);
-      expect(state).toMatchObject({
-        chatRunId: "running-response",
-        chatStream: "Existing response",
-      });
+      expect(state.chatRunId).toBe("running-response");
+      expect(state.chatStream).toBe("Existing response");
     },
   );
   it.each([
@@ -202,11 +283,13 @@ describe("chat pane model-setting permissions", () => {
   ] as const)(
     "dispatches settings only for the owned global target ($sessionKey, $rowAgentId, $sharingRole)",
     async ({ sessionKey, rowAgentId, sharingRole, allowed }) => {
-      const { state, selectedSession } = await createControlsFixture(
+      const { state, selectedSession, access } = await createControlsFixture(
         "operator.sessions.write",
         sharingRole,
         { sessionKey, rowAgentId },
       );
+      expect([access.model.allowed, access.effort.allowed]).toEqual([allowed, allowed]);
+
       const results = [
         await switchChatModel(state, "openai/gpt-test-b"),
         await switchChatSetting(state, { kind: "thinkingLevel", value: "high" }),
@@ -219,7 +302,7 @@ describe("chat pane model-setting permissions", () => {
         agentId: "work",
         expectedSessionId: selectedSession.sessionId,
       };
-      expect(patches(state)).toEqual(
+      expect(state.request.mock.calls.filter(([method]) => method === "sessions.patch")).toEqual(
         allowed
           ? [
               ["sessions.patch", { ...target, model: "openai/gpt-test-b" }],
@@ -240,18 +323,22 @@ describe("chat pane model-setting permissions", () => {
   ] as const)(
     "uses exact field permissions with $scope on a $sharingRole session",
     async ({ scope, sharingRole, allowed }) => {
-      const { state, selectedSession, controls, container } = await createControlsFixture(
+      const { state, selectedSession, access, controls, container } = await createControlsFixture(
         scope,
         sharingRole,
       );
+      expect(access.unarchive.allowed).toBe(
+        allowed && (scope === "operator.admin" || sharingRole === "owner"),
+      );
       const readOnly = !allowed;
       expect(
-        ["model", "thinking"].map((name) =>
-          container.querySelector(`[data-chat-${name}-select]`)?.getAttribute("aria-disabled"),
-        ),
-      ).toEqual([String(readOnly), String(readOnly)]);
-      const thinking = thinkingSlider(container);
-      const fast = speedButton(container, "on");
+        container.querySelector("[data-chat-model-select]")?.getAttribute("aria-disabled"),
+      ).toBe(String(readOnly));
+      expect(
+        container.querySelector("[data-chat-thinking-select]")?.getAttribute("aria-disabled"),
+      ).toBe(String(readOnly));
+      const thinking = container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
+      const fast = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!;
       const context = container.querySelector<HTMLButtonElement>(
         "[data-chat-context-window-toggle]",
       )!;
@@ -264,31 +351,52 @@ describe("chat pane model-setting permissions", () => {
         thinking.dispatchEvent(new Event("change", { bubbles: true }));
         fast.click();
         await getPendingChatPickerPatch(state, state.sessionKey);
-        expectPatch(state, { key: selectedSession.key, fastMode: true });
-        expectPatch(state, { key: selectedSession.key, thinkingLevel: "high" });
+        expect(state.request).toHaveBeenCalledWith(
+          "sessions.patch",
+          expect.objectContaining({ key: selectedSession.key, fastMode: true }),
+        );
+        expect(state.request).toHaveBeenCalledWith(
+          "sessions.patch",
+          expect.objectContaining({ key: selectedSession.key, thinkingLevel: "high" }),
+        );
       } else {
         fast.click();
         expect(state.request).not.toHaveBeenCalled();
       }
-      expect(patches(state, "contextWindow")).toHaveLength(scope === "operator.admin" ? 1 : 0);
+      const contextPatches = state.request.mock.calls.filter(
+        ([method, params]) =>
+          method === "sessions.patch" &&
+          params &&
+          typeof params === "object" &&
+          "contextWindow" in params,
+      );
+      expect(contextPatches).toHaveLength(scope === "operator.admin" ? 1 : 0);
       container
         .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-test-b"]')!
         .click();
       await getPendingChatPickerPatch(state, state.sessionKey);
       if (allowed) {
-        expectPatch(state, {
-          key: selectedSession.key,
-          model: "openai/gpt-test-b",
-          expectedSessionId: selectedSession.sessionId,
-        });
+        expect(state.request).toHaveBeenCalledWith(
+          "sessions.patch",
+          expect.objectContaining({
+            key: selectedSession.key,
+            model: "openai/gpt-test-b",
+            expectedSessionId: selectedSession.sessionId,
+          }),
+        );
       }
       for (const permissionMode of ["read-only", "guarded", "workspace", null] as const) {
         await controls.permissionPicker.onSelect(permissionMode);
       }
       await controls.permissionPicker.onSelect("full");
-      expect(patches(state, "permissionMode")).toHaveLength(
-        allowed ? (scope === "operator.admin" ? 5 : 4) : 0,
+      const permissionPatches = state.request.mock.calls.filter(
+        ([method, params]) =>
+          method === "sessions.patch" &&
+          params &&
+          typeof params === "object" &&
+          "permissionMode" in params,
       );
+      expect(permissionPatches).toHaveLength(allowed ? (scope === "operator.admin" ? 5 : 4) : 0);
     },
   );
 
@@ -335,16 +443,18 @@ describe("chat pane model-setting permissions", () => {
       if (queued) {
         held.resolve({ ok: true, path: "", key: selectedSession.key, entry: selectedSession });
         await Promise.all(operations);
-        expect(patches(state)).toHaveLength(1);
+        expect(
+          state.request.mock.calls.filter(([method]) => method === "sessions.patch"),
+        ).toHaveLength(1);
         return;
       }
       container
         .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-test-b"]')!
         .click();
-      const thinking = thinkingSlider(container);
+      const thinking = container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
       thinking.value = "1";
       thinking.dispatchEvent(new Event("change", { bubbles: true }));
-      speedButton(container, "on").click();
+      container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!.click();
       await controls.permissionPicker.onSelect("guarded");
       await getPendingChatPickerPatch(state, state.sessionKey);
       expect(state.request).not.toHaveBeenCalled();
