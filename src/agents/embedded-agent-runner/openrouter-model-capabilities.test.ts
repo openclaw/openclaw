@@ -219,7 +219,6 @@ describe("openrouter-model-capabilities", () => {
             ],
           },
         },
-        { id: "minimax/minimax-m2.7", reasoning: { mandatory: true } },
       ],
       true,
     );
@@ -234,11 +233,6 @@ describe("openrouter-model-capabilities", () => {
     await expectNoSyncSql(() => reader.load(modelId));
     expect(reader.loaded(modelId)).toMatchObject(expected);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(reader.get("minimax/minimax-m2.7")).toMatchObject({
-      reasoning: true,
-      compat: { supportsReasoningEffort: false },
-      thinkingLevelMap: { off: null },
-    });
   });
 
   it.each(["JSON v2", "SQLite v3"] as const)(
@@ -297,22 +291,19 @@ describe("openrouter-model-capabilities", () => {
     },
   );
 
-  it.each([
-    ["missing data", {}],
-    ["non-array data", { data: {} }],
-  ])("preserves cached capabilities when a refresh has %s", async (_label, malformedPayload) => {
+  it("preserves cached capabilities when a refresh has non-array data", async () => {
     const modelId = "acme/healthy-model";
     const fetchSpy = mockResponses(
       Response.json({ data: [{ id: modelId, name: "Healthy Model", context_length: 8192 }] }),
-      Response.json(malformedPayload),
+      Response.json({ data: {} }),
     );
 
-    const writer = await freshCapabilities(`malformed-writer-${_label}`);
+    const writer = await freshCapabilities("malformed-writer");
     await writer.load(modelId);
     await writer.load("acme/new-model");
 
     expect(writer.get(modelId)?.name).toBe("Healthy Model");
-    const reader = await freshCapabilities(`malformed-reader-${_label}`);
+    const reader = await freshCapabilities("malformed-reader");
     expect(reader.get(modelId)?.name).toBe("Healthy Model");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });

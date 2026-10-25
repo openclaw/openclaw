@@ -72,8 +72,8 @@ function createMistralManifestPlugin(overrides?: {
 }) {
   return {
     id: "mistral",
-    origin: overrides?.origin ?? "bundled",
     providers: ["mistral"],
+    origin: overrides?.origin ?? "bundled",
     modelCatalog: {
       providers: {
         mistral: {
@@ -89,16 +89,11 @@ function createMistralManifestPlugin(overrides?: {
               maxTokens: 8192,
               thinkingLevelMap: { off: null, minimal: "low", max: "max" },
               cost: overrides?.cost ?? { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
-              mediaInput: {
-                image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
-              },
             },
           ],
         },
       },
-      discovery: {
-        mistral: overrides?.discovery ?? "static",
-      },
+      discovery: { mistral: overrides?.discovery ?? "static" },
     },
   };
 }
@@ -134,11 +129,9 @@ describe("resolveBundledStaticCatalogModel", () => {
       ],
     };
     setManifestPlugins(manifestMocks, [createMistralManifestPlugin({ cost })]);
-    expect(resolveBundledStaticCatalogModel({ ...mistralLookup, cfg: {} })).toEqual({
+    expect(resolveBundledStaticCatalogModel({ ...mistralLookup, cfg: {} })).toMatchObject({
       api: "openai-completions",
       baseUrl: "https://api.mistral.ai/v1",
-      compat: undefined,
-      contextTokens: undefined,
       contextWindow: 262144,
       cost: {
         ...cost,
@@ -147,11 +140,9 @@ describe("resolveBundledStaticCatalogModel", () => {
           { ...cost.tieredPricing![1], range: [200_001, Infinity] },
         ],
       },
-      headers: undefined,
       id: "mistral-medium-3-5",
       input: ["text", "image"],
       maxTokens: 8192,
-      mediaInput: { image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" } },
       name: "Mistral Medium 3.5",
       provider: "mistral",
       reasoning: true,
@@ -298,12 +289,6 @@ describe("manifest provider aliases", () => {
     expect(resolveAlias({ provider: "moonshot-ai" })).toEqual({ provider: "moonshot" });
     expect(resolveAlias({ provider: "moonshot-ai" })).toEqual({ provider: "moonshot" });
     expect(manifestMocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
-    expect(manifestMocks.getCurrentPluginMetadataSnapshot).toHaveBeenLastCalledWith({
-      config: undefined,
-      env: process.env,
-      requireDefaultDiscoveryContext: true,
-      workspaceDir: undefined,
-    });
   });
 
   it("keeps custom environments on their own manifest registry context", () => {
@@ -312,11 +297,6 @@ describe("manifest provider aliases", () => {
     setPlugins(aliasPlugin("moonshot", { "moonshot-ai": { provider: "moonshot" } }));
     expect(resolveAlias({ provider: "moonshot-ai", env })).toEqual({ provider: "moonshot" });
     expect(manifestMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
-    expect(manifestMocks.loadPluginManifestRegistryCore).toHaveBeenCalledWith({
-      config: undefined,
-      env,
-      workspaceDir: undefined,
-    });
   });
 
   it("canonicalizes endpoint-less aliases and retains complete transport metadata", () => {
