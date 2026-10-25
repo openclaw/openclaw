@@ -64,15 +64,12 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-function client(profileId?: string): GatewayClient {
-  const result: GatewayClient = {
-    connId: "requester-browser",
+function client(profileId?: string, connId = "requester-browser"): GatewayClient {
+  return {
+    connId,
     connect: gatewayConnect(["operator.write"], { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: "ui" }),
+    ...(profileId ? { authenticatedUserProfile: gatewayProfile(profileId) } : {}),
   };
-  if (profileId) {
-    result.authenticatedUserProfile = gatewayProfile(profileId);
-  }
-  return result;
 }
 
 function runtimeIdentity(profileId?: string): AgentRuntimeIdentity {
@@ -293,10 +290,7 @@ it("lists descriptive choices and inspects a plugin definition without exposing 
 
 it("imports and applies in one durable profile mutation, preserving other preferences and notifying only that profile", async () => {
   seedPreferences({ "ui.accent": "#aabbcc", "ui.fontFamily": "serif" });
-  const options = broadcastOptions([
-    client(requesterId),
-    { ...client(otherId), connId: "other-browser" },
-  ]);
+  const options = broadcastOptions([client(requesterId), client(otherId, "other-browser")]);
   const branding = {
     mascot: "none",
     brandName: "Mission Control",
@@ -500,8 +494,8 @@ it("reads and writes through a merged profile alias and notifies both identities
   linkEmail("requester@example.test", otherId);
   const clients = [
     client(requesterId),
-    { ...client(otherId), connId: "canonical-browser" },
-    { ...client(unrelatedId), connId: "unrelated-browser" },
+    client(otherId, "canonical-browser"),
+    client(unrelatedId, "unrelated-browser"),
   ];
   const options = broadcastOptions(clients);
   const definition = themeDefinition();

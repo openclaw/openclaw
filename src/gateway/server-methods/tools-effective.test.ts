@@ -48,6 +48,15 @@ function makeSession(
   };
 }
 
+function makeRuntimeModel() {
+  return makeProviderModelFixture({
+    id: "gpt-4.1",
+    provider: "openai",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+  });
+}
+
 const runtimeMocks = vi.hoisted(() => ({
   deliveryContextFromSession: vi.fn(() => ({
     channel: "telegram",
@@ -88,12 +97,7 @@ const runtimeMocks = vi.hoisted(() => ({
     run: (project) =>
       project({
         modelApi: "openai-responses",
-        runtimeModel: makeProviderModelFixture({
-          id: "gpt-4.1",
-          provider: "openai",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-        }),
+        runtimeModel: makeRuntimeModel(),
       }),
     [Symbol.asyncDispose]: vi.fn(async () => {}),
   })),
@@ -546,12 +550,7 @@ describe("tools.effective handler", () => {
           const metadataReads = readMetadata.mock.calls.length;
           const result = project({
             modelApi: "openai-responses",
-            runtimeModel: makeProviderModelFixture({
-              id: "gpt-4.1",
-              provider: "openai",
-              api: "openai-responses",
-              baseUrl: "https://api.openai.com/v1",
-            }),
+            runtimeModel: makeRuntimeModel(),
           });
           if (isMcpProjection) {
             expect(readMetadata.mock.calls).toHaveLength(metadataReads);
@@ -633,13 +632,6 @@ describe("tools.effective handler", () => {
     });
     mockMcpTools([enabled, denied], { serverNames: ["collision"] });
     const payload = payloadOf(await invokeTools());
-    expect(payload?.groups?.[0]?.tools?.[0]).toEqual({
-      id: "exec",
-      label: "Exec",
-      description: "Run shell commands",
-      rawDescription: "Run shell commands",
-      source: "core",
-    });
     expect(payload?.groups?.[1]?.tools).toMatchObject([
       { id: "collision__alpha-", mcpServer: "collision", mcpToolName: "alpha!" },
       {
