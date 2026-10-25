@@ -10,6 +10,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type CDPSession, type Page } from "playwright";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  controlUiBundledGatewayUrl,
+  controlUiBundledSettingsStorageKey,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startBuiltControlUiE2eServer,
@@ -258,6 +260,7 @@ try {
         resourceCounts: values["resource-counts"]
           ? "Instrumented top-frame native registrations, including fixture resources; measure timings separately without this flag."
           : false,
+        preferences: { lobsterPetVisits: false },
         headed: values.headed,
         invalidationTracking:
           trace && (values["invalidation-tracking"] || values["selector-stats"]),
@@ -317,6 +320,19 @@ try {
             // tsx preserves names in serialized fixture callbacks, as in the cold-load runner.
             await page.addInitScript("globalThis.__name = (fn) => fn");
             await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
+            // Random per-load pets can repaint continuously; measure the selected interaction.
+            await page.addInitScript(
+              ({ key, gatewayUrl }) => {
+                if (window !== window.top) {
+                  return;
+                }
+                localStorage.setItem(key, JSON.stringify({ gatewayUrl, lobsterPetVisits: false }));
+              },
+              {
+                key: controlUiBundledSettingsStorageKey(slot.server.baseUrl),
+                gatewayUrl: controlUiBundledGatewayUrl(slot.server.baseUrl),
+              },
+            );
             if (values["resource-counts"]) {
               await page.addInitScript(installControlUiResourceCounts);
             }
@@ -369,6 +385,12 @@ try {
             await scenario.prepare(page, gateway);
             await page.evaluate(() => document.fonts.ready.then(() => undefined));
             await settle(page);
+            const activePet = await page.evaluate(
+              () => document.querySelector("openclaw-lobster-pet .lobster-pet__body") !== null,
+            );
+            if (activePet) {
+              throw new Error("Warm interaction fixture must disable unrelated pet visits");
+            }
             await page.locator(`html[data-theme-mode="${theme}"]`).waitFor({ state: "attached" });
             cdp = await context.newCDPSession(page);
             await cdp.send("Performance.enable", {
