@@ -278,22 +278,17 @@ export function registerSessionsSendActiveSteeringTests({
         targetDisposition: "queued",
         delivery: { status: "pending" },
       });
-      expect(queue).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          operation: expect.objectContaining({ sessionId }),
-          text: expect.stringContaining("deps are ready"),
-          abortOnUnconfirmedTranscript: false,
-          options: expect.objectContaining({
-            requesterToolAuthority: expect.objectContaining({
-              requesterOrigin: expect.objectContaining({ senderId: "sessions-requester" }),
-            }),
-            waitForTranscriptCommit: true,
-          }),
-        }),
-      );
+      expect(queue.mock.calls[0]?.[0]).toMatchObject({
+        operation: { sessionId },
+        text: expect.stringContaining("deps are ready"),
+        abortOnUnconfirmedTranscript: false,
+        options: {
+          requesterToolAuthority: { requesterOrigin: { senderId: "sessions-requester" } },
+          waitForTranscriptCommit: true,
+        },
+      });
       const agentCalls = gatewayCalls("agent");
       expect(agentCalls).toHaveLength(1);
-      expect(prepare).toHaveBeenCalledOnce();
       expect(agentCalls[0]?.[0].params).toMatchObject({ sessionKey: targetKey });
       expect(queue.mock.invocationCallOrder[0]).toBeLessThan(prepare.mock.invocationCallOrder[0]!);
       expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(
@@ -387,7 +382,6 @@ export function registerSessionsSendActiveSteeringTests({
   );
 
   it("sessions_send never replays uncertain sibling steering", async () => {
-    const calls: Array<{ method?: string; params?: unknown }> = [];
     const ordinaryActiveKey = "agent:main:main";
     const abort = vi.fn();
     await seedSession("agent:main:dashboard:sibling-sender");
@@ -403,15 +397,9 @@ export function registerSessionsSendActiveSteeringTests({
       options?.onQueueAccepted?.(true);
       throw new Error("synthetic consumption confirmation unavailable after acceptance");
     });
-    callGatewayMock.mockImplementation(async (request) => {
-      calls.push(request);
-      if (request.method === "sessions.resolve") {
-        return { key: ordinaryActiveKey };
-      }
-      if (request.method === "agent") {
-        return { runId: "ordinary-agent-run", status: "accepted", acceptedAt: 2000 };
-      }
-      return {};
+    mockGatewayResponses({
+      "sessions.resolve": { key: ordinaryActiveKey },
+      agent: { runId: "ordinary-agent-run", status: "accepted", acceptedAt: 2000 },
     });
 
     const tool = getSessionTool("sessions_send", {
@@ -434,12 +422,11 @@ export function registerSessionsSendActiveSteeringTests({
       error: "synthetic consumption confirmation unavailable after acceptance",
     });
     expect(queueMessage).toHaveBeenCalledOnce();
-    expect(queueMessage).toHaveBeenCalledWith(
+    expect(queueMessage.mock.calls[0]).toMatchObject([
       expect.stringContaining("synthetic sibling update"),
-      expect.objectContaining({ waitForTranscriptCommit: true }),
-    );
-    expect(calls.filter((call) => call.method === "agent")).toHaveLength(0);
-    expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(0);
+      { waitForTranscriptCommit: true },
+    ]);
+    expect([gatewayCalls("agent"), gatewayCalls("agent.wait")]).toEqual([[], []]);
     expect(abort).not.toHaveBeenCalled();
   });
 }

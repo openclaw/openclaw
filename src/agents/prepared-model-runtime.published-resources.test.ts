@@ -58,13 +58,10 @@ function runtimeFixture(
   });
 }
 
-const selectedSource = vi.hoisted(() => {
-  const state: {
-    input?: PreparedModelRuntimeInput;
-    acquisition?: { entered: () => void; completion: Promise<void> };
-  } = {};
-  return state;
-});
+const selectedSource = vi.hoisted<{
+  input?: PreparedModelRuntimeInput;
+  acquisition?: { entered: () => void; completion: Promise<void> };
+}>(() => ({}));
 
 // Exercise BTW against an already-owned source without enabling configured producer disposal.
 vi.mock("./prepared-model-runtime.js", async (importOriginal) => {
@@ -87,12 +84,7 @@ vi.mock("./prepared-model-runtime.js", async (importOriginal) => {
   };
 });
 
-const publishedRuntimeResourceModes = [
-  "BTW parent close",
-  "BTW parent close during acquisition",
-] as const;
-
-it.each(publishedRuntimeResourceModes)(
+it.each(["BTW parent close", "BTW parent close during acquisition"])(
   "retains an acquired SQLite source through %s and replacement",
   async (mode) => {
     await withOpenClawTestState(
@@ -406,7 +398,7 @@ async function withStaleResourceFixture(
         await run({
           donor,
           acquire: async (agentId = "main") => {
-            const lease = leases.use(
+            return leases.use(
               await acquireAgentRunPreparedModelRuntime(
                 {
                   config,
@@ -418,7 +410,6 @@ async function withStaleResourceFixture(
                 { retainIdleRunOwner: retention === "direct" },
               ),
             );
-            return lease;
           },
           useEngine: async (lease) => {
             const sessionId = "stale-resources-session";

@@ -42,12 +42,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function assistantToolCall(id: string, name = "n", stopReason?: "toolUse"): AgentMessage {
-  return {
-    role: "assistant",
+function assistantToolCall(id: string, name = "n", stopReason?: "toolUse") {
+  return makeAgentAssistantMessage({
     content: [{ type: "toolCall", id, name, arguments: {} }],
     ...(stopReason ? { stopReason } : {}),
-  } as AgentMessage;
+  });
 }
 
 function appender(sm: ReturnType<typeof guardSessionManager>) {
@@ -280,12 +279,7 @@ describe("guardSessionManager integration", () => {
       privateCompletion: true,
       onMessagePersisted,
     });
-    await sm.appendMessageAsync(
-      makeAgentAssistantMessage({
-        content: [{ type: "toolCall", id: "unfinished", name: "n", arguments: {} }],
-        stopReason: "toolUse",
-      }),
-    );
+    await sm.appendMessageAsync(assistantToolCall("unfinished", "n", "toolUse"));
     sm.clearTranscriptRunCallbacks?.();
     await sm.flushPendingToolResultsAsync?.();
 
