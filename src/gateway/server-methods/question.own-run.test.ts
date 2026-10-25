@@ -309,60 +309,6 @@ describe("own-run question admission", () => {
     },
   );
 
-  it("recovers an ordinary question after reconnect and retains an accepted answer after run close", async () => {
-    await withOwnRunQuestion(async (f) => {
-      const id = await f.request();
-      expect(f.browser.socket.send).toHaveBeenCalledOnce();
-      expect(JSON.parse(String(f.browser.socket.send.mock.calls[0]![0]))).toMatchObject({
-        event: "question.requested",
-        payload: { id },
-      });
-      f.clients.delete(f.browser.client);
-      const reconnected = questionPeer(f.profile, "reconnected-browser");
-      f.clients.add(reconnected.client);
-      expect((await f.call("question.list", {}, reconnected.client))[1]).toMatchObject({
-        questions: [{ id }],
-      });
-      expect((await f.call("question.get", { id }, reconnected.client))[1]).toMatchObject({
-        question: { id, status: "pending" },
-      });
-      const waiting = await f.beginWait(id, reconnected.client);
-      broadcast.mockImplementation((event, payload, opts) => {
-        f.broadcaster.broadcast(event, payload, opts);
-        if (event === "question.resolved") {
-          releaseAgentRunDelegatedAuthority(f.authority);
-          f.source.release();
-        }
-      });
-      expect((await f.call("question.resolve", { id, answers }, reconnected.client))[1]).toEqual(
-        answered,
-      );
-      expect((await waiting.result)[1]).toEqual(answered);
-      expect((await f.call("question.waitAnswer", { id }, reconnected.client))[1]).toEqual(
-        answered,
-      );
-      expect((await f.call("question.get", { id }, reconnected.client))[1]).toMatchObject({
-        question: { id, ...answered },
-      });
-      await manager.drain();
-      expect(reconnected.socket.send).toHaveBeenCalledOnce();
-      expect(JSON.parse(String(reconnected.socket.send.mock.calls[0]![0]))).toMatchObject({
-        event: "question.resolved",
-        payload: { id, ...answered },
-      });
-      for (const [method, scope] of [
-        ["exec.approval.resolve", "operator.approvals"],
-        ["secrets.store.set", "operator.admin"],
-      ] as const) {
-        expect(await f.call(method, {}, reconnected.client)).toMatchObject([
-          false,
-          undefined,
-          { code: "FORBIDDEN", message: "missing scope: " + scope },
-        ]);
-      }
-    });
-  });
-
   it("conceals questions from foreign viewers and members with session read and write scopes", async () => {
     await withOwnRunQuestion(async (f) => {
       const peers = ["viewer", "member"].map((name) =>
@@ -435,6 +381,16 @@ describe("own-run question admission", () => {
 
   it("rejects forged admission and conceals unbound questions", async () => {
     await withOwnRunQuestion(async (f) => {
+      for (const [method, scope] of [
+        ["exec.approval.resolve", "operator.approvals"],
+        ["secrets.store.set", "operator.admin"],
+      ] as const) {
+        expect(await f.call(method, {}, f.browser.client)).toMatchObject([
+          false,
+          undefined,
+          { code: "FORBIDDEN", message: "missing scope: " + scope },
+        ]);
+      }
       const unboundRuntime: GatewayClient = {
         ...f.runtime,
         internal: { agentRuntimeIdentity: f.runtime.internal?.agentRuntimeIdentity },

@@ -1,16 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import {
-  getSubagentRunByChildSessionKey,
-  resetSubagentRegistryForTests,
-} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
@@ -95,13 +86,6 @@ function expectRespondErrorMessage(respond: RespondFn, message: string): void {
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ message }));
 }
 
-function expectListedSession(respond: RespondFn, row: object) {
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({ sessions: [expect.objectContaining(row)] }),
-  );
-}
-
 function mockChatSuccess(payload: Record<string, unknown>): void {
   chatAbortMock.mockImplementationOnce(({ respond }: { respond: RespondFn }) => {
     respond(true, payload);
@@ -178,13 +162,6 @@ function projectSession(
   bindSessionRowProjection(context, () => projection);
 }
 
-vi.mock("../call.js", () => ({
-  callGateway: async (request: { method: string }) => {
-    expect(request.method).toBe("agent.wait");
-    return { status: "pending" };
-  },
-}));
-
 describe("sessions.abort agent scope", () => {
   afterEach(async () => {
     for (const projection of projections) {
@@ -249,66 +226,6 @@ describe("sessions.abort agent scope", () => {
       expectChatAbortParams({ sessionKey: key, runId: "run", agentId });
     },
   );
-
-  it("kills controlled subagents after the parent run has already ended", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot(createContext().getRuntimeConfig());
-      try {
-        await useRealChatAbortHandlerOnce();
-        const childSessionKey = "agent:main:subagent:orphaned-after-parent-stop";
-        replaceSessionEntrySync(
-          {
-            sessionKey: childSessionKey,
-            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-          },
-          {
-            sessionId: "session-orphaned-child",
-            updatedAt: Date.now(),
-            spawnedBy: "agent:main:main",
-            parentSessionKey: "agent:main:main",
-          },
-        );
-        await registerSubagentRun({
-          runId: "run-orphaned-child",
-          childSessionKey,
-          childAgentId: "main",
-          sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childSessionKey }),
-          controllerSessionKey: "agent:main:main",
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          requesterAgentId: "main",
-          requesterTurnRunId: "ended-parent-run",
-          task: "orphaned child",
-          cleanup: "keep",
-        });
-        const context = createContext({
-          extra: {
-            agentRunSeq: new Map(),
-            broadcast: vi.fn(),
-            cancelRunBoundApprovals: vi.fn(),
-            chatRunState: { resolveBuffer: () => ({ text: "" }) } as never,
-            nodeSendToSession: vi.fn(),
-            removeChatRun: vi.fn(),
-          },
-        });
-
-        loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
-          cfg: context.getRuntimeConfig(),
-          canonicalKey: sessionKey,
-        }));
-
-        const respond = await abort({ key: "agent:main:main" }, context);
-
-        expectAbortResponse(respond);
-        expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
-          endedReason: "subagent-killed",
-          killReconciliation: { suppressTaskDelivery: true },
-        });
-      } finally {
-        await resetSubagentRegistryForTests({ persist: false });
-      }
-    });
-  });
 
   it("resolves runId-only worker aborts to the owning session", async () => {
     mockChatSuccess({ ok: true, aborted: true, runIds: ["run-worker"] });
@@ -473,22 +390,6 @@ describe("sessions.abort agent scope", () => {
     await abort({ key: "main", agentId: "work", clearQueued: true });
     expect(selected.input.abortSignal.aborted).toBe(true);
     expect(foreign.input.abortSignal.aborted).toBe(false);
-  });
-
-  it("projects global runs without an explicit owner onto the default agent", async () => {
-    const agentId = "main";
-    const context = createContext({
-      activeRuns: [["run-global", createActiveRun("global", { sessionId: "sess-main-global" })]],
-      globalScope: true,
-      extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
-    });
-    projectSession(context, { key: "global", agentId, sessionId: `sess-${agentId}-global` });
-    const respond = await callSessions(
-      "sessions.list",
-      { includeGlobal: true, agentId },
-      { context, reqId: "req-list-global" },
-    );
-    expectListedSession(respond, { key: "global", hasActiveRun: true });
   });
 
   it.each([

@@ -28,7 +28,6 @@ import {
 } from "../../state/user-model-accounts.js";
 import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   type OpenClawTestState,
@@ -64,7 +63,6 @@ function writeSessionFixture(
 
 function fixture(state: OpenClawTestState) {
   const person = ensureProfileForEmail("catalog-reader@example.test");
-  setDisplayName(person.id, "Catalog Reader");
   const authProfileId = connectChatMetadataAccount(person.id);
   const config = {
     ...createOpenAIChatMetadataConfig(),
@@ -115,11 +113,9 @@ function fixture(state: OpenClawTestState) {
   });
   const request = async (
     params: Record<string, unknown>,
-    overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> & {
-      respond?: Reply;
-    } = {},
+    overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> = {},
   ) => {
-    const respond = overrides.respond ?? vi.fn<RespondFn>();
+    const respond = vi.fn<RespondFn>();
     const method = "models.list";
     const handler = modelsHandlers[method]!;
     await handler({
@@ -144,7 +140,6 @@ function fixture(state: OpenClawTestState) {
     invalidateSnapshot: () => {
       snapshotCurrent = false;
     },
-    context,
     readPrepared,
     loadDeferred,
     request,
@@ -226,30 +221,23 @@ const availableModel = expect.objectContaining({ id: "gpt-5.6-luna", available: 
 
 type Reply = ReturnType<typeof vi.fn<RespondFn>>;
 
-function expectReply(respond: Reply, result: object, once = false) {
-  if (once) {
-    expect(respond).toHaveBeenCalledTimes(1);
-  }
-  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(result), undefined);
+function expectReply(respond: Reply, result: object) {
+  expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.objectContaining(result), undefined);
 }
 
-function expectError(respond: Reply, error: object, once = false) {
-  if (once) {
-    expect(respond).toHaveBeenCalledTimes(1);
-  }
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+function expectError(respond: Reply, error: object) {
+  expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, expect.objectContaining(error));
 }
 
 function expectModels(respond: Reply, available: boolean) {
   expectReply(respond, { models: [expect.objectContaining({ available })] });
 }
 
-function expectPersonal(respond: Reply, authProfileId: string, once = false) {
-  expectReply(
-    respond,
-    { models: [availableModel], accountSelection: personalSelection(authProfileId) },
-    once,
-  );
+function expectPersonal(respond: Reply, authProfileId: string) {
+  expectReply(respond, {
+    models: [availableModel],
+    accountSelection: personalSelection(authProfileId),
+  });
 }
 
 it("shares selection revisions with events, ignoring activity", async (f) => {
@@ -318,27 +306,6 @@ it.each(["missing", "foreign"] as const)(
   },
 );
 
-it("retains catalog across committed read acknowledgments", async (f) => {
-  const scope = await f.saveSession("agent:main:catalog-read-marker", {
-    lastReadAt: 1,
-    authProfileOverride: f.authProfileId,
-    authProfileOverrideSource: "user",
-  });
-  const params = { sessionKey: scope.sessionKey, view: "configured" };
-  const control = await f.request(params);
-  expectReply(control, { models: [availableModel] }, true);
-  const changed = await duringCatalog(f, params, async () => {
-    await patchSessionEntryCore(scope, () => ({ lastReadAt: 2 }), {
-      preserveActivity: true,
-      skipMaintenance: true,
-    });
-    expect(loadSessionEntry(scope)?.lastReadAt).toBe(2);
-  });
-  const fresh = await f.request(params);
-  expect(fresh.mock.calls).toEqual(control.mock.calls);
-  expect(changed.mock.calls).toEqual(control.mock.calls);
-});
-
 it.each([
   "selected patch",
   "unselected model",
@@ -355,7 +322,10 @@ it.each([
     { sessionKey: scope.sessionKey, view: "configured" },
     async () => {
       if (change === "selected patch") {
-        await writeSessionFixture(scope, { label: "changed" });
+        await patchSessionEntryCore(scope, () => ({ label: "changed", lastReadAt: 2 }), {
+          preserveActivity: true,
+          skipMaintenance: true,
+        });
       } else if (change === "unselected model") {
         const other = await f.saveSession("agent:main:other");
         await writeSessionFixture(other, { modelOverride: "replacement" });
@@ -382,20 +352,16 @@ it.each([
   );
   if (change === "selected patch" || change === "unselected model") {
     if (change === "selected patch") {
-      expect(loadSessionEntry(scope)?.label).toBe("changed");
+      expect(loadSessionEntry(scope)).toMatchObject({ label: "changed", lastReadAt: 2 });
     }
-    expectPersonal(respond, f.authProfileId, true);
+    expectPersonal(respond, f.authProfileId);
   } else {
-    expectError(
-      respond,
-      {
-        code: "UNAVAILABLE",
-        message: expect.stringMatching(/changed|current/),
-        retryable: true,
-        retryAfterMs: 0,
-      },
-      true,
-    );
+    expectError(respond, {
+      code: "UNAVAILABLE",
+      message: expect.stringMatching(/changed|current/),
+      retryable: true,
+      retryAfterMs: 0,
+    });
     if (closedStorePath) {
       // Synchronous revocation precedes the async resource owner's settlement.
       await closeOpenClawAgentDatabaseByPathAsync(closedStorePath);
