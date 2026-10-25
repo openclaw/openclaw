@@ -151,12 +151,14 @@ describe("SQLite session handle lifecycle", () => {
     ]);
   });
 
-  it.each(["native", "worker"] as const)(
-    "reads complete mirror facts across key batches (%s)",
+  it.each(["native", "worker", "fallback"] as const)(
+    "reads complete batched mirror facts and limits visibility to the active branch (%s)",
     async (route) => {
-      const messages = Array.from({ length: 901 }, (_, index) => ({
+      const count = route === "fallback" ? 3 : 901;
+      const abandoned = count - 2;
+      const messages = Array.from({ length: count }, (_, index) => ({
         eventId: "event-" + index,
-        parentId: index === 0 ? null : "event-" + (index - 1),
+        parentId: index === 0 ? null : "event-" + (index === count - 1 ? index - 2 : index - 1),
         message: { role: "user", content: "body " + index, idempotencyKey: "mirror-" + index },
       }));
       await persist(messages);
@@ -167,30 +169,38 @@ describe("SQLite session handle lifecycle", () => {
 
       const read = () =>
         withTranscriptWriteLock(scope, async (transcript) => {
+          if (route === "fallback") {
+            database.db.exec("DELETE FROM session_transcript_index_state");
+          }
           const keys = messages.map(({ message }) => message.idempotencyKey);
-          const facts = await transcript.readMessageFacts({ idempotencyKeys: keys });
+          const query = { idempotencyKeys: [...keys, "missing"] };
+          const facts = await transcript.readMessageFacts(query);
           expect([...facts.existingIdempotencyKeys]).toEqual(keys);
           expect([...facts.messagesByIdempotencyKey]).toEqual(
             messages.map(({ message }) => [message.idempotencyKey, message]),
           );
-          expect([...facts.anchorsByIdempotencyKey]).toEqual(
-            messages.map(({ eventId, parentId, message }, index) => [
-              message.idempotencyKey,
-              {
-                agentId: "main",
-                sessionId: scope.sessionId,
-                sessionKey: scope.sessionKey,
-                storePath: database.path,
-                generation,
-                entryId: eventId,
-                rawSeq: index + 1,
-                effectiveParentId: parentId,
-                activeMessagePosition: index,
-                idempotencyKey: message.idempotencyKey,
-              },
-            ]),
+          const activeKeys = keys.filter((_, index) => index !== abandoned);
+          expect([...facts.anchorsByIdempotencyKey.keys()]).toEqual(
+            route === "fallback" ? [] : activeKeys,
           );
-          expect([...facts.anchorsByIdempotencyKey.values()].every(Object.isFrozen)).toBe(true);
+          for (const [key, anchor] of facts.anchorsByIdempotencyKey) {
+            const index = keys.indexOf(key);
+            expect(anchor).toEqual({
+              ...scope,
+              agentId: "main",
+              storePath: database.path,
+              generation,
+              entryId: messages[index]!.eventId,
+              rawSeq: index + 1,
+              effectiveParentId: messages[index]!.parentId,
+              activeMessagePosition: index === count - 1 ? abandoned : index,
+              idempotencyKey: key,
+            });
+            expect(Object.isFrozen(anchor)).toBe(true);
+          }
+          const visible = await transcript.readMessageFacts({ ...query, activeBranchOnly: true });
+          expect([...visible.existingIdempotencyKeys]).toEqual(activeKeys);
+          expect([...visible.messagesByIdempotencyKey.keys()]).toEqual(activeKeys);
         });
       if (route === "native") {
         // Released opaque guards retain the synchronous reader used by this batching proof.
@@ -198,28 +208,6 @@ describe("SQLite session handle lifecycle", () => {
       } else {
         await read();
       }
-    },
-  );
-
-  it.each([false, true])(
-    "limits message facts to the active branch (fallback=%s)",
-    async (fallback) => {
-      await persist([
-        runMessage("root", "user", "root", { idempotencyKey: "root" }, null),
-        runMessage("abandoned", "assistant", "old", { idempotencyKey: "abandoned" }, "root"),
-        runMessage("active", "assistant", "new", { idempotencyKey: "active" }, "root"),
-      ]);
-      await withTranscriptWriteLock(scope, async (transcript) => {
-        if (fallback) {
-          openDatabase().db.exec("DELETE FROM session_transcript_index_state");
-        }
-        const query = { idempotencyKeys: ["root", "abandoned", "active", "missing"] };
-        const all = await transcript.readMessageFacts(query);
-        expect([...all.existingIdempotencyKeys]).toEqual(["root", "abandoned", "active"]);
-        const visible = await transcript.readMessageFacts({ ...query, activeBranchOnly: true });
-        expect([...visible.existingIdempotencyKeys]).toEqual(["root", "active"]);
-        expect([...visible.messagesByIdempotencyKey.keys()]).toEqual(["root", "active"]);
-      });
     },
   );
 

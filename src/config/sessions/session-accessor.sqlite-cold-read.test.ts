@@ -302,15 +302,14 @@ it.each(["batch stats", "search", "mutation", "inventory"] as const)(
         kind === "inventory"
           ? { hotTranscripts: 1, coldTranscripts: 0, embeddedArchiveBytes: 0 }
           : read();
+      const marker = {
+        inventory: 'from "session_windows" as "window"',
+        mutation: 'from "session_windows"',
+        "batch stats": 'from "transcript_events"',
+        search: '"session_transcript_cold_archives"',
+      }[kind];
       race.commitAfterMarkerRead(
-        (query) =>
-          kind === "inventory"
-            ? query.includes('from "session_windows" as "window"') && query.includes("count(*)")
-            : kind === "mutation"
-              ? query.includes('from "session_windows"')
-              : kind === "batch stats"
-                ? query.includes('from "transcript_events"')
-                : query.includes('"session_transcript_cold_archives"'),
+        (query) => query.includes(marker) && (kind !== "inventory" || query.includes("count(*)")),
         kind === "batch stats"
           ? () => {
               race.writer
