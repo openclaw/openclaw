@@ -125,8 +125,13 @@ function copyGatewayScope(
     return scoped;
   }
   // Copy enumerable values like spread, but do not read a registry that the caller replaces.
-  for (const key of Reflect.ownKeys(current)) {
-    if (key !== "pluginRegistry" && Object.prototype.propertyIsEnumerable.call(current, key)) {
+  for (const key of Object.keys(current)) {
+    if (key !== "pluginRegistry") {
+      Reflect.set(scoped, key, Reflect.get(current, key));
+    }
+  }
+  for (const key of Object.getOwnPropertySymbols(current)) {
+    if (Object.prototype.propertyIsEnumerable.call(current, key)) {
       Reflect.set(scoped, key, Reflect.get(current, key));
     }
   }
