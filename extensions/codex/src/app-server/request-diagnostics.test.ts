@@ -194,29 +194,12 @@ describe("scoped Codex timeout diagnostics", () => {
     finish.resolve();
   });
 
-  it("keeps the default 60 second callback deadline", async () => {
-    const entered = createDeferred<void>();
-    const finish = createDeferred<void>();
-    shared.acquire.mockResolvedValue(client());
-    const result = withCodexAppServerJsonClient({}, async () => {
-      entered.resolve();
-      await finish.promise;
-    }).catch((error: unknown) => error);
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(59_999);
-    expect(records).toEqual([]);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(await result).toMatchObject({ message: "codex app-server request timed out" });
-    expect((await record()).attributes).toMatchObject({ timeoutMs: 60_000, elapsedMs: 60_000 });
-    finish.resolve();
-  });
-
-  it.each(["disabled", "throwing sink"] as const)(
+  it.each(["default deadline", "disabled", "throwing sink"] as const)(
     "keeps timeout and abandonment semantics with %s diagnostics",
     async (mode) => {
       if (mode === "disabled") {
         vi.mocked(diagnostics.areDiagnosticsEnabledForProcess).mockReturnValue(false);
-      } else {
+      } else if (mode === "throwing sink") {
         vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {
           throw new Error("sink");
         });
@@ -224,15 +207,29 @@ describe("scoped Codex timeout diagnostics", () => {
       const entered = createDeferred<void>();
       const finish = createDeferred<void>();
       shared.acquire.mockResolvedValue(client());
-      const result = start(async () => {
+      const run = async () => {
         entered.resolve();
         await finish.promise;
-      });
+      };
+      const result =
+        mode === "default deadline"
+          ? withCodexAppServerJsonClient({}, run).catch((error: unknown) => error)
+          : start(run);
       await entered.promise;
-      await vi.advanceTimersByTimeAsync(50);
+      const deadline = mode === "default deadline" ? 60_000 : 50;
+      await vi.advanceTimersByTimeAsync(deadline - 1);
+      expect(records).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
       expect(await result).toMatchObject({ message: "codex app-server request timed out" });
       expect(shared.acquire.mock.calls[0]?.[0].abandonSignal.aborted).toBe(true);
-      expect(records).toEqual([]);
+      if (mode === "default deadline") {
+        expect((await record()).attributes).toMatchObject({
+          timeoutMs: deadline,
+          elapsedMs: deadline,
+        });
+      } else {
+        expect(records).toEqual([]);
+      }
       finish.resolve();
       await vi.advanceTimersByTimeAsync(0);
       expect(shared.release).toHaveBeenCalledOnce();
