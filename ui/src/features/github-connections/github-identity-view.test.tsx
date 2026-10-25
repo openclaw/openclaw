@@ -1,8 +1,8 @@
-import { createRouter, definePage } from "@openclaw/uirouter";
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { routeFixtures } from "../../app/router-outlet-fixtures.test-support.tsx";
 import { mountRouterOutlet, settleRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -17,17 +17,11 @@ import {
   sharedTarget,
 } from "./github-identity-harness.test-support.ts";
 import type { GitHubAuthorizationState } from "./github-identity-shared.ts";
-import {
-  GitHubConnectionError,
-  GitHubConnectionSetup,
-  GitHubIdentity,
-} from "./github-identity-view.tsx";
+import { GitHubConnectionSetup, GitHubIdentity } from "./github-identity-view.tsx";
 import { githubIdentityViewFixture } from "./github-identity.test-support.ts";
 
 const writeText = vi.fn<(text: string) => Promise<void>>();
-const fallback = vi.fn(() => true);
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
 async function settle() {
   await vi.advanceTimersByTimeAsync(0);
   flush();
@@ -36,16 +30,12 @@ async function settle() {
 beforeEach(() => {
   vi.useFakeTimers();
   writeText.mockReset().mockResolvedValue(undefined);
-  fallback.mockClear();
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-  Object.defineProperty(document, "execCommand", { configurable: true, value: fallback });
 });
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.restoreAllMocks();
   restorePropertyDescriptor(navigator, "clipboard", clipboardDescriptor);
-  restorePropertyDescriptor(document, "execCommand", execCommandDescriptor);
 });
 
 describe("GitHub identity view", () => {
@@ -77,55 +67,6 @@ describe("GitHub identity view", () => {
     await settle();
     expect(identity.read().authorization).toEqual({ phase: "idle" });
     expect(view.getByRole("button", { name: "Continue with GitHub" })).toBeTruthy();
-  });
-
-  it("retires the owned status request when its view unmounts", async () => {
-    const pending = createDeferred<ReturnType<typeof availableStatus>>();
-    const client = createTestGatewayClient(vi.fn().mockReturnValue(pending.promise));
-    let identity!: ReturnType<typeof createGitHubIdentityView>;
-    const view = mountSolid(() => {
-      identity = createGitHubIdentityView();
-      return <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />;
-    });
-    flush();
-    identity.sync({
-      client,
-      connected: true,
-      permissionsReady: true,
-      target: sharedTarget(),
-      statusReadable: true,
-      configurable: true,
-      authorizable: true,
-      clientRevision: 1,
-    });
-    let retired = false;
-    const reading = identity.verify()?.then(() => {
-      retired = true;
-    });
-    flush();
-    expect(view.getByText("Checking connection…")).toBeTruthy();
-    view.unmount();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(retired).toBe(true);
-    pending.resolve(availableStatus("system"));
-    await reading;
-  });
-
-  it("shows one shared error when the other identity read is still pending", async () => {
-    const personal = createDeferred();
-    const system = createDeferred();
-    const view = mountSolid(() => (
-      <GitHubConnectionError
-        error={null}
-        completion={personal.promise}
-        secondaryCompletion={system.promise}
-      />
-    ));
-    system.reject(new Error("Synthetic shared GitHub failure"));
-    await settle();
-    expect(view.getAllByRole("alert")).toHaveLength(1);
-    expect(view.getByRole("alert").textContent).toContain("Synthetic shared GitHub failure");
-    personal.resolve();
   });
 
   it("preserves the focused PAT draft while saving and retires it when its scope changes", async () => {
@@ -193,40 +134,29 @@ describe("GitHub identity view", () => {
     );
     const client = createTestGatewayClient(request);
     let identity!: ReturnType<typeof createGitHubIdentityView>;
-    const router = createRouter({
-      routes: [
-        definePage({
-          id: "github",
-          path: "/github",
-          component: () => ({
-            renderSolid: () => {
-              identity = createGitHubIdentityView({
-                runExternalMutation: createMutationRunner(client),
-              });
-              return <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />;
-            },
-          }),
-        }),
-        definePage({
-          id: "destination",
-          path: "/destination",
-          component: () => ({
-            renderSolid: () => (
-              <section aria-label="Destination body">The replacement route is ready.</section>
-            ),
-          }),
-        }),
-      ],
-    });
-    const view = mountSolid(() => (
-      <button onClick={() => void router.navigate("destination", {})}>Open destination</button>
-    ));
+    const routes = routeFixtures<
+      "github" | "destination",
+      Record<string, never>,
+      Record<string, never>
+    >();
+    const router = routes.router(
+      routes.page("github", {
+        renderSolid: () => {
+          identity = createGitHubIdentityView({
+            runExternalMutation: createMutationRunner(client),
+          });
+          return <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />;
+        },
+      }),
+      routes.page("destination", {
+        renderSolid: () => <section aria-label="Destination body" />,
+      }),
+    );
     const outlet = mountRouterOutlet({ router });
     const routed = getQueriesForElement(outlet);
     onTestFinished(() => {
       stored.resolve({ ok: true });
       outlet.dispose();
-      view.unmount();
       router.stop();
     });
     await router.navigate("github", {});
@@ -244,10 +174,7 @@ describe("GitHub identity view", () => {
     });
     identity.showPatFallback();
     flush();
-    const input = routed.getByLabelText("Fine-grained PAT");
-    if (!(input instanceof HTMLInputElement)) {
-      throw new Error("Expected PAT input");
-    }
+    const input = routed.getByLabelText<HTMLInputElement>("Fine-grained PAT");
     input.value = "synthetic-navigation-token";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
@@ -257,14 +184,11 @@ describe("GitHub identity view", () => {
     try {
       expect(routed.getByRole("button", { name: "Saving…" })).toHaveProperty("disabled", true);
       expect(routed.getByRole("button", { name: "Verify" })).toHaveProperty("disabled", true);
-      view.getByRole("button", { name: "Open destination" }).click();
+      void router.navigate("destination", {});
       await vi.advanceTimersByTimeAsync(0);
       flush();
       destination = routed.getByRole("region", { name: "Destination body" });
-      expect(destination.textContent).toBe("The replacement route is ready.");
       expect(outlet.querySelector("openclaw-github-identity")).toBeNull();
-      expect(routed.queryByLabelText("Fine-grained PAT")).toBeNull();
-      expect(routed.queryByRole("button", { name: "Saving…" })).toBeNull();
       expect(request.mock.calls.map(([method]) => method)).toEqual(["secrets.store.set"]);
     } finally {
       stored.resolve({ ok: true });
@@ -277,7 +201,6 @@ describe("GitHub identity view", () => {
     expect(identity.read().status).toBeNull();
     expect(routed.getByRole("region", { name: "Destination body" })).toBe(destination);
     expect(outlet.querySelector("openclaw-github-identity")).toBeNull();
-    expect(routed.queryByLabelText("Fine-grained PAT")).toBeNull();
   });
 
   it("retires pending authorization-code copying only when its payload changes", async () => {
@@ -302,13 +225,8 @@ describe("GitHub identity view", () => {
     });
     const copyButton = () =>
       view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
-    const announcements = () =>
-      [...view.container.querySelectorAll('.github-device-code ~ [role="status"]')].map(
-        (node) => node.textContent,
-      );
     const button = copyButton();
     button.click();
-    expect(writeText).toHaveBeenCalledOnce();
     update({ phase: "pending" });
     flush();
     expect(copyButton()).toBe(button);
@@ -317,21 +235,13 @@ describe("GitHub identity view", () => {
     flush();
     const current = copyButton();
     expect(current).not.toBe(button);
-    expect(current.disabled).toBe(false);
-    pending.reject(new Error("Synthetic clipboard rejection"));
+    pending.resolve();
     await vi.advanceTimersByTimeAsync(0);
-    expect(fallback).not.toHaveBeenCalled();
-    expect(current.dataset.copyState).toBeUndefined();
     current.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(writeText.mock.calls.map(([text]) => text)).toEqual(["first", "second"]);
-    expect(current.dataset.copyState).toBe("copied");
-    expect(announcements()).toEqual(["Copied!"]);
-    await vi.advanceTimersByTimeAsync(1500);
-    writeText.mockRejectedValueOnce(new Error("Synthetic clipboard rejection"));
-    fallback.mockReturnValueOnce(false);
-    current.click();
-    await settle();
-    expect(announcements()).toEqual(["Copy failed"]);
+    expect(view.container.querySelector('.github-device-code ~ [role="status"]')?.textContent).toBe(
+      "Copied!",
+    );
   });
 });

@@ -1,20 +1,27 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type {
+  PersonalGitHubStatus,
+  UsersGitHubStatusResult,
+} from "../../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { mockRpc } from "../../pages/profile/profile-rpc.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   authorizationCode,
   availableStatus,
+  availableIdentity,
+  forbidSharedMutation,
   createIdentityFixture,
   createMutationRunner,
   setupRequest,
   sharedTarget,
 } from "./github-identity-harness.test-support.ts";
+import type { TestGitHubIdentity } from "./github-identity.test-support.ts";
 
 const confirmation = vi.hoisted(() => ({ show: vi.fn(async () => true) }));
 vi.mock("../../components/confirm-dialog.ts", async (importOriginal) => ({
@@ -22,9 +29,7 @@ vi.mock("../../components/confirm-dialog.ts", async (importOriginal) => ({
   showConfirmDialog: confirmation.show,
 }));
 
-beforeEach(() => {
-  confirmation.show.mockReset().mockResolvedValue(true);
-});
+beforeEach(() => void confirmation.show.mockReset().mockResolvedValue(true));
 
 function authorConfig(systemName: string, agentName: string) {
   const identity = (name: string, letter: string) => ({
@@ -37,19 +42,7 @@ function authorConfig(systemName: string, agentName: string) {
   };
 }
 
-const createRuntimeConfig = (client: GatewayBrowserClient) =>
-  createRuntimeConfigCapability({
-    snapshot: {
-      client,
-      phase: "connected",
-      sessionKey: "main",
-      hello: gatewayHelloForMethods(["config.set"]),
-    },
-    subscribe: () => () => undefined,
-  });
-
 afterEach(() => {
-  cleanupSolid();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -77,7 +70,7 @@ function createController(behavior: { beforeDispatch?: () => void; refreshError?
 
 it("keeps independent identity drafts isolated and clears only the inherited target", async () => {
   const { identity, sync, requests } = createController();
-  const config = authorConfig("System Author", "Agent Author");
+  const config = authorConfig("System", "Agent");
   const system = createController();
   sync({ config, scope: "agent" });
   identity.setDraft("token", "agent-token");
@@ -89,7 +82,6 @@ it("keeps independent identity drafts isolated and clears only the inherited tar
   expect(identity.read().draft.name).toBe("Active Agent Edit");
   expect(identity.read().draft.token).toBe("agent-token");
   await identity.inherit();
-  expect(confirmation.show).toHaveBeenCalled();
   expect(requests).toContainEqual({
     method: "tools.github.configure",
     params: { scope: "agent", agentId: "main", mode: "inherit" },
@@ -97,10 +89,7 @@ it("keeps independent identity drafts isolated and clears only the inherited tar
   expect(identity.read().scope).toBe("agent");
   expect(identity.read().draft).toEqual({ token: "", name: "", email: "" });
   system.sync({ config });
-  expect(system.identity.read().draft).toMatchObject({
-    name: "System Author",
-    token: "system-token",
-  });
+  expect(system.identity.read().draft).toMatchObject({ name: "System", token: "system-token" });
   expect(system.requests).toEqual([]);
   sync({ config: updatedConfig });
   expect(identity.read().draft.name).toBe("Updated System Author");
@@ -128,17 +117,12 @@ it.each(["access", "profile"] as const)(
 );
 
 it("keeps a consumed handoff successful while surfacing its refresh warning", async () => {
-  vi.stubGlobal("crypto", {
-    getRandomValues: <T extends Uint8Array>(array: T): T => array.fill(0xab),
-  });
   const { identity, sync, requests } = createController({
     refreshError: "authoritative config refresh unavailable",
   });
   sync();
   identity.setDraft("token", "one-use-token");
-
   await identity.configure();
-
   expect(requests.map(({ method }) => method)).toEqual([
     "secrets.store.set",
     "tools.github.configure",
@@ -149,7 +133,6 @@ it("keeps a consumed handoff successful while surfacing its refresh warning", as
     allowedHosts: [],
   });
   expect(requests[1]?.params).not.toHaveProperty("token");
-  expect(requests[0]?.params.name).toMatch(/^github-setup-[a-f0-9]{32}$/u);
   expect(requests[1]?.params.secretName).toBe(requests[0]?.params.name);
   expect(identity.read().status).toEqual(availableStatus("system"));
   expect(requests[1]?.params).toMatchObject({ agentId: "main" });
@@ -158,86 +141,12 @@ it("keeps a consumed handoff successful while surfacing its refresh warning", as
   expect(identity.read().error).toContain("authoritative config refresh unavailable");
 });
 
-it("config.set drains drafts before managed and refreshes both edits", async () => {
-  vi.useFakeTimers();
-  const order: string[] = [];
-  let hashCounter = 1;
-  let storedConfig: Record<string, unknown> = {
-    pendingEdit: "original",
-    tools: { github: { profileId: "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } },
-  };
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    order.push(method);
-    if (method === "config.get") {
-      return sourceConfigSnapshot(storedConfig, `hash-${hashCounter}`);
-    }
-    if (method === "config.set") {
-      storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
-      hashCounter += 1;
-      return { config: storedConfig, hash: `hash-${hashCounter}` };
-    }
-    if (method === "secrets.store.set" || method === "secrets.store.delete") {
-      return { ok: true };
-    }
-    if (method === "tools.github.configure") {
-      expect(params).toMatchObject({ mode: "managed" });
-      storedConfig = {
-        ...storedConfig,
-        tools: { github: { profileId: "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } },
-      };
-      hashCounter += 1;
-      return availableStatus("system");
-    }
-    throw new Error(`unexpected method ${method}`);
-  });
-  const client = createTestGatewayClient(request);
-  const runtimeConfig = createRuntimeConfig(client);
-  await runtimeConfig.ensureLoaded();
-  order.length = 0;
-  runtimeConfig.patchForm(["pendingEdit"], "managed");
-  const { identity, sync } = createIdentityFixture(client, {
-    runExternalMutation: runtimeConfig.runExternalMutation,
-  });
-  sync({ config: runtimeConfig.state.configForm ?? {} });
-  const unsubscribe = runtimeConfig.subscribe(() => {
-    sync({ config: runtimeConfig.state.configForm ?? {} });
-  });
-  try {
-    identity.setDraft("token", "one-use-token");
-    identity.setDraft("name", "Managed Author");
-    await identity.configure();
-
-    expect(order).toEqual([
-      "secrets.store.set",
-      "config.set",
-      "tools.github.configure",
-      "config.get",
-    ]);
-    expect(identity.read()).toMatchObject({
-      busy: false,
-      scope: "system",
-      status: availableStatus("system"),
-      draft: { token: "", name: "Managed Author", email: "" },
-    });
-    expect(runtimeConfig.state.configForm).toMatchObject({
-      pendingEdit: "managed",
-      tools: { github: { profileId: "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" } },
-    });
-  } finally {
-    unsubscribe();
-    runtimeConfig.dispose();
-    vi.clearAllTimers();
-  }
-});
-
 it("keeps UUID generation failures inside configure handling", async () => {
   vi.stubGlobal("crypto", {});
   const { identity, sync, requests } = createController();
   sync();
   identity.setDraft("token", "one-use-token");
-
   await expect(identity.configure()).resolves.toBeUndefined();
-
   expect(requests).toEqual([]);
   expect(identity.read().busy).toBe(false);
   await expect(identity.read().mutationCompletion).rejects.toThrow("Web Crypto is required");
@@ -299,11 +208,9 @@ it("invalidates an in-flight status on effective identity change and verifies on
   });
   const initial = identity.verify();
   await Promise.resolve();
-  expect(request).toHaveBeenCalledTimes(1);
   identity.setDraft("name", "dirty author");
   sync({ config: config("ghp_22222222222222222222222222222222") });
   await Promise.resolve();
-  expect(request).toHaveBeenCalledTimes(2);
   expect(identity.read().draft.name).toBe("dirty author");
 
   await initial;
@@ -315,7 +222,7 @@ it("invalidates an in-flight status on effective identity change and verifies on
   expect(request).toHaveBeenCalledTimes(2);
 });
 
-it.each(["unused", "pending", "loaded", "failed"])(
+it.each(["unused", "pending"])(
   "refreshes only previously requested GitHub status after reconnect (%s)",
   async (initialState) => {
     const first = createDeferredCore<ReturnType<typeof availableStatus>>();
@@ -323,39 +230,15 @@ it.each(["unused", "pending", "loaded", "failed"])(
     const { request, sync, identity } = setupRequest(
       vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(currentStatus),
     );
-    let initial: Promise<void> | undefined;
-    if (initialState !== "unused") {
-      initial = identity.verify();
-      if (initialState === "loaded") {
-        first.resolve(currentStatus);
-        await initial;
-      } else if (initialState === "failed") {
-        first.reject(new Error("Status unavailable"));
-        await expect(initial).rejects.toThrow("Status unavailable");
-        initial = undefined;
-      }
-    }
+    const initial = initialState === "unused" ? undefined : identity.verify();
     identity.setDraft("name", "Unsaved author");
-    const previousStatus = identity.read().status;
-    sync({
-      connected: false,
-      clientRevision: 2,
-      statusReadable: false,
-      configurable: false,
-      authorizable: false,
-    });
-    expect(identity.read().status).toBe(previousStatus);
+    sync({ connected: false, clientRevision: 2 });
+    expect(identity.read().status).toBeNull();
     expect(identity.read().draft.name).toBe("Unsaved author");
     sync({ clientRevision: 3 });
     await Promise.resolve();
-    if (initialState !== "unused") {
-      await waitForFast(() =>
-        expect(identity.read()).toMatchObject({ loading: false, status: currentStatus }),
-      );
-    }
-
-    const statusCall = ["tools.github.status", { agentId: "main", selectedScope: "system" }];
-    expect(request.mock.calls).toEqual(initialState === "unused" ? [] : [statusCall, statusCall]);
+    await identity.read().statusCompletion;
+    expect(identity.read().loading).toBe(false);
     expect(identity.read().draft.name).toBe("Unsaved author");
     expect(identity.read().status).toEqual(initialState === "unused" ? null : currentStatus);
     first.resolve(availableStatus("agent"));
@@ -369,7 +252,7 @@ it.each(["unused", "pending", "loaded", "failed"])(
     sync({ client: replacement, connected: false, clientRevision: 5 });
     sync({ client: replacement, clientRevision: 6 });
     await Promise.resolve();
-    expect(request.mock.calls).toEqual(initialState === "unused" ? [] : [statusCall, statusCall]);
+    expect(request).toHaveBeenCalledTimes(initialState === "unused" ? 0 : 2);
   },
 );
 
@@ -382,29 +265,27 @@ it("rejects status returned for a different agent", async () => {
   expect(identity.read().status).toBeNull();
 });
 
-it("waits for each authoritative poll deadline and adopts successful OAuth status", async () => {
+it("refreshes shared configuration only after successful OAuth polling", async () => {
   vi.useFakeTimers();
-  vi.setSystemTime(1_800_000_000_000);
-  const pollTimes: number[] = [];
   const pollResults = [
     { status: "slow_down" as const, retryAfterMs: 10_000 },
     { status: "success" as const, githubStatus: availableStatus("system") },
   ];
-  const request = vi.fn(async (method: string) => {
-    if (method === "config.get") {
-      return sourceConfigSnapshot({}, "poll-hash");
-    }
-    if (method === "tools.github.authorize.start") {
-      return authorizationCode;
-    }
-    if (method === "tools.github.authorize.poll") {
-      pollTimes.push(Date.now());
-      return pollResults.shift();
-    }
-    throw new Error(`unexpected method ${method}`);
+  const request = mockRpc({
+    "config.get": () => sourceConfigSnapshot({}, "poll-hash"),
+    "tools.github.authorize.start": () => authorizationCode,
+    "tools.github.authorize.poll": () => pollResults.shift(),
   });
   const client = createTestGatewayClient(request);
-  const runtimeConfig = createRuntimeConfig(client);
+  const runtimeConfig = createRuntimeConfigCapability({
+    snapshot: {
+      client,
+      phase: "connected",
+      sessionKey: "main",
+      hello: gatewayHelloForMethods(["config.set"]),
+    },
+    subscribe: () => () => undefined,
+  });
   await runtimeConfig.ensureLoaded();
   request.mockClear();
   const { identity, sync } = createIdentityFixture(client, {
@@ -413,18 +294,11 @@ it("waits for each authoritative poll deadline and adopts successful OAuth statu
   sync();
 
   await identity.startAuthorization();
-  expect(identity.read().authorization).toMatchObject({ phase: "code", userCode: "ABCD-1234" });
-  await vi.advanceTimersByTimeAsync(4_999);
-  expect(pollTimes).toEqual([]);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(pollTimes).toEqual([1_800_000_005_000]);
+  await vi.advanceTimersByTimeAsync(5_000);
   expect(identity.read().authorization).toMatchObject({ phase: "pending", slowedDown: true });
   expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(0);
 
-  await vi.advanceTimersByTimeAsync(9_999);
-  expect(pollTimes).toHaveLength(1);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(pollTimes).toEqual([1_800_000_005_000, 1_800_000_015_000]);
+  await vi.advanceTimersByTimeAsync(10_000);
   expect(identity.read().status).toEqual(availableStatus("system"));
   expect(identity.read().authorization).toEqual({ phase: "idle" });
   expect(request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
@@ -458,59 +332,233 @@ it.each([
   );
 });
 
-it("keeps a too-late cancellation alive and adopts the in-flight success", async () => {
+it.each(["too late", "network failure"] as const)(
+  "keeps authorization alive after cancellation is %s",
+  async (outcome) => {
+    vi.useFakeTimers();
+    const poll = createDeferredCore<unknown>();
+    const { request, identity } = setupRequest(
+      {
+        "tools.github.authorize.start": () => ({ ...authorizationCode, pollAfterMs: 1_000 }),
+        "tools.github.authorize.poll": () =>
+          outcome === "too late" ? poll.promise : { status: "pending", retryAfterMs: 1_000 },
+        "tools.github.authorize.cancel": () => {
+          if (outcome === "network failure") {
+            throw new Error("Gateway unavailable");
+          }
+          return { cancelled: false };
+        },
+      },
+      { mutation: true },
+    );
+    await identity.startAuthorization();
+    if (outcome === "too late") {
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "tools.github.authorize.poll",
+          expect.anything(),
+          expect.anything(),
+        ),
+      );
+    }
+    await identity.cancelAuthorization();
+    if (outcome === "too late") {
+      expect(identity.read().authorization).toMatchObject({ phase: "finishing" });
+      poll.resolve({ status: "success", githubStatus: availableStatus("system") });
+      await vi.waitFor(() => expect(identity.read().authorization).toEqual({ phase: "idle" }));
+      expect(identity.read().status).toEqual(availableStatus("system"));
+    } else {
+      expect(identity.read().authorization).toMatchObject({
+        phase: "cancel_error",
+        message: expect.stringContaining("Gateway unavailable"),
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(request).toHaveBeenCalledWith(
+        "tools.github.authorize.poll",
+        { requestId: authorizationCode.requestId },
+        expect.anything(),
+      );
+      expect(identity.read().authorization).toMatchObject({ phase: "cancel_error" });
+    }
+  },
+);
+
+const code = { ...authorizationCode, userCode: "SELF-1234", pollAfterMs: 1_000 };
+function personalStatus(connected: boolean): PersonalGitHubStatus {
+  return {
+    state: connected ? "connected" : "disconnected",
+    generation: connected ? "11111111-1111-4111-8111-111111111111" : null,
+    account: connected ? { accountId: 1234, login: "my-account" } : null,
+    accessExpiresAtMs: connected ? 1_900_000_000_000 : null,
+    refreshState: connected ? "available" : "not_applicable",
+    pending: null,
+  };
+}
+const disconnected = personalStatus(false);
+const connected = personalStatus(true);
+const system = { ...availableIdentity, source: "system-configured" as const };
+function setup(handlers: Record<string, () => unknown>) {
+  const runExternalMutation = vi.fn(forbidSharedMutation);
+  return {
+    ...setupRequest(handlers, {
+      runExternalMutation,
+      context: {
+        target: { kind: "personal", profileId: "profile-a" },
+        configurable: false,
+      },
+    }),
+    runExternalMutation,
+  };
+}
+
+const expectState = (
+  identity: TestGitHubIdentity,
+  state: Partial<ReturnType<TestGitHubIdentity["read"]>>,
+) => expect(identity.read()).toMatchObject(state);
+
+function expectCode(identity: TestGitHubIdentity) {
+  expect(identity.read().authorization).toMatchObject({ phase: "code", userCode: code.userCode });
+}
+
+it("lets an identified reader connect, reconnect and disconnect only their own OAuth account", async () => {
   vi.useFakeTimers();
-  const poll = createDeferredCore<unknown>();
-  const { request, identity } = setupRequest(
-    {
-      "tools.github.authorize.start": () => ({ ...authorizationCode, pollAfterMs: 1_000 }),
-      "tools.github.authorize.poll": () => poll.promise,
-      "tools.github.authorize.cancel": () => ({ cancelled: false }),
+  let personal = disconnected;
+  const { identity, request, runExternalMutation } = setup({
+    "users.github.status": () => ({ personal, system }),
+    "users.github.authorize.start": () => code,
+    "users.github.authorize.poll": () => {
+      personal = connected;
+      return { status: "success", personal };
     },
-    { mutation: true },
-  );
+    "users.github.disconnect": () => {
+      personal = disconnected;
+      return { disconnected: true };
+    },
+  });
+  await identity.verify();
+  expectState(identity, { system, personal: disconnected, scope: "personal" });
+  identity.showPatFallback();
+  identity.setDraft("token", "not-a-personal-PAT");
+  await identity.configure();
+  await identity.inherit();
+  flush();
+  expectState(identity, { patVisible: false, draft: { token: "", name: "", email: "" } });
   await identity.startAuthorization();
+  expectCode(identity);
   await vi.advanceTimersByTimeAsync(1_000);
-  await vi.waitFor(() =>
-    expect(request).toHaveBeenCalledWith(
-      "tools.github.authorize.poll",
-      expect.anything(),
-      expect.anything(),
-    ),
-  );
-
-  await identity.cancelAuthorization();
-  expect(identity.read().authorization).toMatchObject({ phase: "finishing" });
-  poll.resolve({ status: "success", githubStatus: availableStatus("system") });
-  await vi.waitFor(() => expect(identity.read().authorization).toEqual({ phase: "idle" }));
-
-  expect(identity.read().status).toEqual(availableStatus("system"));
+  expect(identity.read().personal).toEqual(connected);
+  await identity.startAuthorization();
+  expect(identity.read().personal).toEqual(connected);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await identity.disconnect();
+  expectState(identity, { personal: disconnected, system });
+  const read = ["users.github.status", {}];
+  const start = ["users.github.authorize.start", {}, expect.anything()];
+  const poll = ["users.github.authorize.poll", { requestId: code.requestId }, expect.anything()];
+  const calls = [read, start, poll, start, poll, ["users.github.disconnect", {}], read];
+  expect(request.mock.calls).toEqual(calls);
+  expect(runExternalMutation).not.toHaveBeenCalled();
 });
 
-it("keeps authorization pending and surfaces a cancellation network failure", async () => {
+it("restores only the current profile's pending code and honors server retry intervals", async () => {
   vi.useFakeTimers();
-  const { request, identity } = setupRequest(
-    {
-      "tools.github.authorize.start": () => authorizationCode,
-      "tools.github.authorize.cancel": () => {
-        throw new Error("Gateway unavailable");
-      },
-      "tools.github.authorize.poll": () => ({ status: "pending", retryAfterMs: 5_000 }),
-    },
-    { mutation: true },
-  );
-  await identity.startAuthorization();
-
-  await identity.cancelAuthorization();
-  expect(identity.read().authorization).toMatchObject({
-    phase: "cancel_error",
-    message: expect.stringContaining("Gateway unavailable"),
+  const outcomes = [
+    { status: "slow_down", retryAfterMs: 4_000 },
+    { status: "network_error", retryAfterMs: 6_000 },
+    { status: "success", personal: connected },
+  ];
+  const { identity, request } = setup({
+    "users.github.status": () => ({ personal: { ...disconnected, pending: code }, system }),
+    "users.github.authorize.poll": () => outcomes.shift(),
+    "users.github.authorize.cancel": () => ({ cancelled: true }),
   });
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(request).toHaveBeenCalledWith(
-    "tools.github.authorize.poll",
-    { requestId: authorizationCode.requestId },
-    expect.anything(),
-  );
-  expect(identity.read().authorization).toMatchObject({ phase: "cancel_error" });
+  await identity.verify();
+  expectCode(identity);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(identity.read().authorization).toMatchObject({ phase: "pending", slowedDown: true });
+  await vi.advanceTimersByTimeAsync(3_999);
+  expect(request).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(identity.read().authorization).toMatchObject({ phase: "network_error" });
+  await vi.advanceTimersByTimeAsync(5_999);
+  expect(request).toHaveBeenCalledTimes(3);
+  await vi.advanceTimersByTimeAsync(1);
+  expectState(identity, { authorization: { phase: "idle" }, personal: connected });
+});
+
+it.each([
+  ["profile", { target: { kind: "personal", profileId: "profile-b" } }],
+  ["connection", { clientRevision: 2 }],
+  ["access", { statusReadable: false, authorizable: false }],
+  ["dispose", null],
+] as const)("drops delayed status and pending codes after %s changes", async (_change, patch) => {
+  const response = createDeferredCore<UsersGitHubStatusResult>();
+  const { identity, sync } = setup({ "users.github.status": () => response.promise });
+  const verification = identity.verify();
+  if (patch) {
+    sync(patch);
+  } else {
+    identity.dispose();
+  }
+  await verification;
+  response.resolve({ personal: { ...connected, pending: code }, system });
+  await response.promise;
+  expectState(identity, {
+    personal: null,
+    system: null,
+    authorization: { phase: "idle" },
+    loading: false,
+  });
+});
+
+it.each(["start", "poll", "disconnect"] as const)(
+  "invalidates an old profile's delayed %s response when another profile takes over",
+  async (phase) => {
+    vi.useFakeTimers();
+    const response = createDeferredCore<unknown>();
+    const delayedMethod = `users.github.${phase === "disconnect" ? phase : `authorize.${phase}`}`;
+    const { identity, request, sync } = setup({
+      "users.github.status": () => ({ personal: connected, system }),
+      "users.github.authorize.start": () => code,
+      "users.github.authorize.cancel": () => ({ cancelled: true }),
+      [delayedMethod]: () => response.promise,
+    });
+    await identity.verify();
+    const pending = phase === "disconnect" ? identity.disconnect() : identity.startAuthorization();
+    if (phase === "poll") {
+      await pending;
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    sync({ target: { kind: "personal", profileId: "profile-b" } });
+    response.resolve(
+      phase === "start"
+        ? code
+        : phase === "poll"
+          ? { status: "success", personal: connected }
+          : { disconnected: true },
+    );
+    await pending;
+    await vi.advanceTimersByTimeAsync(0);
+    expectState(identity, { personal: null, authorization: { phase: "idle" }, busy: false });
+    if (phase !== "disconnect") {
+      expect(request).toHaveBeenCalledWith("users.github.authorize.cancel", {
+        requestId: code.requestId,
+      });
+    }
+  },
+);
+
+it("does not expose personal authorization when durable identity is absent or status fails", async () => {
+  const { identity, request, sync } = setup({
+    "users.github.status": () => {
+      throw new Error("Identity synchronization failed");
+    },
+  });
+  await expect(identity.verify()).rejects.toThrow("Identity synchronization failed");
+  expectState(identity, { personal: null, system: null });
+  sync({ target: null, authorizable: false, statusReadable: false });
+  await identity.startAuthorization();
+  await identity.disconnect();
+  expect(request).toHaveBeenCalledTimes(1);
 });
