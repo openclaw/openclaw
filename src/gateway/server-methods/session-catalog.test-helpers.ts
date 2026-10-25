@@ -119,7 +119,6 @@ export function startCall(
 ) {
   // Keep caller identity stable for shared lists and live scope updates.
   if (client) {
-    client.connect ??= {};
     client.connect.scopes ??= [];
   }
   const respond = vi.fn();
