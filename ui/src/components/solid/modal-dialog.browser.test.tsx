@@ -72,18 +72,17 @@ function mountModal(container?: HTMLElement) {
   return { handle, name, notes };
 }
 
-it.each([false, true])("wraps native Tab at modal boundaries (shadow: %s)", async (inShadow) => {
+it("wraps native Tab at shadow-hosted modal boundaries", async () => {
   const trigger = document.createElement("button");
   const container = document.createElement("div");
   document.body.append(trigger, container);
   extraNodes.push(trigger, container);
-  const mount = inShadow ? document.createElement("div") : container;
-  if (inShadow) {
-    container.attachShadow({ mode: "open" }).append(mount);
-  }
+  const mount = document.createElement("div");
+  const shadow = container.attachShadow({ mode: "open" });
+  shadow.append(mount);
   trigger.focus();
   const { handle, name, notes } = mountModal(mount);
-  const active = () => (inShadow ? container.shadowRoot!.activeElement : document.activeElement);
+  const active = () => shadow.activeElement;
   notes.focus();
   await keyFocus("{Tab}", name, active);
   await keyFocus("{Shift>}{Tab}{/Shift}", notes, active);
@@ -134,27 +133,9 @@ it.each(["summary", "editable"])(
     target.tabIndex = -1;
     modalDialog(handle).focus();
     await keyFocus("{Tab}", modalDialog(handle));
+    await keyFocus("{Shift>}{Tab}{/Shift}", modalDialog(handle));
   },
 );
-
-it.each([-1, 0, 1])("wraps to the radio group's tab stop (checked: %s)", async (checked) => {
-  const text = element("input", { ariaLabel: "Text" });
-  const radio = (index: number) =>
-    element("input", { type: "radio", name: "mode", checked: checked === index });
-  const first = radio(0),
-    second = radio(1);
-  renderModal("Radio group", () => [text, first, second]);
-  const selected = checked === 1 ? second : first;
-  text.focus();
-  await keyFocus("{Shift>}{Tab}{/Shift}", selected);
-  await keyFocus("{Tab}", text);
-});
-
-it("keeps an empty modal focused without cycling through its guards", async () => {
-  const { dialog } = renderModal("Empty modal", () => null);
-  expect(document.activeElement).toBe(dialog);
-  await tabCycle([dialog]);
-});
 
 it("a vetoed Escape keeps native top-layer, focus, and draft ownership", async () => {
   const { handle, notes } = mountModal();

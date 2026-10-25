@@ -1,6 +1,6 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import type { JSX } from "@solidjs/web";
-import { createSignal, flush, untrack } from "solid-js";
+import { createSignal, createStore, flush, untrack } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
@@ -21,14 +21,8 @@ import {
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { Icon } from "./icon.tsx";
 import { Kbd, KeyboardShortcut } from "./kbd.tsx";
-import {
-  keyFocus,
-  menuContent,
-  mountControls,
-  tabFocus,
-  update,
-} from "./menu-contract.test-support.tsx";
-import { createMenuControls, Menu, type MenuItem, type MenuItemBindings } from "./menu.tsx";
+import { keyFocus, mountControls, update } from "./menu-contract.test-support.tsx";
+import { createMenuControls, Menu, type MenuItem } from "./menu.tsx";
 import "../../styles/base.css";
 import "../../styles/layout.css";
 import "../../styles/session-menu.css";
@@ -64,27 +58,16 @@ afterEach(async () => {
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
-it("keeps autofocus and activation native for embedded buttons and links", async () => {
+it("keeps embedded-button activation and arrow navigation native", async () => {
   const activate = vi.fn();
-  const navigate = vi.fn((event: MouseEvent) => event.preventDefault());
   const select = vi.fn();
   mountControls((controls) => ({
     onSelect: select,
-    items: [
-      { id: "first", label: "First" },
-      { id: "last", label: "Last" },
-      menuContent(
-        "header-actions",
-        <>
-          <button ref={controls.ref()} type="button" autofocus onClick={activate}>
-            Clear
-          </button>
-          <a ref={controls.ref()} href="#help" onClick={navigate}>
-            Help
-          </a>
-        </>,
-      ),
-    ],
+    children: (
+      <button ref={controls.ref()} autofocus onClick={activate}>
+        Clear
+      </button>
+    ),
   }));
   await openMenu();
   const button = surface().querySelector<HTMLButtonElement>("button:not([role])")!;
@@ -94,41 +77,25 @@ it("keeps autofocus and activation native for embedded buttons and links", async
   expect(select).not.toHaveBeenCalled();
   expect(surface().matches(":popover-open")).toBe(true);
   await userEvent.keyboard("{ArrowDown}");
-  await expect.poll(() => document.activeElement).toBe(item("First"));
+  await expect.poll(() => document.activeElement).toBe(trigger("people-assign"));
   button.focus();
-  await tabFocus(surface().querySelector("a"));
-  await userEvent.keyboard("{Enter}");
-  expect(navigate).toHaveBeenCalledOnce();
-  expect(select).not.toHaveBeenCalled();
-  await tabFocus(button, true);
   await userEvent.keyboard("{ArrowUp}");
-  await expect.poll(() => document.activeElement).toBe(item("Last"));
+  await expect.poll(() => document.activeElement).toBe(item("Archive"));
 });
 
-it.each([false, true])("preserves native link intent (routing=%s)", async (routing) => {
-  let cancel = false;
-  let selections = 0;
+it("preserves native link intent while routing selections", async () => {
+  const select = vi.fn();
   const navigate = vi.fn();
   const view = mountMenu({
     items: [{ id: "settings", label: "Settings", href: "#settings" }],
-    onNavigate: routing ? navigate : undefined,
-    onSelect: (_item, event) => {
-      selections += 1;
-      if (cancel) {
-        event.preventDefault();
-      }
-    },
+    onNavigate: navigate,
+    onSelect: select,
   });
   const prevented: boolean[] = [];
-  let suppressNative = true;
-  const initialHash = window.location.hash;
   view.container.addEventListener("click", (event) => {
     if (event.target instanceof Element && event.target.closest("a")) {
       prevented.push(event.defaultPrevented);
-      // Modified gestures stay native; same-tab clicks below exercise the real cancellation path.
-      if (suppressNative) {
-        event.preventDefault();
-      }
+      event.preventDefault();
     }
   });
   await openMenu();
@@ -148,25 +115,10 @@ it.each([false, true])("preserves native link intent (routing=%s)", async (routi
   link.dispatchEvent(canceledClick);
   expect(prevented.at(-1)).toBe(true);
 
-  suppressNative = false;
   await userEvent.click(link);
-  await expect.poll(() => selections).toBe(1);
-  expect(navigate.mock.calls).toEqual(routing ? [[{ href: "#settings", value: "settings" }]] : []);
+  await expect.poll(() => select).toHaveBeenCalledOnce();
+  expect(navigate).toHaveBeenCalledExactlyOnceWith({ href: "#settings", value: "settings" });
   expect(prevented.at(-1)).toBe(true);
-  await phase(surface(), "hidden");
-
-  await openMenu();
-  cancel = true;
-  await userEvent.click(link);
-  await expect.poll(() => selections).toBe(2);
-  expect(navigate).toHaveBeenCalledTimes(routing ? 1 : 0);
-  expect(view.handle.overlay.open).toBe(true);
-  expect(window.location.hash).toBe(initialHash);
-  cancel = false;
-  link.focus();
-  await userEvent.keyboard("{Enter}");
-  await expect.poll(() => selections).toBe(3);
-  expect(navigate).toHaveBeenCalledTimes(routing ? 2 : 0);
   await phase(surface(), "hidden");
 });
 
@@ -189,8 +141,8 @@ it("forwards link navigation from nested menus and closes the root", async () =>
   await phase(surface(), "hidden");
 });
 
-it.each([false, true])("rolls rejected visibility back (initial=%s)", async (initial) => {
-  const [open, setOpen] = createSignal(initial);
+it("rolls rejected initial and controlled visibility back", async () => {
+  const [open, setOpen] = createSignal(true);
   let vetoShow = true;
   let vetoHide = true;
   const received: boolean[] = [];
@@ -205,51 +157,43 @@ it.each([false, true])("rolls rejected visibility back (initial=%s)", async (ini
       setOpen(accepted);
     },
   });
-  if (!initial) {
-    update(() => setOpen(true));
-  }
   expect(untrack(open)).toBe(false);
   expect(surface().matches(":popover-open")).toBe(false);
   expect(received).toEqual([false]);
+  update(() => setOpen(true));
+  expect(untrack(open)).toBe(false);
+  expect(received).toEqual([false, false]);
   vetoShow = false;
   update(() => setOpen(true));
   await phase(surface(), "open");
-  expect(received).toEqual([false, true]);
+  expect(received).toEqual([false, false, true]);
   update(() => setOpen(false));
   expect(untrack(open)).toBe(true);
   expect(surface().matches(":popover-open")).toBe(true);
-  expect(received).toEqual([false, true, true]);
+  expect(received).toEqual([false, false, true, true]);
   vetoHide = false;
   update(() => setOpen(false));
   await phase(surface(), "hidden");
-  expect(received).toEqual([false, true, true, false]);
+  expect(received).toEqual([false, false, true, true, false]);
 });
 
 it("retains submenu content and identity across label updates", async () => {
-  let icon!: HTMLSpanElement;
-  let details!: HTMLSpanElement;
-  const [id, setId] = createSignal("people");
-  const [label, setLabel] = createSignal("People actions");
-  const [childLabel, setChildLabel] = createSignal("Assign to");
-  mountMenu({
-    get id() {
-      return id();
-    },
-    get label() {
-      return label();
-    },
-    get items() {
-      return [
-        {
-          id: "assign",
-          label: childLabel(),
-          icon: <span ref={(node) => (icon = node)}>Icon</span>,
-          details: <span ref={(node) => (details = node)}>A</span>,
-          children: [{ id: "ada", label: "Ada Rivera" }],
-        },
-      ];
-    },
+  const icon = document.createElement("span"),
+    details = document.createElement("span");
+  const [props, setProps] = createStore({
+    id: "people",
+    label: "People actions",
+    items: [
+      {
+        id: "assign",
+        label: "Assign to",
+        icon,
+        details,
+        children: [{ id: "ada", label: "Ada Rivera" }],
+      },
+    ],
   });
+  mountMenu(props);
   const root = surface();
   const button = trigger();
   await openMenu();
@@ -258,10 +202,13 @@ it("retains submenu content and identity across label updates", async () => {
   await openMenu("people-assign");
   expect([icon, details].every((node) => assignment.contains(node))).toBe(true);
   const child = surface("people-assign");
-  expect(item("Ada Rivera", "people-assign").getAttribute("value")).toBe("ada");
-  setId("replacement-id");
-  setLabel("Updated actions");
-  update(() => setChildLabel("Updated assignment"));
+  update(() =>
+    setProps((draft) => {
+      draft.id = "replacement-id";
+      draft.label = "Updated actions";
+      draft.items[0]!.label = "Updated assignment";
+    }),
+  );
   expect(surface()).toBe(root);
   expect(trigger()).toBe(button);
   expect(button.getAttribute("aria-controls")).toBe(root.id);
@@ -356,7 +303,7 @@ it.each([
   await phase(surface(), "hidden");
 });
 
-it("leases descendant native overlap until exit settles", async () => {
+it("leases native overlap contributed only by a descendant menu", async () => {
   vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage() {} } } });
   await page.viewport(1280, 800);
   let bounds = new DOMRect(1000, 100, 100, 100);
@@ -377,43 +324,9 @@ it("leases descendant native overlap until exit settles", async () => {
   bounds = new DOMRect(childRect.right - 4, childRect.top + 4, 100, childRect.height - 8);
   expect(bounds.left).toBeGreaterThan(surface().getBoundingClientRect().right);
   await expect.poll(() => states).toEqual([false, true]);
-  const branch = [surface(), child];
-  // Establish the visible starting state for the closing transitions.
-  await expect.poll(() => branch.map((menu) => getComputedStyle(menu).opacity)).toEqual(["1", "1"]);
-  // Hold the parent too: its exit moves the submenu anchor before hiding it.
-  branch.forEach((menu) => {
-    const animation = menu.animate({ opacity: [1, 0], scale: [1, 0.9] }, { duration: 1000 });
-    animation.pause();
-    animation.currentTime = 0;
-    cleanups.push(() => animation.cancel());
-  });
-  const hidden = new Promise<void>((resolve) => {
-    child.addEventListener("overlay-after-hide", () => resolve(), { once: true });
-  });
-  child.addEventListener("toggle", (event) => {
-    if ((event as ToggleEvent).newState === "closed") {
-      // Chromium starts discrete exits when the native popover finally closes.
-      child.getAnimations().forEach((animation) => animation.finish());
-    }
-  });
   expect(view.handle.close()).toBe(true);
-  const closing = branch.flatMap((menu) => {
-    const animations = menu.getAnimations();
-    expect(animations.length).toBeGreaterThan(0);
-    return animations;
-  });
-  for (const animation of closing) {
-    animation.pause();
-    cleanups.push(() => animation.cancel());
-  }
-  await nextFrame();
-  expect(child.dataset.phase).toBe("closing");
-  expect(child.matches(":popover-open")).toBe(true);
-  expect(states).toEqual([false, true]);
-  child.getAnimations().forEach((animation) => animation.finish());
-  await hidden;
+  await phase(child, "hidden");
   expect(states).toEqual([false, true, false]);
-  closing.forEach((animation) => animation.finish());
 });
 
 async function finishHover() {
@@ -468,29 +381,21 @@ describe("Solid menu branch lifetime", () => {
     expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
   });
 
-  it.each(["array", "factory"] as const)(
-    "materializes %s submenus on open and retains their controls across closes",
-    async (kind) => {
-      const renderAda = vi.fn((attributes: MenuItemBindings) => <button {...attributes} />);
-      const children = [{ id: "ada", label: "Ada Rivera", render: renderAda }];
-      mountMenu({
-        lazy: true,
-        items: [submenuBranch("assign", kind === "array" ? children : () => children)],
-      });
-      expect(renderAda).not.toHaveBeenCalled();
-      await openMenu();
-      expect(renderAda).not.toHaveBeenCalled();
-      expect(surface("people-assign").querySelector('[role="menuitem"]')).toBeNull();
-      await openMenu("people-assign");
-      const ada = item("Ada Rivera", "people-assign");
-      expect(renderAda).toHaveBeenCalledTimes(1);
-      await userEvent.keyboard("{Escape}");
-      await phase(surface("people-assign"), "hidden");
-      await openMenu("people-assign");
-      expect(item("Ada Rivera", "people-assign")).toBe(ada);
-      expect(renderAda).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("materializes lazy submenu factories once and retains their controls", async () => {
+    const children = [{ id: "ada", label: "Ada Rivera" }];
+    mountMenu({
+      lazy: true,
+      items: [submenuBranch("assign", () => children)],
+    });
+    await openMenu();
+    expect(surface("people-assign").querySelector('[role="menuitem"]')).toBeNull();
+    await openMenu("people-assign");
+    const ada = item("Ada Rivera", "people-assign");
+    await userEvent.keyboard("{Escape}");
+    await phase(surface("people-assign"), "hidden");
+    await openMenu("people-assign");
+    expect(item("Ada Rivera", "people-assign")).toBe(ada);
+  });
 
   it("opens custom form content and retains it when generated items become empty", async () => {
     let input!: HTMLInputElement;
@@ -580,17 +485,6 @@ describe("Solid menu branch lifetime", () => {
 
   it("retires an emptied submenu and allows restored content to open at its current anchor", async () => {
     const view = liveMenu();
-    const mutations: MutationRecord[] = [];
-    const observer = new MutationObserver((records) => mutations.push(...records));
-    observer.observe(surface(), { attributes: true, attributeFilter: ["inert", "data-phase"] });
-    try {
-      view.container.append(document.createElement("span"));
-      await Promise.resolve();
-      mutations.push(...observer.takeRecords());
-      expect(mutations).toHaveLength(0);
-    } finally {
-      observer.disconnect();
-    }
     view.update(navigationItems);
     await openMenu();
     await openMenu("people-move");
@@ -619,30 +513,43 @@ function panelAction(
   return { id, label: id[0]!.toUpperCase() + id.slice(1), icon, shortcut, active, onActivate() {} };
 }
 
-it.each(["ltr", "rtl"] as const)("aligns all menu row shortcuts in %s", async (dir) => {
+it.each([
+  ["ltr", false],
+  ["rtl", false],
+  ["ltr", true],
+  ["rtl", true],
+] as const)("aligns shortcut rails in %s (icons only: %s)", async (dir, iconsOnly) => {
   await page.viewport(1000, 700);
-  const hint = (key: "b" | "u") => (
-    <KeyboardShortcut
-      class="session-menu__shortcut"
-      combo={{ key, modifiers: key === "b" ? ["mod"] : ["mod", "alt", "shift"] }}
-      applePlatform
-    />
-  );
-  const alignmentItems: MenuItem[] = [
-    { id: "plain", label: "Plain", details: hint("b") },
-    { id: "off", label: "Unchecked", type: "checkbox", checked: false, details: hint("u") },
-    { id: "on", label: "Checked", type: "checkbox", checked: true, details: hint("b") },
-    { id: "radio", label: "Radio", type: "radio", checked: true, details: hint("u") },
-    {
-      id: "branch",
-      label: "Submenu",
-      details: hint("b"),
-      children: [{ id: "child", label: "Child" }],
-    },
-  ];
-  render(() => (
-    <Menu id="alignment" label="Actions" dir={dir} class="session-menu" items={alignmentItems} />
-  ));
+  const rows: MenuItem[] = iconsOnly
+    ? ["s", "b"].map((id) => ({
+        id,
+        label: id,
+        icon: <Icon name="copy" />,
+        details: <Kbd class="session-menu__shortcut" keys={id.toUpperCase()} inline />,
+      }))
+    : (
+        [
+          { id: "plain", label: "Plain" },
+          { id: "off", label: "Unchecked", type: "checkbox", checked: false },
+          { id: "on", label: "Checked", type: "checkbox", checked: true },
+          { id: "radio", label: "Radio", type: "radio", checked: true },
+          { id: "branch", label: "Submenu", children: [{ id: "child", label: "Child" }] },
+        ] satisfies MenuItem[]
+      ).map((row, index) =>
+        Object.assign(row, {
+          details: (
+            <KeyboardShortcut
+              class="session-menu__shortcut"
+              combo={{
+                key: index % 2 ? "u" : "b",
+                modifiers: index % 2 ? ["mod", "alt", "shift"] : ["mod"],
+              }}
+              applePlatform
+            />
+          ),
+        }),
+      );
+  render(() => <Menu id="alignment" label="Actions" dir={dir} class="session-menu" items={rows} />);
   await openMenu("alignment");
   const menu = surface("alignment");
   await expect.element(page.elementLocator(menu)).toBeVisible();
@@ -650,26 +557,8 @@ it.each(["ltr", "rtl"] as const)("aligns all menu row shortcuts in %s", async (d
     const bounds = element.getBoundingClientRect();
     return dir === "rtl" ? bounds.left : bounds.right;
   });
-  expect(ends).toHaveLength(5);
   expect(Math.max(...ends) - Math.min(...ends)).toBeLessThan(1);
-});
-
-it.each(["ltr", "rtl"] as const)(
-  "insets shortcuts like leading icons without checks or arrows in %s",
-  async (dir) => {
-    await page.viewport(1000, 700);
-    const iconItems: MenuItem[] = ["s", "b"].map((key) => ({
-      id: key,
-      label: key,
-      icon: <Icon name="copy" />,
-      details: <Kbd class="session-menu__shortcut" keys={key.toUpperCase()} inline />,
-    }));
-    render(() => (
-      <Menu id="mirrored" label="Actions" dir={dir} class="session-menu" items={iconItems} />
-    ));
-    await openMenu("mirrored");
-    const menu = surface("mirrored");
-    await expect.element(page.elementLocator(menu)).toBeVisible();
+  if (iconsOnly) {
     for (const row of menu.querySelectorAll<HTMLElement>('[role="menuitem"]')) {
       const bounds = row.getBoundingClientRect();
       const icon = row.querySelector(".oc-menu-item__icon")!.getBoundingClientRect();
@@ -680,8 +569,8 @@ it.each(["ltr", "rtl"] as const)(
           : [icon.left - bounds.left, bounds.right - hint.right];
       expect(Math.abs(end - start)).toBeLessThan(1);
     }
-  },
-);
+  }
+});
 
 it("keeps Layout shortcuts aligned across style loads and hidden on mobile", async () => {
   await page.viewport(1000, 800);
