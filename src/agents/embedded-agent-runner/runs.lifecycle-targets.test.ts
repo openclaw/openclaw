@@ -23,6 +23,8 @@ import { createEmbeddedRunHandle, testing } from "./runs.test-support.js";
 const sessionId = "native-lifecycle-session";
 const sessionKey = "agent:main:native-lifecycle";
 const undrained = { aborted: false, drained: false, forceCleared: false };
+const createOperation = () =>
+  createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
 
 function drain(
   options: Omit<Parameters<typeof abortAndDrainEmbeddedAgentRun>[0], "sessionId"> = {},
@@ -79,10 +81,7 @@ describe("native lifecycle admission and cancellation", () => {
     async (kind, recovery) => {
       vi.useFakeTimers();
       vi.setSystemTime(0);
-      const operation =
-        kind === "owned"
-          ? createReplyOperation({ sessionId, sessionKey, resetTriggered: false })
-          : undefined;
+      const operation = kind === "owned" ? createOperation() : undefined;
       const abort = vi.fn();
       const cleanup = vi.fn(async () => {});
       const recoverStalledModelCall = vi.fn(() => recovery === "model");
@@ -128,9 +127,7 @@ describe("native lifecycle admission and cancellation", () => {
   );
 
   it.each([false, true])("requires exact admission even with an ambient turn: %s", (active) => {
-    const operation = active
-      ? createReplyOperation({ sessionId, sessionKey, resetTriggered: false })
-      : undefined;
+    const operation = active ? createOperation() : undefined;
     const handle = createEmbeddedRunHandle();
     let rejection: unknown;
     try {
@@ -166,20 +163,15 @@ describe("native lifecycle admission and cancellation", () => {
       () => attachActiveEmbeddedRun(sessionId, handle, sessionKey),
     );
     expect(assertActive).toHaveBeenCalled();
-    expect(getEmbeddedRunAttachment(handle)).toMatchObject({ sessionKey });
-    expect(getEmbeddedRunAttachment(handle)?.operation).toBeUndefined();
+    expect(getEmbeddedRunAttachment(handle)).toMatchObject({ sessionKey, operation: undefined });
     expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
     expect(isSessionRunActive(sessionId)).toBe(false);
-    detachActiveEmbeddedRun(sessionId, handle, sessionKey);
   });
 
   it.each(["owned", "preparing", "detached"] as const)(
     "preserves typed single-session restart cancellation for %s work",
     (kind) => {
-      const operation =
-        kind === "detached"
-          ? undefined
-          : createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+      const operation = kind === "detached" ? undefined : createOperation();
       const abort = vi.fn();
       const handle = createEmbeddedRunHandle({ abort });
       if (kind === "owned") {
@@ -197,7 +189,6 @@ describe("native lifecycle admission and cancellation", () => {
       } else {
         expect(abort).toHaveBeenCalledExactlyOnceWith("restart");
         expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
-        detachActiveEmbeddedRun(sessionId, handle, operation ? sessionKey : undefined);
       }
       operation?.complete();
     },
@@ -211,13 +202,9 @@ describe("native lifecycle admission and cancellation", () => {
       });
       const handle = createEmbeddedRunHandle({ abort });
       attachActiveEmbeddedRun(sessionId, handle);
-      try {
-        expect(abortEmbeddedAgentRun(sessionId, { reason })).toBe(false);
-        expect(abort).toHaveBeenCalledExactlyOnceWith(reason);
-        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
-      } finally {
-        detachActiveEmbeddedRun(sessionId, handle);
-      }
+      expect(abortEmbeddedAgentRun(sessionId, { reason })).toBe(false);
+      expect(abort).toHaveBeenCalledExactlyOnceWith(reason);
+      expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
     },
   );
 
@@ -276,7 +263,6 @@ describe("native lifecycle admission and cancellation", () => {
       await expect(draining).resolves.toEqual(undrained);
       expect(abort).not.toHaveBeenCalled();
       expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
-      detachActiveEmbeddedRun(sessionId, handle);
     },
   );
 });

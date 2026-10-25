@@ -18,17 +18,8 @@ vi.mock("./logger.js", () => ({
 
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
 
-beforeEach(() => {
-  extraParamsTesting.setProviderRuntimeDepsForTest({
-    prepareProviderExtraParams: () => undefined,
-    resolveProviderExtraParamsForTransport: () => undefined,
-    wrapProviderStreamFn: () => undefined,
-  });
-});
-
-afterEach(() => {
-  extraParamsTesting.resetProviderRuntimeDepsForTest();
-});
+beforeEach(() => extraParamsTesting.setProviderRuntimeDepsForTest());
+afterEach(() => extraParamsTesting.resetProviderRuntimeDepsForTest());
 
 function createStreamAgent() {
   const underlying = vi.fn(() => ({
@@ -36,7 +27,7 @@ function createStreamAgent() {
     result: vi.fn(async () => undefined),
     [Symbol.asyncIterator]: vi.fn(async function* () {}),
   })) as unknown as StreamFn;
-  const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+  const agent = { streamFn: underlying };
   return { underlying, agent };
 }
 
@@ -57,9 +48,6 @@ function sample(
 ) {
   const { underlying, agent } = createStreamAgent();
   applyExtraParamsToAgent(agent, cfg, provider, id, override);
-  if (!agent.streamFn) {
-    throw new Error("expected extra params to wrap streamFn");
-  }
   void agent.streamFn(
     makeProviderModelFixture({ id, api: "openai-completions", provider, baseUrl: "" }),
     { messages: [], tools: [] },
@@ -197,8 +185,6 @@ describe("extra-params: Google thinking payload compatibility", () => {
   beforeEach(() => {
     extraParamsTesting.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: (params) => params.context.extraParams,
-      resolveProviderExtraParamsForTransport: () => undefined,
-      wrapProviderStreamFn: () => undefined,
     });
   });
 
