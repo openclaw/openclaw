@@ -14,6 +14,7 @@
 // --gateway-http serves paired bundles through the Gateway HTTP owner on loopback.
 // --first-load skips warm-up and clears client state; external Gateway URL runs stay single-sample.
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
+// --chat-pane-one-step --warm-reload measures visible pane transitions with cached reviewed tools.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
 // Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
@@ -243,6 +244,7 @@ const { values } = parseArgs({
     "thread-cpu-time": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
+    "chat-pane-one-step": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -308,6 +310,9 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
+if (values["chat-pane-one-step"] && (!values["warm-reload"] || values["live-events"])) {
+  throw new Error("chat-pane-one-step requires warm-reload without live-events");
+}
 if (values["selector-stats"] && (values.untraced || values["filmstrip-only"])) {
   throw new Error("selector-stats requires tracing; exclude untraced and filmstrip-only");
 }
@@ -655,6 +660,7 @@ const fixture = createControlUiTeamScaleFixture({
     : undefined,
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
+  chatPaneOneStep: values["chat-pane-one-step"],
   offRosterSession: values["off-roster-route"],
   transcriptMessages,
   dashboardWidgetFontUrl: dashboardFont
@@ -981,6 +987,11 @@ try {
         : undefined;
     });
   } else {
+    if (values["chat-pane-one-step"]) {
+      await page.route("**/avatar/main?*", (route) =>
+        route.fulfill(fixture.assets.get("/avatar/main")!),
+      );
+    }
     await page.route("**/control-ui-config.json", (route) =>
       route.fulfill({ json: createControlUiMockBootstrapConfig(prepared.scenario) }),
     );
@@ -1083,7 +1094,9 @@ try {
           : "chip",
     },
   );
-  const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
+  const warmProbes = values["warm-reload"]
+    ? `\n(${warmReloadProbe.toString()})({ paneFrames: ${values["chat-pane-one-step"]} });`
+    : "";
   const boardTickets = values["dashboard-widget"]
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
@@ -1201,12 +1214,23 @@ try {
           .getByText("Team metric 1", { exact: true })
           .waitFor();
       }
-      await page
-        .frameLocator(".chat-tool-card__preview-frame")
-        .last()
-        .frameLocator("iframe")
-        .getByText("Team metric 12", { exact: true })
-        .waitFor();
+      if (!values["chat-pane-one-step"]) {
+        await page
+          .frameLocator(".chat-tool-card__preview-frame")
+          .last()
+          .frameLocator("iframe")
+          .getByText("Team metric 12", { exact: true })
+          .waitFor();
+      } else {
+        await page.locator(".chat-run-failure").waitFor();
+        await page.locator(".chat-activity-group__review-status").first().waitFor();
+        await page.locator(".chat-details-desktop-section").first().waitFor();
+        await page.waitForFunction(() =>
+          [...document.querySelectorAll<HTMLImageElement>(".chat-avatar-slot img")].some(
+            (image) => image.complete && image.naturalWidth > 0,
+          ),
+        );
+      }
       if (face === "dashboard") {
         await page.waitForFunction(() => {
           const ready = Reflect.get(window, "__readWidgetReadiness")();
@@ -2646,6 +2670,7 @@ try {
         cpuThrottle,
         comparisonBundleDirs,
         fixture: fixture.counts,
+        chatPaneOneStep: values["chat-pane-one-step"],
         sidebarView,
         sidebarAvatars: values["sidebar-avatars"],
         sidebarExpanded: values["sidebar-expanded"],

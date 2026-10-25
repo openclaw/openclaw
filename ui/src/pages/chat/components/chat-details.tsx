@@ -470,6 +470,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         dock ? `${DETAILS_WIDTH + (isDesktop ? DETAILS_DESKTOP_INLINE_INSET : 0)}px` : "0px",
       );
       if (open && isDesktop) {
+        // Fetch the docked body while transcript placement still holds its mount.
+        void ChatDetailsDesktopComposition.preload().catch(() => undefined);
         position(layout);
       }
       if (open && (!isDesktop || !conversationVisible) && !dock && !mobileHost) {
