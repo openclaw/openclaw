@@ -468,31 +468,21 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       },
     } as never;
 
-    expect(
-      resolveCompactionHarnessRuntime({
-        boundHarnessRuntime: "copilot",
-        preparedRuntimePlan,
-        configuredHarnessRuntime: "custom",
-        provider: "openai",
-        modelId: "gpt-5.5",
-      }),
-    ).toBe("copilot");
-    expect(
-      resolveCompactionHarnessRuntime({
-        preparedRuntimePlan,
-        configuredHarnessRuntime: "custom",
-        provider: "openai",
-        modelId: "gpt-5.5",
-      }),
-    ).toBe("codex");
-    expect(
-      resolveCompactionHarnessRuntime({
-        preparedRuntimePlan,
-        configuredHarnessRuntime: "custom",
-        provider: "openai",
-        modelId: "gpt-5.4",
-      }),
-    ).toBe("custom");
+    for (const [overrides, expected] of [
+      [{ boundHarnessRuntime: "copilot" }, "copilot"],
+      [{}, "codex"],
+      [{ modelId: "gpt-5.4" }, "custom"],
+    ] as const) {
+      expect(
+        resolveCompactionHarnessRuntime({
+          preparedRuntimePlan,
+          configuredHarnessRuntime: "custom",
+          provider: "openai",
+          modelId: "gpt-5.5",
+          ...overrides,
+        }),
+      ).toBe(expected);
+    }
   });
 
   it.each([

@@ -38,6 +38,26 @@ function scopedKey(value: string): string {
   return `history:${value}:${testScope}`;
 }
 
+const unchangedPrefix = { prefixUnchanged: true, changes: null };
+const openAIModel = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+function observerFor(key: string) {
+  return createPromptCacheRequestObserver(
+    { sessionId: scopedKey(key), streamStrategy: "test" },
+    () => {},
+  );
+}
+function observe(sessionId: string, messages: Message[]) {
+  return beginOpenAIObservation({ sessionId, messages });
+}
+function contentHashes(text: string) {
+  return vi
+    .mocked(crypto.hash)
+    .mock.calls.filter(([, value]) => typeof value === "string" && value.includes(text));
+}
+function historyChange(detail: string) {
+  return [{ code: "historyRewrite", detail }];
+}
+
 describe("prompt cache history fingerprints", () => {
   beforeEach(() => {
     testScope += 1;
@@ -120,10 +140,7 @@ describe("prompt cache history fingerprints", () => {
         route === "model context"
           ? convertToLlm(sanitizeToolUseResultPairingForModel(source, api === "openai-responses"))
           : transformTransportMessages(source, model);
-      const observer = createPromptCacheRequestObserver(
-        { sessionId: scopedKey(`${route}:${api}`), streamStrategy: "test" },
-        () => {},
-      );
+      const observer = observerFor(`${route}:${api}`);
       const first = replay();
       await observer.onModelRequest(model, { messages: first });
       observer.onModelUsage({
@@ -156,7 +173,6 @@ describe("prompt cache history fingerprints", () => {
           timestamp: 2,
         },
       ];
-      const hashes = vi.mocked(crypto.hash);
       const observed = vi.fn();
       const observer = createPromptCacheRequestObserver(
         { sessionId, streamStrategy: "test" },
@@ -193,11 +209,7 @@ describe("prompt cache history fingerprints", () => {
       expect(loop[1]).not.toBe(first[1]);
       expect(loop[1]?.content).toBe(first[1]?.content);
       for (const text of ["Read the fixture", "Fixture context", "fixture result"]) {
-        expect(
-          hashes.mock.calls.filter(
-            ([, value]) => typeof value === "string" && value.includes(text),
-          ),
-        ).toHaveLength(1);
+        expect(contentHashes(text)).toHaveLength(1);
       }
       expect(observed).toHaveBeenCalledTimes(3);
       for (const [observation] of observed.mock.calls) {
@@ -234,16 +246,12 @@ describe("prompt cache history fingerprints", () => {
       const wire = (messages: Message[]) =>
         JSON.stringify(convertProviderResponsesMessages(model, { messages }, new Set(["openai"])));
       expect(wire(recovered)).toBe(wire(before));
-      const observer = createPromptCacheRequestObserver(
-        { sessionId: scopedKey("recovered-coordination"), streamStrategy: "test" },
-        () => {},
-      );
+      const observer = observerFor("recovered-coordination");
       await observer.onModelRequest(model, { messages: before });
       recovered.push({ role: "user", content: "Continue after recovery", timestamp: 2 });
-      expect(await observer.onModelRequest(model, { messages: recovered })).toMatchObject({
-        prefixUnchanged: true,
-        changes: null,
-      });
+      expect(await observer.onModelRequest(model, { messages: recovered })).toMatchObject(
+        unchangedPrefix,
+      );
     });
   });
 
@@ -258,11 +266,8 @@ describe("prompt cache history fingerprints", () => {
       normalizeTranscriptJsonValue(entry, "entry");
       return entry.message;
     };
-    const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
-    const observer = createPromptCacheRequestObserver(
-      { sessionId: scopedKey("sealed-history"), streamStrategy: "test" },
-      () => {},
-    );
+    const model = openAIModel;
+    const observer = observerFor("sealed-history");
     const message = publish("sealed-history-fixture");
     expect(isOwnedTranscriptPayload(message)).toBe(true);
     const hashes = vi.mocked(crypto.hash);
@@ -274,16 +279,10 @@ describe("prompt cache history fingerprints", () => {
       ),
     ).toBe(false);
     messages.push({ role: "user", content: "continue", timestamp: 2 });
-    expect(await observer.onModelRequest(model, { messages })).toMatchObject({
-      prefixUnchanged: true,
-      changes: null,
-    });
+    expect(await observer.onModelRequest(model, { messages })).toMatchObject(unchangedPrefix);
     // Reopening an identical publication must compare by content, not object identity.
     messages[0] = publish("sealed-history-fixture");
-    expect(await observer.onModelRequest(model, { messages })).toMatchObject({
-      prefixUnchanged: true,
-      changes: null,
-    });
+    expect(await observer.onModelRequest(model, { messages })).toMatchObject(unchangedPrefix);
     messages[0] = publish("replacement");
     await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
       await expect(observer.onModelRequest(model, { messages })).rejects.toThrow(
@@ -350,13 +349,8 @@ describe("prompt cache history fingerprints", () => {
     normalizeTranscriptJsonValue(message, "");
     expect(isOwnedTranscriptPayload(message)).toBe(false);
     expect(isOwnedTranscriptPayload(message.content)).toBe(true);
-    const observers = ["first", "second"].map((name) =>
-      createPromptCacheRequestObserver(
-        { sessionId: scopedKey(name), streamStrategy: "test" },
-        () => {},
-      ),
-    );
-    const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+    const observers = ["first", "second"].map((name) => observerFor(name));
+    const model = openAIModel;
     const hashes = vi.mocked(crypto.hash);
     hashes.mockClear();
     for (let turn = 0; turn < 3; turn++) {
@@ -366,11 +360,7 @@ describe("prompt cache history fingerprints", () => {
         ).toMatchObject({ changes: null });
       }
     }
-    expect(
-      hashes.mock.calls.filter(
-        ([, text]) => typeof text === "string" && text.includes("owned-arguments-fixture"),
-      ),
-    ).toHaveLength(1);
+    expect(contentHashes("owned-arguments-fixture")).toHaveLength(1);
 
     message.content = [
       { type: "toolCall", id: "call-1", name: "read", arguments: { options: { path: "changed" } } },
@@ -390,11 +380,8 @@ describe("prompt cache history fingerprints", () => {
     "ignores internal tool-result envelopes but detects content rewrites (sealed=%s)",
     async (sealed) => {
       await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
-        const observer = createPromptCacheRequestObserver(
-          { sessionId: scopedKey("tool-result-envelope"), streamStrategy: "test" },
-          () => {},
-        );
-        const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+        const observer = observerFor("tool-result-envelope");
+        const model = openAIModel;
         const publish = (text: string, metadata?: Record<string, unknown>) => {
           const entry = {
             message: {
@@ -418,16 +405,15 @@ describe("prompt cache history fingerprints", () => {
           codeModeCheckpoint: { status: "completed", replaySafe: true },
         };
         const message = publish("fixture result", metadata);
-        expect(await observer.onModelRequest(model, { messages: [message] })).toMatchObject({
-          prefixUnchanged: true,
-          changes: null,
-        });
+        expect(await observer.onModelRequest(model, { messages: [message] })).toMatchObject(
+          unchangedPrefix,
+        );
         const withoutEnvelope = sealed ? publish("fixture result") : message;
         if (!sealed) {
           delete withoutEnvelope["__openclaw"];
         }
         expect(await observer.onModelRequest(model, { messages: [withoutEnvelope] })).toMatchObject(
-          { prefixUnchanged: true, changes: null },
+          unchangedPrefix,
         );
         await expect(
           observer.onModelRequest(model, { messages: [publish("rewritten result", metadata)] }),
@@ -479,13 +465,10 @@ describe("prompt cache history fingerprints", () => {
       timestamp,
     }));
     const hashes = vi.mocked(crypto.hash);
-    beginOpenAIObservation({ sessionId, messages });
+    observe(sessionId, messages);
     hashes.mockClear();
     messages.push({ role: "user", content: "Next turn", timestamp: 100 });
-    expect(beginOpenAIObservation({ sessionId, messages })).toMatchObject({
-      prefixUnchanged: true,
-      changes: null,
-    });
+    expect(observe(sessionId, messages)).toMatchObject(unchangedPrefix);
     // Hash work grows with the new message, not the retained prefix.
     expect(hashes.mock.calls.length).toBeLessThan(10);
   });
@@ -526,7 +509,7 @@ describe("prompt cache history fingerprints", () => {
       expect(
         completePromptCacheObservation({ sessionId, usage: { input: 8_000, cacheRead: 0 } })
           ?.changes,
-      ).toEqual([{ code: "historyRewrite", detail }]);
+      ).toEqual(historyChange(detail));
     },
   );
 
@@ -537,11 +520,9 @@ describe("prompt cache history fingerprints", () => {
       const message = makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "call-1", name: "read", arguments: args }],
       });
-      beginOpenAIObservation({ sessionId, messages: [message] });
+      observe(sessionId, [message]);
       args.options.path = "after";
-      expect(() => beginOpenAIObservation({ sessionId, messages: [message] })).toThrow(
-        "changed fields: content[0].arguments",
-      );
+      expect(() => observe(sessionId, [message])).toThrow("changed fields: content[0].arguments");
     });
   });
 
@@ -554,10 +535,10 @@ describe("prompt cache history fingerprints", () => {
       "private-extension-name": "original extension value",
     };
     const message = makeAgentAssistantMessage({ content: [block] });
-    beginOpenAIObservation({ sessionId, messages: [message] });
+    observe(sessionId, [message]);
     block.thinkingSignature = "private rewritten signature";
     block["private-extension-name"] = "rewritten extension value";
-    const changes = beginOpenAIObservation({ sessionId, messages: [message] }).changes;
+    const changes = observe(sessionId, [message]).changes;
     expect(changes).toEqual([
       {
         code: "historyRewrite",
@@ -573,7 +554,7 @@ describe("prompt cache history fingerprints", () => {
       const sessionId = scopedKey("mutated-properties");
       const block: TextContent = { type: "text", text: "stable" };
       const message = makeAgentAssistantMessage({ content: [block] });
-      beginOpenAIObservation({ sessionId, messages: [message] });
+      observe(sessionId, [message]);
       for (const mutate of [
         () => {
           block.textSignature = undefined;
@@ -586,9 +567,7 @@ describe("prompt cache history fingerprints", () => {
         },
       ]) {
         mutate();
-        expect(() => beginOpenAIObservation({ sessionId, messages: [message] })).toThrow(
-          "message 0 (assistant)",
-        );
+        expect(() => observe(sessionId, [message])).toThrow("message 0 (assistant)");
       }
     });
   });
@@ -603,17 +582,12 @@ describe("prompt cache history fingerprints", () => {
         content: kind === "string" ? text : [{ type: "text", text }],
         timestamp: 1,
       };
-      const hashes = vi.mocked(crypto.hash);
       for (let index = 0; index < 3; index++) {
         expect(
           beginOpenAIObservation({ sessionId, messages: [{ ...message }] }).changes,
         ).toBeNull();
       }
-      expect(
-        hashes.mock.calls.filter(
-          ([, value]) => typeof value === "string" && value.includes("large-content-fixture"),
-        ),
-      ).toHaveLength(1);
+      expect(contentHashes("large-content-fixture")).toHaveLength(1);
     },
   );
 
@@ -642,21 +616,19 @@ describe("prompt cache history fingerprints", () => {
       const detail = `message ${index} (assistant) differs from the previous request; history must be append-only; ${fields}`;
       const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
       const sessionId = scopedKey(kind);
-      beginOpenAIObservation({ sessionId, messages });
+      observe(sessionId, messages);
       completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
       withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: undefined }, () => {
-        expect(beginOpenAIObservation({ sessionId, messages: changed }).changes).toEqual([
-          { code: "historyRewrite", detail },
-        ]);
+        expect(observe(sessionId, changed).changes).toEqual([{ code: "historyRewrite", detail }]);
         expect(
           completePromptCacheObservation({ sessionId, usage: { input: 8_000, cacheRead: 0 } })
             ?.changes,
-        ).toEqual([{ code: "historyRewrite", detail }]);
-        beginOpenAIObservation({ sessionId, messages });
+        ).toEqual(historyChange(detail));
+        observe(sessionId, messages);
         expect(warn).toHaveBeenCalledTimes(1);
       });
       withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
-        expect(() => beginOpenAIObservation({ sessionId, messages: changed })).toThrow(detail);
+        expect(() => observe(sessionId, changed)).toThrow(detail);
       });
     },
   );
@@ -676,11 +648,11 @@ describe("prompt cache history fingerprints", () => {
         timestamp: 1,
       };
       const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-      beginOpenAIObservation({ sessionId, messages: [message] });
+      observe(sessionId, [message]);
       completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
       message[field] = value;
       withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: undefined }, () => {
-        expect(beginOpenAIObservation({ sessionId, messages: [message] }).changes).toEqual([
+        expect(observe(sessionId, [message]).changes).toEqual([
           {
             code: "historyRewrite",
             detail: `message 0 (user) differs from the previous request; history must be append-only; changed fields: envelope.${label}`,
@@ -692,7 +664,7 @@ describe("prompt cache history fingerprints", () => {
       );
       expect(JSON.stringify(warn.mock.calls)).not.toContain("private-");
       completePromptCacheObservation({ sessionId });
-      beginOpenAIObservation({ sessionId, messages: [message] });
+      observe(sessionId, [message]);
       expect(
         completePromptCacheObservation({ sessionId, usage: { cacheRead: 2_000 } })?.changes,
       ).toEqual([
@@ -711,16 +683,14 @@ describe("prompt cache history fingerprints", () => {
       text: "before",
     }));
     const message = makeAgentAssistantMessage({ content: blocks });
-    beginOpenAIObservation({ sessionId, messages: [message] });
+    observe(sessionId, [message]);
     blocks[19]!.text = "private-rewritten-content";
     withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
-      expect(() => beginOpenAIObservation({ sessionId, messages: [message] })).toThrow(
-        "changed fields: content[remaining]",
-      );
+      expect(() => observe(sessionId, [message])).toThrow("changed fields: content[remaining]");
       for (const block of blocks) {
         block.text = "private-second-rewrite";
       }
-      expect(() => beginOpenAIObservation({ sessionId, messages: [message] })).toThrow(
+      expect(() => observe(sessionId, [message])).toThrow(
         "changed fields: content[0].text, content[1].text, content[2].text, content[3].text, content[4].text, content[5].text, content[6].text, content[7].text, …",
       );
     });
@@ -747,27 +717,24 @@ describe("prompt cache history fingerprints", () => {
       withEnv({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, () => {
         const sessionId = scopedKey(reason);
         const messages: Message[] = [{ role: "user", content: "before", timestamp: 1 }];
-        expect(beginOpenAIObservation({ sessionId, messages }).prefixUnchanged).toBe(false);
+        expect(observe(sessionId, messages).prefixUnchanged).toBe(false);
         const appended: Message[] = [
           ...messages,
           { role: "user", content: "appended", timestamp: 2 },
         ];
         declarePromptHistoryRewrite({ sessionId, reason });
-        expect(beginOpenAIObservation({ sessionId, messages: appended })).toMatchObject({
+        expect(observe(sessionId, appended)).toMatchObject({
           prefixUnchanged: true,
           changes: [{ code: reason, detail: `${reason} changed provider history` }],
         });
         declarePromptHistoryRewrite({ sessionId, reason });
         const rewritten: Message[] = [{ role: "user", content: "after", timestamp: 1 }];
-        expect(beginOpenAIObservation({ sessionId, messages: rewritten })).toMatchObject({
+        expect(observe(sessionId, rewritten)).toMatchObject({
           prefixUnchanged: false,
           changes: [{ code: reason, detail: `${reason} changed provider history` }],
         });
-        expect(beginOpenAIObservation({ sessionId, messages: rewritten })).toMatchObject({
-          prefixUnchanged: true,
-          changes: null,
-        });
-        expect(() => beginOpenAIObservation({ sessionId, messages })).toThrow("message 0 (user)");
+        expect(observe(sessionId, rewritten)).toMatchObject(unchangedPrefix);
+        expect(() => observe(sessionId, messages)).toThrow("message 0 (user)");
       });
     },
   );
