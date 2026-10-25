@@ -23,6 +23,7 @@ import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import * as databaseLifecycle from "../../../state/openclaw-state-db-cache.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import { runSpawnPipeline } from "../../spawn-pipeline.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -30,10 +31,7 @@ import * as registryPublication from "./subagent-registry-publication.js";
 import { registerQueuedRegistrationAdmissionCases } from "./subagent-registry-queued-admission.test-support.js";
 import { registerQueuedCancelledLaunchCases } from "./subagent-registry-queued-cancelled-launch.test-support.js";
 import { registerQueuedRegistrationClaimCases } from "./subagent-registry-queued-registration-claims.test-support.js";
-import {
-  withQueuedRegistrationFixture,
-  type QueuedRegistrationFixture,
-} from "./subagent-registry-queued-registration.test-support.js";
+import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
 import { registerQueuedUnknownKillAuthorityTest } from "./subagent-registry-queued-uncertain-kill.test-support.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import * as runPause from "./subagent-registry-run-pause.js";
@@ -54,35 +52,6 @@ vi.mock("./subagent-registry.js", () => ({
   settleFailedQueuedSubagentLaunch: vi.fn(),
   startQueuedSubagentRun: vi.fn(),
 }));
-
-function captureLifecycle(runId: string) {
-  let listener: ((event: AgentEventPayload) => void) | undefined;
-  vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
-    listener = handler;
-    return () => {};
-  });
-  return (data: AgentEventPayload["data"], seq = 1, ts = Date.now()) =>
-    listener?.({ runId, seq, stream: "lifecycle", ts, data });
-}
-
-function expectTerminal(f: QueuedRegistrationFixture, error?: string) {
-  const terminal = {
-    execution: { status: "terminal", ...(error ? { outcome: { status: "error", error } } : {}) },
-    collectorLaunchCleanupPending: true,
-  };
-  expect(f.current()).toMatchObject(terminal);
-  expect(f.stored()).toMatchObject(terminal);
-}
-
-async function descriptorPending(f: QueuedRegistrationFixture, phase: "before" | "ack" = "ack") {
-  const intent = f.holdNextWrite();
-  const descriptor = f.holdNextWrite(phase);
-  const registration = f.register();
-  await intent.entered;
-  intent.release();
-  await descriptor.entered;
-  return { descriptor, registration };
-}
 
 it("awaits intent and descriptor acknowledgements through the spawn pipeline", async () => {
   await withQueuedRegistrationFixture(async (f) => {
@@ -140,11 +109,9 @@ it.each(["intent", "descriptor"] as const)(
       );
       await expect(registration).rejects.toMatchObject({ outcome: "unknown" });
       expect(f.runs.get(f.registration.runId)?.queuedLaunch).toBeUndefined();
-      expect([
-        f.scope.canLaunch(),
-        f.scope.canCleanupSession(),
-        f.scope.canRetireReservation(),
-      ]).toEqual([false, false, false]);
+      expect(f.scope.canLaunch()).toBe(false);
+      expect(f.scope.canCleanupSession()).toBe(false);
+      expect(f.scope.canRetireReservation()).toBe(false);
       await expect(f.scope.settleFailedLaunch("retained failure")).rejects.toMatchObject({
         outcome: "unknown",
       });
@@ -207,13 +174,21 @@ it("rejects and terminalizes an intent superseded while descriptor admission wai
     earlierMutation.release();
     await changing;
     await expect(registration).rejects.toThrow("Queued registration lost its original run owner");
-    expectTerminal(f, "Queued registration lost its original run owner");
-    for (const row of [f.current(), f.stored()]) {
-      expect(row).toMatchObject({
-        execution: { suppressSessionEffects: true },
-        queuedLaunch: undefined,
-      });
-    }
+    expect(f.current()).toMatchObject({
+      execution: { status: "terminal", suppressSessionEffects: true },
+      collectorLaunchCleanupPending: true,
+      queuedLaunch: undefined,
+    });
+    const stored = f.stored();
+    expect(stored).toMatchObject({
+      execution: {
+        status: "terminal",
+        outcome: { status: "error", error: "Queued registration lost its original run owner" },
+        suppressSessionEffects: true,
+      },
+      collectorLaunchCleanupPending: true,
+    });
+    expect(stored?.queuedLaunch).toBeUndefined();
     expect(f.runs.get(successor.runId)).toEqual(successor);
     expect(f.scope.canLaunch()).toBe(false);
     expect(f.scope.canCleanupSession()).toBe(false);
@@ -260,14 +235,20 @@ it.each(["main", "research"] as const)(
           },
         );
       }
-      const { descriptor, registration } = await descriptorPending(f, "before");
+      const intent = f.holdNextWrite();
+      const descriptor = f.holdNextWrite("before");
+      const registration = f.register();
+      await intent.entered;
+      intent.release();
+      await descriptor.entered;
       descriptor.reject(new Error("descriptor refused"));
       await expect(registration).rejects.toThrow("descriptor refused");
-      expectTerminal(f);
       expect(f.current()).toMatchObject({
-        execution: { outcome: { status: "error" } },
+        execution: { status: "terminal", outcome: { status: "error" } },
         queuedLaunch: undefined,
+        collectorLaunchCleanupPending: true,
       });
+      expect(f.stored()?.execution.status).toBe("terminal");
       expect(f.stored()?.collectorCompletion).toEqual({
         status: "failed",
         usage: { inputTokens: 101, outputTokens: 103 },
@@ -279,7 +260,12 @@ it.each(["main", "research"] as const)(
 
 it("serializes Stop after a pending descriptor without losing either commit", async () => {
   await withQueuedRegistrationFixture(async (f) => {
-    const { descriptor, registration } = await descriptorPending(f);
+    const intent = f.holdNextWrite();
+    const descriptor = f.holdNextWrite();
+    const registration = f.register();
+    await intent.entered;
+    intent.release();
+    await descriptor.entered;
     const captured = f.current();
     const killing = f.track(f.manager.markSubagentRunTerminated({ runId: captured.runId }));
     descriptor.release();
@@ -305,9 +291,13 @@ it.each(["open", "restart", "suspend"] as const)(
       const preservation = vi
         .spyOn(runPause, "preserveSubagentRunForRestart")
         .mockImplementation((params) => f.track(release.promise.then(() => preserve(params))));
-      const emit = captureLifecycle(f.registration.runId);
+      let emit: ((event: AgentEventPayload) => void) | undefined;
       const complete = vi.fn(async () => {});
-
+      const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+      vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
+        emit = handler;
+        return () => {};
+      });
       const listener = f.createListener({ completeSubagentRunWithRecovery: complete });
       const dispatch = async () => {
         const settleRootWork = observeRootWork();
@@ -317,10 +307,16 @@ it.each(["open", "restart", "suspend"] as const)(
           expect(tryBeginGatewaySuspendAdmission(() => {})?.drain()).toBe(true);
         }
         try {
-          emit({
-            phase: "end",
-            endedAt: Date.now(),
-            ...(fence === "restart" ? { aborted: true, stopReason: "restart" } : {}),
+          emit?.({
+            runId: f.registration.runId,
+            seq: 1,
+            stream: "lifecycle",
+            ts: Date.now(),
+            data: {
+              phase: "end",
+              endedAt: Date.now(),
+              ...(fence === "restart" ? { aborted: true, stopReason: "restart" } : {}),
+            },
           });
           expect(preservation).toHaveBeenCalledOnce();
           expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(1);
@@ -328,6 +324,7 @@ it.each(["open", "restart", "suspend"] as const)(
           release.resolve();
           await settleRootWork();
         }
+        expect(warn).not.toHaveBeenCalled();
         expect(getActiveGatewayRootWorkCount({ excludeCurrent: true })).toBe(0);
         if (fence === "restart") {
           expect(f.current().execution.status).toBe("interrupted");
@@ -358,8 +355,12 @@ it.each([false, true])(
   async (started) => {
     await withQueuedRegistrationFixture(async (f) => {
       await f.register();
-      const emit = captureLifecycle(f.registration.runId);
-
+      let emit: ((event: AgentEventPayload) => void) | undefined;
+      vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+      vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
+        emit = handler;
+        return () => {};
+      });
       const listener = f.createListener();
       listener.ensure();
       try {
@@ -370,7 +371,13 @@ it.each([false, true])(
               published.resolve();
             }
           });
-          emit({ phase: "start", startedAt: 10 }, 1, 10);
+          emit?.({
+            runId: f.registration.runId,
+            seq: 1,
+            stream: "lifecycle",
+            ts: 10,
+            data: { phase: "start", startedAt: 10 },
+          });
           await published.promise;
           stop();
         }
@@ -407,13 +414,17 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
         draft.sessionStartedAt = 10;
       });
       vi.useFakeTimers();
-      const emit = captureLifecycle(f.registration.runId);
+      let emit: ((event: AgentEventPayload) => void) | undefined;
       const completeInBackground = vi.fn<(completion: SubagentCompletionRequest) => void>();
       const pendingLifecycle = createPendingLifecycleScheduler({
         runs: f.runs,
         completeInBackground,
       });
-
+      const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+      vi.spyOn(agentEvents, "onAgentEvent").mockImplementation((handler) => {
+        emit = handler;
+        return () => {};
+      });
       const listener = f.createListener({ pendingLifecycle });
       const restarted = createDeferred();
       const stop = subscribeSubagentRunChanges("persistence", () => {
@@ -425,9 +436,21 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
       listener.ensure();
       try {
         if (timing !== "next attempt") {
-          emit({ phase: "error", error: "rate limit", startedAt: 10, endedAt: 15 }, 1, 15);
+          emit?.({
+            runId: f.registration.runId,
+            seq: 1,
+            stream: "lifecycle",
+            ts: 15,
+            data: { phase: "error", error: "rate limit", startedAt: 10, endedAt: 15 },
+          });
         }
-        emit({ phase: "start", startedAt: 20 }, 2, 20);
+        emit?.({
+          runId: f.registration.runId,
+          seq: 2,
+          stream: "lifecycle",
+          ts: 20,
+          data: { phase: "start", startedAt: 20 },
+        });
         await startAck.entered;
         expect(f.current().execution.startedAt).toBe(10);
         if (timing === "already dispatched") {
@@ -437,7 +460,13 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
             true,
           );
         } else if (timing === "next attempt") {
-          emit({ phase: "error", error: "new attempt failed", endedAt: 25 }, 3, 25);
+          emit?.({
+            runId: f.registration.runId,
+            seq: 3,
+            stream: "lifecycle",
+            ts: 25,
+            data: { phase: "error", error: "new attempt failed", endedAt: 25 },
+          });
         }
         startAck.release();
         await restarted.promise;
@@ -445,6 +474,7 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
           runs: f.runs,
         });
         await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
+        expect(warn).not.toHaveBeenCalled();
         expect(f.current().execution).toMatchObject({ status: "running", startedAt: 20 });
         expect(f.scope.canLaunch()).toBe(false);
         expect(f.scope.canAcceptLaunch()).toBe(true);
@@ -554,7 +584,11 @@ it.each(["before", "ack"] as const)(
         terminal.release();
         await settling;
       }
-      expectTerminal(f, "launch failed");
+      expect(f.current()).toMatchObject({
+        execution: { status: "terminal", outcome: { status: "error", error: "launch failed" } },
+        collectorLaunchCleanupPending: true,
+      });
+      expect(f.stored()?.execution.status).toBe("terminal");
     });
   },
 );

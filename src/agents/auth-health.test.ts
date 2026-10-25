@@ -16,6 +16,7 @@ const { resolveProviderIdForAuthMock } = vi.hoisted(() => ({
   >((provider: string) => (provider === "codex-cli" ? "openai" : provider)),
 }));
 
+// mock-isolation: health fixtures must not read credentials from native CLI stores.
 vi.mock("./cli-credentials.js", () => ({
   readMiniMaxCliCredentialsCached: () => null,
 }));

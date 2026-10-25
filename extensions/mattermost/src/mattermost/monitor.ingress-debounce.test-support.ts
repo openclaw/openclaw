@@ -354,7 +354,7 @@ export function registerMattermostIngressDebounceTests(harness: {
         return;
       }
       await lifecycle.onAdopted();
-      const arrival = adopted.get(params.ctx.BodyForAgent);
+      const arrival = params.ctx.BodyForAgent ? adopted.get(params.ctx.BodyForAgent) : undefined;
       if (!arrival) {
         throw new Error("Unexpected Mattermost regression input");
       }

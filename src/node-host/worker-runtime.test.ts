@@ -64,13 +64,6 @@ import { runNodeHostWorker } from "./worker.js";
 const { prepareNodeHostRuntime } =
   await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
 
-function prepareRuntime(options: Parameters<typeof prepareNodeHostRuntime>[0]) {
-  fixture.prepare.mockImplementationOnce(async (params) => ({
-    ...(await prepareNodeHostRuntime({ ...params, ...options })),
-    start: fixture.start,
-  }));
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   fixture.loadConfig.mockResolvedValue(null);
@@ -242,12 +235,16 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
     caps: ["sessions"],
     nodePluginTools: [],
   });
-  prepareRuntime({
-    config: {
-      nodeHost: { workerRuns: { enabled: true, isolation: "none" }, skills: { enabled: false } },
-    },
-    env: {},
-  });
+  fixture.prepare.mockImplementationOnce(async (params) => ({
+    ...(await prepareNodeHostRuntime({
+      ...params,
+      config: {
+        nodeHost: { workerRuns: { enabled: true, isolation: "none" }, skills: { enabled: false } },
+      },
+      env: {},
+    })),
+    start: fixture.start,
+  }));
   await withWorker(async ({ messages }) => {
     expect.soft(readyMessage(messages)).toMatchObject({
       manifest: { commands: expect.arrayContaining(["system.run"]) },
@@ -259,21 +256,27 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
 });
 
 it.each([
-  { desktopSharingEnabled: undefined, configured: false },
-  { desktopSharingEnabled: false, configured: true },
+  { desktopSharingEnabled: undefined, configured: false, enabled: false },
+  { desktopSharingEnabled: false, configured: true, enabled: false },
 ])(
   "publishes the app's desktop preference in the worker manifest: $desktopSharingEnabled",
-  async ({ desktopSharingEnabled, configured }) => {
-    prepareRuntime({
-      config: { desktop: { host: { enabled: configured } } },
-      env: {},
-      platform: "darwin",
-    });
+  async ({ desktopSharingEnabled, configured, enabled }) => {
+    fixture.prepare.mockImplementationOnce(async (params) => ({
+      ...(await prepareNodeHostRuntime({
+        ...params,
+        config: { desktop: { host: { enabled: configured } } },
+        env: {},
+        platform: "darwin",
+      })),
+      start: fixture.start,
+    }));
     await withWorker(
       async ({ messages }) => {
         expect(readyMessage(messages)).toMatchObject({
           manifest: {
-            commands: expect.not.arrayContaining(["desktop.stream"]),
+            commands: enabled
+              ? expect.arrayContaining(["desktop.stream"])
+              : expect.not.arrayContaining(["desktop.stream"]),
           },
         });
       },
@@ -285,24 +288,14 @@ it.each([
 );
 
 it("publishes hosting through the app route and retires it on disconnect", async () => {
-  const { send, connect, ready, messages, stderr, stop } = startWorkerFixture(true, undefined, {
-    initialWorkerCapacity: null,
-  });
+  const { send, connect, ready, messages, stderr, stop } = startWorkerFixture();
   const resumeInvocation = createDeferredCore();
   const capacityPublished = createDeferredCore();
   try {
     await ready();
     expect(readyMessage(messages)).toMatchObject({
-      workerHostingEnabled: false,
+      workerHostingEnabled: true,
     });
-    const callbacks = fixture.start.mock.calls[0]?.[0];
-    expect(messagesOfType(messages, "worker-hosting")).toEqual([]);
-    callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
-    callbacks.onRunnerCapacityChanged({ total: 2, available: 1 });
-    expect(messagesOfType(messages, "worker-hosting")).toEqual([
-      { type: "worker-hosting", enabled: true },
-    ]);
-    callbacks.onRunnerCapacityChanged({ total: 2, available: 2 });
     const connection = {
       ...currentGateway,
       capabilities: ["node.worker.bundleRetention.v1"],
@@ -327,6 +320,10 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(fixture.runtime.updateGatewayConnection).toHaveBeenLastCalledWith();
     connect(3, connection);
     await setImmediate();
+    const callbacks = fixture.start.mock.calls[0]?.[0];
+    if (!callbacks) {
+      throw new Error("runtime was not started");
+    }
     const count = messages.length;
     // Capacity is owned by the supervisor; cleanup from an old invocation can
     // notify it after reconnect without acquiring that invocation's authority.
@@ -338,9 +335,7 @@ it("publishes hosting through the app route and retires it on disconnect", async
       ),
     );
     callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
-    expect(messagesOfType(messages, "worker-hosting")).toEqual([
-      { type: "worker-hosting", enabled: true },
-    ]);
+    expect(messagesOfType(messages, "worker-hosting")).toEqual([]);
     callbacks.onManifestChanged({ commands: ["system.run"], caps: ["system"], pathEnv: "/bin" });
     send({
       type: "invoke",
@@ -351,6 +346,27 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(stderr).not.toHaveBeenCalled();
   } finally {
     resumeInvocation.resolve();
+    await stop();
+  }
+});
+
+it("reports hosting only after supervisor capacity exists", async () => {
+  const { ready, messages, stop } = startWorkerFixture(true, undefined, {
+    initialWorkerCapacity: null,
+  });
+  try {
+    await ready();
+    expect(readyMessage(messages)).toMatchObject({
+      workerHostingEnabled: false,
+    });
+    expect(messagesOfType(messages, "worker-hosting")).toEqual([]);
+    const callbacks = fixture.start.mock.calls[0]?.[0];
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
+    callbacks.onRunnerCapacityChanged({ total: 2, available: 1 });
+    expect(messagesOfType(messages, "worker-hosting")).toEqual([
+      { type: "worker-hosting", enabled: true },
+    ]);
+  } finally {
     await stop();
   }
   expect(messages.findLast((message) => message.type === "worker-hosting")).toEqual({
@@ -610,9 +626,10 @@ it.each(["prepared failure", "later failure"] as const)(
         expect(inventories().at(-1)).toMatchObject({ generation: 3, params: disabledInventory });
         expectDiagnostic();
         const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
-        for (const privateText of [secret, reason, action, "worker hosting disabled"]) {
-          expect(output).not.toContain(privateText);
-        }
+        expect(output).not.toContain(secret);
+        expect(output).not.toContain(reason);
+        expect(output).not.toContain(action);
+        expect(output).not.toContain("worker hosting disabled");
         expect(messagesOfType(messages, "ready")).toHaveLength(1);
         expect(messages.some((message) => message.type === "manifest")).toBe(false);
         expect(messagesOfType(messages, "worker-hosting")).toEqual(

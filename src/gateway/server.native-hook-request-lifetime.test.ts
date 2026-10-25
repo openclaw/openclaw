@@ -14,6 +14,7 @@ import {
   registerOwnedNativeHookRelay,
   testing,
 } from "../agents/harness/native-hook-relay.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { callGateway } from "./call.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";

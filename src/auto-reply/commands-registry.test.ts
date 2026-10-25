@@ -358,7 +358,7 @@ describe("commands registry", () => {
   it("respects text command gating", () => {
     setActivePluginRegistry(createNativeCommandsRegistry("discord"));
     const cfg = { commands: { text: false } };
-    const handles = (surface: string, commandSource = "text") =>
+    const handles = (surface: string, commandSource: "text" | "native" = "text") =>
       shouldHandleTextCommands({ cfg, surface, commandSource });
     expect(handles("discord")).toBe(false);
     expect(handles("whatsapp")).toBe(true);

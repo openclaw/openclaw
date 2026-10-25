@@ -68,7 +68,8 @@ function pluginIntegrationProviderConfig(pluginId: string, integrationId: string
 
 function writeIntegration(
   rootDir: string,
-  integration: Partial<PluginManifestSecretProviderIntegration> & {
+  integration: Omit<Partial<PluginManifestSecretProviderIntegration>, "command"> & {
+    command?: string;
     allowInsecurePath?: boolean;
   } = {},
   id = "vault-secrets",
