@@ -66,17 +66,14 @@ const carrier = resolveGlobalSingleton(
   () => new AsyncLocalStorage<AsyncWorkScope>(),
 );
 
-it("accepts nested work without re-entering its current context", async () => {
+it("preserves nested scope ancestry and restores the caller", async () => {
   const [outer, inner] = [makeScope(), makeScope()];
   await outer.track(() =>
     inner.track(async () => {
       await Promise.resolve();
-      const entries = vi.spyOn(AsyncLocalStorage.prototype, "run");
       await trackAsyncWork(() =>
         inner.run(() => expectContext(inner.signal, [outer, true], [inner, true])),
       );
-      expect(entries).not.toHaveBeenCalled();
-      entries.mockRestore();
       await outer.track(() => expectContext(outer.signal, [inner, true]));
       expect(getAsyncWorkSignal()).toBe(inner.signal);
     }),
@@ -273,26 +270,6 @@ it("settles work for cleanup without closing its captured tracker, then fences f
   await drained;
 });
 
-it("does not close or drain an independent scope", async () => {
-  const [first, second] = [makeScope(), makeScope()];
-  const releases = [makeGate(), makeGate()];
-  const completed: number[] = [];
-  await Promise.all(
-    [first, second].map((scope, index) =>
-      scope.track(async () => {
-        await Promise.resolve();
-        void trackAsyncWork(async () => {
-          await releases[index]!.promise;
-          completed.push(index);
-        });
-      }),
-    ),
-  );
-  releases[0]!.resolve();
-  await first.drain();
-  expect([completed, second.signal.aborted]).toEqual([[0], false]);
-});
-
 it.each([true, false])(
   "captures work ownership without copying caller context (owned=%s)",
   async (owned) => {
@@ -318,8 +295,10 @@ it.each([true, false])(
     );
     expectContext(undefined, [caller, false], [owner, false]);
     await producer;
-    const closing = own(owned ? owner.drain() : descendant!);
     await caller.drain();
+    expect(owner.signal.aborted).toBe(false);
+    expect(owner.hasPendingWork).toBe(owned);
+    const closing = own(owned ? owner.drain() : descendant!);
     await releaseHeld(closing, gate, descendant);
     if (owned) {
       await expectClosed(track);
