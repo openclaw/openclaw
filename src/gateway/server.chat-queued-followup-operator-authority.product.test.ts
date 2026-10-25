@@ -33,6 +33,8 @@ it(
   "finishes queued operator auto-fast progress after its predecessor completes",
   { timeout: 90_000 },
   async ({ signal }) => {
+    const waitForGate = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
     const state = await createOpenClawTestState({
       label: "queued-authority",
       env: {
@@ -84,22 +86,17 @@ it(
         if (++calls === 1) {
           firstReached.resolve();
           await releaseFirst.promise;
-          writeOpenAiResponsesText(response, {
-            text: "First turn complete.",
-            messageId: randomUUID(),
-            responseId: randomUUID(),
-          });
         } else if (calls === 2) {
           writeToolCall(response, "exec", {
             command: `node -e 'fetch("${providerUrl}/tool").then(r=>r.text()).then(console.log)'`,
           });
-        } else {
-          writeOpenAiResponsesText(response, {
-            text: "Follow-up completed successfully.",
-            messageId: randomUUID(),
-            responseId: randomUUID(),
-          });
+          return;
         }
+        writeOpenAiResponsesText(response, {
+          text: calls === 1 ? "First turn complete." : "Follow-up completed successfully.",
+          messageId: randomUUID(),
+          responseId: randomUUID(),
+        });
       })().catch((error: unknown) => {
         providerErrors.push(error);
         response.writeHead(500).end("fixture failure");
@@ -216,25 +213,19 @@ it(
         });
       const first = await send("Synthetic first turn");
       const firstTerminal = terminalFor(first.runId).promise;
-      await withinTest(
-        awaitGateBeforeSettlement(
-          firstReached.promise,
-          firstTerminal,
-          "First turn settled before reaching the provider",
-        ),
-        signal,
+      await waitForGate(
+        firstReached.promise,
+        firstTerminal,
+        "First turn settled before reaching the provider",
       );
       const followup = await send("Synthetic queued follow-up", true);
       await withinTest(enqueued.promise, signal);
       releaseFirst.resolve();
       const terminal = terminalFor(followup.runId).promise;
-      await withinTest(
-        awaitGateBeforeSettlement(
-          toolReached.promise,
-          terminal,
-          "Follow-up settled before executing its tool",
-        ),
-        signal,
+      await waitForGate(
+        toolReached.promise,
+        terminal,
+        "Follow-up settled before executing its tool",
       );
       expect(await withinTest(firstTerminal, signal)).toBe("final");
       // Cross the auto-fast cutoff without sleeping or changing timer scheduling.
