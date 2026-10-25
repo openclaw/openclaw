@@ -371,7 +371,10 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
         action: "log",
         sessionId: processSessionId,
       });
-      expect(result.content).toContainEqual({ type: "text", text: "CRON_EXEC_DONE" });
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: "CRON_EXEC_DONE\n\nProcess exited with code 0.",
+      });
     } finally {
       unsubscribe();
       release();
