@@ -147,7 +147,8 @@ export function prepareSessionToolSurface(params: {
       routeKey: params.routeKey,
       historyId,
       toolPolicy: params.toolPolicy,
-      tools: [...current, ...retained].toSorted((a, b) => a.name.localeCompare(b.name)),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The combined definitions array is private.
+      tools: [...current, ...retained].sort((a, b) => a.name.localeCompare(b.name)),
     };
   }
   return [

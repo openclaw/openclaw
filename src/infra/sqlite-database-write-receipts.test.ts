@@ -128,6 +128,15 @@ it("publishes scope discovery and reference installs without revisiting unchange
   expect(visited).toBe(0);
   expect([...registry.capture(cursor)[0]!.references.keys()]).toEqual([123]);
 
+  const importer = { ...record, writeScopes: new Map() };
+  createReceipts(importer, { publish: () => {} }).readSqliteDatabaseScopedWriteTokenForPath(
+    ":memory:",
+    "imported",
+  );
+  registry.install([importer]);
+  expect(visited).toBe(0);
+  expect([...registry.capture(cursor)[0]!.writeScopes.keys()]).toEqual(['["key","imported"]']);
+
   const added = receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new");
   expect(visited).toBe(0);
   const [delta] = registry.capture(cursor);
@@ -140,7 +149,7 @@ it("publishes scope discovery and reference installs without revisiting unchange
   using database = new DatabaseSync(":memory:");
   receipts.retireSqliteDatabaseWriteScopes(database, ["new"]);
   expect(Atomics.load(delta!.writeScopes.get('["key","new"]')!.state, 1)).toBe(1);
-  expect(registry.capture()[0]!.writeScopes.size).toBe(256);
+  expect(registry.capture()[0]!.writeScopes.size).toBe(257);
   expect(receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new")).not.toBe(added);
   expect([...registry.capture(cursor)[0]!.writeScopes.keys()]).toEqual(['["key","new"]']);
 });
