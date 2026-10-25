@@ -1,0 +1,623 @@
+// One guarded owner for include-file publication: stage in memory (no disk
+// effects), publish inside the caller's commit window under a per-target lock
+// with a hash fence, and restore-only-if-unchanged on failure. Authority is
+// asserted immediately before every disk effect via the caller-supplied
+// assertConfigPathForWrite, the same contract the root config file uses.
+import fsNode from "node:fs";
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
+import { formatErrorMessage } from "../infra/errors.js";
+import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-result.js";
+import { readObjectPath } from "../shared/dot-path.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import { isRecord } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { prepareConfigFileWrite } from "./backup-rotation.js";
+import { restoreEnvVarRefs } from "./env-preserve.js";
+import {
+  resolveKeyedAgentEntryIncludePreservation,
+  resolveKeyedProviderModelsIncludePreservation,
+} from "./include-write-boundary.js";
+import {
+  hashConfigIncludeRaw,
+  isInternalIncludeWriteTarget,
+  type ConfigIncludeOwnership,
+} from "./includes.js";
+import { hashConfigRaw, restoreAuthoredTildePathsForWrite } from "./io.read-helpers.js";
+import { createConfigIncludeOwnershipError } from "./io.write-errors.js";
+import {
+  assertBaseSnapshotStillCurrent,
+  captureConfigFileWritePathProof,
+  createConfigFileWriteGuard,
+  rollbackConfigFileWriteIfUnchanged,
+  type ConfigFileWriteRollbackProof,
+} from "./io.write-safety.js";
+import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
+import {
+  formatJsonFileValue,
+  readRootBoundFileRawIfExists,
+  resolveExpectedRootBoundIncludeFile,
+  type RootBoundIncludeFile,
+} from "./mutate.include-io.js";
+import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import type { ConfigFileSnapshot } from "./types.js";
+import { withConfigWriteLock } from "./write-lock.js";
+
+/** Combines the two keyed-preservation resolvers into the single path list
+ * resolvePersistCandidateForWrite/captureIncludeWriteThrough need. */
+export function resolveIncludeWriteThroughPaths(params: {
+  configPath: string;
+  provenance: Parameters<typeof resolveKeyedAgentEntryIncludePreservation>[0]["provenance"];
+}): {
+  keyedAgentEntryIncludePaths?: readonly (readonly string[])[];
+  includeWriteThroughPaths: readonly (readonly string[])[];
+} {
+  const keyedAgentEntry = resolveKeyedAgentEntryIncludePreservation(params);
+  const keyedProviderModels = resolveKeyedProviderModelsIncludePreservation(params);
+  return {
+    keyedAgentEntryIncludePaths: keyedAgentEntry?.includePaths,
+    includeWriteThroughPaths: [
+      ...(keyedAgentEntry?.includePaths ?? []),
+      ...(keyedProviderModels?.includePaths ?? []),
+    ],
+  };
+}
+
+export type PendingIncludeWrite = {
+  includePath: string[];
+  value: unknown;
+};
+
+// Keyed-path predicates for the two write-through-eligible include shapes.
+function isKeyedAgentEntryIncludePath(keyPath: readonly string[]): boolean {
+  return keyPath.length === 3 && keyPath[0] === "agents" && keyPath[1] === "entries";
+}
+
+function isKeyedProviderModelsIncludePath(keyPath: readonly string[]): boolean {
+  return (
+    keyPath.length === 4 &&
+    keyPath[0] === "models" &&
+    keyPath[1] === "providers" &&
+    keyPath[3] === "models"
+  );
+}
+
+// Filters collectIncludeOwnedPaths's tree walk (owned by io.write-prepare.ts,
+// which still does the walk) down to the two write-through-eligible shapes,
+// honoring caller overrides of either result list.
+export function resolveIncludeOwnedWriteThroughPaths(params: {
+  includeOwnedPaths?: readonly (readonly string[])[];
+  keyedAgentEntryIncludePathsOverride?: readonly (readonly string[])[];
+  includeWriteThroughPathsOverride?: readonly (readonly string[])[];
+}): {
+  keyedAgentEntryIncludePaths?: readonly (readonly string[])[];
+  includeWriteThroughPaths?: readonly (readonly string[])[];
+} {
+  const keyedAgentEntryPaths = params.includeOwnedPaths?.filter(isKeyedAgentEntryIncludePath);
+  const keyedAgentEntryIncludePaths =
+    params.keyedAgentEntryIncludePathsOverride ??
+    (params.includeWriteThroughPathsOverride === undefined ? keyedAgentEntryPaths : undefined);
+  const includeWriteThroughPaths =
+    params.includeWriteThroughPathsOverride ??
+    (params.includeOwnedPaths
+      ? [
+          ...keyedAgentEntryPaths!,
+          ...params.includeOwnedPaths.filter(isKeyedProviderModelsIncludePath),
+        ]
+      : undefined);
+  return { keyedAgentEntryIncludePaths, includeWriteThroughPaths };
+}
+
+function includeConfigPathsEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((segment, index) => segment === right[index]);
+}
+
+// Canonical immutable path get/set, moved from io.write-prepare.ts (which
+// re-imports them) so there is exactly one copy. Config paths can traverse
+// array indices (roster entries), hence parseConfigPathArrayIndex.
+export function getPathValue(value: unknown, keyPath: readonly string[]): unknown {
+  return readObjectPath(value, keyPath, "bounded");
+}
+
+export function setPathValue(
+  value: unknown,
+  keyPath: readonly string[],
+  nextValue: unknown,
+  createParents = false,
+): unknown {
+  if (keyPath.length === 0) {
+    return nextValue;
+  }
+  const head = expectDefined(keyPath[0], "config path head");
+  const tail = keyPath.slice(1);
+  const index = parseConfigPathArrayIndex(head);
+  if (Array.isArray(value) || (createParents && !isRecord(value) && index !== undefined)) {
+    if (index === undefined || (!createParents && Array.isArray(value) && index >= value.length)) {
+      return value;
+    }
+    const next = Array.isArray(value) ? [...value] : [];
+    next[index] = setPathValue(next[index], tail, nextValue, createParents);
+    return next;
+  }
+  if (!createParents && !isRecord(value)) {
+    return value;
+  }
+  const record = isRecord(value) ? value : {};
+  return {
+    ...record,
+    [head]: setPathValue(record[head], tail, nextValue, createParents),
+  };
+}
+
+// Capture include-owned changes before restoring their root-authored directives.
+export function captureIncludeWriteThrough(params: {
+  includeWriteThroughPaths: readonly (readonly string[])[];
+  nextConfig: unknown;
+  sourceConfig: unknown;
+  runtimeConfig: unknown;
+  pendingIncludeWrites: PendingIncludeWrite[];
+}): unknown {
+  let nextConfig = params.nextConfig;
+  for (const includePath of params.includeWriteThroughPaths) {
+    const segments = [...includePath];
+    const nextValue = getPathValue(nextConfig, segments);
+    const sourceValue = getPathValue(params.sourceConfig, segments);
+    const runtimeValue = getPathValue(params.runtimeConfig, segments);
+    if (
+      nextValue === undefined ||
+      isDeepStrictEqual(nextValue, sourceValue) ||
+      isDeepStrictEqual(nextValue, runtimeValue)
+    ) {
+      continue;
+    }
+    params.pendingIncludeWrites.push({ includePath: segments, value: nextValue });
+    const restoreValue = sourceValue !== undefined ? sourceValue : runtimeValue;
+    if (restoreValue !== undefined) {
+      nextConfig = setPathValue(nextConfig, segments, restoreValue);
+    }
+  }
+  return nextConfig;
+}
+
+async function rollbackJsonFileWriteIfUnchanged(params: {
+  target: RootBoundIncludeFile;
+  previousRaw: string | null;
+  committedRaw: string | null;
+  pathProof: IncludePublicationProof;
+  assertOwner: () => void;
+}): Promise<boolean> {
+  const restored = await rollbackConfigFileWriteIfUnchanged({
+    configPath: params.target.absolutePath,
+    previousSnapshot: {
+      path: params.target.absolutePath,
+      exists: params.previousRaw !== null,
+      raw: params.previousRaw,
+    },
+    // rollbackConfigFileWriteIfUnchanged compares the CURRENT file via
+    // hashConfigRaw, not hashConfigIncludeRaw --
+    // the two hash different byte layouts for the same non-null input.
+    committedHash: hashConfigRaw(params.committedRaw),
+    fsModule: fsNode,
+    ...params.pathProof.captureRollbackProof(params.assertOwner),
+    preserveDirectoryMode: true,
+    durable: true,
+    destinationHardlinks: "reject",
+  });
+  if (restored) {
+    recordUpdateDoctorConfigFileWrite(
+      params.target.absolutePath,
+      hashConfigRaw(params.committedRaw),
+      hashConfigRaw(params.previousRaw),
+    );
+  }
+  return restored;
+}
+
+export type StagedIncludeWrite = {
+  includePath: string[];
+  // Authored path identity. Keep it lexical so containment and path-proof
+  // checks preserve supported symlinked config roots.
+  targetPath: string;
+  // Load-time canonical identity for the same target. This is the comparison
+  // and lock key; resolving the lexical path must continue to land here.
+  canonicalTargetPath: string;
+  // Load-graph key for this target (path.normalize(ownership.targetPath)).
+  // Publication advances this exact key; nothing downstream re-derives it.
+  includeGraphKey: string;
+  bytes: string;
+  previousRaw: string | null;
+  previousHash: string;
+};
+
+export type IncludeLoadGraph = { hashes: Record<string, string>; targets: Record<string, string> };
+
+/** Pure staging: no disk writes. Resolves ownership/target from provenance,
+ * refuses external targets, reads the current raw + hash fence, and projects
+ * the pending delta onto the AUTHORED include value so ${VAR} placeholders
+ * survive instead of ever serializing the resolved config. */
+// Both windows are fenced: snapshot-to-stage via the caller's load-time
+// include graph and stage-to-publish via previousHash re-hashed under the
+// publish lock.
+export type StagedIncludeWriteResult = {
+  staged: StagedIncludeWrite[];
+  // Keyed by normalized target path; feeds context.resolveRuntimePreflightSourceConfig
+  // so validation/revision-hashing see the bytes publish will produce.
+  overlay: ReadonlyMap<string, string> | undefined;
+};
+
+export async function stageIncludeWriteThrough(params: {
+  snapshot: Pick<ConfigFileSnapshot, "path" | "exists" | "raw" | "readError"> & {
+    includeProvenance?: readonly ConfigIncludeOwnership[];
+  };
+  pendingIncludeWrites: readonly PendingIncludeWrite[];
+  envForRestore: NodeJS.ProcessEnv;
+  homedir: string;
+  // Load-time include graph (hashes AND canonical targets, intermediates
+  // included; caller-captured or bound to the snapshot by its read), keyed by
+  // the normalized lexical include path -- the same value the provenance
+  // targetPath below carries. Required: io.write.ts fails closed before
+  // staging when authored includes exist with no bound graph.
+  includeLoadGraph: IncludeLoadGraph;
+}): Promise<StagedIncludeWriteResult> {
+  if (params.pendingIncludeWrites.length > 0) {
+    // Snapshot-to-stage fence, fenced whole before any pending value is
+    // projected: an intermediate include redirected since load must conflict
+    // even when the leaf it currently selects is untouched.
+    assertBaseSnapshotStillCurrent(
+      params.snapshot,
+      params.snapshot.path,
+      fsNode,
+      params.includeLoadGraph,
+    );
+  }
+  const staged: StagedIncludeWrite[] = [];
+  for (const pending of params.pendingIncludeWrites) {
+    const ownership = params.snapshot.includeProvenance?.find(
+      (entry) =>
+        includeConfigPathsEqual(entry.path, pending.includePath) &&
+        typeof entry.targetPath === "string",
+    );
+    const targetPath = ownership?.targetPath;
+    if (!targetPath) {
+      throw createConfigIncludeOwnershipError({
+        ownedConfigPath: pending.includePath.join("."),
+      });
+    }
+    if (
+      !isInternalIncludeWriteTarget({
+        configPath: params.snapshot.path,
+        includePath: targetPath,
+      })
+    ) {
+      throw new Error(
+        `Config mutation cannot update external $include target ${targetPath}; edit the included file directly or move it under the config directory.`,
+      );
+    }
+    const includeGraphKey = path.normalize(targetPath);
+    const canonicalTargetPath = params.includeLoadGraph.targets[includeGraphKey];
+    if (!canonicalTargetPath) {
+      throw new ConfigMutationConflictError("included config target changed since last load");
+    }
+    const target = await resolveExpectedRootBoundIncludeFile({
+      configPath: params.snapshot.path,
+      includePath: targetPath,
+      allowedRoots: [],
+      expectedAbsolutePath: canonicalTargetPath,
+    });
+    const previousRaw = await readRootBoundFileRawIfExists(target);
+    const previousHash = hashConfigIncludeRaw(previousRaw);
+    // Target resolution/read above yields after the whole-graph assertion.
+    // Recheck the selected leaf against its load-time hash so a writer in that
+    // window cannot become the staging baseline and then be overwritten.
+    if (params.includeLoadGraph.hashes[includeGraphKey] !== previousHash) {
+      throw new ConfigMutationConflictError("included config changed since last load");
+    }
+    let authoredIncludeValue: unknown;
+    if (previousRaw !== null) {
+      authoredIncludeValue = parseJsonWithJson5Fallback(previousRaw);
+    }
+    // Runtime values carry expanded home paths; restore authored ~ paths the
+    // same way the root writer does so an unrelated save keeps them portable.
+    const stagedValue = restoreAuthoredTildePathsForWrite(
+      restoreEnvVarRefs(pending.value, authoredIncludeValue, params.envForRestore),
+      authoredIncludeValue,
+      undefined,
+      params.homedir,
+    );
+    staged.push({
+      includePath: pending.includePath,
+      targetPath,
+      canonicalTargetPath: target.absolutePath,
+      includeGraphKey,
+      bytes: formatJsonFileValue(stagedValue),
+      previousRaw,
+      previousHash,
+    });
+  }
+  return {
+    staged,
+    overlay:
+      staged.length > 0
+        ? new Map(staged.map((entry) => [path.normalize(entry.canonicalTargetPath), entry.bytes]))
+        : undefined,
+  };
+}
+
+export type IncludeWriteRestorer = {
+  // Lexical and canonical identities stay paired through compensation so a
+  // symlinked config root is revalidated instead of mistaken for a redirect.
+  targetPath: string;
+  canonicalTargetPath: string;
+  previousRaw: string | null;
+  committedRaw: string | null;
+  // Same hardlink/inode identity proof publish itself relied on, carried
+  // forward so restore verifies the file is still the one it wrote.
+  pathProof: IncludePublicationProof;
+};
+
+type IncludePublicationProof = ReturnType<typeof captureConfigFileWritePathProof> & {
+  captureRollbackProof: (assertOwner: () => void) => ConfigFileWriteRollbackProof;
+};
+
+function captureFailurePublicationProof(
+  pathProof: ReturnType<typeof captureConfigFileWritePathProof>,
+  targetPath: string,
+): IncludePublicationProof {
+  const target = fsNode.lstatSync(targetPath, { bigint: true, throwIfNoEntry: false });
+  const publicationIdentity: ConfigFileWriteRollbackProof["publicationIdentity"] = target
+    ? { dev: target.dev, ino: target.ino }
+    : null;
+  return {
+    ...pathProof,
+    captureRollbackProof: (assertOwner) => {
+      const assertCurrent = () => {
+        assertOwner();
+        pathProof.assertCurrent();
+      };
+      assertCurrent();
+      return { assertCurrent, publicationIdentity };
+    },
+  };
+}
+
+/** Publish inside the caller's commit window, before the root file. Per
+ * target: re-resolve (target moved/symlinked since stage -> conflict),
+ * re-hash-fence against previousHash (concurrent edit -> conflict), durable
+ * temp-file+rename write, then push the restorer immediately so a throw at
+ * entry N leaves 1..N-1 restorable. */
+export async function publishStagedIncludeWrites(params: {
+  staged: readonly StagedIncludeWrite[];
+  restorers: IncludeWriteRestorer[];
+  configPath: string;
+  env?: NodeJS.ProcessEnv;
+  assertConfigPathForWrite?: () => void;
+  assertBeforePublish?: () => void;
+  skipOutputLogs?: boolean;
+  // This write's own copy of the load-time graph. Each published leaf advances
+  // its key here, so later leaves and the caller's root guard expect the bytes
+  // just committed. It never holds a root entry: the root guard reuses it.
+  includeGraph?: IncludeLoadGraph;
+  // Root's load-time raw, overlaid per leaf so a leaf publish also conflicts on
+  // a root changed since load. Absent when the root does not exist yet.
+  rootRawForGraph?: string | null;
+}): Promise<void> {
+  const ordered = params.staged.toSorted((a, b) =>
+    a.canonicalTargetPath.localeCompare(b.canonicalTargetPath),
+  );
+  const includeGraph = params.includeGraph ?? { hashes: {}, targets: {} };
+  const rootRaw = params.rootRawForGraph;
+  const leafIncludeGraph = (): IncludeLoadGraph =>
+    rootRaw == null
+      ? includeGraph
+      : {
+          hashes: { ...includeGraph.hashes, [params.configPath]: hashConfigIncludeRaw(rootRaw) },
+          targets: {
+            ...includeGraph.targets,
+            [params.configPath]: fsNode.realpathSync(params.configPath),
+          },
+        };
+  // The child lock gets the caller's live authority explicitly: without it,
+  // an ambient guarded owner (mutation flows) makes the lock capture a guard
+  // for a path that has no scope yet, refusing every authorized mixed save.
+  const liveAuthority = () => {
+    params.assertConfigPathForWrite?.();
+  };
+  for (const entry of ordered) {
+    await withConfigWriteLock(
+      entry.canonicalTargetPath,
+      async () => {
+        params.assertConfigPathForWrite?.();
+        const target = await resolveExpectedRootBoundIncludeFile({
+          configPath: params.configPath,
+          includePath: entry.targetPath,
+          allowedRoots: [],
+          expectedAbsolutePath: entry.canonicalTargetPath,
+        });
+        const currentRaw = await readRootBoundFileRawIfExists(target);
+        if (hashConfigIncludeRaw(currentRaw) !== entry.previousHash) {
+          throw new ConfigMutationConflictError("included config changed while preparing write");
+        }
+        const pathProof = captureConfigFileWritePathProof(
+          entry.targetPath,
+          target.absolutePath,
+          fsNode,
+        );
+        const assertCurrent = () => {
+          params.assertConfigPathForWrite?.();
+          pathProof.assertCurrent();
+        };
+        warnIfJSON5CommentsWillBeStripped({
+          raw: currentRaw,
+          filePath: target.absolutePath,
+          skipOutputLogs: params.skipOutputLogs,
+        });
+        const publication: { phase: "none" | "removed" | "published" } = { phase: "none" };
+        const registerRestorer = (
+          committedRaw: string | null,
+          restorerProof: IncludeWriteRestorer["pathProof"],
+        ) =>
+          params.restorers.push({
+            targetPath: entry.targetPath,
+            canonicalTargetPath: target.absolutePath,
+            previousRaw: entry.previousRaw,
+            committedRaw,
+            pathProof: restorerProof,
+          });
+        const publicationProof: IncludePublicationProof = {
+          ...pathProof,
+          assertCurrent: () => {
+            pathProof.assertCurrent();
+            guardedFs.assertPublishedIdentity();
+          },
+          captureRollbackProof: (assertOwner) => guardedFs.captureRollbackProof(assertOwner),
+        };
+        const recordPublication = () => {
+          if (publication.phase === "published") {
+            return;
+          }
+          registerRestorer(entry.bytes, publicationProof);
+          recordUpdateDoctorConfigFileWrite(
+            target.absolutePath,
+            hashConfigRaw(currentRaw),
+            hashConfigRaw(entry.bytes),
+          );
+          publication.phase = "published";
+        };
+        const guardedFs = createConfigFileWriteGuard(target.absolutePath, fsNode, assertCurrent, {
+          snapshot: { path: target.absolutePath, exists: currentRaw !== null, raw: currentRaw },
+          includeGraph: leafIncludeGraph(),
+          targetPathProof: pathProof,
+          preserveDirectoryMode: true,
+          onRootRemoved: () => {
+            publication.phase = "removed";
+          },
+          onRootPublished: recordPublication,
+        });
+        await using preparedFile = await prepareConfigFileWrite({
+          configPath: target.absolutePath,
+          previousRaw: currentRaw,
+          content: entry.bytes,
+          fsModule: guardedFs.fileSystem,
+          assertCurrent: guardedFs.assertCurrent,
+          assertBeforeMutation: guardedFs.assertBeforeMutation,
+          onDestinationState: guardedFs.onDestinationState,
+          destinationHardlinks: "reject",
+          durable: true,
+        });
+        // The rename callback records publication before descriptor cleanup can throw;
+        // copy fallback damage instead uses the bytes left by its failed write.
+        try {
+          params.assertBeforePublish?.();
+          preparedFile.publish();
+          recordPublication();
+        } catch (error) {
+          if (publication.phase === "removed") {
+            const damageRaw = await readRootBoundFileRawIfExists(target);
+            registerRestorer(
+              damageRaw,
+              captureFailurePublicationProof(pathProof, target.absolutePath),
+            );
+          }
+          throw error;
+        }
+        // Advance only this key: a later leaf in the same publish, and the
+        // caller's own root guard, must see the bytes just committed here.
+        includeGraph.hashes[entry.includeGraphKey] = hashConfigIncludeRaw(entry.bytes);
+        guardedFs.assertCurrent();
+        guardedFs.assertPublishedIdentity();
+      },
+      params.env,
+      liveAuthority,
+    );
+  }
+}
+
+/** Restore-only-if-unchanged, reverse publish order. An external edit made
+ * after publish survives (rollbackJsonFileWriteIfUnchanged compares current
+ * bytes to committedRaw before restoring previousRaw). Failures aggregate;
+ * the original failure that triggered restoration always stays primary.
+ * Compensation authorizes on the original source owner plus each target's
+ * path proof -- like root rollback, it must not require the old config to
+ * still be the selected one. */
+async function restoreStagedIncludeWrites(
+  restorers: readonly IncludeWriteRestorer[],
+  params: { configPath: string; env?: NodeJS.ProcessEnv; restoreAuthority?: () => void },
+): Promise<void> {
+  const failures: unknown[] = [];
+  const liveAuthority = () => {
+    params.restoreAuthority?.();
+  };
+  for (const restorer of restorers.toReversed()) {
+    try {
+      await withConfigWriteLock(
+        restorer.canonicalTargetPath,
+        async () => {
+          params.restoreAuthority?.();
+          const target = await resolveExpectedRootBoundIncludeFile({
+            configPath: params.configPath,
+            includePath: restorer.targetPath,
+            allowedRoots: [],
+            expectedAbsolutePath: restorer.canonicalTargetPath,
+          });
+          await rollbackJsonFileWriteIfUnchanged({
+            target,
+            previousRaw: restorer.previousRaw,
+            committedRaw: restorer.committedRaw,
+            pathProof: restorer.pathProof,
+            assertOwner: () => params.restoreAuthority?.(),
+          });
+        },
+        params.env,
+        liveAuthority,
+      );
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Include restore failed for one or more targets");
+  }
+}
+
+export async function restoreRootAndStagedIncludeWrites(params: {
+  restoreRoot?: (assertCurrent: () => void) => Promise<boolean>;
+  assertCurrent: () => void;
+  restorers: readonly IncludeWriteRestorer[];
+  configPath: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const restoreRoot = params.restoreRoot;
+  if (!restoreRoot) {
+    return false;
+  }
+  const restoredRoot = await restoreRoot(params.assertCurrent);
+  if (!restoredRoot) {
+    return false;
+  }
+  await restoreStagedIncludeWrites(params.restorers, {
+    configPath: params.configPath,
+    env: params.env,
+    restoreAuthority: params.assertCurrent,
+  });
+  return true;
+}
+
+/** Same as restoreStagedIncludeWrites, but folds a restore failure onto the
+ * caller's primary failure (original stays primary) instead of throwing --
+ * for use inside an already-failed commit-window catch block. */
+export async function restoreStagedIncludeWritesOrFold(
+  restorers: readonly IncludeWriteRestorer[],
+  failure: unknown,
+  params: { configPath: string; env?: NodeJS.ProcessEnv; restoreAuthority?: () => void },
+): Promise<unknown> {
+  try {
+    await restoreStagedIncludeWrites(restorers, params);
+    return failure;
+  } catch (includeRestoreError) {
+    return new AggregateError(
+      [failure, includeRestoreError],
+      `${formatErrorMessage(failure)} Include restore failed: ${formatErrorMessage(includeRestoreError)}`,
+    );
+  }
+}

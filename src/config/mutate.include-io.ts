@@ -38,7 +38,7 @@ export function formatJsonFileValue(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-type RootBoundIncludeFile = {
+export type RootBoundIncludeFile = {
   absolutePath: string;
   relativePath: string;
   root: FsSafeRoot;

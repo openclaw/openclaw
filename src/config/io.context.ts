@@ -179,6 +179,7 @@ export function createConfigIoContext(
     includeFileHashes?: Record<string, string>,
     includeFileTargets?: Record<string, string>,
     baseEnv: NodeJS.ProcessEnv = deps.env,
+    includeReadOverlay?: ReadonlyMap<string, string>,
   ): OpenClawConfig {
     const env = cloneEnvWithPlatformSemantics(baseEnv);
     const resolvedIncludes = resolveConfigIncludesForRead(
@@ -187,6 +188,9 @@ export function createConfigIoContext(
       { ...deps, env },
       includeFileHashes,
       includeFileTargets,
+      undefined,
+      undefined,
+      includeReadOverlay,
     );
     const resolution = resolveConfigForRead(resolvedIncludes, env, deps.lowerPrecedenceEnv);
     const config = coerceConfig(applyImplicitAgentRosterDefaults(resolution.resolvedConfigRaw));
