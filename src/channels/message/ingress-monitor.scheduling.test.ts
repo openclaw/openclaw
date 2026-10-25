@@ -32,7 +32,7 @@ describe("ingress wake scheduling", () => {
         await monitor.waitForIdle();
         scans.mockClear();
         recoveries.mockClear();
-        await vi.advanceTimersByTimeAsync(59_999);
+        await vi.advanceTimersByTimeAsync(299_999);
         await monitor.waitForIdle();
         expect(scans).not.toHaveBeenCalled();
         expect(recoveries).not.toHaveBeenCalled();
@@ -179,7 +179,7 @@ describe("ingress wake scheduling", () => {
     });
   });
 
-  it("recovers a dead owner's claim on the bounded sweep", async () => {
+  it.each(["external enqueue", "dead owner"])("recovers %s on the bounded sweep", async (kind) => {
     await withQueue(async (queue) => {
       await queue.listPending();
       vi.useFakeTimers({
@@ -195,13 +195,23 @@ describe("ingress wake scheduling", () => {
           { version: 1, rawEvent: JSON.stringify(event) },
           { laneKey: "lane:a" },
         );
-        const abandoned = await queue.claim(event.id, { ownerId: "2147483647:0:dead" });
-        expect(abandoned).toBeDefined();
-        await vi.advanceTimersByTimeAsync(60_000);
+        const abandoned =
+          kind === "dead owner"
+            ? await queue.claim(event.id, { ownerId: "2147483647:0:dead" })
+            : undefined;
+        if (kind === "dead owner") {
+          expect(abandoned).toBeDefined();
+        }
+        await vi.advanceTimersByTimeAsync(299_999);
+        await monitor.waitForIdle();
+        expect(deliver).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
         await monitor.waitForIdle();
         expect(deliver).toHaveBeenCalledOnce();
         expect(await queue.listClaims()).toEqual([]);
-        expect(await queue.complete(abandoned!)).toBe(false);
+        if (abandoned) {
+          expect(await queue.complete(abandoned)).toBe(false);
+        }
       } finally {
         await monitor.stop();
         vi.useRealTimers();

@@ -11,6 +11,7 @@ import {
   withSessionMcpCallerAuthority,
 } from "./agent-bundle-mcp-request-context.js";
 import type { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
+import { loadBundleMcpRuntimeModules } from "./agent-bundle-mcp-runtime-modules.js";
 import { createSessionMcpRuntimeParts } from "./agent-bundle-mcp-runtime-parts.js";
 import type {
   BundleMcpSession,
@@ -149,8 +150,8 @@ function createServerMcpRuntime(
     if (session.disposePromise) {
       return session.disposePromise;
     }
-    const closing = import("./mcp-client-lifecycle.js")
-      .then(({ disposeMcpClient }) => disposeMcpClient(session))
+    const closing = loadBundleMcpRuntimeModules()
+      .then(({ lifecycle }) => lifecycle.disposeMcpClient(session))
       .then((outcome) => {
         if (outcome === "uncertain") {
           cleanupFailed = true;
@@ -240,10 +241,10 @@ function createServerMcpRuntime(
       }
       return result;
     } catch (error) {
-      const [{ isMcpHttpSessionExpired }, { redactMcpDiagnosticError }] = await Promise.all([
-        import("./mcp-client-lifecycle.js"),
-        import("./mcp-error.js"),
-      ]);
+      const {
+        lifecycle: { isMcpHttpSessionExpired },
+        errors: { redactMcpDiagnosticError },
+      } = await loadBundleMcpRuntimeModules();
       if (currentSession !== session || session.retiring) {
         throw error;
       }
@@ -303,27 +304,17 @@ function createServerMcpRuntime(
       return catalogInFlight;
     }
     const inFlight = (async (): Promise<McpToolCatalog> => {
-      const [
-        { Client },
-        { projectBundleMcpServerCatalog },
-        { bindMcpClientElicitation },
-        { ensureMcpSessionConnected, isMcpHttpSessionExpired },
-        { isMcpMethodNotFoundError, redactMcpDiagnosticError },
-        { createMcpJsonSchemaValidator },
-        { resolveMcpTransport },
-        { observeNativeMcpProbe },
-        { createNativeMcpClientBridge },
-      ] = await Promise.all([
-        import("@modelcontextprotocol/client"),
-        import("./agent-bundle-mcp-catalog-projection.js"),
-        import("./mcp-client-elicitation.runtime.js"),
-        import("./mcp-client-lifecycle.js"),
-        import("./mcp-error.js"),
-        import("./mcp-json-schema-validator.js"),
-        import("./mcp-transport.js"),
-        import("./native-mcp-connect.js"),
-        import("./native-mcp-runtime-client.js"),
-      ]);
+      const {
+        client: { Client },
+        catalog: { projectBundleMcpServerCatalog },
+        elicitation: { bindMcpClientElicitation },
+        lifecycle: { ensureMcpSessionConnected, isMcpHttpSessionExpired },
+        errors: { isMcpMethodNotFoundError, redactMcpDiagnosticError },
+        validator: { createMcpJsonSchemaValidator },
+        transport: { resolveMcpTransport },
+        nativeConnect: { observeNativeMcpProbe },
+        nativeClient: { createNativeMcpClientBridge },
+      } = await loadBundleMcpRuntimeModules();
       failIfDisposed();
       const rawServer = loaded.mcpServers[serverName]!;
       const override = params.connectionOverrides?.get(serverName);

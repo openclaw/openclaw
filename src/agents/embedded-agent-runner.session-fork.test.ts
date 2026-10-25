@@ -442,7 +442,6 @@ const loopModel: Model = makeProviderModelFixture({
   contextWindow: 10000,
   maxTokens: 1000,
 });
-const loopIdentity = { agentId: "main", sessionId: "fork-async-tail", runId: "fork-async-tail" };
 function assistant(content: AssistantMessage["content"]): AssistantMessage {
   return {
     role: "assistant",
@@ -534,29 +533,19 @@ it("forks the canonical completed async tool fragments and outcomes in order", a
     parentResponse.end();
     await run;
     await expect(reviewFork("Review completed turn")).resolves.toBe("Review answer");
+    const message = (role: string, content: unknown, extra = {}) =>
+      expect.objectContaining({ role, content, ...extra });
+    const text = (value: string) => [{ type: "text", text: value }];
     expect(payloads.at(-1)).toEqual({
       input: [
-        expect.objectContaining({
-          role: "user",
-          content: [{ type: "text", text: "Parent question" }],
-        }),
-        expect.objectContaining({
-          role: "assistant",
-          content: [expect.objectContaining({ type: "toolCall", id: "lookup-call" })],
-        }),
-        expect.objectContaining({
-          role: "toolResult",
-          toolCallId: "lookup-call",
-          content: [{ type: "text", text: "TOOL_RESULT_4837" }],
-        }),
-        expect.objectContaining({
-          role: "assistant",
-          content: [{ type: "text", text: "PARENT_FINAL_4837" }],
-        }),
-        expect.objectContaining({ role: "user", content: "Review completed turn" }),
+        message("user", text("Parent question")),
+        message("assistant", [expect.objectContaining({ type: "toolCall", id: "lookup-call" })]),
+        message("toolResult", text("TOOL_RESULT_4837"), { toolCallId: "lookup-call" }),
+        message("assistant", text("PARENT_FINAL_4837")),
+        message("user", "Review completed turn"),
       ],
     });
-    cleanupSessionResources(loopIdentity.sessionId);
+    cleanupSessionResources("fork-async-tail");
     await expect(reviewFork("Review after transport cleanup")).resolves.toBe("Review answer");
     expect(JSON.stringify(payloads.at(-1))).toContain("PARENT_FINAL_4837");
   } finally {

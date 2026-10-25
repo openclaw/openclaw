@@ -20,6 +20,7 @@ import workerThreads, { isMainThread, threadId } from "node:worker_threads";
 const output = process.env.OPENCLAW_BENCH_RETAINED_WORKER_DIR;
 const baseline = process.env.OPENCLAW_BENCH_BASELINE_DIR;
 const traceGc = process.env.OPENCLAW_BENCH_TRACE_GC === "1";
+const sampleAllocation = process.env.OPENCLAW_BENCH_SAMPLE_ALLOCATION === "1";
 if ((!output && !baseline) || (output && !path.isAbsolute(output))) {
   throw new Error("Worker heap preload requires an absolute synthetic benchmark output directory");
 }
@@ -66,6 +67,7 @@ workerThreads.Worker = class extends NativeWorker {
               ...(options.env ?? process.env),
               ...(output ? { OPENCLAW_BENCH_RETAINED_WORKER_DIR: output } : {}),
               ...(output && traceGc ? { OPENCLAW_BENCH_TRACE_GC: "1" } : {}),
+              ...(output && sampleAllocation ? { OPENCLAW_BENCH_SAMPLE_ALLOCATION: "1" } : {}),
               ...(baseline ? { OPENCLAW_BENCH_BASELINE_DIR: baseline } : {}),
             },
     });
@@ -121,7 +123,14 @@ if (
   mkdirSync(output, { recursive: true });
   const prefix = path.join(output, `worker-${process.pid}-${threadId}`);
   const commandPath = `${prefix}.command.json`;
-  const identity = { pid: process.pid, threadId, script, node: process.version, traceGc };
+  const identity = {
+    pid: process.pid,
+    threadId,
+    script,
+    node: process.version,
+    traceGc,
+    sampleAllocation,
+  };
   const traceMarker = (marker: string, commandId: string) => {
     writeSync(1, `${marker} pid=${process.pid} threadId=${threadId} command=${commandId}\n`);
   };
@@ -209,6 +218,17 @@ if (
       if (measured) {
         throw new Error("Worker heap measurement is already active");
       }
+      if (sampleAllocation) {
+        if (!inspector) {
+          inspector = new Session();
+          inspector.connect();
+        }
+        await inspector.post("HeapProfiler.startSampling", {
+          samplingInterval: 32768,
+          includeObjectsCollectedByMajorGC: true,
+          includeObjectsCollectedByMinorGC: true,
+        });
+      }
       if (traceGc) {
         // Identify the isolate before starting counters; forced collections are not workload GC.
         traceMarker("WORKER_GC_IDENTIFY_BEGIN", command.id);
@@ -242,6 +262,9 @@ if (
       const endedAtEpochMs = Date.now();
       const elapsedMs = performance.now() - measured.startedAt;
       const cpu = process.threadCpuUsage(measured.cpu);
+      const allocation = sampleAllocation
+        ? (await inspector!.post("HeapProfiler.stopSampling")).profile
+        : undefined;
       if (traceGc) {
         setFlagsFromString("--no-trace-gc-nvp");
         traceMarker("WORKER_GC_END", command.id);
@@ -258,6 +281,16 @@ if (
         endedAtEpochMs,
         elapsedMs,
         cpu,
+        ...(allocation
+          ? {
+              allocation: {
+                sampledBytes: allocation.samples.reduce((sum, sample) => sum + sample.size, 0),
+                samples: allocation.samples.length,
+                samplingInterval: 32768,
+                includesCollectedObjects: true,
+              },
+            }
+          : {}),
         initialMemory: result.initialMemory,
         finalMemory: memory(),
         gc: Object.fromEntries(

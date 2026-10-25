@@ -229,7 +229,9 @@ the update result. This does not change Gateway authentication or pairing.
 The retained verifier runs the previous package, so an update that changes the
 Gateway protocol version, in either direction, gets the same HTTP identity check
 with an RPC protocol warning instead of waiting for an RPC handshake that cannot
-succeed.
+succeed. When readiness never settles, the recorded timeout names both the read
+the budget interrupted and the last health probe error, such as an RPC
+rejection.
 
 Channel outages are warnings once the expected Gateway build is running and its
 core readiness is verified. Detailed `/readyz` responses report `coreReady`

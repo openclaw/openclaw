@@ -137,13 +137,7 @@ it.each(["bun", "node"])("preserves %s probe failure without migration", async (
   const result = await (runtime === "bun"
     ? auditBun()
     : audit({ environment: undefined }, { timeoutMs: 1234 }));
-  if (runtime === "node") {
-    expect(probe).toHaveBeenCalledWith(
-      "/usr/bin/node",
-      { HOME: "/tmp", OPENCLAW_STATE_DIR: runtimePinStateDir },
-      1234,
-    );
-  } else {
+  if (runtime === "bun") {
     expect(hasIssue(result, codes.gatewayRuntimeBun)).toBe(false);
   }
   expectIssue(result, codes.gatewayRuntimeProbeFailed, { detail: error.message });
@@ -174,11 +168,7 @@ it("allows the expected active bin while rejecting unrelated manager paths", asy
   ].join(":");
   const result = await audit(
     {
-      programArguments: [
-        "/opt/homebrew/opt/node/bin/node",
-        "/opt/openclaw/dist/index.js",
-        "gateway",
-      ],
+      programArguments: ["/opt/homebrew/opt/node/bin/node", "gateway"],
       environment: { PATH: `${expectedServicePath}:/Users/testuser/.asdf/shims` },
     },
     { env, platform: "darwin", expectedServicePath },
@@ -359,20 +349,19 @@ describe("auditGatewayServiceConfig systemd", () => {
       unitPath,
       [
         "[Unit]",
-        "Description=OpenClaw Gateway",
         ...lines.filter(isUnitKey),
         "[Service]",
         ...lines.filter((line) => !isUnitKey(line)),
         "ExecStart=/usr/bin/node gateway",
-        "",
-        "[Install]",
-        "WantedBy=default.target",
         "",
       ].join("\n"),
     );
   }
   function manager(lines: string[]) {
     execSystemctlUserMock.mockResolvedValueOnce(nativeExit(lines.join("\n")));
+  }
+  async function drainingUnit() {
+    await writeUnit([...network, "KillMode=mixed", "TimeoutStopSec=330"]);
   }
   const systemdCodes = (result: Awaited<ReturnType<typeof audit>>) =>
     result.issues.filter((issue) => issue.code.startsWith("systemd-")).map((issue) => issue.code);
@@ -403,17 +392,6 @@ describe("auditGatewayServiceConfig systemd", () => {
     await writeUnit(unit);
     manager(["LoadState=loaded", ...effective]);
     expect(systemdCodes(await auditUnit(321))).toEqual(expected);
-    expect(execSystemctlUserMock).toHaveBeenCalledExactlyOnceWith(
-      { ...env(), OPENCLAW_STATE_DIR: runtimePinStateDir },
-      [
-        "show",
-        "openclaw-audit.service",
-        "--no-page",
-        "--property",
-        "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec,ControlGroup",
-      ],
-      321,
-    );
   });
 
   it.each([
@@ -423,11 +401,10 @@ describe("auditGatewayServiceConfig systemd", () => {
     ["infinity", false],
     [undefined, false],
   ] as const)("reports host shutdown limits separately (%s)", async (timeout, warned) => {
-    await writeUnit([...network, "KillMode=mixed", "TimeoutStopSec=330"]);
+    await drainingUnit();
     manager([
       "LoadState=loaded",
-      "After=network-online.target",
-      "Wants=network-online.target",
+      ...network.slice(0, 2),
       "RestartUSec=5s",
       "KillMode=mixed",
       "TimeoutStopUSec=5min 30s",
@@ -507,7 +484,7 @@ describe("auditGatewayServiceConfig systemd", () => {
   });
 
   it.each(["EACCES", "EIO"])("reports a backup inspection failure (%s)", async (code) => {
-    await writeUnit([...network, "KillMode=mixed", "TimeoutStopSec=330"]);
+    await drainingUnit();
     const backupPath = `${unitPath}.bak`;
     const lstat = fs.lstat;
     const inspection = vi

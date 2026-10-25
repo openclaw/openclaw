@@ -146,6 +146,7 @@ describe("mounted pane run settlement", () => {
       state: "final",
       message: finalMessage,
     });
+    await vi.waitFor(() => expect(pane.state.chatRunId).toBeNull());
     draw();
     expect(pane.state.chatRunId).toBeNull();
     expect(view.container.querySelector(".chat-working-indicator")).toBeNull();

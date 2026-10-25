@@ -32,7 +32,7 @@ import {
   captureSqliteWorkerCommitReceipt,
   deferSqliteWorkerNativeCommitReceipt,
   currentSqliteWorkerOperationAdmission as currentAdmission,
-  readNativeCommitReceipt,
+  isNativeCommitReceipt,
   type CapturedSqliteWorkerCommitReceipt,
   type NativeCommitReceipt,
   type RetainedWorkerTransactionAdmission,
@@ -389,8 +389,8 @@ function createOperationAdmission(
       return;
     }
     if (isRecord(message) && message.kind === "native-commit") {
-      const receipt = readNativeCommitReceipt(message.committed);
-      if (!receipt) {
+      const receipt = message.committed;
+      if (!isNativeCommitReceipt(receipt)) {
         invalidProtocol("commit receipt");
         return;
       }
@@ -399,17 +399,16 @@ function createOperationAdmission(
     }
     if (isRecord(message) && message.kind === "native-settlement") {
       const value = message.settlement;
-      const receipt = isRecord(value) ? readNativeCommitReceipt(value.committed) : undefined;
       if (
         !isRecord(value) ||
         (value.kind !== "completed" && value.kind !== "unknown") ||
-        (value.committed !== undefined && !receipt)
+        (value.committed !== undefined && !isNativeCommitReceipt(value.committed))
       ) {
         invalidProtocol("native settlement");
         return;
       }
-      if (receipt) {
-        installCommitted(receipt);
+      if (value.committed !== undefined) {
+        installCommitted(value.committed);
       }
       settlement = {
         kind: value.kind,

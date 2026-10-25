@@ -113,7 +113,8 @@ function flushEventCounters() {
         frameBytes[FRAME_BYTE_LABELS[i]!] = cumulative;
         cumulative -= counter.buckets[i]!;
       }
-      traffic.frameBytes = frameBytes;
+      // Reuse the owned snapshot; cloning sparse numeric keys expands V8's elements storage.
+      traffic.frameBytes = Object.freeze(frameBytes);
     }
     // Enrichment copies the top level synchronously; queued nested histograms stay detached.
     emitTrustedDiagnosticEvent(traffic);
@@ -151,7 +152,14 @@ export function recordGatewayWsEvent(
   let counter = deliveries.get(delivery);
   if (!counter) {
     counter = {
-      traffic: { type: "gateway.ws.event", event: name, count: 0, bytes: 0 },
+      traffic: {
+        type: "gateway.ws.event",
+        event: name,
+        count: 0,
+        bytes: 0,
+        sessionEvent: sessionEvent && Object.freeze({ ...sessionEvent }),
+        presenceMode,
+      },
       buckets: new Float64Array(FRAME_BYTE_BOUNDS.length),
       pending: false,
     };
@@ -162,8 +170,6 @@ export function recordGatewayWsEvent(
       runInDetachedAsyncContext(() => setImmediate(flushEventCounters).unref());
     }
     counter.pending = true;
-    counter.traffic.sessionEvent = sessionEvent;
-    counter.traffic.presenceMode = presenceMode;
     pendingCounters.push(counter);
   }
   counter.traffic.bytes += bytes;

@@ -22,6 +22,7 @@ import {
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -77,6 +78,7 @@ it("retains materialized rows and sharing after unchanged prepared reads, but pu
     const materialized = previous.materialized;
     expect(Object.values(materialized.row)).not.toContain(undefined);
     const facts = previous.facts;
+    const before = getSessionRowSelectionMetrics().materialization;
     sessionChanges.emit({ agentId: query.agentId, sessionKey: query.key, scope: "automation" });
     const sharing = projection.sharingRevision;
     await projection.ensureMaterialized();
@@ -84,6 +86,7 @@ it("retains materialized rows and sharing after unchanged prepared reads, but pu
     expect(current.materialized).toBe(materialized);
     expect(current.facts).toBe(facts);
     expect(projection.sharingRevision).toBe(sharing);
+    expect(getSessionRowSelectionMetrics().materialization.skipped - before.skipped).toBe(1);
 
     for (const patch of [
       { label: "Renamed" },
@@ -98,6 +101,9 @@ it("retains materialized rows and sharing after unchanged prepared reads, but pu
       write(query.key, { ...entry, ...patch });
       await projection.ensureMaterialized();
       expect(projection.describe(query)!.materialized).not.toBe(prior);
+      expect(projection.describe(query)!.materialized.source.configuredAgentIds).toBe(
+        prior.source.configuredAgentIds,
+      );
       expect(projection.sharingRevision).not.toBe(revision);
       expect(projection.describe(query)!.materialized.source.entry).toMatchObject(patch);
       expect(projection.snapshot(query).row).toMatchObject(
