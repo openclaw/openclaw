@@ -124,7 +124,7 @@ function bootDecision(tripped = false, recovered = false) {
   };
 }
 const bootLifecycle = vi.hoisted(() => ({
-  manualChannelStartHint: `Start a channel manually with: openclaw gateway call channels.start --params '{"channel":"<id>"}'`,
+  manualChannelStartHint: `Start a channel manually with: openclaw channels start --channel <id>`,
   decisions: [] as ReturnType<typeof bootDecision>[],
   inspect: vi.fn(
     (_env?: NodeJS.ProcessEnv, _nowMs?: number) =>
