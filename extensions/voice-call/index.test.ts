@@ -336,27 +336,27 @@ it.each(["gateway", "tool"])("sends DTMF through the %s adapter", async (adapter
 
 it("does not fall back to one-shot TwiML speak when realtime-only speech is requested", async () => {
   runtimeStub.config.realtime.enabled = true;
+  const speakRealtime = vi.spyOn(runtimeStub.webhookServer, "speakRealtime");
   const respond = await gateway("voicecall.speak", {
     allowTwimlFallback: false,
     callId: "call-1",
     message: "hello",
   });
 
-  expect(vi.mocked(runtimeStub.webhookServer.speakRealtime).mock.calls).toEqual([
-    ["call-1", "hello"],
-  ]);
+  expect(speakRealtime).toHaveBeenCalledWith("call-1", "hello");
   expect(runtimeStub.manager["speak"]).not.toHaveBeenCalled();
   expect(respond).toEqual([true, { success: false, error: "No active realtime bridge for call" }]);
 });
 
 it.each([true, false])("uses realtime speech or classic fallback (%s)", async (realtime) => {
   runtimeStub.config.realtime.enabled = true;
+  const speakRealtime = vi.spyOn(runtimeStub.webhookServer, "speakRealtime");
   if (realtime) {
     runtimeStub.manager.getCall = vi.fn(() => undefined);
     runtimeStub.manager.getCallByProviderCallId = vi.fn(() =>
       createCallRecord({ callId: "call-1", providerCallId: "CA123" }),
     );
-    runtimeStub.webhookServer.speakRealtime = vi.fn(() => ({ success: true }));
+    speakRealtime.mockReturnValue({ success: true });
   }
   const result = await (
     await activeTool()
@@ -365,7 +365,7 @@ it.each([true, false])("uses realtime speech or classic fallback (%s)", async (r
     callId: realtime ? "CA123" : "call-1",
     message: "hello",
   });
-  expect(runtimeStub.webhookServer["speakRealtime"]).toHaveBeenCalledWith("call-1", "hello");
+  expect(speakRealtime).toHaveBeenCalledWith("call-1", "hello");
   expect(vi.mocked(runtimeStub.manager.speak).mock.calls).toEqual(
     realtime ? [] : [["call-1", "hello"]],
   );
