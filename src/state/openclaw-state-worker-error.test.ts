@@ -30,6 +30,7 @@ import {
   isSqliteWorkerError,
   retainSqliteWorkerErrorCode,
   SqliteWorkerError,
+  type SqliteWorkerReply,
 } from "../infra/sqlite-worker-contract.js";
 import {
   exchangeSqliteDatabaseAdmissions,
@@ -77,6 +78,51 @@ function roundTrip(error: Error): Error {
   return decoded;
 }
 
+function brokerFailure(error: Extract<SqliteWorkerReply, { ok: false }>["error"]) {
+  const custody = new SqliteWorkerSlotCustody().createRequest();
+  custody.activate();
+  custody.accept();
+  const job: Job = {
+    custody,
+    observation: { started() {}, completed() {} },
+    request: {
+      type: "execute",
+      id: 1,
+      actor: 1,
+      input: new Uint8Array(),
+      stateContext: { environment: { OPENCLAW_STATE_DIR: "/fixture" } },
+    },
+    bytes: 0,
+    result: createDeferredCore().promise,
+    resolve() {},
+    reject() {},
+    detach() {},
+  };
+  let failure: unknown;
+  receiveSqliteWorkerReply(
+    {
+      current: job,
+      actors: new Set(),
+      worker: {
+        postMessage() {
+          throw new Error("Unexpected native dispatch");
+        },
+      },
+    },
+    { id: 1, ok: false, error },
+    {
+      fail(reason) {
+        throw reason;
+      },
+      finish(_job, result) {
+        failure = result;
+      },
+      dispatch() {},
+    },
+  );
+  return failure;
+}
+
 it("retains canonical uncertainty on an ordinary diagnostic wrapper", () => {
   const error = retainSqliteWorkerErrorCode(
     new Error("Synthetic wrapper"),
@@ -105,48 +151,12 @@ it("preserves pre-execution admission-relay unavailability through the broker re
   expect(isSqliteWorkerError(original, "unavailable")).toBe(true);
   const sharedState = encodeOpenClawStateWorkerError(original, { includeOrdinary: true });
   assert(sharedState);
-  const custody = new SqliteWorkerSlotCustody().createRequest();
-  custody.activate();
-  custody.accept();
-  const job: Job = {
-    custody,
-    observation: { started() {}, completed() {} },
-    request: {
-      type: "execute",
-      id: 1,
-      actor: 1,
-      input: new Uint8Array(),
-      stateContext: { environment: { OPENCLAW_STATE_DIR: "/fixture" } },
-    },
-    bytes: 0,
-    result: createDeferredCore().promise,
-    resolve() {},
-    reject() {},
-    detach() {},
-  };
-  let failure: unknown;
-  receiveSqliteWorkerReply(
-    { current: job, actors: new Set(), worker: { postMessage() {} } },
-    {
-      id: 1,
-      ok: false,
-      error: {
-        name: original.name,
-        message: original.message,
-        code: "unavailable",
-        sharedState: structuredClone(sharedState),
-      },
-    },
-    {
-      fail(error) {
-        throw error;
-      },
-      finish(_job, error) {
-        failure = error;
-      },
-      dispatch() {},
-    },
-  );
+  const failure = brokerFailure({
+    name: original.name,
+    message: original.message,
+    code: "unavailable",
+    sharedState: structuredClone(sharedState),
+  });
   expect(isSqliteWorkerError(failure, "unavailable")).toBe(true);
   expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(false);
   const storageFailure = classifyGatewayStorageFailure(failure);
@@ -448,58 +458,12 @@ describe("shared-state worker error transport", () => {
   ])("keeps outcome-unknown explicit instead of hydrating %s", (original) => {
     const payload = encodeOpenClawStateWorkerError(original);
     assert(payload);
-    const custody = new SqliteWorkerSlotCustody().createRequest();
-    custody.activate();
-    custody.accept();
-    const job: Job = {
-      custody,
-      observation: { started() {}, completed() {} },
-      request: {
-        type: "execute",
-        id: 1,
-        actor: 1,
-        input: new Uint8Array(),
-        stateContext: {
-          environment: { OPENCLAW_STATE_DIR: "/fixture" },
-        },
-      },
-      bytes: 0,
-      result: createDeferredCore().promise,
-      resolve: () => undefined,
-      reject: () => undefined,
-      detach: () => undefined,
-    };
-    let failure: unknown;
-    receiveSqliteWorkerReply(
-      {
-        actors: new Set(),
-        current: job,
-        worker: {
-          postMessage: () => {
-            throw new Error("Unexpected native dispatch");
-          },
-        },
-      },
-      {
-        id: 1,
-        ok: false,
-        error: {
-          name: "SqliteWorkerError",
-          message: "write outcome unknown",
-          code: "outcome-unknown",
-          sharedState: payload,
-        },
-      },
-      {
-        fail(error) {
-          throw error;
-        },
-        finish(_job, error) {
-          failure = error;
-        },
-        dispatch() {},
-      },
-    );
+    const failure = brokerFailure({
+      name: "SqliteWorkerError",
+      message: "write outcome unknown",
+      code: "outcome-unknown",
+      sharedState: payload,
+    });
     assert(failure instanceof Error, "Expected the broker to settle the original failure");
     expect(hydrateOpenClawStateWorkerError(failure)).toBe(failure);
     expect(failure).toMatchObject({ code: "outcome-unknown" });
