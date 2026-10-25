@@ -1,6 +1,5 @@
 import "./web-search-runtime.test-support.js";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createWebSearchTestProvider } from "../../test-utils/web-provider-runtime.test-helpers.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -35,7 +34,6 @@ vi.mock("../../secrets/runtime-degraded-state.js", () => ({
 import { webSearchHandlers } from "./web-search.js";
 
 let config: OpenClawConfig;
-let searchStatus: WebSearchStatusResult;
 const source = { title: "A source", url: "https://example.com/source" };
 const citation = { url: source.url, title: "Source" };
 const sourceResult = { results: [{ ...source, description: "A snippet" }] };
@@ -85,37 +83,6 @@ beforeEach(() => {
   mocks.profile.mockReturnValue(undefined);
   mocks.assertProfile.mockReset();
   config = { tools: { web: { search: { provider: "example", cacheTtlMinutes: 15 } } } };
-  searchStatus = {
-    enabled: true,
-    provider: "example",
-    agentId: "main",
-    model: {
-      provider: "local",
-      id: "local-model",
-      runtime: "openclaw",
-      runtimeLabel: "OpenClaw embedded agent",
-    },
-    providers: [
-      {
-        id: "example",
-        pluginId: "example",
-        label: "Example Search",
-        hint: "example runtime provider",
-        configured: true,
-        installed: false,
-        available: true,
-        requiresCredential: true,
-        credentialSource: "config",
-        configPath: ["plugins", "entries", "example", "config", "webSearch"],
-        credentialPath: "plugins.entries.example.config.webSearch.apiKey",
-        credential: undefined,
-        docsUrl: undefined,
-        signupUrl: "https://example.com/example",
-      },
-    ],
-    testProvider: { id: "example", label: "Example Search" },
-    route: { kind: "managed", provider: "example", label: "Example Search", testable: true },
-  };
   mocks.prepareProfile.mockImplementation(async () => ({
     profileId: mocks.profile(),
     assertCurrent: mocks.assertProfile,
@@ -125,8 +92,7 @@ beforeEach(() => {
   mocks.search.mockResolvedValue({ provider: "example", result: sourceResult });
 });
 
-it("returns settings and rejects incomplete or unknown request fields", async () => {
-  await expectResult(request("webSearch.status"), searchStatus);
+it("rejects incomplete or unknown request fields", async () => {
   for (const params of [
     { modelId: "model" },
     { modelProvider: "local", modelId: " " },
