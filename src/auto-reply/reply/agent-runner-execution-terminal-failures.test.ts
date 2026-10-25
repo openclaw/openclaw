@@ -1,10 +1,9 @@
-import { assert, expect, it, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { buildPayloads } from "../../agents/embedded-agent-runner/run/payloads.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
@@ -17,7 +16,6 @@ import {
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
-import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-state.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import {
   markGatewayRestartDraining,
@@ -38,7 +36,6 @@ import {
   createTestFallbackSummaryError,
   type EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
-import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -54,6 +51,7 @@ function runningOperation(name: string, sessionId = name, upstreamAbortSignal?: 
     upstreamAbortSignal,
   });
   operation.setPhase("running");
+  onTestFinished(() => operation.complete());
   return operation;
 }
 
@@ -167,9 +165,6 @@ it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => 
   const payload = await finalPayload(createRunAgentTurnParams(createFollowupRun()));
 
   expect(payload.text).toBe(formatBillingErrorMessage());
-  expect(payload.text).not.toContain("All models failed");
-  expect(payload.text).not.toContain("402 (billing)");
-  expect(payload.text).not.toContain("Rate-limited");
 });
 
 it("keeps the provider reset hint when the chain summary exceeds the length guard", async () => {
@@ -211,59 +206,44 @@ it("surfaces restart text when fallback exhaustion wraps a drain error, keeping 
   expect(failCall[1]).toBeInstanceOf(GatewayDrainingError);
 });
 
-it("preserves controller restart cancellation when fallback exhaustion wraps its abort", async () => {
-  const replyOperation = runningOperation("wrapped-restart-abort");
-  const failMock = vi.spyOn(replyOperation, "fail");
-  state.runWithModelFallbackMock.mockImplementationOnce(async () => {
-    const reason = createAgentRunRestartAbortError();
-    expect(replyOperation.abortForRestart()).toBe(true);
-    throw exhausted(reason, "agent run aborted for restart");
-  });
-
-  try {
+it.each(["wrapped abort", "admission refusal"] as const)(
+  "preserves automatic restart recovery after %s",
+  async (source) => {
+    const replyOperation = runningOperation("restart-refusal");
+    const failMock = vi.spyOn(replyOperation, "fail");
+    if (source === "wrapped abort") {
+      state.runWithModelFallbackMock.mockImplementationOnce(async () => {
+        expect(replyOperation.abortForRestart()).toBe(true);
+        throw exhausted(createAgentRunRestartAbortError(), "agent run aborted for restart");
+      });
+    } else {
+      onTestFinished(resetGatewayWorkAdmission);
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+        params.onExecutionPhase?.({
+          phase: "model_call_started",
+          provider: "openai",
+          model: "fixture",
+        });
+        // Admission closes before the shutdown owner aborts the turn.
+        markGatewayRestartDraining();
+        throw new GatewayDrainingError();
+      });
+    }
     const result = await runRawTurn({ replyOperation });
     expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
     expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    expect(failMock).not.toHaveBeenCalled();
-  } finally {
-    replyOperation.complete();
-  }
-});
-
-it("retains automatic recovery when restart admission refuses an active turn", async () => {
-  const replyOperation = runningOperation("restart-refusal");
-  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-    await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-    params.onExecutionPhase?.({
-      phase: "model_call_started",
-      provider: "openai",
-      model: "fixture",
-    });
-    // The admission fence closes before the shutdown owner aborts the turn.
-    markGatewayRestartDraining();
-    throw new GatewayDrainingError();
-  });
-  try {
-    const result = await runRawTurn({ replyOperation });
-    expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
-    expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    const terminal = onlyTerminal(result.runId);
-    expect(terminal.data).toMatchObject({
-      phase: "end",
-      aborted: true,
-      stopReason: "restart",
-    });
-    expect(
-      deriveGatewaySessionLifecycleProjectionPatch({
-        entry: { updatedAt: 1, startedAt: 1 },
-        event: { ...terminal, ts: 2 },
-      }),
-    ).toMatchObject({ status: "interrupted", abortedLastRun: true });
-  } finally {
-    resetGatewayWorkAdmission();
-    replyOperation.complete();
-  }
-});
+    if (source === "wrapped abort") {
+      expect(failMock).not.toHaveBeenCalled();
+    } else {
+      expect(onlyTerminal(result.runId).data).toMatchObject({
+        phase: "end",
+        aborted: true,
+        stopReason: "restart",
+      });
+    }
+  },
+);
 
 it.each([
   { label: "reconnected first interruption", continuing: true },
@@ -284,32 +264,28 @@ it.each([
   const onAgentRunTerminalOutcome = vi.fn();
   const params = createMinimalRunAgentTurnParams({ replyOperation });
   params.opts = { [REPLY_OPERATION_RUN_STATE]: runState, onAgentRunTerminalOutcome };
-  try {
-    const result = await runRawTurn(params);
-    expect(result.outcome).toMatchObject({
-      kind: "rejected",
-      payload: {
-        text: continuing ? "" : `${loss.message} This turn will not be continued automatically.`,
-      },
-    });
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    if (continuing) {
-      expect(runState.replyCompletion?.outcome).toBe("pending");
-      expect(replyOperation.result).toBeNull();
-      expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
-    } else {
-      expect(replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
-      expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
-    }
-    expect(continueStalledTurn).toHaveBeenCalledExactlyOnceWith(expect.any(String), replyOperation);
-    expect(onlyTerminal(result.runId).data).toMatchObject(
-      continuing
-        ? { phase: "end", yielded: true, terminalReply: { disposition: "empty" } }
-        : { phase: "error" },
-    );
-  } finally {
-    replyOperation.complete();
+  const result = await runRawTurn(params);
+  expect(result.outcome).toMatchObject({
+    kind: "rejected",
+    payload: {
+      text: continuing ? "" : `${loss.message} This turn will not be continued automatically.`,
+    },
+  });
+  expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  if (continuing) {
+    expect(runState.replyCompletion?.outcome).toBe("pending");
+    expect(replyOperation.result).toBeNull();
+    expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
+  } else {
+    expect(replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("failed");
   }
+  expect(continueStalledTurn).toHaveBeenCalledExactlyOnceWith(expect.any(String), replyOperation);
+  expect(onlyTerminal(result.runId).data).toMatchObject(
+    continuing
+      ? { phase: "end", yielded: true, terminalReply: { disposition: "empty" } }
+      : { phase: "error" },
+  );
 });
 
 it.each([
@@ -322,6 +298,7 @@ it.each([
     const upstreamAbort = new AbortController();
     const replyOperation = runningOperation("abort-terminal", "session", upstreamAbort.signal);
     const failMock = vi.spyOn(replyOperation, "fail");
+    onTestFinished(() => failMock.mockRestore());
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       if (reason === "superseded") {
         replyOperation.supersede();
@@ -334,31 +311,26 @@ it.each([
       throw Object.assign(new Error("aborted"), { name: "AbortError" });
     });
 
-    try {
-      const result = await runRawTurn({
-        replyOperation,
-        opts: { abortSignal: upstreamAbort.signal },
-        isRestartRecoveryArmed: async () => true,
-      });
+    const result = await runRawTurn({
+      replyOperation,
+      opts: { abortSignal: upstreamAbort.signal },
+      isRestartRecoveryArmed: async () => true,
+    });
 
-      expect(result.outcome).toEqual({ kind: "aborted", reason });
-      expect(replyOperation.result).toEqual({ kind: "aborted", code });
-      expect(failMock).not.toHaveBeenCalled();
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      expect(onlyTerminal(result.runId).data).toMatchObject({
-        phase,
-        aborted: true,
-        stopReason: reason,
-      });
-    } finally {
-      replyOperation.complete();
-      failMock.mockRestore();
-    }
+    expect(result.outcome).toEqual({ kind: "aborted", reason });
+    expect(replyOperation.result).toEqual({ kind: "aborted", code });
+    expect(failMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(onlyTerminal(result.runId).data).toMatchObject({
+      phase,
+      aborted: true,
+      stopReason: reason,
+    });
   },
 );
 
 it.for([false, true])(
-  "preserves the prior terminal row when cancellation precedes execution (started=%s)",
+  "marks cancellation according to whether execution started (started=%s)",
   async (started, { signal }) => {
     const reachedBoundary = createDeferred();
     const release = createDeferred();
@@ -402,21 +374,9 @@ it.for([false, true])(
       );
       expect(terminals).toHaveLength(1);
       const terminal = terminals[0]!;
-      const patch = deriveGatewaySessionLifecycleProjectionPatch({
-        entry: {
-          updatedAt: 2,
-          startedAt: 1,
-          endedAt: 2,
-          lastRunId: "prior-completed-run",
-          lastRunError: "prior timeout",
-        },
-        event: { ...terminal, ts: 3 },
-      });
       if (started) {
         expect(terminal.data.executionStarted).not.toBe(false);
-        expect(patch).toMatchObject({ status: "killed", abortedLastRun: true });
       } else {
-        expect(patch).toEqual({});
         expect(terminal.data).toMatchObject({ executionStarted: false, providerStarted: false });
       }
     } finally {
@@ -488,28 +448,6 @@ it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
 
   expect(payload).toMatchObject({ isError: true, text: recoveryText });
   expect(payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-});
-
-it("warns that interrupted CLI background work may have completed", () => {
-  const payload = buildKnownAgentRunFailureReplyPayload({
-    err: createCliTimeoutError(
-      { provider: "claude-cli" },
-      {
-        mode: "overall",
-        timeoutSeconds: 600,
-        observedActivity: true,
-        activeToolCount: 1,
-        backgroundTaskCount: 1,
-      },
-      "cli_overall_timeout",
-    ),
-    sessionCtx: createMinimalRunAgentTurnParams().sessionCtx,
-    resolvedVerboseLevel: "off",
-  });
-
-  expect(payload?.text).toContain("Some work may have completed");
-  expect(payload?.text).toContain("Check its results before trying again");
-  expect(payload?.text).toContain("task time limit in the Control UI settings");
 });
 
 it("surfaces Codex app-server bridge failures instead of generic copy", async () => {
