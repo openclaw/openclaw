@@ -104,7 +104,7 @@ const ready = (scope: ReturnType<typeof createScope>, messages: unknown[]) => ({
   kind: "ready",
   context: { empty: messages.length === 0, messages, sessionId: scope.sessionId },
 });
-const compact = (scope: ReturnType<typeof createScope>, details?: { payload: string }) =>
+const compact = (scope: ReturnType<typeof createScope>) =>
   appendTranscriptEvent(scope, {
     type: "compaction",
     id: "compaction",
@@ -113,7 +113,7 @@ const compact = (scope: ReturnType<typeof createScope>, details?: { payload: str
     summary: "older context was compacted",
     firstKeptEntryId: "retained",
     tokensBefore: 100,
-    ...(details ? { details } : {}),
+    details: { payload: "x".repeat(1024 * 1024) },
   });
 
 async function readReady(scope: ReturnType<typeof createScope>) {
@@ -376,7 +376,7 @@ it("uses the contiguous newest suffix when an older message exceeds the read bud
   );
 });
 
-it("keeps transcript-visible messages across compaction", async () => {
+it("keeps transcript-visible messages across compaction with oversized non-message details", async () => {
   const scope = await seedScope("companion-context-compaction", [
     turn("discarded", null, "user", "discarded context", 1),
     turn("retained", "discarded", "user", "retained context", 2),
@@ -387,23 +387,13 @@ it("keeps transcript-visible messages across compaction", async () => {
     turn("question", "answer", "user", "visible current question", 4),
   ]);
 
-  const messages = await readReady(scope);
-  expect(messages.map((message) => [message.role, message.text])).toEqual([
-    ["user", "discarded context"],
-    ["user", "retained context"],
-    ["assistant", "recent answer"],
-    ["user", "visible current question"],
-  ]);
-});
-
-it("ignores oversized non-message compaction details", async () => {
-  const scope = await seedScope("companion-context-oversized-boundary", [
-    turn("retained", null, "user", "retained context", 1),
-  ]);
-  await compact(scope, { payload: "x".repeat(1024 * 1024) });
-
   await expect(reader.read(scope)).resolves.toEqual(
-    ready(scope, [{ role: "user", text: "retained context", ts: 1 }]),
+    ready(scope, [
+      { role: "user", text: "discarded context", ts: 1 },
+      { role: "user", text: "retained context", ts: 2 },
+      { role: "assistant", text: "recent answer", ts: 3 },
+      { role: "user", text: "visible current question", ts: 4 },
+    ]),
   );
 });
 
