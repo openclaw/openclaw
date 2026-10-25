@@ -100,7 +100,9 @@ it("renders current safe Markdown and retains its DOM while the live runtime loa
       html.set!.call(this, value);
     },
   });
-  onTestFinished(() => Object.defineProperty(Element.prototype, "innerHTML", html));
+  onTestFinished(() => {
+    Object.defineProperty(Element.prototype, "innerHTML", html);
+  });
   setSource(`${latest} **More**`);
   await waitForSolid(() => {
     expect(view.container.querySelector(".live-message")?.textContent).toContain("More");
