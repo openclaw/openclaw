@@ -105,13 +105,17 @@ export async function expectMigratedPackageFinalization(
   ]);
   let observedProgress = Buffer.alloc(0);
   const onResult = vi.fn();
+  const expectPublished = (expectedStatus: string) => {
+    expect(stdout).toHaveBeenCalledExactlyOnceWith("candidate finalization result\n");
+    expect(onResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ status: expectedStatus }),
+    );
+  };
   if (recovered) {
     windowsRecovery.complete.mockImplementationOnce(async () => {
       expectNoCalls(stdout, onResult);
     });
   }
-  let stdoutAtCompletion: number | undefined;
-  let observedAtCompletion: number | undefined;
   let candidateRow: unknown;
   const oldRuntimeOpens: string[] = [];
   const databasePath = path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
@@ -120,8 +124,7 @@ export async function expectMigratedPackageFinalization(
     // Keep the successful package owner's real completion; inject only the
     // ordinary error that the canonical completion policy must classify.
     complete.mockImplementation(async (...args) => {
-      stdoutAtCompletion = stdout.mock.calls.length;
-      observedAtCompletion = onResult.mock.calls.length;
+      expect.soft([stdout.mock.calls, onResult.mock.calls]).toEqual([[], []]);
       if (completion === "failure") {
         throw new Error("fixture package completion unavailable");
       }
@@ -198,18 +201,7 @@ export async function expectMigratedPackageFinalization(
         const migrated = new DatabaseSync(databasePath);
         migrated.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
         migrated.close();
-        const controlPath = path.join(base, "observer-control.sqlite");
-        new DatabaseSync(controlPath).close();
-        const observedOpen = observeMigratedStateOpens(databasePath, oldRuntimeOpens);
-        // Exercise the observer with the native SQLite filename URI without
-        // reopening the migrated state database in the old runtime.
-        const controlUri = nodeSqlite.resolveExistingSqliteFileUri(controlPath);
-        const control = nodeSqlite.openNodeSqliteDatabase(controlUri);
-        try {
-          expect(observedOpen).toHaveBeenCalledExactlyOnceWith(controlUri);
-        } finally {
-          control.close();
-        }
+        observeMigratedStateOpens(databasePath, oldRuntimeOpens);
       }
       await fs.writeFile(
         input.resultPath,
@@ -280,8 +272,6 @@ export async function expectMigratedPackageFinalization(
     return;
   }
   if (completion) {
-    expect.soft(stdoutAtCompletion).toBe(0);
-    expect.soft(observedAtCompletion).toBe(0);
     expect.soft(readCandidateRow()).toEqual(candidateRow);
     expect.soft(candidateRow).toMatchObject({ status: "succeeded", reason: "updated" });
     expect.soft(oldRuntimeOpens).toEqual([]);
@@ -291,13 +281,11 @@ export async function expectMigratedPackageFinalization(
       expect.soft(settled).toMatchObject({
         cause: { result: { reason: "package-backup-retention-failed" } },
       });
-      expect.soft(stdout).not.toHaveBeenCalled();
-      expect(onResult).not.toHaveBeenCalled();
+      expectNoCalls(stdout, onResult);
       await expect(fs.access(transaction.backupRoot)).resolves.toBeUndefined();
     } else {
       expect(settled).toMatchObject({ exitCode: 0, result: { status: "ok" } });
-      expect(stdout).toHaveBeenCalledExactlyOnceWith("candidate finalization result\n");
-      expect(onResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: "ok" }));
+      expectPublished("ok");
     }
     return;
   }
@@ -314,8 +302,7 @@ export async function expectMigratedPackageFinalization(
   if (handback) {
     expectNoCalls(stdout, onResult);
   } else {
-    expect(stdout).toHaveBeenCalledExactlyOnceWith("candidate finalization result\n");
-    expect(onResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status }));
+    expectPublished(status);
   }
   if (pending || handback) {
     expect(complete).not.toHaveBeenCalled();

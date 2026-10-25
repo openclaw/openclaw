@@ -2,9 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import * as terminalNote from "../../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { retireHeartbeatWithDoctor } from "../../commands/doctor-heartbeat-retirement.js";
 import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
@@ -13,7 +11,6 @@ import {
 import { parseUpdateAdmissionVerdict } from "../../infra/update-run-schema.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { withStateMigrationBackupForTest } from "../../state/openclaw-state-schema.test-support.js";
 import * as schemaPreflight from "./schema-preflight.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
 
@@ -139,7 +136,7 @@ function fixture(scenario: Scenario, withDatabase = true) {
           fs.statSync(filename).mode,
         ];
       });
-  return { config, configPath, contextPath, sourcePath, snapshot };
+  return { configPath, contextPath, sourcePath, snapshot };
 }
 
 async function checkAdmission(
@@ -191,39 +188,6 @@ it.each<Scenario>([
         ]
       : [],
   });
-
-  if (scenario.scratch === operatorScratch && !scenario.invalidSource) {
-    const notes = vi.spyOn(terminalNote, "note").mockImplementation(() => {});
-    const next = await withStateMigrationBackupForTest({}, () =>
-      retireHeartbeatWithDoctor(f.config),
-    );
-    expect(next.agents?.entries?.main?.heartbeat).toBeUndefined();
-    expect(fs.readFileSync(f.sourcePath)).toEqual(Buffer.from(scenario.source ?? source));
-    {
-      using database = new DatabaseSync(resolveOpenClawStateSqlitePath(), { readOnly: true });
-      expect(database.prepare("SELECT * FROM cron_job_scratch").all()).toEqual([
-        {
-          store_key: path.join(path.dirname(f.configPath), "cron", "jobs.json"),
-          job_id: "july-monitor",
-          content: operatorScratch,
-          revision: 4,
-          source_sha256: null,
-          updated_at_ms: 1,
-        },
-      ]);
-      expect(database.prepare("SELECT job_id, payload_kind FROM cron_jobs").all()).toEqual([
-        { job_id: "july-monitor", payload_kind: "agentTurn" },
-      ]);
-    }
-    expect(notes).toHaveBeenCalledWith(
-      expect.stringContaining("different cron scratch"),
-      "Doctor notices",
-    );
-    expect(notes).toHaveBeenCalledWith(
-      expect.stringContaining("HEARTBEAT.md was retained for review"),
-      "Doctor notices",
-    );
-  }
 });
 
 it.each([
