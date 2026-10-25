@@ -10842,7 +10842,7 @@ describe("ci workflow guards", () => {
             JSON.parse(expectDefined(manifest.outputs.ui_e2e_matrix, assertionName)),
             assertionName,
           ).toEqual({
-            include: expectedUiE2eMatrices[1].include.filter(
+            include: expectDefined(expectedUiE2eMatrices[1], "current UI matrix").include.filter(
               (row) =>
                 row.task !== "browser-extension" ||
                 manifest.outputs.reuse_browser_extension_build !== "true",
@@ -10920,6 +10920,20 @@ describe("ci workflow guards", () => {
 
     // Failed-job retries can retain an earlier eight-shard plan while live routing
     // selects hosted runners. Both widths retain the cache and contributor boundaries.
+    const routedRealGatewayJobs = [
+      { shard: 1, shard_count: 2, run_desktop: true },
+      { shard: 2, shard_count: 2, run_desktop: false },
+      { shard: 1, shard_count: 1, run_desktop: true },
+    ].map((matrix) => ({
+      job: uiE2eRealGateway,
+      name:
+        matrix.shard_count === 1
+          ? "checks-ui-e2e-real-gateway"
+          : `checks-ui-e2e-real-gateway (${matrix.shard}/${matrix.shard_count})`,
+      setup: realGatewaySetup,
+      matrix,
+      blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
+    }));
     const routedUiE2eJobs = [
       {
         job: uiBrowser,
@@ -10940,20 +10954,7 @@ describe("ci workflow guards", () => {
               ? "blacksmith-16vcpu-ubuntu-2404"
               : "blacksmith-8vcpu-ubuntu-2404",
         })),
-      ...[
-        { shard: 1, shard_count: 2, run_desktop: true },
-        { shard: 2, shard_count: 2, run_desktop: false },
-        { shard: 1, shard_count: 1, run_desktop: true },
-      ].map((matrix) => ({
-        job: uiE2eRealGateway,
-        name:
-          matrix.shard_count === 1
-            ? "checks-ui-e2e-real-gateway"
-            : `checks-ui-e2e-real-gateway (${matrix.shard}/${matrix.shard_count})`,
-        setup: realGatewaySetup,
-        matrix,
-        blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
-      })),
+      ...routedRealGatewayJobs,
     ] as const;
     expect(new Set(routedUiE2eJobs.map((job) => job.name)).size).toBe(routedUiE2eJobs.length);
     const routingScenarios = [
@@ -11303,9 +11304,7 @@ describe("ci workflow guards", () => {
     expect(proofUpload.with.name).toBe(
       "control-ui-real-gateway-proof-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}",
     );
-    const realGatewayRows = routedUiE2eJobs.filter(
-      (row) => row.job === uiE2eRealGateway && row.matrix.shard_count === 2,
-    );
+    const realGatewayRows = routedRealGatewayJobs.filter((row) => row.matrix.shard_count === 2);
     for (const step of [desktopProof, desktopUpload]) {
       expect(
         realGatewayRows.filter(({ matrix }) =>
