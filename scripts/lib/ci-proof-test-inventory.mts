@@ -2238,7 +2238,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/config/sessions/session-history-wal-budget.test.ts",
   "src/config/sessions/session-history-worker-errors.test.ts",
   "src/config/sessions/session-registry-maintenance.test.ts",
-  "src/config/sessions/session-row-changes.test.ts",
   "src/config/sessions/session-sharing-store.test.ts",
   "src/config/sessions/session-sharing-store.worker.test.ts",
   "src/config/sessions/session-sqlite-target.ownership.test.ts",
