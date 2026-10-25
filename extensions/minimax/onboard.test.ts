@@ -36,7 +36,7 @@ describe.each([
       legacyApi: "openai-completions",
     });
     expect(provider?.authHeader).toBe(true);
-    expect(provider?.models.map((m) => m.id)).toEqual(["old-model", "MiniMax-M3"]);
+    expect(provider?.models.map((m) => m.id)).toEqual(["old-model", "MiniMax-M3.1-Flash"]);
   });
 
   it("drops placeholder apiKey while preserving provider timeout", () => {
@@ -56,7 +56,7 @@ describe.each([
     expect(cfg.models?.providers?.minimax?.timeoutSeconds).toBe(900);
     expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
       "MiniMax-M2.7",
-      "MiniMax-M3",
+      "MiniMax-M3.1-Flash",
     ]);
   });
 
