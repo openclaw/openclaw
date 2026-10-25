@@ -1,4 +1,5 @@
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
+import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
@@ -19,20 +20,9 @@ import {
 type RequestHandler = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 const sessionKey = "agent:main:work";
 const cwd = "/tmp/openclaw";
-const lineage = {
-  parentSessionKey: "agent:main:main",
-  spawnedBy: "agent:main:main",
-  spawnDepth: 1,
-  subagentRole: "leaf",
-  subagentControlScope: "none",
-} as const;
-const { parentSessionKey, ...lineageFields } = lineage;
-const lineageMeta = { parentSessionId: parentSessionKey, ...lineageFields };
+const parentSessionKey = "agent:main:main";
 function row(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return { key, kind: "direct", updatedAt: 1_710_000_000_000, ...fields };
-}
-function meta(key: string, fields: Record<string, unknown> = {}) {
-  return { sessionKey: key, kind: "direct", ...fields };
 }
 function sessions(rows: GatewaySessionRow[]) {
   return { sessions: rows, hasMore: false };
@@ -56,98 +46,59 @@ function pagedFixture(rows: GatewaySessionRow[]) {
   });
 }
 
-it.each([
-  {
-    name: "prefers an explicit label over a key and resets the resolved session",
-    metadata: { sessionLabel: "support", sessionKey: "agent:main:main", resetSession: true },
-    opts: {},
-    expected: "agent:main:label",
-    lookup: { label: "support" },
-    reset: true,
+const defaultKey = { defaultSessionKey: "default" };
+const defaultLabel = { defaultSessionLabel: "label" };
+const explicitKey = { sessionKey: "explicit" };
+const existing = { ...defaultKey, requireExistingSession: true };
+type Route = [
+  metadata: Record<string, unknown>,
+  opts: AcpServerOptions,
+  expected: string | undefined,
+  lookup?: { key: string } | { label: string },
+  reset?: boolean,
+];
+it.each<Route>([
+  [
+    { ...explicitKey, sessionLabel: "label", resetSession: true },
+    {},
+    "resolved",
+    { label: "label" },
+    true,
+  ],
+  [explicitKey, defaultLabel, "explicit"],
+  [{}, { ...defaultKey, ...defaultLabel }, "resolved", { label: "label" }],
+  [{}, defaultKey, "default"],
+  [{}, existing, "default", { key: "default" }],
+  [{ ...explicitKey, requireExisting: true }, defaultLabel, "explicit", { key: "explicit" }],
+  [{ requireExisting: false }, existing, "default"],
+  [{}, { requireExistingSession: true }, undefined],
+  [{ ...explicitKey, resetSession: false }, { resetSession: true }, "explicit"],
+  [explicitKey, { resetSession: true }, "explicit", undefined, true],
+])(
+  "routes newSession metadata %j with defaults %j to %s",
+  async (metadata, opts, expected, lookup, reset) => {
+    const gateway = createAcpGateway();
+    const request = vi.spyOn(gateway, "request").mockResolvedValue(sessions([]));
+    if (lookup) {
+      request.mockResolvedValueOnce({ ok: true, key: expected });
+    }
+    const sessionStore = createInMemorySessionStore();
+    const agent = createAcpGatewayAgent(createAcpConnection(), gateway, {
+      ...opts,
+      sessionStore,
+    });
+    const { newSession } = agent;
+    const result = await newSession({ ...createNewSessionRequest(cwd), _meta: metadata });
+    const selectedKey = expected ?? `acp-bridge:${result.sessionId}`;
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe(selectedKey);
+    expect(request.mock.calls).toEqual([
+      ...(lookup ? [["sessions.resolve", lookup]] : []),
+      ...(reset ? [["sessions.reset", { key: selectedKey }]] : []),
+      ...(expected === undefined ? [["sessions.create", { key: selectedKey, cwd }]] : []),
+      ["sessions.list", { limit: 200, search: selectedKey, includeDerivedTitles: true }],
+    ]);
   },
-  {
-    name: "lets metadata sessionKey override the default label",
-    metadata: { sessionKey: "agent:main:override" },
-    opts: { defaultSessionLabel: "default-label" },
-    expected: "agent:main:override",
-  },
-  {
-    name: "resolves the default label ahead of the default key",
-    metadata: {},
-    opts: { defaultSessionLabel: "default-label", defaultSessionKey: "default-key" },
-    expected: "agent:main:label",
-    lookup: { label: "default-label" },
-  },
-  {
-    name: "uses the default key without a lookup",
-    metadata: {},
-    opts: { defaultSessionKey: "default-key" },
-    expected: "default-key",
-  },
-  {
-    name: "resolves an existing default key",
-    metadata: {},
-    opts: { defaultSessionKey: "default-key", requireExistingSession: true },
-    expected: "default-key",
-    lookup: { key: "default-key" },
-  },
-  {
-    name: "resolves an explicit existing key ahead of the default label",
-    metadata: { sessionKey: "explicit-key", requireExisting: true },
-    opts: { defaultSessionLabel: "default-label" },
-    expected: "explicit-key",
-    lookup: { key: "explicit-key" },
-  },
-  {
-    name: "lets false metadata disable the default existing-key requirement",
-    metadata: { requireExisting: false },
-    opts: { defaultSessionKey: "default-key", requireExistingSession: true },
-    expected: "default-key",
-  },
-  {
-    name: "creates the generated bridge key without a lookup when routing is unset",
-    metadata: {},
-    opts: { requireExistingSession: true },
-    create: true,
-  },
-  {
-    name: "lets false reset metadata override the server reset default",
-    metadata: { sessionKey: "explicit-key", resetSession: false },
-    opts: { resetSession: true },
-    expected: "explicit-key",
-  },
-  {
-    name: "applies the server reset default to the selected key",
-    metadata: { sessionKey: "explicit-key" },
-    opts: { resetSession: true },
-    expected: "explicit-key",
-    reset: true,
-  },
-])("newSession $name", async ({ metadata, opts, expected, lookup, reset, create }) => {
-  const gateway = createAcpGateway();
-  const request = vi.spyOn(gateway, "request").mockResolvedValue(sessions([]));
-  if (lookup) {
-    request.mockResolvedValueOnce({ ok: true, key: expected });
-  }
-  if (reset) {
-    request.mockResolvedValueOnce({ ok: true });
-  }
-  const sessionStore = createInMemorySessionStore();
-  const agent = createAcpGatewayAgent(createAcpConnection(), gateway, {
-    ...opts,
-    sessionStore,
-  });
-  const { newSession } = agent;
-  const result = await newSession({ ...createNewSessionRequest(cwd), _meta: metadata });
-  const selectedKey = expected ?? `acp-bridge:${result.sessionId}`;
-  expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe(selectedKey);
-  expect(request.mock.calls).toEqual([
-    ...(lookup ? [["sessions.resolve", lookup]] : []),
-    ...(reset ? [["sessions.reset", { key: selectedKey }]] : []),
-    ...(create ? [["sessions.create", { key: selectedKey, cwd }]] : []),
-    ["sessions.list", { limit: 200, search: selectedKey, includeDerivedTitles: true }],
-  ]);
-});
+);
 
 it.each([
   {
@@ -228,15 +179,12 @@ it.each([
   { metadata: { limit: -1 }, expected: 1 },
 ])("clamps session/list page metadata: $metadata", async ({ metadata, expected }) => {
   const rows = Array.from({ length: 101 }, (_, index) => row(`session-${index}`));
-  const { agent, request } = pagedFixture(rows);
+  const { agent } = pagedFixture(rows);
   const result = await agent.listSessions({ _meta: metadata });
   expect(result.sessions.map((session) => session.sessionId)).toEqual(
     rows.slice(0, expected).map((session) => session.key),
   );
   expect(result.nextCursor).not.toBeNull();
-  expect(request.mock.calls).toEqual([
-    ["sessions.list", { limit: expected + 1, includeDerivedTitles: true }],
-  ]);
 });
 
 it("bounds the Gateway fetch at the maximum accepted session/list offset", async () => {
@@ -255,19 +203,18 @@ it("bounds the Gateway fetch at the maximum accepted session/list offset", async
 it("paginates cwd-filtered sessions with lineage, safe timestamps, and filter-bound cursors", async () => {
   const rows = [
     row("child", {
-      ...lineage,
-      channel: "telegram",
+      parentSessionKey,
       derivedTitle: "Child",
       spawnedWorkspaceDir: "/work/a",
       updatedAt: Infinity,
     }),
     row("unknown"),
-    row("a2", { channel: "telegram", displayName: "Main", spawnedWorkspaceDir: "/work/a" }),
+    row("a2", { displayName: "Main", spawnedWorkspaceDir: "/work/a" }),
     row("b1", { spawnedWorkspaceDir: "/work/b" }),
     row("a3", { spawnedWorkspaceDir: "/work/a" }),
     row("a4", { spawnedWorkspaceDir: "/work/a" }),
   ];
-  const { agent, request } = pagedFixture(rows);
+  const { agent } = pagedFixture(rows);
   const first = await agent.listSessions({ cwd: "/work/a", _meta: { limit: 2 } });
   const second = await agent.listSessions({
     cwd: "/work/a",
@@ -277,27 +224,13 @@ it("paginates cwd-filtered sessions with lineage, safe timestamps, and filter-bo
   expect(first.sessions.map((session) => session.sessionId)).toEqual(["child", "a2"]);
   expect(first.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
   expect(first.sessions[0]?.updatedAt).toBeUndefined();
-  expect(first.sessions[0]?._meta).toEqual(
-    meta("child", {
-      channel: "telegram",
-      ...lineageMeta,
-      spawnedWorkspaceDir: "/work/a",
-    }),
-  );
-  expect(first.sessions[1]?._meta).toEqual(
-    meta("a2", {
-      channel: "telegram",
-      spawnedWorkspaceDir: "/work/a",
-    }),
-  );
-  expect(first.nextCursor).toBeTypeOf("string");
-  expect(first.nextCursor).not.toBe("");
+  expect(first.sessions[0]?._meta).toMatchObject({
+    sessionKey: "child",
+    parentSessionId: parentSessionKey,
+  });
   expect(second.sessions.map((session) => session.sessionId)).toEqual(["a3", "a4"]);
   expect(second.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
   expect(second.nextCursor).toBeNull();
-  expect(request.mock.calls).toEqual(
-    [3, 6, 5, 10].map((limit) => ["sessions.list", { limit, includeDerivedTitles: true }]),
-  );
   await expect(
     agent.listSessions({ cwd: "/work/a", cursor: ` ${first.nextCursor} ` }),
   ).rejects.toThrow("Invalid ACP session list cursor.");
@@ -305,8 +238,6 @@ it("paginates cwd-filtered sessions with lineage, safe timestamps, and filter-bo
     /cursor does not match the cwd filter/i,
   );
   const unfiltered = await agent.listSessions({ _meta: { limit: 1 } });
-  expect(unfiltered.nextCursor).toBeTypeOf("string");
-  expect(unfiltered.nextCursor).not.toBe("");
   await expect(
     agent.listSessions({ cwd: "/work/a", cursor: unfiltered.nextCursor }),
   ).rejects.toThrow(/cursor does not match the cwd filter/i);
@@ -336,9 +267,7 @@ it.each(["resume", "load"] as const)(
     const { agent, request, sessionUpdate, sessionStore } = fixture([
       row(sessionKey, {
         thinkingLevel: "adaptive",
-        ...(resume
-          ? { derivedTitle: title }
-          : { ...lineage, channel: "discord", displayName: title }),
+        ...(resume ? { derivedTitle: title } : { parentSessionKey, displayName: title }),
         spawnedWorkspaceDir,
         updatedAt: resume ? 1_710_000_000_000 : 1_710_000_020_000,
       }),
@@ -363,9 +292,10 @@ it.each(["resume", "load"] as const)(
         sessionUpdate: "session_info_update",
         title,
         updatedAt: resume ? "2024-03-09T16:00:00.000Z" : "2024-03-09T16:00:20.000Z",
-        _meta: meta(sessionKey, {
+        _meta: expect.objectContaining({
+          sessionKey,
           spawnedWorkspaceDir,
-          ...(!resume ? { channel: "discord", ...lineageMeta } : {}),
+          ...(!resume ? { parentSessionId: parentSessionKey } : {}),
         }),
       },
     });

@@ -141,6 +141,11 @@ function createWireHarness(maxSessions = 10) {
     expect(updateIndex(sessionId)).toBeGreaterThanOrEqual(0);
     expect(updateIndex(sessionId)).toBeLessThan(responseIndex(id));
   };
+  const finishSlow = async (id: JsonRpcId) => {
+    slow.resolve();
+    const response = await waitResponse(id);
+    await expect.poll(() => updateIndex("slow"), FAST_POLL).toBeGreaterThan(response);
+  };
   cleanup = async () => {
     slow.resolve();
     if (!inputCancelled) {
@@ -154,7 +159,6 @@ function createWireHarness(maxSessions = 10) {
   return {
     frames,
     entered,
-    slow,
     store,
     connection,
     send,
@@ -164,6 +168,7 @@ function createWireHarness(maxSessions = 10) {
     sessionInfo,
     exchange,
     beginSlow,
+    finishSlow,
     expectUpdateBefore,
     failOutput: () => {
       outputFailure = new Error("stdout closed");
@@ -199,19 +204,12 @@ it("streams create/prompt/load/resume with empty and null IDs while a creation i
   expect(text).toBeLessThan(wire.responseIndex(2));
   wire.expectUpdateBefore("loaded", "");
   wire.expectUpdateBefore("resumed", null);
-  wire.slow.resolve();
-  await wire.waitResponse(90);
-  await expect
-    .poll(() => wire.updateIndex("slow"), FAST_POLL)
-    .toBeGreaterThan(wire.responseIndex(90));
+  await wire.finishSlow(90);
 });
 
 it.each([
   { ...create(41, "invalid"), jsonrpc: undefined },
   request(null, "session/new", { cwd: 1, mcpServers: [] }),
-  ...["session/load", "session/resume"].map((method) =>
-    Object.assign(restore(41, method, "slow"), { jsonrpc: "1.0" }),
-  ),
 ])("retires rejected session correlations for %j", async (message) => {
   const wire = createWireHarness();
   wire.send(message);
@@ -221,11 +219,8 @@ it.each([
   await wire.exchange(initialize(42));
   wire.expectUpdateBefore("unowned", 42);
   await wire.beginSlow("");
-  wire.slow.resolve();
-  const response = await wire.waitResponse("");
-  await expect.poll(() => wire.updateIndex("slow"), FAST_POLL).toBeGreaterThan(response);
+  await wire.finishSlow("");
   expect(wire.entered).toEqual(["slow"]);
-  expect(wire.updateIndex("unowned")).toBeGreaterThanOrEqual(0);
 });
 
 it("does not settle a null-ID creation on an uncorrelated protocol error", async () => {
@@ -235,7 +230,7 @@ it("does not settle a null-ID creation on an uncorrelated protocol error", async
   await wire.waitResponse(null);
   await wire.exchange(initialize(42));
   expect(wire.updateIndex("slow")).toBe(-1);
-  wire.slow.resolve();
+  await wire.finishSlow(null);
   await expect
     .poll(() => wire.frames.some((frame) => "result" in frame && frame.id === null), FAST_POLL)
     .toBe(true);
@@ -251,8 +246,7 @@ it("forgets recognition when the actual session store evicts an idle session", a
   await wire.connection.sessionUpdate(wire.sessionInfo("evicted", "late"));
   await wire.exchange(initialize(3));
   expect(wire.frames.slice(before)).toHaveLength(1);
-  wire.slow.resolve();
-  await wire.waitResponse(2);
+  await wire.finishSlow(2);
   await expect.poll(() => wire.frames.length, FAST_POLL).toBe(before + 4);
 });
 

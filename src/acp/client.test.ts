@@ -1,6 +1,6 @@
 import { ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import {
   AgentSideConnection,
   ndJsonStream,
@@ -117,11 +117,7 @@ describe("interactive ACP permissions", () => {
         async cancel() {},
       }),
       ndJsonStream(
-        new WritableStream<Uint8Array>({
-          write(bytes) {
-            toClient.write(bytes);
-          },
-        }),
+        Writable.toWeb(toClient),
         new ReadableStream<Uint8Array>({
           start(controller) {
             fromClient.on("data", (bytes: Buffer) => controller.enqueue(bytes));

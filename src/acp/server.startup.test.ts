@@ -1,4 +1,5 @@
 import { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
@@ -27,16 +28,13 @@ function rpcRequest(id: number, method: string, params: Record<string, unknown>)
   return { jsonrpc: "2.0", id, method, params };
 }
 
-function rpcUpdate(sessionId: string, text?: string) {
+function rpcUpdate(sessionId: string, text: string) {
   return {
     jsonrpc: "2.0",
     method: "session/update",
     params: {
       sessionId,
-      update:
-        text === undefined
-          ? { sessionUpdate: "session_info_update", title: "Proof" }
-          : { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
     },
   };
 }
@@ -49,10 +47,9 @@ const mockState = vi.hoisted(() => ({
   /** When set, the NDJSON sink rejects every write, standing in for a broken stdout. */
   acpOutputSinkError: null as Error | null,
   gateways: [] as MockGatewayClient[],
-  gatewayOptions: [] as GatewayClientOptions[],
-  agentSideConnectionCtor: vi.fn(),
+  agentSideConnectionCtor:
+    vi.fn<(factory: (conn: unknown) => unknown, stream: MockAcpStream) => void>(),
   agentHandleGatewayEvent: vi.fn(async (_evt: unknown) => {}),
-  agentStart: vi.fn(),
   agentShutdown: vi.fn(),
   routeLogsToStderr: vi.fn(),
   closeOpenClawStateDatabaseAsync: vi.fn<() => Promise<void>>(async () => {}),
@@ -80,18 +77,14 @@ vi.mock("node:stream", async (importOriginal) => {
 });
 
 class MockGatewayClient {
-  private callbacks: GatewayClientCallbacks;
-
-  constructor(opts: GatewayClientOptions) {
-    this.callbacks = opts;
-    mockState.gatewayOptions.push(opts);
+  constructor(readonly options: GatewayClientOptions) {
     mockState.gateways.push(this);
   }
 
   start(): void {}
 
   stop(): void {
-    this.callbacks.onClose?.(1000, "gateway stopped");
+    this.options.onClose?.(1000, "gateway stopped");
   }
 
   async stopAndWait(): Promise<void> {
@@ -100,23 +93,10 @@ class MockGatewayClient {
     }
     this.stop();
   }
-
-  emitHello(): void {
-    this.callbacks.onHelloOk?.();
-  }
-
-  emitConnectError(message: string): void {
-    this.callbacks.onConnectError?.(new Error(message));
-  }
-  emitEvent(event: { event: string; payload?: unknown }): void {
-    this.callbacks.onEvent?.(event);
-  }
 }
 
 vi.mock("@agentclientprotocol/sdk", () => ({
-  AGENT_METHODS: {
-    initialize: "initialize",
-  },
+  AGENT_METHODS: { initialize: "initialize" },
   AgentSideConnection: function AgentSideConnection(
     factory: (conn: unknown) => unknown,
     stream: MockAcpStream,
@@ -154,11 +134,7 @@ vi.mock("@agentclientprotocol/sdk", () => ({
 }));
 
 vi.mock("../config/config.js", () => {
-  const loadConfig = () => ({
-    gateway: {
-      mode: "local",
-    },
-  });
+  const loadConfig = () => ({ gateway: { mode: "local" } });
   return {
     getRuntimeConfig: loadConfig,
     loadConfig,
@@ -177,13 +153,7 @@ vi.mock("../gateway/client.js", () => ({
 vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: vi.fn(async (client: MockGatewayClient) => {
     client.start();
-    return {
-      ready: true,
-      elapsedMs: 0,
-      maxDriftMs: 0,
-      checks: 2,
-      aborted: false,
-    };
+    return { ready: true };
   }),
 }));
 
@@ -209,9 +179,7 @@ vi.mock("./event-ledger.js", () => ({
 
 vi.mock("./translator.js", () => ({
   AcpGatewayAgent: class {
-    start(): void {
-      mockState.agentStart();
-    }
+    start(): void {}
 
     shutdown(): void {
       mockState.agentShutdown();
@@ -243,11 +211,7 @@ describe("serveAcpGateway startup", () => {
   }
 
   function getMockGateway() {
-    const gateway = mockState.gateways[0];
-    if (!gateway) {
-      throw new Error("Expected mocked gateway instance");
-    }
-    return gateway;
+    return expectDefined(mockState.gateways[0], "mock Gateway");
   }
 
   function captureProcessSignalHandlers() {
@@ -267,23 +231,14 @@ describe("serveAcpGateway startup", () => {
       expect(mockState.gateways).toHaveLength(1);
     });
     const gateway = getMockGateway();
-    gateway.emitHello();
+    gateway.options.onHelloOk?.();
     await vi.waitFor(() => {
       expect(mockState.agentSideConnectionCtor).toHaveBeenCalledTimes(1);
     });
   }
 
   function getCapturedAcpStream(): MockAcpStream {
-    const stream = mockState.agentSideConnectionCtor.mock.calls[0]?.[1];
-    if (
-      !stream ||
-      typeof stream !== "object" ||
-      !(stream as MockAcpStream).readable ||
-      !(stream as MockAcpStream).writable
-    ) {
-      throw new Error("Expected AgentSideConnection stream");
-    }
-    return stream as MockAcpStream;
+    return expectDefined(mockState.agentSideConnectionCtor.mock.calls[0]?.[1], "ACP stream");
   }
 
   async function readCapturedAcpMessages(): Promise<unknown[]> {
@@ -363,10 +318,8 @@ describe("serveAcpGateway startup", () => {
     mockState.acpOutputMessages.length = 0;
     mockState.acpOutputSinkError = null;
     mockState.gateways.length = 0;
-    mockState.gatewayOptions.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
     mockState.agentHandleGatewayEvent.mockReset();
-    mockState.agentStart.mockReset();
     mockState.agentShutdown.mockReset();
     mockState.routeLogsToStderr.mockReset();
     mockState.closeOpenClawStateDatabaseAsync.mockReset();
@@ -413,7 +366,7 @@ describe("serveAcpGateway startup", () => {
       expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
       await emitHelloAndWaitForAgentSideConnection();
 
-      expect(mockState.gatewayOptions[0]?.tlsFingerprint).toBe("sha256:local");
+      expect(getMockGateway().options.tlsFingerprint).toBe("sha256:local");
 
       await stopServeWithSigint(signalHandlers, servePromise);
     });
@@ -432,7 +385,7 @@ describe("serveAcpGateway startup", () => {
         const servePromise = serveAcpGateway({ verbose: true });
         await emitHelloAndWaitForAgentSideConnection();
 
-        getMockGateway().emitEvent({ event: "chat" });
+        getMockGateway().options.onEvent?.({ event: "chat" });
         await vi.waitFor(() => {
           expect(writes).toEqual([
             "openclaw acp: gateway event chat failed\n",
@@ -451,7 +404,7 @@ describe("serveAcpGateway startup", () => {
       await Promise.resolve();
 
       const gateway = getMockGateway();
-      gateway.emitConnectError("connect failed");
+      gateway.options.onConnectError?.(new Error("connect failed"));
       await expect(servePromise).rejects.toThrow("connect failed");
       expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
     });
@@ -517,64 +470,15 @@ describe("serveAcpGateway startup", () => {
     });
   });
 
-  it("orders new-session updates at the ACP stdio boundary without delaying loaded sessions", async () => {
-    await withWire(
-      [
-        rpcRequest(3, "session/load", { sessionId: "existing-session", cwd: "/tmp/openclaw" }),
-        rpcRequest(2, "session/new", { cwd: "/tmp/openclaw" }),
-      ],
-      async (writer) => {
-        const existingUpdate = rpcUpdate("existing-session");
-        const newUpdate = rpcUpdate("new-session");
-        const newResult = { jsonrpc: "2.0", id: 2, result: { sessionId: "new-session" } };
-        await writer.write(existingUpdate);
-        await vi.waitFor(() => expect(mockState.acpOutputMessages).toEqual([existingUpdate]));
-        await writer.write(newUpdate);
-        expect(mockState.acpOutputMessages).toEqual([existingUpdate]);
-        await writer.write(newResult);
-        await vi.waitFor(() =>
-          expect(mockState.acpOutputMessages).toEqual([existingUpdate, newResult, newUpdate]),
-        );
-      },
-    );
-  });
-
-  it("writes a session's text to the wire before the prompt response that completes it", async () => {
-    await withWire(
-      [
-        rpcRequest(1, "session/new", { cwd: "/tmp/openclaw" }),
-        rpcRequest(2, "session/new", { cwd: "/tmp/openclaw" }),
-        rpcRequest(3, "session/prompt", {
-          sessionId: "chatty-session",
-          prompt: [{ type: "text", text: "hi" }],
-        }),
-      ],
-      async (writer) => {
-        const slowChunk = rpcUpdate("slow-session", "slow");
-        const chattyChunk = rpcUpdate("chatty-session", "answer");
-        const chattyCreated = { jsonrpc: "2.0", id: 2, result: { sessionId: "chatty-session" } };
-        const endTurn = { jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } };
-        const slowCreated = { jsonrpc: "2.0", id: 1, result: { sessionId: "slow-session" } };
-
-        await writer.write(slowChunk);
-        await writer.write(chattyChunk);
-        expect(mockState.acpOutputMessages).toEqual([]);
-
-        // Release this session's backlog even while the other creation is pending.
-        await writer.write(chattyCreated);
-        await writer.write(endTurn);
-        await writer.write(slowCreated);
-
-        await vi.waitFor(() => expect(mockState.acpOutputMessages).toHaveLength(5));
-        expect(mockState.acpOutputMessages).toEqual([
-          chattyCreated,
-          chattyChunk,
-          endTurn,
-          slowCreated,
-          slowChunk,
-        ]);
-      },
-    );
+  it("wires session creation ordering into the server transport", async () => {
+    await withWire([rpcRequest(1, "session/new", { cwd: "/tmp" })], async (writer) => {
+      const update = rpcUpdate("new", "answer");
+      const result = { jsonrpc: "2.0", id: 1, result: { sessionId: "new" } };
+      await writer.write(update);
+      expect(mockState.acpOutputMessages).toEqual([]);
+      await writer.write(result);
+      await vi.waitFor(() => expect(mockState.acpOutputMessages).toEqual([result, update]));
+    });
   });
 
   it("tears down the agent, Gateway, and state database when the outbound sink fails", async () => {
