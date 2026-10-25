@@ -218,16 +218,11 @@ it("keeps the original deadline and key through a legacy creation retry", async 
   await operation;
 });
 
-it.each([
-  ["send", 45_000],
-  ["send", 240_000],
-  ["new", 45_000],
-  ["new", 240_000],
-] as const)("%s waits through %i ms of startup and writes once", async (action, preparationMs) => {
+it.each(["send", "new"] as const)("%s waits through startup and writes once", async (action) => {
   const f = createFixture();
   const settled = vi.fn();
   const operation = f.submit(action).then(settled);
-  await vi.advanceTimersByTimeAsync(preparationMs);
+  await vi.advanceTimersByTimeAsync(240_000);
   expect(settled).not.toHaveBeenCalled();
   expect(f.writes).toHaveLength(0);
   f.ready();

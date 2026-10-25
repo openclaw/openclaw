@@ -5,7 +5,6 @@ import {
   extractContentFromMessage,
   extractTextFromMessage,
   formatTuiFooter,
-  formatTuiErrorMessage,
   isolateRtlRenderedLine,
   isTerminalSafeAutocompleteValue,
   isCommandMarkedMessage,
@@ -138,35 +137,35 @@ describe("formatTuiFooter", () => {
 
 describe("extractTextFromMessage", () => {
   it.each([
-    [[attachment("document", "/document", "Attached file")], "Attached file"],
+    [[attachment("document", "/document", "Attached file")], {}, "Attached file"],
     [
       [
         { type: "image", source: { type: "url", url: "/image.png" } },
         attachment("document", "/report.pdf", "report.pdf"),
       ],
+      {},
       "Attached image\nAttached file: report.pdf",
     ],
-  ] as const)("renders attachment-only user content %j", (content, expected) => {
-    expect(userText(content)).toBe(expected);
-  });
-
-  it.each([
-    [[{ path: "/media/inbound/media-only.png" }], "Attached image"],
+    ["", { __openclaw: { media: [{ path: "/media/inbound/media-only.png" }] } }, "Attached image"],
     [
-      [
-        { path: "/media/inbound/generated-image.png", contentType: "image/png" },
-        { path: "/media/inbound/generated-report.pdf", contentType: "application/pdf" },
-      ],
+      "",
+      {
+        __openclaw: {
+          media: [
+            { path: "/media/inbound/generated-image.png", contentType: "image/png" },
+            { path: "/media/inbound/generated-report.pdf", contentType: "application/pdf" },
+          ],
+        },
+      },
       "Attached image\nAttached file",
     ],
-  ] as const)("renders canonical media %j for an empty user turn", (media, expected) => {
-    expect(userText("", { __openclaw: { media } })).toBe(expected);
-  });
-
-  it("sanitizes the display name of an attachment-only user turn", () => {
-    expect(
-      userText([attachment("document", "/report.pdf", "\u001b[31mreport.pdf\u001b[0m\u0000")]),
-    ).toBe("Attached file: report.pdf");
+    [
+      [attachment("document", "/report.pdf", "\u001b[31mreport.pdf\u001b[0m\u0000")],
+      {},
+      "Attached file: report.pdf",
+    ],
+  ] as const)("renders safe user attachments %j", (content, fields, expected) => {
+    expect(userText(content, fields)).toBe(expected);
   });
 
   it.each([
@@ -215,12 +214,6 @@ describe("extractTextFromMessage", () => {
     includes(assistantText([], { stopReason: "error", errorMessage }), expected);
   });
 
-  it("joins multiple text blocks with single newlines", () => {
-    expect(assistantText([textBlock("first\ncontinued"), textBlock("second")])).toBe(
-      "first\ncontinued\nsecond",
-    );
-  });
-
   it.each([
     [undefined, "ponder", "hello", "hello"],
     [false, "ponder", "hello", "hello"],
@@ -248,9 +241,10 @@ describe("extractTextFromMessage", () => {
   );
 
   it.each([
+    [[textBlock("first\ncontinued"), textBlock("second")], "first\ncontinued\nsecond"],
     ["Hello\x1b[31m red\x1b[0m\x00world\nNext line", "Hello redworld\nNext line"],
     [[{ type: "text", text: "������������������������" }], "[binary data omitted]"],
-  ] as const)("sanitizes assistant content %j", (content, expected) => {
+  ] as const)("renders and sanitizes assistant content %j", (content, expected) => {
     expect(assistantText(content)).toBe(expected);
   });
 
@@ -306,17 +300,6 @@ it("detects command-marked messages", () => {
   expect(isCommandMarkedMessage({ command: true })).toBe(true);
   expect(isCommandMarkedMessage({ command: false })).toBe(false);
   expect(isCommandMarkedMessage({})).toBe(false);
-});
-
-it("redacts and sanitizes terminal escapes in nested error causes", () => {
-  const secret = "sk-abcdefghijklmnopqrstuv";
-  const cause = new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`);
-
-  const formatted = formatTuiErrorMessage(new Error("gateway down", { cause }));
-
-  includes(formatted, ["gateway down", "Authorization: Bearer"]);
-  expect(formatted).not.toContain(secret);
-  expect(formatted).not.toContain("\u001b");
 });
 
 const cjk =

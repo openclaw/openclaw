@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { expectUnused } from "./tui-handler-test-support.js";
 import { createChoicePromptHarness, createPendingRequests } from "./tui-overlay.test-support.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 
@@ -364,9 +365,7 @@ describe("TUI plugin approvals", () => {
       }
       await resolution.promise.catch(() => undefined);
 
-      expect(harness.addSystem).not.toHaveBeenCalled();
-      expect(harness.listPluginApprovals).not.toHaveBeenCalled();
-      expect(harness.requestRender).not.toHaveBeenCalled();
+      expectUnused(harness.addSystem, harness.listPluginApprovals, harness.requestRender);
     },
   );
 
@@ -390,7 +389,6 @@ describe("TUI plugin approvals", () => {
     pendingList.reject(new Error("refresh unavailable"));
     await refresh.catch(() => undefined);
 
-    expect(harness.addSystem).not.toHaveBeenCalled();
-    expect(harness.requestRender).not.toHaveBeenCalled();
+    expectUnused(harness.addSystem, harness.requestRender);
   });
 });
