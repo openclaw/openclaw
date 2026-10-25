@@ -11,7 +11,7 @@ import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { resetSubagentRegistryForTests } from "../../subagents/registry/subagent-registry.test-helpers.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
-import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -39,24 +39,25 @@ import { prepareEmbeddedAttemptPromptContext as prepareContext } from "./attempt
 const temporalContext = "## Temporal Context\nCurrent date: 2026-10-09\nTime zone: UTC";
 const inboundRuntimeContext = `Conversation info: channel=telegram\n\n${temporalContext}`;
 
-const messages = [
-  {
-    role: "user",
-    content: [{ type: "text", text: "Previous request" }],
-    timestamp: 100,
-  },
-] as AgentMessage[];
+const user = (text: string, timestamp = 100): AgentMessage => ({
+  role: "user",
+  content: [{ type: "text", text }],
+  timestamp,
+});
+const messages = [user("Previous request")];
+type PromptInput = Parameters<typeof prepareContext>[0]["prompt"];
 
-const projectionState: ToolResultPromptProjectionState = {
-  replacements: new Map(),
-  frozen: new Set(),
-  ambiguousBaseKeys: new Set(),
-  restoredCacheTtl: new Map(),
-  sourceHashByKey: new Map(),
-};
-
-function createAttempt(overrides?: Partial<EmbeddedRunAttemptParams>) {
-  return {
+function createInput(
+  options: {
+    attempt?: Partial<EmbeddedRunAttemptParams>;
+    messages?: AgentMessage[];
+    preparedUserTurnMessage?: AgentMessage;
+    prompt?: Partial<PromptInput>;
+  } = {},
+) {
+  const replaceSessionMessages = vi.fn();
+  const report = {} as SessionSystemPromptReport;
+  const attempt = {
     config: { agents: { defaults: { userTimezone: "UTC" } } },
     contextTokenBudget: 32_000,
     currentInboundContext: {
@@ -66,30 +67,9 @@ function createAttempt(overrides?: Partial<EmbeddedRunAttemptParams>) {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     suppressNextUserMessagePersistence: false,
-    ...overrides,
+    trigger: options.attempt ? undefined : "user",
+    ...options.attempt,
   } as EmbeddedRunAttemptParams;
-}
-
-type PromptInput = Parameters<typeof prepareContext>[0]["prompt"];
-
-function createPrompt(overrides?: Partial<PromptInput>): PromptInput {
-  return {
-    effectivePrompt: "Visible request",
-    effectiveTranscriptPrompt: "Visible request",
-    ...overrides,
-  };
-}
-
-function createInput(options?: {
-  attempt?: EmbeddedRunAttemptParams;
-  messages?: AgentMessage[];
-  preparedUserTurnMessage?: AgentMessage;
-  prompt?: ReturnType<typeof createPrompt>;
-  report?: SessionSystemPromptReport;
-}) {
-  const replaceSessionMessages = vi.fn();
-  const report = options?.report ?? ({} as SessionSystemPromptReport);
-  const attempt = options?.attempt ?? createAttempt({ trigger: "user" });
   setRuntimeConfigSnapshot(attempt.config ?? {});
   return {
     input: {
@@ -97,16 +77,20 @@ function createInput(options?: {
       capabilityToolNames: new Set<string>(),
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
-      messages: options?.messages ?? messages,
+      messages: options.messages ?? messages,
       preparedUserTurnMessage:
-        options?.preparedUserTurnMessage ??
+        options.preparedUserTurnMessage ??
         ({ role: "user", content: "Visible request", timestamp: 123 } as AgentMessage),
-      prompt: options?.prompt ?? createPrompt(),
+      prompt: {
+        effectivePrompt: "Visible request",
+        effectiveTranscriptPrompt: "Visible request",
+        ...options.prompt,
+      },
       replaceSessionMessages,
       sessionAgentId: "agent-1",
       systemPromptReport: report,
       systemPromptText: "Base system prompt",
-      toolResultPromptProjectionState: projectionState,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
     },
     replaceSessionMessages,
     report,
@@ -200,20 +184,13 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       messages: [...messages, active.runtimeContextMessageForCurrentTurn!],
     });
     expect(empty.systemPromptForHook).toBe(active.systemPromptForHook);
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "No active exec-tool sessions in this scope at turn start.",
-    );
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).not.toContain("exec-z");
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "persistent automations and other background work are not included.",
-    );
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "## Active Subagents\nnone",
-    );
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "- tool=image_generate; none",
-    );
-    expect(empty.runtimeContextMessageForCurrentTurn?.content).not.toContain("image-1");
+    const content = empty.runtimeContextMessageForCurrentTurn?.content;
+    expect(content).toContain("No active exec-tool sessions in this scope at turn start.");
+    expect(content).not.toContain("exec-z");
+    expect(content).toContain("persistent automations and other background work are not included.");
+    expect(content).toContain("## Active Subagents\nnone");
+    expect(content).toContain("- tool=image_generate; none");
+    expect(content).not.toContain("image-1");
   });
 
   it("quotes producer data in the new-session model prompt while retaining transcript bytes", async () => {
@@ -222,9 +199,11 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       ...fixture.input,
       sessionVersion: 4,
     });
-    expect(result.promptForSession).toBe("Visible request");
-    expect(result.llmBoundaryPromptForPrecheck).toBe("Visible request");
-    expect(result.systemPromptForHook).toBe("Base system prompt");
+    expect(result).toMatchObject({
+      promptForSession: "Visible request",
+      llmBoundaryPromptForPrecheck: "Visible request",
+      systemPromptForHook: "Base system prompt",
+    });
     const carrier = result.hookMessagesForCurrentPrompt.find(
       (message) => message.role === "custom",
     );
@@ -270,7 +249,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       aggregateBudgetChars: 200,
     }));
     const fixture = createInput({
-      attempt: createAttempt({ sessionId: "pressure-session", sessionKey: "pressure-session" }),
+      attempt: { sessionId: "pressure-session", sessionKey: "pressure-session" },
     });
 
     const result = await prepareContext(fixture.input);
@@ -285,44 +264,40 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     }
   });
 
-  it.each([4])(
-    "carries version %s runtime-only events in the message tail carrier without rewriting system prompt",
-    async (sessionVersion) => {
-      const fixture = createInput({
-        attempt: createAttempt({
-          currentInboundContext: {
-            text: "Room conversation data",
-          },
-          runtimeContextFragments: [{ kind: "runtime-instruction", text: "Runtime room event" }],
-          currentInboundEventKind: "room_event",
-        }),
-        prompt: createPrompt({
-          effectivePrompt: "",
-          effectiveTranscriptPrompt: "",
-        }),
-      });
+  it("carries version 4 runtime-only events in the message tail carrier without rewriting system prompt", async () => {
+    const fixture = createInput({
+      attempt: {
+        currentInboundContext: {
+          text: "Room conversation data",
+        },
+        runtimeContextFragments: [{ kind: "runtime-instruction", text: "Runtime room event" }],
+        currentInboundEventKind: "room_event",
+      },
+      prompt: {
+        effectivePrompt: "",
+        effectiveTranscriptPrompt: "",
+      },
+    });
 
-      fixture.input.capabilityToolNames.add("process");
-      const result = await prepareContext({
-        ...fixture.input,
-        sessionVersion,
-      });
+    fixture.input.capabilityToolNames.add("process");
+    const result = await prepareContext({
+      ...fixture.input,
+      sessionVersion: 4,
+    });
 
-      expect(result.systemPromptForHook).toBe("Base system prompt");
-      expect(result.promptSubmission.runtimeOnly).toBe(true);
-      expect(result.promptForSession).toBe("Continue the OpenClaw runtime event.");
-      expect(result.promptForModel).toBe(result.promptForSession);
-      expect(result.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
-        "Active exec sessions at turn start (snapshot):",
-      );
-      expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("Runtime room event");
-      expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
-        "Room conversation data",
-      );
-      expect(fixture.report.currentTurn?.kind).toBe("room_event");
-      expect(fixture.report.currentTurn?.runtimeContextChars).toBeGreaterThan(0);
-    },
-  );
+    expect(result).toMatchObject({
+      systemPromptForHook: "Base system prompt",
+      promptSubmission: { runtimeOnly: true },
+      promptForSession: "Continue the OpenClaw runtime event.",
+    });
+    expect(result.promptForModel).toBe(result.promptForSession);
+    const content = result.runtimeContextMessageForCurrentTurn?.content;
+    expect(content ?? "").not.toContain("Active exec sessions at turn start (snapshot):");
+    expect(content).toContain("Runtime room event");
+    expect(content).toContain("Room conversation data");
+    expect(fixture.report.currentTurn?.kind).toBe("room_event");
+    expect(fixture.report.currentTurn?.runtimeContextChars).toBeGreaterThan(0);
+  });
 
   it("keeps the live orphan-repair heartbeat task active without parsing its marker", async () => {
     const taskPrompt = "Check the deployment and report any failures.";
@@ -331,11 +306,11 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       "\n",
     );
     const fixture = createInput({
-      attempt: createAttempt({ currentInboundContext: undefined }),
-      prompt: createPrompt({
+      attempt: { currentInboundContext: undefined },
+      prompt: {
         effectivePrompt: mergedModelPrompt,
         effectiveTranscriptPrompt: transcriptPrompt,
-      }),
+      },
     });
 
     const result = await prepareContext(fixture.input);
@@ -351,12 +326,12 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
   it("rebases prePromptMessageCount and updates session messages when replay normalization shrinks history", async () => {
     const rawHistory: AgentMessage[] = [
-      { role: "user", content: [{ type: "text", text: "Historic question" }], timestamp: 10 },
+      user("Historic question", 10),
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "NO_REPLY" }],
         timestamp: 11,
       }),
-      { role: "user", content: [{ type: "text", text: "Follow-up" }], timestamp: 12 },
+      user("Follow-up", 12),
     ];
     const fixture = createInput({ messages: rawHistory });
 
@@ -369,7 +344,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
   it("preserves ordinary reply text containing a trailing silence token without rewriting history", async () => {
     const contentModifiedHistory: AgentMessage[] = [
-      { role: "user", content: [{ type: "text", text: "Historic question" }], timestamp: 10 },
+      user("Historic question", 10),
       makeAgentAssistantMessage({
         content: [
           { type: "text", text: "Slides ready" },

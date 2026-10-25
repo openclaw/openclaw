@@ -79,6 +79,29 @@ describe("deferred logical-turn lifecycle", () => {
     complete: async () => {},
     discard: () => {},
   });
+  const retryManager = (
+    runId: string,
+    overrides: Partial<Parameters<typeof createEmbeddedAttemptDeferredLifecycleOwner>[0]> = {},
+  ) => {
+    const ref = { runId, sessionId, sessionKey };
+    const operation = createReplyOperation({ ...ref, resetTriggered: false });
+    const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
+      ...ref,
+      watchdogAttempt: operation.watchdog.attachAttempt({
+        assertCurrent: () => assertSessionControllerOperation(operation),
+      }),
+    });
+    markDiagnosticEmbeddedRunStarted({ ...ref, owner: diagnosticOwner });
+    const manager = managerFor(runId);
+    manager.adopt(
+      ownerFor(runId, {
+        diagnosticOwner,
+        clearActiveRun: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
+        ...overrides,
+      }),
+    );
+    return { ref, operation, diagnosticOwner, manager };
+  };
 
   afterEach(() => {
     for (const handle of handles) {
@@ -272,10 +295,7 @@ describe("deferred logical-turn lifecycle", () => {
     const release = createDeferredCore();
     const recordEvent = vi.fn();
     const clearActiveRun = vi.fn();
-    const manager = createDeferredEmbeddedRunLifecycleManager({
-      runId: "replaced-candidate",
-      sessionId,
-    });
+    const manager = managerFor("replaced-candidate", { sessionKey: undefined });
     const discarded = ownerFor("replaced-candidate", {
       trajectoryRecorder: {
         recordEvent,
@@ -336,26 +356,12 @@ describe("deferred logical-turn lifecycle", () => {
   it.each(["abort", "timeout", "complete", "replace", "close", "authority"] as const)(
     "releases a retry wait when its owner loses authority through %s",
     async (reason) => {
-      const ref = { runId: "waiting-run", sessionId, sessionKey };
-      const operation = createReplyOperation({ ...ref, resetTriggered: false });
-      const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
-        ...ref,
-        watchdogAttempt: operation.watchdog.attachAttempt({
-          assertCurrent: () => assertSessionControllerOperation(operation),
-        }),
-      });
-      markDiagnosticEmbeddedRunStarted({ ...ref, owner: diagnosticOwner });
       let current = true;
       const onRetryWaitCompleted = vi.fn();
-      const manager = createDeferredEmbeddedRunLifecycleManager(ref);
-      manager.adopt(
-        ownerFor(ref.runId, {
-          diagnosticOwner,
-          isCurrent: () => current,
-          onRetryWaitCompleted,
-          clearActiveRun: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
-        }),
-      );
+      const { ref, operation, diagnosticOwner, manager } = retryManager("waiting-run", {
+        isCurrent: () => current,
+        onRetryWaitCompleted,
+      });
       const timeout = new AbortController();
       const deadlineAtMs = Date.now() + 660_000;
       const release = manager.beginRetryWait(deadlineAtMs, timeout.signal);
@@ -389,22 +395,7 @@ describe("deferred logical-turn lifecycle", () => {
   );
 
   it("does not let a completed wait release its owner's next wait or renew its horizon", async () => {
-    const ref = { runId: "reused-wait-owner", sessionId, sessionKey };
-    const operation = createReplyOperation({ ...ref, resetTriggered: false });
-    const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
-      ...ref,
-      watchdogAttempt: operation.watchdog.attachAttempt({
-        assertCurrent: () => assertSessionControllerOperation(operation),
-      }),
-    });
-    markDiagnosticEmbeddedRunStarted({ ...ref, owner: diagnosticOwner });
-    const manager = createDeferredEmbeddedRunLifecycleManager(ref);
-    manager.adopt(
-      ownerFor(ref.runId, {
-        diagnosticOwner,
-        clearActiveRun: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
-      }),
-    );
+    const { ref, operation, manager } = retryManager("reused-wait-owner");
     try {
       const firstDeadline = Date.now() + 660_000;
       const releaseFirst = manager.beginRetryWait(firstDeadline);

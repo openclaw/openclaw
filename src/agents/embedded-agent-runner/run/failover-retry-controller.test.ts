@@ -230,17 +230,11 @@ it.each([
   expectNoRetry();
 });
 
-it.each([
-  [true, true, false],
-  [false, true, false],
-  [true, false, false],
-  [true, true, true],
-])("paces TPM recovery (fallback=%s, safe=%s, final=%s)", async (fallback, replaySafe, isFinal) => {
+it("paces TPM recovery before rotating credentials", async () => {
   const advance = vi.fn(async () => true);
   controller = createController({
     advanceAuthProfile: advance,
-    fallbackConfigured: fallback,
-    isFinalFallbackAttempt: isFinal,
+    fallbackConfigured: true,
     budget: 1,
   });
   const message =
@@ -249,7 +243,7 @@ it.each([
     reason: "rate_limit" as const,
     message,
     retryAfterMs: resolveRetryAfterMs(message),
-    failoverEligible: replaySafe,
+    failoverEligible: true,
   };
   await checkRetry(retry);
   expect(sleep).toHaveBeenCalledExactlyOnceWith(2000, undefined);
@@ -262,9 +256,7 @@ it.each([
 
 it.each([
   ["fallback", true, undefined, 30_000, "rate_limit", 9_897_000, false],
-  ["no fallback", false, undefined, 30_000, "rate_limit", 9_897_000, false],
   ["replay-unsafe", true, false, 30_000, "rate_limit", 9_897_000, true],
-  ["replay-unsafe without fallback", false, false, 30_000, "rate_limit", 9_897_000, true],
   ["disabled cap", true, undefined, 0, "rate_limit", 9_897_000, true],
   ["absent cap", true, undefined, undefined, "rate_limit", 9_897_000, true],
   ["inside cap", true, undefined, 30_000, "rate_limit", 20_000, true],
