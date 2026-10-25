@@ -101,17 +101,22 @@ export function readLocalWorkspaceManifestRows(
   if (!row || row.revision !== input.revision) {
     throw new Error("Local workspace binding changed");
   }
-  const nodes =
-    row.baseline_json || input.action.kind === "replace"
-      ? []
-      : executeSqliteQuerySync(
-          db,
-          query
-            .selectFrom("local_workspace_manifest_nodes")
-            .select("node_json")
-            .where("worktree_id", "=", input.id),
-        ).rows;
-  return { row, nodes };
+  const records = new Map<string, LocalWorkspaceManifestRecord>();
+  if (!row.baseline_json && input.action.kind !== "replace") {
+    // Decode within the read scope; do not retain the JSON inventory beside its tree during scanning.
+    for (const { node_json } of executeSqliteQuerySync(
+      db,
+      query
+        .selectFrom("local_workspace_manifest_nodes")
+        .select("node_json")
+        .where("worktree_id", "=", input.id),
+    ).rows) {
+      // SAFETY: The workspace owner writes this internal record shape atomically with its root.
+      const record = JSON.parse(node_json) as LocalWorkspaceManifestRecord;
+      records.set(record.node.path, record);
+    }
+  }
+  return { row, records };
 }
 
 function manifestDocument(
@@ -193,7 +198,7 @@ export async function executeLocalWorkspaceManifestRead(
     // Pending legacy receipts name these exact bytes until acceptance migrates them.
     return { kind: "materialize", rawManifest: row.baseline_json, manifestRef: row.baseline_ref };
   }
-  let records: Map<string, LocalWorkspaceManifestRecord>;
+  let { records } = snapshot;
   if (row.baseline_json && row.baseline_ref) {
     const baseline = parseWorkerWorkspaceManifest(row.baseline_json, row.baseline_ref);
     records = createLocalWorkspaceManifestTree([
@@ -203,19 +208,11 @@ export async function executeLocalWorkspaceManifestRead(
         type: "directory" as const,
       })),
     ]);
-  } else {
-    records = new Map();
-    for (const { node_json } of snapshot.nodes) {
-      // SAFETY: The workspace owner writes this internal record shape atomically with its root.
-      const record = JSON.parse(node_json) as LocalWorkspaceManifestRecord;
-      records.set(record.node.path, record);
+  } else if (records.size === 0) {
+    if (row.baseline_ref) {
+      throw new Error("Local workspace baseline nodes are missing");
     }
-    if (records.size === 0) {
-      if (row.baseline_ref) {
-        throw new Error("Local workspace baseline nodes are missing");
-      }
-      records = createLocalWorkspaceManifestTree([]);
-    }
+    records = createLocalWorkspaceManifestTree([]);
   }
   if (action.kind === "materialize") {
     return {

@@ -63,11 +63,7 @@ function truncateTelegramCommandText(value: string, maxLength: number): string {
   return maxLength > 1 ? `${truncateCodePoints(prefix, maxLength - 1)}…` : prefix;
 }
 
-function fitTelegramCommandsWithinTextBudget(commands: TelegramMenuCommand[]): {
-  commands: TelegramMenuCommand[];
-  descriptionTrimmed: boolean;
-  textBudgetDropCount: number;
-} {
+function fitTelegramCommandsWithinTextBudget(commands: TelegramMenuCommand[]) {
   let commandCount = 0;
   let commandNameChars = 0;
   for (const { command } of commands) {
@@ -205,16 +201,7 @@ function buildDirectSkillFallbackCommands(commands: TelegramMenuCommand[]): Tele
   return fallback ? [fallback, ...remaining] : remaining;
 }
 
-function buildUncachedCappedTelegramMenuCommands(allCommands: TelegramMenuCommand[]): {
-  commandsToRegister: TelegramMenuCommand[];
-  totalCommands: number;
-  maxCommands: number;
-  overflowCount: number;
-  maxTotalChars: number;
-  descriptionTrimmed: boolean;
-  textBudgetDropCount: number;
-  skillCommandsOmitted: boolean;
-} {
+function buildUncachedCappedTelegramMenuCommands(allCommands: TelegramMenuCommand[]) {
   const maxCommands = TELEGRAM_MAX_COMMANDS;
   const maxTotalChars = TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET;
   const fitCommands = (commands: TelegramMenuCommand[]) => {
