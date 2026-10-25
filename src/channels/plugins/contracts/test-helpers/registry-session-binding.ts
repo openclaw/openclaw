@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { aroundEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import * as config from "../../../../config/config.js";
 import * as sessionBinding from "../../../../infra/outbound/session-binding-service.js";
 import type { SessionBindingCapabilities } from "../../../../infra/outbound/session-binding.types.js";
@@ -16,7 +16,7 @@ import type { PluginRuntime } from "../../../../plugins/runtime/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../../../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../../test-utils/channel-plugins.js";
-import { createOpenClawTestState } from "../../../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../../../test-utils/openclaw-test-state.js";
 import { getChannelPlugin } from "../../registry.js";
 import type { ChannelPlugin } from "../../types.public.js";
 import {
@@ -26,7 +26,6 @@ import {
 import { importBundledChannelContractArtifact } from "./runtime-artifacts.js";
 import { expectContractFields } from "./threading-directory-contract-suites.js";
 
-const contractApiPromises: Record<string, Promise<Record<string, unknown>>> = {};
 const matrixSessionBindingStateDir = fs.mkdtempSync(
   path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-session-binding-contract-"),
 );
@@ -45,15 +44,11 @@ const matrixManagerOptions = {
   enableSweeper: false,
 };
 
-async function getContractApi<T extends Record<string, unknown>>(
+function getContractApi<T extends Record<string, unknown>>(
   pluginId: string,
   artifact = "session-binding-contract-api",
 ): Promise<T> {
-  const key = `${pluginId}:${artifact}`;
-  return (await (contractApiPromises[key] ??= importBundledChannelContractArtifact<T>(
-    pluginId,
-    artifact,
-  ))) as T;
+  return importBundledChannelContractArtifact<T>(pluginId, artifact);
 }
 
 function keyedState(pluginId: string) {
@@ -186,14 +181,6 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
     ...(fixture.parentConversationId ? { parentConversationId: fixture.parentConversationId } : {}),
   };
   const service = sessionBinding.getSessionBindingService();
-  let manager: BindingManager | undefined;
-  const startManager = async () => {
-    manager = await createBindingContractManager(fixture.id);
-  };
-  const stopManager = async () => {
-    await manager?.stop();
-    manager = undefined;
-  };
   const expectResolved = (metadata?: Record<string, unknown>) =>
     expect(service.resolveByConversation(conversation)).toMatchObject({
       targetSessionKey,
@@ -206,85 +193,83 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
         ? getContractApi(fixture.id)
         : getBindingPlugin(fixture.id),
     );
-    aroundEach(async (run) => {
-      const testState = await createOpenClawTestState({
-        label: `${id}-session-binding-contract`,
-        layout: "state-only",
-      });
-      pluginRuntime.resetPluginRuntimeStateForTest();
-      config.clearRuntimeConfigSnapshot();
-      // Enable config-aware facades without inheriting the host configuration.
-      config.setRuntimeConfigSnapshot(
-        id === "discord" || id === "matrix"
-          ? { plugins: { entries: { [id]: { enabled: true } } } }
-          : {},
-      );
-      sessionBinding.testing.resetSessionBindingAdaptersForTests();
-      try {
-        await stopManager();
-        if (fixture.id === "matrix") {
-          pluginState.resetPluginStateStoreForTests();
-          fs.rmSync(matrixSessionBindingStateDir, { recursive: true, force: true });
-          fs.mkdirSync(matrixSessionBindingStateDir, { recursive: true });
-        }
-        await run();
-      } finally {
-        config.clearRuntimeConfigSnapshot();
-        await testState.cleanup();
-      }
-    });
-    it("registers, binds, unbinds, and cleans up session bindings", async () => {
-      await startManager();
-      expect(
-        service.getCapabilities({ channel: fixture.id, accountId: conversation.accountId }),
-      ).toEqual({
-        adapterAvailable: true,
-        bindSupported: true,
-        unbindSupported: true,
-        placements: fixture.placements,
-      });
-      try {
-        const binding = await service.bind({
-          targetSessionKey,
-          targetKind: fixture.targetKind ?? "subagent",
-          conversation,
-          placement: "current",
-          metadata: { agentId: fixture.id, label: "contract-binding", ...fixture.metadata },
-        });
-        if (fixture.metadata) {
-          expect(binding.metadata).toMatchObject(fixture.metadata);
-        }
-        expectResolved();
-        if (fixture.id === "imessage") {
-          await stopManager();
-          closeOpenClawStateDatabaseForTest();
-          await startManager();
-          expectResolved(fixture.metadata);
-        }
-        expectContractFields(binding, {
-          targetSessionKey: (value) => value === targetSessionKey,
-          bindingId: (value) =>
-            typeof value === "string" &&
-            value.trim() !== "" &&
-            (!fixture.expectedBindingId || value === fixture.expectedBindingId),
-          boundAt: (value) => typeof value === "number",
-          targetKind: (value) => value === "session" || value === "subagent",
-          status: (value) => value === "active" || value === "ending" || value === "ended",
-        });
-        for (const key of ["channel", "accountId", "conversationId"] as const) {
-          expect(typeof binding.conversation[key]).toBe("string");
-        }
-        const removed = await service.unbind({
-          bindingId: binding.bindingId,
-          reason: "contract-test",
-        });
-        expect(removed.map((entry) => entry.bindingId)).toContain(binding.bindingId);
-        expect(service.resolveByConversation(binding.conversation)).toBeNull();
-      } finally {
-        await stopManager();
-        const { channel, accountId, conversationId } = conversation;
-        expect(service.resolveByConversation({ channel, accountId, conversationId })).toBeNull();
-      }
-    });
+    it("registers, binds, unbinds, and cleans up session bindings", () =>
+      withOpenClawTestState(
+        { label: `${id}-session-binding-contract`, layout: "state-only" },
+        async () => {
+          pluginRuntime.resetPluginRuntimeStateForTest();
+          config.clearRuntimeConfigSnapshot();
+          // Enable config-aware facades without inheriting the host configuration.
+          config.setRuntimeConfigSnapshot(
+            id === "discord" || id === "matrix"
+              ? { plugins: { entries: { [id]: { enabled: true } } } }
+              : {},
+          );
+          sessionBinding.testing.resetSessionBindingAdaptersForTests();
+          let manager: BindingManager | undefined;
+          try {
+            if (fixture.id === "matrix") {
+              pluginState.resetPluginStateStoreForTests();
+              fs.rmSync(matrixSessionBindingStateDir, { recursive: true, force: true });
+              fs.mkdirSync(matrixSessionBindingStateDir, { recursive: true });
+            }
+            manager = await createBindingContractManager(fixture.id);
+            expect(
+              service.getCapabilities({ channel: fixture.id, accountId: conversation.accountId }),
+            ).toEqual({
+              adapterAvailable: true,
+              bindSupported: true,
+              unbindSupported: true,
+              placements: fixture.placements,
+            });
+            const binding = await service.bind({
+              targetSessionKey,
+              targetKind: fixture.targetKind ?? "subagent",
+              conversation,
+              placement: "current",
+              metadata: { agentId: fixture.id, label: "contract-binding", ...fixture.metadata },
+            });
+            if (fixture.metadata) {
+              expect(binding.metadata).toMatchObject(fixture.metadata);
+            }
+            expectResolved();
+            if (fixture.id === "imessage") {
+              await manager.stop();
+              closeOpenClawStateDatabaseForTest();
+              manager = await createBindingContractManager(fixture.id);
+              expectResolved(fixture.metadata);
+            }
+            expectContractFields(binding, {
+              targetSessionKey: (value) => value === targetSessionKey,
+              bindingId: (value) =>
+                typeof value === "string" &&
+                value.trim() !== "" &&
+                (!fixture.expectedBindingId || value === fixture.expectedBindingId),
+              boundAt: (value) => typeof value === "number",
+              targetKind: (value) => value === "session" || value === "subagent",
+              status: (value) => value === "active" || value === "ending" || value === "ended",
+            });
+            for (const key of ["channel", "accountId", "conversationId"] as const) {
+              expect(typeof binding.conversation[key]).toBe("string");
+            }
+            const removed = await service.unbind({
+              bindingId: binding.bindingId,
+              reason: "contract-test",
+            });
+            expect(removed.map((entry) => entry.bindingId)).toContain(binding.bindingId);
+            expect(service.resolveByConversation(binding.conversation)).toBeNull();
+          } finally {
+            try {
+              await manager?.stop();
+              const { channel, accountId, conversationId } = conversation;
+              expect(
+                service.resolveByConversation({ channel, accountId, conversationId }),
+              ).toBeNull();
+            } finally {
+              config.clearRuntimeConfigSnapshot();
+            }
+          }
+        },
+      ));
   });
 }

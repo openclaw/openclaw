@@ -186,58 +186,49 @@ export function describeChannelPluginCatalogEntriesContract() {
         pluginId: "@vendor/demo-channel-runtime",
       });
     });
-    it("pins bare external prerelease package specs to the entry version", () => {
-      const entry = externalEntry({
-        ...catalogEntry("prerelease-demo", "@openclaw/prerelease-demo-channel", {
-          label: "Prerelease Demo",
-        }),
-        version: "2026.5.3-beta.1",
-      });
-      const spec = "@openclaw/prerelease-demo-channel@2026.5.3-beta.1";
-      expect(entry).toMatchObject({ install: { npmSpec: spec }, installSource: { npm: { spec } } });
-    });
-    it.each([
-      [
-        "wecom",
-        "@wecom/wecom-openclaw-plugin",
-        "npm",
-        "@wecom/wecom-openclaw-plugin@1.2.3",
-        "sha512-wecom",
-      ],
-      [
-        "openclaw-plugin-yuanbao",
-        "openclaw-plugin-yuanbao",
-        "npm",
-        "openclaw-plugin-yuanbao@1.0.0",
-        "sha512-yuanbao",
-      ],
-      ["clawhub-chat", null, "clawhub", "clawhub:openclaw/clawhub-chat@2026.5.2", undefined],
-    ] as const)(
-      "accepts rich %s manifest install metadata",
-      (id, name, source, spec, expectedIntegrity) => {
-        const integrity = expectedIntegrity ? { expectedIntegrity } : {};
-        const install = {
-          [`${source}Spec`]: spec,
-          defaultChoice: source,
+    it.each(["@openclaw/prerelease-demo-channel", "openclaw-plugin-yuanbao"])(
+      "preserves rich npm metadata and pins the bare %s prerelease spec",
+      (name) => {
+        const version = "2026.5.3-beta.1";
+        const metadata = {
+          defaultChoice: "npm",
           minHostVersion: ">=2026.5.1",
-          ...integrity,
+          expectedIntegrity: "sha512-demo",
         };
         const entry = externalEntry(
           {
-            ...catalogEntry(id, name, { ...richMeta, aliases: ["chat"], order: 45 }, install),
+            ...catalogEntry(
+              "prerelease-demo",
+              name,
+              { ...richMeta, aliases: ["chat"], order: 45 },
+              { npmSpec: name, ...metadata },
+            ),
+            version,
             source: "external",
             kind: "channel",
           },
           true,
         );
+        const spec = `${name}@${version}`;
         expect(entry).toMatchObject({
-          id,
           meta: richMeta,
-          install,
-          installSource: { defaultChoice: source, [source]: { spec, ...integrity }, warnings: [] },
+          install: { npmSpec: spec, ...metadata },
+          installSource: {
+            defaultChoice: "npm",
+            npm: { spec, expectedIntegrity: metadata.expectedIntegrity },
+            warnings: [],
+          },
         });
       },
     );
+    it("preserves ClawHub-only install metadata", () => {
+      const spec = "clawhub:openclaw/clawhub-chat@2026.5.2";
+      const install = { clawhubSpec: spec, defaultChoice: "clawhub", minHostVersion: ">=2026.5.1" };
+      expect(externalEntry(catalogEntry("clawhub-chat", null, {}, install))).toMatchObject({
+        install,
+        installSource: { defaultChoice: "clawhub", clawhub: { spec }, warnings: [] },
+      });
+    });
   });
 }
 export function describeChannelPluginCatalogPathResolutionContract() {
