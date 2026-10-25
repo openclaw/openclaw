@@ -1479,7 +1479,7 @@ src/cli/logs-cli.ts	1
 src/cli/mcp-cli.ts	1
 src/cli/models-cli.ts	1
 src/cli/native-hook-relay-cli.ts	1
-src/cli/nodes-cli/register.pairing.ts	2
+src/cli/nodes-cli/register.pairing.ts	1
 src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	1
 src/cli/pairing-cli.ts	1
@@ -2180,7 +2180,6 @@ src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	2
 src/plugins/schema-validator.ts	4
-src/plugins/session-catalog-history-import.ts	1
 src/plugins/setup-registry.ts	2
 src/plugins/slots.ts	1
 src/plugins/toggle-config.ts	2

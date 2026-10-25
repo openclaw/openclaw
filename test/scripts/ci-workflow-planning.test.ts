@@ -10568,13 +10568,14 @@ describe("ci workflow guards", () => {
         expectDefined(manifest.outputs.ui_e2e_matrix, "browser matrix"),
       ).include;
       expect(rows.map((row: { shard: number }) => row.shard)).toEqual([
-        ...(control ? [1, 2, 3, 4, 5, 6, 7, 8] : []),
-        ...(browser ? [control ? 9 : 1] : []),
+        ...(control ? [1, 2, 3, 4, 5, 6] : []),
+        ...(browser ? [control ? 7 : 1] : []),
       ]);
       for (const row of rows) {
         expect(row).toMatchObject({
-          shard_count: control ? 9 : 1,
-          vitest_shard_count: control ? 8 : 0,
+          shard_count: control ? 7 : 1,
+          vitest_shard_count: control ? 6 : 0,
+          vitest_max_workers: 4,
         });
       }
       for (const name of ["checks-ui-e2e", "checks-ui-e2e-real-gateway"]) {
@@ -10730,7 +10731,13 @@ describe("ci workflow guards", () => {
     expect(uiE2e.strategy["fail-fast"]).toBe(false);
     expect(uiE2e.strategy["max-parallel"]).toBe(14);
     expect(uiE2e.strategy.matrix).toBe("${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}");
-    const expectedUiE2eMatrices = [6, 8, 12].map((vitestShardCount) => ({
+    const expectedUiE2eMatrices = (
+      [
+        [8, 3],
+        [6, 4],
+        [12, 2],
+      ] as const
+    ).map(([vitestShardCount, workers]) => ({
       include: Array.from({ length: vitestShardCount + 1 }, (_, index) => {
         const shard = index + 1;
         return {
@@ -10738,7 +10745,7 @@ describe("ci workflow guards", () => {
           shard_count: vitestShardCount + 1,
           task: shard === vitestShardCount + 1 ? "browser-extension" : "control-ui",
           vitest_shard_count: vitestShardCount,
-          vitest_max_workers: vitestShardCount === 8 ? 3 : 2,
+          vitest_max_workers: workers,
         };
       }),
     }));
@@ -10806,7 +10813,7 @@ describe("ci workflow guards", () => {
     });
     expect(realGatewaySetup.with).toEqual(expectedSharedUiE2eSetup);
 
-    // Failed-job retries can retain an earlier six-shard plan while live routing
+    // Failed-job retries can retain an earlier eight-shard plan while live routing
     // selects hosted runners. Both widths retain the cache and contributor boundaries.
     const routedUiE2eJobs = [
       ...expectedUiE2eMatrices

@@ -39,6 +39,93 @@ function dynamicImportMemberNames(source, specifier) {
   ];
 }
 
+function lazyModuleNamespaces(source) {
+  const assignment = source.match(
+    /\bconst\s*\[([\s\S]*?)\]\s*=\s*await\s+Promise\.all\(\s*\[([\s\S]*?)\]\s*\)\s*;/u,
+  );
+  if (!assignment) {
+    return new Map();
+  }
+  const bindings = assignment[1]
+    .split(",")
+    .map((binding) => binding.trim())
+    .filter(Boolean);
+  const specifiers = [...assignment[2].matchAll(/\bimport\(\s*["']([^"'\r\n]+)["']\s*\)/gu)].map(
+    (match) => match[1],
+  );
+  if (bindings.length !== specifiers.length) {
+    return new Map();
+  }
+
+  const bindingSpecifiers = new Map(bindings.map((binding, index) => [binding, specifiers[index]]));
+  const returned = source.match(/\breturn\s*\{([^{}]+)\}\s*;/u)?.[1] ?? "";
+  return new Map(
+    returned
+      .split(",")
+      .map((property) =>
+        property.trim().match(/^([A-Za-z_$][\w$]*)(?:\s*:\s*([A-Za-z_$][\w$]*))?$/u),
+      )
+      .filter(Boolean)
+      .flatMap((match) => {
+        const specifier = bindingSpecifiers.get(match[2] ?? match[1]);
+        return specifier ? [[match[1], specifier]] : [];
+      }),
+  );
+}
+
+function loadedNamespaceMemberNames(source, loaderName) {
+  const members = new Map();
+  const escapedLoaderName = loaderName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const destructuring = new RegExp(
+    `\\bconst\\s*\\{((?:[^{}]|\\{[^{}]*\\})*)\\}\\s*=\\s*await\\s+${escapedLoaderName}\\(\\s*\\)\\s*;`,
+    "gu",
+  );
+  for (const match of source.matchAll(destructuring)) {
+    for (const namespace of match[1].matchAll(/([A-Za-z_$][\w$]*)\s*:\s*\{([^{}]+)\}/gu)) {
+      const names = members.get(namespace[1]) ?? new Set();
+      for (const binding of namespace[2].split(",")) {
+        const name = binding.trim().split(/\s*:\s*/u)[0];
+        if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
+          names.add(name);
+        }
+      }
+      members.set(namespace[1], names);
+    }
+  }
+  return members;
+}
+
+function emittedNamedImportEdges(source) {
+  const transforms = new Map(
+    [
+      ...source.matchAll(/^def\s+([A-Za-z_]\w*)\(s\):\n([\s\S]*?)(?=^def\s+|^edit\(|^for\s+)/gmu),
+    ].map((match) => [match[1], match[2]]),
+  );
+  const edges = new Map();
+  for (const match of source.matchAll(
+    /^edit\(\s*["']([^"'\r\n]+)["']\s*,\s*([A-Za-z_]\w*)\s*\)/gmu,
+  )) {
+    const body = transforms.get(match[2]);
+    if (!body) {
+      continue;
+    }
+    for (const imported of body.matchAll(
+      /\bimport\s*\{([^}]+)\}\s*from\s*["']([^"'\r\n]+)["']/gu,
+    )) {
+      const targetFile = path.resolve(path.dirname(match[1]), imported[2]);
+      const names = edges.get(targetFile) ?? new Set();
+      for (const binding of imported[1].split(",")) {
+        const name = binding.trim().split(/\s+as\s+/u)[0];
+        if (name) {
+          names.add(name);
+        }
+      }
+      edges.set(targetFile, names);
+    }
+  }
+  return edges;
+}
+
 function namedImport(names, targetFile, consumerFile, index) {
   const bindings = names.map(
     (name, bindingIndex) => `${name} as __dynamic${index}_${bindingIndex}`,
@@ -129,6 +216,38 @@ export function compileDynamicConsumerEdges(source, filePath) {
         imports.length,
       ),
     );
+  }
+
+  const mcpLoaderPath = "src/agents/agent-bundle-mcp-runtime-modules.ts";
+  const mcpRuntimePath = "src/agents/agent-bundle-mcp-runtime.ts";
+  const mcpNamespaces = lazyModuleNamespaces(fs.readFileSync(mcpLoaderPath, "utf8"));
+  const mcpMembers = loadedNamespaceMemberNames(
+    fs.readFileSync(mcpRuntimePath, "utf8"),
+    "loadBundleMcpRuntimeModules",
+  );
+  for (const [namespace, specifier] of mcpNamespaces) {
+    if (!specifier.startsWith(".")) {
+      continue;
+    }
+    const names = [...(mcpMembers.get(namespace) ?? [])];
+    if (names.length > 0) {
+      imports.push(
+        namedImport(
+          names,
+          path.resolve(path.dirname(mcpLoaderPath), specifier),
+          filePath,
+          imports.length,
+        ),
+      );
+    }
+  }
+
+  const rowChurnInstrumenter = fs.readFileSync(
+    "scripts/perf/session-row-churn-instrument.py",
+    "utf8",
+  );
+  for (const [targetFile, names] of emittedNamedImportEdges(rowChurnInstrumenter)) {
+    imports.push(namedImport([...names], targetFile, filePath, imports.length));
   }
 
   return `${source}\n${imports.join("\n")}`;

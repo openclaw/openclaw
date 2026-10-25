@@ -512,16 +512,15 @@ type DiagnosticToolExecutionBlockedEvent = DiagnosticToolExecutionBaseEvent & {
   reason: string;
 };
 
-type DiagnosticSkillTelemetrySource = "bundled" | "unknown" | "workspace";
-type DiagnosticSkillActivation = "command" | "read";
-
 export type DiagnosticSkillUsedEvent = DiagnosticSessionEvent & {
   type: "skill.used";
   runId?: string;
   agentId?: string;
   skillName: string;
-  skillSource: DiagnosticSkillTelemetrySource;
-  activation: DiagnosticSkillActivation;
+  skillSource: "bundled" | "unknown" | "workspace";
+  activation: "command" | "read";
+  /** SHA-256 of the complete instructions actually delivered, when known. */
+  skillFingerprint?: string;
   toolName?: string;
   toolCallId?: string;
 };

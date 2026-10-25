@@ -4,19 +4,9 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 const pendingImport = vi.hoisted(() => {
-  let release!: () => void;
-  let started!: () => void;
-  return {
-    held: new Promise<void>((resolve) => {
-      release = resolve;
-    }),
-    started: new Promise<void>((resolve) => {
-      started = resolve;
-    }),
-    release: () => release(),
-    start: () => started(),
-    dispatchImports: 0,
-  };
+  const { promise: held, resolve: release } = Promise.withResolvers<void>();
+  const { promise: started, resolve: start } = Promise.withResolvers<void>();
+  return { held, started, release, start, dispatchImports: 0 };
 });
 vi.mock("./chat-live-events.runtime.ts", async (importOriginal) => {
   pendingImport.dispatchImports += 1;

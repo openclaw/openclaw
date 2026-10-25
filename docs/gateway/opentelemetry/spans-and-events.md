@@ -56,6 +56,9 @@ Omitting the option preserves prompt statistics for interested subscribers.
 - `openclaw.tool.execution`
   - `gen_ai.tool.name`, `gen_ai.operation.name` (`execute_tool`), `openclaw.toolName`, `openclaw.tool.source`, optional `gen_ai.tool.call.id`, `openclaw.tool.owner`, `openclaw.tool.params.*`, optional `openclaw.agent`
   - Optional `openclaw.errorCategory`/`openclaw.errorCode` on errors, `openclaw.deniedReason` and `openclaw.outcome=blocked` when denied by policy or sandbox
+- `openclaw.skill.used`
+  - `openclaw.skill.name`, `openclaw.skill.source`, `openclaw.skill.activation`, optional `openclaw.agent` and `openclaw.toolName`
+  - Optional `openclaw.skill.fingerprint`: SHA-256 of the complete instruction body actually delivered by `read` or `skills_read`. Cached reads reuse the delivered identity; unread support files and discovery results do not contribute. The fingerprint is omitted when no traced instruction delivery is known and never labels metrics.
 - `openclaw.exec`
   - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`, `openclaw.exec.command_length`, `openclaw.exec.exit_code`, `openclaw.exec.exit_signal`, `openclaw.exec.timed_out`
 - `openclaw.webhook.processed`
