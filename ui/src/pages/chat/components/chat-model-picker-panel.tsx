@@ -21,11 +21,11 @@ import {
   modelOptionSearchRow,
 } from "./chat-model-picker-options.tsx";
 import {
-  ChatModelSearchContext,
+  createChatModelSearchView,
   handleModelSearchKeydown,
   updateModelSearch,
-  type ChatModelSearchCatalog,
-} from "./chat-model-picker-search.ts";
+} from "./chat-model-picker-search-view.ts";
+import { ChatModelSearchContext, type ChatModelSearchCatalog } from "./chat-model-picker-search.ts";
 import { createModelPickerWindow } from "./chat-model-picker-window.tsx";
 import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
 
@@ -190,7 +190,8 @@ export function ChatModelPickerPanel(panel: {
       ],
     };
   });
-  const searchView = search?.createView(catalog, (key) => window.reveal(key));
+  const searchView =
+    search && createChatModelSearchView(search, catalog, (key) => window.reveal(key));
   const layout = createMemo<string[]>(() => {
     if (searchView?.filtering()) {
       return [

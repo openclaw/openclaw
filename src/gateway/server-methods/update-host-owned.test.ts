@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createMacosAppInstallOwner } from "../../commands/test-runtime-config-helpers.js";
 import {
   adoptUpdateCampaignMock,
   invokeUpdateRun,
@@ -44,12 +45,7 @@ function expectNoUpdateEffects(...effects: MockInstance[]) {
 
 it("refuses an app-owned Gateway update before delegation, history, or restart effects", async () => {
   const { root, resolveManager, createRun } = await installRoot();
-  const installOwner = {
-    schemaVersion: 1,
-    owner: "macos-app",
-    displayName: "OpenClaw.app",
-    updateHint: "Update OpenClaw.app to update this Gateway.",
-  };
+  const installOwner = createMacosAppInstallOwner();
   await fs.writeFile(path.join(root, "openclaw-install-owner.json"), JSON.stringify(installOwner));
   const respond = vi.fn();
 

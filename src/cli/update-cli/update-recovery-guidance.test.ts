@@ -6,7 +6,7 @@ import * as ledger from "../../infra/update-run-ledger.js";
 import * as reports from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { recordUpdateResultNextAction } from "./update-command-result.js";
@@ -128,11 +128,7 @@ beforeEach(() => {
   vi.mocked(isContainerEnvironment).mockReturnValue(true);
   vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "");
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 it("reports an untouched Gateway after a capacity refusal without recommending recovery", () => {
   const action = guidance(failure({ reason: "snapshot-capacity-insufficient" }), {

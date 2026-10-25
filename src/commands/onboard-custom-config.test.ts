@@ -16,6 +16,7 @@ import {
   parseNonInteractiveCustomApiFlags,
   resolveCustomModelAliasError,
 } from "./onboard-custom-config.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 const EXPECTED_CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const manifestPlugins = [
@@ -43,15 +44,10 @@ function buildCustomProviderConfig(contextWindow?: number) {
           api: "openai-completions" as const,
           baseUrl: "https://llm.example.com/v1",
           models: [
-            {
-              id: "foo-large",
-              name: "foo-large",
+            createTestModelDefinition("foo-large", {
               contextWindow,
               maxTokens: contextWindow > CONTEXT_WINDOW_HARD_MIN_TOKENS ? 4096 : 1024,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              reasoning: false,
-            },
+            }),
           ],
         },
       },
@@ -459,16 +455,10 @@ describe("applyCustomApiConfig", () => {
         api: "openai-completions",
         auth: "none",
         models: [
-          {
-            id: "foo-large",
-            name: "foo-large",
+          createTestModelDefinition("foo-large", {
             api: "openai-responses",
             contextWindow: 128_000,
-            maxTokens: 4096,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            reasoning: false,
-          },
+          }),
         ],
       } satisfies ModelProviderConfig;
       expect(() =>
@@ -548,17 +538,7 @@ describe("applyCustomApiConfig", () => {
             [oldProviderId]: {
               baseUrl: "https://my-resource.openai.azure.com/openai/deployments/gpt-4",
               api: "openai-completions",
-              models: [
-                {
-                  id: "gpt-4",
-                  name: "gpt-4",
-                  contextWindow: 1,
-                  maxTokens: 1,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  reasoning: false,
-                },
-              ],
+              models: [createTestModelDefinition("gpt-4", { contextWindow: 1, maxTokens: 1 })],
             },
           },
         },
@@ -587,15 +567,11 @@ describe("applyCustomApiConfig", () => {
               baseUrl: "http://old.example.com/v1",
               api: "openai-completions",
               models: [
-                {
-                  id: "old-model",
+                createTestModelDefinition("old-model", {
                   name: "Old",
                   contextWindow: 1,
                   maxTokens: 1,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  reasoning: false,
-                },
+                }),
               ],
             },
           },

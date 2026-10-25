@@ -717,8 +717,7 @@ describe("Reef channel lifecycle", () => {
     );
     const lifecycle = run({
       reconcile: async (signal) => {
-        await friends.reconcile(signal);
-        await friends.surfacePairingCandidates(async () => {}, signal);
+        await friends.reconcile(signal, async () => {});
       },
     });
 

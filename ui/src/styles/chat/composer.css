@@ -1898,7 +1898,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .agent-chat__file-input,
 .agent-chat__photo-input,
-.agent-chat__camera-input {
+.agent-chat__camera-input,
+.agent-chat__media-input {
   display: none;
   position: fixed;
   margin: 0;

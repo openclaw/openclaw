@@ -4,6 +4,7 @@ import {
   expectedRecoveredTool,
   makeCompletionsChunk,
   makeCompletionsModel,
+  makeCompletionsToolDelta,
 } from "./openai-completions.test-support.js";
 
 const model = makeCompletionsModel({
@@ -105,16 +106,9 @@ describe("Gemma tool-call text recovery", () => {
     async (rawFirst) => {
       const { output, events, run } = streamFixture(model);
       const raw = makeCompletionsChunk({ content: call });
-      const native = makeCompletionsChunk({
-        tool_calls: [
-          {
-            index: 0,
-            id: "native-call",
-            type: "function",
-            function: { name: "read", arguments: '{"path":"probe.txt"}' },
-          },
-        ],
-      });
+      const native = makeCompletionsChunk(
+        makeCompletionsToolDelta("native-call", "read", '{"path":"probe.txt"}'),
+      );
       await run([
         ...(rawFirst ? [raw, native] : [native, raw]),
         makeCompletionsChunk({}, "tool_calls"),

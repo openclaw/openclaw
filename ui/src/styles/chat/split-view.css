@@ -776,7 +776,7 @@
   padding: 0 8px;
   border-color: transparent;
   border-radius: var(--radius-full);
-  background: var(--session-header-control-surface);
+  background: var(--session-header-sharing-surface);
   font-size: 12px;
 }
 

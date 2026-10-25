@@ -36,7 +36,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import { isProcessAlive, waitForDead } from "./process-wait.test-helper.js";
+import { isProcessAlive } from "../../test-support/process.test-support.js";
+import { waitForDead } from "./process-wait.test-helper.js";
 import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
 
 type ParentSignal = "SIGINT" | "SIGTERM";

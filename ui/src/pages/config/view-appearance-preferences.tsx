@@ -446,14 +446,21 @@ export function ChatPreferencesSection(props: ConfigProps) {
     </section>
   );
 }
-export function SidebarPreferencesSection(props: ConfigProps) {
+export function SidebarPreferencesSection(
+  props: ConfigProps & { sectionRef?: (element: HTMLElement) => void },
+) {
   const catalogLabelsScope = createMemo(() => props.hiddenSessionCatalogLabels.scope);
   const hiddenCatalogIds = createMemo(() => [...props.hiddenSessionCatalogIds].toSorted());
   // The delete dialog's "Don't ask me again" writes this off; this row is where
   // the operator turns it back on, so it has to stay next to the session prefs.
 
   return (
-    <section id={APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
+    <section
+      ref={(element) => props.sectionRef?.(element)}
+      id={APPEARANCE_SETTINGS_TARGET_IDS.sidebar}
+      class="settings-section"
+      onFocusIn={() => props.onAppearanceDataNeeded?.()}
+    >
       <SettingsSectionHeader title={t("configView.sidebarPrefs.title")} />
       <p class="settings-section__desc">{t("configView.sidebarPrefs.hint")}</p>
       <div class="settings-group">

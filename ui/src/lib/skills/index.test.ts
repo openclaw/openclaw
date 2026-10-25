@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SkillStatusReport } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createProps, createSkill } from "../../pages/skills/view.test-support.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -633,16 +634,7 @@ it("retires presentation before selecting the roster default after the selected 
   setSkillsAgentId(state, " deleted ", beforeRetarget);
   expect(beforeRetarget).not.toHaveBeenCalled();
 
-  reconcileSkillsAgentId(
-    state,
-    {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-    },
-    beforeRetarget,
-  );
+  reconcileSkillsAgentId(state, makeBootRoster(), beforeRetarget);
   expect(beforeRetarget).toHaveBeenCalledTimes(1);
   expect(state.skillsAgentId).toBe("main");
   expect(state.skillsAgentRevision).toBe(1);

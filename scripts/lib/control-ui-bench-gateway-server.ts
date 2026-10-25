@@ -49,8 +49,21 @@ export async function startControlUiBenchGatewayServer(outDir: string, port = 0)
   }
 
   let currentRoot = await prepareRoot(outDir);
+  let preloadHeadersEnabled = true;
   let closing: Promise<void> | undefined;
+  const requests: Array<{ method: string; url: string; navigationPreload: boolean }> = [];
   const server = createServer((request, response) => {
+    if (!preloadHeadersEnabled) {
+      // Paired measurement of the pre-hints delivery path, with the same files.
+      const setHeader = response.setHeader.bind(response);
+      response.setHeader = (name, value) =>
+        name.toLowerCase() === "link" ? response : setHeader(name, value);
+    }
+    requests.push({
+      method: request.method ?? "GET",
+      url: request.url ?? "/",
+      navigationPreload: request.headers["service-worker-navigation-preload"] !== undefined,
+    });
     const fixture = readFixture?.(new URL(request.url ?? "/", "http://localhost").pathname);
     if (fixture) {
       const send = () => {
@@ -105,6 +118,10 @@ export async function startControlUiBenchGatewayServer(outDir: string, port = 0)
 
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
+    requests,
+    setPreloadHeadersEnabled(enabled: boolean) {
+      preloadHeadersEnabled = enabled;
+    },
     setFixtureReader(reader: typeof readFixture) {
       readFixture = reader;
     },

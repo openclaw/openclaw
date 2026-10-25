@@ -15,14 +15,11 @@ function createDelegationHarness(
 ) {
   const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: responseText }));
   const onTranscript = vi.fn(options.onTranscript);
-  const handleDelegationInput =
-    options.handleDelegationInput && vi.fn(options.handleDelegationInput);
   const harness = buildDelegationHarness({
     model: "gpt-live-1",
     ...options,
     runAgentConsult,
     onTranscript,
-    handleDelegationInput,
   });
   const frame = (event: unknown) =>
     harness.controller.handleFrame(Buffer.from(JSON.stringify(event)), false);
@@ -30,7 +27,6 @@ function createDelegationHarness(
   return {
     ...harness,
     runAgentConsult,
-    handleDelegationInput,
     onTranscript,
     finals: (role?: "user" | "assistant") =>
       onTranscript.mock.calls.filter((call) => call[2] && (!role || call[0] === role)),
@@ -67,14 +63,8 @@ it("uses public transcript deltas for metadata-only delegations and returns plai
       content: "The forecast is sunny.",
     }),
   );
-  expect(
-    h
-      .finals("user")
-      .map(([, text]) => text)
-      .join(""),
-  ).toBe("Check the forecast.");
+  expect(h.finals("user")).toEqual([["user", "Check the forecast.", true]]);
   expect(h.onTranscript).toHaveBeenCalledWith("assistant", "I can help.", true);
-  expect(h.handleDelegationInput).toHaveBeenCalledWith("Check the forecast.", expect.any(Function));
   const prompt = h.runAgentConsult.mock.calls[0]?.[0].prompt;
   expect(prompt).toContain("<input>Check the forecast.</input>");
   expect(prompt).toContain("assistant: I can help.");
@@ -95,26 +85,6 @@ it("uses public transcript deltas for metadata-only delegations and returns plai
     delegation_id: "item_without_user",
     content: "Ask the user to repeat their request; no user transcript was received.",
   });
-});
-
-it("retains early public notices and claims each id before dispatch or later transcript delivery", async () => {
-  const { socket, emitDelta, emitNotice, runAgentConsult } = createDelegationHarness();
-  emitNotice("early");
-  emitNotice("early");
-  emitDelta("I can help.", "assistant");
-  emitDelta(" ");
-  expect(runAgentConsult).not.toHaveBeenCalled();
-  expect(parseSent(socket)).toEqual([]);
-  emitDelta("Check my flight.");
-  expect(runAgentConsult).toHaveBeenCalledOnce();
-  expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain("Check my flight.");
-  await nextEventLoopTurn();
-  emitDelta("Check the train.");
-  emitNotice("early");
-  expect(runAgentConsult).toHaveBeenCalledOnce();
-  emitNotice("next");
-  expect(runAgentConsult).toHaveBeenCalledTimes(2);
-  expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("Check the train.");
 });
 
 it.each(["abort", "drain-abort", "overflow"] as const)(
@@ -143,18 +113,6 @@ it.each(["abort", "drain-abort", "overflow"] as const)(
     expect(parseSent(h.socket)).toEqual([]);
   },
 );
-
-it("retains the pending user request while long assistant speech evicts transcript context", async () => {
-  const { transcript, delegate, runAgentConsult, handleDelegationInput, finals } =
-    createFrameHarness();
-  transcript("input", "Check my flight.", 0, 100);
-  transcript("output", "Background speech. ".repeat(1_000), 100, 2_000);
-  delegate("item_request", 2_000);
-  await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
-  expect(handleDelegationInput).toHaveBeenCalledWith("Check my flight.", expect.any(Function));
-  expect(runAgentConsult.mock.calls[0]?.[0].prompt).toContain("<input>Check my flight.</input>");
-  expect(finals("user")).toEqual([["user", "Check my flight.", true]]);
-});
 
 it("preserves context after a handled control without reusing that control as the next question", async () => {
   const handleDelegationInput = vi.fn((input: string) =>

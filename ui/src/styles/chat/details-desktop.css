@@ -424,7 +424,7 @@
 }
 
 .chat-details .chat-details-desktop-body a.chat-details-people__row:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .chat-details

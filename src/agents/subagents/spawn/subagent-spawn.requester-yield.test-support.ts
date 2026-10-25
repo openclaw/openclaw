@@ -10,7 +10,6 @@ import {
   type AcceptedSessionSpawn,
 } from "../../accepted-session-spawn.js";
 import {
-  resolvePreparedRunAdmission,
   readAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
 } from "../../admitted-run-context.js";
@@ -21,25 +20,22 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
+import { admitEmbeddedRun, recordFinal } from "./subagent-spawn.boundary-run.test-support.js";
+import {
+  visibleResult,
+  type BoundaryHarness,
+  type WaitForEmbeddedRun,
+} from "./subagent-spawn.fixtures.test-support.js";
 import {
   createBoundSpawnInvocation,
-  recordSpawnBoundaryFinal,
   type createSpawnBoundaryParent,
   type createSpawnOperatorSource,
-  type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
 type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 export function registerYieldedRequesterBatchCase(
-  options: Pick<
-    NativePluginSpawnTestOptions,
-    | "createBoundGateway"
-    | "closeBoundGateway"
-    | "waitForEmbeddedRun"
-    | "runEmbeddedAgent"
-    | "throwBoundFailures"
-  > & {
+  options: BoundaryHarness & {
+    waitForEmbeddedRun: WaitForEmbeddedRun;
     createBoundParent: () => Promise<BoundParent>;
     createGuestParent: (audit?: boolean) => Promise<{
       bound: BoundParent;
@@ -86,21 +82,11 @@ export function registerYieldedRequesterBatchCase(
       let childCalls = 0;
       const childResult = createDeferred<EmbeddedAgentRunResult>();
       const parentStarted = createDeferred();
-      const parentCalls: Array<{
-        runId: string;
-        childSessionKey: string | undefined;
-        hasAuthority: boolean;
-        prompt: string;
-      }> = [];
+      const parentCalls: string[] = [];
       const admissionFailures: unknown[] = [];
       options.runEmbeddedAgent.mockImplementation(async (params) => {
         try {
-          const admitted = await resolvePreparedRunAdmission({
-            runId: params.runId,
-            runtimeKind: "embedded",
-            admittedRunContext: params.admittedRunContext,
-            preparedRunAdmission: params.preparedRunAdmission,
-          });
+          const admitted = await admitEmbeddedRun(params);
           if (guest) {
             const authority = readAdmittedRunOperatorAuthority(admitted);
             expect(authority?.profileId).toBe(guest.source.authority.profileId);
@@ -126,28 +112,14 @@ export function registerYieldedRequesterBatchCase(
             if (result.meta.aborted) {
               return result;
             }
-            await recordSpawnBoundaryFinal({
-              storePath: bound.storePath,
-              sessionKey: expectDefined(params.sessionKey, "child session"),
-              runId: params.runId,
-              text: "Nested child result.",
-            });
+            await recordFinal(bound, params, "Nested child result.");
             return result;
           }
-          const current = subagentRuns.get(params.runId);
-          parentCalls.push({
-            runId: params.runId,
-            childSessionKey: current?.childSessionKey,
-            hasAuthority: getAdmittedRunDelegatedAuthority(admitted) !== undefined,
-            prompt: params.prompt,
-          });
+          expect(subagentRuns.get(params.runId)?.childSessionKey).toBe(bound.parentSessionKey);
+          expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
+          parentCalls.push(params.prompt);
           parentStarted.resolve();
-          await recordSpawnBoundaryFinal({
-            storePath: bound.storePath,
-            sessionKey: bound.parentSessionKey,
-            runId: params.runId,
-            text: "Nested parent is complete.",
-          });
+          await recordFinal(bound, params, "Nested parent is complete.");
           return visibleResult("Nested parent is complete.");
         } catch (error) {
           admissionFailures.push(error);
@@ -274,11 +246,7 @@ export function registerYieldedRequesterBatchCase(
         await settleSubagentRegistryPersistenceWork();
         expect(admissionFailures).toEqual([]);
         expect(parentCalls).toHaveLength(1);
-        expect(parentCalls[0]).toMatchObject({
-          childSessionKey: bound.parentSessionKey,
-          hasAuthority: true,
-        });
-        expect(parentCalls[0]?.prompt).toContain("Nested child result.");
+        expect(parentCalls[0]).toContain("Nested child result.");
         const durable = loadSubagentRegistryFromSqlite().get(childRunId);
         expect(durable?.delivery?.status).toBe("delivered");
         expect(durable?.requesterSettleWake).toBeUndefined();

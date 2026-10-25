@@ -1,5 +1,7 @@
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
+type JsonPrefix = { text: string; bytes: number; jsonBytes: number };
+
 export function createJsonPrefixFitter(
   text: string,
   maxBytes: number,
@@ -11,13 +13,13 @@ export function createJsonPrefixFitter(
   // Model-budget trials share this fitter; retain sparse UTF-8 boundaries to avoid rescanning.
   const checkpoints: Array<{ end: number; jsonBytes: number }> = [];
   let nextCheckpoint = 256;
-  return (limit: number): string => {
+  return (limit: number): JsonPrefix => {
     if (limit <= 0) {
-      return "";
+      return { text: "", bytes: 0, jsonBytes: 2 };
     }
     // Whole fits preserve lone surrogates; partial UTF-8 decoding replaces them.
     if (bytes <= limit && (completeBytes ??= jsonUtf8Bytes(text)) + overhead(bytes) <= limit) {
-      return text;
+      return { text, bytes, jsonBytes: completeBytes };
     }
     encoded ??= Buffer.from(text.slice(0, Math.ceil(Math.min(bytes, maxBytes))));
     let end = 0;
@@ -43,8 +45,9 @@ export function createJsonPrefixFitter(
       if (next >= bytes || next > limit) {
         break;
       }
-      jsonBytes +=
-        byte === 34 ||
+      const nextJsonBytes =
+        jsonBytes +
+        (byte === 34 ||
         byte === 92 ||
         byte === 8 ||
         byte === 9 ||
@@ -54,16 +57,17 @@ export function createJsonPrefixFitter(
           ? 2
           : byte < 32
             ? 6
-            : width;
-      if (jsonBytes + overhead(next) > limit) {
+            : width);
+      if (nextJsonBytes + overhead(next) > limit) {
         break;
       }
       end = next;
+      jsonBytes = nextJsonBytes;
       if (end >= nextCheckpoint) {
         checkpoints.push({ end, jsonBytes });
         nextCheckpoint = end + 256;
       }
     }
-    return encoded.subarray(0, end).toString("utf8");
+    return { text: encoded.toString("utf8", 0, end), bytes: end, jsonBytes };
   };
 }

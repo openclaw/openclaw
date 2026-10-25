@@ -6,8 +6,8 @@ import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
 import { StreamGroup, UnplacedSubagentWait } from "./chat-message-stream-view.tsx";
 import { RealtimeTalkConversation } from "./chat-realtime-controls.tsx";
 import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
+import { TurnRecapRow } from "./chat-turn-recap-view.tsx";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
-import { TurnRecapRow } from "./chat-working-indicator.tsx";
 
 export const nativeRows = {
   "system-events": lazy(() => import("./chat-system-events.tsx"), { export: "ChatSystemEvents" }),

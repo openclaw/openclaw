@@ -808,7 +808,20 @@ async function createGatewaySessionInScope(
         const initializedEntry: InternalSessionEntry = {
           ...patched.entry,
           ...inheritedWorkspace,
-          ...(createdNewEntry && displayName ? { displayName } : {}),
+          ...(createdNewEntry && displayName
+            ? {
+                displayName,
+                ...(params.displayNameGenerated
+                  ? {
+                      titleRefinement: {
+                        sessionId: patched.entry.sessionId,
+                        generatedName: displayName,
+                        remainingMessages: 7,
+                      },
+                    }
+                  : {}),
+              }
+            : {}),
           ...projectSessionCreateSpawnModelSelection({
             entry: patched.entry,
             creation: params.creation,

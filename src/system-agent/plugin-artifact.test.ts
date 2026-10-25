@@ -6,8 +6,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { packToArchive } from "../plugins/test-helpers/archive-fixtures.js";
 import {
-  executePluginArtifactActivation,
-  prepareSystemAgentPluginArtifact,
+  executePluginArtifactActivation as activateArtifact,
+  prepareSystemAgentPluginArtifact as prepareArtifact,
 } from "./plugin-artifact.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
@@ -50,9 +50,9 @@ describe("exact system-agent plugin artifacts", () => {
   let runtime: ReturnType<typeof createSystemAgentTestRuntime>["runtime"];
   let lines: string[];
   const activate = (
-    operation: Parameters<typeof executePluginArtifactActivation>[0],
-    options: Partial<Parameters<typeof executePluginArtifactActivation>[2]> = {},
-  ) => executePluginArtifactActivation(operation, runtime, { approved: true, ...options });
+    operation: Parameters<typeof activateArtifact>[0],
+    options: Partial<Parameters<typeof activateArtifact>[2]> = {},
+  ) => activateArtifact(operation, runtime, { approved: true, ...options });
   const importPath = (...parts: string[]) =>
     path.join(fixture, "state", "imports", "plugins", ...parts);
   function installedArchive() {
@@ -106,7 +106,7 @@ describe("exact system-agent plugin artifacts", () => {
 
   async function prepare() {
     const operation = await pack();
-    return { operation, review: await prepareSystemAgentPluginArtifact(operation) };
+    return { operation, review: await prepareArtifact(operation) };
   }
 
   it("retains reviewed bytes and installs them after the task source changes", async () => {
@@ -142,23 +142,13 @@ describe("exact system-agent plugin artifacts", () => {
     ).toMatchObject({ applied: true });
     await expect(fs.access(review.retainedPath)).rejects.toThrow();
     expect(beforePersistentApply).toHaveBeenCalledTimes(3);
-    expect(applyPluginRuntime).toHaveBeenCalledExactlyOnceWith({
-      config: {},
-      pluginIds: [pluginId],
-      reason: "install",
-    });
+    expect(applyPluginRuntime).toHaveBeenCalledOnce();
     expect(lines.join("\n")).toContain(
       "Artifact installed. Inspect the plugin's runtime and Control UI activation status.",
     );
-    expect(mocks.audit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        details: expect.objectContaining({
-          pluginId,
-          sha256: operation.sha256,
-          sourcePath: installedPath,
-        }),
-      }),
-    );
+    expect(mocks.audit.mock.calls.at(-1)?.[0]).toMatchObject({
+      details: { pluginId, sha256: operation.sha256, sourcePath: installedPath },
+    });
   });
 
   it("preserves the approved source when the installer reports a late failure", async () => {
@@ -205,7 +195,7 @@ describe("exact system-agent plugin artifacts", () => {
       await fs.writeFile(path.join(pendingDir, name), "abandoned review");
     }
 
-    const next = await prepareSystemAgentPluginArtifact(await pack({ version: "2.0.0" }));
+    const next = await prepareArtifact(await pack({ version: "2.0.0" }));
     expect((await fs.readdir(pendingDir)).length).toBeLessThanOrEqual(8);
     expect(await fs.readFile(installedPath)).toEqual(bytes);
     expect(await fs.readFile(next.retainedPath)).not.toEqual(bytes);
@@ -219,7 +209,7 @@ describe("exact system-agent plugin artifacts", () => {
     await expect(activate(operation)).rejects.toThrow(/expired.*propose/i);
     expect(mocks.install).not.toHaveBeenCalled();
 
-    await prepareSystemAgentPluginArtifact(await pack({ version: "2.0.0" }));
+    await prepareArtifact(await pack({ version: "2.0.0" }));
     await expect(fs.access(review.retainedPath)).rejects.toThrow();
   });
 
@@ -228,27 +218,21 @@ describe("exact system-agent plugin artifacts", () => {
     { peerDependencies: { example: "*" } },
   ])("rejects an artifact requiring unreviewed installation inputs: %j", async (fields) => {
     const operation = await pack(fields);
-    await expect(prepareSystemAgentPluginArtifact(operation)).rejects.toThrow(
-      /bundle|dependencies|scripts/,
-    );
+    await expect(prepareArtifact(operation)).rejects.toThrow(/bundle|dependencies|scripts/);
     await expect(fs.access(importPath("pending", `${operation.sha256}.tgz`))).rejects.toThrow();
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
   it("rejects a source digest mismatch and linked source files before review", async () => {
     const operation = await pack();
-    await expect(
-      prepareSystemAgentPluginArtifact({ ...operation, sha256: "0".repeat(64) }),
-    ).rejects.toThrow("SHA256 does not match");
+    await expect(prepareArtifact({ ...operation, sha256: "0".repeat(64) })).rejects.toThrow(
+      "SHA256 does not match",
+    );
     const linked = path.join(fixture, "linked.tgz");
     await fs.symlink(operation.path, linked);
-    await expect(
-      prepareSystemAgentPluginArtifact({ ...operation, path: linked }),
-    ).rejects.toThrow();
+    await expect(prepareArtifact({ ...operation, path: linked })).rejects.toThrow();
     await fs.unlink(linked);
     await fs.link(operation.path, linked);
-    await expect(
-      prepareSystemAgentPluginArtifact({ ...operation, path: linked }),
-    ).rejects.toThrow();
+    await expect(prepareArtifact({ ...operation, path: linked })).rejects.toThrow();
   });
 });

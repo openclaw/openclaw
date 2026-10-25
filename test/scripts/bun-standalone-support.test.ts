@@ -8,6 +8,9 @@ import {
   planStandaloneRuntime,
   pruneStandaloneRuntime,
 } from "../../scripts/lib/bun-standalone-sidecar.mjs";
+import { createStandaloneSourceEntries } from "../../scripts/lib/bun-standalone-source-entries.mjs";
+import { createStandaloneSourceGraph } from "../../scripts/lib/bun-standalone-source-graph.mjs";
+import { standaloneSourceGraphSha256 } from "../../scripts/lib/bun-standalone-source-identity.mjs";
 import {
   assertStandaloneDestinations,
   compileStandaloneArtifacts,
@@ -15,6 +18,7 @@ import {
   publishStandaloneArtifacts,
   STANDALONE_BUILD_MARKER,
 } from "../../scripts/lib/bun-standalone-support.mjs";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -66,27 +70,35 @@ console.log(JSON.stringify({ answer, mode: getStandaloneRuntimeBuild()?.mode ?? 
   const compiler = path.join(root, "compiler");
   fs.writeFileSync(
     compiler,
-    `#!${process.execPath}
+    `#!${resolveTestNodeExecPath()}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
-if (args[0] !== 'build') {
-  const result = require('node:child_process').spawnSync(process.execPath, args, {stdio:'inherit'});
-  process.exit(result.status ?? 1);
+if (process.versions.bun) throw new Error('The synthetic compiler must run under Node');
+if (args[0] === 'build') throw new Error('The synthetic compiler accepts only the build API driver');
+if (require('node:path').basename(args[0]) === 'compile-standalone.mjs') {
+  const compiler = {build: async (options) => {
+    if (${failSupport} && !options.compile.aot) process.exit(42);
+    fs.writeFileSync(options.compile.outfile, JSON.stringify({aot: options.compile.aot === true, bytecode: options.bytecode === true, source: fs.readFileSync(options.entrypoints[0], 'utf8')}));
+    fs.writeFileSync(options.compile.outfile + '.options.json', JSON.stringify(options));
+    return {success: true, logs: []};
+  }};
+  const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
+  new AsyncFunction('Bun', fs.readFileSync(args[0], 'utf8'))(compiler).catch((error) => {console.error(error); process.exitCode = 1;});
+  return;
 }
-if (${failSupport} && !args.includes('--aot')) process.exit(42);
-const output = args.find((arg) => arg.startsWith('--outfile=')).slice(10);
-fs.writeFileSync(output, JSON.stringify({aot: args.includes('--aot'), source: fs.readFileSync('main.js', 'utf8')}));
+const result = require('node:child_process').spawnSync(process.execPath, args, {stdio:'inherit'});
+process.exit(result.status ?? 1);
 `,
     { mode: 0o755 },
   );
   return { root, outputRoot, compileRoot, runtimeRoot, mainEntry, source, compiler };
 }
 
-async function compile(
+function compileOptions(
   input: ReturnType<typeof fixture>,
   overrides: Partial<Parameters<typeof compileStandaloneArtifacts>[0]> = {},
-) {
-  const artifacts = await compileStandaloneArtifacts({
+): Parameters<typeof compileStandaloneArtifacts>[0] {
+  return {
     runtimeRoot: input.runtimeRoot,
     outputRoot: input.outputRoot,
     destination: path.join(input.root, "aot"),
@@ -116,7 +128,14 @@ async function compile(
       directories: ["lib"],
     },
     ...overrides,
-  });
+  };
+}
+
+async function compile(
+  input: ReturnType<typeof fixture>,
+  overrides: Partial<Parameters<typeof compileStandaloneArtifacts>[0]> = {},
+) {
+  const artifacts = await compileStandaloneArtifacts(compileOptions(input, overrides));
   const [standard, support] = artifacts;
   if (!standard || !support || artifacts.length !== 2) {
     throw new Error("Expected the standard and support fixture artifacts");
@@ -125,6 +144,153 @@ async function compile(
 }
 
 describe("matched standalone support artifacts", () => {
+  it.skipIf(process.platform === "win32")(
+    "retains requested AOT features and entrypoints without applying them to JIT support",
+    async () => {
+      const input = fixture();
+      const second = path.join(input.compileRoot, "worker.js");
+      fs.writeFileSync(second, "console.log('worker');");
+      await compile(input, {
+        compiledEntries: [input.mainEntry, second],
+        compileEntries: new Set([input.mainEntry, second]),
+        external: ["external-package"],
+        compileFlags: ["--aot", "--trim-allow=run,jit", "--trim-locales=en"],
+        aotCompileOptions: { trim: { allow: ["run", "jit"], locales: ["en"] } },
+      });
+      const options = JSON.parse(
+        fs.readFileSync(path.join(input.outputRoot, "openclaw.options.json"), "utf8"),
+      );
+      expect(options).toEqual({
+        entrypoints: ["main.js", "worker.js"],
+        root: input.compileRoot,
+        target: "bun",
+        splitting: true,
+        format: "esm",
+        external: ["external-package"],
+        compile: {
+          outfile: path.join(input.outputRoot, "openclaw"),
+          aot: true,
+          trim: { allow: ["run", "jit"], locales: ["en"] },
+          autoloadPackageJson: true,
+          autoloadDotenv: false,
+          autoloadBunfig: false,
+        },
+      });
+      const support = JSON.parse(
+        fs.readFileSync(path.join(input.outputRoot, "support-artifact/openclaw"), "utf8"),
+      );
+      expect(support.aot).toBe(false);
+      expect(fs.existsSync(path.join(input.outputRoot, "compile-standalone.mjs"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["jit", "bytecode"] as const)(
+    "compiles a large %s module inventory without putting its roots in the process arguments",
+    async (mode) => {
+      const input = fixture();
+      const entries = [input.mainEntry];
+      for (let index = 0; index < 6144; index++) {
+        const entry = path.join(input.compileRoot, `${index}-${"module-".repeat(32)}.js`);
+        fs.writeFileSync(entry, "export {};\n");
+        entries.push(entry);
+      }
+      const artifacts = await compileStandaloneArtifacts(
+        compileOptions(input, {
+          mode,
+          compileFlags: mode === "bytecode" ? ["--bytecode"] : [],
+          supportDestination: undefined,
+          compiledEntries: entries,
+          compileEntries: new Set(entries),
+          external: ["external-package"],
+        }),
+      );
+      const options = JSON.parse(
+        fs.readFileSync(path.join(input.outputRoot, "openclaw.options.json"), "utf8"),
+      );
+      expect(options.entrypoints).toEqual(entries.map((entry) => path.basename(entry)));
+      expect(options).toMatchObject({
+        root: input.compileRoot,
+        target: "bun",
+        splitting: true,
+        format: "esm",
+        external: ["external-package"],
+        compile: {
+          outfile: path.join(input.outputRoot, "openclaw"),
+          autoloadPackageJson: true,
+          autoloadDotenv: false,
+          autoloadBunfig: false,
+        },
+      });
+      expect(options.compile.aot).toBeUndefined();
+      expect(options.bytecode === true).toBe(mode === "bytecode");
+      expect(artifacts.map((artifact) => artifact.mode)).toEqual([mode]);
+      const executable = JSON.parse(
+        fs.readFileSync(path.join(input.outputRoot, "openclaw"), "utf8"),
+      );
+      expect(executable.bytecode).toBe(mode === "bytecode");
+      expect(executable.source).toContain(`"mode":"${mode}"`);
+      expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);
+      expect(fs.existsSync(path.join(input.outputRoot, "compile-standalone.mjs"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "binds typed source and transforms to build identity while retaining relocation and support equality",
+    async () => {
+      const capture = async (annotation: string, transformedSuffix = "") => {
+        const input = fixture();
+        const sourceRoot = path.join(input.root, "source");
+        fs.mkdirSync(path.join(sourceRoot, "src"), { recursive: true });
+        fs.writeFileSync(path.join(sourceRoot, "package.json"), '{"type":"module"}\n');
+        const source = `export function identity(value: ${annotation}): ${annotation} { return value; }\n`;
+        fs.writeFileSync(path.join(sourceRoot, "src/index.ts"), source);
+        fs.writeFileSync(path.join(sourceRoot, "src/helper.ts"), "export const helper = true;\n");
+        fs.writeFileSync(path.join(sourceRoot, "tsconfig.json"), "{}\n");
+        const sourceEntries = createStandaloneSourceEntries({
+          sourceRoot,
+          configs: [
+            {
+              entry: { entry: "src/index.ts" },
+              alias: { "@fixture/helper": path.join(sourceRoot, "src/helper.ts") },
+              cwd: sourceRoot,
+              tsconfig: path.join(sourceRoot, "tsconfig.json"),
+            },
+          ],
+        });
+        const graph = createStandaloneSourceGraph({
+          sourceRoot,
+          outputRoot: input.outputRoot,
+          runtimeRoot: input.runtimeRoot,
+          sourceEntries,
+          embeddedPaths: {},
+        });
+        const entry = graph.addEntry("dist/entry.mjs");
+        if (!entry) {
+          throw new Error("Missing typed source entry");
+        }
+        graph.recordLoaded(entry, source + transformedSuffix);
+        const sourceGraphSha256 = standaloneSourceGraphSha256(sourceRoot, graph.manifest());
+        const artifacts = await compile(input, { sourceGraphSha256 });
+        return { sourceGraphSha256, artifacts };
+      };
+      const first = await capture("number");
+      const relocated = await capture("number");
+      const typeChanged = await capture("string");
+      const transformChanged = await capture("number", "// changed compiler input\n");
+      expect(relocated.artifacts[0].build).toEqual(first.artifacts[0].build);
+      for (const changed of [typeChanged, transformChanged]) {
+        expect(changed.sourceGraphSha256).not.toBe(first.sourceGraphSha256);
+        expect(changed.artifacts[0].build.id).not.toBe(first.artifacts[0].build.id);
+        expect(changed.artifacts[0].build.moduleGraphSha256).toBe(
+          first.artifacts[0].build.moduleGraphSha256,
+        );
+      }
+      for (const captured of [first, relocated, typeChanged, transformChanged]) {
+        expect(captured.artifacts[1].build.id).toBe(captured.artifacts[0].build.id);
+      }
+    },
+  );
+
   it("keeps bundled plugin fingerprints bound to the executing image's captured identity", () => {
     const runtimeRoot = tempDirs.make("standalone-fingerprint-");
     const entry = "dist/extensions/demo/state-operation-api.js";
@@ -162,6 +328,29 @@ console.log(JSON.stringify([fingerprint(record), fingerprint({ ...record, source
     ]);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "runs original-source AOT through the shared build owner",
+    async () => {
+      const input = fixture();
+      const seen: object[] = [];
+      const artifacts = await compileStandaloneArtifacts(
+        compileOptions(input, {
+          supportDestination: undefined,
+          async compileAot({ outfile, buildInfo }) {
+            seen.push(buildInfo);
+            fs.writeFileSync(outfile, JSON.stringify(buildInfo));
+          },
+        }),
+      );
+      expect(seen).toHaveLength(1);
+      expect(artifacts.map(({ mode }) => mode)).toEqual(["aot"]);
+      const aot = JSON.parse(fs.readFileSync(path.join(input.outputRoot, "openclaw"), "utf8"));
+      expect(aot.mode).toBe("aot");
+      expect(aot.build.id).toMatch(/^[0-9a-f]{64}$/);
+      expect(aot.build.moduleGraphSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);
+    },
+  );
   it.skipIf(process.platform === "win32")(
     "publishes matching provenance, resources and debugger sources with distinct compilation modes",
     async () => {
@@ -308,6 +497,9 @@ console.log(JSON.stringify([fingerprint(record), fingerprint({ ...record, source
       expect(fs.existsSync(path.join(input.root, "aot"))).toBe(false);
       expect(fs.existsSync(path.join(input.root, "support"))).toBe(false);
       expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);
+      expect(
+        fs.existsSync(path.join(input.outputRoot, "support-artifact/compile-standalone.mjs")),
+      ).toBe(false);
     },
   );
 

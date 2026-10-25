@@ -780,6 +780,11 @@
   margin: 0 auto;
 }
 
+.chat-notice__actions {
+  display: flex;
+  justify-content: center;
+}
+
 /* Mid-run context is part of the agent's turn: a compact card flush with its column. */
 .chat-notice-inline {
   width: fit-content;

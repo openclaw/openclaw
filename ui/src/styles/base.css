@@ -17,6 +17,19 @@
   --bg-hover: #1f2330;
   --bg-muted: #1f2330;
 
+  /* Interaction layers follow the host surface and the theme's own ink. */
+  --surface-hover-amount: 6%;
+  --surface-selected-amount: 8%;
+  --surface-selected-hover-amount: 11%;
+  --surface-hover: color-mix(in srgb, var(--text) var(--surface-hover-amount), transparent);
+  --surface-selected: color-mix(in srgb, var(--text) var(--surface-selected-amount), transparent);
+  --surface-selected-hover: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-hover-amount),
+    transparent
+  );
+  --navigation-selected-border: transparent;
+
   --card: #161920;
   --card-foreground: #f0f0f2;
   --card-highlight: rgba(255, 255, 255, 0.04);
@@ -74,13 +87,19 @@
   --rail-header-action-disabled-opacity: 0.4;
   --rail-header-action-gap: 2px;
   --rail-header-background: var(--bg);
-  --session-header-control-surface: var(--bg-elevated);
+  --session-header-sharing-surface: color-mix(in srgb, var(--text) 4%, transparent);
+  --session-header-control-surface: color-mix(in srgb, var(--text) 5%, transparent);
+  --session-header-control-hover-bg: var(--surface-hover);
+  --session-header-control-active-hover-bg: color-mix(in srgb, var(--text) 10%, transparent);
+  --session-header-sharing-hover-bg: var(--surface-hover);
+  --session-header-sharing-active-bg: var(--session-header-control-active-hover-bg);
   --rail-header-title-size: var(--control-ui-text-sm);
   --rail-header-title-weight: 600;
   --rail-divider-color: var(--border);
   --rail-divider-size: 1px;
   --resize-handle-size: 6px;
   --resize-handle-line-size: 1px;
+  --shell-divider-size: var(--resize-handle-line-size);
   --resize-handle-active-line-size: 2px;
   --resize-handle-rest-color: color-mix(in srgb, var(--border) 74%, transparent);
   --resize-handle-active-color: color-mix(in srgb, var(--text) 42%, transparent);
@@ -344,7 +363,7 @@
   --menu-item-radius: var(--radius-sm);
   --menu-item-height: 28px;
   --menu-padding: 4px;
-  --menu-selected: color-mix(in srgb, var(--text) 8%, transparent);
+  --menu-selected: var(--surface-selected);
 
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
@@ -535,10 +554,12 @@
   --bg-content: #f4f1ec;
   --chat-user-surface: color-mix(in srgb, var(--accent) 15%, var(--bg));
 
-  --session-header-control-surface: color-mix(in srgb, var(--text) 9%, var(--bg-content));
-  --session-header-sharing-hover-bg: color-mix(in srgb, var(--text) 12%, var(--bg-content));
-  --session-header-sharing-active-bg: color-mix(in srgb, var(--text) 15%, var(--bg-content));
-  --session-header-control-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg-content));
+  --surface-hover-amount: 4%;
+  --surface-selected-amount: 6%;
+  --surface-selected-hover-amount: 9%;
+  --session-header-sharing-surface: color-mix(in srgb, var(--text) 3%, transparent);
+  --session-header-control-surface: var(--surface-selected);
+  --session-header-control-active-hover-bg: var(--surface-selected-hover);
   --session-header-control-active-color: color-mix(in srgb, var(--accent) 20%, var(--text));
   --subagent-avatar-ink: 45% 36%;
   --subagent-avatar-tint: 45% 94%;

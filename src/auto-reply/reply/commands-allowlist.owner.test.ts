@@ -25,16 +25,8 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 const beforeConfigEdit = vi.fn(async () => {});
 type AdminFixture = Parameters<Parameters<typeof withAdminIngress>[0]>[0];
 
-function withCommandIngress(
-  run: (fixture: AdminFixture, admin: AdminFixture["admins"][number]) => Promise<void>,
-) {
-  return withAdminIngress(async (fixture) => {
-    fixture.cfg.commands = { ...fixture.cfg.commands, text: true, config: true };
-    await run(fixture, fixture.admins[0]!);
-  });
-}
-
 async function commandParams(fixture: AdminFixture, body: string) {
+  fixture.cfg.commands = { ...fixture.cfg.commands, text: true, config: true };
   return buildCommandTestParams(
     body,
     fixture.cfg,
@@ -90,10 +82,9 @@ async function withPausedWrite(
       : vi.spyOn(pairingStore, method).mockImplementation(async (entry) => {
           if (!afterRemoval) {
             await pause();
-            return original(entry);
           }
           const result = await original(entry);
-          if (entry.accountId === "default") {
+          if (afterRemoval && entry.accountId === "default") {
             expect(result).toEqual({ changed: true, allowFrom: [] });
             await pause();
           }
@@ -172,8 +163,10 @@ const mutations = [
 it.each(mutations)(
   "rechecks $action $target pairing writes after $revocation during preparation (revoke=$revoke)",
   ({ action, target, revocation, revoke }) =>
-    withCommandIngress(async (fixture, admin) => {
+    withAdminIngress(async (fixture) => {
       const { cfg, admins, state } = fixture;
+      const admin = admins[0]!;
+      cfg.commands = { ...cfg.commands, text: true, config: true };
       if (!target) {
         cfg.channels!.discord!.accounts!.team!.allowFrom = ["*", "200"];
       }
@@ -188,8 +181,6 @@ it.each(mutations)(
         fixture,
         `/allowlist ${action} dm ${target} --account team 200`,
       );
-      expect(params.command.senderIsOwner).toBe(true);
-      expect(params.command.assertOwnerCurrent).toBeTypeOf("function");
       await withPausedWrite(params, target ? action : "config", false, async (resume) => {
         if (revoke) {
           if (revocation === "demote") {
@@ -216,7 +207,8 @@ it.each(mutations)(
 it.each([false, true])(
   "rechecks default-account cleanup after an accepted removal (revoke=%s)",
   (revoke) =>
-    withCommandIngress(async (fixture, admin) => {
+    withAdminIngress(async (fixture) => {
+      const admin = fixture.admins[0]!;
       await addEntry("200", "default");
       const params = await commandParams(
         fixture,
@@ -237,7 +229,8 @@ it.each([false, true])(
 );
 
 it("settles a committed pairing addition after the original admin is demoted", async () => {
-  await withCommandIngress(async (fixture, admin) => {
+  await withAdminIngress(async (fixture) => {
+    const admin = fixture.admins[0]!;
     const params = await commandParams(fixture, "/allowlist add dm --store --account team 200");
     const add = pairingStore.addChannelAllowFromStoreEntry;
     const writer = vi

@@ -30,12 +30,8 @@ import { Agents, type AgentsProps } from "./view.tsx";
 
 function config(configForm: ReturnType<typeof createProps>["config"]["configForm"]) {
   return {
+    ...createProps().config,
     configForm,
-    configSnapshot: null,
-    configLoading: false,
-    configSaving: false,
-    configFormDirty: false,
-    lastError: null,
   };
 }
 
@@ -129,7 +125,7 @@ describe("renderAgents", () => {
     );
   });
 
-  it("renders the selected agent's tool catalog loading state", () => {
+  it("renders the selected agent's tool catalog loading state", async () => {
     const mounted = mountConnected(() => {
       const readCatalog = createMemo(() => new Promise<ToolsCatalogResult>(() => {}));
       const props = createProps();
@@ -141,9 +137,13 @@ describe("renderAgents", () => {
         />
       );
     });
-    expect(
-      mounted.container.querySelector('.settings-loading-skeleton[aria-busy="true"]'),
-    ).not.toBeNull();
+    await waitForSolid(() =>
+      expect(
+        mounted.container.querySelector(
+          `.settings-loading-skeleton[aria-label="${t("agentTools.loadingCatalog")}"]`,
+        ),
+      ).not.toBeNull(),
+    );
   });
 
   it("renders the active agent tab and selects a different panel", () => {
@@ -182,7 +182,7 @@ describe("renderAgents", () => {
     ).toBe("🦊");
   });
 
-  it("renders and counts a server-scoped default-agent cron job without an explicit agentId", () => {
+  it("renders and counts a server-scoped default-agent cron job without an explicit agentId", async () => {
     const job = createCronJob("implicit-default-job", {
       name: "Implicit default-agent reminder",
     });
@@ -213,7 +213,9 @@ describe("renderAgents", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Implicit default-agent reminder");
+    await waitForSolid(() =>
+      expect(container.textContent).toContain("Implicit default-agent reminder"),
+    );
     expect(
       expectAgentTab(container, t("agents.tabs.cronJobs")).querySelector(".hub-tab__badge--count")
         ?.textContent,
@@ -271,6 +273,7 @@ describe("renderAgents", () => {
       );
     };
     renderCurrent();
+    await waitForSolid(() => expect(container.textContent).toContain("Retained reminder"));
     const scheduler = [...container.querySelectorAll(".settings-section")].find(
       (section) =>
         section.querySelector("h2")?.textContent === t("agents.cronPanel.schedulerTitle"),
@@ -358,6 +361,7 @@ describe("renderAgents", () => {
       );
     };
     renderCurrentPage();
+    await waitForSolid(() => expect(container.querySelector(".cron-load-more")).not.toBeNull());
 
     expect(
       expectAgentTab(container, t("agents.tabs.cronJobs")).querySelector(".hub-tab__badge--count")
@@ -410,9 +414,11 @@ describe("renderAgents", () => {
       directText(tab),
     );
     expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
-    expect(
-      container.querySelector("openclaw-agent-memory-panel .agent-memory-panel__header"),
-    ).not.toBeNull();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector("openclaw-agent-memory-panel .agent-memory-panel__header"),
+      ).not.toBeNull(),
+    );
     await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "beta" }),
     );
@@ -644,12 +650,15 @@ describe("renderAgents", () => {
       const chinese = flattenTranslations(zh_CN);
       const tabs = ["overview", "files", "tools", "skills", "channels", "cronJobs", "memory"];
       expect(tabLabels).toEqual(tabs.map((tab) => chinese.get(`agents.tabs.${tab}`)));
-      const sectionDescs = Array.from(container.querySelectorAll(".settings-section__desc"));
       const lastRefresh = chinese
         .get("agents.channels.lastRefresh")
         ?.replace("{time}", chinese.get("common.never") ?? "");
-      expect(sectionDescs.map((desc) => desc.textContent?.replace(/\s+/gu, " ").trim())).toContain(
-        `${chinese.get("agents.channels.subtitle")} ${lastRefresh}`,
+      await waitForSolid(() =>
+        expect(
+          Array.from(container.querySelectorAll(".settings-section__desc"), (desc) =>
+            desc.textContent?.replace(/\s+/gu, " ").trim(),
+          ),
+        ).toContain(`${chinese.get("agents.channels.subtitle")} ${lastRefresh}`),
       );
     } finally {
       await i18n.setLocale("en");
@@ -955,12 +964,8 @@ describe("renderAgents toolbar", () => {
       renderView(
         {
           access: {
+            ...createProps().access,
             canCreateAgent: false,
-            canPatchConfig: false,
-            canUpdateConfig: false,
-            canUpdateIdentity: false,
-            canWriteFiles: false,
-            canRunCron: false,
           },
           onCreateAgent,
           readData: () => ({
@@ -993,10 +998,7 @@ describe("renderAgents toolbar", () => {
 it("retires agent config errors during save and retains all owner error messages", () => {
   const container = document.createElement("div");
   const failedConfig = {
-    configForm: { agents: { entries: { beta: {} } } },
-    configSnapshot: null,
-    configLoading: false,
-    configSaving: false,
+    ...config({ agents: { entries: { beta: {} } } }),
     configFormDirty: true,
     lastError: "mock validation failure",
   };
@@ -1013,57 +1015,57 @@ it("retires agent config errors during save and retains all owner error messages
 it.each([
   { name: "paused authorized job", enabled: false, canRunCron: true, canRun: true },
   { name: "enabled unauthorized job", enabled: true, canRunCron: false, canRun: false },
-])("preserves edit links and gates Run Now for a $name", ({ enabled, canRunCron, canRun }) => {
-  const container = document.createElement("div");
-  const onCronRunNow = vi.fn();
-  const job: CronJob = {
-    id: "job /?&",
-    name: "Weekly report",
-    agentId: "alpha",
-    enabled,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: "Summarize notes." },
-    state: {},
-  };
-  const props = createProps({
-    selectedAgentId: "alpha",
-    basePath: "/gateway",
-    readData: () => ({ ...createProps().readData(), agentsPanel: "cron" }),
-  });
-  renderView(
-    {
-      ...props,
-      access: { ...props.access, canRunCron },
-      cron: { ...props.cron, onRunNow: onCronRunNow },
-      readData: () => ({
-        ...props.readData(),
-        cron: { ...props.readData().cron, cronJobs: [job] },
-      }),
-    },
-    container,
-  );
-  const link = [...container.querySelectorAll("a")].find(
-    (entry) => entry.textContent?.trim() === "Edit",
-  );
-  expect(link?.getAttribute("href")).toBe("/gateway/automations?job=job%20%2F%3F%26");
+])(
+  "preserves edit links and gates Run Now for a $name",
+  async ({ enabled, canRunCron, canRun }) => {
+    const container = document.createElement("div");
+    const onCronRunNow = vi.fn();
+    const job = createCronJob("job /?&", {
+      name: "Weekly report",
+      agentId: "alpha",
+      enabled,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "Summarize notes." },
+      state: {},
+    });
+    const props = createProps({
+      selectedAgentId: "alpha",
+      basePath: "/gateway",
+      readData: () => ({ ...createProps().readData(), agentsPanel: "cron" }),
+    });
+    renderView(
+      {
+        ...props,
+        access: { ...props.access, canRunCron },
+        cron: { ...props.cron, onRunNow: onCronRunNow },
+        readData: () => ({
+          ...props.readData(),
+          cron: { ...props.readData().cron, cronJobs: [job] },
+        }),
+      },
+      container,
+    );
+    await waitForSolid(() => expect(container.textContent).toContain("Weekly report"));
+    const link = [...container.querySelectorAll("a")].find(
+      (entry) => entry.textContent?.trim() === "Edit",
+    );
+    expect(link?.getAttribute("href")).toBe("/gateway/automations?job=job%20%2F%3F%26");
 
-  const jobRow = [...container.querySelectorAll(".settings-row")].find(
-    (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === job.name,
-  );
-  const runNow = [...(jobRow?.querySelectorAll("button") ?? [])].find(
-    (button) => button.textContent?.trim() === "Run Now",
-  );
-  expect(runNow).toBeInstanceOf(HTMLButtonElement);
-  expect(runNow?.disabled).toBe(!canRun);
-  runNow?.click();
-  if (canRun) {
-    expect(onCronRunNow).toHaveBeenCalledTimes(1);
-    expect(onCronRunNow).toHaveBeenCalledWith(job.id);
-  } else {
-    expect(onCronRunNow).not.toHaveBeenCalled();
-  }
-});
+    const jobRow = [...container.querySelectorAll(".settings-row")].find(
+      (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === job.name,
+    );
+    const runNow = [...(jobRow?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent?.trim() === "Run Now",
+    );
+    expect(runNow).toBeInstanceOf(HTMLButtonElement);
+    expect(runNow?.disabled).toBe(!canRun);
+    runNow?.click();
+    if (canRun) {
+      expect(onCronRunNow).toHaveBeenCalledTimes(1);
+      expect(onCronRunNow).toHaveBeenCalledWith(job.id);
+    } else {
+      expect(onCronRunNow).not.toHaveBeenCalled();
+    }
+  },
+);

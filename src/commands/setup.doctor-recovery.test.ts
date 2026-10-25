@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
@@ -25,8 +26,8 @@ afterEach(() => {
 it("points failed setup to a repair that works without a terminal", async () => {
   const repairHint =
     "Config invalid. Run `openclaw doctor --fix` to apply supported repairs, then re-run setup.";
-  const stdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-  Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+  const ttyMock = createCliTtyMock([process.stdin]);
+  ttyMock.set(false);
   try {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
@@ -101,10 +102,6 @@ it("points failed setup to a repair that works without a terminal", async () => 
       });
     });
   } finally {
-    if (stdinIsTTY) {
-      Object.defineProperty(process.stdin, "isTTY", stdinIsTTY);
-    } else {
-      Reflect.deleteProperty(process.stdin, "isTTY");
-    }
+    ttyMock.restore();
   }
 }, 30_000);

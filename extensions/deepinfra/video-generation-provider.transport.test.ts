@@ -106,15 +106,7 @@ async function startConnectProxy(upstreamBaseUrl: string): Promise<{
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
+      await server[Symbol.asyncDispose]();
     },
   };
 }
