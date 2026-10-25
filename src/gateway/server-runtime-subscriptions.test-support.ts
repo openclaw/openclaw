@@ -4,6 +4,7 @@ import {
   bindTestChannelParticipantAdmissionEvidence,
   createChannelParticipantAdmissionEvidence,
 } from "../../test/helpers/channel-admission-evidence.js";
+import { createMockSubsystemLogger } from "../../test/helpers/mock-subsystem-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { waitForFast } from "../../test/helpers/vitest-wait.js";
 import {
@@ -27,7 +28,6 @@ import {
 } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { heartbeatNotifications } from "../infra/heartbeat-events.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import {
@@ -55,18 +55,7 @@ export { waitForFast } from "../../test/helpers/vitest-wait.js";
 
 export function createSubscriptionTestFixture() {
   const warn = vi.fn();
-  const log: SubsystemLogger = {
-    subsystem: "gateway-test",
-    isEnabled: () => true,
-    trace: vi.fn(),
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn,
-    error: vi.fn(),
-    fatal: vi.fn(),
-    raw: vi.fn(),
-    child: () => log,
-  };
+  const log = createMockSubsystemLogger("gateway-test", { isEnabled: () => true, warn });
   return {
     log,
     warn,
@@ -170,16 +159,14 @@ export function registerAuditSubscriptionTests(params: {
   warn: ReturnType<typeof createSubscriptionTestFixture>["warn"];
 }) {
   const { start, runtimeConfigState, auditTestState, warn } = params;
+  const emitStart = (runId: string, startedAt = 1_000, emit = emitAgentAuditEvent) =>
+    emit({ runId, stream: "lifecycle", data: { phase: "start", startedAt } });
   it("records audit events by default and stops the recorder on unsubscribe", async () => {
     runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
     const unsubs = start();
 
     expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({
-      runId: "enabled-audit",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
+    emitStart("enabled-audit");
     expect(auditTestState.recorded).toBe(0);
     expect(hasExecutionIdentityAdmissionSink()).toBe(true);
     expect(
@@ -305,11 +292,7 @@ export function registerAuditSubscriptionTests(params: {
       runtimeConfigState.value = { logging: { audit } };
       unsubs.reconcileAuditPolicy(runtimeConfigState.value);
       const runId = `live-audit-${index}`;
-      emitAgentAuditEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "start", startedAt: 1_000 },
-      });
+      emitStart(runId);
       emitAgentAuditEvent({
         runId,
         stream: "lifecycle",
@@ -355,30 +338,14 @@ export function registerAuditSubscriptionTests(params: {
     const unsubs = start();
 
     expect(auditTestState.created).toBe(1);
-    emitAgentAuditEvent({
-      runId: "disabled-private",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    emitAgentEvent({
-      runId: "disabled-public",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
+    emitStart("disabled-private");
+    emitStart("disabled-public", 1_000, emitAgentEvent);
     expect(auditTestState.recorded).toBe(0);
     runtimeConfigState.value = {};
-    emitAgentAuditEvent({
-      runId: "resumed-private",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 2_000 },
-    });
+    emitStart("resumed-private", 2_000);
     expect(auditTestState.recorded).toBe(0);
     runtimeConfigState.value = { logging: { audit: { enabled: false } } };
-    emitAgentAuditEvent({
-      runId: "disabled-again",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 3_000 },
-    });
+    emitStart("disabled-again", 3_000);
     expect(auditTestState.recorded).toBe(1);
     await waitForFast(() => expect(warn).toHaveBeenCalledOnce());
     warn.mockClear();
@@ -555,26 +522,18 @@ export function registerAssistantTailSubscriptionTests({
   start: (params: Parameters<typeof startGatewayEventSubscriptions>[0]) => void;
 }): void {
   it.each([
-    { source: "plain", committed: ["Saved paragraph."], initial: "Saved paragraph." },
-    {
-      source: "native raw directive",
-      committed: ["[[reply_to_current]]Saved paragraph."],
-      initial: "[[reply_to_current]]Saved paragraph.",
-    },
-    {
-      source: "native partial before directive",
-      committed: ["Saved[[reply_to_current]] paragraph."],
-      initial: "Saved",
-    },
-    { source: "before first bytes", committed: ["Saved paragraph."], initial: undefined },
-    {
-      source: "identical receipts before first bytes",
-      committed: ["Saved paragraph.", "Saved paragraph."],
-      initial: undefined,
-    },
-  ])(
-    "retires $source by identity before queued continuation without session subscribers",
-    async ({ committed, initial }) => {
+    ["plain", ["Saved paragraph."], "Saved paragraph."],
+    [
+      "native raw directive",
+      ["[[reply_to_current]]Saved paragraph."],
+      "[[reply_to_current]]Saved paragraph.",
+    ],
+    ["native partial before directive", ["Saved[[reply_to_current]] paragraph."], "Saved"],
+    ["before first bytes", ["Saved paragraph."], undefined],
+    ["identical receipts before first bytes", ["Saved paragraph.", "Saved paragraph."], undefined],
+  ] as const)(
+    "retires %s by identity before queued continuation without session subscribers",
+    async (_source, committed, initial) => {
       const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const params = createParams();
