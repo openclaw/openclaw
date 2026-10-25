@@ -14,7 +14,7 @@ import type {
   TranscriptSessionDescriptor,
   TranscriptSourceProvider,
 } from "../../transcripts/provider-types.js";
-import { type TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
+import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 import { useTranscriptTestState } from "./transcripts-tool.test-support.js";
@@ -253,5 +253,25 @@ describe("transcripts read actions", () => {
     const listed = await run({ action: "list", limit: 50 });
     expect(listed.details).toHaveProperty("sessions.length", 50);
     expect(JSON.stringify(listed.content).length).toBeLessThan(4200);
+  });
+
+  it("stops a fully denied list at the page ceiling instead of draining the store", async () => {
+    const listed = vi
+      .spyOn(TranscriptsStore.prototype, "listReadEntries")
+      .mockImplementation(async (options) => {
+        const offset = options.offset ?? 0;
+        return {
+          entries: Array.from({ length: 200 }, (_, index) => ({
+            session: { ...session, sessionId: `hidden-${offset + index}`, source: foreignSource },
+          })),
+          hasMore: true,
+        } as never;
+      });
+    provider(async () => ({ ok: false, error: "denied" }));
+    const result = await run({ action: "list", limit: 20 }, true);
+    expect(listed).toHaveBeenCalledTimes(20);
+    expect(result.details).toMatchObject({ truncated: true, sessions: [] });
+    expect(JSON.stringify(result.content)).toContain("page budget");
+    listed.mockRestore();
   });
 });
