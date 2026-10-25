@@ -64,6 +64,17 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     await fs.writeFile(filename, content, "utf8");
   }
 
+  async function writeNeighbors(directories: string[], filename: string) {
+    const files = directories.map((directory) => path.join(home, directory, filename));
+    for (const file of files) {
+      await writeEnvironmentFile(file, "FOREIGN=must-not-be-selected\n");
+    }
+    return files;
+  }
+
+  const readCommand = (requireEffective = false) =>
+    readSystemdServiceExecStart(serviceEnv(), { requireEffective });
+
   function mockManager(snapshot: Omit<SystemdManagerSnapshotFixture, "programArguments">) {
     const effective = { programArguments, fragmentPath: unitPath(), ...snapshot };
     const unitProperties = buildSystemdUnitPropertyOutput(effective);
@@ -79,7 +90,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
       } else {
         throw new Error("Unexpected native request in scalar fixture");
       }
-      return { code: 0, termination: "exit", stdout, stderr: "" };
+      return nativeExit(stdout);
     });
   }
 
@@ -97,7 +108,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
   async function readExpression(expression: string) {
     await writeUnit();
     mockManager({ environmentFiles: [[expression, false]] });
-    return readSystemdServiceExecStart(serviceEnv(), { requireEffective: true });
+    return readCommand(true);
   }
 
   it("rejects trailing whitespace before rendering a different native cwd", () => {
@@ -126,7 +137,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     expect(path.relative(home, nativePath).split(path.sep)).not.toContain("..");
     // Accept equivalent native directory spellings (for example a trailing /.) without prescribing one.
     await expect(fs.realpath(nativePath)).resolves.toBe(workingDirectory);
-    const command = await readSystemdServiceExecStart(serviceEnv());
+    const command = await readCommand();
     expect(command?.workingDirectory).toBe(workingDirectory);
     expect(command?.environment).toEqual({ AFTER_CWD: "retained" });
   });
@@ -138,7 +149,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     await writeUnit(
       `[Service]\nExecStart=/usr/bin/openclaw gateway run\nWorkingDirectory=${expression}\n`,
     );
-    const command = await readSystemdServiceExecStart(serviceEnv());
+    const command = await readCommand();
     expect(command?.workingDirectory).toBe(workingDirectory);
   });
 
@@ -153,7 +164,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
       const environment = surface === "inline environment" ? { OPENCLAW_STATE_DIR: literal } : {};
       await writeUnit(buildSystemdUnit({ programArguments: argv, environment }));
 
-      const command = await readSystemdServiceExecStart(serviceEnv());
+      const command = await readCommand();
       expect(command?.programArguments).toEqual(argv);
       if (surface === "inline environment") {
         expect(command?.environment).toEqual(environment);
@@ -168,16 +179,11 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
         stateDir: path.join(home, directory),
       });
       await writeEnvironmentFile(environmentFile);
-      const neighboringFiles = alternatives.map((alternative) =>
-        resolveSystemdEnvironmentFilePath({ stateDir: path.join(home, alternative) }),
-      );
-      for (const neighbor of neighboringFiles) {
-        await writeEnvironmentFile(neighbor, "FOREIGN=must-not-be-selected\n");
-      }
+      const neighboringFiles = await writeNeighbors(alternatives, path.basename(environmentFile));
       const unit = buildSystemdUnit({ programArguments, environmentFiles: [environmentFile] });
       await writeUnit(unit);
 
-      const command = await readSystemdServiceExecStart(serviceEnv());
+      const command = await readCommand();
       expect(command?.environment).toEqual({ SELECTED: "intended" });
       expect(command?.environmentValueSources).toEqual({ SELECTED: "file" });
       const encoded = scalarValue(unit, "EnvironmentFile");
@@ -206,12 +212,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
           "FIRST=retained\nSHARED=first\n",
         );
         await writeEnvironmentFile(path.join(home, directory, "set-20.env"), "SHARED=second\n");
-        for (const alternative of alternatives) {
-          await writeEnvironmentFile(
-            path.join(home, alternative, "set-10.env"),
-            "FOREIGN=must-not-be-selected\n",
-          );
-        }
+        await writeNeighbors(alternatives, "set-10.env");
         const command = await readExpression(path.join(home, expression, "set-*.env"));
         expect(command?.environment).toEqual({ FIRST: "retained", SHARED: "second" });
         expect(command?.environmentValueSources).toEqual({ FIRST: "file", SHARED: "file" });
@@ -221,10 +222,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     it.each([false, true])(
       "does not broaden a missing literal file (optional=%s)",
       async (optional) => {
-        await writeEnvironmentFile(
-          path.join(home, "missing-one", "gateway.systemd.env"),
-          "FOREIGN=must-not-be-selected\n",
-        );
+        await writeNeighbors(["missing-one"], "gateway.systemd.env");
         const expression = path.join(home, "missing\\*", "gateway.systemd.env");
         await writeUnit(
           "[Service]\nExecStart=/usr/bin/openclaw gateway run\nEnvironment=INLINE=retained\n",
@@ -233,9 +231,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
           environment: ["INLINE=retained"],
           environmentFiles: [[expression, optional]],
         });
-        const command = readSystemdServiceExecStart(serviceEnv(), {
-          requireEffective: true,
-        });
+        const command = readCommand(true);
         if (!optional) {
           await expect(command).rejects.toThrow();
         } else {
@@ -245,40 +241,32 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     );
   });
 
-  it("does not read an authored optional relative EnvironmentFile", async () => {
-    const relativeFile = path.join(path.dirname(unitPath()), "operator.env");
-    await writeEnvironmentFile(relativeFile, "FOREIGN=must-not-be-read\n");
-    const unit =
-      "[Service]\nExecStart=/usr/bin/openclaw gateway run\nEnvironment=INLINE=retained\nEnvironmentFile=-./operator.env\n";
-    await writeUnit(unit);
-    const readFile = vi.spyOn(fs, "readFile");
-    try {
-      const command = await readSystemdServiceExecStart(serviceEnv());
-      expect(readFile).not.toHaveBeenCalledWith(relativeFile, "utf8");
-      expect(command?.environment).toEqual({ INLINE: "retained" });
-      await expect(fs.readFile(unitPath(), "utf8")).resolves.toBe(unit);
-    } finally {
-      readFile.mockRestore();
-    }
-  });
-
-  it("rejects an optional relative manager EnvironmentFile tuple", async () => {
-    const relativeFile = path.join(path.dirname(unitPath()), "operator.env");
-    await writeEnvironmentFile(relativeFile, "FOREIGN=must-not-be-read\n");
-    const unit = "[Service]\nExecStart=/usr/bin/openclaw gateway run\n";
-    await writeUnit(unit);
-    mockManager({ environmentFiles: [["operator.env", true]] });
-    const readFile = vi.spyOn(fs, "readFile");
-    try {
-      await expect(
-        readSystemdServiceExecStart(serviceEnv(), { requireEffective: true }),
-      ).rejects.toThrow();
-      expect(readFile).not.toHaveBeenCalledWith(relativeFile, "utf8");
-      await expect(fs.readFile(unitPath(), "utf8")).resolves.toBe(unit);
-    } finally {
-      readFile.mockRestore();
-    }
-  });
+  it.each([false, true])(
+    "does not read an optional relative EnvironmentFile (manager=%s)",
+    async (manager) => {
+      const relativeFile = path.join(path.dirname(unitPath()), "operator.env");
+      await writeEnvironmentFile(relativeFile, "FOREIGN=must-not-be-read\n");
+      const unit =
+        "[Service]\nExecStart=/usr/bin/openclaw gateway run\n" +
+        (manager ? "" : "Environment=INLINE=retained\nEnvironmentFile=-./operator.env\n");
+      await writeUnit(unit);
+      if (manager) {
+        mockManager({ environmentFiles: [["operator.env", true]] });
+      }
+      const readFile = vi.spyOn(fs, "readFile");
+      try {
+        if (manager) {
+          await expect(readCommand(true)).rejects.toThrow();
+        } else {
+          expect((await readCommand())?.environment).toEqual({ INLINE: "retained" });
+        }
+        expect(readFile).not.toHaveBeenCalledWith(relativeFile, "utf8");
+        await expect(fs.readFile(unitPath(), "utf8")).resolves.toBe(unit);
+      } finally {
+        readFile.mockRestore();
+      }
+    },
+  );
 
   it("records only the keys supplied by an authored space-containing EnvironmentFile drop-in", async () => {
     const environmentFile = path.join(home, "operator space", "operator.env");
@@ -289,7 +277,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     await writeUnit();
     mockManager({ environmentFiles: [[environmentFile, false]], dropInPaths: [dropIn] });
 
-    const command = await readSystemdServiceExecStart(serviceEnv(), { requireEffective: true });
+    const command = await readCommand(true);
     expect(command?.environment).toEqual({ SELECTED: "intended" });
     expect(command?.managedOverrides).toEqual({ environment: { keys: ["SELECTED"] } });
   });

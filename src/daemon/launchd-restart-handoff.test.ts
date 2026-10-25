@@ -44,6 +44,12 @@ const countCall = (command: string) => `    count_file="$LAUNCHCTL_STUB_DIR/${co
     printf '%s\n' "$count" > "$count_file"`;
 
 const spawnCall = () => spawnMock.mock.calls[0]!;
+const stubCommands = (commands: Record<string, string>) =>
+  `case "$1" in\n${Object.entries(commands)
+    .map(([command, body]) => `  ${command}) ${body} ;;`)
+    .join("\n")}\n  *) exit 0 ;;\nesac`;
+const countedCommand = (command: string, body: string) => `${countCall(command)}\n${body}`;
+const startStub = 'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac';
 
 async function executeHandoff(
   mode: "park" | "reload" | "start-after-exit",
@@ -54,7 +60,7 @@ async function executeHandoff(
   try {
     const file = (name: string) => path.join(stubDir, name);
     const writeScript = (name: string, source: string) => {
-      fs.writeFileSync(file(name), source, { mode: 0o755 });
+      fs.writeFileSync(file(name), `#!/bin/sh\n${source}\n`, { mode: 0o755 });
     };
     const home = file("home");
     const stateDir = path.join(home, ".openclaw");
@@ -77,8 +83,7 @@ async function executeHandoff(
     fs.mkdirSync(systemDaemonsDir);
     writeScript(
       "launchctl",
-      `#!/bin/sh
-LAUNCHCTL_CALLS_PATH="$TMPDIR/launchctl.calls"
+      `LAUNCHCTL_CALLS_PATH="$TMPDIR/launchctl.calls"
 LAUNCHCTL_STUB_DIR="$TMPDIR"
 printf '%s\\n' "$*" >> "$LAUNCHCTL_CALLS_PATH"
 printf '%s:%s:%s\\n' "\${BOUNDARY_PARENT+present}" "\${BOUNDARY_SERVICE+present}" "\${OPENCLAW_PROFILE+present}" >> "$TMPDIR/environment.calls"
@@ -88,7 +93,7 @@ fi
 ${launchctlStub}
 `,
     );
-    writeScript("sleep", "#!/bin/sh\nexit 0\n");
+    writeScript("sleep", "exit 0");
     const parser = file("plutil");
     if (systemOwnership === "interrupted extraction") {
       fs.writeFileSync(
@@ -97,8 +102,7 @@ ${launchctlStub}
       );
       writeScript(
         "plutil",
-        `#!/bin/sh
-for last; do :; done
+        `for last; do :; done
 if [ "$last" != '-' ]; then exit 1; fi
 if [ "$1" = '-extract' ]; then kill -TERM "$$"; fi
 exec /usr/bin/plutil "$@"
@@ -119,20 +123,19 @@ exec /usr/bin/plutil "$@"
         systemOwnership === "interrupted extraction" ? parser : "/usr/bin/plutil",
       );
 
-    let exitCode = 0;
-    try {
-      await execFileAsync(
-        "/bin/sh",
-        ["-c", script, "handoff-test", "gui/501/test.label", "gui/501", file("test.plist"), "0"],
-        { env: options.env },
-      );
-    } catch (error) {
-      const code = (error as { code?: unknown }).code;
-      if (typeof code !== "number") {
-        throw error;
-      }
-      exitCode = code;
-    }
+    const exitCode = await execFileAsync(
+      "/bin/sh",
+      ["-c", script, "handoff-test", "gui/501/test.label", "gui/501", file("test.plist"), "0"],
+      { env: options.env },
+    ).then(
+      () => 0,
+      (error: { code?: unknown }) => {
+        if (typeof error.code !== "number") {
+          throw error;
+        }
+        return error.code;
+      },
+    );
 
     const readLines = (name: string) => fs.readFileSync(file(name), "utf8").trim().split("\n");
     expect(new Set(readLines("environment.calls"))).toEqual(new Set(["::"]));
@@ -178,10 +181,7 @@ it("waits for the caller pid before kickstarting launchd", () => {
 });
 
 it("kickstarts after exit without replacing a running KeepAlive process", async () => {
-  const result = await executeHandoff(
-    "start-after-exit",
-    'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac',
-  );
+  const result = await executeHandoff("start-after-exit", startStub);
 
   expect(result).toMatchObject({
     exitCode: 0,
@@ -196,11 +196,7 @@ it.for(["loaded", "interrupted extraction"] as const)(
     if (scenario === "interrupted extraction" && process.platform !== "darwin") {
       context.skip();
     }
-    const result = await executeHandoff(
-      "start-after-exit",
-      'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac',
-      scenario,
-    );
+    const result = await executeHandoff("start-after-exit", startStub, scenario);
 
     expect(result).toMatchObject({ exitCode: 78, calls: [] });
     expect(result.log).toContain("restart blocked");
@@ -222,16 +218,7 @@ it("parks the service with bootout after the caller exits", async () => {
 it("executes the generated reload handoff through a delayed launchd stop", async () => {
   const result = await executeHandoff(
     "reload",
-    `
-case "$1" in
-  print)
-${countCall("print")}
-    [ "$count" -le 20 ] && exit 0
-    exit 113
-    ;;
-  bootstrap) exit 0 ;;
-  *) exit 0 ;;
-esac`,
+    stubCommands({ print: countedCommand("print", '[ "$count" -le 20 ] && exit 0\nexit 113') }),
   );
 
   expectReload(result, { print: 21, bootstrap: 1 });
@@ -249,21 +236,11 @@ esac`,
 it("retries bootstrap when the label disappears between print and kickstart", async () => {
   const result = await executeHandoff(
     "reload",
-    `
-case "$1" in
-  print)
-${countCall("print")}
-    [ "$count" -eq 2 ] && exit 0
-    exit 113
-    ;;
-  bootstrap)
-${countCall("bootstrap")}
-    [ "$count" -eq 1 ] && exit 5
-    exit 0
-    ;;
-  kickstart) exit 113 ;;
-  *) exit 0 ;;
-esac`,
+    stubCommands({
+      print: countedCommand("print", '[ "$count" -eq 2 ] && exit 0\nexit 113'),
+      bootstrap: countedCommand("bootstrap", '[ "$count" -eq 1 ] && exit 5\nexit 0'),
+      kickstart: "exit 113",
+    }),
   );
 
   expectReload(result, { bootstrap: 2, kickstart: 1 });
