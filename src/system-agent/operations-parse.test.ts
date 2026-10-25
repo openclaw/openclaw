@@ -25,11 +25,13 @@ const parseSystemAgentOperation: typeof parseSystemAgentOperationImpl = (...args
   pluginMetadata!.run(() => parseSystemAgentOperationImpl(...args));
 
 function expectOperation<K extends SystemAgentOperation["kind"]>(
-  command: string,
+  command: string | string[],
   kind: K,
   fields?: Omit<Extract<SystemAgentOperation, { kind: K }>, "kind">,
 ) {
-  expect(parseSystemAgentOperation(command)).toEqual({ kind, ...fields });
+  for (const input of typeof command === "string" ? [command] : command) {
+    expect(parseSystemAgentOperation(input)).toEqual({ kind, ...fields });
+  }
 }
 
 function expectConfigSet(path: string, value: string) {
@@ -73,8 +75,11 @@ describe("parseSystemAgentOperation", () => {
 
   it("parses typed model writes", () => {
     const model = "openai/gpt-5.2";
-    expectOperation(`set default model ${model}`, "set-default-model", { model });
-    expectOperation(`configure models ${model}`, "set-default-model", { model });
+    expectOperation(
+      [`set default model ${model}`, `configure models ${model}`],
+      "set-default-model",
+      { model },
+    );
     expectOperation(`set default model ${model} for agent агент✨`, "set-default-model", {
       model,
       agentId: "агент✨",
@@ -82,8 +87,7 @@ describe("parseSystemAgentOperation", () => {
   });
 
   it("parses interactive model provider setup", () => {
-    expectOperation("configure model provider", "model-setup");
-    expectOperation("setup model provider", "model-setup");
+    expectOperation(["configure model provider", "setup model provider"], "model-setup");
     expectOperation("model setup workspace /tmp/work", "model-setup", { workspace: "/tmp/work" });
   });
 
@@ -139,8 +143,7 @@ describe("parseSystemAgentOperation", () => {
   });
 
   it("parses plugin management operations", () => {
-    expectOperation("plugins list", "plugin-list");
-    expectOperation("list plugin", "plugin-list");
+    expectOperation(["plugins list", "list plugin"], "plugin-list");
     expectOperation("plugins search calendar sync", "plugin-search", { query: "calendar sync" });
     expectOperation("install npm plugin @openclaw/discord", "plugin-install", {
       spec: "npm:@openclaw/discord",
@@ -258,12 +261,6 @@ vi.mock("../config/channel-configured-shared.js", async (importOriginal) => ({
   isStaticallyChannelConfigured: vi.fn(),
 }));
 
-function expectSetupOperation(
-  input: string,
-  operation: ReturnType<typeof parseSystemAgentOperation>,
-) {
-  expect(parseSystemAgentOperation(input)).toEqual(operation);
-}
 function expectLines(lines: string[], expected: string[]) {
   for (const text of expected) {
     expect(lines.join("\n")).toContain(text);
@@ -272,11 +269,10 @@ function expectLines(lines: string[], expected: string[]) {
 
 describe("system agent setup-flow operations", () => {
   it("parses channel listing and connect requests", () => {
-    expectSetupOperation("channels", { kind: "channel-list" });
-    expectSetupOperation("list channels", { kind: "channel-list" });
-    expectSetupOperation("connect telegram", { kind: "channel-setup", channel: "telegram" });
-    expectSetupOperation("connect to WhatsApp", { kind: "channel-setup", channel: "whatsapp" });
-    expectSetupOperation("link discord channel", { kind: "channel-setup", channel: "discord" });
+    expectOperation(["channels", "list channels"], "channel-list");
+    expectOperation("connect telegram", "channel-setup", { channel: "telegram" });
+    expectOperation("connect to WhatsApp", "channel-setup", { channel: "whatsapp" });
+    expectOperation("link discord channel", "channel-setup", { channel: "discord" });
     // Starting the wizard is not a write; the wizard collects explicit answers.
     expect(isPersistentSystemAgentOperation({ kind: "channel-setup", channel: "telegram" })).toBe(
       false,
@@ -285,28 +281,17 @@ describe("system agent setup-flow operations", () => {
   });
 
   it("parses hosted skills, web-search, and Gateway setup requests", () => {
-    for (const input of ["configure skills", "setup skills", "set up skills"]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "skills-setup" });
-    }
-    for (const input of [
-      "configure search",
-      "configure web search",
-      "setup search",
-      "web search provider setup",
-    ]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "search-setup" });
-    }
-    expect(parseSystemAgentOperation("open search wizard")).toEqual({
-      kind: "open-setup",
-      target: "search",
-    });
-    for (const input of ["configure gateway", "set up gateway", "gateway settings"]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "gateway-config-setup" });
-    }
-    expect(parseSystemAgentOperation("open gateway wizard")).toEqual({
-      kind: "open-setup",
-      target: "gateway",
-    });
+    expectOperation(["configure skills", "setup skills", "set up skills"], "skills-setup");
+    expectOperation(
+      ["configure search", "configure web search", "setup search", "web search provider setup"],
+      "search-setup",
+    );
+    expectOperation("open search wizard", "open-setup", { target: "search" });
+    expectOperation(
+      ["configure gateway", "set up gateway", "gateway settings"],
+      "gateway-config-setup",
+    );
+    expectOperation("open gateway wizard", "open-setup", { target: "gateway" });
     expect(isPersistentSystemAgentOperation({ kind: "skills-setup" })).toBe(false);
     expect(isPersistentSystemAgentOperation({ kind: "search-setup" })).toBe(false);
     expect(isPersistentSystemAgentOperation({ kind: "gateway-config-setup" })).toBe(false);
@@ -314,34 +299,29 @@ describe("system agent setup-flow operations", () => {
   });
 
   it("parses the exact memory-import grammar", () => {
-    for (const input of ["import memory", "import memories", "memory import"]) {
-      expect(parseSystemAgentOperation(input)).toEqual({ kind: "memory-import" });
-    }
+    expectOperation(["import memory", "import memories", "memory import"], "memory-import");
     expect(isPersistentSystemAgentOperation({ kind: "memory-import" })).toBe(false);
     expect(parseSystemAgentOperation("import memory from codex").kind).toBe("none");
   });
 
   it("parses anchored setup switches and channel info", () => {
-    for (const input of [
-      "open setup wizard",
-      "setup wizard",
-      "menu setup",
-      "use the setup wizard",
-      "use the wizard",
-    ]) {
-      expectSetupOperation(input, { kind: "open-setup", target: "guided" });
-    }
-    for (const input of ["open classic wizard", "open classic setup wizard", "classic setup"]) {
-      expectSetupOperation(input, { kind: "open-setup", target: "classic" });
-    }
-    expectSetupOperation("open channel wizard", { kind: "open-setup", target: "channels" });
-    expectSetupOperation("open channel wizard for Slack", {
-      kind: "open-setup",
+    expectOperation(
+      ["open setup wizard", "setup wizard", "menu setup", "use the setup wizard", "use the wizard"],
+      "open-setup",
+      { target: "guided" },
+    );
+    expectOperation(
+      ["open classic wizard", "open classic setup wizard", "classic setup"],
+      "open-setup",
+      { target: "classic" },
+    );
+    expectOperation("open channel wizard", "open-setup", { target: "channels" });
+    expectOperation("open channel wizard for Slack", "open-setup", {
       target: "channels",
       channel: "slack",
     });
-    expectSetupOperation("channel info Slack", { kind: "channel-info", channel: "slack" });
-    expectSetupOperation("about Telegram channel", { kind: "channel-info", channel: "telegram" });
+    expectOperation("channel info Slack", "channel-info", { channel: "slack" });
+    expectOperation("about Telegram channel", "channel-info", { channel: "telegram" });
     expect(parseSystemAgentOperation("please open the setup wizard soon").kind).toBe("none");
     expect(parseSystemAgentOperation("channel info slack please").kind).toBe("none");
   });
