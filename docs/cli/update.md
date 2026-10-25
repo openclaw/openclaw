@@ -67,8 +67,9 @@ update continues with a warning; only a confirmed ownership match skips replacem
 A missing package-manager executable is reported as unavailable, without database
 recovery instructions. For pacman (including Arch-based distributions), update
 with `sudo pacman -Syu` or your AUR helper. For FreeBSD,
-use the owning pkg or Ports deployment. Then restart the Gateway through its
-service owner.
+use the owning pkg or Ports deployment. Then run `openclaw doctor --fix` and restart
+the Gateway through its service owner; see
+[System-package and image-based installs](/install/updating/update-methods#system-package-and-image-based-installs).
 Older updaters must receive this fix through that system package manager first;
 a candidate cannot repair an updater that fails before staging it.
 
