@@ -356,11 +356,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
             deferUntilRunner: deferTimeoutUntilExecutionStart,
             jobTimeoutMs,
             triggerTimeout: (reason) => {
-              if (!runAbortController.signal.aborted) {
-                const timeoutError = new Error(reason);
-                timeoutError.name = "TimeoutError";
-                runAbortController.abort(timeoutError);
-              }
+              const timeoutError = new Error(reason);
+              timeoutError.name = "TimeoutError";
+              runAbortController.abort(timeoutError);
               timeout.resolve({ timeoutMs: jobTimeoutMs, reason });
             },
           });

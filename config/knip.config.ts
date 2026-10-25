@@ -55,6 +55,8 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   // The scheduled-run execution context design invokes this development replay by path.
   "scripts/dev/cron-context-replay.mts!",
+  // #183131 invokes this fresh-process cron flake workload by path.
+  "scripts/perf/repeat-cron-test.mjs!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
