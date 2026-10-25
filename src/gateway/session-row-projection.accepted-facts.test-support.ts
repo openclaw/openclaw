@@ -42,10 +42,7 @@ export async function withAcceptedSuffix(
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {
-      agents: {
-        entries: { main: {} },
-        defaults: { utilityModel: "unit-test/small" },
-      },
+      agents: { entries: { main: {} }, defaults: { utilityModel: "unit-test/small" } },
     };
     setRuntimeConfigSnapshot(cfg);
     const keys = [
@@ -79,7 +76,7 @@ export async function withAcceptedSuffix(
     if (options.acpMeta) {
       seedCanonicalAcpSessionMeta({
         sessionKey: keys[1]!,
-        sessionId: entries[1]!.sessionId,
+        sessionId: suffixEntry.sessionId,
         lifecycleRevision: options.legacyAcp ? undefined : "accepted-lifecycle",
         meta: options.acpMeta,
         now: () => 1,
@@ -92,7 +89,7 @@ export async function withAcceptedSuffix(
     if (options.replacement) {
       replaceSessionEntrySync(
         { ...scope, storePath: replacementPath },
-        { ...entries[1]!, updatedAt: 2, label: "replacement store" },
+        { ...suffixEntry, updatedAt: 2, label: "replacement store" },
       );
       await closeOpenClawAgentDatabaseByPathAsync(replacementPath, "main");
     }
@@ -145,11 +142,9 @@ export async function withAcceptedSuffix(
           await release.promise;
         },
       );
-      const acceptedEntries = entries.map((entry, index) => ({
-        ...entry,
-        updatedAt: 2,
-        label: `accepted-${index}`,
-      }));
+      const acceptedEntries = entries.map((entry, index) =>
+        Object.assign({}, entry, { updatedAt: 2, label: `accepted-${index}` }),
+      );
       for (const [index, sessionKey] of keys.entries()) {
         rowFixture.seedRow(sessionKey, acceptedEntries[index]!);
         sessionChanges.emit({
@@ -169,7 +164,7 @@ export async function withAcceptedSuffix(
       expect(releases).toBe(1);
       const suffix = projection.findBySessionId({
         agentId: "main",
-        sessionId: entries[1]!.sessionId,
+        sessionId: suffixEntry.sessionId,
       })[0]!;
       expect(suffix.pendingDatabaseFacts?.entry.label).toBe("accepted-1");
       expect(suffix.pendingDatabaseFacts?.acpMeta).toEqual(options.acpMeta ?? null);

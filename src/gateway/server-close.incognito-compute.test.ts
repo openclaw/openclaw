@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionActor } from "../config/sessions/session-actor-contract.js";
+import type { SessionActorStorageReads } from "../config/sessions/session-actor-storage-contract.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   startSessionTranscriptIndexReconcile,
@@ -45,6 +46,10 @@ it("settles accepted memory usage and trajectory work across the real close prel
     const { owner, authority, target, created, actor: selected } = session;
     actor = selected;
     expect(created).toMatchObject({ kind: "committed" });
+    const read = <Key extends keyof SessionActorStorageReads>(
+      type: Key,
+      input: SessionActorStorageReads[Key]["input"],
+    ) => selected.storage!.read({ type, input }, authority);
     for (const [index, content] of ["old branch", "accepted current branch"].entries()) {
       const appended = await selected.appendToolResult(
         {
@@ -123,33 +128,24 @@ it("settles accepted memory usage and trajectory work across the real close prel
           startSessionTranscriptIndexReconcile(database);
           await waitForSessionTranscriptIndexReconcile(database);
           expect(isSessionTranscriptIndexReconcileRunning(database)).toBe(false);
-          const history = await selected.storage!.read(
-            {
-              type: "session.history.recent",
-              input: { sessionId: target.sessionId, options: { maxMessages: 10 } },
-            },
-            authority,
-          );
-          expect(history).toMatchObject({
+          expect(
+            await read("session.history.recent", {
+              sessionId: target.sessionId,
+              options: { maxMessages: 10 },
+            }),
+          ).toMatchObject({
             totalMessages: 1,
             messages: [{ content: [{ type: "text", text: "accepted current branch" }] }],
           });
           expect(refreshed).toBe("refreshed");
           await trajectory.flush();
           expect(trajectory.describeFlushState()).toBeUndefined();
-          const events = await selected.storage!.read(
-            { type: "session.trajectory.read", input: { sessionId: target.sessionId } },
-            authority,
-          );
-          expect(events).toEqual([event]);
-          const usage = await selected.storage!.read(
-            {
-              type: "session.usage.snapshot",
-              input: { sessionIds: [target.sessionId] },
-            },
-            authority,
-          );
-          expect(usage).toMatchObject([
+          expect(await read("session.trajectory.read", { sessionId: target.sessionId })).toEqual([
+            event,
+          ]);
+          expect(
+            await read("session.usage.snapshot", { sessionIds: [target.sessionId] }),
+          ).toMatchObject([
             { sessionId: target.sessionId, rollup: { valueJson: expect.any(String) } },
           ]);
           expect(published).toHaveBeenCalledExactlyOnceWith("main");

@@ -75,19 +75,19 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
       },
       initialConfig,
       readSnapshot: vi.fn() as never,
-      promoteSnapshot: vi.fn(async () => true) as never,
       subscribeToWrites: vi.fn(() => () => {}) as never,
       broadcast,
       resolveGatewayContext: () => gatewayContext,
-      setState: vi.fn(),
-      reloadPlugins: vi.fn(async () => {
-        throw new Error("Unexpected plugin reload while observing config status");
-      }),
       activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
       channelManager: {} as never,
     }),
   );
   await reloader.ready;
+  const commit = (path: string, config = initialConfig) =>
+    expectDefined(hoisted.onRuntimeConfigCommitted, "runtime config commit")(
+      buildGatewayReloadPlan([path]),
+      config,
+    );
 
   expect(reloader.hotReloadStatus?.()).toBe("active");
 
@@ -107,7 +107,7 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
   );
   expect(invalidateMentions).not.toHaveBeenCalled();
 
-  hoisted.onRuntimeConfigCommitted?.(buildGatewayReloadPlan(["gateway.roles"]), initialConfig);
+  commit("gateway.roles");
   expect(invalidateMentions).toHaveBeenCalledOnce();
 
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -155,7 +155,7 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
       expect(original.authority.signal?.aborted).toBe(false);
 
       setRuntimeConfigSnapshot(candidate);
-      hoisted.onRuntimeConfigCommitted?.(buildGatewayReloadPlan(["gateway.roles"]), candidate);
+      commit("gateway.roles", candidate);
       expect(gatewayContext.getCommittedRuntimeConfig()).toBe(candidate);
       expect(original.authority.signal?.aborted).toBe(true);
       expect(duringActivation.authority.signal?.aborted).toBe(true);
@@ -170,13 +170,12 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
   const storeOwnerKey = Symbol.for("openclaw.test.managedReloadStoreOwner");
   registerSystemEventStoreOwner(storeOwnerKey, retireStoreOwner);
   try {
-    const commit = expectDefined(hoisted.onRuntimeConfigCommitted, "runtime config commit");
     const neutralConfig: OpenClawConfig = {
       ...initialConfig,
       ui: { prefs: { sidebarEntries: ["route:usage"] } },
     };
-    commit(buildGatewayReloadPlan(["ui.prefs.sidebarEntries"]), neutralConfig);
-    commit(buildGatewayReloadPlan(["logging.level"]), {
+    commit("ui.prefs.sidebarEntries", neutralConfig);
+    commit("logging.level", {
       ...neutralConfig,
       logging: { level: "debug" },
     });
@@ -186,11 +185,11 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
       ...neutralConfig,
       session: { store: "/tmp/replacement-sessions.json" },
     };
-    commit(buildGatewayReloadPlan(["session.store"]), replacementConfig);
+    commit("session.store", replacementConfig);
     expect(retireStoreOwner).toHaveBeenCalledOnce();
-    commit(buildGatewayReloadPlan(["env.OPENCLAW_STATE_DIR"]), replacementConfig);
+    commit("env.OPENCLAW_STATE_DIR", replacementConfig);
     expect(retireStoreOwner).toHaveBeenCalledTimes(2);
-    commit(buildGatewayReloadPlan(["ui.prefs.sidebarEntries"]), replacementConfig);
+    commit("ui.prefs.sidebarEntries", replacementConfig);
     expect(retireStoreOwner).toHaveBeenCalledTimes(2);
   } finally {
     registerSystemEventStoreOwner(storeOwnerKey, () => {});
