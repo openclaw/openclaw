@@ -527,6 +527,31 @@ describe("prompt cache history fingerprints", () => {
     tracker.assertRewrite("message 0 (assistant)");
   });
 
+  it.each(["__proto__", "constructor", "toString"])(
+    "tracks primitive revisions for the own field %s",
+    (key) => {
+      const block: TextContent & Record<string, unknown> = { type: "text", text: "stable" };
+      Object.defineProperty(block, key, {
+        value: "original",
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
+      const tracker = history(`own-field-${key}`, [
+        makeAgentAssistantMessage({ content: [block] }),
+      ]);
+      expect(tracker.read()).toMatchObject(unchangedPrefix);
+      expect(contentHashes("original")).toHaveLength(1);
+      for (const value of [undefined, null, { nested: "value" }, "changed"]) {
+        block[key] = value;
+        tracker.assertRewrite("changed fields: content[0].other");
+        expect(tracker.read()).toMatchObject(unchangedPrefix);
+      }
+      delete block[key];
+      tracker.assertRewrite("changed fields: content[0].other");
+    },
+  );
+
   it.each(["block", "string"] as const)(
     "hashes unchanged large %s content once across three observations",
     (kind) => {

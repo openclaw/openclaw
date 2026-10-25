@@ -19,12 +19,15 @@ export type PromptHistoryFingerprint = {
 type PromptStringFingerprint = { value: string; digest: string };
 
 const stringFingerprints = new WeakMap<Message, PromptStringFingerprint>();
-// Nested values are rehashed; only primitive revisions can reuse a field digest.
-const NESTED_VALUE = Symbol("nested fingerprint value");
-type FingerprintField = [key: string, primitive: unknown, digest: string];
 type RecordFingerprint =
-  | { digest: string; fields: FingerprintField[]; immutable: false }
+  | {
+      digest: string;
+      fields: Map<string, string>;
+      primitives: Record<string, unknown>;
+      immutable: false;
+    }
   | { digest: string; layout: string; packed: string; immutable: true };
+// Primitive revisions avoid rehashing retained text; nested values remain mutable.
 const recordFingerprints = new WeakMap<object, RecordFingerprint>();
 const immutableValueFingerprints = new WeakMap<object, string>();
 export const messageFingerprints = new WeakMap<Message, PromptHistoryFingerprint>();
@@ -59,50 +62,62 @@ function fingerprintRecord(
     return previous;
   }
   const immutable = immutableParent || isOwnedTranscriptPayload(record);
-  let fields: FingerprintField[] | undefined = previous ? undefined : [];
+  let fields = previous ? undefined : new Map<string, string>();
+  const primitives: Record<string, unknown> | undefined = immutable
+    ? undefined
+    : (previous?.primitives ?? {});
   for (const [key, value] of Object.entries(record)) {
     if (omit?.has(key)) {
       continue;
     }
     const primitive = value === null || typeof value !== "object";
-    const index = previous?.fields.findIndex(([name]) => name === key) ?? -1;
-    const previousField = previous?.fields[index];
     const digest =
-      primitive && previousField && Object.is(previousField[1], value)
-        ? previousField[2]
+      primitive &&
+      previous &&
+      Object.hasOwn(previous.primitives, key) &&
+      Object.is(previous.primitives[key], value)
+        ? previous.fields.get(key)!
         : typeof value === "string"
           ? fingerprintText(value)
           : fingerprintValue(value);
-    if (!previousField || previousField[2] !== digest) {
-      fields ??= previous!.fields.slice();
-      fields[index < 0 ? fields.length : index] = [key, primitive ? value : NESTED_VALUE, digest];
-    } else {
-      previousField[1] = primitive ? value : NESTED_VALUE;
+    if (!previous || previous.fields.get(key) !== digest) {
+      (fields ??= new Map(previous?.fields)).set(key, digest);
+    }
+    if (primitives) {
+      if (!primitive) {
+        delete primitives[key];
+      } else if (key === "__proto__") {
+        // Revision keys are data, including the legacy prototype setter name.
+        Object.defineProperty(primitives, key, { value, writable: true, configurable: true });
+      } else {
+        primitives[key] = value;
+      }
     }
   }
-  if (previous?.fields.some(([key]) => !Object.hasOwn(record, key))) {
-    fields = (fields ?? previous.fields).filter(([key]) => Object.hasOwn(record, key));
+  for (const key of previous?.fields.keys() ?? []) {
+    if (!Object.hasOwn(record, key)) {
+      (fields ??= new Map(previous?.fields)).delete(key);
+      if (primitives) {
+        delete primitives[key];
+      }
+    }
   }
   if (!fields && previous && !immutable) {
     return previous;
   }
   const digest = fields
-    ? hash(
-        "sha256",
-        stableStringify(Object.fromEntries(fields.map(([key, , value]) => [key, value]))),
-        "latin1",
-      )
+    ? hash("sha256", stableStringify(Object.fromEntries(fields)), "latin1")
     : previous!.digest;
   fields ??= previous!.fields;
   // Sealed records never check primitive revisions again. Retain only diagnostic bytes.
   const fingerprint: RecordFingerprint = immutable
     ? {
         digest,
-        layout: JSON.stringify(fields.map(([key]) => key)),
-        packed: fields.map((field) => field[2]).join(""),
+        layout: JSON.stringify(Array.from(fields.keys())),
+        packed: Array.from(fields.values()).join(""),
         immutable: true,
       }
-    : { digest, fields, immutable: false };
+    : { digest, fields, primitives: primitives!, immutable: false };
   recordFingerprints.set(record, fingerprint);
   return fingerprint;
 }
@@ -163,7 +178,7 @@ export function fingerprintMessage(
       "[",
       records
         .map((record) =>
-          record.immutable ? record.layout : JSON.stringify(record.fields.map(([key]) => key)),
+          record.immutable ? record.layout : JSON.stringify(Array.from(record.fields.keys())),
         )
         .join(","),
       "]",
@@ -171,7 +186,7 @@ export function fingerprintMessage(
     packed: [
       identity,
       ...records.map((record) =>
-        record.immutable ? record.packed : record.fields.map((field) => field[2]).join(""),
+        record.immutable ? record.packed : Array.from(record.fields.values()).join(""),
       ),
     ].join(""),
     stringBlock,
