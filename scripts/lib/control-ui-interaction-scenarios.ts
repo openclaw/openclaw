@@ -1173,7 +1173,7 @@ async function prepareSidebarInventory(page: Page, gateway: MockGatewayControls)
 }
 
 async function settleSidebarBackgroundWork(page: Page) {
-  // The built prefetch owner warms one group per idle window; one quiet network gap is insufficient.
+  // The prefetch owner automatically warms New Session; other groups require navigation intent.
   const prefetchAssets = await page.evaluate(async () => {
     const descriptor = document
       .getElementById("openclaw-navigation-preloads")
@@ -1189,9 +1189,9 @@ async function settleSidebarBackgroundWork(page: Page) {
       throw new Error("Could not read the built navigation prefetch manifest");
     }
     const manifest: Record<string, string[]> = await response.json();
-    return [
-      ...new Set(Object.entries(manifest).flatMap(([key, files]) => (key === route ? [] : files))),
-    ].map((file) => new URL(file, base).href);
+    return [...new Set(route === "new-session" ? [] : (manifest["new-session"] ?? []))].map(
+      (file) => new URL(file, base).href,
+    );
   });
   try {
     await page.waitForFunction(

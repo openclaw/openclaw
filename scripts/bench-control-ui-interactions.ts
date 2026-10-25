@@ -8,6 +8,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type CDPSession, type Page } from "playwright";
+import { buildSandboxHostPath } from "../src/agents/sandbox-host.ts";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -16,11 +17,14 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-cold-load-trace.ts";
 import {
   createInteractionFixture,
   interactionScenarios,
+  type InteractionEvidence,
+  type InteractionSandbox,
 } from "./lib/control-ui-interaction-scenarios.ts";
 import {
   clipInteractionCpuProfile,
@@ -120,6 +124,7 @@ type Result = {
   layoutMs?: number;
   styleMs?: number;
   requests?: Record<string, number>;
+  scenarioEvidence?: InteractionEvidence;
   domBefore?: { nodes: number; menuItems: number; namedAnchors: number };
   domAfter?: { nodes: number; menuItems: number; namedAnchors: number };
   rowIdentity?: { initial: number; created: number; retained: number; final: number };
@@ -222,7 +227,29 @@ async function launchNativeVisibilityContext() {
 }
 
 class ScenarioSkipped extends Error {}
+let sandboxServer: ReturnType<typeof createControlUiSandboxFixtureServer> | undefined;
+let sandbox: InteractionSandbox | undefined;
 try {
+  if (
+    scenarios.some(
+      ({ fixture }) =>
+        fixture?.boardFrameResources || fixture?.canvasFrameRetention || fixture?.mcpAppResources,
+    )
+  ) {
+    sandboxServer = createControlUiSandboxFixtureServer();
+    await new Promise<void>((resolve, reject) => {
+      sandboxServer!.once("error", reject);
+      sandboxServer!.listen(0, "127.0.0.1", resolve);
+    });
+    const address = sandboxServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Interaction sandbox did not bind a TCP port");
+    }
+    sandbox = {
+      sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
+      sandboxPort: address.port,
+    };
+  }
   for (const directory of bundles) {
     const resolved = path.resolve(directory);
     const html = await readFile(path.join(resolved, "index.html"), "utf8");
@@ -310,6 +337,13 @@ try {
             }));
           let page: Page;
           try {
+            if (
+              scenario.fixture?.boardFrameResources ||
+              scenario.fixture?.canvasFrameRetention ||
+              scenario.fixture?.mcpAppResources
+            ) {
+              await context.grantPermissions(["local-network-access"]);
+            }
             page = await context.newPage();
             if (nativeVisibility) {
               await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -363,6 +397,7 @@ try {
               slot.build.buildId,
               slot.build.version,
               scenario.fixture,
+              sandbox,
             );
             const sessions = createTeamScaleSidebarListOwner({
               rows: fixture.sessions,
@@ -381,6 +416,7 @@ try {
                 },
               },
             });
+            await scenario.setup?.(page);
             await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
             await scenario.prepare(page, gateway);
             await page.evaluate(() => document.fonts.ready.then(() => undefined));
@@ -436,9 +472,6 @@ try {
               await cdp.send("Profiler.start");
               profiling = true;
             }
-            if (values["resource-counts"]) {
-              result.resourcesBefore = await readControlUiResourceCounts(page);
-            }
             if (scenario.visibility === "hidden") {
               const { windowId } = await cdp.send("Browser.getWindowForTarget");
               minimizedWindow = windowId;
@@ -462,6 +495,9 @@ try {
                   "Native window minimization did not hide the page; use --headed on a windowed host for hidden-idle proof.",
                 );
               }
+            }
+            if (values["resource-counts"]) {
+              result.resourcesBefore = await readControlUiResourceCounts(page);
             }
             const requestsBefore = (await gateway.getRequests()).length;
             const countDom = () =>
@@ -504,7 +540,7 @@ try {
             const before = await metrics(cdp);
             await page.evaluate(() => performance.mark("interaction:start"));
             const start = performance.now();
-            await scenario.run(page, gateway);
+            result.scenarioEvidence = (await scenario.run(page, gateway)) ?? undefined;
             if (scenario.visibility !== "hidden") {
               await settle(page);
             }
@@ -697,6 +733,12 @@ try {
   }
 } finally {
   await browser.close();
+  if (sandboxServer?.listening) {
+    sandboxServer.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      sandboxServer!.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
   for (const { server } of servers) {
     await server.close();
   }
