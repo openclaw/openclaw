@@ -322,21 +322,21 @@ describe("canonical CLI history", () => {
       timestamp: 1,
     });
     manager.appendCompaction("OWNED_SUMMARY", retained, 1000);
-    for (let index = 0; index < 125; index++) {
+    for (let index = 0; index < MAX_CLI_SESSION_HISTORY_MESSAGES + 1; index++) {
       manager.appendMessage({ role: "user", content: `tail-${index}`, timestamp: index });
     }
     const params = { sessionManager: manager };
     const before = structuredClone(manager.getEntries());
     const hooks = await loadCliSessionHistoryMessages(params);
     expect(hooks).toHaveLength(100);
-    expect(hooks[0]).toMatchObject({ content: "tail-25" });
+    expect(hooks[0]).toMatchObject({ content: "tail-1" });
     const context = await loadCliSessionContextEngineMessages(params);
-    expect(context).toHaveLength(126);
+    expect(context).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES + 2);
     expect(context[0]).toMatchObject({ role: "compactionSummary", summary: "OWNED_SUMMARY" });
     expect(context[1]).toMatchObject({ content: "tail-0" });
     const reseed = await loadCliSessionReseedMessages(params);
     expect(reseed).toHaveLength(100);
-    expect(reseed[1]).toMatchObject({ content: "tail-26" });
+    expect(reseed[1]).toMatchObject({ content: "tail-2" });
     expect(JSON.stringify(context)).not.toContain("older large");
     expect(manager.getEntries()).toEqual(before);
   });
@@ -387,16 +387,16 @@ describe("canonical CLI history", () => {
 
   it("bounds hooks and raw reseeding while preserving complete bounded context and row timestamps", async () => {
     const { params } = await createSession(
-      Array.from({ length: MAX_CLI_SESSION_HISTORY_MESSAGES + 25 }, (_, i) => `msg-${i}`),
+      Array.from({ length: MAX_CLI_SESSION_HISTORY_MESSAGES + 1 }, (_, i) => `msg-${i}`),
     );
     const history = await loadCliSessionHistoryMessages(params);
     expect(history).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES);
-    expect(history[0]).toMatchObject({ content: "msg-25" });
+    expect(history[0]).toMatchObject({ content: "msg-1" });
     expect(history.at(-1)).toMatchObject({
-      content: `msg-${MAX_CLI_SESSION_HISTORY_MESSAGES + 24}`,
+      content: `msg-${MAX_CLI_SESSION_HISTORY_MESSAGES}`,
     });
     const context = await loadCliSessionContextEngineMessages(params);
-    expect(context).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES + 25);
+    expect(context).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES + 1);
     expect(context[0]).toMatchObject({ content: "msg-0" });
     const reseed = await loadCliSessionReseedMessages({
       ...params,
@@ -404,9 +404,9 @@ describe("canonical CLI history", () => {
       rawTranscriptReseedReason: "missing-transcript",
     });
     expect(reseed).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES);
-    expect(reseed[0]).toMatchObject({ content: "msg-25", timestamp: "1970-01-01T00:00:00.026Z" });
+    expect(reseed[0]).toMatchObject({ content: "msg-1", timestamp: "1970-01-01T00:00:00.002Z" });
     const prompt = buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" });
-    expect(prompt).toContain("[1970-01-01T00:00:00.026Z] User: msg-25");
+    expect(prompt).toContain("[1970-01-01T00:00:00.002Z] User: msg-1");
     expect(prompt).toContain(RESEED_CURRENCY_GUIDANCE);
   });
 
@@ -608,34 +608,39 @@ describe("canonical CLI history", () => {
     },
   );
 
-  it.each([
-    "missing-transcript",
-    "orphaned-tool-use",
-    "message-policy",
-    "system-prompt",
-    "prompt-tools",
-    "cwd",
-    "mcp",
-    "session-expired",
-  ] as const)("raw-reseeds consecutive user rows for %s only with opt-in", async (reason) => {
+  it("raw-reseeds consecutive user rows only with opt-in for non-auth invalidations", async () => {
     const { params } = await createSession(["first ambient", "second ambient", "current ask"]);
-    await expect(
-      loadCliSessionReseedMessages({ ...params, rawTranscriptReseedReason: reason }),
-    ).resolves.toEqual([]);
-    await expect(
-      loadCliSessionReseedMessages({ ...params, allowRawTranscriptReseed: true }),
-    ).resolves.toEqual([]);
-    await expect(
-      loadCliSessionReseedMessages({
-        ...params,
-        allowRawTranscriptReseed: true,
-        rawTranscriptReseedReason: reason,
-      }),
-    ).resolves.toMatchObject([
-      { content: "first ambient" },
-      { content: "second ambient" },
-      { content: "current ask" },
-    ]);
+    for (const reason of [
+      "missing-transcript",
+      "orphaned-tool-use",
+      "message-policy",
+      "system-prompt",
+      "prompt-tools",
+      "cwd",
+      "mcp",
+      "session-expired",
+    ] as const) {
+      await expect(
+        loadCliSessionReseedMessages({ ...params, rawTranscriptReseedReason: reason }),
+        `${reason}: no opt-in`,
+      ).resolves.toEqual([]);
+      await expect(
+        loadCliSessionReseedMessages({ ...params, allowRawTranscriptReseed: true }),
+        `${reason}: no invalidation reason`,
+      ).resolves.toEqual([]);
+      await expect(
+        loadCliSessionReseedMessages({
+          ...params,
+          allowRawTranscriptReseed: true,
+          rawTranscriptReseedReason: reason,
+        }),
+        `${reason}: opted-in consecutive user rows`,
+      ).resolves.toMatchObject([
+        { content: "first ambient" },
+        { content: "second ambient" },
+        { content: "current ask" },
+      ]);
+    }
   });
 });
 
