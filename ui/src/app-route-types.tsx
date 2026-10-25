@@ -8,12 +8,10 @@ export type SolidRouteProps<Data = unknown> = {
   presented: boolean;
 };
 
-type ForwardedRouteProps<Data> = { routeData: Data | undefined; loaderPending: boolean };
-
 /** Keep simple page renderers behind their route's existing lazy boundary. */
 export function defineSolidPage<Id extends RouteId, Context = unknown, Data = unknown>(
   id: Id,
-  load: () => Promise<Component<ForwardedRouteProps<Data>>>,
+  load: () => Promise<Component<{ routeData: Data | undefined; loaderPending: boolean }>>,
   options: Omit<PageDefinition<Id, Context, unknown, Data>, "id" | "path" | "component"> = {},
 ): PageDefinition<Id, Context, { renderSolid: Component<SolidRouteProps<Data>> }, Data> {
   return definePage({
