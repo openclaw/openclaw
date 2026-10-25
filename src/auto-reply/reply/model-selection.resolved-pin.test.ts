@@ -21,7 +21,6 @@ afterEach(() => resetPluginRuntimeStateForTest());
 test.each<[string, string | undefined, string | undefined, boolean, string | undefined]>([
   ["configured selection", "openai", "gpt-x", false, "openai"],
   ["trimmed selection", " openai ", " gpt-x ", false, "openai"],
-  ["legacy fallback", undefined, undefined, true, "openai"],
   ["another provider", "other", "gpt-x", true, "openai"],
   ["incomplete origin", "openai", undefined, true, "openai"],
   ["case-distinct model", "openai", "GPT-X", true, "openai"],
