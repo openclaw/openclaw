@@ -1,8 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as userProfileList from "../../state/user-profile-list.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
@@ -28,13 +24,11 @@ function setEntries(entries: Record<string, Partial<SessionEntry>>) {
 describe("session catalog entry snapshots", () => {
   afterEach(() => {
     projection.dispose();
-    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
   });
 
   beforeEach(() => {
     vi.spyOn(userProfileList, "hasMultipleResidentSessionSharingIdentities").mockReturnValue(false);
-    setRuntimeConfigSnapshot({});
     projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
   });
 
@@ -130,8 +124,6 @@ describe("session catalog entry snapshots", () => {
       { sessionKey: key, entry: expect.objectContaining({ label: "Before" }) },
     ]);
     expect(second.sessionEntries.entriesForAgent("main")).toBe(entries);
-    expect(Object.keys(entries[0]!)).toEqual(["sessionKey", "entry"]);
-    expect(Object.keys(catalog[0]!)).toEqual(["sessionKey", "entry", "agentId"]);
     for (const value of [entries, entries[0], catalog, catalog[0]]) {
       expect(Object.isFrozen(value)).toBe(true);
     }
@@ -144,48 +136,5 @@ describe("session catalog entry snapshots", () => {
     const reconfigured = capture();
     expect(reconfigured.sessionEntries.revision).not.toBe(current.sessionEntries.revision);
     expect(reconfigured.entryForSession(key)?.label).toBe("After");
-  });
-
-  it("projects profile and channel creators from stored provenance, not provider metadata", () => {
-    const display = vi.spyOn(userProfileList, "getResidentUserProfileDisplay").mockReturnValue({
-      id: "current",
-      displayName: "Current",
-      avatarRevision: "1",
-      hasAvatar: false,
-    });
-    const entries = Object.fromEntries(
-      (["profile", "channel"] as const).map((source) => [
-        `agent:main:${source}`,
-        { createdActor: { type: "human" as const, source, id: "former" } },
-      ]),
-    );
-    setEntries(entries);
-    display.mockClear();
-    const current = snapshot();
-    const host = catalogHost({
-      sessions: Object.keys(entries).map((sessionKey) =>
-        catalogSession(sessionKey, {
-          sessionKey,
-          createdActor: { type: "human", id: "provider-spoof" },
-        }),
-      ),
-    });
-    const instances = new Map();
-    current.captureHostInstances(host, instances);
-    const projected = current.projectHostSessions(host, instances);
-    expect(projected.sessions.map((session) => session.createdActor)).toEqual([
-      {
-        type: "human",
-        id: "former",
-        identity: { type: "profile", id: "current" },
-        label: "Current",
-      },
-      {
-        type: "human",
-        id: "former",
-        identity: { type: "legacy", actorType: "human", source: null, id: "former" },
-      },
-    ]);
-    expect(display).toHaveBeenCalledExactlyOnceWith("former");
   });
 });

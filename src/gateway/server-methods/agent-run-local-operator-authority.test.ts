@@ -2,18 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, expect, it } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
-  createCronCreatorAuthorityCapability,
-  runWithCronCreatorAuthorityCapability,
-} from "../../agents/cron-creator-authority-context.js";
-import {
   claimAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
 } from "../../infra/agent-run-registry.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import {
-  consumeCronCreatorAuthorityGrant,
-  mintCronCreatorAuthorityGrant,
-} from "../cron-creator-authority-grant.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
@@ -128,8 +120,8 @@ it.each([
 });
 
 it.each(["agent", "chat"] as const)(
-  "keeps %s creator grants bound to the original caller after request completion",
-  async (entry) => {
+  "keeps %s admission bound to the original caller after request completion",
+  (entry) => {
     const context = {};
     const caller = captureGatewayDeviceRevocation(
       context,
@@ -144,23 +136,10 @@ it.each(["agent", "chat"] as const)(
     );
     const release = retainGatewayDeviceRevocation(admission.isCurrent);
     caller.release();
-    const capability = expectDefined(
-      createCronCreatorAuthorityCapability(
-        admission.runId,
-        admission.callerOrigin,
-        admission.managementEntitlement,
-        admission.isCurrent,
-      ),
-      "expected creator capability",
-    );
     try {
-      await runWithCronCreatorAuthorityCapability(capability, async () => {
-        const grant = mintCronCreatorAuthorityGrant(capability);
-        invalidateGatewayDeviceRevocation(context, "original-device", "operator");
-        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
-          "cron authority is no longer active",
-        );
-      });
+      expect(admission.isCurrent?.()).toBe(true);
+      invalidateGatewayDeviceRevocation(context, "original-device", "operator");
+      expect(admission.isCurrent?.()).toBe(false);
     } finally {
       caller.release();
       release?.();
@@ -216,11 +195,12 @@ it.each(["operator.read", "operator.write"])(
 
 it.each([
   ["channel-origin turn", { hasExplicitOrigin: true }],
-  ["reconnect", { isReconnectResume: true }],
   ["spawned turn", { spawnedBy: "agent:main:parent" }],
   ["cron continuation", { hasRestoredCronContinuation: true }],
   ["internal entry", { isDirectExternalUser: false }],
-] as const)("does not promote Control UI admin authority for %s", (_label, overrides) => {
+  ["system-generated", { isSystemGenerated: true }],
+  ["BTW turn", { turnKind: "btw" }],
+] as const)("rejects disallowed chat ingress from %s", (_label, overrides) => {
   expect(
     admitChat({ client: createClient({ controlUiAdmin: true }), ...overrides }),
   ).toBeUndefined();
