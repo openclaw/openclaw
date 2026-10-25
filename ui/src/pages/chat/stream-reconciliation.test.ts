@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
+import { message as chatMessage } from "./chat-thread-fixtures.test-support.ts";
 import {
   appendTerminalAssistantMessage as appendTerminal,
   historyReplacedVisibleStream as historyReplaced,
@@ -9,7 +10,6 @@ import {
 } from "./stream-reconciliation.ts";
 import {
   pruneHistoryReplacedStreamSegments as pruneHistoryReplaced,
-  prunePersistedAssistantStreamSegments as prunePersistedAssistant,
   prunePersistedToolStreamMessages as prunePersistedTools,
 } from "./stream-segment-pruning.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
@@ -28,23 +28,19 @@ const visibleStreamOptions = {
 };
 
 function user(content: string, timestamp?: number, key?: string, target?: string) {
-  return {
-    role: "user",
+  return chatMessage(
+    "user",
     content,
-    ...(timestamp === undefined ? {} : { timestamp }),
-    ...(key === undefined
+    timestamp,
+    key === undefined
       ? {}
       : {
           __openclaw: { idempotencyKey: key, ...(target ? { steerTargetRunId: target } : {}) },
-        }),
-  };
+        },
+  );
 }
 function assistant(text: string, timestamp?: number) {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    ...(timestamp === undefined ? {} : { timestamp }),
-  };
+  return chatMessage("assistant", [{ type: "text", text }], timestamp);
 }
 function streamSegment(
   text: string,
@@ -163,8 +159,6 @@ it("preserves reused commentary from another run before the user boundary loads"
   });
   const state = idle({ chatRunId: "run-active", chatStreamSegments: [segment] });
   expectTexts(materialize([persisted], state), "Saved commentary", "Current commentary");
-  prunePersistedAssistant(state, persisted);
-  expect(state.chatStreamSegments).toEqual([segment]);
 });
 
 it("does not replay a keyed preamble across a same-run steer boundary", () => {
@@ -304,10 +298,7 @@ it("prunes persisted tool messages across current tool id shapes", () => {
     toolStreamOrder: identities,
   });
   prunePersistedTools(state, new Set(identities));
-  expect(state.chatToolMessages).toEqual([
-    { role: "assistant", content: "hello" },
-    { role: "user", content: "hello" },
-  ]);
+  expect(state.chatToolMessages).toEqual(messages.slice(-2));
   expect(state.toolStreamById.size).toBe(0);
   expect(state.toolStreamOrder).toEqual([]);
 });

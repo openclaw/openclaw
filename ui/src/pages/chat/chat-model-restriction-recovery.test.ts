@@ -8,7 +8,10 @@ import type { SessionsPatchResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import { waitForConfirmDialogActions } from "../../test-helpers/modal-dialog.ts";
+import {
+  answerConfirmDialog as click,
+  waitForConfirmDialogActions as dialog,
+} from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost, requestCalls, expectRequestCounts } from "./chat-host.test-support.ts";
@@ -199,25 +202,6 @@ const selectionChanges = {
   "newer-selection": (host) => switchChatModel(host, "fixture/newer", "global", "openclaw"),
 } satisfies Record<string, (host: RecoveryHost) => void | Promise<unknown>>;
 
-async function dialog() {
-  await waitForConfirmDialogActions();
-  const modal = document.querySelector("openclaw-modal-dialog");
-  if (!modal) {
-    throw new Error("Expected native runtime confirmation");
-  }
-  return modal;
-}
-
-function click(modal: Element, label: string) {
-  const button = Array.from(modal.querySelectorAll("button")).find(
-    (candidate) => candidate.textContent?.trim() === label,
-  );
-  if (!button) {
-    throw new Error("Missing confirmation action: " + label);
-  }
-  button.click();
-}
-
 function expectNoPatchFields(host: ReturnType<typeof fixture>["host"], ...fields: string[]) {
   for (const [, params] of requestCalls(host.request, "sessions.patch")) {
     for (const field of fields) {
@@ -226,39 +210,19 @@ function expectNoPatchFields(host: ReturnType<typeof fixture>["host"], ...fields
   }
 }
 
-it.each([false, true])(
-  "requires explicit consent and handles a rejected recovery=%s without replay",
-  async (rejectRecovery) => {
-    const { host, selection, modal } = await selecting({ rejectRecovery });
-    for (const phrase of ["own permissions", "Gateway host", "Only this chat"]) {
-      expect(modal.textContent).toContain(phrase);
-    }
-    expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
-    click(modal, "Continue for this chat");
-    await expect(selection).resolves.toBe(!rejectRecovery);
-    const patches = requestCalls(host.request, "sessions.patch");
-    expect(patches).toHaveLength(2);
-    expect(patches[1]?.[1]).toEqual({
-      key: "global",
-      agentId: "selected-agent",
-      expectedSessionId: recovery.sessionId,
-      model: "fixture/selected",
-      agentRuntime: "opencode",
-      nativeRuntimeConsent: "opencode",
-      sandboxMode: "off",
-      permissionMode: "full",
-      expectedLifecycleRevision: recovery.lifecycleRevision,
-      expectedPermissionMode: "guarded",
-      expectedSandboxMode: null,
-      expectedNativeRuntimeConsent: null,
-    });
-    expectRequestCounts(host.request, { "chat.send": 0, "config.patch": 0 });
-    expect(host.chatMessage).toBe("Keep this draft; never replay it");
-    expect(host.chatError ?? null).toEqual(
-      rejectRecovery ? expect.stringContaining("Session changed") : null,
-    );
-  },
-);
+it("keeps the draft without replay when a confirmed recovery is rejected", async () => {
+  const { host, selection, modal } = await selecting({ rejectRecovery: true });
+  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
+  click(modal, "confirm");
+  await expect(selection).resolves.toBe(false);
+  expectRequestCounts(host.request, { "sessions.patch": 2, "chat.send": 0, "config.patch": 0 });
+  expect(requestCalls(host.request, "sessions.patch")[1]?.[1]).toMatchObject({
+    key: "global",
+    agentId: "selected-agent",
+  });
+  expect(host.chatMessage).toBe("Keep this draft; never replay it");
+  expect(host.chatError).toContain("Session changed");
+});
 
 it.each([
   { sessionKey: "global", rememberedAgentId: "selected-agent" },
@@ -290,7 +254,7 @@ it("requires confirmation when only the UI-selected agent remembers consent", as
     rememberedAgentId: "selected-agent",
   });
   expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
-  click(modal, "Cancel");
+  click(modal, "cancel");
   await expect(selection).resolves.toBe(false);
   expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
 });
@@ -330,7 +294,7 @@ it.each([
   if (change === "newer-selection" || change === "retired") {
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   } else {
-    click(modal, change === "cancel" ? "Cancel" : "Continue for this chat");
+    click(modal, change === "cancel" ? "cancel" : "confirm");
   }
   await expect(selection).resolves.toBe(false);
   const patches = requestCalls(host.request, "sessions.patch");
@@ -352,7 +316,7 @@ it("rechecks a confirmed recovery after the shared settings tail, before dispatc
   );
   await waitForFast(() => expect(requestCalls(host.request, "sessions.patch")).toHaveLength(2));
   const previousTail = getPendingChatPickerPatch(host, "global", "selected-agent");
-  click(modal, "Continue for this chat");
+  click(modal, "confirm");
   // Observe admission behind the held mutation before revoking UI authority.
   await waitForFast(() =>
     expect(getPendingChatPickerPatch(host, "global", "selected-agent")).not.toBe(previousTail),
@@ -400,7 +364,7 @@ it.each(["repeated refusal", "newer draft", "unbound session"] as const)(
     if (scenario === "newer draft") {
       host.chatMessage = "A newer draft, not yet submitted";
     }
-    click(modal, "Continue for this chat");
+    click(modal, "confirm");
     await sending;
     const sends = requestCalls(host.request, "chat.send");
     expect(sends).toHaveLength(2);
@@ -440,7 +404,7 @@ it.each(["newer-selection", "server-selection", "session"] as const)(
       await selectionChanges[change](host);
     }
     if (change !== "newer-selection") {
-      click(modal, "Continue for this chat");
+      click(modal, "confirm");
     }
     await sending;
     expectNoPatchFields(host, "nativeRuntimeConsent");

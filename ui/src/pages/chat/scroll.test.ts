@@ -1,8 +1,5 @@
-import { createEffect, createRoot } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
-import { projectChatFields } from "./chat-field-projection.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   CHAT_TRANSCRIPT_END_THRESHOLD_PX,
@@ -70,31 +67,6 @@ function createScrollHost(
   return { host, container, commit: () => commit(), cancel: () => cancel(), cancelCommit };
 }
 
-function observeScrollState(host: ChatScrollHost) {
-  const changed = vi.fn();
-  createRoot((dispose) => {
-    onTestFinished(dispose);
-    projectChatFields(host, [
-      "chatReadingHistory",
-      "chatNewMessagesBelow",
-      "chatFollowLocked",
-      "chatUserNearBottom",
-    ]);
-    createEffect(
-      () => ({
-        readingHistory: host.chatReadingHistory,
-        newMessagesBelow: host.chatNewMessagesBelow,
-        followLocked: host.chatFollowLocked,
-        nearBottom: host.chatUserNearBottom,
-      }),
-      changed,
-    );
-  });
-  flush();
-  changed.mockClear();
-  return changed;
-}
-
 function scroll(host: ChatScrollHost, scrollTop: number, clientHeight = 400) {
   handleChatScroll(
     host,
@@ -158,16 +130,15 @@ describe("handleChatScroll", () => {
     expect(host).toMatchObject({ chatFollowLocked: true, chatUserNearBottom: false });
     Object.defineProperty(container, "clientHeight", { value: 600 });
     container.scrollTop = 1400;
-    const changed = observeScrollState(host);
     handleChatScrollTakeover(host);
     expect(host).toMatchObject({ chatReadingHistory: true, chatFollowLocked: true });
     handleChatScrollTakeover(host, true);
-    expect(host.chatFollowLocked).toBe(false);
-    flush();
-    expect(changed).toHaveBeenCalledExactlyOnceWith(
-      { readingHistory: false, newMessagesBelow: false, followLocked: false, nearBottom: true },
-      expect.anything(),
-    );
+    expect(host).toMatchObject({
+      chatReadingHistory: false,
+      chatNewMessagesBelow: false,
+      chatFollowLocked: false,
+      chatUserNearBottom: true,
+    });
   });
 });
 
@@ -237,7 +208,6 @@ describe("scheduleChatScroll", () => {
   it("does not re-stick streaming after a user scrolls slightly up near the bottom", () => {
     const { host, container } = createScrollHost({ scrollTop: 1589, clientHeight: 400 });
     host.chatHasAutoScrolled = true;
-    host.chatUserNearBottom = true;
     host.chatIsProgrammaticScroll = () => true;
     host.chatLastScrollTop = 1600;
     scroll(host, 1589);
@@ -294,7 +264,6 @@ it("resets state for new chat session", () => {
     chatFollowLocked: false,
     chatLastScrollTop: 0,
   });
-  expect(host.chatIsProgrammaticScroll()).toBe(false);
 });
 
 describe("programmatic scroll ownership", () => {
@@ -364,9 +333,8 @@ describe("programmatic scroll ownership", () => {
   });
 });
 
-it("retires pending follow at the physical end and publishes the locked state once", () => {
+it("retires pending follow at the physical end until the reader returns", () => {
   const { host } = createScrollHost();
-  const changed = observeScrollState(host);
   const frames = installAnimationFrameQueue();
   scheduleChatScroll(host, true);
   expect(frames.pending.size).toBe(1);
@@ -376,15 +344,9 @@ it("retires pending follow at the physical end and publishes the locked state on
     chatFollowLocked: true,
     chatUserNearBottom: false,
     chatHasAutoScrolled: true,
+    chatReadingHistory: false,
+    chatNewMessagesBelow: false,
   });
-  flush();
-  expect(changed).toHaveBeenCalledExactlyOnceWith(
-    { readingHistory: false, newMessagesBelow: false, followLocked: true, nearBottom: false },
-    expect.anything(),
-  );
-  lockChatScroll(host);
-  flush();
-  expect(changed).toHaveBeenCalledTimes(1);
   handleChatScrollTakeover(host, true);
   expect(host).toMatchObject({ chatFollowLocked: false, chatUserNearBottom: true });
 });

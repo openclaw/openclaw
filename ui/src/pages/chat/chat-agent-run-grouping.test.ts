@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { message as chatMessage } from "./chat-thread-fixtures.test-support.ts";
-import { groupMessages } from "./chat-thread-grouping.ts";
 import type {
   ActivityRunRenderItem,
   StreamRunRenderItem,
   WorkGroupRenderItem,
 } from "./chat-turn-presentation.ts";
+import { createAttachmentBlock } from "./components/chat-message.test-support.ts";
 
 function group(
   role: "assistant" | "tool" | "user",
@@ -16,16 +16,12 @@ function group(
   overrides: Record<string, unknown> = {},
 ): MessageGroup {
   const entry = chatMessage(role === "tool" ? "toolResult" : role, key, 1, overrides);
-  const [prepared] = groupMessages([{ kind: "message", key, message: entry }], {}, undefined, true);
-  if (prepared?.kind !== "group") {
-    throw new Error("expected a prepared message group");
-  }
   return {
     kind: "group",
     key: `group:${key}`,
     role,
     visibleContent: "text",
-    messages: prepared.messages,
+    messages: [{ key, message: entry, hasVisibleContent: true }],
     timestamp: 1,
     isStreaming: false,
     ...(runId ? { runId } : {}),
@@ -63,11 +59,7 @@ function streamRun(
 const assistant = (key: string, overrides: Record<string, unknown>) =>
   group("assistant", key, "run-1", overrides);
 const toolGroup = (key: string) => group("tool", key, "run-1");
-const completed = (name: string, parts: MessageGroup[], actionKey: string | null = null) => ({
-  name,
-  parts,
-  outcome: { kind: "completed", actionOwner: actionKey === null ? null : { key: actionKey } },
-});
+const terminalContent = (block: unknown) => ({ stopReason: "stop", content: [block] });
 
 type AgentRunFrameRenderItem = Extract<
   ReturnType<typeof coalesceAgentRunFrames>[number],
@@ -278,103 +270,94 @@ describe("coalesceAgentRunFrames", () => {
     );
   });
 
-  it.each([
-    completed("persisted keyed commentary", [
-      assistant("commentary-stop", {
+  it.each<[string, Record<string, unknown>, boolean, ("tool" | "speech")?]>([
+    [
+      "keyed commentary",
+      {
         stopReason: "stop",
         openclawStreamFallback: {
-          replacementText: "I will inspect it.",
+          replacementText: "Checking.",
           source: "segment",
-          itemId: "commentary-1",
+          itemId: "commentary",
         },
-      }),
-      toolGroup("commentary-tool"),
-    ]),
-    completed(
-      "provider speech cannot replace a completed frame answer",
-      [
-        assistant("backing-answer", { stopReason: "stop" }),
-        assistant("spoken-readback", {
-          stopReason: "stop",
-          __openclaw: { voiceTranscript: "provider-owned" },
-        }),
-      ],
-      "backing-answer",
-    ),
-    completed("Codex reasoning mirror", [
-      assistant("reasoning", {
+      },
+      false,
+      "tool",
+    ],
+    ["provider speech after answer", { stopReason: "stop" }, true, "speech"],
+    [
+      "Codex reasoning mirror",
+      {
         stopReason: "stop",
         __openclaw: { mirrorOrigin: "codex-app-server", runId: "run-1" },
-      }),
-      toolGroup("reasoning-tool"),
-    ]),
-    completed(
-      "attachment-only final followed by work",
-      [
-        assistant("final-document", {
-          phase: "final_answer",
-          content: [
-            {
-              type: "attachment",
-              attachment: {
-                kind: "document",
-                url: "https://files.example.test/report.pdf",
-                label: "report.pdf",
-                mimeType: "application/pdf",
-              },
-            },
-          ],
-        }),
-        toolGroup("trailing-tool"),
-      ],
-      "final-document",
-    ),
-    completed(
-      "image-only final",
-      [
-        assistant("final-image", {
-          stopReason: "stop",
-          content: [{ type: "image", url: "https://files.example.test/banner.png" }],
-        }),
-      ],
-      "final-image",
-    ),
-    completed(
-      "omitted-image-only final",
-      [
-        assistant("final-omitted-image", {
-          stopReason: "stop",
-          content: [{ type: "image", omitted: true, bytes: 12 * 1024 }],
-        }),
-      ],
-      "final-omitted-image",
-    ),
-    completed("reasoning-only final", [
-      assistant("thinking", {
-        stopReason: "stop",
-        content: [{ type: "thinking", thinking: "I am considering the request." }],
-      }),
-    ]),
-    completed(
+      },
+      false,
+      "tool",
+    ],
+    [
+      "attachment final followed by work",
+      {
+        phase: "final_answer",
+        content: [
+          createAttachmentBlock(
+            "https://example.test/report.pdf",
+            "document",
+            "report.pdf",
+            "application/pdf",
+          ),
+        ],
+      },
+      true,
+      "tool",
+    ],
+    [
+      "image final",
+      terminalContent({ type: "image", url: "https://example.test/image.png" }),
+      true,
+    ],
+    [
+      "omitted image final",
+      terminalContent({ type: "image", omitted: true, bytes: 12 * 1024 }),
+      true,
+    ],
+    [
+      "reasoning-only final",
+      terminalContent({ type: "thinking", thinking: "Considering." }),
+      false,
+    ],
+    [
       "mixed-phase answer followed by work",
-      [
-        assistant("mixed-final", {
-          content: ["commentary", "final_answer"].map((phase) => ({
-            type: "text",
-            text: phase === "commentary" ? "Checking" : "Finished.",
-            textSignature: JSON.stringify({ v: 1, id: phase, phase }),
-          })),
-        }),
-        toolGroup("trailing-tool"),
-      ],
-      "mixed-final",
-    ),
-  ])("records $name without deriving completion from the last part", ({ parts, outcome }) => {
-    const frame = requireFrame(coalesceAgentRunFrames([userBoundary(), ...parts])[1]);
-
-    expect(frame).toMatchObject({ outcome });
-  });
-
+      {
+        content: ["commentary", "final_answer"].map((phase) => ({
+          type: "text",
+          text: phase === "commentary" ? "Checking" : "Finished.",
+          textSignature: JSON.stringify({ v: 1, id: phase, phase }),
+        })),
+      },
+      true,
+      "tool",
+    ],
+  ])(
+    "records %s without deriving completion from the last part",
+    (_, message, ownsActions, tail) => {
+      const parts = [assistant("answer", message)];
+      if (tail) {
+        parts.push(
+          tail === "tool"
+            ? toolGroup("tool")
+            : assistant("speech", {
+                stopReason: "stop",
+                __openclaw: { voiceTranscript: "provider-owned" },
+              }),
+        );
+      }
+      const frame = requireFrame(coalesceAgentRunFrames([userBoundary(), ...parts])[1]);
+      expect(frame.outcome).toMatchObject({
+        kind: "completed",
+        actionOwner: ownsActions ? { key: "answer" } : null,
+      });
+    },
+  );
   it.each([
     { name: "placement abort", terminal: { stopReason: "stop", openclawAbort: { aborted: true } } },
   ])("marks an interrupted partial failed for $name", ({ terminal }) => {

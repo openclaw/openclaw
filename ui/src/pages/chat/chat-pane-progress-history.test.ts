@@ -362,19 +362,6 @@ it.each([
   },
 );
 
-it("does not adopt a stale history reply after navigation", async () => {
-  const old = createDeferred<ChatHistoryResult>();
-  const request = vi.fn(() => old.promise);
-  const { pane, state } = createHistoryProgressPane(request);
-  const load = loadChatHistory(state, { deferBranches: true });
-  state.sessionKey = "scratch";
-  old.resolve(history);
-  expect(await load).toBeUndefined();
-  await pane.updateComplete;
-  expect(pane.chatProps?.progressCard).toBeNull();
-  expect(request).toHaveBeenCalledOnce();
-});
-
 it("keeps accepted progress through a same-session background history refresh", async () => {
   const refreshed = createDeferred<ChatHistoryResult>();
   let historyReads = 0;

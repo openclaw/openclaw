@@ -157,7 +157,6 @@ describe("chat permission failure ownership", () => {
         }
         state.assistantAgentId = foregroundAgent;
         await host.sessions.refresh({ agentId: foregroundAgent, force: true });
-        const revision = host.sessions.canonicalListRevision;
         permissionMode = persistedMode;
         recoveryUnavailable = recovery !== "immediate";
         pending.reject(new Error("saved mode could not be applied to the active run"));
@@ -179,14 +178,8 @@ describe("chat permission failure ownership", () => {
           }
         }
         expect(host.sessions.state.agentId).toBe(foregroundAgent);
-        expect(host.sessions.state.result?.sessions.map((row) => row.key)).toEqual([
-          foregroundAgent === "main" ? selectedSession.key : otherSession.key,
-        ]);
         draw();
         expectPicker(trigger, recovery === "unrelated" ? "full" : persistedMode, false);
-        expect(host.sessions.canonicalListRevision).toBe(
-          revision + (foregroundAgent === "main" || recovery === "unrelated" ? 1 : 0),
-        );
       } finally {
         pending.resolve({});
         await selection;

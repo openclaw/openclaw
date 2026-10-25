@@ -231,23 +231,13 @@ it("keeps media visible and folds commentary after replacement", () => {
     tool("render-diagram", 3),
     message("assistant", "Done", 4),
   ];
-  expect(collapse(messages)).toMatchObject([
-    { kind: "group", role: "user" },
-    { kind: "work-group", groups: [{ role: "tool" }] },
-    { kind: "group", role: "assistant", messages: [{ message: preview }] },
-    { kind: "group", role: "assistant" },
-  ]);
+  expectHistory(messages, [0, 1, 3], [2]);
   const replacement = { ...preview, content: [{ type: "text", text: "Preparing a diagram" }] };
-  expect(
-    collapse(messages.map((entry) => (entry === preview ? replacement : entry))),
-  ).toMatchObject([
-    { kind: "group", role: "user" },
-    {
-      kind: "work-group",
-      groups: [{ role: "assistant", messages: [{ message: replacement }] }, { role: "tool" }],
-    },
-    { kind: "group", role: "assistant" },
-  ]);
+  expectHistory(
+    messages.map((entry) => (entry === preview ? replacement : entry)),
+    [0, 3],
+    [1, 2],
+  );
 });
 it.each([true, false])(
   "keeps work with its answer above a trailing steer (working=%s)",

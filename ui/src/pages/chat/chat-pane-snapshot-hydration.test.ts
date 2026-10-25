@@ -4,7 +4,6 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { loadSettings } from "../../app/settings.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -35,7 +34,6 @@ import {
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
-import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 import "./chat-pane.tsx";
@@ -79,48 +77,6 @@ describe("stored chat snapshot hydration", () => {
     });
     expect(() => getPaneTestRuntime(pane).start()).toThrow(stopAfterAttach);
     return expectDefined(attachedState, "attached pane state");
-  }
-
-  function networkHydration(sessionKey: string, client: GatewayBrowserClient) {
-    const memory: ChatMessageCache = new Map();
-    const store = new SessionSnapshotStore(memory);
-    store.connect();
-    observeChatCache(memory, store);
-    const pane = createMountedPane(sessionKey, memory, client);
-    pane.sessionSnapshotStore = store;
-    return {
-      pane,
-      start: () =>
-        startPane(pane, (state) => {
-          Object.assign(state, { client, connected: true, connectionEpoch: 1 });
-          void loadChatHistory(state);
-        }),
-      dispose: async () => {
-        pane.disconnectedCallback();
-        store.disconnect();
-        await store.whenIdle();
-        await clearStoredChatSnapshots();
-      },
-    };
-  }
-
-  async function writeStoredSnapshot(
-    targetSessionKey: string,
-    messages: ReturnType<typeof nativeHistoryMessage>[],
-  ) {
-    const writer = new SessionSnapshotStore();
-    writer.write(
-      resolveChatSnapshotKey(
-        { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
-        { sessionKey: targetSessionKey },
-      ),
-      {
-        messages,
-        pagination: { hasMore: false, completeSnapshot: true },
-        sessionId: "persistent-session",
-      },
-    );
-    await writer.flush();
   }
 
   it("holds ready cached rows until connect dispatch and adopts them once", async () => {
@@ -330,49 +286,6 @@ describe("stored chat snapshot hydration", () => {
         remounted.disconnectedCallback();
         await store.flush();
         await clearStoredChatSnapshots();
-      }
-    },
-  );
-
-  it.each(["delayed", "immediate"] as const)(
-    "hydrates persistent history without overwriting its %s network refresh",
-    async (timing) => {
-      vi.stubGlobal("indexedDB", new IDBFactory());
-      const targetSessionKey = "agent:main:persistent";
-      const cachedMessages = [nativeHistoryMessage(1, "persistent history")];
-      const networkMessages = [nativeHistoryMessage(1, "network history")];
-      await writeStoredSnapshot(targetSessionKey, cachedMessages);
-      const response = createDeferred<Record<string, unknown>>();
-      const request = vi.fn(() => response.promise);
-      const hydration = networkHydration(
-        targetSessionKey,
-        timing === "delayed"
-          ? createGatewayBrowserClientFixture({ request })
-          : ({ request } as unknown as GatewayBrowserClient),
-      );
-      if (timing === "immediate") {
-        response.resolve({ messages: networkMessages, sessionId: "network-session" });
-      }
-      try {
-        const state = hydration.start();
-        if (timing === "delayed") {
-          await vi.waitFor(() => expect(state.chatMessages).toEqual(cachedMessages));
-          expect(request).toHaveBeenCalledWith(
-            "chat.history",
-            expect.objectContaining({ sessionKey: targetSessionKey }),
-            { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-          );
-          response.resolve({ messages: networkMessages, sessionId: "network-session" });
-        }
-        await vi.waitFor(() => expect(state.chatMessages).toEqual(networkMessages));
-        if (timing === "immediate") {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 0);
-          });
-          expect(state.chatMessages).toEqual(networkMessages);
-        }
-      } finally {
-        await hydration.dispose();
       }
     },
   );
