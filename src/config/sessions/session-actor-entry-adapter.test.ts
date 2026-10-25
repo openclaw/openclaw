@@ -105,7 +105,7 @@ async function fixture(name: string) {
     run,
     read: () => run(() => loadSessionEntryReadOnly(scope)),
     patch: (patch: Partial<SessionEntry>) => run(() => upsertSessionEntryCore(scope, patch)),
-    async sibling(sessionId: string, entry: Partial<SessionEntry> = {}) {
+    async sibling(this: void, sessionId: string, entry: Partial<SessionEntry> = {}) {
       const key = `${sessionKey}-${sessionId}`;
       const sibling = own(await actor.storage!.acquire(key));
       await bindStorage({ ...binding, actor: sibling }, () =>

@@ -54,7 +54,7 @@ function promptFixture(id: string, routeKey: string) {
         entries,
       });
     },
-    persist(entries: SessionEntry[]) {
+    persist(this: void, entries: SessionEntry[]) {
       return persistSessionSystemPrompt(lease.state, checkpointWriter(entries));
     },
   };

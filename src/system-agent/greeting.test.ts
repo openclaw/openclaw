@@ -492,7 +492,7 @@ describe("system agent greeting facts", () => {
 });
 
 describe("system agent quick actions", () => {
-  it.each([
+  it.each<[string, SystemAgentOverview | undefined, Partial<SystemAgentGreetingFacts>, string[]]>([
     ["healthy", undefined, {}, handoffReplies()],
     ["unknown health", undefined, { channelHealth: unavailableHealth }, handoffReplies("health")],
     ["missing config", overviewWithConfig(false, true), {}, handoffReplies("setup")],
@@ -515,9 +515,7 @@ describe("system agent quick actions", () => {
       },
       handoffReplies("gateway status", "restart gateway"),
     ],
-  ] satisfies Array<
-    [string, SystemAgentOverview | undefined, Partial<SystemAgentGreetingFacts>, string[]]
-  >)("builds canonical replies for %s facts", (_name, overview, facts, replies) => {
+  ])("builds canonical replies for %s facts", (_name, overview, facts, replies) => {
     const question = buildSystemAgentGreetingQuestion(
       overview ?? createOverview(),
       healthyFacts(facts),

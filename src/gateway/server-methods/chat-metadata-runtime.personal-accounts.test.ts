@@ -151,14 +151,17 @@ describe("gateway chat metadata personal accounts", () => {
       });
       const read = async (selected = authProfileId) => {
         const sql = forbidMainThreadSql("account label queried host SQLite");
-        using _ = { [Symbol.dispose]: sql.restore };
-        return (
-          await harness.runtime.read({
-            agentId: "main",
-            sessionEntry: { authProfileOverride: selected, authProfileOverrideSource: "user" },
-            requesterProfileId: viewer.id,
-          })
-        ).accountSelection;
+        try {
+          return (
+            await harness.runtime.read({
+              agentId: "main",
+              sessionEntry: { authProfileOverride: selected, authProfileOverrideSource: "user" },
+              requesterProfileId: viewer.id,
+            })
+          ).accountSelection;
+        } finally {
+          sql.restore();
+        }
       };
       const label = (name?: string) => ({
         kind: "personal",
@@ -170,12 +173,14 @@ describe("gateway chat metadata personal accounts", () => {
         expect(await read()).toEqual(label("Original"));
         await mergeCanonicalUserProfiles(owner.id, successor.id);
         expect(await read()).toEqual(label("Successor"));
-        {
-          using foreign = new DatabaseSync(resolveOpenClawStateSqlitePath());
+        const foreign = new DatabaseSync(resolveOpenClawStateSqlitePath());
+        try {
           foreign
             .prepare("UPDATE user_profiles SET display_name = ? WHERE id = ?")
             .run("Foreign", successor.id);
           expect(await read()).toEqual(label("Foreign"));
+        } finally {
+          foreign.close();
         }
         expect(await read(`personal:${randomUUID()}:${randomUUID()}`)).toEqual(label());
       } finally {
@@ -297,8 +302,11 @@ describe("gateway chat metadata personal accounts", () => {
         await harness.refresh();
         const readAliceDefaults = async () => {
           const sql = forbidMainThreadSql("personal defaults queried host SQLite");
-          using _ = { [Symbol.dispose]: sql.restore };
-          return await harness.runtime.read(aliceScope);
+          try {
+            return await harness.runtime.read(aliceScope);
+          } finally {
+            sql.restore();
+          }
         };
         const shared = await harness.runtime.read({ agentId: "main" });
         expect(await readAliceDefaults()).toEqual(shared);
@@ -384,7 +392,7 @@ describe("gateway chat metadata personal accounts", () => {
   });
 });
 
-function createAuthOwner(key = "synthetic-key") {
+function createAuthHarnesses(authStore: AuthProfileStore, key: string) {
   const config: OpenClawConfig = {
     auth: { order: { acme: ["acme:primary"] } },
     agents: {
@@ -392,13 +400,37 @@ function createAuthOwner(key = "synthetic-key") {
       entries: { main: {} },
     },
   };
-  return createChatMetadataOwner(config, "model", { acme: { type: "api_key", key } }, "acme");
+  const owner = createChatMetadataOwner(
+    config,
+    "model",
+    { acme: { type: "api_key", key } },
+    "acme",
+  );
+  const cached = createChatMetadataHarness(config, { useDefaultProjection: true });
+  const fresh = createChatMetadataHarness(config, { useDefaultProjection: true });
+  for (const harness of [cached, fresh]) {
+    harness.setOwner(owner);
+    harness.setAuthStore(authStore);
+  }
+  return { cached, fresh };
 }
 
 describe("gateway chat metadata auth deadlines", () => {
   test("retains metadata on bookkeeping and reads cleared and renewed cooldowns from a full catalog", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    const prepared = createAuthOwner();
+    const config: OpenClawConfig = {
+      auth: { order: { acme: ["acme:primary"] } },
+      agents: {
+        defaults: { model: { primary: "acme/model" }, models: { "acme/model": {} } },
+        entries: { main: {} },
+      },
+    };
+    const prepared = createChatMetadataOwner(
+      config,
+      "model",
+      { acme: { type: "api_key", key: "synthetic-key" } },
+      "acme",
+    );
     const original: AuthProfileStore = {
       version: 1,
       profiles: { "acme:primary": { type: "api_key", provider: "acme", key: "synthetic-key" } },
@@ -417,7 +449,7 @@ describe("gateway chat metadata auth deadlines", () => {
     const fullCatalog = materializePreparedModelCatalog(prepared.modelCatalog, []);
     const owner = { ...prepared, readFullModelCatalog: () => fullCatalog };
     const onChanged = vi.fn();
-    const harness = createChatMetadataHarness(prepared.config, {
+    const harness = createChatMetadataHarness(config, {
       useDefaultProjection: true,
       onChanged,
     });
@@ -479,26 +511,29 @@ describe("gateway chat metadata auth deadlines", () => {
         profiles: { "acme:primary": { ...credential, provider: "acme" } },
         ...(token ? {} : { usageStats: { "acme:primary": { cooldownUntil: 20_000 } } }),
       };
-      const owner = createAuthOwner(token ? "synthetic-token" : "synthetic-key");
-      const cached = createChatMetadataHarness(owner.config, { useDefaultProjection: true });
-      cached.setOwner(owner);
-      cached.setAuthStore(authStore);
+      const { cached, fresh } = createAuthHarnesses(
+        authStore,
+        token ? "synthetic-token" : "synthetic-key",
+      );
       try {
         await cached.refresh();
         await expect(cached.read()).resolves.toMatchObject({
           models: [{ id: "model", provider: "acme", available: before }],
         });
         clock.mockReturnValue(20_000);
-        cached.getPreparedAuthStore.mockClear();
-        await expect(cached.read()).resolves.toMatchObject({
+        await fresh.refresh();
+        const expected = await fresh.read();
+        expect(expected).toMatchObject({
           models: [{ id: "model", provider: "acme", available: after }],
         });
+        cached.getPreparedAuthStore.mockClear();
+        expect(await cached.read()).toEqual(expected);
         if (!token) {
           expect(cached.getPreparedAuthStore).not.toHaveBeenCalled();
           expect(cached.buildCommands).toHaveBeenCalledTimes(2);
         }
       } finally {
-        await cached.runtime.stop();
+        await Promise.all([cached.runtime.stop(), fresh.runtime.stop()]);
         clock.mockRestore();
       }
     },
