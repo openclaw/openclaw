@@ -144,22 +144,6 @@ describe("UpdateCampaignController", () => {
     expect(onChange).toHaveBeenLastCalledWith(undefined);
   });
 
-  it("lets update.run adopt a campaign without invoking automatic apply", async () => {
-    const { controller, apply, announce } = fixture();
-
-    expect(controller.adopt()).toEqual({ status: "absent" });
-    announce();
-    expect(controller.adopt()).toEqual({
-      status: "adopted",
-      campaignId: "campaign-1",
-      target: packageTarget(),
-    });
-    expect(controller.getState()?.state).toBe("applying");
-    expect(controller.hold()).toBe(false);
-    await clock.advanceBy(15 * 60_000);
-    expect(apply).not.toHaveBeenCalled();
-  });
-
   it("keeps a different Git upstream waiting after mismatched adoption", () => {
     const { controller, apply, onChange, announce } = fixture();
     const matching = {
@@ -235,6 +219,7 @@ describe("UpdateCampaignController", () => {
 
   it("holds a countdown, drops its apply deadline, and allows adoption", async () => {
     const { controller, apply, announce } = fixture();
+    expect(controller.adopt()).toEqual({ status: "absent" });
     announce();
     expect(controller.getState()?.state).toBe("countdown");
 
@@ -249,12 +234,13 @@ describe("UpdateCampaignController", () => {
     expect(controller.getState()?.state).toBe("waiting-for-idle");
     expect(apply).not.toHaveBeenCalled();
 
-    expect(controller.adopt()).toMatchObject({
+    expect(controller.adopt()).toEqual({
       status: "adopted",
       campaignId: "campaign-1",
       target: packageTarget(),
     });
     expect(controller.getState()?.state).toBe("applying");
+    expect(controller.hold()).toBe(false);
     await clock.advanceBy(20 * 60_000);
     expect(apply).not.toHaveBeenCalled();
   });
