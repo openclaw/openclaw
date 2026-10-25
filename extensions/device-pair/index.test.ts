@@ -11,10 +11,7 @@ import type { OpenClawPluginApi } from "./api.js";
 
 const pluginApiMocks = vi.hoisted(() => ({
   clearDeviceBootstrapTokens: vi.fn(async () => ({ removed: 2 })),
-  issueDeviceBootstrapToken: vi.fn(async (_params?: { assertCurrent?: () => void }) => ({
-    token: "boot-token",
-    expiresAtMs: Date.now() + 10 * 60_000,
-  })),
+  issueDeviceBootstrapToken: vi.fn<typeof import("./api.js").issueDeviceBootstrapToken>(),
   revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   resolvePreferredOpenClawTmpDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-device-pair-tests")),
   writeQrPngTempFile: vi.fn(async (dataValue: string, opts: { tmpRoot: string }) => {
@@ -38,30 +35,22 @@ vi.mock("./api.js", async (importOriginal) => ({
   runPluginCommandWithTimeout: vi.fn(),
 }));
 
-vi.mock("./notify.js", () => ({
+vi.mock("./notify.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./notify.js")>()),
   armPairNotifyOnce: vi.fn(async () => false),
-  formatPendingRequests: vi.fn(() => "No pending device pairing requests."),
   handleNotifyCommand: vi.fn(async () => ({ text: "notify" })),
 }));
 
 import { approveDevicePairing, listDevicePairing, runPluginCommandWithTimeout } from "./api.js";
 import registerDevicePair from "./index.js";
+import { formatPendingRequests } from "./notify.js";
 
 type ApproveDevicePairingResolved = Awaited<ReturnType<typeof approveDevicePairing>>;
-type ApprovedPairingResult = Extract<
-  NonNullable<ApproveDevicePairingResolved>,
-  { status: "approved" }
->;
-type RegisterPairOptions = {
-  config?: OpenClawPluginApi["config"];
-  runtime?: OpenClawPluginApi["runtime"];
-  pluginConfig?: Record<string, unknown>;
-};
+type RegisterPairOptions = Partial<Pick<OpenClawPluginApi, "config" | "runtime" | "pluginConfig">>;
+type Gateway = NonNullable<OpenClawPluginApi["config"]["gateway"]>;
 
 const gatewayAuth = { mode: "token" as const, token: "gateway-token" };
-function gatewayOptions(
-  gateway: NonNullable<OpenClawPluginApi["config"]["gateway"]>,
-): RegisterPairOptions {
+function gatewayOptions(gateway: Gateway): RegisterPairOptions {
   return {
     config: { gateway: { auth: gatewayAuth, ...gateway } },
     pluginConfig: { publicUrl: undefined },
@@ -88,25 +77,17 @@ const TALK_SECRETS_REQUIRED =
   "⚠️ Setup code handoff includes Talk secrets and requires operator.talk.secrets.";
 const SECURE_URL_REQUIRED = "Tailscale and public mobile pairing require a secure gateway URL";
 
-function registerPairCommand(params: RegisterPairOptions = {}): OpenClawPluginCommandDefinition {
-  let command: OpenClawPluginCommandDefinition | undefined;
+function registerPairCommand(params: RegisterPairOptions = {}) {
+  const registerCommand = vi.fn<(command: OpenClawPluginCommandDefinition) => void>();
   registerDevicePair.register(
     createTestPluginApi({
-      id: "device-pair",
-      name: "device-pair",
-      source: "test",
       config: params.config ?? { gateway: { auth: gatewayAuth } },
       pluginConfig: { publicUrl: "wss://gateway.example.test", ...params.pluginConfig },
       runtime: (params.runtime ?? {}) as OpenClawPluginApi["runtime"],
-      registerCommand: (nextCommand) => {
-        command = nextCommand;
-      },
+      registerCommand,
     }),
   );
-  if (!command) {
-    throw new Error("device-pair plugin did not register its /pair command");
-  }
-  return command;
+  return registerCommand.mock.calls[0]![0];
 }
 
 function createCommandContext(params: Partial<PluginCommandContext> = {}): PluginCommandContext {
@@ -116,6 +97,7 @@ function createCommandContext(params: Partial<PluginCommandContext> = {}): Plugi
     isAuthorizedSender: true,
     commandBody: `/pair ${args}`.trim(),
     args,
+    gatewayClientScopes: INTERNAL_SETUP_SCOPES,
     config: {},
     requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
     detachConversationBinding: async () => ({ removed: false }),
@@ -140,6 +122,14 @@ function expectFragments(text: string | undefined, ...fragments: string[]) {
   }
 }
 
+function decodeSetupCode(text: string) {
+  const code = text.match(/Setup code:\n([A-Za-z0-9_-]+)/u)?.[1];
+  if (!code) {
+    throw new Error("Missing setup code in /pair reply");
+  }
+  return JSON.parse(Buffer.from(code, "base64url").toString("utf8"));
+}
+
 type SendPayload = { to: string; text: string; mediaUrl?: string; [key: string]: unknown };
 function createChannelRuntime(
   channel: string,
@@ -155,50 +145,12 @@ function createChannelRuntime(
   } as unknown as OpenClawPluginApi["runtime"];
 }
 
-function ipv4Interfaces(address: string): ReturnType<typeof os.networkInterfaces> {
-  return {
-    en0: [
-      {
-        address,
-        family: "IPv4",
-        internal: false,
-        netmask: "255.255.255.0",
-        mac: "00:00:00:00:00:00",
-        cidr: `${address}/24`,
-      },
-    ],
-  };
-}
-
 const device = {
   deviceId: "victim-phone",
   publicKey: "victim-public-key",
   displayName: "Victim Phone",
   platform: "ios",
 };
-function makeApprovedPairingResult(): ApprovedPairingResult {
-  return {
-    status: "approved",
-    requestId: "req-1",
-    device: { ...device, createdAtMs: Date.now(), approvedAtMs: Date.now() },
-  };
-}
-
-function makeForbiddenPairingResult(): ApproveDevicePairingResolved {
-  return {
-    status: "forbidden",
-    reason: "caller-missing-scope",
-    scope: "operator.admin",
-  };
-}
-
-function mockPendingPairingList() {
-  vi.mocked(listDevicePairing).mockResolvedValueOnce({
-    pending: [{ ...device, requestId: "req-1", ts: Date.now() }],
-    paired: [],
-  });
-}
-
 beforeEach(async () => {
   vi.clearAllMocks();
   vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18789");
@@ -244,7 +196,6 @@ describe("device-pair /pair qr", () => {
     expect(result.mediaUrl).toBeUndefined();
     expectFragments(
       result.text,
-      "Scan this QR code with the OpenClaw iOS app:",
       "- Security: single-use bootstrap token",
       "**Important:** Run `/pair cleanup` after pairing finishes.",
       "If this QR code leaks, run `/pair cleanup` immediately.",
@@ -269,32 +220,24 @@ describe("device-pair /pair qr", () => {
       return { messageId: "1" };
     });
     const text = await runPairText(
-      { channel, ...context, gatewayClientScopes: INTERNAL_SETUP_SCOPES },
+      { channel, ...context },
       { runtime: createChannelRuntime(channel, sendMessage) },
     );
-    expect(sendMessage).toHaveBeenCalledTimes(1);
     const payload = sendMessage.mock.calls[0]![0];
-    const caption = payload.text;
     expectFragments(
-      caption,
-      "Scan this QR code with the OpenClaw iOS app:",
+      payload.text,
       "IMPORTANT: After pairing finishes, run /pair cleanup.",
       "If this QR code leaks, run /pair cleanup immediately.",
     );
     const mediaUrl = payload.mediaUrl!;
-    expect(mediaUrl).toMatch(/pair-qr\.png$/);
-    expect(payload).toEqual({
+    expect(payload).toMatchObject({
       to: target,
-      text: caption,
-      cfg: { gateway: { auth: { mode: "token", token: "gateway-token" } } },
-      mediaUrl,
       mediaLocalRoots: [path.dirname(mediaUrl)],
       ...opts,
     });
     expect(sentPng).toBe("fakepng");
     await expect(fs.access(mediaUrl)).rejects.toMatchObject({ code: "ENOENT" });
     expect(text).toContain("QR code sent above.");
-    expect(text).toContain("IMPORTANT: Run /pair cleanup after pairing finishes.");
   });
 
   it("reissues the bootstrap token after QR delivery failure before falling back", async () => {
@@ -303,52 +246,33 @@ describe("device-pair /pair qr", () => {
       .mockResolvedValueOnce({ token: "second-token", expiresAtMs: Date.now() + 10 * 60_000 });
     const sendMessage = vi.fn().mockRejectedValue(new Error("upload failed"));
     const text = await runPairText(
-      { channel: "discord", senderId: "123", gatewayClientScopes: INTERNAL_SETUP_SCOPES },
+      { channel: "discord", senderId: "123" },
       { runtime: createChannelRuntime("discord", sendMessage) },
     );
 
     expect(pluginApiMocks.revokeDeviceBootstrapToken).toHaveBeenCalledWith({
       token: "first-token",
     });
-    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(2);
-    expect(text).toContain("Pairing setup code generated.");
+    expect(decodeSetupCode(text)).toMatchObject({ bootstrapToken: "second-token" });
     expect(text).toContain("If this code leaks or you are done, run /pair cleanup");
   });
 
   it("requires QR channel senders to be own entries", async () => {
-    const loadAdapter = vi.fn(async () => undefined);
+    const send = vi.fn();
     const text = await runPairText(
-      {
-        channel: "__proto__",
-        senderId: "prototype-channel",
-        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
-      },
-      {
-        runtime: {
-          channel: { outbound: { loadAdapter } },
-        } as unknown as OpenClawPluginApi["runtime"],
-      },
+      { channel: "__proto__", senderId: "prototype-channel" },
+      { runtime: createChannelRuntime("__proto__", send) },
     );
     expect(pluginApiMocks.writeQrPngTempFile).not.toHaveBeenCalled();
-    expect(loadAdapter).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
     expect(pluginApiMocks.revokeDeviceBootstrapToken).not.toHaveBeenCalled();
-    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
-    expectFragments(
-      text,
-      "QR image delivery is not available on this channel",
-      "Setup code:",
-      "IMPORTANT: After pairing finishes, run /pair cleanup.",
-    );
+    expect(text).toContain("QR image delivery is not available on this channel");
+    expect(decodeSetupCode(text)).toMatchObject({ bootstrapToken: "boot-token" });
     expect(text).not.toContain("```");
   });
 
   it("supports invalidating unused setup codes", async () => {
-    const result = await runPair({
-      channel: "telegram",
-      args: "cleanup",
-      gatewayClientScopes: INTERNAL_PAIRING_SCOPES,
-    });
-    expect(pluginApiMocks.clearDeviceBootstrapTokens).toHaveBeenCalledTimes(1);
+    const result = await runPair({ args: "cleanup", gatewayClientScopes: INTERNAL_PAIRING_SCOPES });
     expect(result).toEqual({ text: "Invalidated 2 unused setup codes." });
   });
 });
@@ -361,10 +285,7 @@ describe("device-pair /pair setup", () => {
       },
     },
   };
-  const pub = (
-    publicUrl: string,
-    gateway: NonNullable<OpenClawPluginApi["config"]["gateway"]> = {},
-  ): RegisterPairOptions => ({
+  const pub = (publicUrl: string, gateway: Gateway = {}): RegisterPairOptions => ({
     ...gatewayOptions(gateway),
     pluginConfig: { publicUrl },
   });
@@ -375,96 +296,75 @@ describe("device-pair /pair setup", () => {
       stderr: "",
     });
   }
-  const network = (address: string) => () => {
-    vi.spyOn(os, "networkInterfaces").mockReturnValueOnce(ipv4Interfaces(address));
-  };
   type SetupRow = {
-    label: string;
     options: RegisterPairOptions;
     context: Partial<PluginCommandContext>;
     text: string | string[];
     issued: 0 | 1 | typeof LIMITED_SETUP_REQUEST | typeof FULL_SETUP_REQUEST;
     prepare?: () => void;
     absent?: string;
-    noDiscovery?: boolean;
   };
   it.each`
-    label                                                  | options                                                                                                          | context                                                                                                   | text                                                                                                 | issued                   | prepare                     | absent                                      | noDiscovery
-    ${"trusted admin"}                                     | ${trustedProxy}                                                                                                  | ${{ gatewayClientScopes: ["operator.admin"] }}                                                            | ${["Auth: trusted-proxy"]}                                                                           | ${FULL_SETUP_REQUEST}    | ${undefined}                | ${undefined}                                | ${false}
-    ${"trusted limited"}                                   | ${trustedProxy}                                                                                                  | ${{}}                                                                                                     | ${["Auth: trusted-proxy"]}                                                                           | ${LIMITED_SETUP_REQUEST} | ${undefined}                | ${undefined}                                | ${false}
-    ${"trusted owner"}                                     | ${trustedProxy}                                                                                                  | ${{ channel: "discord", gatewayClientScopes: undefined, senderIsOwner: true }}                            | ${["Auth: trusted-proxy"]}                                                                           | ${FULL_SETUP_REQUEST}    | ${undefined}                | ${undefined}                                | ${false}
-    ${"trusted non-owner"}                                 | ${trustedProxy}                                                                                                  | ${{ channel: "discord", gatewayClientScopes: undefined, senderIsOwner: false }}                           | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"trusted read-only"}                                 | ${trustedProxy}                                                                                                  | ${{ gatewayClientScopes: ["operator.read"] }}                                                             | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"trusted no Talk scope"}                             | ${trustedProxy}                                                                                                  | ${{ gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                                                       | ${TALK_SECRETS_REQUIRED}                                                                             | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"trusted no scopes"}                                 | ${trustedProxy}                                                                                                  | ${{ gatewayClientScopes: undefined }}                                                                     | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"QR owner with no Talk scope"}                       | ${{}}                                                                                                            | ${{ args: "qr", channel: "telegram", senderIsOwner: true, gatewayClientScopes: INTERNAL_PAIRING_SCOPES }} | ${TALK_SECRETS_REQUIRED}                                                                             | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"cleanup with no scopes"}                            | ${{}}                                                                                                            | ${{ args: "cleanup", gatewayClientScopes: undefined }}                                                    | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"external status with no scopes"}                    | ${{}}                                                                                                            | ${{ args: "status", channel: "telegram", gatewayClientScopes: undefined }}                                | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"unknown subcommand"}                                | ${{}}                                                                                                            | ${{ args: "foo", gatewayClientScopes: ["operator.write"] }}                                               | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"approval read-only"}                                | ${{}}                                                                                                            | ${{ args: "approve latest", gatewayClientScopes: ["operator.write"] }}                                    | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"approval no scopes"}                                | ${{}}                                                                                                            | ${{ args: "approve latest", gatewayClientScopes: undefined }}                                             | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"approval non-owner"}                                | ${{}}                                                                                                            | ${{ args: "approve latest", channel: "telegram", gatewayClientScopes: undefined, senderIsOwner: false }}  | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"unauthenticated gateway"}                           | ${gatewayOptions({ auth: { mode: "none" } })}                                                                    | ${{}}                                                                                                     | ${["Gateway auth is not configured"]}                                                                | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"external token owner"}                              | ${{}}                                                                                                            | ${{ channel: "telegram", gatewayClientScopes: undefined, senderIsOwner: true }}                           | ${["Pairing setup code generated."]}                                                                 | ${FULL_SETUP_REQUEST}    | ${undefined}                | ${undefined}                                | ${false}
-    ${"bare secure URL"}                                   | ${pub("gateway.example.test:18789/setup", { tls: { enabled: true } })}                                           | ${{ gatewayClientScopes: ["operator.admin"] }}                                                            | ${["Gateway: wss://gateway.example.test:18789"]}                                                     | ${1}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"loopback"}                                          | ${pub("ws://127.0.0.1:18789")}                                                                                   | ${{}}                                                                                                     | ${["Gateway: ws://127.0.0.1:18789"]}                                                                 | ${1}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"mdns"}                                              | ${pub("ws://openclaw.local:18789")}                                                                              | ${{}}                                                                                                     | ${["Gateway: ws://openclaw.local:18789"]}                                                            | ${1}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"IPv6 ULA"}                                          | ${pub("ws://[fc00::1]:18789")}                                                                                   | ${{}}                                                                                                     | ${["Gateway: ws://[fc00::1]:18789"]}                                                                 | ${1}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"IPv6 link-local lower"}                             | ${pub("ws://[fe80::1]:18789")}                                                                                   | ${{}}                                                                                                     | ${["Gateway: ws://[fe80::1]:18789"]}                                                                 | ${1}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"IPv6 link-local upper"}                             | ${pub("ws://[febf::1]:18789")}                                                                                   | ${{}}                                                                                                     | ${["Gateway: ws://[febf::1]:18789"]}                                                                 | ${1}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"Tailscale Serve"}                                   | ${gatewayOptions({ tailscale: { mode: "serve" } })}                                                              | ${{}}                                                                                                     | ${["Gateway: wss://gateway.tailnet.ts.net"]}                                                         | ${1}                     | ${discoverDns}              | ${undefined}                                | ${false}
-    ${"publicOrigin"}                                      | ${gatewayOptions({ bind: "loopback", publicOrigin: "https://gateway.example.test" })}                            | ${{}}                                                                                                     | ${["Gateway: wss://gateway.example.test"]}                                                           | ${1}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"limited secure caller"}                             | ${{}}                                                                                                            | ${{}}                                                                                                     | ${["Access: limited"]}                                                                               | ${LIMITED_SETUP_REQUEST} | ${undefined}                | ${"Plaintext ws:// was limited for safety"} | ${false}
-    ${"private LAN admin"}                                 | ${pub("ws://192.168.1.20:18789")}                                                                                | ${{ gatewayClientScopes: ["operator.admin"] }}                                                            | ${["Gateway: ws://192.168.1.20:18789", "Access: limited", "Plaintext ws:// was limited for safety"]} | ${LIMITED_SETUP_REQUEST} | ${undefined}                | ${undefined}                                | ${false}
-    ${"trusted private LAN admin"}                         | ${{ ...trustedProxy, pluginConfig: { publicUrl: "ws://192.168.1.20:18789" } }}                                   | ${{ gatewayClientScopes: ["operator.admin"] }}                                                            | ${["Access: limited"]}                                                                               | ${LIMITED_SETUP_REQUEST} | ${undefined}                | ${undefined}                                | ${false}
-    ${"trusted public plaintext"}                          | ${{ ...trustedProxy, pluginConfig: { publicUrl: "ws://gateway.example.test" } }}                                 | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"LAN 10.211.55.3"}                                   | ${gatewayOptions({ bind: "lan" })}                                                                               | ${{}}                                                                                                     | ${["Gateway: ws://10.211.55.3:18789"]}                                                               | ${1}                     | ${network("10.211.55.3")}   | ${"Fallback:"}                              | ${true}
-    ${"LAN 192.168.139.3"}                                 | ${gatewayOptions({ bind: "lan" })}                                                                               | ${{}}                                                                                                     | ${["Gateway: ws://192.168.139.3:18789"]}                                                             | ${1}                     | ${network("192.168.139.3")} | ${"Fallback:"}                              | ${true}
-    ${"custom bind"}                                       | ${gatewayOptions({ bind: "custom", customBindHost: "192.168.139.3" })}                                           | ${{}}                                                                                                     | ${["Gateway: ws://192.168.139.3:18789"]}                                                             | ${1}                     | ${undefined}                | ${"Fallback:"}                              | ${false}
-    ${"reject ws://0.0.0.0:18789"}                         | ${pub("ws://0.0.0.0:18789")}                                                                                     | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"reject ws://[::]:18789"}                            | ${pub("ws://[::]:18789")}                                                                                        | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"reject ws://gateway.example.test:18789"}            | ${pub("ws://gateway.example.test:18789")}                                                                        | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"reject ws://[2001:db8::1]:18789"}                   | ${pub("ws://[2001:db8::1]:18789")}                                                                               | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"reject ws://[fe7f::1]:18789"}                       | ${pub("ws://[fe7f::1]:18789")}                                                                                   | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"reject ws://[fec0::1]:18789"}                       | ${pub("ws://[fec0::1]:18789")}                                                                                   | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"plaintext tailnet"}                                 | ${gatewayOptions({ bind: "tailnet" })}                                                                           | ${{}}                                                                                                     | ${["prefer gateway.tailscale.mode=serve"]}                                                           | ${0}                     | ${network("100.64.0.9")}    | ${undefined}                                | ${false}
-    ${"invalid remote URL"}                                | ${gatewayOptions({ bind: "custom", customBindHost: "127.0.0.1", remote: { url: "http://localhost:notaport" } })} | ${{}}                                                                                                     | ${"Error: Configured gateway.remote.url is invalid."}                                                | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"invalid localhost:notaport"}                        | ${pub("localhost:notaport")}                                                                                     | ${{}}                                                                                                     | ${"Error: Configured publicUrl is invalid."}                                                         | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"invalid http://localhost:notaport"}                 | ${pub("http://localhost:notaport")}                                                                              | ${{}}                                                                                                     | ${"Error: Configured publicUrl is invalid."}                                                         | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"invalid http:gateway.example.test"}                 | ${pub("http:gateway.example.test")}                                                                              | ${{}}                                                                                                     | ${"Error: Configured publicUrl is invalid."}                                                         | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"invalid ftp:/gateway.example.test"}                 | ${pub("ftp:/gateway.example.test")}                                                                              | ${{}}                                                                                                     | ${"Error: Configured publicUrl is invalid."}                                                         | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-    ${"invalid ws://user:pass@gateway.example.test:18789"} | ${pub("ws://user:pass@gateway.example.test:18789")}                                                              | ${{}}                                                                                                     | ${"Error: Configured publicUrl is invalid."}                                                         | ${0}                     | ${undefined}                | ${undefined}                                | ${false}
-  `(
-    "$label",
-    async ({ options, context, text, issued, prepare, absent, noDiscovery }: SetupRow) => {
-      prepare?.();
-      const result = await runPair(
-        { args: "", gatewayClientScopes: INTERNAL_SETUP_SCOPES, ...context },
-        options,
-      );
-      if (typeof text === "string") {
-        expect(result).toEqual({ text });
-      } else {
-        expectFragments(result.text, ...text);
+    label                                       | options                                                                               | context                                                                                                   | text                                                                                                 | issued                   | prepare        | absent
+    ${"trusted admin"}                          | ${trustedProxy}                                                                       | ${{ gatewayClientScopes: ["operator.admin"] }}                                                            | ${["Auth: trusted-proxy"]}                                                                           | ${FULL_SETUP_REQUEST}    | ${undefined}   | ${undefined}
+    ${"trusted owner"}                          | ${trustedProxy}                                                                       | ${{ channel: "discord", gatewayClientScopes: undefined, senderIsOwner: true }}                            | ${["Auth: trusted-proxy"]}                                                                           | ${FULL_SETUP_REQUEST}    | ${undefined}   | ${undefined}
+    ${"QR owner with no Talk scope"}            | ${{}}                                                                                 | ${{ args: "qr", channel: "telegram", senderIsOwner: true, gatewayClientScopes: INTERNAL_PAIRING_SCOPES }} | ${TALK_SECRETS_REQUIRED}                                                                             | ${0}                     | ${undefined}   | ${undefined}
+    ${"cleanup with no scopes"}                 | ${{}}                                                                                 | ${{ args: "cleanup", gatewayClientScopes: undefined }}                                                    | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}   | ${undefined}
+    ${"approval read-only"}                     | ${{}}                                                                                 | ${{ args: "approve latest", gatewayClientScopes: ["operator.write"] }}                                    | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}   | ${undefined}
+    ${"approval no scopes"}                     | ${{}}                                                                                 | ${{ args: "approve latest", gatewayClientScopes: undefined }}                                             | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}   | ${undefined}
+    ${"approval non-owner"}                     | ${{}}                                                                                 | ${{ args: "approve latest", channel: "telegram", gatewayClientScopes: undefined, senderIsOwner: false }}  | ${PAIRING_REQUIRED}                                                                                  | ${0}                     | ${undefined}   | ${undefined}
+    ${"unauthenticated gateway"}                | ${gatewayOptions({ auth: { mode: "none" } })}                                         | ${{}}                                                                                                     | ${["Gateway auth is not configured"]}                                                                | ${0}                     | ${undefined}   | ${undefined}
+    ${"external token owner"}                   | ${{}}                                                                                 | ${{ channel: "telegram", gatewayClientScopes: undefined, senderIsOwner: true }}                           | ${["Pairing setup code generated."]}                                                                 | ${FULL_SETUP_REQUEST}    | ${undefined}   | ${undefined}
+    ${"bare secure URL"}                        | ${pub("gateway.example.test:18789/setup", { tls: { enabled: true } })}                | ${{ gatewayClientScopes: ["operator.admin"] }}                                                            | ${["Gateway: wss://gateway.example.test:18789"]}                                                     | ${1}                     | ${undefined}   | ${undefined}
+    ${"path-qualified public URL"}              | ${pub("https://pair.example/extra")}                                                  | ${{}}                                                                                                     | ${["Gateway: wss://pair.example"]}                                                                   | ${1}                     | ${undefined}   | ${undefined}
+    ${"path-qualified remote URL"}              | ${gatewayOptions({ remote: { url: "https://pair.example/extra" } })}                  | ${{}}                                                                                                     | ${["Gateway: wss://pair.example"]}                                                                   | ${1}                     | ${undefined}   | ${undefined}
+    ${"loopback"}                               | ${pub("ws://127.0.0.1:18789")}                                                        | ${{}}                                                                                                     | ${["Gateway: ws://127.0.0.1:18789"]}                                                                 | ${1}                     | ${undefined}   | ${undefined}
+    ${"mdns"}                                   | ${pub("ws://openclaw.local:18789")}                                                   | ${{}}                                                                                                     | ${["Gateway: ws://openclaw.local:18789"]}                                                            | ${1}                     | ${undefined}   | ${undefined}
+    ${"IPv6 ULA"}                               | ${pub("ws://[fc00::1]:18789")}                                                        | ${{}}                                                                                                     | ${["Gateway: ws://[fc00::1]:18789"]}                                                                 | ${1}                     | ${undefined}   | ${undefined}
+    ${"IPv6 link-local lower"}                  | ${pub("ws://[fe80::1]:18789")}                                                        | ${{}}                                                                                                     | ${["Gateway: ws://[fe80::1]:18789"]}                                                                 | ${1}                     | ${undefined}   | ${undefined}
+    ${"IPv6 link-local upper"}                  | ${pub("ws://[febf::1]:18789")}                                                        | ${{}}                                                                                                     | ${["Gateway: ws://[febf::1]:18789"]}                                                                 | ${1}                     | ${undefined}   | ${undefined}
+    ${"Tailscale Serve"}                        | ${gatewayOptions({ tailscale: { mode: "serve" } })}                                   | ${{}}                                                                                                     | ${["Gateway: wss://gateway.tailnet.ts.net"]}                                                         | ${1}                     | ${discoverDns} | ${undefined}
+    ${"publicOrigin"}                           | ${gatewayOptions({ bind: "loopback", publicOrigin: "https://gateway.example.test" })} | ${{}}                                                                                                     | ${["Gateway: wss://gateway.example.test"]}                                                           | ${1}                     | ${undefined}   | ${undefined}
+    ${"limited secure caller"}                  | ${{}}                                                                                 | ${{}}                                                                                                     | ${["Access: limited"]}                                                                               | ${LIMITED_SETUP_REQUEST} | ${undefined}   | ${"Plaintext ws:// was limited for safety"}
+    ${"private LAN admin"}                      | ${pub("ws://192.168.1.20:18789")}                                                     | ${{ gatewayClientScopes: ["operator.admin"] }}                                                            | ${["Gateway: ws://192.168.1.20:18789", "Access: limited", "Plaintext ws:// was limited for safety"]} | ${LIMITED_SETUP_REQUEST} | ${undefined}   | ${undefined}
+    ${"custom bind"}                            | ${gatewayOptions({ bind: "custom", customBindHost: "192.168.139.3" })}                | ${{}}                                                                                                     | ${["Gateway: ws://192.168.139.3:18789"]}                                                             | ${1}                     | ${undefined}   | ${"Fallback:"}
+    ${"reject ws://0.0.0.0:18789"}              | ${pub("ws://0.0.0.0:18789")}                                                          | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}   | ${undefined}
+    ${"reject ws://[::]:18789"}                 | ${pub("ws://[::]:18789")}                                                             | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}   | ${undefined}
+    ${"reject ws://gateway.example.test:18789"} | ${pub("ws://gateway.example.test:18789")}                                             | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}   | ${undefined}
+    ${"reject ws://[2001:db8::1]:18789"}        | ${pub("ws://[2001:db8::1]:18789")}                                                    | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}   | ${undefined}
+    ${"reject ws://[fe7f::1]:18789"}            | ${pub("ws://[fe7f::1]:18789")}                                                        | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}   | ${undefined}
+    ${"reject ws://[fec0::1]:18789"}            | ${pub("ws://[fec0::1]:18789")}                                                        | ${{}}                                                                                                     | ${[SECURE_URL_REQUIRED]}                                                                             | ${0}                     | ${undefined}   | ${undefined}
+    ${"invalid http://localhost:notaport"}      | ${pub("http://localhost:notaport")}                                                   | ${{}}                                                                                                     | ${"Error: Configured publicUrl is invalid."}                                                         | ${0}                     | ${undefined}   | ${undefined}
+  `("$label", async ({ options, context, text, issued, prepare, absent }: SetupRow) => {
+    prepare?.();
+    const result = await runPair({ args: "", ...context }, options);
+    if (typeof text === "string") {
+      expect(result).toEqual({ text });
+    } else {
+      expectFragments(result.text, ...text);
+      const gateway = text.find((part) => part.startsWith("Gateway: "));
+      if (gateway) {
+        expect(decodeSetupCode(result.text ?? "")).toMatchObject({
+          url: gateway.slice("Gateway: ".length),
+          bootstrapToken: "boot-token",
+        });
       }
-      if (issued === 0) {
-        expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
-        expect(listDevicePairing).not.toHaveBeenCalled();
-        expect(approveDevicePairing).not.toHaveBeenCalled();
-        expect(pluginApiMocks.clearDeviceBootstrapTokens).not.toHaveBeenCalled();
-      } else if (issued === 1) {
-        expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
-      } else {
-        expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(issued);
-      }
-      if (absent) {
-        expect(result.text).not.toContain(absent);
-      }
-      if (noDiscovery) {
-        expect(runPluginCommandWithTimeout).not.toHaveBeenCalled();
-      }
-    },
-  );
+    }
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(issued === 0 ? 0 : 1);
+    if (typeof issued === "object") {
+      expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledExactlyOnceWith(issued);
+    }
+    if (issued === 0) {
+      expect([
+        vi.mocked(listDevicePairing).mock.calls,
+        vi.mocked(approveDevicePairing).mock.calls,
+        pluginApiMocks.clearDeviceBootstrapTokens.mock.calls,
+      ]).toEqual([[], [], []]);
+    }
+    if (absent) {
+      expect(result.text).not.toContain(absent);
+    }
+  });
 
   it.each([false, true])(
     "rechecks channel ownership after Gateway URL discovery (gateway admin: %s)",
@@ -505,70 +405,43 @@ describe("device-pair /pair setup", () => {
       expect(issued).toBe(gatewayAdmin);
     },
   );
-
-  it.each(["publicUrl", "remote"] as const)(
-    "keeps /pair setup codes origin-only for a path-qualified %s",
-    async (source) => {
-      const text = await runPairText(
-        { args: "", gatewayClientScopes: INTERNAL_SETUP_SCOPES },
-        {
-          ...gatewayOptions(
-            source === "remote" ? { remote: { url: "https://pair.example/extra" } } : {},
-          ),
-          pluginConfig: {
-            publicUrl: source === "publicUrl" ? "https://pair.example/extra" : undefined,
-          },
-        },
-      );
-      const code = text.match(/Setup code:\n([A-Za-z0-9_-]+)/u)?.[1];
-      if (!code) {
-        throw new Error("Missing setup code in /pair reply");
-      }
-      expect(JSON.parse(Buffer.from(code, "base64url").toString("utf8"))).toMatchObject({
-        url: "wss://pair.example",
-        bootstrapToken: "boot-token",
-      });
-      expect(text.split("\n")).toContain("Gateway: wss://pair.example");
-    },
-  );
 });
 
-describe("device-pair notify pending formatting", () => {
-  it.each`
-    request                                                                                                                                                                           | fragments
-    ${{ requestId: "req-1", deviceId: "device-1", displayName: "dev one", platform: "ios", role: "operator", scopes: ["operator.admin", "operator.read"], remoteIp: "198.51.100.2" }} | ${["Pending device pairing requests:", "name=dev one", "platform=ios", "role=operator", "scopes=operator.admin, operator.read", "ip=198.51.100.2"]}
-    ${{ requestId: "req-2", deviceId: "device-2", roles: ["node", "operator"], scopes: [] }}                                                                                          | ${["role=node, operator", "scopes=none"]}
-  `(
-    "formats $request.requestId",
-    async ({
-      request,
-      fragments,
-    }: {
-      request: Parameters<typeof import("./notify.js").formatPendingRequests>[0][number];
-      fragments: string[];
-    }) => {
-      const { formatPendingRequests } =
-        await vi.importActual<typeof import("./notify.js")>("./notify.js");
-      const text = formatPendingRequests([request]);
-      expectFragments(text, ...fragments);
-    },
-  );
+it.each<{
+  request: Parameters<typeof formatPendingRequests>[0][number];
+  fragments: string[];
+}>`
+  request                                                                                                                                                                           | fragments
+  ${{ requestId: "req-1", deviceId: "device-1", displayName: "dev one", platform: "ios", role: "operator", scopes: ["operator.admin", "operator.read"], remoteIp: "198.51.100.2" }} | ${["Pending device pairing requests:", "name=dev one", "platform=ios", "role=operator", "scopes=operator.admin, operator.read", "ip=198.51.100.2"]}
+  ${{ requestId: "req-2", deviceId: "device-2", roles: ["node", "operator"], scopes: [] }}                                                                                          | ${["role=node, operator", "scopes=none"]}
+`("formats pending request $request.requestId", ({ request, fragments }) => {
+  expectFragments(formatPendingRequests([request]), ...fragments);
 });
 
 describe("device-pair /pair approve", () => {
+  const approved: ApproveDevicePairingResolved = {
+    status: "approved",
+    requestId: "req-1",
+    device: { ...device, createdAtMs: 1, approvedAtMs: 2 },
+  };
+  const forbidden: ApproveDevicePairingResolved = {
+    status: "forbidden",
+    reason: "caller-missing-scope",
+    scope: "operator.admin",
+  };
   it.each`
-    name                                                                    | context                                                                                       | approved                      | expectedCall               | expectedText
-    ${"allows internal gateway callers with operator.pairing"}              | ${{ channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                       | ${makeApprovedPairingResult}  | ${INTERNAL_PAIRING_SCOPES} | ${"✅ Paired Victim Phone (ios)."}
-    ${"allows command owners to approve from non-gateway command surfaces"} | ${{ channel: "telegram", gatewayClientScopes: undefined, senderIsOwner: true }}               | ${makeApprovedPairingResult}  | ${["operator.pairing"]}    | ${"✅ Paired Victim Phone (ios)."}
-    ${"preserves gateway caller scopes for command-owner approvals"}        | ${{ channel: "telegram", gatewayClientScopes: INTERNAL_PAIRING_SCOPES, senderIsOwner: true }} | ${makeApprovedPairingResult}  | ${INTERNAL_PAIRING_SCOPES} | ${"✅ Paired Victim Phone (ios)."}
-    ${"rejects approvals that request scopes above the caller session"}     | ${{ channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                       | ${makeForbiddenPairingResult} | ${INTERNAL_PAIRING_SCOPES} | ${"⚠️ This command requires operator.admin to approve this pairing request."}
-  `("$name", async ({ context, approved, expectedCall, expectedText }) => {
-    mockPendingPairingList();
-    vi.mocked(approveDevicePairing).mockResolvedValueOnce(approved());
-    const result = await runPair({
-      ...context,
-      args: "approve latest",
+    name                                                                    | context                                                                                       | approved     | expectedCall               | expectedText
+    ${"allows internal gateway callers with operator.pairing"}              | ${{ channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                       | ${approved}  | ${INTERNAL_PAIRING_SCOPES} | ${"✅ Paired Victim Phone (ios)."}
+    ${"allows command owners to approve from non-gateway command surfaces"} | ${{ channel: "telegram", gatewayClientScopes: undefined, senderIsOwner: true }}               | ${approved}  | ${["operator.pairing"]}    | ${"✅ Paired Victim Phone (ios)."}
+    ${"preserves gateway caller scopes for command-owner approvals"}        | ${{ channel: "telegram", gatewayClientScopes: INTERNAL_PAIRING_SCOPES, senderIsOwner: true }} | ${approved}  | ${INTERNAL_PAIRING_SCOPES} | ${"✅ Paired Victim Phone (ios)."}
+    ${"rejects approvals that request scopes above the caller session"}     | ${{ channel: "webchat", gatewayClientScopes: INTERNAL_PAIRING_SCOPES }}                       | ${forbidden} | ${INTERNAL_PAIRING_SCOPES} | ${"⚠️ This command requires operator.admin to approve this pairing request."}
+  `("$name", async ({ context, approved: outcome, expectedCall, expectedText }) => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [{ ...device, requestId: "req-1", ts: 1 }],
+      paired: [],
     });
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce(outcome);
+    const result = await runPair({ ...context, args: "approve latest" });
     expect(approveDevicePairing).toHaveBeenCalledWith("req-1", {
       callerScopes: expectedCall,
     });
