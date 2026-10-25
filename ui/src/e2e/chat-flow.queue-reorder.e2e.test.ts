@@ -1,9 +1,12 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   newChatPage,
   QUEUED,
@@ -42,6 +45,60 @@ async function storedQueueOrder(page: Page) {
 }
 
 suite.define(() => {
+  it("reorders queued messages using only click actions and retains durable order", async () => {
+    const { page, gateway } = await openChat();
+    await page.locator(".agent-chat__welcome").waitFor();
+    await gateway.setOnline(false);
+    await gateway.closeLatest();
+    await queueMessages(page);
+    const row = page.locator(".chat-queue__item", { hasText: QUEUED[2] });
+    const actions = row.getByRole("button", { name: "Actions for queued message: " + QUEUED[2] });
+    await actions.click();
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      for (const [mode, width, height] of [
+        ["dark", 1280, 900],
+        ["light", 1280, 900],
+        ["dark", 390, 844],
+        ["light", 390, 844],
+      ] as const) {
+        await page.evaluate((themeMode) => {
+          document.documentElement.dataset.themeMode = themeMode;
+        }, mode);
+        await page.setViewportSize({ width, height });
+        if ((await actions.getAttribute("aria-expanded")) !== "true") {
+          await actions.click();
+        }
+        const menu = row.getByRole("menu");
+        const frame = await takeControlUiScreenshotFrame(page, menu, [actions], {
+          animations: "disabled",
+        });
+        await writeFile(
+          path.join(
+            suite.artifactDir,
+            "pointer-" +
+              (process.env.OPENCLAW_POINTER_PROOF_STAGE ?? "after") +
+              "-" +
+              mode +
+              "-" +
+              width +
+              ".png",
+          ),
+          frame.png,
+        );
+      }
+    }
+    await row.getByRole("menuitem", { name: "Move earlier", exact: true }).click();
+    await expect.poll(() => storedQueueOrder(page)).toEqual([QUEUED[0], QUEUED[2], QUEUED[1]]);
+    await expect
+      .poll(() => actions.evaluate((button) => document.activeElement === button))
+      .toBe(true);
+    await expect.poll(() => row.locator(".sr-only").textContent()).toContain("position 2 of 3");
+    await actions.click();
+    await row.getByRole("menuitem", { name: "Move later", exact: true }).click();
+    await expect.poll(() => storedQueueOrder(page)).toEqual([...QUEUED]);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+  });
+
   it("delivers the reordered head after a reconnect attachment read settles", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const { gateway, composer } = await openChat(

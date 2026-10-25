@@ -218,6 +218,11 @@ const catalog = {
       reorderUnavailable: "This message holds its place and cannot be reordered",
       editQueuedMessage: "Edit queued message",
       moreActions: "More queued message actions",
+      actionsForQueuedMessage: "Actions for queued message: {message}",
+      moveEarlier: "Move earlier",
+      moveLater: "Move later",
+      movedQueuedMessage:
+        "Moved queued message {message} to position {position} of {count} in its group.",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
         applyingSettings: "Applying chat settings",
