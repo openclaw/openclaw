@@ -68,24 +68,23 @@ describe("QA self-check", () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
     buses.push(bus);
+    const cfg = { channels: { "qa-channel": { baseUrl: bus.baseUrl } } };
     const targets: unknown[] = [];
-    const testState = {
-      ...state,
-      addInboundMessage: (input: Parameters<typeof state.addInboundMessage>[0]) => {
-        const inbound = state.addInboundMessage(input);
-        const direct = input.text === "hello from qa";
-        if (direct || input.text === "inside thread") {
-          state.addOutboundMessage({
-            accountId: direct ? delivery?.directAccountId : undefined,
-            to: direct
-              ? (delivery?.directTarget ?? "dm:alice")
-              : (delivery?.threadedTarget ?? `thread:${input.conversation.id}/${input.threadId}`),
-            text: `qa-echo: ${input.text}`,
-          });
-        }
-        return inbound;
-      },
-    };
+    const addInbound = state.addInboundMessage.bind(state);
+    vi.spyOn(state, "addInboundMessage").mockImplementation((input) => {
+      const inbound = addInbound(input);
+      const direct = input.text === "hello from qa";
+      if (direct || input.text === "inside thread") {
+        state.addOutboundMessage({
+          accountId: direct ? delivery?.directAccountId : undefined,
+          to: direct
+            ? (delivery?.directTarget ?? "dm:alice")
+            : (delivery?.threadedTarget ?? `thread:${input.conversation.id}/${input.threadId}`),
+          text: `qa-echo: ${input.text}`,
+        });
+      }
+      return inbound;
+    });
     const handleAction = qaChannelPlugin.actions?.handleAction;
     if (!handleAction) {
       throw new Error("expected QA channel action handler");
@@ -97,19 +96,19 @@ describe("QA self-check", () => {
       return handleAction({
         channel: "qa-channel",
         action,
-        cfg: { channels: { "qa-channel": { baseUrl: bus.baseUrl } } },
+        cfg,
         accountId: "default",
         params: args,
       });
     };
 
     return {
-      state: testState,
+      state,
       targets,
       performAction,
       run: async () =>
         await scenarioModule.runQaScenario(createQaSelfCheckScenario({ waitTimeoutMs: 20 }), {
-          state: testState,
+          state,
           performAction,
         }),
     };
@@ -141,27 +140,26 @@ describe("QA self-check", () => {
         };
       });
     let settled = false;
-    const run = runQaSelfCheckAgainstState({ state, cfg: {}, outputPath }).finally(() => {
-      settled = true;
-    });
-    const failed = run.then(
-      () => "resolved",
-      (error: unknown) => {
-        expect(error).toMatchObject({ path: outputPath });
-        return "rejected";
-      },
-    );
+    const run = runQaSelfCheckAgainstState({
+      state,
+      cfg: {},
+      outputPath,
+    })
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
     try {
       const phase = await withinTest(
-        Promise.race([cleanupEntered.promise.then(() => "cleanup"), failed]),
+        Promise.race([cleanupEntered.promise.then(() => "cleanup"), run]),
         signal,
       );
       expect({ phase, settled }).toEqual({ phase: "cleanup", settled: false });
       releaseCleanup.resolve();
-      await expect(withinTest(failed, signal)).resolves.toBe("rejected");
+      expect(await withinTest(run, signal)).toMatchObject({ path: outputPath });
     } finally {
       releaseCleanup.resolve();
-      await Promise.allSettled([run, failed]);
+      await Promise.allSettled([run]);
     }
   });
 

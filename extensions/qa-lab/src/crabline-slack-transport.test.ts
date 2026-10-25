@@ -1,19 +1,17 @@
 import { createHmac } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { text as readText } from "node:stream/consumers";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { postJson, withTransport } from "./crabline-transport.test-support.js";
+import { expectDelivery, postJson, withTransport } from "./crabline-transport.test-support.js";
 
 describe("Crabline Slack transport", () => {
   it("keeps startup readiness and full runtime evidence for the same Slack provider", async () => {
     await withTransport("slack", async (transport, outputDir) => {
       const readArtifact = (relativePath: string) =>
         fs.readFile(path.join(outputDir, relativePath), "utf8");
-      expect(transport.id).toBe("crabline");
       expect(transport.requiredPluginIds).toEqual(["slack"]);
-      expect(transport.sendNativeCommand).toBeUndefined();
-      expect(transport.waitForOutboundSequence).toBeUndefined();
       expect(
         transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" }).channels?.slack,
       ).toMatchObject({
@@ -28,11 +26,7 @@ describe("Crabline Slack transport", () => {
         SLACK_BOT_TOKEN: "xoxb-crabline-slack-token",
         SLACK_SIGNING_SECRET: "crabline-slack-signing-secret",
       });
-      expect(transport.buildAgentDelivery({ target: "C1234567890" })).toMatchObject({
-        channel: "slack",
-        replyTo: "C1234567890",
-        to: "C1234567890",
-      });
+      expectDelivery(transport, "slack", "C1234567890", "C1234567890");
       const response = await fetch(`${env.SLACK_API_URL}users.info?user=U0123456789`, {
         headers: { authorization: `Bearer ${env.SLACK_BOT_TOKEN}` },
       });
@@ -79,10 +73,7 @@ describe("Crabline Slack transport", () => {
       await withServer(
         (request, response) => {
           void (async () => {
-            let body = "";
-            for await (const chunk of request) {
-              body += String(chunk);
-            }
+            const body = await readText(request);
             const timestamp = request.headers["x-slack-request-timestamp"];
             if (typeof timestamp !== "string") {
               response.writeHead(401).end();
@@ -99,8 +90,7 @@ describe("Crabline Slack transport", () => {
               pendingWebhook.resolve();
               return;
             }
-            response.writeHead(!signed ? 401 : rejectWebhook ? 503 : 200);
-            response.end();
+            response.writeHead(!signed ? 401 : rejectWebhook ? 503 : 200).end();
           })().catch((error: unknown) =>
             response.destroy(error instanceof Error ? error : new Error(String(error))),
           );

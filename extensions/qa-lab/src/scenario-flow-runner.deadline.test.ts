@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaScenarioFlow } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteStepOutcome } from "./suite-types.js";
 
 type QaFlowAction = QaScenarioFlow["steps"][number]["actions"][number];
@@ -10,18 +11,6 @@ const delayedSideEffectCases: Array<[name: string, action: QaFlowAction]> = [
   ["generic call", { call: "sideEffect", args: [{ expr: "await resolveInput()" }] }],
   ["sendInbound", { sendInbound: { expr: "await resolveInput()" } }],
 ];
-
-function scenario(id: string) {
-  return {
-    id,
-    title: id,
-    sourcePath: `qa/scenarios/${id}.yaml`,
-    surface: "test",
-    objective: "test",
-    successCriteria: ["test"],
-    execution: { kind: "flow" as const },
-  };
-}
 
 describe("scenario flow deadline", () => {
   it.each(delayedSideEffectCases)(
@@ -37,7 +26,7 @@ describe("scenario flow deadline", () => {
         api: {
           signal: controller.signal,
           state: createQaBusState(),
-          scenario: scenario("flow-post-resolution-abort-fence"),
+          scenario: makeQaSuiteTestScenario("flow-post-resolution-abort-fence"),
           config: {},
           resolveInput: async () => {
             markInputStarted();
@@ -46,10 +35,6 @@ describe("scenario flow deadline", () => {
           sideEffect,
           transport: {
             sendInbound: sideEffect,
-            sendNativeCommand: sideEffect,
-            waitForOutbound: sideEffect,
-            waitForOutboundSequence: sideEffect,
-            waitForNoOutbound: sideEffect,
           },
           runScenario: async (name, steps) => {
             for (const step of steps) {
@@ -84,27 +69,23 @@ describe("scenario flow deadline", () => {
     const { promise: action, resolve: releaseAction } = Promise.withResolvers<void>();
     const { promise: deadline, reject: expireDeadline } = Promise.withResolvers<never>();
     const thenKey = ["th", "en"].join("");
+    const loop = {
+      forEach: {
+        items: [1],
+        item: "item",
+        actions: [{ call: "delayedAction" }, { call: "nestedMutation" }],
+      },
+    };
     const ifAction = Object.fromEntries([
       ["expr", "true"],
-      [
-        thenKey,
-        [
-          {
-            forEach: {
-              items: [1],
-              item: "item",
-              actions: [{ call: "delayedAction" }, { call: "nestedMutation" }],
-            },
-          },
-        ],
-      ],
+      [thenKey, [loop]],
     ]);
 
     const pending = runScenarioFlow({
       api: {
         signal: controller.signal,
         state: createQaBusState(),
-        scenario: scenario("flow-abort-fence"),
+        scenario: makeQaSuiteTestScenario("flow-abort-fence"),
         config: {},
         delayedAction: async () => {
           markActionStarted();
