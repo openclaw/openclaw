@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
-import packageJson from "../../package.json" with { type: "json" };
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
@@ -104,6 +103,7 @@ export function runIsolatedModuleScript(
 }
 
 export function createSourceRuntime(root: string): string {
+  const packageJson: { files: string[] } = JSON.parse(fs.readFileSync("package.json", "utf8"));
   const runtimeRoot = path.join(root, "runtime");
   fs.mkdirSync(path.join(runtimeRoot, "dist"), { recursive: true });
   for (const dirname of ["node_modules", "packages", "scripts", "src", "docs"]) {
