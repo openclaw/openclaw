@@ -264,16 +264,6 @@ function hasNestedRepetition(source: string): boolean {
   return analysis.nestedQuantifier || analysis.ambiguousAlternation;
 }
 
-/**
- * Narrow admission predicate: true only when a quantifier repeats an atom that already
- * contains a quantifier (e.g. `(a+)+$`). Unlike {@link hasNestedRepetition}, this does not
- * apply the length-based alternation heuristic, so safe patterns such as `^(a|bc)+$` stay
- * admissible. Intended for untrusted-schema admission where false positives break honest
- * servers; operator-authored config keeps using the stricter guard.
- */
-export function hasNestedQuantifierRepetition(source: string): boolean {
-  return analyzeRepetition(source).nestedQuantifier;
-}
 
 type BranchStartSet = { any: boolean; chars: Set<string> };
 
@@ -431,15 +421,46 @@ function readClassStartSet(
   return null;
 }
 
+/**
+ * One atom-plus-quantifier inside a repeated group. `consumable` holds the characters a
+ * quantified item can consume across its repetitions; it stays empty for unquantified items,
+ * which cannot extend and therefore cannot create segmentation ambiguity.
+ */
+type SequenceUnit = {
+  first: BranchStartSet;
+  consumable: BranchStartSet;
+  nullable: boolean;
+  unbounded: boolean;
+};
+
+type ExtendedBranch = AlternationBranch & {
+  consumable: BranchStartSet;
+  hasUnboundedQuantifier: boolean;
+};
+
+type PendingGroup =
+  | { kind: "alternation"; branches: ExtendedBranch[] }
+  | { kind: "sequence"; units: SequenceUnit[] };
+
 type OverlapFrame = {
   sawAlternation: boolean;
-  branches: AlternationBranch[];
+  branches: ExtendedBranch[];
   firstSet: BranchStartSet;
   literal: string | null;
   startDecided: boolean;
   hasToken: boolean;
-  /** Branches of the most recently closed alternation group awaiting a possible quantifier. */
-  pendingAlternation: AlternationBranch[] | null;
+  /** Units of the current (non-alternation) sequence within this frame. */
+  units: SequenceUnit[];
+  /** First set of the atom currently being built within the current unit. */
+  pendingUnitFirst: BranchStartSet;
+  /** Consumable set of the atom currently being built within the current unit. */
+  pendingUnitConsumable: BranchStartSet;
+  /** Whether the pending unit has seen any token since the last unit boundary. */
+  pendingUnitHasToken: boolean;
+  /** Whether the pending unit has seen a non-nullable token. */
+  pendingUnitMandatory: boolean;
+  /** Group analysis awaiting a possible quantifier. */
+  pendingGroup: PendingGroup | null;
 };
 
 function createOverlapFrame(): OverlapFrame {
@@ -450,23 +471,76 @@ function createOverlapFrame(): OverlapFrame {
     literal: "",
     startDecided: false,
     hasToken: false,
-    pendingAlternation: null,
+    units: [],
+    pendingUnitFirst: EMPTY_BRANCH_SET,
+    pendingUnitConsumable: EMPTY_BRANCH_SET,
+    pendingUnitHasToken: false,
+    pendingUnitMandatory: false,
+    pendingGroup: null,
   };
 }
 
-function finalizeBranch(frame: OverlapFrame): AlternationBranch {
+/** First set of a unit range, walking past nullable units. */
+function prefixFirst(units: SequenceUnit[], from: number): BranchStartSet {
+  let result = EMPTY_BRANCH_SET;
+  for (let i = from; i < units.length; i += 1) {
+    result = unionBranchSets(result, units[i].first);
+    if (!units[i].nullable) {
+      break;
+    }
+  }
+  return result;
+}
+
+/** Whole-group first set: first set of its units, walking past nullable units. */
+function groupFirstSet(units: SequenceUnit[]): BranchStartSet {
+  return prefixFirst(units, 0);
+}
+
+/** Whole-group consumable set: every character any unit can consume. */
+function groupConsumableSet(units: SequenceUnit[]): BranchStartSet {
+  let result = EMPTY_BRANCH_SET;
+  for (const unit of units) {
+    result = unionBranchSets(result, unit.first);
+    result = unionBranchSets(result, unit.consumable);
+  }
+  return result;
+}
+
+function finalizeBranch(frame: OverlapFrame): ExtendedBranch {
   if (!frame.hasToken) {
     // Empty alternative: matches the empty string, so it overlaps every other branch.
-    return { firstSet: ANY_BRANCH_SET, literal: "", nullable: true };
+    return {
+      firstSet: ANY_BRANCH_SET,
+      literal: "",
+      nullable: true,
+      consumable: ANY_BRANCH_SET,
+      hasUnboundedQuantifier: false,
+    };
   }
   return {
     firstSet: frame.firstSet,
     literal: frame.literal,
     nullable: !frame.startDecided,
+    consumable: unionBranchSets(frame.pendingUnitConsumable, frame.firstSet),
+    hasUnboundedQuantifier: frame.units.some((unit) => unit.unbounded),
   };
 }
 
-function alternationBranchesAmbiguous(branches: AlternationBranch[]): boolean {
+/**
+ * A repeated alternation is ambiguous when branches can match the same position and either
+ * one literal is a prefix of the other or a branch with an unbounded internal quantifier can
+ * consume a character that starts any branch (including the next repetition).
+ */
+function alternationBranchesAmbiguous(branches: ExtendedBranch[]): boolean {
+  const allFirsts = branches
+    .map((branch) => branch.firstSet)
+    .reduce((acc, entry) => unionBranchSets(acc, entry), EMPTY_BRANCH_SET);
+  for (const branch of branches) {
+    if (branch.hasUnboundedQuantifier && branchSetsOverlap(branch.consumable, allFirsts)) {
+      return true;
+    }
+  }
   for (let a = 0; a < branches.length; a += 1) {
     for (let b = a + 1; b < branches.length; b += 1) {
       const left = branches[a];
@@ -489,6 +563,35 @@ function alternationBranchesAmbiguous(branches: AlternationBranch[]): boolean {
 }
 
 /**
+ * A repeated sequence is ambiguous when a quantified unit can consume a character that can
+ * also begin what follows it — the rest of the atom, or, when the rest can vanish, the next
+ * repetition of the whole atom. `(-[a-z0-9]+)*` is safe because the inner class cannot
+ * consume the `-` that starts a new repetition; `(a+)+` is not, because `a` extends the inner
+ * quantifier and starts the next repetition.
+ */
+function sequenceUnitsAmbiguous(units: SequenceUnit[]): boolean {
+  if (units.length === 0) {
+    return false;
+  }
+  const restart = groupFirstSet(units);
+  for (let k = 0; k < units.length; k += 1) {
+    const unit = units[k];
+    if (!unit.unbounded) {
+      continue;
+    }
+    let after = prefixFirst(units, k + 1);
+    const restNullable = units.slice(k + 1).every((entry) => entry.nullable);
+    if (restNullable) {
+      after = unionBranchSets(after, restart);
+    }
+    if (branchSetsOverlap(unit.consumable, after)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Detect alternation groups repeated by an unbounded quantifier whose branches can match the
  * same input position — the alternation form of catastrophic backtracking (e.g. `(a|aa)+$`).
  * Branches that start with disjoint characters are provably deterministic per input position;
@@ -497,7 +600,7 @@ function alternationBranchesAmbiguous(branches: AlternationBranch[]): boolean {
  * Returns false for malformed sources: invalid patterns never execute, so their diagnostics
  * stay with the validation engines.
  */
-export function hasAmbiguousAlternationOverlap(source: string): boolean {
+export function hasCatastrophicBacktracking(source: string): boolean {
   const frames: OverlapFrame[] = [createOverlapFrame()];
   const frame = () => frames[frames.length - 1];
 
@@ -505,13 +608,36 @@ export function hasAmbiguousAlternationOverlap(source: string): boolean {
     firstSet: BranchStartSet,
     literalPiece: string | null,
     nullable: boolean,
+    consumableSet?: BranchStartSet,
   ) => {
     const current = frame();
+    // A token following an unquantified atom finalizes that atom as its own item.
+    if (current.pendingUnitHasToken) {
+      current.units.push({
+        first: current.pendingUnitFirst,
+        consumable: EMPTY_BRANCH_SET,
+        nullable: !current.pendingUnitMandatory,
+        unbounded: false,
+      });
+      current.pendingUnitFirst = EMPTY_BRANCH_SET;
+      current.pendingUnitConsumable = EMPTY_BRANCH_SET;
+      current.pendingUnitHasToken = false;
+      current.pendingUnitMandatory = false;
+    }
     if (!current.startDecided) {
       current.firstSet = unionBranchSets(current.firstSet, firstSet);
       if (!nullable) {
         current.startDecided = true;
       }
+    }
+    current.pendingUnitFirst = unionBranchSets(current.pendingUnitFirst, firstSet);
+    current.pendingUnitConsumable = unionBranchSets(
+      current.pendingUnitConsumable,
+      consumableSet ?? firstSet,
+    );
+    current.pendingUnitHasToken = true;
+    if (!nullable) {
+      current.pendingUnitMandatory = true;
     }
     if (literalPiece === null || nullable) {
       current.literal = null;
@@ -519,7 +645,25 @@ export function hasAmbiguousAlternationOverlap(source: string): boolean {
       current.literal += literalPiece;
     }
     current.hasToken = true;
-    current.pendingAlternation = null;
+    current.pendingGroup = null;
+  };
+
+  /** Fold the in-progress atom into a unit and start a new one. */
+  const finalizePendingUnit = (nullable: boolean, unbounded: boolean) => {
+    const current = frame();
+    const consumable = unbounded
+      ? unionBranchSets(current.pendingUnitFirst, current.pendingUnitConsumable)
+      : EMPTY_BRANCH_SET;
+    current.units.push({
+      first: current.pendingUnitFirst,
+      consumable,
+      nullable,
+      unbounded,
+    });
+    current.pendingUnitFirst = EMPTY_BRANCH_SET;
+    current.pendingUnitConsumable = EMPTY_BRANCH_SET;
+    current.pendingUnitHasToken = false;
+    current.pendingUnitMandatory = false;
   };
 
   let i = 0;
@@ -641,15 +785,26 @@ export function hasAmbiguousAlternationOverlap(source: string): boolean {
       const closed = frames.pop();
       const parent = frame();
       const branch = finalizeBranch(closed);
+      // Trailing atom without a quantifier becomes the final unit, when one is pending.
+      if (closed.pendingUnitHasToken) {
+        closed.units.push({
+          first: closed.pendingUnitFirst,
+          consumable: EMPTY_BRANCH_SET,
+          nullable: !closed.pendingUnitMandatory,
+          unbounded: false,
+        });
+      }
+      const groupFirst = groupFirstSet(closed.units);
+      const groupConsumable = groupConsumableSet(closed.units);
       if (closed.sawAlternation) {
         const allBranches = [...closed.branches, branch];
-        const firstSet = allBranches
-          .map((entry) => entry.firstSet)
-          .reduce((acc, entry) => unionBranchSets(acc, entry), EMPTY_BRANCH_SET);
-        consumeToken(firstSet, null, allBranches.some((entry) => entry.nullable));
-        parent.pendingAlternation = allBranches;
+        const nullable = allBranches.some((entry) => entry.nullable);
+        consumeToken(groupFirst, null, nullable, groupConsumable);
+        parent.pendingGroup = { kind: "alternation", branches: allBranches };
       } else {
-        consumeToken(branch.firstSet, branch.nullable ? null : branch.literal, branch.nullable);
+        const nullable = closed.units.every((unit) => unit.nullable);
+        consumeToken(groupFirst, nullable ? null : branch.literal, nullable, groupConsumable);
+        parent.pendingGroup = { kind: "sequence", units: closed.units };
       }
       i += 1;
       continue;
@@ -662,24 +817,33 @@ export function hasAmbiguousAlternationOverlap(source: string): boolean {
       current.literal = "";
       current.startDecided = false;
       current.hasToken = false;
-      current.pendingAlternation = null;
+      current.units = [];
+      current.pendingUnitFirst = EMPTY_BRANCH_SET;
+      current.pendingUnitConsumable = EMPTY_BRANCH_SET;
+      current.pendingUnitHasToken = false;
+      current.pendingUnitMandatory = false;
+      current.pendingGroup = null;
       i += 1;
       continue;
     }
     const quantifier = readQuantifier(source, i);
     if (quantifier) {
       const current = frame();
-      if (!current.hasToken && current.pendingAlternation === null) {
+      if (!current.hasToken && current.pendingGroup === null) {
         // Quantifier without a preceding atom: malformed pattern.
         return false;
       }
-      if (
-        quantifier.maxRepeat === null &&
-        current.pendingAlternation &&
-        alternationBranchesAmbiguous(current.pendingAlternation)
-      ) {
-        return true;
+      if (quantifier.maxRepeat === null && current.pendingGroup) {
+        const ambiguous =
+          current.pendingGroup.kind === "alternation"
+            ? alternationBranchesAmbiguous(current.pendingGroup.branches)
+            : sequenceUnitsAmbiguous(current.pendingGroup.units);
+        if (ambiguous) {
+          return true;
+        }
       }
+      // The repeated atom (plain token or whole group) becomes one unit.
+      finalizePendingUnit(quantifier.minRepeat === 0, quantifier.maxRepeat === null);
       if (quantifier.minRepeat === 0) {
         // The preceding atom became nullable, which makes the branch multi-string.
         current.literal = null;
@@ -687,7 +851,7 @@ export function hasAmbiguousAlternationOverlap(source: string): boolean {
           current.firstSet = ANY_BRANCH_SET;
         }
       }
-      current.pendingAlternation = null;
+      current.pendingGroup = null;
       i += quantifier.consumed;
       continue;
     }

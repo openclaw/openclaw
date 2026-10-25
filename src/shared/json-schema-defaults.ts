@@ -7,10 +7,7 @@ import {
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { Check } from "typebox/schema";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import {
-  hasAmbiguousAlternationOverlap,
-  hasNestedQuantifierRepetition,
-} from "../security/safe-regex.js";
+import { hasCatastrophicBacktracking } from "../security/safe-regex.js";
 import { validateSchemaKeywordShapes, validateTypeKeyword } from "./json-schema-keywords.js";
 
 type LocalRefResolution =
@@ -411,11 +408,14 @@ function previewSchemaPattern(pattern: string): string {
  * visitSchemaChildren so applicator and dependency subschemas (`properties`, `$defs`,
  * `allOf`/`anyOf`/`oneOf`, `dependencies`, `items`, …) all contribute their patterns.
  *
- * Admission stays deliberately narrower than the operator-config safe-regex guard: it rejects
- * nested-quantifier patterns and ambiguous-alternation patterns, but admits valid JSON Schema
- * constructs an honest server may ship (disjoint alternations such as `^(a|bc)+$`, sequential
- * groups such as `^(ab)+(cd)+$`, empty/whitespace-only patterns). Invalid patterns are not
- * rejected here at all — the validation engines keep their established diagnostics for those.
+ * Admission stays deliberately narrower than the operator-config safe-regex guard: the
+ * analysis only rejects patterns whose repetition is provably ambiguous (nested quantifiers
+ * over overlapping character sets such as `(a+)+`, and alternations whose branches can match
+ * the same position such as `(a|aa)+`), while admitting constructs honest servers ship
+ * (slug patterns such as `^[a-z0-9]+(?:-[a-z0-9]+)*$`, disjoint alternations such as
+ * `^(a|bc)+$`, sequential groups such as `^(ab)+(cd)+$`, empty/whitespace-only patterns).
+ * Invalid patterns are not rejected here at all — the validation engines keep their
+ * established diagnostics for those.
  */
 export function findJsonSchemaUnsafePatternError(schema: JsonSchemaValue): string | undefined {
   const patterns: string[] = [];
@@ -437,11 +437,8 @@ export function findJsonSchemaUnsafePatternError(schema: JsonSchemaValue): strin
   };
   collectFrom(schema);
   for (const pattern of patterns) {
-    if (hasNestedQuantifierRepetition(pattern)) {
-      return `regex pattern ${previewSchemaPattern(pattern)} is not safe to compile (unsafe-nested-repetition)`;
-    }
-    if (hasAmbiguousAlternationOverlap(pattern)) {
-      return `regex pattern ${previewSchemaPattern(pattern)} is not safe to compile (unsafe-ambiguous-alternation)`;
+    if (hasCatastrophicBacktracking(pattern)) {
+      return `regex pattern ${previewSchemaPattern(pattern)} is not safe to compile (catastrophic backtracking)`;
     }
   }
   return undefined;
