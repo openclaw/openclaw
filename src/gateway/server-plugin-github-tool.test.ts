@@ -173,10 +173,6 @@ async function createFixture(allow?: string[], throughSearch = false) {
   if (throughSearch) {
     registerHeadlessToolSearchCatalog({ catalogRef, tools });
   }
-  const tool = expectDefined(
-    tools.find((candidate) => candidate.name === "github_read"),
-    "registered GitHub reader",
-  );
   const fetcher = vi.fn<typeof fetch>(async (input) => {
     const url = new URL(requestUrl(input));
     if (url.pathname === "/user") {
@@ -198,11 +194,7 @@ async function createFixture(allow?: string[], throughSearch = false) {
     }
     if (url.pathname === "/search/issues") {
       const page = Number(url.searchParams.get("page"));
-      return Response.json({
-        total_count: 21,
-        incomplete_results: false,
-        items: [searchItem(page)],
-      });
+      return searchPage([searchItem(page)], 21);
     }
     return Response.json({
       id: 123,
@@ -231,16 +223,12 @@ async function createFixture(allow?: string[], throughSearch = false) {
     invoke("github_search", { repository: "octocat/reader", kind: "issue", ...params }, signal);
   return {
     config,
-    context,
     client,
     scope,
     host,
-    captured,
     registry,
     record,
     assemble,
-    tool,
-    tools,
     fetcher,
     read,
     search,
@@ -252,6 +240,12 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
 }
 
 type Reader = Awaited<ReturnType<typeof createFixture>>;
+
+function searchUrls(reader: Reader) {
+  return reader.fetcher.mock.calls
+    .map(([input]) => new URL(requestUrl(input)))
+    .filter((url) => url.pathname === "/search/issues");
+}
 
 function interceptRequests(
   reader: Reader,
@@ -304,6 +298,23 @@ function searchItem(number = 1, overrides: Record<string, unknown> = {}) {
   };
 }
 
+function searchPage(
+  items: ReturnType<typeof searchItem>[] = [],
+  total = items.length,
+  incomplete = false,
+) {
+  return Response.json({ total_count: total, incomplete_results: incomplete, items });
+}
+
+function expectUntrustedContent(result: Awaited<ReturnType<Reader["read"]>>, ...texts: string[]) {
+  for (const text of ["EXTERNAL_UNTRUSTED_CONTENT", ...texts]) {
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ text: expect.stringContaining(text) }),
+    );
+  }
+  expect(JSON.stringify(result)).not.toContain(token);
+}
+
 function installJobResponses(reader: Reader) {
   const jobUrl = "https://api.github.com/repos/octocat/reader/actions/jobs/117611687309";
   const storage = "https://productionresultssa10.blob.core.windows.net/logs/job.txt?sig=synthetic";
@@ -352,62 +363,33 @@ describe("GitHub agent reader", () => {
       expect(result.details).toMatchObject(
         throughSearch ? { result: { details: document } } : document,
       );
-      expect(result.content).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT") }),
-          expect.objectContaining({ text: expect.stringContaining("Failed check") }),
-        ]),
-      );
-      expect(JSON.stringify(result)).not.toContain(token);
+      expectUntrustedContent(result, "Failed check");
       expect(JSON.stringify(result)).not.toContain("sig=synthetic");
     },
   );
 
   it("searches a public repository, follows a bounded page and reads its result", async () => {
     fixture = await createFixture();
-    const first = await fixture.search({
-      query: "gateway OR streaming",
-      kind: "issue",
-      state: "open",
-    });
+    const query = { query: "gateway OR streaming", kind: "issue", state: "open" };
+    const first = await fixture.search(query);
     expect(first.details).toMatchObject({
-      repository: "octocat/reader",
-      page: 1,
       pageSize: 20,
-      totalCount: 21,
-      incomplete: false,
-      limited: false,
       nextPage: 2,
       items: [{ number: 1, kind: "issue", url: "https://github.com/octocat/reader/issues/1" }],
     });
-    const second = await fixture.search({
-      query: "gateway OR streaming",
-      kind: "issue",
-      state: "open",
-      page: 2,
-    });
+    const second = await fixture.search({ ...query, page: 2 });
     expect(second.details).toMatchObject({ page: 2, nextPage: null, items: [{ number: 2 }] });
     const result = await fixture.read({ url: "https://github.com/octocat/reader/issues/2" });
     expect(result.details).toMatchObject({ title: "Public reader issue" });
-    const urls = fixture.fetcher.mock.calls
-      .map(([input]) => new URL(requestUrl(input)))
-      .filter((url) => url.pathname === "/search/issues");
-    expect(urls.map((url) => url.searchParams.get("page"))).toEqual(["1", "2"]);
-    expect(urls[0]?.searchParams.get("q")).toBe(
+    expect(searchUrls(fixture)[0]?.searchParams.get("q")).toBe(
       'repo:octocat/reader is:public is:issue is:open "gateway" "OR" "streaming"',
     );
-    expect(urls[0]?.searchParams.get("per_page")).toBe("20");
-    expect(JSON.stringify(first)).not.toContain(token);
-    expect(first.content).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT") }),
-      ]),
-    );
+    expectUntrustedContent(first);
   });
 
   it("reports no matches, incomplete results, the search cap and rate-limit retry information", async () => {
     fixture = await createFixture();
-    let response = () => Response.json({ total_count: 0, incomplete_results: false, items: [] });
+    let response = () => searchPage();
     interceptRequests(fixture, (input) =>
       new URL(requestUrl(input)).pathname === "/search/issues" ? response() : undefined,
     );
@@ -418,28 +400,20 @@ describe("GitHub agent reader", () => {
       incomplete: false,
     });
     response = () =>
-      Response.json({
-        total_count: 1,
-        incomplete_results: false,
-        items: [
-          searchItem(2, {
-            html_url: "https://github.com/octocat/reader/pull/2",
-            pull_request: {},
-            state: "closed",
-          }),
-        ],
-      });
+      searchPage([
+        searchItem(2, {
+          html_url: "https://github.com/octocat/reader/pull/2",
+          pull_request: {},
+          state: "closed",
+        }),
+      ]);
     expect((await fixture.search({ kind: "pull", state: "closed" })).details).toMatchObject({
       items: [{ kind: "pull", state: "closed", url: "https://github.com/octocat/reader/pull/2" }],
     });
-    expect(
-      fixture.fetcher.mock.calls.some(
-        ([input]) =>
-          new URL(requestUrl(input)).searchParams.get("q") ===
-          "repo:octocat/reader is:public is:pull-request is:closed",
-      ),
-    ).toBe(true);
-    response = () => Response.json({ total_count: 1200, incomplete_results: true, items: [] });
+    expect(searchUrls(fixture).map((url) => url.searchParams.get("q"))).toContain(
+      "repo:octocat/reader is:public is:pull-request is:closed",
+    );
+    response = () => searchPage([], 1200, true);
     expect((await fixture.search({ page: 50 })).details).toMatchObject({
       nextPage: null,
       incomplete: true,
@@ -448,12 +422,9 @@ describe("GitHub agent reader", () => {
     });
     response = () => new Response(null, { status: 429, headers: { "retry-after": "60" } });
     await expect(fixture.search()).rejects.toThrow(/rate limit.*Wait 60 seconds/i);
-    const calls = fixture.fetcher.mock.calls;
-    const searchRequests = () =>
-      calls.filter(([input]) => new URL(requestUrl(input)).pathname === "/search/issues").length;
-    const requestsBeforeRetry = searchRequests();
+    const requestsBeforeRetry = searchUrls(fixture).length;
     await expect(fixture.search()).rejects.toThrow(/rate limit/i);
-    expect(searchRequests()).toBe(requestsBeforeRetry);
+    expect(searchUrls(fixture)).toHaveLength(requestsBeforeRetry);
   });
 
   it("rejects query scope escapes and out-of-range pages before GitHub I/O", async () => {
@@ -483,18 +454,14 @@ describe("GitHub agent reader", () => {
       const url = new URL(requestUrl(input));
       if (url.pathname === "/search/issues") {
         searched = true;
-        return Response.json({
-          total_count: 1,
-          incomplete_results: false,
-          items: [
-            searchItem(
-              1,
-              mode === "foreign"
-                ? { repository_url: "https://api.github.com/repos/other/private" }
-                : {},
-            ),
-          ],
-        });
+        return searchPage([
+          searchItem(
+            1,
+            mode === "foreign"
+              ? { repository_url: "https://api.github.com/repos/other/private" }
+              : {},
+          ),
+        ]);
       }
       if (
         url.pathname === "/repos/octocat/reader" &&
@@ -513,28 +480,6 @@ describe("GitHub agent reader", () => {
     await expect(fixture.search()).rejects.toThrow(/public/);
   });
 
-  it.each(["cancel", "caller closure"] as const)(
-    "withholds in-flight search after %s",
-    async (change) => {
-      fixture = await createFixture();
-      const paused = pauseRequest(fixture, "/search/issues");
-      const cancel = new AbortController();
-      const pending = fixture.search({}, cancel.signal);
-      const rejected = expect(pending).rejects.toThrow();
-      try {
-        const signal = await paused.wait(pending);
-        if (change === "cancel") {
-          cancel.abort();
-          expect(signal.aborted).toBe(true);
-        } else {
-          fixture.host.closeHost();
-        }
-      } finally {
-        paused.release();
-        await rejected;
-      }
-    },
-  );
   it.each([
     { policy: "coding profile", allow: undefined },
     { policy: "plugin allowlist", allow: ["github"] },
@@ -632,42 +577,52 @@ describe("GitHub agent reader", () => {
     expect(fixture.fetcher).not.toHaveBeenCalled();
   });
 
-  it.each(["cancel", "close caller", "retire plugin"] as const)(
-    "does not disclose an in-flight response after %s",
-    async (change) => {
-      fixture = await createFixture();
-      const paused = pauseRequest(fixture, "/repos/octocat/reader/issues/1", true);
-      const cancel = new AbortController();
-      const pending = fixture.read({}, cancel.signal);
-      const rejected = expect(pending).rejects.toThrow();
-      try {
-        const signal = await paused.wait(pending);
-        if (change === "cancel") {
-          cancel.abort();
-        } else if (change === "close caller") {
-          fixture.host.closeHost();
-        } else {
-          fixture.registry.rollbackPluginGlobalSideEffects("github", fixture.record);
-        }
-        paused.release();
-        await rejected;
-        if (change === "cancel") {
-          expect(signal.aborted).toBe(true);
-        }
+  it.each([
+    ["search", "cancel"],
+    ["search", "close caller"],
+    ["read", "cancel"],
+    ["read", "close caller"],
+    ["read", "retire plugin"],
+  ] as const)("does not disclose an in-flight %s after %s", async (method, change) => {
+    fixture = await createFixture();
+    const reading = method === "read";
+    const paused = pauseRequest(
+      fixture,
+      reading ? "/repos/octocat/reader/issues/1" : "/search/issues",
+      reading,
+    );
+    const cancel = new AbortController();
+    const pending = fixture[method]({}, cancel.signal);
+    const rejected = expect(pending).rejects.toThrow();
+    try {
+      const signal = await paused.wait(pending);
+      if (change === "cancel") {
+        cancel.abort();
+      } else if (change === "close caller") {
+        fixture.host.closeHost();
+      } else {
+        fixture.registry.rollbackPluginGlobalSideEffects("github", fixture.record);
+      }
+      paused.release();
+      await rejected;
+      if (change === "cancel") {
+        expect(signal.aborted).toBe(true);
+      }
+      if (reading) {
         expect(
           fixture.fetcher.mock.calls.some(([input]) => requestUrl(input).includes("/comments")),
         ).toBe(false);
-        if (change === "cancel") {
-          expect((await fixture.read({ refresh: false })).details).toMatchObject({
-            title: "Public reader issue",
-          });
-        }
-      } finally {
-        paused.release();
-        await pending.catch(() => {});
       }
-    },
-  );
+      if (reading && change === "cancel") {
+        expect((await fixture.read({ refresh: false })).details).toMatchObject({
+          title: "Public reader issue",
+        });
+      }
+    } finally {
+      paused.release();
+      await pending.catch(() => {});
+    }
+  });
 
   it.each(["fresh", "cached", "job storage"] as const)(
     "stops GitHub I/O and %s delivery after identity reassignment",

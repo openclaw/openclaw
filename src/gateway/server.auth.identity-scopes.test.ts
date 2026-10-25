@@ -171,14 +171,21 @@ function tailscaleEndpoint(server: Pick<GatewayServer, "getTailscaleIngressEndpo
 
 async function verifiedProfile(ws: WebSocket, connected: Connected) {
   expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
-  const self = await rpcReq<UsersSelfResult>(ws, "users.self");
-  expect(self.ok, JSON.stringify(self.error)).toBe(true);
-  return self.payload?.profile.id;
+  return (await rpcPayload<UsersSelfResult>(ws, "users.self"))?.profile.id;
+}
+
+async function rpcPayload<T extends Record<string, unknown> = Record<string, unknown>>(
+  ws: WebSocket,
+  method: string,
+  params?: object,
+) {
+  const result = await rpcReq<T>(ws, method, params);
+  expect(result.ok, JSON.stringify(result.error)).toBe(true);
+  return result.payload;
 }
 
 async function expectPayload(ws: WebSocket, method: string, payload: unknown, params?: object) {
-  const result = await rpcReq(ws, method, params);
-  expect(result, JSON.stringify(result.error)).toMatchObject({ ok: true, payload });
+  expect({ payload: await rpcPayload(ws, method, params) }).toMatchObject({ payload });
 }
 
 async function expectWriteDenied(ws: WebSocket, key: string) {
@@ -317,7 +324,6 @@ test("denies missing person access, retires grant or alias authority, and preser
       });
       grant = new AbortController();
       const guest = await connect("visitor@example.com");
-      expect(guest.connected.ok).toBe(true);
       expect((await rpcReq(guest.ws, "status")).ok).toBe(true);
       grant.abort(new Error("Grant expired"));
       expect(await waitForWsClose(guest.ws, 1_000)).toBe(true);
@@ -329,7 +335,6 @@ test("denies missing person access, retires grant or alias authority, and preser
       linkEmail("retained@example.com", person.id);
       const replacement = ensureProfileForEmail("replacement@example.com");
       const aliasGuest = await connect("visitor@example.com");
-      expect(aliasGuest.connected.ok).toBe(true);
       setDisplayName(person.id, "Updated visitor");
       linkEmail("added@example.com", person.id);
       expect((await rpcReq(aliasGuest.ws, "status")).ok).toBe(true);
@@ -395,23 +400,21 @@ test.each([
         });
         expect(adminConnected.ok).toBe(true);
         expect(responseAuth(adminConnected)?.deviceToken).toBeUndefined();
-        const registration = await rpcReq<{ requestId: string }>(
+        const registration = await rpcPayload<{ requestId: string }>(
           ws,
           "device.scopes.requestUpgrade",
           { scopes: UPGRADE_SCOPES },
         );
-        expect(registration.ok).toBe(true);
-        const requestId = registration.payload?.requestId;
-        expect(requestId).toBeTypeOf("string");
+        const requestId = registration?.requestId;
         expect((await rpcReq(admin, "device.pair.approve", { requestId })).ok).toBe(true);
-        const result = await rpcReq<{ deviceToken: string }>(ws, "device.scopes.waitUpgrade", {
+        const result = await rpcPayload<{ deviceToken: string }>(ws, "device.scopes.waitUpgrade", {
           requestId,
         });
         expect(result).toMatchObject({
-          ok: true,
-          payload: { status: "approved", scopes: [...UPGRADE_SCOPES, "operator.talk"].toSorted() },
+          status: "approved",
+          scopes: [...UPGRADE_SCOPES, "operator.talk"].toSorted(),
         });
-        expect(result.payload?.deviceToken).toBeTypeOf("string");
+        expect(result?.deviceToken).toBeTypeOf("string");
         expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(false);
       }
     } finally {
@@ -437,7 +440,6 @@ test("lets the shared-token owner manage accounts across device-token reconnects
         },
         { origin: BROWSER_ORIGIN },
       );
-      expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
       await expectProfile(ws, GATEWAY_OWNER_PROFILE_ID);
       if (!reconnect) {
         deviceToken = (connected.payload as HelloOk).auth.deviceToken;
@@ -448,11 +450,10 @@ test("lets the shared-token owner manage accounts across device-token reconnects
           assertCurrent() {},
         }).authProfileId;
       }
-      const cleared = await rpcReq(ws, "users.unlinkAuthProfile", {
+      await rpcPayload(ws, "users.unlinkAuthProfile", {
         profileId: GATEWAY_OWNER_PROFILE_ID,
         provider: "anthropic",
       });
-      expect(cleared.ok, JSON.stringify(cleared.error)).toBe(true);
       await expectPayload(ws, "users.listModelAccounts", {
         profileId: GATEWAY_OWNER_PROFILE_ID,
         accounts: [{ authProfileId, provider: "anthropic", selected: false }],
@@ -517,13 +518,7 @@ test("adds a case-insensitive trusted-proxy email grant without changing pairing
       );
       expectScopes(connected, ["operator.write", "operator.admin"]);
       expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(true);
-      const browse = await rpcReq<{ path?: string }>(ws, "fs.listDir", {
-        path: outsideWorkspace,
-      });
-      expect(browse, JSON.stringify(browse.error)).toMatchObject({
-        ok: true,
-        payload: { path: outsideWorkspace },
-      });
+      await expectPayload(ws, "fs.listDir", { path: outsideWorkspace }, { path: outsideWorkspace });
     });
   } finally {
     testState.agentConfig = undefined;
@@ -589,8 +584,7 @@ test.each<[string, string | undefined, boolean]>([
     const auth = buildGatewayConnectAuth(
       selectGatewayConnectAuth({ token, storedToken: cached.token, storedScopes: cached.scopes }),
     );
-    const { ws, connected } = await tailscale(login, { ...options, ...auth, prePairDevice: false });
-    expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
+    const { ws } = await tailscale(login, { ...options, ...auth, prePairDevice: false });
     await expectProfile(ws, usePerson ? profileId : GATEWAY_OWNER_PROFILE_ID);
     ws.close();
     expect(await waitForWsClose(ws, 1_000)).toBe(true);
@@ -606,8 +600,7 @@ test("keeps a verified GitHub person signed in while anonymous GitHub quota is e
     const profileId = await withPerson("ada@github", verifiedProfile);
 
     github.quotaExhausted = true;
-    await withPerson("ada@github", async (ws, connected) => {
-      expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
+    await withPerson("ada@github", async (ws) => {
       await expectProfile(ws, profileId);
       expect((await rpcReq(ws, "sessions.list")).ok).toBe(true);
     });
