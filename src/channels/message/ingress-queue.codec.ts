@@ -146,6 +146,72 @@ export function failedRecord<TPayload, TMetadata>(
 
 export const CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT = 100;
 
+/** Bound the number of bounded pages one claim scans past fully blocked lanes. */
+export const CHANNEL_INGRESS_CLAIM_SCAN_PAGE_BUDGET = 10;
+
+/**
+ * 64-bit FNV-1a over a prefix row's FIFO, membership, and lane-policy identity.
+ * XOR-composable, so a retained direct-scan cursor can fold walked rows into an
+ * expected prefix fingerprint that detects offsetting writes (one row removed,
+ * another inserted) which a count alone cannot observe. The persisted payload is
+ * hashed too because derived lanes are a function of it: replacing a row with the
+ * same id, timestamps, lane_key, and status but a different payload must invalidate
+ * a retained cursor that derived a blocked lane from the old payload.
+ */
+export function channelIngressPrefixRowFingerprint(row: {
+  event_id: string;
+  received_at: number;
+  lane_key: string | null;
+  status: string;
+  payload_json: string;
+}): string {
+  let hash = 0xcbf29ce484222325n;
+  const parts = [
+    row.event_id,
+    String(row.received_at),
+    row.lane_key ?? "",
+    row.status,
+    row.payload_json,
+  ];
+  for (const part of parts) {
+    for (let index = 0; index < part.length; index++) {
+      hash ^= BigInt(part.charCodeAt(index));
+      hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+    }
+    // Field separator so concatenations of adjacent parts cannot collide.
+    hash ^= 0xffn;
+    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return hash.toString(16);
+}
+
+/** XOR-combine prefix row fingerprints into a set fingerprint of the ordered prefix. */
+export function xorChannelIngressPrefixFingerprints(...fingerprints: string[]): string {
+  let result = 0n;
+  for (const fingerprint of fingerprints) {
+    result ^= BigInt(`0x${fingerprint || "0"}`);
+  }
+  return result.toString(16);
+}
+
+/** Fold prefix row fingerprints in a bounded loop, avoiding a variadic spread
+ * that would exceed V8's function-argument limit on a very large prefix. */
+export function foldChannelIngressPrefixFingerprints(
+  rows: ReadonlyArray<{
+    event_id: string;
+    received_at: number;
+    lane_key: string | null;
+    status: string;
+    payload_json: string;
+  }>,
+): string {
+  let result = 0n;
+  for (const row of rows) {
+    result ^= BigInt(`0x${channelIngressPrefixRowFingerprint(row) || "0"}`);
+  }
+  return result.toString(16);
+}
+
 /** Resolve host policy only for the rows the original bounded scan would visit. */
 export function selectChannelIngressClaim(
   snapshot: ChannelIngressClaimSnapshot,
@@ -160,14 +226,19 @@ export function selectChannelIngressClaim(
     }
   }
   const corruptIds: string[] = [];
-  let pending = snapshot.pending;
-  while (true) {
-    const removed = new Set<string>();
-    for (const row of pending.slice(0, Math.max(1, Math.floor(request.scanLimit ?? 100)))) {
+  const pending = snapshot.pending;
+  const scanLimit = Math.max(1, Math.floor(request.scanLimit ?? 100));
+  let scanOffset = 0;
+  let corruptCapHit = false;
+  while (scanOffset < pending.length) {
+    const window = pending.slice(scanOffset, scanOffset + scanLimit);
+    if (window.length === 0) {
+      break;
+    }
+    for (const row of window) {
       if (!baseRecord(row)) {
         if (corruptIds.length < CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT) {
           corruptIds.push(row.event_id);
-          removed.add(row.event_id);
         }
         continue;
       }
@@ -176,9 +247,24 @@ export function selectChannelIngressClaim(
         return { corruptIds, selected: { id: row.event_id, laneKey } };
       }
     }
-    if (removed.size === 0 || corruptIds.length >= CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT) {
-      return { corruptIds };
+    // Scan the next bounded window of this snapshot. Corrupt rows are collected
+    // but the scan window is bounded by the snapshot's repair allowance.
+    scanOffset += window.length;
+    if (corruptIds.length >= CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT) {
+      corruptCapHit = true;
+      break;
     }
-    pending = pending.filter((row) => !removed.has(row.event_id));
   }
+  if (corruptCapHit) {
+    // Corrupt repair budget is consumed; rows beyond the scan point must stay
+    // reachable on a later scan, so do not page past them here.
+    return { corruptIds };
+  }
+  // The whole snapshot held no eligible row. Signal another bounded page when
+  // the snapshot consumed its full allowance, so a free lane beyond a fully
+  // blocked prefix stays reachable instead of wedging the claim.
+  return {
+    corruptIds,
+    ...(pending.length >= scanLimit + CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT ? { more: true } : {}),
+  };
 }
