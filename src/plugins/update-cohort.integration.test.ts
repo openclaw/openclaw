@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -28,6 +27,12 @@ async function withCohort(
     );
     await check(result);
   });
+}
+
+const emptyPayloadCheck = { checked: [], failures: [] };
+const emptyModule = "module.exports = {};\n";
+function expectUnchangedModule(directory: string, entry = "index") {
+  expect(fs.readFileSync(path.join(directory, `${entry}.js`), "utf8")).toBe(emptyModule);
 }
 
 async function withUnavailableRegistry(
@@ -60,8 +65,7 @@ describe("plugin release cohort real synchronization", () => {
     "preserves package ownership boundaries for $source on $channel (explicit link: $explicit)",
     async ({ channel, explicit, source }) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-cohort-linked-"));
-      const bundledRoot = path.join(root, "bundled");
-      const bundledPath = path.join(bundledRoot, "llm-task");
+      const bundledPath = path.join(root, "bundled", "llm-task");
       const linkedPath = path.join(root, "linked-task");
       for (const directory of [bundledPath, linkedPath]) {
         writePackage(directory, "llm-task");
@@ -76,19 +80,20 @@ describe("plugin release cohort real synchronization", () => {
             ? path.join(root, "missing-shadowed-package")
             : bundledPath,
       };
-      const config: OpenClawConfig = {
-        plugins: {
-          installs: source === "none" ? {} : { "llm-task": record },
-          load: { paths: explicit ? [linkedPath] : [] },
-          entries: { "llm-task": { enabled: true } },
-        },
-      };
+      const config = cohortConfig(source === "none" ? {} : { "llm-task": record }, {
+        load: { paths: explicit ? [linkedPath] : [] },
+        entries: { "llm-task": { enabled: true } },
+      });
       const env = fixtureEnv(root);
       await withCohort(
         { config, channel, coreVersion: "2026.9.4", timeoutMs: 60_000, env },
         async (result) => {
-          expect(result.sync.summary.errors).toEqual([]);
-          expect(result.remainingMissingPayloads).toEqual([]);
+          expect(result).toMatchObject({ remainingMissingPayloads: [] });
+          expect(result.sync.summary).toMatchObject({
+            errors: [],
+            warnings: [],
+            switchedToBundled: explicit ? [] : ["llm-task"],
+          });
           expect(result.config.plugins?.installs?.["llm-task"]).toEqual(
             source === "none"
               ? undefined
@@ -102,10 +107,8 @@ describe("plugin release cohort real synchronization", () => {
                   },
           );
           expect(result.config.plugins?.load?.paths).toEqual([explicit ? linkedPath : bundledPath]);
-          expect(result.sync.summary.switchedToBundled).toEqual(explicit ? [] : ["llm-task"]);
-          expect(result.sync.summary.warnings).toEqual([]);
           if (explicit) {
-            expect(result.changed).toBe(false);
+            expect(result).toMatchObject({ changed: false, repairOutcomes: [] });
             expect(result.updateOutcomes).toEqual([
               expect.objectContaining({
                 pluginId: "llm-task",
@@ -124,14 +127,13 @@ describe("plugin release cohort real synchronization", () => {
                 `It shadows the ${source} install @example/llm-task at ${record.installPath}`,
               );
             }
-            expect(result.repairOutcomes).toEqual([]);
             expect(
               await runActivePluginPayloadSmokeCheck({
                 cfg: result.config,
                 records: result.config.plugins?.installs ?? {},
                 env,
               }),
-            ).toEqual({ checked: [], failures: [] });
+            ).toEqual(emptyPayloadCheck);
           }
           const selectedIndex = withPluginCache(createPluginCache(), () =>
             loadInstalledPluginIndex({
@@ -147,9 +149,7 @@ describe("plugin release cohort real synchronization", () => {
             expect(ownership.resolvePackage("llm-task").ok).toBe(false);
             expect(ownership.resolveLifecycle("llm-task").ok).toBe(false);
           }
-          expect(fs.readFileSync(path.join(linkedPath, "index.js"), "utf8")).toBe(
-            "module.exports = {};\n",
-          );
+          expectUnchangedModule(linkedPath);
         },
       );
     },
@@ -179,15 +179,12 @@ describe("plugin release cohort real synchronization", () => {
             }),
           ),
         );
-        expect(await runActivePluginPayloadSmokeCheck({ cfg: config, records, env })).toEqual({
-          checked: [],
-          failures: [],
-        });
+        expect(await runActivePluginPayloadSmokeCheck({ cfg: config, records, env })).toEqual(
+          emptyPayloadCheck,
+        );
         for (const directory of [managedPath, localPath]) {
           for (const entry of ["one", "two"]) {
-            expect(fs.readFileSync(path.join(directory, `${entry}.js`), "utf8")).toBe(
-              "module.exports = {};\n",
-            );
+            expectUnchangedModule(directory, entry);
           }
         }
       });
@@ -226,12 +223,11 @@ describe("plugin release cohort real synchronization", () => {
             source: "path",
             installPath: bundledPath,
           });
-          expect(result.remainingMissingPayloads.map((entry) => entry.pluginId)).toEqual(
-            sibling === "missing" ? ["broken"] : [],
-          );
-          expect(result.missingPayloads.map((entry) => entry.pluginId)).toEqual(
-            sibling === "missing" ? ["broken"] : [],
-          );
+          for (const payloads of [result.missingPayloads, result.remainingMissingPayloads]) {
+            expect(payloads.map((entry) => entry.pluginId)).toEqual(
+              sibling === "missing" ? ["broken"] : [],
+            );
+          }
           if (hasSibling) {
             expect(registryRequests()).toBeGreaterThan(0);
             expect(
