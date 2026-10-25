@@ -3160,6 +3160,9 @@ importers:
       parse5:
         specifier: 8.0.1
         version: 8.0.1
+      qrcode:
+        specifier: 1.5.4
+        version: 1.5.4
       remend:
         specifier: 1.4.0
         version: 1.4.0

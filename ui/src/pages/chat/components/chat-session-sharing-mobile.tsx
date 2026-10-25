@@ -2,9 +2,11 @@ import type { JSX } from "@solidjs/web";
 import {
   createSignal,
   createUniqueId,
+  Errored,
   For,
   isPending,
   latest,
+  lazy,
   Loading,
   onSettled,
   Show,
@@ -36,6 +38,11 @@ import {
 registerEnglishCatalog(registerChatSessionEnglish);
 
 registerEnglishCatalog(registerSessionPeopleEnglish);
+
+// Loaded only once a public link is shown, so the encoder stays out of the sharing chunk.
+const ChatSessionPublicQr = lazy(() => import("./chat-session-public-qr.tsx"), {
+  export: "ChatSessionPublicQr",
+});
 
 export type ChatSessionSharingMobileLabels = {
   sessionAccess: string;
@@ -181,6 +188,16 @@ export function ChatSessionSharingMobile(props: ChatSessionSharingMobileProps) {
                     <span class="chat-sharing-mobile__url">{link().url}</span>
                     <Icon name="copy" />
                   </button>
+                </Show>
+                <Show when={link().enabled && link().url}>
+                  {(url) => (
+                    // A failed load or an unencodable URL drops the code; copy still works.
+                    <Errored fallback={null}>
+                      <Loading>
+                        <ChatSessionPublicQr url={url()} />
+                      </Loading>
+                    </Errored>
+                  )}
                 </Show>
               </SharingDisclosure>
             </div>

@@ -67,6 +67,7 @@ export const commonJsOptimizeDeps = [
   "highlight.js/lib/languages/typescript",
   "highlight.js/lib/languages/xml",
   "highlight.js/lib/languages/yaml",
+  "qrcode",
 ] as const;
 // npm excludes dist/**/*.map; sidecars would bypass that rule and ship source
 // maps that the browser never needs during normal runtime.

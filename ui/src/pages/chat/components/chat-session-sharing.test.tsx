@@ -423,6 +423,36 @@ describe("chat session sharing menu", () => {
     expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
   });
 
+  it("shows the scan caption only with a QR code it could encode", async () => {
+    const root = await mount({
+      state: { ...sharingState({ publicShare }), publicUrl: "https://team.example/chat/main/demo" },
+      onPublicShareChange: vi.fn(),
+      onCopyPublicLink: vi.fn(),
+    });
+    await waitForSolid(() =>
+      expect(root.querySelector(".chat-session-public-qr .qr-code")).not.toBeNull(),
+    );
+    expect(root.querySelector(".chat-session-public-qr")?.textContent).toContain(
+      "Scan to open the public link",
+    );
+
+    // Past QR capacity the encoder throws; copy stays, and no caption points at a missing code.
+    render(
+      renderSharing({
+        state: {
+          ...sharingState({ publicShare }),
+          publicUrl: `https://team.example/${"a".repeat(3000)}`,
+        },
+        onPublicShareChange: vi.fn(),
+        onCopyPublicLink: vi.fn(),
+      }),
+      root,
+    );
+    await waitForSolid(() => expect(root.querySelector(".chat-session-public-qr")).toBeNull());
+    expect(root.textContent).not.toContain("Scan to open the public link");
+    expect(item(root, "public:copy")?.disabled).toBe(false);
+  });
+
   it.each(["loading", "read-only", "member"] as const)(
     "refuses public mutations for %s controls",
     async (blocked) => {
