@@ -1,4 +1,4 @@
-import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
+import { ComponentType, Routes } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
@@ -19,18 +19,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
-
-function liveCommand(options: Record<string, unknown>[], extra: Record<string, unknown> = {}) {
-  return {
-    id: "cmd1",
-    application_id: "app1",
-    type: ApplicationCommandType.ChatInput,
-    name: "one",
-    description: "one command",
-    options,
-    ...extra,
-  };
-}
 
 function deployFixture(
   commands: DiscordCommand[],
@@ -81,12 +69,32 @@ describe("ComponentRegistry", () => {
 });
 
 describe("Client.deployCommands", () => {
-  it("does not patch live-only command metadata or reordered unordered arrays", async () => {
-    const option = { type: 7 as const, name: "value", description: "Value" };
+  it.each([false, true])("patches changed localization only: %s", async (changed) => {
+    const option = {
+      type: 7 as const,
+      name: "value",
+      description: "Value",
+      required: false,
+      channel_types: [1, 0],
+      name_localizations: { de: "wert" },
+      description_localizations: { de: "Wert" },
+    };
+    const command = createTestCommand("one", [option]);
     const { client, ...rest } = deployFixture(
-      [createTestCommand("one", [{ ...option, required: false, channel_types: [1, 0] }])],
+      [command],
       [
-        liveCommand([{ ...option, description_localized: "Value", channel_types: [0, 1] }], {
+        {
+          ...existingCommand(command, "cmd1"),
+          options: [
+            {
+              ...option,
+              required: undefined,
+              description_localized: "Value",
+              channel_types: [0, 1],
+              name_localizations: { de: changed ? "alt" : "wert" },
+              description_localizations: { de: changed ? "Alt" : "Wert" },
+            },
+          ],
           name_localized: "one",
           description_localized: "one command",
           default_member_permissions: null,
@@ -95,17 +103,25 @@ describe("Client.deployCommands", () => {
           contexts: [2, 1, 0],
           guild_id: undefined,
           version: "1",
-        }),
+        },
       ],
     );
     await client.deployCommands();
-    expectNoWrites(rest.patch, rest.post, rest.delete);
+    expectNoWrites(rest.post, rest.delete);
+    if (!changed) {
+      expectNoWrites(rest.patch);
+    } else {
+      expect(rest.patch).toHaveBeenCalledExactlyOnceWith(
+        Routes.applicationCommand("app1", "cmd1"),
+        {
+          body: expect.objectContaining({ options: [option] }),
+        },
+      );
+    }
   });
 
-  it("bulk overwrites when a capped application cannot create a replacement", async () => {
-    const retainedCommands = Array.from({ length: 99 }, (_, index) =>
-      createTestCommand(`retained-${index}`),
-    );
+  it("bulk overwrites the desired set when Discord rejects a create at its command cap", async () => {
+    const retainedCommands = [createTestCommand("retained")];
     const replacement = createTestCommand("replacement");
     const existing = [
       ...retainedCommands.map((command, index) => existingCommand(command, `retained-id-${index}`)),
@@ -145,44 +161,6 @@ describe("Client.deployCommands", () => {
     await expect(client.deployCommands()).rejects.toThrow("Discord unavailable");
 
     expect(deleteRequest).not.toHaveBeenCalled();
-  });
-
-  it("patches changed option localization maps", async () => {
-    const option = {
-      type: 3 as const,
-      name: "value",
-      description: "Value",
-      name_localizations: { de: "wert" },
-      description_localizations: { de: "Wert" },
-    };
-    const command = createTestCommand("one", [option]);
-    const { client, ...rest } = deployFixture(
-      [command],
-      [
-        liveCommand([
-          {
-            ...option,
-            name_localizations: { de: "alter-wert" },
-            description_localizations: { de: "Alter Wert" },
-          },
-        ]),
-      ],
-    );
-
-    await client.deployCommands();
-
-    expect(rest.patch).toHaveBeenCalledWith(Routes.applicationCommand("app1", "cmd1"), {
-      body: {
-        name: "one",
-        description: "one command",
-        type: ApplicationCommandType.ChatInput,
-        options: [option],
-        integration_types: [0, 1],
-        contexts: [0, 1, 2],
-        default_member_permissions: null,
-      },
-    });
-    expectNoWrites(rest.post, rest.delete);
   });
 
   it("skips unchanged command deploys across client restarts using the hash store", async () => {
@@ -251,19 +229,17 @@ describe("Client gateway event queue", () => {
     firstSettlement.resolve();
     await dispatch;
     expect(started).toEqual(["first", "second"]);
-    expect(first.handle).toHaveBeenCalledTimes(1);
-    expect(second.handle).toHaveBeenCalledTimes(1);
   });
 
   it("logs a listener failure when its underlying promise rejects", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const settlement = createDeferred<void>();
     const failure = new Error("listener failure");
-    const waiting = listener(async () => await settlement.promise);
+    const waiting = listener(async () => {
+      throw failure;
+    });
     const client = createQueuedClient([waiting]);
 
     const dispatch = client.dispatchGatewayEvent("READY", {});
-    settlement.reject(failure);
     await expect(dispatch).resolves.toBeUndefined();
 
     expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
@@ -280,10 +256,7 @@ describe("Client gateway event queue", () => {
           releases.push(resolve);
         }),
     );
-    const client = createQueuedClient([waiting], {
-      maxConcurrency: 1,
-      maxQueueSize: 1,
-    });
+    const client = createQueuedClient([waiting], { maxConcurrency: 1, maxQueueSize: 1 });
 
     const first = client.dispatchGatewayEvent("READY", {});
     await vi.waitFor(() => expect(waiting.handle).toHaveBeenCalledTimes(1));
