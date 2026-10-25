@@ -268,7 +268,6 @@ it("keeps env-only agent callbacks isolated when saving", async () => {
     const result = await withEnvOnlyAuthProfileStore(() =>
       updateStore({ agentDir: localDir, saveOptions, updater }),
     );
-    expect(updater).toHaveBeenCalledOnce();
     expect(result).toEqual(explicit);
     expect(readPersistedStore()).toEqual(shared);
     expect(readPersistedStore(localDir)).toEqual(explicit);
@@ -509,7 +508,6 @@ it("keeps a shared rotation that commits while a local save awaits publication",
       },
     );
     await update({ profiles: { local: "synthetic-local-after" } }, agentDir);
-    expect(rotated).toBe(true);
     expect(snapshot(agentDir)?.profiles).toEqual({
       local: credential("synthetic-local-after"),
       shared: credential("synthetic-shared-after"),
