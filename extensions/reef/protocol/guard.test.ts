@@ -1,5 +1,6 @@
 import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { createAnthropicGuard, createOpenAiGuard, type FetchLike } from "./guard-adapters.js";
 import {
   admitGuardAdapter,
@@ -62,22 +63,13 @@ describe("guard admission", () => {
 
 describe("provider adapters", () => {
   it("cancels Anthropic non-200 provider response bodies before failing closed", async () => {
-    let cancelled = false;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("partial error body"));
-        },
-        cancel() {
-          cancelled = true;
-        },
-      }),
-      { status: 503 },
-    );
+    const { response, wasCanceled } = cancelTrackedTextResponse("partial error body", {
+      status: 503,
+    });
     const guard = createAnthropicGuard({ ...adapterOptions, fetch: async () => response });
 
     await expect(guard.classify(request)).resolves.toMatchObject(failure);
-    expect(cancelled).toBe(true);
+    expect(wasCanceled()).toBe(true);
   });
 
   it("cancels oversized provider response streams before buffering them fully", async () => {

@@ -1,5 +1,7 @@
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
+import { createRuntimeProcessScriptFile } from "../../runtime-process-scripts.generated.mjs";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import {
   createSealedRuntimeProcessEntrypoints,
@@ -9,7 +11,7 @@ import {
   type runtimeProcessDeployManifest,
   type runtimeProcessSealedManifest,
 } from "./runtime-process-manifest.js";
-import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 type RuntimeProcessEntrypointName = keyof typeof runtimeProcessEntrypoints;
 
@@ -54,4 +56,21 @@ export function resolveRuntimeScriptEntrypointUrl(
   directory: string,
 ): URL {
   return pathToFileURL(path.join(directory, runtimeProcessScriptEntrypoints[name].fileName));
+}
+
+/** Embedded self children use the image dispatcher; foreign runtimes need a real file. */
+export function prepareRuntimeProcessScriptInvocation(
+  name: Parameters<typeof createRuntimeProcessScriptFile>[0],
+  execPath: string,
+  options?: Parameters<typeof createRuntimeProcessScriptFile>[1],
+): { argv: string[]; dispose(): void } {
+  const entry = runtimeProcessScriptEntrypoints[name];
+  if ("runtimeEntrypoint" in entry && execPath === process.execPath) {
+    const url = resolveRuntimeProcessEntrypointUrl(entry.runtimeEntrypoint);
+    if (isEmbeddedStandaloneModule(url.href)) {
+      return { argv: [execPath, ...resolveRuntimeWorkerArgv(url, execPath)], dispose() {} };
+    }
+  }
+  const file = createRuntimeProcessScriptFile(name, options);
+  return { argv: [execPath, fileURLToPath(file.url)], dispose: () => file.dispose() };
 }

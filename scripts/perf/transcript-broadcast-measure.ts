@@ -1,6 +1,24 @@
 // Add --list-filter-churn to --scenario memory-soak --mixed-rpc to rotate sidebar/search filters.
 // --gateway-preload <file> imports benchmark instrumentation after tsx for source or dist entries;
 // result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
+// Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
+// foreground session its own managed worktree, read/grep its README, and cycle list searches.
+// This mode keeps a fixed viewer set instead of adding reconnect churn.
+// --stress-tool-search adds a verified catalog search before each --stress-tools execution.
+// --poll-between-rounds keeps list/mixed-RPC polling active between memory-soak cohorts.
+// On a fresh team-shape fixture, exercise sidebar/search and usage refresh with:
+// node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+//   --state-dir <fixture> --entry dist/entry.js --scenario memory-soak \
+//   --clients 64 --exact-clients 4 --runs 8 --plugins 40 --row-mode sidebar \
+//   --chunks 500 --chunk-interval-ms 10 --warmup-ms 60000 --duration-ms 600000 \
+//   --soak-rounds 40 --round-interval-ms 15000 --memory-interval-ms 15000 \
+//   --retained-profile-ms 0 --stress-tools --mixed-rpc --dashboard-rpc \
+//   --list-filter-churn --usage-rpc --list-interval-ms 1000 --poll-seed usage \
+//   --diagnostics --port 41712 --mock-port 41714 --revision <sha>
+// List churn rotates the existing filters and patches a label every tenth list.
+// Usage polling adds usage.cost and sessions.usage overview reads to the
+// mixed rotation; each round reports response cache statuses, including partials.
+// Use separate matching --allocations passes; their traced GC timing is diagnostic.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -90,7 +108,10 @@ const { values } = parseArgs({
     "worker-heap-peer-done-file": { type: "string" },
     "worker-baseline-dir": { type: "string" },
     "baseline-owners": { type: "boolean", default: false },
+    "stress-shell-words": { type: "string", default: "0" },
     "stress-tools": { type: "boolean", default: false },
+    "worktree-tool-churn": { type: "boolean", default: false },
+    "stress-tool-search": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
     "stress-session-store": { type: "boolean", default: false },
@@ -104,6 +125,8 @@ const { values } = parseArgs({
     "authority-source-preload": { type: "string" },
     "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
+    "poll-between-rounds": { type: "boolean", default: false },
+    "usage-rpc": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
     "github-options-connected": { type: "boolean", default: false },
     "github-options-observe": { type: "boolean", default: false },
@@ -328,6 +351,9 @@ if (
   );
 }
 const toolScenario = scenario === "chat.send" || reasoningScenario;
+if (values["stress-tool-search"] && !values["stress-tools"]) {
+  throw new Error("--stress-tool-search requires --stress-tools");
+}
 const chatActiveHoldMs = integer(values["chat-active-hold-ms"], "--chat-active-hold-ms", 0);
 if (
   chatActiveHoldMs &&
@@ -553,8 +579,22 @@ if (values["stress-tools"] && !toolScenario) {
     "--stress-tools requires chat.send, attempt-retention, session-idle-retention, or memory-soak",
   );
 }
+const stressShellWords = integer(values["stress-shell-words"], "--stress-shell-words", 0);
+// At most 50,007 source characters and about 10,000 syntax nodes, below both parser limits.
+if (stressShellWords > 10_000 || (stressShellWords > 0 && !values["stress-tools"])) {
+  throw new Error("--stress-shell-words must be 0–10000 and requires --stress-tools when positive");
+}
+const stressShellCommand = stressShellWords ? `: ${"word ".repeat(stressShellWords)}; pwd` : "pwd";
 if (values["stress-session-store"] && !values["stress-tools"]) {
   throw new Error("--stress-session-store requires --stress-tools");
+}
+if (
+  values["worktree-tool-churn"] &&
+  (!soakScenario || !values["stress-tools"] || !values["mixed-rpc"] || historyTurns > 0)
+) {
+  throw new Error(
+    "--worktree-tool-churn requires memory-soak --stress-tools --mixed-rpc without seeded history",
+  );
 }
 if (
   values["operator-access-policy"] &&
@@ -653,8 +693,14 @@ if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)
     "--mixed-rpc requires a turn scenario, --list-interval-ms, and at least four clients",
   );
 }
+if (values["poll-between-rounds"] && (!soakScenario || !listIntervalMs)) {
+  throw new Error("--poll-between-rounds requires memory-soak and --list-interval-ms");
+}
 if (values["dashboard-rpc"] && (!soakScenario || !values["mixed-rpc"])) {
   throw new Error("--dashboard-rpc requires memory-soak and --mixed-rpc");
+}
+if (values["usage-rpc"] && (!soakScenario || !values["mixed-rpc"])) {
+  throw new Error("--usage-rpc requires memory-soak and --mixed-rpc");
 }
 if (values["github-options-connected"] && !values["dashboard-rpc"]) {
   throw new Error("--github-options-connected requires --dashboard-rpc");
@@ -971,6 +1017,8 @@ if (values["mixed-rpc"] && fixtureSessionCount < 1) {
   throw new Error("--mixed-rpc requires retained fixture sessions for chat.history");
 }
 let stressWorktree: string | undefined;
+const worktreeToolRoots = new Map<number, string>();
+const worktreeToolSearches = new Map<string, number>();
 let diffControlOriginal: string | undefined;
 if (values["stress-tools"] || values["mixed-rpc"] || values["attempt-setup-image"]) {
   if (!isRecord(project) || typeof project.path !== "string") {
@@ -2046,7 +2094,7 @@ const mock = createServer((req, res) => {
           (toolResult) =>
             typeof toolResult.output !== "string" ||
             !toolResult.output.includes(
-              values["attempt-setup-image"]
+              values["attempt-setup-image"] || values["worktree-tool-churn"]
                 ? "# Synthetic project "
                 : "Synthetic allocation benchmark tool result.",
             ) ||
@@ -2152,6 +2200,12 @@ const mock = createServer((req, res) => {
       let reasoningReplayKey = toolOutput?.call_id;
       if (primary && toolScenario && cohort) {
         const currentCohort = cohort;
+        const toolWorktree = values["worktree-tool-churn"]
+          ? worktreeToolRoots.get(index)
+          : stressWorktree;
+        if (values["worktree-tool-churn"] && !toolWorktree) {
+          throw new Error("Synthetic foreground turn has no owned worktree");
+        }
         const items = toolPaths.map((toolPath, toolIndex) => {
           const callId = `call_allocation_${currentCohort.id}_${index}_${toolIndex}`;
           currentCohort.toolCallIds.add(callId);
@@ -2176,9 +2230,16 @@ const mock = createServer((req, res) => {
                     awaitResults: true,
                     code:
                       storeCode +
-                      `json(await read({ path: ${JSON.stringify(toolPath)} }));\n` +
-                      `const shell = await exec({ command: "pwd", workdir: ${JSON.stringify(stressWorktree)} });\n` +
-                      `if (shell.exitCode !== 0 || shell.aggregated.trim() !== ${JSON.stringify(stressWorktree)}) throw new Error("Synthetic exec worktree mismatch");\n` +
+                      (values["stress-tool-search"]
+                        ? 'if (!(await catalog.search("read file content", { limit: 5 })).some(tool => tool.name === "read")) throw new Error("Synthetic tool search omitted read");\n'
+                        : "") +
+                      `json(await read({ path: ${JSON.stringify(values["worktree-tool-churn"] && toolWorktree ? path.join(toolWorktree, "README.md") : toolPath)} }));\n` +
+                      `const shell = await exec({ command: ${JSON.stringify(stressShellCommand)}, workdir: ${JSON.stringify(toolWorktree)} });\n` +
+                      `if (shell.exitCode !== 0 || shell.aggregated.trim() !== ${JSON.stringify(toolWorktree)}) throw new Error("Synthetic exec worktree mismatch");\n` +
+                      (values["worktree-tool-churn"]
+                        ? `const match = await exec({ command: "grep -n 'Synthetic project' README.md", workdir: ${JSON.stringify(toolWorktree)} });\n` +
+                          'if (match.exitCode !== 0 || !match.aggregated.includes("Synthetic project")) throw new Error("Synthetic worktree grep failed");\n'
+                        : "") +
                       'return "synthetic-code-exec-verified";',
                   }
                 : { path: toolPath },
@@ -2669,7 +2730,7 @@ if (values["dashboard-rpc"] && Array.isArray(fixture.projectWorktrees)) {
     });
   }
 }
-function bindConnectedOptionsWorktree(target: (typeof diffTargets)[number], created: unknown) {
+function readManagedWorktree(created: unknown): string {
   if (
     !isRecord(created) ||
     !isRecord(created.entry) ||
@@ -2677,15 +2738,19 @@ function bindConnectedOptionsWorktree(target: (typeof diffTargets)[number], crea
     typeof created.entry.worktree.id !== "string" ||
     typeof created.entry.sessionRoot !== "string"
   ) {
-    throw new Error("Connected GitHub options require a session-owned managed worktree");
+    throw new Error("Synthetic session requires a session-owned managed worktree");
   }
   const worktree = realpathSync(created.entry.sessionRoot);
   if (
     !worktree.startsWith(`${realpathSync(root)}${path.sep}`) ||
     !readFileSync(path.join(worktree, ".git"), "utf8").startsWith("gitdir: ")
   ) {
-    throw new Error("Connected GitHub worktree must be linked and inside the synthetic fixture");
+    throw new Error("Managed worktree must be linked and inside the synthetic fixture");
   }
+  return worktree;
+}
+function bindConnectedOptionsWorktree(target: (typeof diffTargets)[number], created: unknown) {
+  const worktree = readManagedWorktree(created);
   target.worktree = worktree;
   target.original = readFileSync(path.join(worktree, "README.md"), "utf8");
 }
@@ -2709,8 +2774,9 @@ const mixedRpcMethods = [
   "sessions.list",
   "chat.history",
   "sessions.diff",
-  "connect",
+  ...(values["worktree-tool-churn"] ? [] : ["connect"]),
   ...dashboardRpcShapes.map(({ method }) => method),
+  ...(values["usage-rpc"] ? ["usage.cost", "sessions.usage"] : []),
 ];
 const stressParentKey = "agent:main:transcript-broadcast-measure-native-parent";
 const keys = Array.from({ length: sessionCount }, (_, index) =>
@@ -4453,11 +4519,11 @@ try {
           displayName: "Synthetic native subagent parent",
         });
       }
-      for (const key of keys) {
+      for (const [keyIndex, key] of keys.entries()) {
         if (historyTurns) {
           continue;
         }
-        await rpc(client, "sessions.create", {
+        const created = await rpc(client, "sessions.create", {
           key,
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
           ...(values["activity-summaries"] ||
@@ -4466,12 +4532,19 @@ try {
             ? {}
             : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
-          ...(values["attempt-setup-image"]
+          ...(values["attempt-setup-image"] || values["worktree-tool-churn"]
             ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
             : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast child",
         });
+        if (values["worktree-tool-churn"]) {
+          const worktree = readManagedWorktree(created);
+          if ([...worktreeToolRoots.values()].includes(worktree)) {
+            throw new Error("Synthetic foreground sessions must own distinct worktrees");
+          }
+          worktreeToolRoots.set(keyIndex + 1, worktree);
+        }
         await rpc(client, "sessions.reset", { key });
       }
     }
@@ -5337,6 +5410,7 @@ try {
       mixedRpcMethods.map((method) => [method, []]),
     );
     const listLatencies = rpcLatencies["sessions.list"]!;
+    const usageCacheStatuses: Record<string, number> = {};
     const initialPollPhasesMs: number[] = [];
     let streamStart: Awaited<ReturnType<typeof runRound>> | undefined;
     const listRequests: Array<{
@@ -5367,11 +5441,13 @@ try {
                   await Promise.race([delay(initialPhaseMs, undefined, { ref: false }), stopped]);
                 }
                 let poll = clientIndex;
+                let listPoll = round * clientCount + clientIndex;
                 while (true) {
                   if (!polling) {
                     break;
                   }
                   const started = performance.now();
+                  let requestStarted = started;
                   let responseId = "";
                   let diffSessionKey: string | undefined;
                   let githubOptionsSessionKey: string | undefined;
@@ -5409,6 +5485,31 @@ try {
                         onResponse,
                       ),
                     );
+                  } else if (method === "usage.cost" || method === "sessions.usage") {
+                    const usage = await rpc(
+                      client,
+                      method,
+                      {
+                        agentId: "main",
+                        range: "all",
+                        ...(method === "sessions.usage" ? { projection: "overview", limit } : {}),
+                      },
+                      onResponse,
+                    );
+                    if (
+                      !isRecord(usage) ||
+                      !isRecord(usage.totals) ||
+                      typeof usage.totals.totalTokens !== "number" ||
+                      typeof usage.totals.totalCost !== "number" ||
+                      !Array.isArray(method === "usage.cost" ? usage.daily : usage.sessions)
+                    ) {
+                      throw new Error(`${method} did not return a usage report`);
+                    }
+                    const cacheStatus = isRecord(usage.cacheStatus)
+                      ? String(usage.cacheStatus.status)
+                      : "unspecified";
+                    const statusKey = `${method}:${cacheStatus}`;
+                    usageCacheStatuses[statusKey] = (usageCacheStatuses[statusKey] ?? 0) + 1;
                   } else if (method === "connect") {
                     const peer = createGatewayWsClient(clientConnection);
                     trackClientFrames(peer);
@@ -5469,12 +5570,27 @@ try {
                       target.worktree,
                     );
                   } else {
-                    const listFilter = values["list-filter-churn"]
-                      ? listFilterShapes[
-                          (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
-                            listFilterShapes.length
-                        ]
+                    const listSequence = listPoll;
+                    listPoll += clientCount;
+                    if (values["list-filter-churn"] && listSequence % 10 === 0) {
+                      const params = {
+                        key: parentKey,
+                        label: `Synthetic list filter churn ${listChurnSequence++}`,
+                      };
+                      assertSessionPatch(params, await rpc(client, "sessions.patch", params));
+                    }
+                    const search = values["worktree-tool-churn"]
+                      ? Math.floor(poll / mixedRpcMethods.length) % 2 === 0
+                        ? "Synthetic"
+                        : "investigation"
                       : undefined;
+                    // Worktree churn keeps its fixed search fixtures when both presets are selected.
+                    const listFilter = search
+                      ? { archived: "all", search }
+                      : values["list-filter-churn"]
+                        ? listFilterShapes[listSequence % listFilterShapes.length]
+                        : undefined;
+                    requestStarted = performance.now();
                     const page = await rpc(
                       client,
                       method,
@@ -5496,13 +5612,18 @@ try {
                       page.sessions.length !== page.count ||
                       (page.count === 0 &&
                         !values["list-profile-reference"] &&
-                        (!listFilter || Object.keys(listFilter).length === 0))
+                        (search !== undefined ||
+                          !listFilter ||
+                          Object.keys(listFilter).length === 0))
                     ) {
                       throw new Error("concurrent sessions.list did not return the requested page");
                     }
+                    if (search) {
+                      worktreeToolSearches.set(search, (worktreeToolSearches.get(search) ?? 0) + 1);
+                    }
                   }
                   const ended = performance.now();
-                  const requestDurationMs = ended - started;
+                  const requestDurationMs = ended - requestStarted;
                   rpcLatencies[method]!.push(requestDurationMs);
                   if (recordListRequests) {
                     listRequests.push({
@@ -5510,7 +5631,7 @@ try {
                       responseId,
                       client: clientIndex,
                       round,
-                      startedAtEpochMs: performance.timeOrigin + started,
+                      startedAtEpochMs: performance.timeOrigin + requestStarted,
                       endedAtEpochMs: performance.timeOrigin + ended,
                       durationMs: requestDurationMs,
                       ...(diffSessionKey ? { diffSessionKey } : {}),
@@ -5540,8 +5661,8 @@ try {
         if (!values["dashboard-rpc"]) {
           await drainEvents();
         }
-        if (values["dashboard-rpc"]) {
-          // Dashboards keep polling between bursts of agent work.
+        if (values["dashboard-rpc"] || values["poll-between-rounds"]) {
+          // Keep polling between bursts of agent work.
           const pacedUntil = Math.min(
             roundStartedAt + roundIntervalMs,
             measurementStartedAt + durationMs,
@@ -5867,6 +5988,7 @@ try {
       activeWorkCounts,
       toolCalls,
       toolResults,
+      ...(values["usage-rpc"] ? { usageCacheStatuses } : {}),
       ...(reasoningScenario && { reasoningResponses, reasoningReplayRequests }),
       verifyHistoryReplay,
       ...(verifyHistoryReplay ? { historicalReplayRequests } : {}),
@@ -6336,7 +6458,9 @@ try {
     presenceDeltas: values["presence-deltas"],
     sessionEnvelopeRefs: values["session-envelope-refs"],
     listIntervalMs,
+    pollBetweenRounds: values["poll-between-rounds"],
     mixedRpc: values["mixed-rpc"],
+    usageRpc: values["usage-rpc"],
     ...(values["dashboard-rpc"]
       ? {
           dashboardRpc: {
@@ -6397,7 +6521,21 @@ try {
         }
       : {}),
     stressTools: values["stress-tools"],
+    worktreeToolChurn: values["worktree-tool-churn"],
+    ...(values["worktree-tool-churn"]
+      ? {
+          worktreeTools: {
+            sessions: [...worktreeToolRoots].map(([index, worktree]) => ({
+              sessionKey: keys[index - 1],
+              worktree,
+            })),
+            successfulListSearches: Object.fromEntries(worktreeToolSearches),
+          },
+        }
+      : {}),
+    stressShellWords,
     stressSessionStore: values["stress-session-store"],
+    stressToolSearch: values["stress-tool-search"],
     transcriptHydrationCounts: values["transcript-hydration-counts"],
     operatorAccessPolicy: values["operator-access-policy"],
     cronOperatorTurn: values["cron-operator-turn"],

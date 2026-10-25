@@ -389,7 +389,6 @@ it.each([
     const run = writerReceipt ? undefined : updateRun(env);
     const steps: UpdateStepResult[] = [];
     const step = await doctor({
-      timeoutMs: 1_000,
       progress: run
         ? createUpdateRunProgress(
             run,

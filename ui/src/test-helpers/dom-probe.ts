@@ -19,3 +19,13 @@ export function allMutationObserverOptions() {
     characterData: true,
   };
 }
+
+export function findButton(label: string): HTMLButtonElement {
+  const button = [...document.body.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent?.trim() === label,
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected ${label} button`);
+  }
+  return button;
+}

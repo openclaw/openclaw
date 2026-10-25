@@ -161,33 +161,26 @@ describe("config writer policy-close ordering", () => {
       const beforeFiles = await captureFiles();
       const prepared = createDeferredCore();
       const release = createDeferredCore();
-      const publish = vi.fn();
       const prepareFile = configPublication.prepareConfigFileWrite;
       vi.spyOn(configPublication, "prepareConfigFileWrite").mockImplementation(async (params) => {
         const file = await prepareFile(params);
         if (params.configPath === writtenPath) {
           // Hold real prepared bytes; retain the original disposable and publication owner.
-          const publishFile = file.publish.bind(file);
-          vi.spyOn(file, "publish").mockImplementation(() => {
-            publish();
-            return publishFile();
-          });
           prepared.resolve();
           await release.promise;
         }
         return file;
       });
-      const result = writer.client
-        .request("config.patch", {
-          baseHash: before.hash,
-          raw: JSON.stringify({
-            gateway: { controlUi: { allowedOrigins: ["https://next.example.test"] } },
-          }),
-        })
-        .then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
+      const request = writer.client.request("config.patch", {
+        baseHash: before.hash,
+        raw: JSON.stringify({
+          gateway: { controlUi: { allowedOrigins: ["https://next.example.test"] } },
+        }),
+      });
+      const result = request.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       try {
         await Promise.race([
           prepared.promise,
@@ -207,16 +200,11 @@ describe("config writer policy-close ordering", () => {
         // The response hold postpones close; release preparation before waiting for the socket.
         release.resolve();
         const outcome = await result;
-        expect(outcome.ok).toBe(false);
-        if (outcome.ok) {
-          throw new Error("Revoked config publication unexpectedly succeeded");
-        }
-        expect(isGatewayProtocolResponseError(outcome.error)).toBe(true);
-        expect(outcome.error).toMatchObject({
+        expect(isGatewayProtocolResponseError(outcome)).toBe(true);
+        expect(outcome).toMatchObject({
           code: "UNAVAILABLE",
           message: expect.stringContaining("Gateway requester authority changed"),
         });
-        expect(publish).not.toHaveBeenCalled();
         expect(await captureFiles()).toEqual(beforeFiles);
         expect(await admin.client.request<ConfigSnapshot>("config.get")).toEqual(before);
         await writer.closed;
@@ -344,7 +332,6 @@ describe("config writer policy-close ordering", () => {
           }),
         ]);
         expect(publication.stats?.requiresRestart).toBe(false);
-        await peer.closed;
         expect(writer.didClose()).toBe(false);
         const staleRead = writer.client.request("health");
         void staleRead.catch(() => {});

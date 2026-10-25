@@ -1,3 +1,4 @@
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,6 +9,7 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
+import { readText, readUtf8Text } from "./helpers.js";
 import { discoverHermesSource } from "./source.js";
 import { hermesCase, item } from "./test/hermes-case.js";
 import { configRuntime, useHermesFixture } from "./test/migration-fixture.js";
@@ -22,6 +24,31 @@ const fixture = useHermesFixture(async (root) => {
 const makeCase = () => hermesCase(fixture.paths.root);
 const read = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
 const missing = (file: string) => expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
+async function withoutFifoRead(file: string, action: () => Promise<void>) {
+  execFileSync("mkfifo", [file]);
+  const opened = `${file}.opened`;
+  const writer = spawn(
+    process.execPath,
+    [
+      "-e",
+      'const fs = require("node:fs"); const fd = fs.openSync(process.argv[1], "w"); fs.writeSync(fd, "backstop input\\n"); fs.writeFileSync(process.argv[2], "opened"); fs.closeSync(fd);',
+      file,
+      opened,
+    ],
+    { stdio: "ignore" },
+  );
+  const exited = new Promise<void>((resolve) => {
+    writer.once("exit", () => resolve());
+  });
+  try {
+    await action();
+    // A blocking read cannot finish before the writer records its open and closes.
+    await expect(fs.access(opened)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    writer.kill("SIGKILL");
+    await exited;
+  }
+}
 async function discover(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = "darwin") {
   for (const key of [
     "HERMES_HOME",
@@ -39,6 +66,59 @@ async function discover(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = "dar
 }
 
 describe("Hermes files and skills", () => {
+  it.skipIf(process.platform === "win32").each([false, true])(
+    "does not read a FIFO during migration discovery or planning (required: %s)",
+    async (required) => {
+      const h = makeCase();
+      await fs.mkdir(h.source, { recursive: true });
+      const file = path.join(h.source, required ? "config.yaml" : "active_profile");
+      await withoutFifoRead(file, async () => {
+        if (required) {
+          const pending = h.plan();
+          await expect(pending).rejects.toThrow(/regular file/i);
+          await expect(pending).rejects.toThrow(file);
+          await expect(pending).rejects.toThrow("retry migration");
+        } else {
+          await expect(discover({ HERMES_HOME: h.source })).resolves.toBe(h.source);
+        }
+      });
+      expect((await fs.lstat(file)).isFIFO()).toBe(true);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a FIFO memory target before dedupe reads",
+    async () => {
+      const h = makeCase();
+      await h.write("memories/MEMORY.md", "Imported memory\n");
+      const plan = await h.plan();
+      const planned = item(plan, "memory:MEMORY.md");
+      if (!planned?.target) {
+        throw new Error("expected memory append target");
+      }
+      await fs.mkdir(h.workspaceDir, { recursive: true });
+      await withoutFifoRead(planned.target, async () => {
+        const result = await h.apply({ runtime: configRuntime({}) }, plan);
+        expect(item(result, "memory:MEMORY.md")?.status).toBe("error");
+      });
+      expect((await fs.lstat(planned.target)).isFIFO()).toBe(true);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps symlinked text inputs and exact Unicode",
+    async () => {
+      const h = makeCase();
+      const body = "Café 会议 �\n";
+      await h.write("input.txt", body);
+      const link = path.join(h.source, "linked-input.txt");
+      await fs.symlink(path.join(h.source, "input.txt"), link);
+
+      await expect(readUtf8Text(link)).resolves.toBe(body);
+      await expect(readText(link)).resolves.toBe(body);
+    },
+  );
+
   it.each(["stat", "readdir"] as const)(
     "rejects incomplete source %s and recovers",
     async (operation) => {

@@ -134,7 +134,7 @@ export async function rebuildPortedAgentMemory(params: {
                 outcome = failed(target, "The selected memory plugin does not support indexing.");
               } else {
                 assertCurrent();
-                await manager.sync({ reason: "cli" });
+                await manager.sync({ reason: "cli", force: true });
                 const status = await readMemorySearchManagerStatus(manager);
                 outcome =
                   status.lastSyncError || status.dirty

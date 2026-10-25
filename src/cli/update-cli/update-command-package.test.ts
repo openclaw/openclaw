@@ -612,7 +612,14 @@ it.each([
     expect(result).toMatchObject({ status: "ok", root, after: { version: "2026.5.14" } });
     expect(commands.mock.calls.filter(([argv]) => argv[2] === "doctor")).toHaveLength(1);
     for (const [argv, options] of commands.mock.calls) {
-      expect(options, argv.join(" ")).toMatchObject({ timeoutMs: expectedTimeout });
+      if (argv[2] === "doctor" && expectedTimeout !== undefined) {
+        assert(typeof options !== "number");
+        // Preparation spends the same allowance before the Doctor command is admitted.
+        expect(options.timeoutMs).toBeGreaterThan(0);
+        expect(options.timeoutMs).toBeLessThanOrEqual(expectedTimeout);
+      } else {
+        expect(options, argv.join(" ")).toMatchObject({ timeoutMs: expectedTimeout });
+      }
     }
   },
 );

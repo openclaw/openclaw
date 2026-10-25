@@ -26,6 +26,25 @@ import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js"
 import { captureUpdateFinalizationDoctorOutput } from "./update-finalization-output.js";
 
 const dirs = createTempDirTracker();
+
+it("does not restart the Doctor phase budget after slow custody entry", async () => {
+  let elapsedMs = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+  const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+  const doctorChild = vi.fn(async () => undefined);
+
+  await expect(
+    withCliProcessScope(() =>
+      lifecycle.run("doctor", doctorChild, undefined, {
+        enter: async () => {
+          elapsedMs = 5_001;
+        },
+      }),
+    ),
+  ).rejects.toMatchObject({ result: { reason: "finalization-timeout" } });
+  expect(doctorChild).not.toHaveBeenCalled();
+});
+
 let stderrWrite: MockInstance<typeof process.stderr.write>;
 
 function finalization(timeoutMs: number | undefined, json = false, attach = true) {
@@ -449,12 +468,12 @@ it.each([false, true])(
       ]);
     try {
       await beforeCompletion(custodyEntered.promise);
-      // Custody precedes the work deadline; total phase time also includes it.
-      await vi.advanceTimersByTimeAsync(3_500);
+      // Custody consumes the same admitted allowance as Doctor work.
+      await vi.advanceTimersByTimeAsync(350);
       expect(finished).toBe(false);
       custodyReady.resolve();
       const { signal, capture } = await beforeCompletion(workEntered.promise);
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(649);
       expect(signal.aborted).toBe(false);
       if (progress) {
         capture(Buffer.from("\nPROGRESS fixture-validation"), "stderr");
@@ -469,7 +488,7 @@ it.each([false, true])(
       expect(await running).toBe(signal.reason);
       expect(vi.getTimerCount()).toBe(0);
       expect(lifecycle.phaseTimings).toEqual([
-        { phase: "doctor", startedOffsetMs: 0, durationMs: 4_600, outcome: "failed" },
+        { phase: "doctor", startedOffsetMs: 0, durationMs: 1_100, outcome: "failed" },
       ]);
       lifecycle.complete(1);
       expect(writeJson).toHaveBeenCalledWith(
