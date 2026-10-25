@@ -19,6 +19,7 @@
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
 // --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
+// --settings-core-schema replays the server's core config schema, prepared before sampling.
 // Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -74,12 +75,17 @@ import {
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
 import {
+  renderCriticalPathWaterfall,
+  type CriticalPathHttpRequest,
+} from "./lib/control-ui-critical-path-waterfall.ts";
+import {
   criticalPathRoutes,
   criticalPathCpuDelta,
   installCriticalPathProbe,
   navigateCriticalPath,
   readCriticalPath,
   readCriticalPathCpu,
+  type CriticalPathPresentation,
   type CriticalPathRoute,
 } from "./lib/control-ui-critical-path.ts";
 import {
@@ -271,6 +277,7 @@ const { values } = parseArgs({
     "critical-path": { type: "boolean", default: false },
     "critical-path-route": { type: "string", multiple: true, default: [] },
     "critical-path-intent-ms": { type: "string" },
+    "settings-core-schema": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
@@ -696,6 +703,11 @@ let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
 const results = [];
+const waterfallArtifacts: Array<{
+  file: string;
+  capture: Awaited<ReturnType<typeof readCriticalPath>>;
+  requests: CriticalPathHttpRequest[];
+}> = [];
 try {
   const terminalEnabled = gatewayUrl
     ? await fetch(new URL("/control-ui-config.json", gatewayUrl)).then(async (response) => {
@@ -705,8 +717,19 @@ try {
         return (await response.json()).terminalEnabled === true;
       })
     : fixture.scenario.terminalEnabled;
+  const settingsCoreSchema = values["settings-core-schema"]
+    ? (await import("../src/config/schema.ts")).buildConfigSchemaCore()
+    : undefined;
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
+    ...(settingsCoreSchema
+      ? {
+          methodResponses: {
+            ...fixture.scenario.methodResponses,
+            "config.schema": settingsCoreSchema,
+          },
+        }
+      : {}),
     terminalEnabled,
     serverBuildId: buildId,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
@@ -1505,17 +1528,18 @@ try {
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
         : "full";
-    const requests: Array<{ url: string; type?: string; timestamp: number; initiator: unknown }> =
-      [];
-    if (firstLoad || values["cold-http-cache"]) {
+    const requests: CriticalPathHttpRequest[] = [];
+    if (firstLoad || values["cold-http-cache"] || values["critical-path"]) {
       await cdp.send("Network.enable");
     }
-    if (firstLoad) {
+    if (firstLoad || values["critical-path"]) {
       cdp.on("Network.requestWillBeSent", (event) => {
         requests.push({
+          requestId: event.requestId,
           url: event.request.url,
           type: event.type,
           timestamp: event.timestamp,
+          wallTime: event.wallTime,
           initiator: event.initiator,
         });
       });
@@ -2527,27 +2551,26 @@ try {
         if (firstLoad) {
           await resetColdState(cdp, bundleIndex);
         }
+        const routeRequestsOffset = requests.length;
         await page.goto(url, { waitUntil: "domcontentloaded" });
         await settle();
         const routeTrace: unknown[] = [];
-        criticalPath.push(
-          await navigateCriticalPath(
-            page,
-            cdp,
-            route,
-            cpuProfile
-              ? async () => {
-                  collectedTrace = routeTrace;
-                  await cdp.send("Profiler.start");
-                  await cdp.send("Tracing.start", {
-                    categories:
-                      "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,v8",
-                    transferMode: "ReportEvents",
-                  });
-                }
-              : undefined,
-            criticalPathIntentMs,
-          ),
+        const routeCapture = await navigateCriticalPath(
+          page,
+          cdp,
+          route,
+          cpuProfile
+            ? async () => {
+                collectedTrace = routeTrace;
+                await cdp.send("Profiler.start");
+                await cdp.send("Tracing.start", {
+                  categories:
+                    "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,v8",
+                  transferMode: "ReportEvents",
+                });
+              }
+            : undefined,
+          criticalPathIntentMs,
         );
         if (cpuProfile) {
           const routeProfile = (await cdp.send("Profiler.stop")).profile;
@@ -2562,6 +2585,75 @@ try {
             JSON.stringify({ traceEvents: routeTrace }),
           );
         }
+        // Observe late shifts after timing/CPU capture without extending those measured intervals.
+        await page.waitForTimeout(500);
+        const presentationSnapshot: Pick<
+          CriticalPathPresentation,
+          "startedMs" | "capturedMs" | "layoutShifts"
+        > = await page.evaluate((startedMs) => {
+          const capturedMs = performance.now();
+          return {
+            startedMs,
+            capturedMs,
+            layoutShifts: Reflect.get(window, "__coldLoadPresentation").layoutShifts.filter(
+              (shift: { atMs: number }) => shift.atMs >= startedMs && shift.atMs <= capturedMs,
+            ),
+          };
+        }, routeCapture.intentStartedMs ?? routeCapture.startedMs);
+        let cls = 0;
+        let nonRecentInputShiftSum = 0;
+        let allShiftSum = 0;
+        let shiftWindowStartMs = 0;
+        let previousShiftMs = 0;
+        let shiftWindowValue = 0;
+        for (const shift of presentationSnapshot.layoutShifts) {
+          allShiftSum += shift.value;
+          if (shift.hadRecentInput) {
+            continue;
+          }
+          nonRecentInputShiftSum += shift.value;
+          if (
+            previousShiftMs === 0 ||
+            shift.atMs - previousShiftMs >= 1000 ||
+            shift.atMs - shiftWindowStartMs >= 5000
+          ) {
+            shiftWindowStartMs = shift.atMs;
+            shiftWindowValue = 0;
+          }
+          previousShiftMs = shift.atMs;
+          shiftWindowValue += shift.value;
+          cls = Math.max(cls, shiftWindowValue);
+        }
+        criticalPath.push({
+          ...routeCapture,
+          presentation: {
+            ...presentationSnapshot,
+            settleMs: 500,
+            cls,
+            nonRecentInputShiftSum,
+            allShiftSum,
+          },
+        });
+        const routeRequests = requests.slice(routeRequestsOffset);
+        await writeFile(
+          path.join(artifactDir, `run-${run + 1}.${route}.requests.json`),
+          JSON.stringify(
+            {
+              timeOrigin: routeCapture.timeOrigin,
+              startedMs: routeCapture.startedMs,
+              readyMs: routeCapture.readyMs,
+              capturedMs: routeCapture.capturedMs,
+              requests: routeRequests,
+            },
+            null,
+            2,
+          ),
+        );
+        waterfallArtifacts.push({
+          file: path.join(artifactDir, `run-${run + 1}.${route}.waterfall.html`),
+          capture: routeCapture,
+          requests: routeRequests,
+        });
         await saveCriticalPath();
         await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.${route}.png`) });
       }
@@ -2674,6 +2766,12 @@ try {
   await new Promise<void>((resolve, reject) => {
     sandbox.close((error) => (error ? reject(error) : resolve()));
   });
+  for (const artifact of waterfallArtifacts) {
+    await writeFile(
+      artifact.file,
+      renderCriticalPathWaterfall(artifact.capture, artifact.requests),
+    );
+  }
   await writeFile(
     path.join(artifactDir, "summary.json"),
     JSON.stringify(
@@ -2708,6 +2806,7 @@ try {
         sessionSwitch: values["session-switch"],
         criticalPathRoutes: values["critical-path"] ? navigationRoutes : undefined,
         criticalPathIntentMs: values["critical-path"] ? criticalPathIntentMs : undefined,
+        settingsCoreSchema: values["settings-core-schema"],
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,
         duplicateBootReads: values["duplicate-boot-reads"],

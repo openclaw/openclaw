@@ -36,13 +36,14 @@ import {
 } from "./config-page.test-support.ts";
 import { preloadConfigPage, type ConfigPageId, type ConfigPageRouteData } from "./config-page.tsx";
 import { pages } from "./route.ts";
-import { extractQuickSettingsSecurity } from "./security.tsx";
+import { extractQuickSettingsSecurity } from "./security-model.ts";
 
 beforeAll(() =>
   Promise.all([
     preloadConfigPage("updates"),
     preloadConfigPage("notifications"),
     preloadConfigPage("advanced"),
+    preloadConfigPage("security"),
   ]),
 );
 

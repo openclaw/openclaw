@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 273686,
-  "reason": "Route readiness: 20 interleaved pairs against the original base showed 15.8% faster Settings readiness and 8.3% less task CPU. After merging main 2f95e977, same-host builds compare 272893 to 273686 B startup gzip (+793 B); seven JS requests, one CSS request, and total CSS are unchanged. Set the baseline to the measured head.",
+  "startupJsGzipBytes": 273804,
+  "reason": "Appearance Settings readiness improves 21.06% remotely and 53.62% locally over 20 base/base/head triplets; script CPU falls 51.31% remotely. Accept the measured 222 B startup gzip increase for owner-backed deferred reads and parallel sidebar loading.",
   "updatedAt": "2026-10-25"
 }

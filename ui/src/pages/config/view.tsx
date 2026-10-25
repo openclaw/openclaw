@@ -52,7 +52,6 @@ import type { ConfigProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 export type { ConfigProps } from "./view-types.ts";
-void warmJson5().catch(() => undefined);
 
 export function Config(props: ConfigProps) {
   let content: HTMLDivElement | undefined;
@@ -135,7 +134,9 @@ export function Config(props: ConfigProps) {
       sections: category.sections
         .filter(
           (key) =>
-            (visibleVirtual(key) || key in schemaProps) &&
+            (visibleVirtual(key) ||
+              key in schemaProps ||
+              (key === "ui" && includedSections()?.has("__appearance__"))) &&
             includedSections()?.has(key) !== false &&
             !excludedSections()?.has(key),
         )
@@ -213,8 +214,8 @@ export function Config(props: ConfigProps) {
     const showSectionTabs = props.settingsLayout !== "accordion" && topTabs.length > 1;
     const showToolbar = showModeToggle || showSectionTabs;
     const showValidityWarning = props.valid === false && !viewState.validityDismissed;
-    const sensitiveCount = countSensitiveConfigValues(props.formValue, [], props.uiHints);
     return {
+      displayReady: props.activeSection === "__appearance__" && props.appearanceDisplayReady,
       showModeToggle,
       includeVirtualSections,
       include: includedSections(),
@@ -243,7 +244,6 @@ export function Config(props: ConfigProps) {
         props.settingsLayout === "accordion" ||
         showValidityWarning ||
         Boolean(channelGroup),
-      sensitiveCount,
     };
   });
   const schemaRead = createMemo(() => ({ completion: props.schemaRead }), {
@@ -262,6 +262,10 @@ export function Config(props: ConfigProps) {
   const schemaReady = createMemo(readSchema);
   const readSchemaReady = () => (hasSchema() ? latest(schemaReady) : schemaReady());
   function RawEditor() {
+    void warmJson5().catch(() => undefined);
+    const sensitiveCount = createMemo(() =>
+      countSensitiveConfigValues(props.formValue, [], props.uiHints),
+    );
     const [commandPending, setCommandPending] = createOptimistic(false);
     const [savePending, setSavePending] = createOptimistic(false);
     const presentCommand = action(function* (
@@ -391,14 +395,14 @@ export function Config(props: ConfigProps) {
             <div class="field config-raw-field">
               <span style={{ display: "flex", "align-items": "center", gap: "8px" }}>
                 {t("configView.rawConfig")}
-                {state().sensitiveCount > 0 ? (
+                {sensitiveCount() > 0 ? (
                   <>
                     <span class="settings-count">
                       {t(
-                        state().sensitiveCount === 1
+                        sensitiveCount() === 1
                           ? "configView.secretCount"
                           : "configView.secretCountPlural",
-                        { count: String(state().sensitiveCount) },
+                        { count: String(sensitiveCount()) },
                       )}{" "}
                       {t(view().rawRevealed ? "configView.visible" : "configView.redacted")}
                     </span>
@@ -424,13 +428,13 @@ export function Config(props: ConfigProps) {
                   </>
                 ) : null}
               </span>
-              {state().sensitiveCount > 0 && !view().rawRevealed ? (
+              {sensitiveCount() > 0 && !view().rawRevealed ? (
                 <div class="callout info" style={{ "margin-top": "12px" }}>
                   {t(
-                    state().sensitiveCount === 1
+                    sensitiveCount() === 1
                       ? "configView.sensitiveHidden"
                       : "configView.sensitiveHiddenPlural",
-                    { count: String(state().sensitiveCount) },
+                    { count: String(sensitiveCount()) },
                   )}
                 </div>
               ) : (
@@ -614,7 +618,7 @@ export function Config(props: ConfigProps) {
         }
         aria-label={state().showSectionTabs ? undefined : t("common.settingsSections")}
       >
-        <ConfigReadBoundary config={props}>
+        <ConfigReadBoundary config={props} displayReady={state().displayReady}>
           {props.activeSection === "__appearance__" ? (
             state().includeVirtualSections ? (
               <AppearanceSection {...props} />
