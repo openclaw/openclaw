@@ -35,13 +35,7 @@ const mocks = vi.hoisted(() => ({
     outputFormat: "mp3",
     fileExtension: ".mp3",
   })),
-  textToSpeech: vi.fn(async () => ({
-    success: true,
-    audioPath: "/tmp/tts.mp3",
-    provider: "openai",
-    outputFormat: "mp3",
-    voiceCompatible: false,
-  })),
+  textToSpeech: vi.fn(),
 }));
 
 vi.mock("../../tts/tts-settings-write-worker.js", async (importOriginal) => ({
@@ -72,14 +66,9 @@ vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
 
 // mock-isolation: TTS RPCs use fixture settings and synthesis without machine preference bindings.
 vi.mock("../../tts/tts.js", () => ({
-  getResolvedSpeechProviderConfig: vi.fn(),
-  getTtsPersona: vi.fn(() => undefined),
-  getTtsProvider: vi.fn(() => "openai"),
-  isTtsEnabled: vi.fn(() => true),
   isTtsProviderConfiguredAsync: mocks.isTtsProviderConfiguredAsync,
   listTtsPersonas: vi.fn(() => []),
   resolveExplicitTtsOverridesAsync: mocks.resolveExplicitTtsOverridesAsync,
-  resolveTtsAutoMode: vi.fn(() => false),
   resolveTtsConfig: mocks.resolveTtsConfig,
   resolveTtsPrefsPathAsync: vi.fn(async () => "/tmp/tts.json"),
   resolveTtsProviderOrder: mocks.resolveTtsProviderOrder,
