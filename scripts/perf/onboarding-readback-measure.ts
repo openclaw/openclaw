@@ -12,6 +12,7 @@ import { loadavg } from "node:os";
 import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../src/infra/kysely-sync.js";
+import { writeConfigMachineStateInDatabase } from "../../src/state/config-machine-state-write.js";
 import { prepareOnboardingRecommendationOffer } from "../../src/state/onboarding-recommendations.contract.js";
 import { readOnboardingRecommendationsInDatabase } from "../../src/state/onboarding-recommendations.kernel.js";
 
@@ -47,11 +48,7 @@ try {
   db.exec(`CREATE TABLE config_machine_state (
     state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL
   ) STRICT`);
-  db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
-    "onboarding.recommendations.synthetic",
-    JSON.stringify(record),
-    1_000,
-  );
+  writeConfigMachineStateInDatabase(db, "onboarding.recommendations.synthetic", record);
   const read = () =>
     readOnboardingRecommendationsInDatabase(db, "onboarding.recommendations.synthetic");
   assert.deepEqual(read(), record);
