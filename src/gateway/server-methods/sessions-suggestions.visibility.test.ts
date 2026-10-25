@@ -62,6 +62,13 @@ const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
 const withState = (run: Parameters<typeof withSuggestionState>[0]) =>
   withSuggestionState(run, { prepareProfileCatalog: true });
 
+function addMember(identityId: string, key = sessionKey, expectedSessionId = "session-main") {
+  addSessionMember(
+    { agentId: "main", sessionKey: key },
+    { identityId, addedBy: "owner", expectedSessionId },
+  );
+}
+
 function roleConfig(
   others: "none" | "view" | "suggest" | "write",
   scopes: OperatorScope[] = ["operator.read", "operator.write"],
@@ -98,14 +105,7 @@ it.each(["policy", "profile", "disconnect", "session", "membership", "projection
       let committed = roleConfig(change === "membership" ? "view" : "write");
       setRuntimeConfigSnapshot(committed);
       if (change === "membership") {
-        addSessionMember(
-          { agentId: "main", sessionKey },
-          {
-            identityId: "alice",
-            addedBy: "owner",
-            expectedSessionId: "session-main",
-          },
-        );
+        addMember("alice");
       }
       const requestContext = context(vi.fn(), committed);
       requestContext.getCommittedRuntimeConfig = () => committed;
@@ -162,6 +162,29 @@ it.each(["policy", "profile", "disconnect", "session", "membership", "projection
               ? [true, { role: "viewer", suggestions: [expect.objectContaining({ id: "alice" })] }]
               : [false, undefined, { code: "FORBIDDEN" }],
           ]);
+          if (change === "policy") {
+            const request = (others: Parameters<typeof roleConfig>[0], list = false) => {
+              const cfg = roleConfig(others);
+              setRuntimeConfigSnapshot(cfg);
+              return call(
+                list ? "session.suggestions.list" : "session.suggestions.add",
+                { sessionKey, ...(list ? {} : { text: "guest suggestion" }) },
+                requester,
+                context(vi.fn(), cfg),
+              );
+            };
+            expect((await request("view")).responses[0]?.[2]).toMatchObject({
+              code: "FORBIDDEN",
+              message: expect.stringContaining("viewing sessions only"),
+            });
+            expect((await request("none", true)).responses[0]?.[2]).toMatchObject({
+              code: "INVALID_REQUEST",
+              message: `unknown session: ${sessionKey}`,
+            });
+            expect((await request("suggest")).responses[0]?.[0]).toBe(true);
+            addMember("alice");
+            expect((await request("view")).responses[0]?.[0]).toBe(true);
+          }
         }
       } finally {
         release.resolve();
@@ -219,49 +242,6 @@ it("retains committed suggestion visibility through a tentative role relaxation"
     }
   }));
 
-it("enforces view, suggest, and hidden role ceilings while honoring explicit membership", () =>
-  withState(async () => {
-    const ownerProfile = ensureProfileForEmail("suggestion-owner@example.test");
-    const guestProfile = ensureProfileForEmail("suggestion-guest@example.test");
-    await upsertDefaultSuggestionSession({
-      createdActor: { type: "human", source: "profile", id: ownerProfile.id },
-    });
-    const guest = client(guestProfile.id, "Guest");
-    const request = (others: Parameters<typeof roleConfig>[0], list = false) => {
-      const cfg = roleConfig(others);
-      setRuntimeConfigSnapshot(cfg);
-      return call(
-        list ? "session.suggestions.list" : "session.suggestions.add",
-        { sessionKey, ...(list ? {} : { text: "guest suggestion" }) },
-        guest,
-        context(vi.fn(), cfg),
-      );
-    };
-    const denied = await request("view");
-    expect(denied.responses[0]?.[2]).toMatchObject({
-      code: "FORBIDDEN",
-      message: expect.stringContaining("viewing sessions only"),
-    });
-
-    const hidden = await request("none", true);
-    expect(hidden.responses[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: `unknown session: ${sessionKey}`,
-    });
-
-    expect((await request("suggest")).responses[0]?.[0]).toBe(true);
-
-    addSessionMember(
-      { agentId: "main", sessionKey },
-      {
-        identityId: guestProfile.id,
-        addedBy: ownerProfile.id,
-        expectedSessionId: "session-main",
-      },
-    );
-    expect((await request("view")).responses[0]?.[0]).toBe(true);
-  }));
-
 it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing privacy", (mode) =>
   withState(async () => {
     const incognito = mode === "incognito";
@@ -280,10 +260,7 @@ it.each(["draft", "incognito"] as const)("enforces %s suggestion and typing priv
       key,
     );
     if (!incognito) {
-      addSessionMember(
-        { agentId: "main", sessionKey: key },
-        { identityId: "member", addedBy: "owner", expectedSessionId: sessionId },
-      );
+      addMember("member", key, sessionId);
     }
     const request = requests(
       key,
