@@ -394,10 +394,7 @@ it("reads an unbound incognito announcement from its memory owner", async () => 
   const sessionKey = `agent:${agentId}:dashboard:incognito-unbound`;
   const storePath = actorPath(agentId);
   setSessionStore(storePath);
-  await replaceSessionEntry(
-    { agentId, sessionKey, storePath, env: actorEnv },
-    { sessionId: "unbound-announcement", updatedAt: 1, incognito: true },
-  );
+  await create(memoryOwner(agentId), sessionKey, { sessionId: "unbound-announcement" });
   expect((await loadRequesterSessionEntry(sessionKey, agentId)).entry?.sessionId).toBe(
     "unbound-announcement",
   );
