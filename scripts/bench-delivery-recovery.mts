@@ -320,7 +320,7 @@ try {
       for (const job of payload.jobs) {
         assert.equal(
           payload.deliveryPreviews?.[job.id]?.label,
-          `announce -> imessage:${jobs.get(job.id)!.to}`,
+          `announce -> imessage:auto:${jobs.get(job.id)!.to}`,
           "Delivery preview did not resolve its own route",
         );
       }
