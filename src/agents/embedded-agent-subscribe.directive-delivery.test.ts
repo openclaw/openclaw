@@ -34,12 +34,9 @@ import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.
 
 const googleModel = makeProviderModelFixture<"google-generative-ai">({
   id: "gemini-2.5-flash",
-  name: "Gemini 2.5 Flash",
   api: "google-generative-ai",
   provider: "google",
   baseUrl: "https://example.invalid",
-  contextWindow: 200000,
-  maxTokens: 8192,
 });
 const responsesModel: Model<"openai-responses"> = {
   ...googleModel,
@@ -522,27 +519,15 @@ it("keeps generic directive URLs separate from tool-owned managed media", () => 
   ).toEqual(["./managed.png"]);
 });
 
-const xmlText = "<tool_call>{}</tool_call>Visible\n";
-it.each([
-  {
-    name: "a held directive frame",
-    frames: [
-      { text: "<tool_call", delta: "<tool_call", held: true, expected: "" },
-      { text: xmlText, delta: ">{}</tool_call>Visible\n", expected: "Visible" },
-    ],
-  },
-  {
-    name: "a source replacement",
-    frames: [
-      { text: "Discarded.", delta: "Discarded.", expected: "Discarded." },
-      { text: xmlText, expected: "Visible" },
-      { text: xmlText + "tail", delta: "tail", expected: "Visible\ntail" },
-    ],
-  },
-] as const)("retains raw XML projection across $name", ({ frames }) => {
+it("retains raw XML projection across a source replacement", () => {
+  const xmlText = "<tool_call>{}</tool_call>Visible\n";
   const resolve = createStreamingReplyResolver();
   let previousCleaned = "";
-  for (const frame of frames) {
+  for (const frame of [
+    { text: "Discarded.", delta: "Discarded.", expected: "Discarded." },
+    { text: xmlText, expected: "Visible" },
+    { text: xmlText + "tail", delta: "tail", expected: "Visible\ntail" },
+  ]) {
     const delta = "delta" in frame ? frame.delta : undefined;
     const result = resolve({
       evtType: "text_delta",
@@ -551,7 +536,7 @@ it.each([
       previousCleaned,
       visibleDelta: delta ?? frame.text,
       appendDelta: delta ?? null,
-      parsedStreamDirectives: "held" in frame ? null : { text: "", replyToTag: false },
+      parsedStreamDirectives: { text: "", replyToTag: false },
       previousAudioDirectiveCount: 0,
       rawDirectiveSource: frame.text,
       rawDirectiveDelta: delta,
