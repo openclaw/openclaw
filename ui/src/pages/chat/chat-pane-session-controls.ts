@@ -30,6 +30,7 @@ import type { ChatProps } from "./chat-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.tsx";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
+import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
 registerModelControlsEnglish();
 
@@ -195,6 +196,13 @@ export function renderChatPaneComposerControls(params: {
     composerControls: {
       component: ChatPaneModelControl,
       model: {
+        snapshot:
+          state.connected &&
+          state.chatModelCatalogInitialized &&
+          (selectedSession?.model || agentDefaultModel || state.sessionsResult?.defaults.model)
+            ? undefined
+            : (readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
+                ?.composer ?? undefined),
         modelAuthStatusResult: state.modelAuthStatusResult,
         accountSelection,
         renderAccountSection: (accountModel) =>
