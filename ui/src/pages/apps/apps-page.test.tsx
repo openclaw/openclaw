@@ -164,6 +164,13 @@ it("discovers the session's agent while selection is switching", async () => {
     agentId: "main",
   });
   discovered.resolve();
+  await waitForSolid(() =>
+    expect(mounted.container.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      serverName: "parts",
+    }),
+  );
 });
 
 afterEach(() => {

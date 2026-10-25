@@ -39,11 +39,14 @@ export function AppsPage(props: { appSearch?: string }) {
   );
   const launch = createMemo((previous: AppLaunch | undefined): AppLaunch => {
     const state = gateway.read();
-    const agentId = selection.read().state.selectedId ?? undefined;
+    const target = resolveMcpAppExtensionTarget({
+      sessionKey: state.snapshot.sessionKey,
+      agentId: selection.read().state.selectedId ?? undefined,
+    });
     const key = JSON.stringify([
       appSearch(),
-      state.snapshot.sessionKey,
-      agentId,
+      target.sessionKey,
+      target.agentId,
       state.connectionRevision,
     ]);
     const route = appRoute();
@@ -81,8 +84,8 @@ export function AppsPage(props: { appSearch?: string }) {
       detail:
         server && entrypoint
           ? {
-              sessionKey: state.snapshot.sessionKey,
-              agentId,
+              sessionKey: target.sessionKey,
+              agentId: target.agentId,
               owner: state.snapshot.client,
               serverName: server.serverName,
               entrypoint,
