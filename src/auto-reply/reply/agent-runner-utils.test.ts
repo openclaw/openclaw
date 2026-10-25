@@ -219,6 +219,7 @@ describe("agent-runner-utils", () => {
           chat: { id: "native-chat-1", topicId: "topic-1" },
         },
         MemberRoleIds: ["admin", " ", "operator"],
+        media: [{ contentType: "audio/ogg; codecs=opus", kind: "audio" }],
       },
       provider: "anthropic",
       model: "claude-sonnet-4-6",
@@ -236,7 +237,7 @@ describe("agent-runner-utils", () => {
         messageTo: "channel-1",
         chatId: "native-chat-1",
         memberRoleIds: ["admin", "operator"],
-        currentInboundAudio: false,
+        currentInboundAudio: true,
         senderId: "sender-1",
         channelContext: run.channelContext,
         senderName: undefined,
@@ -288,6 +289,7 @@ describe("agent-runner-utils", () => {
         agentAccountId: "work",
         chatType: "direct",
         replyToMode: "off",
+        currentInboundAudio: false,
       }),
     );
   });
@@ -312,19 +314,6 @@ describe("agent-runner-utils", () => {
       currentMessageId: undefined,
       replyToMode: "all",
     });
-  });
-
-  it("carries inbound audio context into embedded message tools", async () => {
-    const resolved = await buildExecution({
-      sessionCtx: {
-        Provider: "telegram",
-        To: "268300329",
-        media: [{ contentType: "audio/ogg; codecs=opus", kind: "audio" }],
-        BodyForCommands: "",
-      },
-    });
-
-    expect(resolved.currentInboundAudio).toBe(true);
   });
 
   it("uses OriginatingTo for threading tool context on discord native commands", () => {

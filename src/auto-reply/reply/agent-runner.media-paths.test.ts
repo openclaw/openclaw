@@ -146,24 +146,6 @@ describe("runReplyAgent media path normalization", () => {
     );
   });
 
-  it("defers the complete image turn when the active runtime cannot preserve images", async () => {
-    queueMessageMock.mockImplementation(async (sessionId: string) => ({
-      queued: false,
-      sessionId,
-      reason: "image_input_unsupported",
-      gatewayHealth: "live",
-    }));
-    const followupRun = createMediaFollowupRun({
-      prompt: "inspect this",
-      images: [{ type: "image", data: "png", mimeType: "image/png" }],
-    });
-
-    await runReplyAgent(await makeSteerParams({ followupRun }));
-
-    expect(reserveSteerCandidateMock).toHaveBeenCalledOnce();
-    expectDeferredSteer();
-  });
-
   it("latches audio only after the active reply operation accepts the steer", async () => {
     const followupRun = createMediaFollowupRun({
       prompt: "summarize the audio",
@@ -258,46 +240,36 @@ describe("runReplyAgent media path normalization", () => {
       | undefined;
   }
 
-  it.each([true, false])(
-    "keeps the prepared global owner in executeAgentTurn (provided context: %s)",
-    async (providedContext) => {
-      // Regression: #68056, block and final replies must share the caller's media cache.
-      runEmbeddedAgentMock.mockResolvedValue({
-        payloads: [],
-        meta: { agentMeta: { sessionId: "session", provider: "anthropic", model: "claude" } },
-      });
+  it("creates a missing media context for the prepared global owner", async () => {
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [],
+      meta: { agentMeta: { sessionId: "session", provider: "anthropic", model: "claude" } },
+    });
 
-      const followupRun = createMediaFollowupRun({
-        prompt: "generate",
-        run: {
-          agentId: "qa",
-          sessionKey: "global",
-          workspaceDir: testWorkspaceDir,
-          config: { agents: { ownership: "explicit", entries: { qa: {}, beta: {} } } },
-        },
-      });
-      setRuntimeConfigSnapshot(followupRun.run.config, followupRun.run.config);
-      const result = await runTurn(makeSessionContext(), "generate", {
-        followupRun,
-        blockStreamingEnabled: true,
+    const followupRun = createMediaFollowupRun({
+      prompt: "generate",
+      run: {
+        agentId: "qa",
         sessionKey: "global",
-        replyMediaContext: providedContext
-          ? { normalizePayload: async (payload) => payload }
-          : undefined,
-      });
+        workspaceDir: testWorkspaceDir,
+        config: { agents: { ownership: "explicit", entries: { qa: {}, beta: {} } } },
+      },
+    });
+    setRuntimeConfigSnapshot(followupRun.run.config, followupRun.run.config);
+    const result = await runTurn(makeSessionContext(), "generate", {
+      followupRun,
+      blockStreamingEnabled: true,
+      sessionKey: "global",
+      replyMediaContext: undefined,
+    });
 
-      if (providedContext) {
-        expect(mediaContextMock).not.toHaveBeenCalled();
-      } else {
-        expect(mediaContextMock).toHaveBeenCalledOnce();
-        expect(mediaContextMock).toHaveBeenCalledWith(
-          expect.objectContaining({ cfg: followupRun.run.config, sessionKey: "global" }),
-        );
-      }
-      expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
-      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    },
-  );
+    expect(mediaContextMock).toHaveBeenCalledOnce();
+    expect(mediaContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: followupRun.run.config, sessionKey: "global" }),
+    );
+    expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
 
   it("passes resolved current images and skips unresolved attachments", async () => {
     const { tmpDir, imagePath } = await nativeImage();

@@ -3,10 +3,11 @@ import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "../../gateway/server-methods/chat.abort-registry.test-support.js";
+import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { testing as acpTesting, getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../acp/control-plane/manager.lifecycle.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
@@ -51,12 +52,11 @@ import { createAcpTestBindingRegistry } from "./test-fixtures/acp-runtime.js";
 const fixture = useChatAbortRegistryFixture();
 
 async function beforeSettlement<T>(gate: Promise<T>, operation: Promise<unknown>) {
-  return Promise.race([
+  return awaitGateBeforeSettlement(
     gate,
-    operation.then(() => {
-      throw new Error("Operation settled before its cancellation gate");
-    }),
-  ]);
+    operation,
+    "Operation settled before its cancellation gate",
+  );
 }
 
 it.each(["idle", "active", "native failure"])(
@@ -67,15 +67,14 @@ it.each(["idle", "active", "native failure"])(
     const nativeError = new Error("native cancellation failed");
     const backendError = new Error("backend cancellation failed");
     const expectBackendCleanupFailure = (error: unknown): AcpRuntimeError => {
-      if (!(error instanceof AggregateError)) {
-        throw new Error("Expected a session source cleanup failure", { cause: error });
-      }
+      assert(error instanceof AggregateError, "Expected a session source cleanup failure");
       expect(error.message).toBe("Session source cleanup failed");
       expect(error.errors).toHaveLength(1);
       const runtimeError: unknown = error.errors[0];
-      if (!(runtimeError instanceof AcpRuntimeError)) {
-        throw new Error("Expected the ACP runtime cancellation failure", { cause: runtimeError });
-      }
+      assert(
+        runtimeError instanceof AcpRuntimeError,
+        "Expected the ACP runtime cancellation failure",
+      );
       expect(runtimeError.code).toBe("ACP_TURN_FAILED");
       expect(runtimeError.message).toBe(backendError.message);
       expect(runtimeError.cause).toBe(backendError);

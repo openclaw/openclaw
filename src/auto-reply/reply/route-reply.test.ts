@@ -62,11 +62,7 @@ function createChannelPlugin(
   adapters: Pick<ChannelPlugin, "messaging" | "threading"> = {},
 ): ChannelPlugin {
   return {
-    ...createChannelTestPluginBase({
-      id,
-      label: String(id),
-      config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-    }),
+    ...createChannelTestPluginBase({ id, config: { listAccountIds: () => [] } }),
     ...adapters,
   };
 }

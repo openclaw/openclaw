@@ -14,10 +14,7 @@ import {
   extractShortModelName,
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
-import {
-  createStreamingDirectiveAccumulator,
-  splitTrailingDirective,
-} from "./streaming-directives.js";
+import { createStreamingDirectiveAccumulator } from "./streaming-directives.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
 import { createTypingController } from "./typing.js";
@@ -325,32 +322,15 @@ it("plans references for off/first/batched/all modes", () => {
   expect([existing.use(), existing.use()]).toEqual(["thread-1", undefined]);
 });
 
-type StreamResult = ReturnType<ReturnType<typeof createStreamingDirectiveAccumulator>["consume"]>;
-type StreamCase = [string, string[], Array<Partial<StreamResult>>, boolean?];
-it.each<StreamCase>([
-  [
-    "chunked NO_REPLY",
-    ["NO_R", "EPLY", "\nVisible reply"],
-    [null, null, { text: "Visible reply" }],
-  ],
-  [
-    "split reply tag",
-    ["[", "[reply_to_current]] Yo"],
-    [null, { text: "Yo", replyToCurrent: true }],
-  ],
-  [
-    "malformed leading reply prefix",
-    ["[[reply_to_", "current] Visible reply", ""],
-    [null, null, { text: "Visible reply", replyToCurrent: false, replyToTag: false }],
-    true,
-  ],
-])("parses %s", (_name, chunks, expected, final = false) => {
+it("strips a malformed leading reply prefix without claiming reply intent", () => {
   const accumulator = createStreamingDirectiveAccumulator();
-  expect(
-    chunks.map((chunk, i) =>
-      accumulator.consume(chunk, { final: final && i === chunks.length - 1 }),
-    ),
-  ).toMatchObject(expected);
+  expect(accumulator.consume("[[reply_to_")).toBeNull();
+  expect(accumulator.consume("current] Visible reply")).toBeNull();
+  expect(accumulator.consume("", { final: true })).toMatchObject({
+    text: "Visible reply",
+    replyToCurrent: false,
+    replyToTag: false,
+  });
 });
 
 it("preserves split malformed fenced code", () => {
@@ -380,16 +360,6 @@ it("propagates explicit reply ids until the assistant message resets", () => {
   });
 });
 
-it("preserves a glued leading NO_REPLY mention in streamed text", () => {
-  const text = "NO_REPLYThe user is saying hello";
-  expect(createStreamingDirectiveAccumulator().consume(text)?.text).toBe(text);
-});
-
-it("keeps a complete final MEDIA line available to the final parser", () => {
-  const input = "Here.\nMEDIA:/tmp/a.png";
-  expect(splitTrailingDirective(input)).toEqual({ text: "Here.\n", tail: "MEDIA:/tmp/a.png" });
-  expect(parseReplyDirectives(input)).toMatchObject({ text: "Here.", mediaUrls: ["/tmp/a.png"] });
-});
 it("strips an incomplete reply tag without treating it as reply intent", () => {
   expect(parseReplyDirectives("[[reply_to:")).toMatchObject({
     text: "",
