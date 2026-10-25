@@ -95,11 +95,10 @@ it("bridges regular replies to shared outbound with Discord package deps", async
     channel: "discord",
     to: "channel:101",
     accountId: "default",
-    payloads: replies,
     replyToId: "reply-1",
     replyToMode: "all",
+    onPlatformSendDispatch,
   });
-  expect(params.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
   expect(params.payloads).toEqual(replies);
 
   const deps = params.deps!;
@@ -296,13 +295,7 @@ find /tmp -type f
 });
 
 it("passes media roots and explicit off-mode payload reply tags to shared outbound", async () => {
-  const replies = [
-    {
-      text: "explicit reply",
-      replyToId: "reply-explicit-1",
-      replyToTag: true,
-    },
-  ];
+  const replies = [{ text: "explicit reply", replyToId: "reply-explicit-1", replyToTag: true }];
 
   await deliver(replies, {
     target: "channel:202",
