@@ -1,105 +1,50 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
+import { makeReleaseFixture } from "./worker-config-owner-fixture.mjs";
 
-const library = join(import.meta.dirname, "release-lib.mjs");
-const sha = "a".repeat(40);
 const oldSetup = "# OPENCLAW_TEAM_ARTIFACT_SETUP_V1\ncommand -v node\nprintf legacy-runtime\n";
 const replacement = "#!/usr/bin/env bash\nset -eu\ncommand -v node\ncommand -v npm\n";
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function fixture(t) {
-  const directory = realpathSync(mkdtempSync(join(tmpdir(), "team-worker-config-")));
-  const root = join(directory, "serving");
-  const config = join(directory, "runtime", "openclaw.json");
-  const database = join(directory, "runtime", "openclaw.sqlite");
-  for (const path of [root, ...["journal", "staging", `releases/${sha}`].map(p => join(root, p)), dirname(config)]) {
-    mkdirSync(path, { recursive: true, mode: 0o700 });
-  }
-  writeFileSync(join(root, "releases", sha, "package.json"), JSON.stringify({ version: "2026.9.3" }));
-  symlinkSync(join(root, "releases", sha), join(root, "current"));
-  const original = {
-    meta: { lastTouchedVersion: "2026.9.3", migrations: { modelPolicyAllowlist: true } },
-    cloudWorkers: {
-      profiles: {
-        aws: {
-          provider: "crabbox",
-          settings: {
-            binary: "/home/openclaw/.openclaw/bin/crabbox-artifact",
-            desktop: true,
-            setup: oldSetup,
-          },
-        },
-      },
-    },
-    syntheticUnrelated: { retained: "private-fixture-value" },
-  };
-  writeFileSync(config, JSON.stringify(original) + "\n", { mode: 0o600 });
-  writeFileSync(database, "synthetic-database-identity", { mode: 0o600 });
-  const originalBytes = readFileSync(config);
+  const f = makeReleaseFixture(t), config = f.configPath, database = f.databasePath, root = f.serving;
+  // Library-only transactions start fenced; the full owner normally revokes this permit.
+  rmSync(f.permit);
   function call(action, args = [], input = undefined) {
     const result = spawnSync(process.execPath,
-      ["--no-warnings", library, "worker-config", action, root, ...args], {
-        encoding: "utf8", input,
-        env: { ...process.env, OPENCLAW_TEAM_ROOT_UID: String(process.getuid()),
-          OPENCLAW_TEAM_ROOT_GID: String(process.getgid()), OPENCLAW_TEAM_ANCESTOR_BOUNDARY: directory },
+      ["--no-warnings", f.library, "worker-config", action, root, ...args], {
+        encoding: "utf8", input, env: f.env,
       });
     assert.ifError(result.error);
     return result;
   }
-  function prepare(configHash = hash(originalBytes), setupHash = hash(oldSetup)) {
+  function prepare(configHash = f.configSha256, setupHash = f.oldSetupSha256) {
     return call("prepare",
-      [config, database, sha, configHash, setupHash, String(process.getuid()), String(process.getgid())],
+      [config, database, f.sha, configHash, setupHash, String(process.getuid()), String(process.getgid())],
       replacement);
   }
   function begin() {
     const token = JSON.parse(pass(prepare()));
-    const result = call(
-      "begin",
-      [JSON.stringify(token)],
-      JSON.stringify({
-        process: { pid: 111, generation: "1110", instance: "synthetic-instance" },
-        suspension: {
-          id: "synthetic-lease",
-          expiresAtMs: Date.now() + 120000,
-          status: "ready",
-          terminalPolicy: "preserve",
-        },
-        witness: [JSON.stringify(["controller-test-agent", "synthetic-agent-db", 1, 2,
-          "agent:controller-test-agent:existing", "synthetic-session", null, null])],
-      }),
-    );
-    pass(result);
+    pass(call("begin", [JSON.stringify(token)], JSON.stringify({
+      process: { pid: 111, generation: "1110", instance: "synthetic-instance" },
+      suspension: { id: "synthetic-lease", expiresAtMs: Date.now() + 120000,
+        status: "ready", terminalPolicy: "preserve" },
+      witness: [JSON.stringify(["controller-test-agent", "synthetic-agent-db", 1, 2,
+        "agent:controller-test-agent:existing", "synthetic-session", null, null])],
+    })));
     return token;
   }
-  function publish(value = structuredClone(original), setup = replacement) {
+  function publish(value = structuredClone(f.original), setup = replacement) {
     value.cloudWorkers.profiles.aws.settings.setup = setup;
     writeFileSync(`${config}.fixture-next`, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
     renameSync(`${config}.fixture-next`, config);
     return readFileSync(config);
   }
-  const journal = join(root, "journal/activation.json");
-  t.after(() => {
-    chmodSync(root, 0o700);
-    rmSync(directory, { recursive: true, force: true });
-  });
-  return { directory, root, config, database, original, originalBytes, journal,
-    call, prepare, begin, publish };
+  return { ...f, root, config, database, originalBytes: f.originalConfigBytes, call, prepare, begin, publish };
 }
 
 test("prepares only a bound AWS setup operation and retains exact original bytes", (t) => {
@@ -117,7 +62,7 @@ test("prepares only a bound AWS setup operation and retains exact original bytes
   assert.equal(JSON.parse(pass(f.call("replacement-value", [JSON.stringify(token)]))), replacement);
   assert.equal(JSON.parse(pass(f.call("expected-value", [JSON.stringify(token)]))), oldSetup);
   assert.deepEqual(readFileSync(f.config), f.originalBytes);
-  assert.doesNotMatch(result.stdout + result.stderr, /private-fixture-value|legacy-runtime/u);
+  assert.doesNotMatch(result.stdout + result.stderr, /nonsecret-synthetic-sibling|legacy-runtime/u);
 });
 
 test("refuses stale full-config or old-script bindings before preparing a write", (t) => {
