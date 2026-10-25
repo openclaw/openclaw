@@ -128,7 +128,7 @@ export function createApplicationPlacementStartup(
   let pendingStoredRecovery:
     | {
         current: () => boolean;
-        refresh: () => void;
+        refresh: () => boolean;
         read: (sessionKey: string) => { startedAt: number } | undefined;
       }
     | undefined;
@@ -236,6 +236,7 @@ export function createApplicationPlacementStartup(
       }
       return;
     }
+    let hasStoredRecovery = false;
     if (client && !pending) {
       // Keys hold admission until runtime validation, even if import finishes offline.
       // They carry neither payload content nor execution permission.
@@ -251,6 +252,7 @@ export function createApplicationPlacementStartup(
           current,
           refresh: () => {
             keys = listSessionPlacementRecoveryStorageKeys(owner.gatewayUrl, owner.recoveryScope);
+            return keys.length > 0;
           },
           read: (key) =>
             current() &&
@@ -264,7 +266,10 @@ export function createApplicationPlacementStartup(
         };
       }
       // Reset can remove a creating draft while the lazy runtime is unavailable.
-      pendingStoredRecovery.refresh();
+      hasStoredRecovery = pendingStoredRecovery.refresh();
+    }
+    if (!hasStoredRecovery && pendingInputs().length === 0) {
+      return;
     }
     // Snapshot changes retain the attempt and its observed start time. Only an
     // explicit Start or Retry can replace a failed lazy-module load.

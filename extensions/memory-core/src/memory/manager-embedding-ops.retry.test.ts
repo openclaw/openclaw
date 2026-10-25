@@ -19,6 +19,7 @@ type EmbeddingQueryRetryHarness = {
   ) => Promise<number[]>;
   markLocalEmbeddingProviderDegraded: (error: unknown) => void;
   resolveEmbeddingTimeout: () => number;
+  waitForEmbeddingRetry: (delayMs: number, action: string, signal?: AbortSignal) => Promise<void>;
 };
 
 function createEmbeddingQueryRetryHarness(
@@ -32,8 +33,6 @@ function createEmbeddingQueryRetryHarness(
     embedBatch: async () => [],
   };
 
-  // Exercise the real query and retry methods without opening an unrelated
-  // memory index or acquiring an external embedding provider.
   return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
     provider,
     settings: {},
@@ -57,6 +56,17 @@ function createEmbeddingBatchRetryHarness(embedBatch: EmbeddingProvider["embedBa
   manager.provider.embedBatch = embedBatch;
   return manager;
 }
+
+const rateLimitError = () =>
+  Object.assign(new Error("gemini embeddings failed (429)"), { status: 429, retryAfterMs: 60_000 });
+
+const documentInput = () => ({
+  text: "first second",
+  parts: [
+    { type: "text" as const, text: "first" },
+    { type: "text" as const, text: " second" },
+  ],
+});
 
 describe("memory model input formatting", () => {
   it.each<[string, string, boolean, string?]>([
@@ -84,13 +94,7 @@ describe("memory model input formatting", () => {
       const manager = createEmbeddingBatchRetryHarness(embedBatch);
       Object.assign(manager.provider, { id, model, embed });
       Object.assign(manager, { settings: { queryInstruction } });
-      const document = {
-        text: "first second",
-        parts: [
-          { type: "text" as const, text: "first" },
-          { type: "text" as const, text: " second" },
-        ],
-      };
+      const document = documentInput();
 
       await expect(manager.embedQueryWithRetry("find this")).resolves.toEqual([1, 0]);
       await expect(manager.embedBatchWithRetry(["remember this", document])).resolves.toEqual([
@@ -122,13 +126,7 @@ describe("memory model input formatting", () => {
             ]
           : ["remember this", document],
       );
-      expect(document).toEqual({
-        text: "first second",
-        parts: [
-          { type: "text", text: "first" },
-          { type: "text", text: " second" },
-        ],
-      });
+      expect(document).toEqual(documentInput());
     },
   );
 });
@@ -175,23 +173,9 @@ describe("memory embedding query retry cancellation", () => {
     vi.useFakeTimers();
     const controller = new AbortController();
     const abortReason = new Error("memory search was cancelled");
-    const embedQuery = vi.fn<EmbeddingProvider["embed"]>().mockRejectedValue(
-      Object.assign(new Error("gemini embeddings failed (429)"), {
-        status: 429,
-        retryAfterMs: 60_000,
-      }),
-    );
+    const embedQuery = vi.fn<EmbeddingProvider["embed"]>().mockRejectedValue(rateLimitError());
     const manager = createEmbeddingQueryRetryHarness(embedQuery, 10_000);
-    const waitForRetrySpy = vi.spyOn(
-      manager as unknown as {
-        waitForEmbeddingRetry: (
-          delayMs: number,
-          action: string,
-          signal?: AbortSignal,
-        ) => Promise<void>;
-      },
-      "waitForEmbeddingRetry",
-    );
+    const waitForRetrySpy = vi.spyOn(manager, "waitForEmbeddingRetry");
 
     const pending = manager.embedQueryWithRetry("search terms", controller.signal);
     await vi.advanceTimersByTimeAsync(0);
@@ -231,12 +215,7 @@ describe("memory embedding query retry cancellation", () => {
   it("reaches caller fallback within the memory_search deadline after a hinted 429", async () => {
     vi.useFakeTimers();
     const waits: number[] = [];
-    const embedQuery = vi.fn<EmbeddingProvider["embed"]>().mockRejectedValue(
-      Object.assign(new Error("gemini embeddings failed (429)"), {
-        status: 429,
-        retryAfterMs: 60_000,
-      }),
-    );
+    const embedQuery = vi.fn<EmbeddingProvider["embed"]>().mockRejectedValue(rateLimitError());
     const manager = Object.assign(createEmbeddingQueryRetryHarness(embedQuery), {
       waitForEmbeddingRetry: async (delayMs: number, _action: string, signal?: AbortSignal) => {
         waits.push(delayMs);
@@ -313,18 +292,12 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
   });
 
   it.each([
-    {
-      label: "generic validation errors containing request-id digits",
-      message:
-        '{"error":{"code":"InvalidParameter","message":"The parameter input specified in the request is not valid. Request id: fixture-000597000","param":"input"}}',
-      items: ["one", "two"],
-    },
-    {
-      label: "a numeric row cap rejecting a single item",
-      message: "batch size is invalid, it should not be larger than 10",
-      items: ["one"],
-    },
-  ])("does not retry or split $label", async ({ message, items }) => {
+    [
+      '{"error":{"code":"InvalidParameter","message":"The parameter input specified in the request is not valid. Request id: fixture-000597000","param":"input"}}',
+      ["one", "two"],
+    ],
+    ["batch size is invalid, it should not be larger than 10", ["one"]],
+  ] satisfies [string, string[]][])("does not retry or split %s", async (message, items) => {
     const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async () => {
       throw new Error(`openai-compatible embeddings failed: HTTP 400: ${message}`);
     });

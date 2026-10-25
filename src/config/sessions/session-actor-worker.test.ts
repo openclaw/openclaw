@@ -25,6 +25,71 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 // mock-isolation: The fixture owns its database lifetime without background history eviction.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
+it.each(["commit", "preparation", "abort"] as const)(
+  "settles a resident single-node adoption after %s without losing its native receipt",
+  async (mode) => {
+    await withActor(async (f) => {
+      if (mode === "abort") {
+        f.database.db.exec(
+          "CREATE TEMP TRIGGER refuse_adoption BEFORE INSERT ON session_nodes BEGIN SELECT RAISE(ABORT, 'synthetic adoption refused'); END",
+        );
+      }
+      const initial = f.read();
+      const command: Mutation = {
+        type: "session.actor.adoptRun",
+        input: {
+          target: f.target,
+          expected: initial.version,
+          commandId: `single-node-${mode}`,
+          phaseId: "adoption",
+          sessionId: f.scope.sessionId,
+          expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+          runId: "next-run",
+          lifecycle: {},
+        },
+      };
+      await f.prepare(command);
+      if (mode === "preparation") {
+        f.hooks.admit = (stage) => {
+          if (stage === "commit") {
+            throw new Error("synthetic final admission refused");
+          }
+        };
+      }
+      const writes = trackSqliteStatementExecutions(f.database.db, ["nodes", "envelope"], (sql) =>
+        /^(?:begin|commit)\b/iu.test(sql)
+          ? "envelope"
+          : /^insert into "session_nodes"/iu.test(sql)
+            ? "nodes"
+            : null,
+      );
+      const changesBefore = f.database.db.prepare("SELECT total_changes() AS count").get()?.count;
+      try {
+        const outcome = f.mutate(command);
+        delete f.hooks.admit;
+        if (mode === "commit") {
+          assert(outcome.kind === "committed");
+          expect(writes.counts).toEqual({ nodes: 1, envelope: 0 });
+          expect(outcome.receipt.postimage.entry?.activeWriterRunId).toBe("next-run");
+          expect(f.read().writeToken).toBe(outcome.receipt.postimage.writeToken);
+          expect(f.read().version).toEqual(outcome.receipt.afterVersion);
+          expect(f.nativeEntry()?.activeWriterRunId).toBe("next-run");
+        } else {
+          expect(outcome).toMatchObject({ kind: "rolled-back" });
+          expect(writes.counts).toEqual({ nodes: 1, envelope: 0 });
+          expect(f.database.db.prepare("SELECT total_changes() AS count").get()?.count).toBe(
+            changesBefore,
+          );
+          expect(f.read()).toEqual(initial);
+          expect(f.nativeEntry()).toEqual(initial.entry);
+        }
+      } finally {
+        writes.restore();
+      }
+    });
+  },
+);
+
 type Events = readonly TranscriptEvent[];
 
 function seedEntry(f: Fixture, overrides: Partial<InternalSessionEntry>, events: Events = []) {

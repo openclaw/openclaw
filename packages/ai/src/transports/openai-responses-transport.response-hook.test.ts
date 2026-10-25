@@ -377,17 +377,8 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
       async (settlement) => {
         const lifecycle = installResponse();
         const controller = new AbortController();
-        let settleHook!: () => void;
-        const pendingHook = new Promise<void>((resolve, reject) => {
-          settleHook = () => {
-            if (settlement === "resolve") {
-              resolve();
-            } else {
-              reject(new Error("late response hook rejection"));
-            }
-          };
-        });
-        const onResponse = vi.fn(() => pendingHook);
+        const pendingHook = createDeferred();
+        const onResponse = vi.fn(() => pendingHook.promise);
         const stream = createStream({ signal: controller.signal, onResponse });
         const eventTypes: string[] = [];
         const consume = collectEventTypes(stream, eventTypes);
@@ -407,7 +398,11 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
         expect(eventTypes).toEqual(["error"]);
         expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
 
-        settleHook();
+        if (settlement === "resolve") {
+          pendingHook.resolve();
+        } else {
+          pendingHook.reject(new Error("late response hook rejection"));
+        }
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });

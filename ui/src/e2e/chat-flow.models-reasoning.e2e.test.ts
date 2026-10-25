@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
   newChatPage,
@@ -15,13 +16,6 @@ const suite = createChatFlowE2eSuite();
 
 const sessionA = "agent:main:session-a";
 const bedrockModel = "bedrock/claude-opus-4.5";
-const sessionRow = <T extends object>(key: string, label: string, updatedAt: number, extra: T) => ({
-  key,
-  kind: "direct",
-  label,
-  updatedAt,
-  ...extra,
-});
 const generatedModels = (count: number, idPrefix = "model", namePrefix = "Model") =>
   Array.from({ length: count }, (_, index) => ({
     id: `${idPrefix}-${index + 1}`,

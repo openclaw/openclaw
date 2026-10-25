@@ -17,19 +17,19 @@ export async function admitProviderRateLimitStream(
   ) => AssistantMessageEventStreamLike | Promise<AssistantMessageEventStreamLike>,
   assertCurrent?: () => void,
 ): Promise<AssistantMessageEventStreamLike> {
-  const request = createProviderRateLimitRequest(model, options ?? {});
+  let request: ReturnType<typeof createProviderRateLimitRequest> | undefined =
+    createProviderRateLimitRequest(model, options ?? {});
   const context = getModelTransportContext();
   await request.wait(context?.onRateLimitWait, context?.priority);
   assertCurrent?.();
   assertProviderAuthAuthority(model);
   options?.signal?.throwIfAborted();
   const stream = await start(request.options);
-  let observed = false;
   const observe = (message: AssistantMessage) => {
-    if (!observed) {
-      observed = true;
-      request.observe(message);
-    }
+    const pending = request;
+    // Completed streams must not retain request options and their callbacks.
+    request = undefined;
+    pending?.observe(message);
   };
   // Keep native producer completion identity for idle guards and repair consumers.
   const iterate = stream[Symbol.asyncIterator].bind(stream);
@@ -45,9 +45,13 @@ export async function admitProviderRateLimitStream(
     }
   };
   stream.result = async () => {
-    const message = await result();
-    observe(message);
-    return message;
+    try {
+      const message = await result();
+      observe(message);
+      return message;
+    } finally {
+      request = undefined;
+    }
   };
   return stream;
 }

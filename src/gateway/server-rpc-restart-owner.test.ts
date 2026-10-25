@@ -21,6 +21,7 @@ import * as providerFixture from "./gateway-provider-fixture.test-support.js";
 import * as sourceFinalization from "./server-methods/chat-send-source-finalization.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayBackgroundTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 import "./server.subagent-prompt-recent.gateway.test-support.js";
 
@@ -31,16 +32,7 @@ it(
     const token = "synthetic-rpc-owner-token";
     const state = await createOpenClawTestState({
       label: "rpc-restart-owner",
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: token,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
+      env: createGatewayBackgroundTestEnv(token),
     });
     const sessionKey = "agent:main:rpc-restart-owner";
     const firstGate = createDeferred();

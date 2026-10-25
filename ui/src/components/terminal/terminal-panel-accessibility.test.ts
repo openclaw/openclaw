@@ -8,6 +8,7 @@ import { TERMINAL_PANEL_DOCK_BOTTOM_EVENT } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
+  createTerminalGatewayClient,
   createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
@@ -31,9 +32,8 @@ function createPanel(client: TerminalGatewayClient, embedded = false) {
 }
 
 function createPickerClient(listCurrent: boolean | (() => boolean) = false) {
-  return {
-    forceReconnect: () => {},
-    request: async <T>(method: string) =>
+  return createTerminalGatewayClient(
+    async <T>(method: string) =>
       (method === "terminal.open"
         ? terminalOpenResult("current-1")
         : method === "terminal.attach"
@@ -45,8 +45,7 @@ function createPickerClient(listCurrent: boolean | (() => boolean) = false) {
                   : [],
               }
             : { ok: true }) as T,
-    addEventListener: () => () => {},
-  } satisfies TerminalGatewayClient;
+  ) satisfies TerminalGatewayClient;
 }
 
 describe("OpenClawTerminalPanel accessibility", () => {
@@ -224,9 +223,8 @@ describe("OpenClawTerminalPanel accessibility", () => {
 
   it("keeps pointer actions inside the terminal session picker", async () => {
     const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
+    const client: TerminalGatewayClient = createTerminalGatewayClient(
+      async <T>(method: string, params?: unknown) => {
         requests.push({ method, params });
         if (method === "terminal.open") {
           return terminalOpenResult("current-1") as T;
@@ -253,8 +251,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
         }
         return { ok: true } as T;
       },
-      addEventListener: () => () => {},
-    };
+    );
     const panel = createPanel(client);
     await waitForFast(() => expect(panel.querySelector(".tp-actions")).not.toBeNull());
 

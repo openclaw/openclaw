@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { describe, expect, it } from "vitest";
 import { acpReplayOperations } from "../../acp/event-ledger.worker.js";
 import {
@@ -46,13 +47,33 @@ for (const engine of ["sqlite", "postgres"] as const) {
             write: (operation) => runOpenClawStateWriteTransaction(operation, { database }),
             writeAdmitted: (operation) => runOpenClawStateWriteTransaction(operation, { database }),
           };
-          acpReplayOperations["acpReplay.start"](
-            {
-              session: { sessionId: "fresh", sessionKey: "key", cwd: "/work", complete: true },
-              now: 200,
-            },
-            context,
-          );
+          let budgetReads = 0;
+          const observation = channel("openclaw.database.statement");
+          const observe = (event: unknown) => {
+            if (
+              event &&
+              typeof event === "object" &&
+              "sql" in event &&
+              typeof event.sql === "string" &&
+              /^select /i.test(event.sql) &&
+              /from "acp_replay_sessions"/i.test(event.sql) &&
+              (/sum\(/i.test(event.sql) || /order by "updated_at" asc/i.test(event.sql))
+            ) {
+              budgetReads++;
+            }
+          };
+          observation.subscribe(observe);
+          try {
+            acpReplayOperations["acpReplay.start"](
+              {
+                session: { sessionId: "fresh", sessionKey: "key", cwd: "/work", complete: true },
+                now: 200,
+              },
+              context,
+            );
+          } finally {
+            observation.unsubscribe(observe);
+          }
           expect(
             db
               .prepare(
@@ -73,6 +94,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
           expect(
             db.prepare("SELECT COUNT(*) AS n FROM acp_replay_events WHERE session_id = 'c'").get(),
           ).toEqual({ n: 130 });
+          expect(budgetReads).toBe(2);
         }),
     );
 

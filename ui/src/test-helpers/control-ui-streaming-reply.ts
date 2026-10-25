@@ -1,5 +1,5 @@
 /** A long synthetic answer whose fences, tables, and inline tokens cross delta boundaries. */
-export function createControlUiStreamingReply() {
+export function createControlUiStreamingReply(deltasPerSecond = 30) {
   const text = Array.from({ length: 24 }, (_, index) => {
     const section = index + 1;
     return `## Checkpoint ${section}\n\nThe streaming renderer should retain completed content while the next paragraph grows. This checkpoint includes **important details**, an [example link](https://example.com/checkpoint/${section}), and inline \`code\` without moving the surrounding conversation.\n\n\`\`\`typescript\nexport function checkpoint${section}(values: readonly number[]) {\n  return values.filter((value) => value < 100).map((value) => ({ value, doubled: value * 2 }));\n}\n\`\`\`\n\n| Measurement | Expected behavior |\n| --- | --- |\n| Completed blocks | Retain their DOM |\n| Open paragraph | Update in place |\n| Checkpoint | ${section} of 24 |\n\nThe result is ready for the next checkpoint.\n\n`;
@@ -11,7 +11,7 @@ export function createControlUiStreamingReply() {
     offset = Math.min(text.length, offset + 12 + ((deltas.length * 17) % 25));
     deltas.push(text.slice(0, offset));
   }
-  return { text, deltas, deltasPerSecond: 30 };
+  return { text, deltas, deltasPerSecond };
 }
 
 export function createStreamingReplyProbeInitScript(): string {
@@ -38,6 +38,13 @@ function installStreamingReplyProbe() {
   let finalReceived = false;
   let initialScrollHeight = 0;
   let paneProbeAttached = false;
+  let observeTextVisibility = false;
+  const textVisibility: Array<{
+    index: number;
+    present: boolean;
+    visible: boolean;
+    nextFrameMs: number;
+  }> = [];
   const pipeline = {
     streamWrites: 0,
     streamWriteMs: 0,
@@ -160,6 +167,54 @@ function installStreamingReplyProbe() {
           ...emptyCounters,
         };
         deltas.push(current);
+        if (observeTextVisibility) {
+          const source: string = payload.message.content[0].text;
+          const boundary = source.lastIndexOf("\n\n");
+          const tail = source.slice(boundary < 0 ? 0 : boundary + 2);
+          // Plain paragraphs have no hidden destinations or formatting delimiters.
+          if (/^[A-Za-z][A-Za-z\d .,;:'!-]{8,}$/u.test(tail)) {
+            const expected = tail.trimEnd();
+            const sample = current;
+            queueMicrotask(() =>
+              requestAnimationFrame(() => {
+                // rAF precedes ResizeObserver-driven follow. Sample after layout,
+                // at this frame's pre-paint boundary rather than before its scroll writes.
+                const painted = new OriginalResizeObserver(() => {
+                  painted.disconnect();
+                  const bubble = document.querySelector(".chat-bubble.streaming .chat-text");
+                  const viewport = bubble?.closest(".chat-thread");
+                  const paragraph = Array.from(bubble?.querySelectorAll("p") ?? []).at(-1);
+                  const present = paragraph?.textContent?.startsWith(expected) ?? false;
+                  let visible = false;
+                  if (paragraph && viewport && present) {
+                    const bounds = viewport.getBoundingClientRect();
+                    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+                    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                      const end = node.textContent?.lastIndexOf(expected) ?? -1;
+                      if (end < 0) {
+                        continue;
+                      }
+                      const range = document.createRange();
+                      range.setStart(node, end + expected.length - 1);
+                      range.setEnd(node, end + expected.length);
+                      visible ||= Array.from(range.getClientRects()).some(
+                        (rect) =>
+                          rect.bottom > bounds.top && rect.top < bounds.bottom && rect.width > 0,
+                      );
+                    }
+                  }
+                  textVisibility.push({
+                    index: sample.index,
+                    present,
+                    visible,
+                    nextFrameMs: performance.now() - startedAt - sample.at,
+                  });
+                });
+                painted.observe(document.documentElement);
+              }),
+            );
+          }
+        }
         taskEnds.push({ delta: current, at: performance.now() });
         channel.port2.postMessage(null);
       });
@@ -252,7 +307,9 @@ function installStreamingReplyProbe() {
       deltas: string[];
       deltasPerSecond: number;
       burstSize: number;
+      observeTextVisibility?: boolean;
     }) {
+      observeTextVisibility = input.observeTextVisibility ?? false;
       if (window.WeakMap === ProbeWeakMap) {
         window.WeakMap = OriginalWeakMap;
       }
@@ -358,6 +415,7 @@ function installStreamingReplyProbe() {
         longFrames,
         longFrameBlockingMs: longFrames.reduce((sum, item) => sum + item.blocking, 0),
         inputs,
+        textVisibility,
         inputDelayMs: distribution(inputs.map((sample) => sample.delayMs)),
         inputToNextFrameMs: optionalDistribution(inputs.map((sample) => sample.nextFrameMs)),
         finalHtml: document.querySelector(".chat-bubble.streaming .chat-text")?.innerHTML ?? null,

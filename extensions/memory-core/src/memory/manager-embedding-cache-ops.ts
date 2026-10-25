@@ -40,7 +40,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     cacheCandidates?: MemoryEmbeddingCacheCandidate[],
   ): Promise<number[][]>;
 
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
+  protected async pruneEmbeddingCacheIfNeeded(recount = false): Promise<void> {
     const max = this.cache.maxEntries;
     if (!this.cache.enabled || !max || max <= 0) {
       return;
@@ -56,7 +56,10 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       identities: this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities(),
     };
     while (
-      await database.pruneEmbeddingCache({ maxEntries: max, unreferencedFirst }, assertCurrent)
+      await database.pruneEmbeddingCache(
+        { maxEntries: max, unreferencedFirst, ...(recount ? { recount: true } : {}) },
+        assertCurrent,
+      )
     ) {
       await yieldToEventLoop();
     }
@@ -74,6 +77,18 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
             input: {
               providerIdentities: generation.identities,
               hashes,
+              ...(this.reindexProgress
+                ? {
+                    rebuild: {
+                      chunks: candidates.map(({ source, entry, chunk }) => ({
+                        source,
+                        path: entry.path,
+                        hash: chunk.hash,
+                      })),
+                      dimensions: generation.embeddingDimensions,
+                    },
+                  }
+                : {}),
             },
           },
           () => {
@@ -257,7 +272,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       }
       const reindex = this.reindexProgress;
       if (reindex) {
-        reindex.cacheWritesPendingPrune = true;
+        reindex.cachePrunePending = true;
       }
       await this.withGeneratedEmbeddingCacheWrite(generation, {
         kind: "upsert",
@@ -265,9 +280,12 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
           agentId: this.agentId,
           provider: { id: generation.provider.id, model: generation.provider.model },
           providerKey: generation.providerKey,
-          // Later rebuild batches may still need the oldest cached vectors.
-          // The rebuild owner trims after publication or abandonment.
-          maxEntries: reindex ? undefined : this.cache.maxEntries,
+          // During a full rebuild the embedding cache may temporarily hold up to 2×
+          // maxEntries rows; it is pruned to the cap after publication or abort.
+          maxEntries:
+            this.cache.maxEntries === undefined
+              ? undefined
+              : this.cache.maxEntries * (this.reindexProgress ? 2 : 1),
           unreferencedFirst: { identities: generation.identities },
         },
         entries: accepted,

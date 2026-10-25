@@ -309,6 +309,31 @@ describe("GatewayBrowserClient", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([false, true])(
+    "publishes recovery readiness without loading an empty legacy scope (foreign recovery=%s)",
+    async (foreignRecovery) => {
+      vi.stubGlobal("sessionStorage", createStorageMock());
+      if (foreignRecovery) {
+        seedRecovery("agent:cloud:foreign", "another-principal");
+      }
+      const onRecoveryScopeChange = vi.fn();
+      const client = createClient({ onRecoveryScopeChange });
+      const { ws, connectFrame } = await startConnect(client);
+      emitHello(ws, connectFrame.id, {
+        deviceToken: STORED_CRED,
+        recoveryMigrationAllowed: true,
+        recoveryScope: "server-current",
+      });
+
+      await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+      expect(client.recoveryScopeReady).toBe(true);
+      expect(client.recoveryScope).toBe("server-current");
+      expect(recoveryMigrationRuntimeMock.loaded).not.toHaveBeenCalled();
+      expect(recoveryMigrationRuntimeMock.migrate).not.toHaveBeenCalled();
+      expect(sessionStorage.length).toBe(foreignRecovery ? 1 : 0);
+    },
+  );
+
   it.each([
     { advertised: false, modelCatalog: { agentId: "alpha" } },
     { advertised: true, modelCatalog: { agentId: "alpha", sessionKey: "agent:alpha:saved" } },

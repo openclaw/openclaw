@@ -1,4 +1,4 @@
-import type { CDPSession, Page } from "playwright";
+import type { CDPSession, Locator, Page } from "playwright";
 
 export const criticalPathRoutes = ["sessions", "settings", "cron", "agents"] as const;
 export type CriticalPathRoute = (typeof criticalPathRoutes)[number];
@@ -6,6 +6,9 @@ export type CriticalPathRoute = (typeof criticalPathRoutes)[number];
 type CriticalPathCapture = {
   name: string;
   startedMs: number;
+  intentStartedMs?: number;
+  intentDwellMs?: number;
+  intentElapsedMs?: number;
   readyMs: number;
   elapsedMs: number;
   capturedMs: number;
@@ -69,10 +72,12 @@ export function installCriticalPathProbe(bootRoute: "chat" | "new") {
   type Step = {
     name: string;
     startedMs: number;
+    intentStartedMs?: number;
     readyMs: number | null;
     sessionKey?: string;
   };
   let step: Step = { name: `cold-${bootRoute}`, startedMs: 0, readyMs: null };
+  let intent: { name: string; startedMs: number } | undefined;
   let frame = 0;
   const visible = (selector: string) => {
     const element = document.querySelector<HTMLElement>(selector);
@@ -107,7 +112,9 @@ export function installCriticalPathProbe(bootRoute: "chat" | "new") {
         break;
       case "settings":
         ready = Boolean(
-          enabled(".settings-sidebar__search-input") && visible("#settings-font-chat"),
+          (document.querySelector(".shell--mobile-nav:not(.shell--nav-drawer-open)") ||
+            enabled(".settings-sidebar__search-input")) &&
+          enabled("#settings-font-chat"),
         );
         break;
       case "cron":
@@ -126,24 +133,36 @@ export function installCriticalPathProbe(bootRoute: "chat" | "new") {
   };
   const start = (name: string, sessionKey?: string) => {
     cancelAnimationFrame(frame);
-    step = { name, sessionKey, startedMs: performance.now(), readyMs: null };
+    step = {
+      name,
+      sessionKey,
+      startedMs: performance.now(),
+      readyMs: null,
+      ...(intent?.name === name ? { intentStartedMs: intent.startedMs } : {}),
+    };
+    intent = undefined;
     performance.mark(`critical-path:${name}:start`);
     frame = requestAnimationFrame(sample);
   };
   Reflect.set(window, "__criticalPath", {
     start,
+    intent(name: string) {
+      intent = { name, startedMs: performance.now() };
+      performance.mark(`critical-path:${name}:intent`);
+    },
     ready: () => step.readyMs !== null,
     read() {
       const capturedMs = performance.now();
+      const intervalStartedMs = step.intentStartedMs ?? step.startedMs;
       const rpcs = Reflect.get(window, "__coldLoad")
         .read()
         .rpcs.filter(
           (rpc: { requestMs: number; responseMs: number }) =>
-            rpc.responseMs >= step.startedMs && rpc.requestMs <= capturedMs,
+            rpc.responseMs >= intervalStartedMs && rpc.requestMs <= capturedMs,
         );
       const resources = performance
         .getEntriesByType("resource")
-        .filter((entry) => entry.startTime + entry.duration >= step.startedMs)
+        .filter((entry) => entry.startTime + entry.duration >= intervalStartedMs)
         .map((entry) => entry.toJSON());
       return {
         ...step,
@@ -151,8 +170,14 @@ export function installCriticalPathProbe(bootRoute: "chat" | "new") {
         timeOrigin: performance.timeOrigin,
         capturedMs,
         elapsedMs: step.readyMs === null ? null : step.readyMs - step.startedMs,
+        ...(step.intentStartedMs !== undefined
+          ? {
+              intentDwellMs: step.startedMs - step.intentStartedMs,
+              intentElapsedMs: step.readyMs === null ? null : step.readyMs - step.intentStartedMs,
+            }
+          : {}),
         measurement:
-          "First renderer animation frame with visible, enabled readiness selectors; not INP. RPC/resource timestamps use the document performance clock. Collection continues through idle to retain secondary requests.",
+          "First renderer animation frame with visible, enabled readiness selectors; not INP. elapsedMs starts at activation; intentElapsedMs, when present, starts before hover/focus. RPC/resources include that intent interval. Timestamps use the document performance clock. Collection continues through idle to retain secondary requests.",
         rpcs,
         resources,
       };
@@ -204,50 +229,53 @@ export async function navigateCriticalPath(
   cdp: CDPSession,
   route: CriticalPathRoute,
   beforeMeasurement?: () => Promise<void>,
+  intentMs = 0,
 ) {
-  let cpuBefore: Record<string, number>;
+  let target: Locator | undefined;
   if (route === "settings") {
-    if (beforeMeasurement) {
-      await beforeMeasurement();
+    if (intentMs > 0) {
+      await page.locator(".sidebar-identity-card").click();
+      target = page.locator('.sidebar-identity-menu [data-value="command:settings"]');
+      await target.waitFor({ state: "visible" });
     }
-    cpuBefore = await readCriticalPathCpu(cdp);
-    await page.evaluate(() => Reflect.get(window, "__criticalPath").start("settings"));
-    await page.keyboard.press("Control+Shift+,");
   } else if (route === "agents") {
     if (!(await page.locator(".settings-sidebar").isVisible())) {
       await page.keyboard.press("Control+Shift+,");
       await page.locator(".settings-sidebar__search-input").waitFor({ state: "visible" });
     }
-    const link = page.locator('.settings-sidebar a[href="/settings/agents"]').first();
-    await link.waitFor({ state: "visible" });
-    if (beforeMeasurement) {
-      await beforeMeasurement();
-    }
-    cpuBefore = await readCriticalPathCpu(cdp);
-    await link.evaluate((element: HTMLAnchorElement) => {
-      Reflect.get(window, "__criticalPath").start("agents");
-      element.click();
-    });
+    target = page.locator('.settings-sidebar a[href="/settings/agents"]').first();
+    await target.waitFor({ state: "visible" });
   } else {
     if (await page.locator(".settings-sidebar").isVisible()) {
       await page.keyboard.press("Escape");
       await page.locator("openclaw-app-sidebar").waitFor({ state: "visible" });
     }
     const pathname = { sessions: "/sessions", cron: "/automations" }[route];
-    let link = page.locator(`openclaw-app-sidebar a[href="${pathname}"]`).first();
-    if (!(await link.isVisible())) {
+    target = page.locator(`openclaw-app-sidebar a[href="${pathname}"]`).first();
+    if (!(await target.isVisible())) {
       await page.locator('[data-navigation-view="pages"]').click();
-      link = page.locator(`openclaw-app-sidebar a[href="${pathname}"]`).first();
+      target = page.locator(`openclaw-app-sidebar a[href="${pathname}"]`).first();
     }
-    await link.waitFor({ state: "visible" });
-    if (beforeMeasurement) {
-      await beforeMeasurement();
-    }
-    cpuBefore = await readCriticalPathCpu(cdp);
-    await link.evaluate((element: HTMLAnchorElement, name) => {
+    await target.waitFor({ state: "visible" });
+  }
+  if (beforeMeasurement) {
+    await beforeMeasurement();
+  }
+  const cpuBefore = await readCriticalPathCpu(cdp);
+  if (target && intentMs > 0) {
+    await page.evaluate((name) => Reflect.get(window, "__criticalPath").intent(name), route);
+    await target.hover();
+    await target.focus();
+    await page.waitForTimeout(intentMs);
+  }
+  if (target) {
+    await target.evaluate((element: HTMLElement, name) => {
       Reflect.get(window, "__criticalPath").start(name);
       element.click();
     }, route);
+  } else {
+    await page.evaluate(() => Reflect.get(window, "__criticalPath").start("settings"));
+    await page.keyboard.press("Control+Shift+,");
   }
   await page.waitForFunction(() => Reflect.get(window, "__criticalPath").ready());
   await page.waitForFunction(() => {

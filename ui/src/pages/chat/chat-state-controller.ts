@@ -573,10 +573,19 @@ export function createChatState<TState extends ChatPageHost>(
     const loadingChanged = previousChatLoading !== state.chatLoading;
     const loadFinished = previousChatLoading && !state.chatLoading;
     const streamStarted = previousChatStream == null && typeof stream === "string";
+    const streamEnded = previousChatStream !== null && stream === null;
     previousTranscriptSources = sources;
     previousChatLoading = state.chatLoading;
     previousChatStream = stream;
     if (!messagesChanged && !streamChanged && !loadingChanged) {
+      return;
+    }
+    if (!messagesChanged && !loadingChanged && !streamStarted && !streamEnded) {
+      // Row ResizeObserver owns end-follow when text actually changes its height.
+      // Same-height arrivals still light the affordance for a departed reader.
+      if (state.chatFollowLocked) {
+        state.chatNewMessagesBelow = true;
+      }
       return;
     }
     pendingScroll = {

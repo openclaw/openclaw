@@ -204,38 +204,25 @@ describe("source update build output transaction", () => {
         }
         return 0;
       });
-      const [outcome] = await Promise.allSettled([
-        runUpdateGatewayBuild("stop-selected", "restart-selected", shimDir, target),
-      ]);
       const reachedPublication = failure === "shared consumer";
+      await expect(
+        runUpdateGatewayBuild("stop-selected", "restart-selected", shimDir, target),
+      ).rejects.toThrow(
+        reachedPublication
+          ? "another managed Gateway"
+          : failure === "migration refusal"
+            ? "Conflicting automation scratch"
+            : "Candidate admission unavailable (exit-2)",
+      );
       expect(imported).toBe(reachedPublication);
       expect(consumerLive).toBe(reachedPublication);
       expect(lifecycle).toEqual(reachedPublication ? ["stop-selected", "restart-selected"] : []);
-      expect({
-        outcome: outcome.status,
-        rejection: outcome.status === "rejected" ? String(outcome.reason) : undefined,
-        lastObservedConsumerLive: observed.at(-1),
-        head: await git(workdir, "rev-parse", "HEAD"),
-        targetSourceExists: exists("target.txt"),
-        runtime: readOutput("dist"),
-        dependency: read("node_modules/marker"),
-        inodes: inodes(),
-      }).toEqual({
-        outcome: "rejected",
-        rejection: expect.stringContaining(
-          reachedPublication
-            ? "another managed Gateway"
-            : failure === "migration refusal"
-              ? "Conflicting automation scratch"
-              : "Candidate admission unavailable (exit-2)",
-        ),
-        lastObservedConsumerLive: reachedPublication ? true : undefined,
-        head: before,
-        targetSourceExists: false,
-        runtime: "original",
-        dependency: "original dependency",
-        inodes: originalInodes,
-      });
+      expect(observed.at(-1)).toBe(reachedPublication ? true : undefined);
+      expect(await git(workdir, "rev-parse", "HEAD")).toBe(before);
+      expect(exists("target.txt")).toBe(false);
+      expect(readOutput("dist")).toBe("original");
+      expect(read("node_modules/marker")).toBe("original dependency");
+      expect(inodes()).toEqual(originalInodes);
       expect(
         fs
           .readdirSync(path.join(workdir, ".git/objects/pack"))

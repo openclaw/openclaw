@@ -51,7 +51,8 @@ continues to run PostgreSQL 17. See the [qualification evidence](#server-major-q
 | `unaccent`, `pg_trgm`, `vector`                   | Supported requirements                  | Positive and missing-extension cases tested; administrators install extensions.                                                                                                                                                |
 | Headless Linux, including Linux under WSL2        | Supported                               | Linux PostgreSQL conformance and CLI/Gateway paths.                                                                                                                                                                            |
 | Headless macOS CLI                                | Supported                               | Real PostgreSQL CLI, interactive setup and Gateway runs.                                                                                                                                                                       |
-| Headless native Windows                           | Experimental                            | No native Windows PostgreSQL acceptance run recorded. Test setup, turns, port, backup and update on Windows.                                                                                                                   |
+| Native Windows + PostgreSQL                       | Supported                               | Native Windows client and PG17 server, including fresh backup restore; [qualification and limits](#native-windows-qualification).                                                                                              |
+| Native Windows database port                      | Not supported yet                       | Use fresh PostgreSQL state on Windows, or run the port on Linux/macOS; [details](#native-windows-qualification).                                                                                                               |
 | macOS app                                         | Experimental: pending signed-app proof  | Credentials stay local, runtime pins stay local, and exec approvals use the shared owner. Combined signed-app acceptance is pending.                                                                                           |
 | iOS/iPad app                                      | Not supported without real-device proof | Simulator evidence is insufficient; real-device authentication and approval flows remain unqualified.                                                                                                                          |
 
@@ -100,6 +101,31 @@ PG18 may report JSON parse failure before a CHECK violation, while still
 rejecting the row. Its first full attempt also exhausted the default lock table.
 The recorded full PG18 run used `max_locks_per_transaction=512` with 100
 connections; production sizing depends on actual concurrent store use.
+
+## Native Windows qualification
+
+The `PGQUALWIN` qualification on 2026-10-25 used Windows Server 2022 Datacenter
+build **20348.5761**, Node **24.22.1**, PostgreSQL **17.11** from the official EDB
+Windows installer, and pgvector **0.8.7** built from its official release tag with
+MSVC. Extensions were `pg_trgm` **1.6** and `unaccent` **1.1**. Both OpenClaw and
+PostgreSQL ran natively on Windows, connected over loopback TLS `verify-full`.
+Source pins, commands, timings, and redacted evidence are recorded in
+[PR #183512](https://github.com/openclaw/openclaw/pull/183512).
+
+Covered flows include non-interactive onboarding through a file DSN SecretRef,
+Doctor/status/models, foreground Gateway readiness and health, scripted turns,
+memory indexing/search, and forced Gateway restart continuity. A populated PG
+backup was created, verified, and restored into fresh staging with exact canonical
+digests and no embedding calls during backup/restore and index rebuild. Path checks
+covered spaces/non-ASCII names, drive-letter/backslash SecretRef and `sslrootcert`
+paths, and a **324-character state directory**. An unreachable DSN failed without
+credential leaks, and Gateway startup rejected invalid config with exit **78**.
+The OpenClaw Windows service lifecycle and package updates remain unqualified.
+
+Native Windows does not yet support SQLite ↔ PostgreSQL database port, including
+dry-run, resume, and rollback. The command refuses before creating recovery
+artifacts and leaves existing data and engine selection unchanged. Start with
+fresh PostgreSQL state on Windows, or run the port on Linux/macOS.
 
 ## When to use PostgreSQL
 
@@ -725,6 +751,18 @@ Admission verifies the generated destination schema before publication. Missing
 migrations, newer schemas, and drift refuse admission; use a compatible binary
 or restore a matched backup. Never edit version/fingerprint metadata. Doctor's
 state migrations take their own exact backup before mutation.
+
+PostgreSQL schema upgrades run through `openclaw doctor --fix` or the normal
+update flow with writers stopped. A direct Gateway start on an older schema
+refuses and directs you to Doctor. For example, [state schema 32](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-state-db-engine.ts)
+and [agent schema 34](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-db-engine.ts)
+([#183015](https://github.com/openclaw/openclaw/pull/183015)) add nullability-aware
+index ordering by [recreating changed indexes](https://github.com/openclaw/openclaw/blob/main/src/infra/database-engine/postgres-index-ordering.ts).
+The affected indexes rebuild in seconds: the three-index group on a 500,000-row
+table took about 1.1 seconds in the measured fixture, not including the rest of
+the upgrade. [Doctor's migration owner](https://github.com/openclaw/openclaw/blob/main/src/commands/doctor-schema-migrations.ts)
+and the [agent maintenance gate](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-db-maintenance-authority.ts)
+enforce stopped-writer maintenance.
 
 First boot, ports, rebuilds, and migrations can take longer on slow disks or a
 remote server. Connection waits allow 60 seconds. On runtime store connections,

@@ -335,9 +335,7 @@ export function createAgentsPageState(
     if (!state.connected || !state.client || !routeDataInitialized || !routeData) {
       return;
     }
-    if (!context.runtimeConfig.state.configSnapshot && !context.runtimeConfig.state.configLoading) {
-      void context.runtimeConfig.ensureLoaded();
-    }
+    void context.runtimeConfig.ensureLoaded();
     if (!state.agentsList && !context.agents.state.agentsLoading) {
       void refreshAgents("ensure");
       return;

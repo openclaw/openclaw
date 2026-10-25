@@ -225,7 +225,7 @@ export async function prepareMessageRoute(params: {
   const pluginOwnedAction = action !== "send" && action !== "poll";
   if (
     pluginOwnedAction &&
-    channelPlugin?.actions?.supportsAction &&
+    channelPlugin.actions?.supportsAction &&
     !channelPlugin.actions.supportsAction({ action })
   ) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
@@ -234,7 +234,7 @@ export async function prepareMessageRoute(params: {
     action,
     args: actionParams,
     toolContext: input.toolContext,
-    targetAliasSpec: channelPlugin?.actions?.messageActionTargetAliases?.[action] ?? null,
+    targetAliasSpec: channelPlugin.actions?.messageActionTargetAliases?.[action] ?? null,
     // Trusted direct operators retain opaque resource-id workflows. Native conversation
     // aliases still normalize above and remain subject to the shared cross-context policy.
     allowResourceOnly: input.conversationReadOrigin === "direct-operator",
@@ -264,7 +264,7 @@ export async function prepareMessageRoute(params: {
   }
   const delegatesActionToGateway =
     Boolean(input.gateway) &&
-    channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
+    channelPlugin.actions?.resolveExecutionMode?.({ action }) === "gateway";
   // Resolve once for locally owned sends so formatting and delivery share an
   // identity. Remote calls must retain omitted input for the Gateway to resolve.
   if (

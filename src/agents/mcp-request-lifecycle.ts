@@ -1,5 +1,7 @@
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 
+let clientModule: Promise<typeof import("@modelcontextprotocol/client")> | undefined;
+
 export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
   const timeouts = new WeakSet<object>();
   return {
@@ -12,7 +14,8 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
     ): Promise<T> => {
       const requestSignal = parentSignal ?? getSessionMcpRequestSignal();
       let deadline = Date.now() + timeoutMs;
-      const { SdkError, SdkErrorCode } = await import("@modelcontextprotocol/client");
+      const { SdkError, SdkErrorCode } = await (clientModule ??=
+        import("@modelcontextprotocol/client"));
       requestSignal?.throwIfAborted();
       const abortController = new AbortController();
       const signal = requestSignal

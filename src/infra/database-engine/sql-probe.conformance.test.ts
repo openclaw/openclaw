@@ -15,21 +15,14 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../sql-connection.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
+import { createSqlStatementObserver } from "./sql-statement-observer.test-support.js";
 
 function countStatements<T>(db: EngineConnection, matches: (sql: string) => boolean, run: () => T) {
   let statements = 0;
   const observation = channel("openclaw.database.statement");
-  const observe = (event: unknown) => {
-    if (
-      event &&
-      typeof event === "object" &&
-      "sql" in event &&
-      typeof event.sql === "string" &&
-      matches(event.sql)
-    ) {
-      statements += 1;
-    }
-  };
+  const observe = createSqlStatementObserver(matches, () => {
+    statements += 1;
+  });
   const native = isPostgresSqlConnection(db)
     ? undefined
     : trackSqliteStatementExecutions(db, ["target"], (sql) => (matches(sql) ? "target" : null));

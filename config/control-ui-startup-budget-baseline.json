@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281465,
-  "reason": "Streaming-only token-to-DOM: Peter accepted chat boot growth after the original experiment reduced streaming script CPU 8.6% and HTML assignments 2129 to 178. Settled rendering retains HTML plus DOMPurify; startup measures 281465 B with unchanged requests. Ratchet to the measured head.",
+  "startupJsGzipBytes": 273565,
+  "reason": "Streaming cold-runtime prefix retention cuts standard script CPU 47.1% and burst 37.7% over 20 interleaved base/A-A/head triplets per workload. After merging main b3ba4d62263, same-host builds measure startup 273582 to 273565 B gzip, unchanged raw startup bytes and seven JS/one CSS requests. Chat is 347 B smaller and New Session 56 B smaller. Ratchet to the measured integrated head.",
   "updatedAt": "2026-10-25"
 }

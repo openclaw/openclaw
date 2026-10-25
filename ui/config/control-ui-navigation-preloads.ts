@@ -57,7 +57,11 @@ export function collectControlUiNavigationPreloads(
       }
     }
     if (assets.size) {
-      result[name] = [...assets].filter((file) => /\.(?:js|css)$/u.test(file));
+      // URL assets include worker and plugin-island scripts. They are fetched by
+      // their own runtime, not evaluated as modules in the navigation document.
+      result[name] = [...assets].filter(
+        (file) => bundle[file]?.type === "chunk" || file.endsWith(".css"),
+      );
     }
   }
   return result;

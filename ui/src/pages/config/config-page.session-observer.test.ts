@@ -3,7 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter } from "@openclaw/uirouter";
 import { createComponent } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
@@ -31,10 +31,18 @@ import {
   mountConfigPageState,
   publishConfigSource,
 } from "./config-page.test-support.ts";
-import type { ConfigPageRouteData } from "./config-page.tsx";
+import { preloadConfigPage, type ConfigPageRouteData } from "./config-page.tsx";
 import { configSelectionFromSearch, type ConfigPageId } from "./config-sections.ts";
 import { configRouteData } from "./route-data.ts";
 import { pages } from "./route.ts";
+
+beforeAll(() =>
+  Promise.all([
+    preloadConfigPage("advanced"),
+    preloadConfigPage("communications", "transcripts"),
+    preloadConfigPage("ai-agents", "session"),
+  ]),
+);
 
 afterEach(() => {
   cleanupSolid();

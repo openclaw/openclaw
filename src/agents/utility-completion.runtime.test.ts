@@ -157,6 +157,58 @@ it.each(["missing", "api", "fallback", "native", "cooldown"] as const)(
   },
 );
 
+it("keeps utility auth available when the catalog contains another provider's transport", async () => {
+  const cfg = config({
+    model: { primary: "openai/gpt-4.1-mini" },
+    utilityModel: "openai/gpt-4.1-mini",
+  });
+  const target = {
+    provider: "openai",
+    id: "gpt-4.1-mini",
+    name: "Utility model",
+    api: "openai-responses" as const,
+    baseUrl: "https://api.openai.com/v1",
+  };
+  const unrelated = {
+    provider: "anthropic",
+    id: "claude-haiku-4-5",
+    name: "Unrelated model",
+    api: "anthropic-messages" as const,
+    baseUrl: "https://api.anthropic.com",
+  };
+  using acquire = vi.spyOn(preparedRuntime, "acquirePreparedModelRuntimeSnapshot");
+  await withEnvAsync(
+    { CODEX_API_KEY: undefined, OPENAI_API_KEY: "synthetic-api-key" },
+    async () => {
+      const model = await prepareUtilityCompletionForAgent({
+        cfg,
+        agentId: "main",
+        useUtilityModel: true,
+      });
+      for (const entries of [[target], [target, unrelated]]) {
+        const snapshot = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+          pluginRegistry: createEmptyPluginRegistry(),
+          metadataSnapshot: createPluginMetadataSnapshotFixture(),
+          modelCatalog: { entries, routeVariants: entries },
+        });
+        bindPreparedModelRuntimeAuth(snapshot, { store: { version: 1, profiles: {} } });
+        acquire.mockResolvedValue({
+          snapshot,
+          pluginGeneration: {
+            remoteCatalog: null,
+            pluginMetadataSnapshot: snapshot.metadataSnapshot,
+            inlineProviderModels: [],
+            configuredCatalogEntries: [],
+            pluginRegistry: snapshot.pluginRegistry,
+          },
+          [Symbol.asyncDispose]: async () => {},
+        });
+        expect(await hasAvailableUtilityCompletionAuth(model)).toBe(true);
+      }
+    },
+  );
+});
+
 it.each([
   ["claude-cli", { id: "claude-cli", kind: "cli", label: "Claude CLI" }],
   [undefined, { id: "openclaw", kind: "api", label: "OpenClaw Default" }],

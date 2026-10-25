@@ -600,8 +600,7 @@ export class TerminalSessionManager {
     session.reaper = setTimeout(() => {
       // Silent: nobody owns the stream, so there is no socket to notify.
       this.finalize(session, "disconnected", {}, { silent: true });
-    }, remainingMs);
-    session.reaper.unref?.();
+    }, remainingMs).unref();
   }
 
   private enforceDetachedCap(): void {

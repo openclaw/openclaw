@@ -10,7 +10,7 @@ import {
   stripToolCallXmlTags,
   type AssistantVisibleTextSanitizerProfile,
 } from "./assistant-visible-text.js";
-import * as codeRegions from "./code-regions.js";
+import * as codeRegions from "./code-ranges.js";
 import { createTextProjection, type TextFilter } from "./text-projection.js";
 
 function expectXml(input: string, expected = input) {

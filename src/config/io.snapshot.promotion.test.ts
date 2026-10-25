@@ -25,7 +25,9 @@ import { promoteConfigSnapshotToLastKnownGoodCore } from "./io.observe-promotion
 import { recoverConfigFromLastKnownGoodCore } from "./io.observe-recovery.js";
 import {
   approveRecoveryCandidate,
+  createRecoveryBaselineConfig,
   createRecoveryConfigEnv,
+  largeRecoverableCoreConfig,
   makeDeps,
   makeSnapshot,
   resolveLastKnownGoodConfigPath,
@@ -58,14 +60,7 @@ describe("config observe recovery promotion", () => {
   it("refuses to promote a suspicious snapshot over last-known-good", async () => {
     const home = tempDirs.make("openclaw-config-lgg-promotion-");
     const { deps, configPath, warn } = makeDeps(home);
-    const healthyConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      update: { channel: "beta" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 60 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const healthyConfig = structuredClone(largeRecoverableCoreConfig);
     const healthy = await makeSnapshot(configPath, healthyConfig);
 
     await expect(
@@ -122,13 +117,7 @@ describe("config observe recovery promotion", () => {
     const error = vi.fn();
     const deps = normalizeConfigIoDeps({ env: {}, homedir: () => home, logger: { warn, error } });
     const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const healthyConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 40 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const healthyConfig = createRecoveryBaselineConfig();
     const healthy = await makeSnapshot(configPath, healthyConfig);
     await expect(
       promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: healthy, logger: { warn } }),
@@ -217,14 +206,7 @@ describe("config observe recovery promotion", () => {
       homedir: () => home,
       logger: { warn: vi.fn(), error: vi.fn() },
     });
-    const healthyConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      update: { channel: "beta" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 60 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const healthyConfig = structuredClone(largeRecoverableCoreConfig);
     const healthy = await makeSnapshot(configPath, healthyConfig);
 
     // Seed a stored row with the current fingerprint producer. This exercises
@@ -710,13 +692,7 @@ describe("last-known-good promotion after accepted writes", () => {
   });
 
   it("restores the last-known-good baseline when a committed write rolls back", async () => {
-    const initialConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 40 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const initialConfig = createRecoveryBaselineConfig();
     await withTempHomeConfig(initialConfig, async ({ home, configPath }) => {
       const lastGoodPath = `${configPath}.last-good`;
       const originalRaw = await fsp.readFile(configPath, "utf-8");
@@ -775,13 +751,7 @@ describe("last-known-good promotion after accepted writes", () => {
   });
 
   it("restores the pre-write baseline when an intervening read records the published candidate", async () => {
-    const initialConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 40 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const initialConfig = createRecoveryBaselineConfig();
     await withTempHomeConfig(initialConfig, async ({ home, configPath }) => {
       const lastGoodPath = `${configPath}.last-good`;
       const originalRaw = await fsp.readFile(configPath, "utf-8");

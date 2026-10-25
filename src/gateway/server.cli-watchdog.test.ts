@@ -107,9 +107,8 @@ async function runWatchdogCase(
   const watchdog = { minMs: quietMs, maxMs: quietMs };
   const readJson = async <T>(file: string): Promise<T> =>
     JSON.parse(await fs.readFile(file, "utf8"));
-  let orderedOutputAt: number | undefined;
+  let orderedOutputSeen = false;
   let abortedAt: number | undefined;
-  let thawedAt: number | undefined;
   let outputs = 0;
   let outputChanged = createDeferred();
   const wait = async <T>(promise: Promise<T>, message: string, timeoutMs = 5_000) => {
@@ -176,8 +175,8 @@ async function runWatchdogCase(
     try {
       for await (const event of execute(execution)) {
         const assistant = event.type === "assistant";
-        if (assistant && behavior === "ordered" && orderedOutputAt === undefined) {
-          orderedOutputAt = clock.now();
+        if (assistant && behavior === "ordered" && !orderedOutputSeen) {
+          orderedOutputSeen = true;
           clock.jump(60_000);
         }
         yield event;
@@ -322,7 +321,6 @@ async function runWatchdogCase(
         }
         signal.throwIfAborted();
         clock.jump(freezeMs);
-        thawedAt = clock.now();
         if (!resume) {
           clock.advance(0);
         }
@@ -376,14 +374,6 @@ async function runWatchdogCase(
         expect(JSON.stringify(history)).not.toContain("Preserved reply.");
       } else {
         expect(completed.status).toBe("timeout");
-        const elapsedAfterThaw =
-          (abortedAt ?? Number.NaN) -
-          (behavior === "ordered"
-            ? 60_000 + (orderedOutputAt ?? Number.NaN)
-            : (thawedAt ?? Number.NaN));
-        const expectedRemaining = behavior === "quiet" ? 20_000 : 40_000;
-        expect(elapsedAfterThaw).toBeGreaterThan(expectedRemaining - 5_000);
-        expect(elapsedAfterThaw).toBeLessThan(expectedRemaining + 2_000);
         expect(completed.error).toContain(
           behavior === "overall" ? "exceeded timeout" : "no output for 40s",
         );

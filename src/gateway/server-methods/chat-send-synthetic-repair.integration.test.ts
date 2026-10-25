@@ -22,6 +22,7 @@ import type { AssistantMessage } from "../../llm/types.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { createPluginEnabledGatewayTestEnv } from "../test-helpers.env.js";
 
 function readStoredRows(storePath: string, sessionId: string) {
   const database = new DatabaseSync(storePath, { readOnly: true });
@@ -41,15 +42,7 @@ function readStoredRows(storePath: string, sessionId: string) {
 it("chat.send replays synthetic repairs through session history and the registered messages transport", async () => {
   const state = await createOpenClawTestState({
     label: "chat-send-synthetic-repair",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    },
+    env: createPluginEnabledGatewayTestEnv(),
   });
   const provider = "replay-fixture";
   const model = "replay-proof";

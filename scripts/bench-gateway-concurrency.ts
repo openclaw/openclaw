@@ -1,5 +1,26 @@
-import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  execFileSync,
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 // Measure Gateway probes during mock or explicitly selected live streaming turns.
+// Ten-minute workspace stress (TMPDIR must be an existing isolated fixture directory):
+// node --import ./scripts/tsx.mjs scripts/bench-gateway-concurrency.ts --entry dist/entry.js
+//   --duration-ms 600000 --timeout-ms 1800000 --session-count 10000 --concurrency 36
+//   --plugin-count 40 --workspace-fanout --tool-events --subscribers 58 --history-clients 4
+//   --history-burst 1 --cadence-ms 500 --stream-chunk-delay-ms 20 --output /absolute/report.json
+// This keeps 64 protocol clients, repeats read/grep tool turns in 36 managed Git worktrees,
+// and rotates list/search/sidebar reads. It seeds archived inventory, mostly subagents.
+// The duration is the admission window; admitted turns drain before measurement ends.
+// For paired starts, add --start-barrier /shared/fresh-release --runs 1 --warmup 0.
+// Create that release file only after both distinct <output>.ready files appear;
+// all three files must be absent before launch. Waiting uses the setup deadline.
+// Compare matched base/candidate runs. Untraced loadDiagnostics contains GC/loop tails;
+// CPU uses threadCpuUsage, memory uses status, and filesystem counters bracket CPU samples.
+// Fixed-duration profiles sample only the main isolate. Run --heap-prof-dir separately
+// for allocation including collected objects; its timing is profiling context, not
+// acceptance evidence. No real accounts or external model calls.
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
@@ -65,6 +86,7 @@ import {
   readGatewayCpuProfile,
   readGatewayCpuUsage,
   readGatewayHeapProfile,
+  startGatewayDiagnostics,
   type GatewayHeapProfile,
   type GatewayCpuProfile,
   type GatewayCpuUsage,
@@ -144,7 +166,7 @@ type GatewayChildExit = {
 
 type MainProfileArtifacts = {
   scope: "main-isolate";
-  workersManifestPath: string;
+  workersManifestPath?: string;
 };
 
 type BenchmarkRun = {
@@ -175,6 +197,7 @@ type BenchmarkRun = {
   };
   heapProfile?: GatewayHeapProfile & MainProfileArtifacts;
   loadCpuProfile?: GatewayCpuProfile & MainProfileArtifacts;
+  loadDiagnostics?: Awaited<ReturnType<Awaited<ReturnType<typeof startGatewayDiagnostics>>>>;
   controlPlane: Array<TimedProbe & { method: string }>;
   controlUi: ControlUiProbe[];
   cpuUsage: GatewayCpuUsage;
@@ -273,7 +296,9 @@ type FailedBenchmarkAttempt = Extract<BenchmarkAttempt, { status: "failure" }> &
 
 type CliOptions = GatewayBenchRuntimeOptions & {
   controlUiLoad?: ControlUiLoadOptions & { cgroupParent: string; transpilerCache: string };
+  durationMs?: number;
   provider: "mock" | "openai";
+  startBarrier?: string;
   agentCount: number;
   agentWarmupTurns: number;
   browserHistoryMessages: number;
@@ -367,6 +392,7 @@ const VALUE_FLAGS = new Set([
   "--active-clients",
   "--drivers",
   "--duration-ms",
+  "--start-barrier",
   "--resource-cgroup",
   "--transpiler-cache",
   "--provider",
@@ -444,6 +470,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       ? boundedInt("--max-handshake-ms", 2_000, 30_000)
       : undefined,
     output: resolveOutputPath(flags.get("--output")?.[0]),
+    startBarrier: resolveOutputPath(flags.get("--start-barrier")?.[0]),
     pluginCount: boundedInt("--plugin-count", 0, MAX_PLUGIN_COUNT, true),
     probeRounds:
       flags.get("--probe-rounds")?.[0] === undefined
@@ -455,7 +482,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     sessionUpdates: boundedInt("--session-updates", 0, MAX_SESSION_UPDATES, true),
     streamChunkDelayMs: boundedInt("--stream-chunk-delay-ms", MOCK_RESPONSE_CHUNK_DELAY_MS, 30_000),
     subscribers: boundedInt("--subscribers", 0, MAX_CONCURRENCY, true),
-    timeoutMs: boundedInt("--timeout-ms", DEFAULT_TIMEOUT_MS, 10 * 60_000),
+    timeoutMs: boundedInt("--timeout-ms", DEFAULT_TIMEOUT_MS, 60 * 60_000),
     agentWarmupTurns: boundedInt("--agent-warmup-turns", 0, MAX_WARMUP, true),
     toolEvents: flags.has("--tool-events"),
     turnsPerSession: boundedInt("--turns-per-session", 1, MAX_TURNS_PER_SESSION),
@@ -512,15 +539,29 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       transpilerCache: path.resolve(transpilerCache),
     };
   } else if (
-    [
-      "--active-clients",
-      "--drivers",
-      "--duration-ms",
-      "--resource-cgroup",
-      "--transpiler-cache",
-    ].some((flag) => flags.has(flag))
+    ["--active-clients", "--drivers", "--resource-cgroup", "--transpiler-cache"].some((flag) =>
+      flags.has(flag),
+    )
   ) {
     throw new CliArgumentError("Control UI load options require --control-ui-clients");
+  }
+  if (!options.controlUiLoad && flags.has("--duration-ms")) {
+    options.durationMs = boundedInt("--duration-ms", 600_000, 3_600_000);
+    if (
+      provider !== "mock" ||
+      options.timeoutMs <= options.durationMs ||
+      options.runs !== 1 ||
+      options.warmup !== 0
+    ) {
+      throw new CliArgumentError(
+        "Fixed-duration turns require mock inference, --runs 1 --warmup 0, and a longer --timeout-ms for draining",
+      );
+    }
+  }
+  if (options.startBarrier && (!options.durationMs || !options.output)) {
+    throw new CliArgumentError(
+      "--start-barrier requires normal mock fixed-duration mode, --output, --runs 1 --warmup 0",
+    );
   }
   if (options.activitySummaryDiagnostics && provider !== "mock") {
     throw new CliArgumentError("--activity-summary-diagnostics requires the mock provider");
@@ -584,7 +625,8 @@ Options:
   --control-ui-clients <n> Fixed-duration Control UI protocol workload (Linux, 1–200 connections)
   --active-clients <n> Closed-loop senders; remaining clients select their own idle sessions (default: 25)
   --drivers <n> Coordinated Node driver processes (default: 4)
-  --duration-ms <ms> Measured admission window (default: 60000)
+  --duration-ms <ms> Fixed admission window; normal mode repeats turns, then drains (mock only)
+  --start-barrier <path> Wait for a fresh shared release file after writing <output>.ready (normal fixed-duration mode only)
   --resource-cgroup <path> Writable delegated cgroup-v2 parent; benchmark owns a unique child
   --transpiler-cache <path> Explicit Gateway Bun transpiler-cache directory (prime separately)
   --provider <name> mock (default) or openai (live ${LIVE_GATEWAY_MODEL_ID}; requires OPENAI_API_KEY)
@@ -1026,7 +1068,8 @@ function createTurnEvidence(toolEvents: boolean) {
       observer: boolean;
     }
   >();
-  let invalid = false;
+  const invalid = new Set<string>();
+  const observed = { agentTool: 0, sessionTool: 0, starts: 0, results: 0 };
   return {
     register(runId: string, sessionKey: string, phase: "warmup" | "load" = "load") {
       if (turns.has(runId)) {
@@ -1049,9 +1092,11 @@ function createTurnEvidence(toolEvents: boolean) {
         }
         return;
       }
-      if (!toolEvents || event.event !== "session.tool") {
+      const agentTool = event.event === "agent" && payload.stream === "tool";
+      if (!toolEvents || (!agentTool && event.event !== "session.tool")) {
         return;
       }
+      observed[agentTool ? "agentTool" : "sessionTool"]++;
       // The WebSocket callback cannot throw into runTurn's promise. Retain bounded
       // failure state through client teardown, including late duplicate results.
       const data = payload.data;
@@ -1061,23 +1106,47 @@ function createTurnEvidence(toolEvents: boolean) {
         data.name !== "exec" ||
         typeof data.toolCallId !== "string"
       ) {
-        invalid = true;
+        invalid.add("invalid-session-or-tool-envelope");
         return;
       }
       if (data.phase === "start") {
-        invalid ||= turn.toolCallId !== undefined;
+        observed.starts++;
+        if (turn.toolCallId !== undefined) {
+          invalid.add("duplicate-tool-start");
+        }
         turn.toolCallId = data.toolCallId;
       } else if (data.phase === "result") {
         const result = isRecord(data.result) ? data.result : {};
         const details = isRecord(result.details) ? result.details : {};
-        invalid ||=
-          turn.toolCompleted ||
-          turn.toolCallId !== data.toolCallId ||
-          data.isError !== false ||
-          details.status !== "completed" ||
-          details.exitCode !== 0 ||
-          typeof details.aggregated !== "string" ||
-          !details.aggregated.includes("openclaw-draft-proof");
+        // capLiveExecResult removes duplicate aggregated output when live text exists.
+        const output =
+          typeof details.aggregated === "string"
+            ? details.aggregated
+            : Array.isArray(result.content)
+              ? result.content
+                  .flatMap((block) =>
+                    isRecord(block) && block.type === "text" && typeof block.text === "string"
+                      ? [block.text]
+                      : [],
+                  )
+                  .join("\n")
+              : undefined;
+        observed.results++;
+        for (const [failed, reason] of [
+          [turn.toolCompleted, "duplicate-tool-result"],
+          [turn.toolCallId !== data.toolCallId, "unmatched-tool-result"],
+          [data.isError !== false, "tool-error-not-false"],
+          [details.status !== "completed", "tool-status-not-completed"],
+          [details.exitCode !== 0, "tool-exit-not-zero"],
+          [
+            output === undefined || !output.includes("openclaw-draft-proof"),
+            "tool-output-marker-missing",
+          ],
+        ] as const) {
+          if (failed) {
+            invalid.add(reason);
+          }
+        }
         turn.toolCompleted = true;
       }
     },
@@ -1097,12 +1166,21 @@ function createTurnEvidence(toolEvents: boolean) {
     finish(phase: "warmup" | "load" = "load") {
       const allTurns = [...turns.values()];
       if (
-        invalid ||
+        invalid.size > 0 ||
         (toolEvents &&
           allTurns.some((turn) => !turn.toolCallId || !turn.toolCompleted || !turn.final))
       ) {
         throw new Error(
-          "benchmark tool lifecycle evidence is missing, duplicated, or unsuccessful",
+          `benchmark tool lifecycle evidence is missing, duplicated, or unsuccessful: ${JSON.stringify(
+            {
+              observed,
+              invalid: [...invalid],
+              turns: allTurns.length,
+              missingStarts: allTurns.filter((turn) => !turn.toolCallId).length,
+              missingResults: allTurns.filter((turn) => !turn.toolCompleted).length,
+              missingFinals: allTurns.filter((turn) => !turn.final).length,
+            },
+          )}`,
         );
       }
       // Validate late events from both phases, but keep warmup out of measured totals.
@@ -1124,6 +1202,7 @@ function buildConfig(
   agentIds: string[],
   provider: CliOptions["provider"],
   activitySummaryDiagnostics = false,
+  workspaceStress = false,
 ): string {
   const controlUiRoot = path.join(root, "control-ui");
   mkdirSync(controlUiRoot, { recursive: true });
@@ -1163,6 +1242,16 @@ function buildConfig(
       modelRef: "openai/gpt-5.6-luna",
       utilityModelRef: `openai/${UTILITY_MODEL_ID}`,
     });
+    if (workspaceStress) {
+      // The configurable mock toolCall fixture is a Chat Completions contract.
+      const model = (config as OpenClawConfig).models?.providers?.openai?.models.find(
+        (entry) => entry.id === "gpt-5.6-luna",
+      );
+      if (!model) {
+        throw new Error("Workspace stress model was not configured");
+      }
+      model.api = "openai-completions";
+    }
   }
   const plugins = config.plugins as { entries: Record<string, unknown> };
   plugins.entries["memory-core"] = { config: { dreaming: { enabled: false } } };
@@ -1221,6 +1310,7 @@ async function connectGateway(
   protocolVersion: number,
   subscribeSessions = true,
   onEvent?: Parameters<typeof createGatewayWsClient>[0]["onEvent"],
+  toolEvents = false,
 ) {
   let requestDeadlineAt = deadlineAt;
   const client = createGatewayWsClient({
@@ -1290,7 +1380,7 @@ async function connectGateway(
       },
       role: "operator",
       scopes: ["operator.read", "operator.write", "operator.admin"],
-      caps: [],
+      caps: toolEvents ? ["tool-events"] : [],
     });
     if (subscribeSessions) {
       await requestRpc("sessions.subscribe", {});
@@ -1600,23 +1690,39 @@ async function runSessionTurns(
     accounting?: BenchmarkRun["turnAccounting"];
     live?: LiveGatewayEvidence;
     stopped?: () => boolean;
+    admitUntil?: number;
   },
 ): Promise<number> {
-  for (let turn = 0; turn < options.turnsPerSession; turn += 1) {
+  let turn = 0;
+  for (
+    ;
+    options.admitUntil === undefined
+      ? turn < options.turnsPerSession
+      : performance.now() < options.admitUntil;
+    turn += 1
+  ) {
     if (options.stopped?.()) {
       return turn;
     }
     requireRemainingMs(deadlineAt, `starting session ${index + 1} turn ${turn + 1}`);
-    await runTurn(rpc, index * options.turnsPerSession + turn, deadlineAt, options.toolEvents, {
-      sessionKey: options.sessionKey,
-      warmup: options.warmup,
-      accounting: options.accounting,
-      onStarted: turn === 0 ? options.onStarted : undefined,
-      evidence: options.evidence,
-      live: options.live,
-    });
+    await runTurn(
+      rpc,
+      options.admitUntil === undefined
+        ? index * options.turnsPerSession + turn
+        : turn * MAX_CONCURRENCY + index,
+      deadlineAt,
+      options.toolEvents,
+      {
+        sessionKey: options.sessionKey,
+        warmup: options.warmup,
+        accounting: options.accounting,
+        onStarted: turn === 0 ? options.onStarted : undefined,
+        evidence: options.evidence,
+        live: options.live,
+      },
+    );
   }
-  return options.turnsPerSession;
+  return turn;
 }
 
 async function sampleGateway(params: {
@@ -1625,6 +1731,7 @@ async function sampleGateway(params: {
   rpc: GatewayRpc;
   runStartedAt: number;
   activitySummaryDiagnostics?: ReturnType<typeof createActivitySummaryDiagnostics>;
+  listParams?: Record<string, unknown>;
 }): Promise<GatewaySample> {
   const atMs = performance.now() - params.runStartedAt;
   const safeHttpProbe = async (pathValue: string, accept: string) => {
@@ -1655,7 +1762,7 @@ async function sampleGateway(params: {
     try {
       const payload = await params.rpc(
         "sessions.list",
-        {},
+        params.listParams ?? {},
         Math.min(HTTP_TIMEOUT_MS, requireRemainingMs(params.deadlineAt, "probing sessions.list")),
       );
       const latencyMs = performance.now() - startedAt;
@@ -1930,6 +2037,12 @@ async function runGatewaySample(
   const postgresConnection = options.postgres ? process.env[POSTGRES_CONNECTION_ENV] : undefined;
 
   try {
+    if (
+      options.startBarrier &&
+      (existsSync(options.startBarrier) || existsSync(`${options.output}.ready`))
+    ) {
+      throw new Error("Start barrier release and ready files must be absent before launch");
+    }
     if (options.provider === "openai" && !process.env.OPENAI_API_KEY?.trim()) {
       throw new Error("OpenAI benchmark requires OPENAI_API_KEY");
     }
@@ -1977,6 +2090,7 @@ async function runGatewaySample(
         agentIds,
         options.provider,
         Boolean(activityDiagnostics),
+        Boolean(options.durationMs && options.toolEvents && options.workspaceFanout),
       );
       const workersPath = path.join(fixtureRoot, "workers.jsonl");
       if (options.postgres) {
@@ -1996,6 +2110,20 @@ async function runGatewaySample(
           responseControlPath,
           JSON.stringify({
             models: {
+              ...(options.durationMs && options.toolEvents && options.workspaceFanout
+                ? {
+                    "gpt-5.6-luna": {
+                      text: TOOL_SUCCESS_MARKER,
+                      toolCall: {
+                        name: "exec",
+                        arguments: {
+                          command:
+                            'for file in owned-directory-*.txt; do cat "$file" >/dev/null; grep -q synthetic "$file" || exit 1; done; sleep 2; echo openclaw-draft-proof',
+                        },
+                      },
+                    },
+                  }
+                : {}),
               [UTILITY_MODEL_ID]: {
                 text: JSON.stringify({
                   headline: "Synthetic benchmark work is progressing.",
@@ -2046,8 +2174,19 @@ async function runGatewaySample(
           import.meta.url,
         ).href,
       );
+      if (options.durationMs && options.output) {
+        mkdirSync(path.dirname(options.output), { recursive: true });
+        const countsPreload = new URL(
+          "./perf/owned-directory-load-counts-preload.mjs",
+          import.meta.url,
+        );
+        countsPreload.searchParams.set("output", `${options.output}.filesystem.json`);
+        gatewayArgs.unshift("--import", countsPreload.href);
+      }
       if (options.controlUiLoad) {
         gatewayArgs[gatewayArgs.indexOf("--auth") + 1] = "token";
+      }
+      if (options.controlUiLoad || options.durationMs) {
         const stopPreload = new URL("./lib/gateway-bench-stop-preload.mjs", import.meta.url);
         stopPreload.searchParams.set("parentPid", String(process.pid));
         stopPreload.searchParams.set("entry", path.resolve(options.entry));
@@ -2131,11 +2270,18 @@ async function runGatewaySample(
         });
         break workload;
       }
-      client = await connectGateway(port, options.deadlineAt, protocolVersion, true, (event) => {
-        activityDiagnostics?.onEvent(event);
-        turnEvidence.onEvent(event);
-        live?.onEvent(event);
-      });
+      client = await connectGateway(
+        port,
+        options.deadlineAt,
+        protocolVersion,
+        true,
+        (event) => {
+          activityDiagnostics?.onEvent(event);
+          turnEvidence.onEvent(event);
+          live?.onEvent(event);
+        },
+        options.toolEvents,
+      );
       const rpc = client.request;
       await live?.verifyConfiguration(rpc);
       if (options.visibleObserver) {
@@ -2180,10 +2326,57 @@ async function runGatewaySample(
         (_, index) => agentIds[index % agentIds.length]!,
       );
       const sessionKeys = sessionAgents.map(
-        (agentId, index) => `agent:${agentId}:gateway-concurrency-${index + 1}`,
+        (agentId, index) =>
+          `agent:${agentId}:${options.durationMs && index < sessionCount - options.concurrency && index % 5 !== 0 ? "subagent:" : ""}gateway-concurrency-${index + 1}`,
       );
       const sessionSeedStartedAt = performance.now();
+      const worktreeSource =
+        options.durationMs && options.workspaceFanout
+          ? path.join(fixtureRoot, "owned-directory-source")
+          : undefined;
+      if (worktreeSource) {
+        mkdirSync(worktreeSource);
+        for (let file = 0; file < 16; file++) {
+          writeFileSync(
+            path.join(worktreeSource, `owned-directory-${file}.txt`),
+            "synthetic workspace observation fixture\n".repeat(128),
+          );
+        }
+        const git = (...args: string[]) =>
+          execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+            cwd: worktreeSource,
+            env: {
+              ...createGatewayBenchEnv(fixtureRoot, configPath, {}),
+              ...(process.platform === "darwin"
+                ? { DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer" }
+                : {}),
+              GIT_CONFIG_NOSYSTEM: "1",
+              GIT_CONFIG_GLOBAL: "/dev/null",
+            },
+            stdio: "pipe",
+          });
+        git("init", "--quiet", "--initial-branch=main");
+        git("add", ".");
+        git(
+          "-c",
+          "user.name=Synthetic Benchmark",
+          "-c",
+          "user.email=benchmark@example.invalid",
+          "commit",
+          "--quiet",
+          "-m",
+          "Synthetic worktree fixture",
+        );
+      }
       if (prepareSessions) {
+        if (options.durationMs) {
+          for (const agentId of agentIds) {
+            await rpc("sessions.create", {
+              key: `agent:${agentId}:owned-directory-parent`,
+              agentId,
+            });
+          }
+        }
         let nextSessionIndex = 0;
         let seededSessionCount = 0;
         await concurrently(
@@ -2194,17 +2387,49 @@ async function runGatewaySample(
               if (!sessionKey || probesStopped) {
                 return;
               }
-              const workspaceDir = options.workspaceFanout
-                ? path.join(fixtureRoot, `workspace-${index + 1}`)
-                : undefined;
-              if (workspaceDir) {
+              const workspaceDir =
+                options.workspaceFanout &&
+                (!options.durationMs || index >= sessionCount - options.concurrency)
+                  ? path.join(fixtureRoot, `workspace-${index + 1}`)
+                  : undefined;
+              if (workspaceDir && !worktreeSource) {
                 mkdirSync(workspaceDir, { recursive: true });
               }
-              await rpc("sessions.create", {
-                key: sessionKey,
-                agentId: sessionAgents[index],
-                ...(workspaceDir ? { cwd: workspaceDir } : {}),
-              });
+              const created = await rpc<{ sessionId: string; worktree?: { path?: string } }>(
+                "sessions.create",
+                {
+                  key: sessionKey,
+                  agentId: sessionAgents[index],
+                  ...(workspaceDir
+                    ? {
+                        cwd: worktreeSource ?? workspaceDir,
+                        ...(worktreeSource ? { worktree: true } : {}),
+                      }
+                    : {}),
+                  ...(options.durationMs &&
+                  index < sessionCount - options.concurrency &&
+                  index % 5 !== 0
+                    ? {
+                        parentSessionKey: `agent:${sessionAgents[index]}:owned-directory-parent`,
+                        spawnDepth: 1,
+                      }
+                    : {}),
+                },
+              );
+              if (
+                workspaceDir &&
+                worktreeSource &&
+                (!created.worktree?.path || !existsSync(path.join(created.worktree.path, ".git")))
+              ) {
+                throw new Error("Session creation did not bind its managed Git worktree");
+              }
+              if (options.durationMs && index < sessionCount - options.concurrency) {
+                await rpc("sessions.patch", {
+                  key: sessionKey,
+                  expectedSessionId: created.sessionId,
+                  archived: true,
+                });
+              }
               for (
                 let messageIndex = 0;
                 messageIndex < options.historyMessages;
@@ -2364,6 +2589,15 @@ async function runGatewaySample(
       for (let index = 0; index < options.subscribers; index += 1) {
         const subscriber = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
         ownClient(subscriber);
+        if (options.durationMs) {
+          const roster = await subscriber.request<{ subscribed?: boolean }>("sessions.subscribe", {
+            limit: 100,
+            archived: "all",
+          });
+          if (roster.subscribed !== true) {
+            throw new Error("Sidebar roster subscription was not accepted");
+          }
+        }
         if (options.visibleObserver) {
           await subscriber.request("sessions.observer.visibility", { visible: true });
         }
@@ -2430,6 +2664,35 @@ async function runGatewaySample(
       } else {
         agentWarmup.afterOrdinal = agentWarmup.beforeOrdinal;
       }
+      if (options.startBarrier && options.output) {
+        const controller = new AbortController();
+        const signal = options.signal
+          ? AbortSignal.any([options.signal, controller.signal])
+          : controller.signal;
+        const cancel = () => controller.abort(new Error("Start barrier interrupted"));
+        process.on("SIGINT", cancel);
+        process.on("SIGTERM", cancel);
+        try {
+          signal.throwIfAborted();
+          requireRemainingMs(preparedDeadlineAt, "preparing synchronized start");
+          mkdirSync(path.dirname(options.output), { recursive: true });
+          const readyPath = `${options.output}.ready`;
+          writeFileSync(readyPath, `${process.pid}\n`, { flag: "wx" });
+          console.error(`[bench-gateway-concurrency] ready: ${readyPath}`);
+          while (!existsSync(options.startBarrier)) {
+            await abortableDelay(
+              Math.min(100, requireRemainingMs(preparedDeadlineAt, "waiting for start barrier")),
+              undefined,
+              { signal },
+            );
+          }
+          signal.throwIfAborted();
+          requireRemainingMs(preparedDeadlineAt, "releasing start barrier");
+        } finally {
+          process.off("SIGINT", cancel);
+          process.off("SIGTERM", cancel);
+        }
+      }
       // Warm turns exercise this Gateway's runtime; they do not prove background queues drained.
       const memoryBefore = await readGatewayMemory(rpc, runStartedAt);
       partialRun.memory.before = memoryBefore;
@@ -2438,12 +2701,12 @@ async function runGatewaySample(
       }
       if (loadCpuProfilePath) {
         await controlGatewayProfile(gateway, "cpu", "start", loadCpuProfilePath, {
-          includeWorkers: true,
+          includeWorkers: !options.durationMs,
         });
       }
       if (heapProfilePath) {
         await controlGatewayProfile(gateway, "heap", "start", heapProfilePath, {
-          includeWorkers: true,
+          includeWorkers: !options.durationMs,
         });
       }
       const setupDurationMs = performance.now() - setupStartedAt;
@@ -2501,7 +2764,11 @@ async function runGatewaySample(
           : undefined;
       partialRun.processPlacement = processPlacement;
       const cpuBefore = await readGatewayCpuUsage(gateway);
+      const stopLoadDiagnostics = options.durationMs
+        ? await startGatewayDiagnostics(gateway, "fixed-duration")
+        : undefined;
       const turnsStartedAt = performance.now();
+      const admitUntil = options.durationMs ? turnsStartedAt + options.durationMs : undefined;
       // Keep the live artifact intact: buffered setup writes can arrive after this boundary.
       // Inclusive millisecond timestamps conservatively include events on the boundary.
       const timelineFrom = Date.now();
@@ -2523,6 +2790,7 @@ async function runGatewaySample(
             sessionKey,
             toolEvents: options.toolEvents,
             turnsPerSession: options.turnsPerSession,
+            admitUntil,
             evidence: turnEvidence,
             accounting: turnAccounting,
             stopped: () => probesStopped,
@@ -2592,6 +2860,18 @@ async function runGatewaySample(
               rpc,
               runStartedAt,
               activitySummaryDiagnostics: activityDiagnostics,
+              ...(options.durationMs
+                ? {
+                    listParams: {
+                      limit: 100,
+                      archived: "all",
+                      ...(readyz.length % 3 === 1 ? { search: "gateway-concurrency-9" } : {}),
+                      ...(readyz.length % 3 === 2
+                        ? { includeDerivedTitles: true, includeLastMessage: true }
+                        : {}),
+                    },
+                  }
+                : {}),
             }),
             subscriptionProbeClient && subscriptionKey
               ? timeRpcProbe(
@@ -2711,6 +2991,8 @@ async function runGatewaySample(
       ]);
       partialRun.turnCount = sessionTurnCounts.reduce((sum, count) => sum + count, 0);
       const cpuAfter = await readGatewayCpuUsage(gateway);
+      const loadDiagnostics = await stopLoadDiagnostics?.();
+      partialRun.loadDiagnostics = loadDiagnostics;
       partialRun.cpuUsage = measureGatewayCpuUsage(cpuBefore, cpuAfter);
       const loadEndMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
       partialRun.loadWindow = {
@@ -2732,7 +3014,9 @@ async function runGatewaySample(
         loadCpuProfile = {
           ...readGatewayCpuProfile(loadCpuProfilePath),
           scope: "main-isolate",
-          workersManifestPath: `${loadCpuProfilePath}.workers.json`,
+          ...(!options.durationMs
+            ? { workersManifestPath: `${loadCpuProfilePath}.workers.json` }
+            : {}),
         };
       }
       partialRun.loadCpuProfile = loadCpuProfile;
@@ -2742,7 +3026,9 @@ async function runGatewaySample(
         heapProfile = {
           ...readGatewayHeapProfile(heapProfilePath),
           scope: "main-isolate",
-          workersManifestPath: `${heapProfilePath}.workers.json`,
+          ...(!options.durationMs
+            ? { workersManifestPath: `${heapProfilePath}.workers.json` }
+            : {}),
         };
       }
       partialRun.heapProfile = heapProfile;
@@ -2781,6 +3067,7 @@ async function runGatewaySample(
           : {}),
         ...(heapProfile ? { heapProfile } : {}),
         ...(loadCpuProfile ? { loadCpuProfile } : {}),
+        ...(loadDiagnostics ? { loadDiagnostics } : {}),
         controlPlane,
         controlUi,
         cpuUsage: measureGatewayCpuUsage(cpuBefore, cpuAfter),
@@ -2843,6 +3130,8 @@ async function runGatewaySample(
         if (
           gateway &&
           options.cpuProfDir &&
+          !options.controlUiLoad &&
+          !options.durationMs &&
           gateway.exitCode === null &&
           gateway.signalCode === null
         ) {
@@ -2857,7 +3146,7 @@ async function runGatewaySample(
       await captureFailure("cleanup", async () => {
         if (gateway) {
           try {
-            if (options.controlUiLoad) {
+            if (options.controlUiLoad || options.durationMs) {
               shutdown = await stopGatewayGracefully(gateway, GATEWAY_SERVICE_STOP_TIMEOUT_MS);
             }
           } finally {
@@ -3436,6 +3725,8 @@ async function main(): Promise<void> {
     browserSessionClicks: options.browserSessionClicks,
     cadenceMs: options.cadenceMs,
     concurrency: options.concurrency,
+    durationMs: options.durationMs,
+    startBarrier: options.startBarrier,
     controlPlane: options.controlPlane,
     historyMessages: options.historyMessages,
     historyMessageChars: options.historyMessageChars,
@@ -3475,7 +3766,7 @@ async function main(): Promise<void> {
       options.provider === "openai"
         ? { kind: "live-provider" }
         : options.toolEvents
-          ? { kind: "shell-delay", toolDelayMs: 3000, streamChunkDelayMs: 0 }
+          ? { kind: "shell-delay", toolDelayMs: 2000, streamChunkDelayMs: 0 }
           : { kind: "text-stream", streamChunkDelayMs: options.streamChunkDelayMs },
     subscribers: options.subscribers,
     summary: summarizeRuns(runs, options),

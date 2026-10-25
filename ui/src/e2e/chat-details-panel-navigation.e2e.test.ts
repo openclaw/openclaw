@@ -2,6 +2,7 @@ import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
@@ -75,18 +76,14 @@ async function setup(page: Page) {
         revision: 1,
         tabs: [{ tabId: "main", title: "Project overview", position: 0, chatDock: "right" }],
         widgets: [
-          {
+          createBoardWidget({
             name: "overview",
-            tabId: "main",
             title: "Project overview",
-            contentKind: "html",
             sizeW: 12,
             sizeH: 8,
-            position: 0,
             grantState: "granted",
-            revision: 1,
             frameUrl,
-          },
+          }),
         ],
       },
       "artifacts.list": {

@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, vi } from "vitest";
 import {
   runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
   type SqliteTransactionOptions,
 } from "../../infra/sqlite-transaction.js";
 import {
@@ -118,14 +119,17 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
         outcomeTransfer?.accept(facts.publication.transfer);
       }
     },
-    writeTransaction(operationLabel, _owner, write, diagnosticContext) {
+    writeTransaction(operationLabel, _owner, write, diagnosticContext, singleStatement) {
       hooks.transactions += 1;
-      const result = runSqliteImmediateTransactionSync(database.db, () => write(database), {
-        ...hooks.transactionOptions,
-        operationLabel,
-        diagnosticContext,
-        withCommit: (commit) => (hooks.withCommit ? hooks.withCommit(commit) : commit()),
-      });
+      const result =
+        singleStatement && !hooks.withCommit && !hooks.transactionOptions
+          ? runSqliteSingleStatementSync(database.db, () => write(database))
+          : runSqliteImmediateTransactionSync(database.db, () => write(database), {
+              ...hooks.transactionOptions,
+              operationLabel,
+              diagnosticContext,
+              withCommit: (commit) => (hooks.withCommit ? hooks.withCommit(commit) : commit()),
+            });
       hooks.afterTransaction?.();
       return result;
     },

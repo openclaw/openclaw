@@ -52,6 +52,23 @@ function probeClient(server: Parameters<typeof sendRequest>[0]) {
       const response = await request(input);
       expect([response.res.statusCode, response.getBody()]).toEqual([status, body]);
     },
+    async getAndHead(input: ProbeRequest, status: number, body: object) {
+      const json = JSON.stringify(body);
+      for (const method of ["GET", "HEAD"]) {
+        const response = await request({
+          ...(typeof input === "string" ? { path: input } : input),
+          method,
+        });
+        expect([response.res.statusCode, response.getBody()]).toEqual([
+          status,
+          method === "HEAD" ? "" : json,
+        ]);
+        expect(response.setHeader).toHaveBeenCalledWith(
+          "Content-Length",
+          String(Buffer.byteLength(json)),
+        );
+      }
+    },
   };
 }
 function withProbeServer(
@@ -326,15 +343,7 @@ describe("gateway probe endpoints", () => {
             const body = path.startsWith("/ready")
               ? { ready }
               : { ok: ready, status: ready ? "started" : "starting" };
-            for (const method of ["GET", "HEAD"]) {
-              const response = await probe.request({ ...remote(path), method });
-              expect(response.res.statusCode, `${method} ${path}`).toBe(ready ? 200 : 503);
-              expect(response.getBody()).toBe(method === "HEAD" ? "" : JSON.stringify(body));
-              expect(response.setHeader).toHaveBeenCalledWith(
-                "Content-Length",
-                String(Buffer.byteLength(JSON.stringify(body))),
-              );
-            }
+            await probe.getAndHead(remote(path), ready ? 200 : 503, body);
           }
         }
         const protectedResponse = await probe.request(remote("/tools/invoke"));
@@ -444,11 +453,10 @@ describe("gateway probe endpoints", () => {
     );
   });
 
-  it("reports startup lifecycle independently of hard channel failures", async ({
-    onTestFinished,
-  }) => {
+  it("reports startup lifecycle independently of hard channel failures", async () => {
     let startupPending = true;
     let gatewayDraining = false;
+    let channelFailed = false;
     const pending = createAgentDatabaseInspectionRefusal({
       agentId: "optional-worker",
       paths: ["/isolated/optional-worker.sqlite"],
@@ -457,25 +465,6 @@ describe("gateway probe endpoints", () => {
     });
     let refusals: AgentDatabaseAdmissionRefusal[] = [pending];
     const startedAt = Date.now() - 5_000;
-    const account = {
-      accountId: "default",
-      running: true,
-      connected: true,
-      enabled: true,
-      configured: true,
-      lifecycle: "ready" as "ready" | "blocked",
-      linked: true,
-      terminalDisconnect: false,
-      lastStartAt: startedAt,
-    };
-    const channelManager = {
-      getRuntimeSnapshot: () => ({
-        channels: { whatsapp: account },
-        channelAccounts: { whatsapp: { default: account } },
-      }),
-      getAutostartSuppression: () => null,
-      isAmbientAutostartSuppressed: () => false,
-    };
     const startupDeps = {
       startedAt,
       getStartupPending: () => startupPending,
@@ -483,17 +472,15 @@ describe("gateway probe endpoints", () => {
       getGatewayDraining: () => gatewayDraining,
     };
     const getStartup = createStartupChecker(startupDeps, () => refusals);
-    const getReadiness = createReadinessChecker({
-      channelManager,
-      ...startupDeps,
-    });
+    // Channel-health policy is covered by server/readiness.test.ts; here the
+    // contract is that HTTP startup uses its own lifecycle, not readiness.
+    const getReadiness = () => ({ ...unready, ...readyState(channelFailed ? ["whatsapp"] : []) });
     await withProbeServer({ getReadiness, getStartup }, async (probe) => {
       await probe.json("/startupz", 503, startupDetails("starting", "plugin-convergence"));
 
       gatewayDraining = true;
       await probe.json("/startupz", 503, startupDetails("draining"));
 
-      await probe.json("/readyz", 503, readyState(["gateway-draining"], false));
       gatewayDraining = false;
 
       startupPending = false;
@@ -509,13 +496,7 @@ describe("gateway probe endpoints", () => {
       await probe.json("/startupz", 200, startupDetails("started"));
 
       refusals = [];
-      account.lifecycle = "blocked";
-      account.running = false;
-      account.connected = false;
-      account.linked = false;
-      account.terminalDisconnect = true;
-      const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_001);
-      onTestFinished(() => now.mockRestore());
+      channelFailed = true;
       await probe.json("/readyz", 503, readyState(["whatsapp"]));
 
       await probe.json("/startupz", 200, { ok: true, status: "started" });
@@ -555,18 +536,8 @@ describe("gateway probe endpoints", () => {
       return AUTH_NONE;
     });
     await withProbeServer({ getRuntimeConfig, getResolvedAuth }, async (probe) => {
-      const liveBody = JSON.stringify({ ok: true, status: "live" });
       for (const path of ["/health", "/healthz"]) {
-        for (const method of ["GET", "HEAD"] as const) {
-          const { res, getBody, setHeader } = await probe.request({ path, method });
-
-          expect(res.statusCode, `${method} ${path}`).toBe(200);
-          expect(getBody(), `${method} ${path}`).toBe(method === "HEAD" ? "" : liveBody);
-          expect(setHeader).toHaveBeenCalledWith(
-            "Content-Length",
-            String(Buffer.byteLength(liveBody)),
-          );
-        }
+        await probe.getAndHead(path, 200, { ok: true, status: "live" });
       }
       expect(getRuntimeConfig).not.toHaveBeenCalled();
       expect(getResolvedAuth).not.toHaveBeenCalled();

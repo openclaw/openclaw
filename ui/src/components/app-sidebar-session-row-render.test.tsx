@@ -5,6 +5,7 @@ import { createSignal, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { createTestSessionCapability } from "../lib/sessions/session-capability.test-support.ts";
 import {
@@ -15,12 +16,12 @@ import {
   mountSidebarContext,
 } from "../test-helpers/app-sidebar.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { domProbe } from "../test-helpers/dom-probe.ts";
+import { domProbe, allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { renderAppSidebarOnline } from "./app-sidebar-online.tsx";
+import { AppSidebarOnline } from "./app-sidebar-online.tsx";
 import { renderSidebarAgentCard } from "./app-sidebar-render.tsx";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { renderRecentSession as RecentSession } from "./app-sidebar-session-row-render.tsx";
@@ -201,12 +202,13 @@ it("keeps cached agent rows while the live roster settles", async () => {
   );
   const sessions = createTestSessionCapability(gateway.gateway);
   await sessions.refresh({ agentId: "main" });
-  const context = createContext(gateway.gateway, sessions, {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: [{ id: "main", name: "Harbor", identity: { emoji: "⚓" } }],
-  });
+  const context = createContext(
+    gateway.gateway,
+    sessions,
+    makeBootRoster({
+      agents: [{ id: "main", name: "Harbor", identity: { emoji: "⚓" } }],
+    }),
+  );
   const store = rosterActivityStore(context);
   const { sidebar: host } = await mountSidebarContext(context);
   host.sidebarAgentsMode = "roster";
@@ -465,7 +467,9 @@ it("keeps Users visible despite a cached legacy collapse preference", () => {
     onlineUsers: [{ id: "ada", name: "Ada", watchedSessions: [] }],
   });
   host.sessionData.presencePayload = { presence: [{ ts: 1, user: { id: "ada", name: "Ada" } }] };
-  const update = mountObservedHost(host, container, renderAppSidebarOnline);
+  const update = mountObservedHost(host, container, (current) => (
+    <AppSidebarOnline host={current} />
+  ));
   expect(dom.text(".sidebar-online__person-name")).toBe("Ada");
   host.releaseSidebarSnapshot();
   update();
@@ -480,7 +484,9 @@ it("shows unavailable counts after a failed live summary instead of retaining sa
     ],
     onlineCounts: [["ada", { open: 2, running: 1 }]],
   });
-  const update = mountObservedHost(host, container, renderAppSidebarOnline);
+  const update = mountObservedHost(host, container, (current) => (
+    <AppSidebarOnline host={current} />
+  ));
   expect(dom.query(".sidebar-online__counts")).not.toBeNull();
   host.releaseSidebarSnapshot();
   host.sessionData.ownerCounts.error = "Synthetic count failure";
@@ -517,12 +523,7 @@ it.each([false, true])(
     await facepile.updateComplete;
     const updates: MutationRecord[] = [];
     const observer = new MutationObserver((records) => updates.push(...records));
-    observer.observe(facepile, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      characterData: true,
-    });
+    observer.observe(facepile, allMutationObserverOptions());
     onTestFinished(() => observer.disconnect());
 
     update();

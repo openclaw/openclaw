@@ -173,6 +173,40 @@ describe("nodes-cli coverage", () => {
     expect(methods()).toEqual(["node.pair.list", "node.pair.approve"]);
   });
 
+  it.each([
+    {
+      recorded: ["operator.write", "operator.write"],
+      commands: ["system.run"],
+      expected: ["operator.pairing", "operator.write"],
+    },
+    {
+      recorded: ["operator.pairing"],
+      commands: ["system.run"],
+      expected: ["operator.pairing", "operator.admin"],
+    },
+    {
+      recorded: "malformed",
+      commands: ["canvas.present"],
+      expected: ["operator.pairing", "operator.write"],
+    },
+    { recorded: undefined, commands: [], expected: ["operator.pairing"] },
+  ])(
+    "preserves approval scopes for $recorded and $commands",
+    async ({ recorded, commands, expected }) => {
+      callGateway
+        .mockResolvedValueOnce({
+          pending: [
+            { requestId: "scope-request", nodeId: "n1", requiredApproveScopes: recorded, commands },
+          ],
+        })
+        .mockResolvedValueOnce({ approved: true });
+      await parseNodes("nodes approve scope-request");
+      expect(callGateway).toHaveBeenLastCalledWith(
+        expect.objectContaining({ method: "node.pair.approve", scopes: expected }),
+      );
+    },
+  );
+
   it("still approves when the pairing preflight is unavailable", async () => {
     callGateway
       .mockRejectedValueOnce(new Error("pairing list unavailable"))

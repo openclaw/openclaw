@@ -1,4 +1,4 @@
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts";
@@ -9,6 +9,7 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts
 import { requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI profile page real Gateway E2E",
@@ -85,27 +86,8 @@ suite.define(() => {
         });
 
         // Chromium does not consistently apply extraHTTPHeaders to WebSocket upgrades.
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/": {
-                target: `http://127.0.0.1:${port}`,
-                ws: true,
-                headers: {
-                  "x-forwarded-for": "192.0.2.10",
-                  "x-forwarded-proto": "http",
-                  "x-forwarded-user": authenticatedUser,
-                },
-              },
-            },
-          },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/": gatewayProxyRoute(port, authenticatedUser),
         });
         await proxy.listen();
         const gatewayUrl = new URL(

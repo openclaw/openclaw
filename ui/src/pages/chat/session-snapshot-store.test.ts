@@ -155,6 +155,17 @@ async function readRawRecord(
 }
 
 describe("persistent chat session snapshots", () => {
+  it("restores model display data with the conversation, isolated from another account", async () => {
+    const writer = new SessionSnapshotStore();
+    const remembered = { id: "model", provider: "openai", name: "Remembered model" };
+    await persist(writer, sessionKey, { ...snapshot(), composer: remembered });
+    expect((await readSnapshot())?.composer).toEqual(remembered);
+    const otherKey = resolveChatSnapshotKey(
+      { ...snapshotHost, client: { recoveryScope: "account-b", recoveryScopeReady: true } },
+      { sessionKey: rawKey(sessionKey) },
+    );
+    expect(await readSnapshot(otherKey)).toBeNull();
+  });
   let writer: SessionSnapshotStore;
   const seed = async (value = snapshot(), cacheKey = sessionKey) =>
     persist(writer, cacheKey, value);
@@ -343,7 +354,7 @@ describe("persistent chat session snapshots", () => {
     // A foreign/older writer must not make private records readable by this UI.
     await putRawRecord(envelope(privateKey, snapshot("private")));
     expect(await readStoredChatSnapshotRecord(privateKey)).toBeUndefined();
-    prewarmChatSnapshot(privateKey);
+    void prewarmChatSnapshot(privateKey);
     expect(await new SessionSnapshotStore().read(privateKey)).toBeNull();
   });
 
@@ -353,7 +364,7 @@ describe("persistent chat session snapshots", () => {
       await persist(writer, sessionKey, snapshot("current"));
       await putRawRecord(envelope(sessionKey, snapshot("old"), 2));
       if (mode === "prewarmed") {
-        prewarmChatSnapshot(sessionKey);
+        void prewarmChatSnapshot(sessionKey);
       }
       expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
     },
@@ -379,7 +390,7 @@ describe("persistent chat session snapshots", () => {
       { sessionKey: orphanedKey, savedAt: 1, weight: 0 },
     );
     // A direct routed prewarm must not expose previously persisted private history.
-    prewarmChatSnapshot(privateKey);
+    void prewarmChatSnapshot(privateKey);
     const reader = new SessionSnapshotStore();
     expect(await reader.read(privateKey)).toBeNull();
     await reader.loadSavedAtIndex();

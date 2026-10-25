@@ -279,6 +279,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt.bounded-continuity.test.ts",
   "extensions/codex/src/app-server/run-attempt-lifecycle-controller.test.ts",
   "extensions/codex/src/app-server/run-attempt-parent-continuation.test.ts",
+  "extensions/codex/src/app-server/run-attempt-continuity.test.ts",
   "extensions/codex/src/app-server/run-attempt.subsession-delivery.test.ts",
   "extensions/codex/src/app-server/run-attempt-native-process-authority.test.ts",
   "extensions/codex/src/app-server/run-attempt-one-shot-cleanup.test.ts",

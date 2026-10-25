@@ -1,8 +1,12 @@
 // Builds the reusable AI package separately to keep provider bundling out of
 // the already-parallel main package graph.
 import type { UserConfig } from "tsdown";
+import { resolveRepoRoot } from "./scripts/lib/repo-root.mjs";
+import { createStandaloneSourceModuleUrlPlugin } from "./scripts/lib/standalone-source-module-urls.mjs";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
+
+const repoRoot = resolveRepoRoot(import.meta.url);
 
 const externalDependencies = [
   "@anthropic-ai/sdk",
@@ -68,4 +72,9 @@ const config = {
   },
 } satisfies UserConfig;
 
-export default cacheTsdownRuntimeConfigs([config])[0]!;
+export default cacheTsdownRuntimeConfigs([
+  {
+    ...config,
+    plugins: [createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot })],
+  },
+])[0]!;

@@ -40,7 +40,7 @@ export function applyManualCompactInTransaction(
     throw new Error(`SQLite session changed before compacting ${scope.sessionId}`);
   }
   replaceSqliteTranscriptEventsInTransaction(database, scope, input.events, {
-    scheduleProjectionReconcile: false,
+    rebuildProjectionSynchronously: true,
   });
   const next = projectManuallyCompactedSessionEntry(
     previous.priorWorkspace

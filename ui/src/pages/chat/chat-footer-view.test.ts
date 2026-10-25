@@ -32,6 +32,7 @@ function expectFooterContext(container: Element, surface: Element) {
   expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
   expect(viewport.compareDocumentPosition(scrollAnchor!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   expect(viewport.querySelector(':scope > .chat-thread[role="log"]')).not.toBeNull();
+  expect(viewport.querySelector('[role="log"]')?.getAttribute("aria-label")).toBe("Chat");
   expect(surface.closest(".chat-footer")).toBe(footer);
   expect(shell.closest(".chat-footer")).toBe(footer);
   const input = requireElement(shell, ".agent-chat__input", "composer input");

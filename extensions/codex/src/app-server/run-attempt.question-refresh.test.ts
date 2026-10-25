@@ -3,6 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
+import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
@@ -162,14 +163,7 @@ it.each([
     await handleServerRequest({
       id: "reload-after-question",
       method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "reload-after-question",
-        namespace: null,
-        tool: "reload_runtime",
-        arguments: {},
-      },
+      params: createDynamicToolCall("reload_runtime", {}, "reload-after-question"),
     });
     expect(pendingRefresh).toBe(true);
     const result = await run;

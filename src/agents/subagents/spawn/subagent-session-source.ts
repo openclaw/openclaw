@@ -31,7 +31,7 @@ export async function withSubagentSessionSource<T>(
     if (retained) {
       const release = () => source.actor.release();
       void retained.then(release, release).catch((error: unknown) => {
-        defaultRuntime.error?.(`Subagent session source release failed: ${String(error)}`);
+        defaultRuntime.error(`Subagent session source release failed: ${String(error)}`);
       });
     } else {
       await source.actor.release();

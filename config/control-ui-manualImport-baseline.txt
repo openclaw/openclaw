@@ -26,7 +26,6 @@ ui/src/components/link-reader-hovercard-registration.ts	1
 ui/src/components/markdown-blocks-owner.ts	1
 ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/session-organizer-group-dialogs.runtime.ts	3
-ui/src/components/session-organizer.ts	3
 ui/src/components/session-placement.runtime.ts	1
 ui/src/components/sidebar-attention-store.ts	1
 ui/src/components/sidebar-menus-render.tsx	1
@@ -38,7 +37,7 @@ ui/src/pages/chat/attachment-payload-store.ts	1
 ui/src/pages/chat/chat-outbox-drain.ts	1
 ui/src/pages/chat/chat-outbox-recovery.tsx	1
 ui/src/pages/chat/chat-pane-board.ts	1
-ui/src/pages/chat/chat-pane-session-menu.ts	2
+ui/src/pages/chat/chat-pane-session-menu.ts	1
 ui/src/pages/chat/components/chat-attachment-reads.ts	1
 ui/src/pages/chat/components/chat-detail-panel.tsx	1
 ui/src/pages/chat/components/chat-diff-render.solid.tsx	1

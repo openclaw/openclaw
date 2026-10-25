@@ -147,8 +147,11 @@ function matchLinks(text: string): {
   return { labelEnds, destinationEnds };
 }
 
-/** Replaces `[label](destination)` and `![label](destination)` with the label, nested labels included. */
-function stripInlineLinks(text: string): string {
+/** Strips inline link destinations, retaining nested labels and optionally omitting images entirely. */
+export function stripInlineLinks(
+  text: string,
+  options: { images?: "label" | "omit" } = {},
+): string {
   const { labelEnds, destinationEnds } = matchLinks(text);
   const suffixEnds = new Map<number, number>();
   let output = "";
@@ -171,6 +174,11 @@ function stripInlineLinks(text: string): string {
       continue;
     }
     output += text.slice(cursor, isImage ? index - 1 : index);
+    if (isImage && options.images === "omit") {
+      cursor = destinationEnd + 1;
+      index = destinationEnd;
+      continue;
+    }
     cursor = index + 1;
     suffixEnds.set(labelEnd, destinationEnd + 1);
   }

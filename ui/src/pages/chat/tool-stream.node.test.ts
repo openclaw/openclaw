@@ -7,8 +7,8 @@ import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-snapshot.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
-import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 import {
   agentEvent,
   createHost,

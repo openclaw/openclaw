@@ -19,6 +19,7 @@ import {
   createApplicationGateway,
 } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ToolPreview as DeferredToolPreview } from "./chat-message-deferred.tsx";
@@ -280,13 +281,7 @@ describe("widget-card", () => {
     },
   );
   it("retains video playback through title changes after the player loads", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        disconnect() {}
-      },
-    );
+    stubTargetRetainingObserver("ResizeObserver");
     onTestFinished(() => {
       vi.unstubAllGlobals();
     });
@@ -727,14 +722,30 @@ describe("widget-card", () => {
   it("releases placement observation while a retained widget is hidden", () => {
     const observers: ResizeObserverStub[] = [];
     class ResizeObserverStub implements ResizeObserver {
-      observe = vi.fn();
-      unobserve = vi.fn();
-      disconnect = vi.fn();
+      private readonly targets = new Set<Element>();
+      observe = vi.fn((target: Element) => {
+        this.targets.add(target);
+      });
+      unobserve = vi.fn((target: Element) => {
+        this.targets.delete(target);
+      });
+      disconnect = vi.fn(() => {
+        this.targets.clear();
+      });
       constructor(private readonly callback: ResizeObserverCallback) {
         observers.push(this);
       }
       deliver() {
-        this.callback([], this);
+        this.callback(
+          [...this.targets].map((target) => ({
+            target,
+            contentRect: new DOMRectReadOnly(),
+            borderBoxSize: [],
+            contentBoxSize: [],
+            devicePixelContentBoxSize: [],
+          })),
+          this,
+        );
       }
     }
     vi.stubGlobal("ResizeObserver", ResizeObserverStub);

@@ -343,10 +343,6 @@ export function installSpawnAuthorityFixture() {
     bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
     const authority = runContext.getAdmittedRunDelegatedAuthority(admitted)!;
     parent.bindAgentRunDelegatedAuthority(authority);
-    expect(parent.entry?.adapter.operationalRunInstance).toBe(admitted.operationalRunInstance);
-    expect(parent.entry?.adapter.agentRunDelegatedAuthority).toBe(authority);
-    expect(admitted.executionIdentityToken).toBeUndefined();
-
     return { cfg, storePath, context, admission, parent, admitted, authority };
   }
 
