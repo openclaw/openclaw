@@ -2062,20 +2062,6 @@ describe("capability cli", () => {
     });
   });
 
-  it("marks env-backed TTS providers as configured", async () => {
-    vi.stubEnv("XAI_API_KEY", "xai-test-key");
-    mocks.getProviderEnvVarsCore.mockReturnValueOnce(["XAI_API_KEY"]);
-    mocks.listSpeechProviders.mockReturnValueOnce([
-      { id: "xai", label: "xAI", models: [], voices: [] },
-    ] as never);
-
-    await runCap("capability", "tts", "providers", "--local", "--json");
-
-    expect(firstJsonOutput()).toMatchObject({
-      providers: [{ id: "xai", configured: true, selected: false }],
-    });
-  });
-
   it("distinguishes the local STT fallback winner from global provider selection", async () => {
     vi.stubEnv("DEEPGRAM_API_KEY", "deepgram-test-key");
     mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(

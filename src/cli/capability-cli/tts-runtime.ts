@@ -4,12 +4,15 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { withAuthProfileStoreAgentDir } from "../../agents/auth-profiles.js";
 import { resolveApiKeyForProviderCore } from "../../agents/model-auth.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connection-details.js";
 import { isLoopbackHost } from "../../gateway/net.js";
+import { resolveProviderAuthProfileApiKey } from "../../plugins/provider-auth-availability.js";
 import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
@@ -17,6 +20,7 @@ import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
 import { resolveTtsPersonaList } from "../../tts/tts-settings.js";
 import {
   getTtsProviderAsync,
+  isTtsProviderConfiguredAsync,
   listTtsPersonas,
   listSpeechVoices,
   resolveExplicitTtsOverridesAsync,
@@ -30,7 +34,7 @@ import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 import {
   pinRuntimeConfigSnapshot,
   providerHasGenericConfig,
-  resolveCapabilityProviderAgentId,
+  resolveLocalCapabilityAgent,
   resolveLocalCapabilityRuntimeConfig,
 } from "./shared.js";
 
@@ -138,6 +142,8 @@ async function injectTtsAuthProfileApiKey(params: {
   cfg: OpenClawConfig;
   provider?: string;
   channelId?: string;
+  /** Inspection accepts API-key profiles without refreshing OAuth credentials. */
+  agentDir?: string;
 }): Promise<OpenClawConfig> {
   const { cfg } = params;
   if (!params.provider) {
@@ -171,11 +177,21 @@ async function injectTtsAuthProfileApiKey(params: {
   if (ttsProviderConfigHasApiKey(existing?.value)) {
     return cfg;
   }
-  const auth = await resolveApiKeyForProviderCore({
-    provider: providerId,
-    cfg,
-    credentialPrecedence: "profile-first",
-  }).catch(() => undefined);
+  const auth = params.agentDir
+    ? {
+        apiKey: await resolveProviderAuthProfileApiKey({
+          provider: providerId,
+          cfg,
+          agentDir: params.agentDir,
+          profileTypes: ["api_key"],
+        }).catch(() => undefined),
+        mode: "api-key",
+      }
+    : await resolveApiKeyForProviderCore({
+        provider: providerId,
+        cfg,
+        credentialPrecedence: "profile-first",
+      }).catch(() => undefined);
   if (!auth?.apiKey || auth.mode !== "api-key") {
     return cfg;
   }
@@ -230,8 +246,8 @@ function ttsProviderConfigHasApiKey(value: unknown): boolean {
 }
 
 export async function runTtsProviders(transport: CapabilityTransport, rawAgentId?: string) {
-  const cfg = await captureRuntimeConfigAsyncReader()();
   if (transport === "gateway") {
+    const cfg = await captureRuntimeConfigAsyncReader()();
     if (rawAgentId !== undefined) {
       throw new Error("--agent is only supported with local TTS provider inspection.");
     }
@@ -260,24 +276,46 @@ export async function runTtsProviders(transport: CapabilityTransport, rawAgentId
       }),
     };
   }
-  const agentId = resolveCapabilityProviderAgentId(cfg, rawAgentId);
-  const config = resolveTtsConfig(cfg);
-  const prefsPath = await resolveTtsPrefsPathAsync(config);
-  const active = await getTtsProviderAsync(config, prefsPath);
-  return {
-    providers: listSpeechProviders(cfg).map((provider) => ({
-      available: true,
-      configured:
-        active === provider.id ||
-        providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-      selected: active === provider.id,
-      id: provider.id,
-      name: provider.label,
-      models: [...(provider.models ?? [])],
-      voices: [...(provider.voices ?? [])],
-    })),
-    active,
-  };
+  const { cfg, agentDir } = await resolveLocalCapabilityAgent({
+    commandName: "infer tts providers",
+    targetIds: getTtsCommandSecretTargetIds(),
+    mode: "read_only_status",
+    agent: rawAgentId,
+  });
+  return await withAuthProfileStoreAgentDir(agentDir, resolveStateDir(), async () => {
+    const config = resolveTtsConfig(cfg);
+    const prefsPath = await resolveTtsPrefsPathAsync(config);
+    const active = await getTtsProviderAsync(config, prefsPath);
+    const providers = await Promise.all(
+      listSpeechProviders(cfg).map(async (provider) => {
+        let configured = await isTtsProviderConfiguredAsync(config, provider, cfg);
+        if (!configured) {
+          const effectiveCfg = await injectTtsAuthProfileApiKey({
+            cfg,
+            provider: provider.id,
+            agentDir,
+          });
+          if (effectiveCfg !== cfg) {
+            configured = await isTtsProviderConfiguredAsync(
+              resolveTtsConfig(effectiveCfg),
+              provider,
+              effectiveCfg,
+            );
+          }
+        }
+        return {
+          available: true,
+          configured,
+          selected: active === provider.id,
+          id: provider.id,
+          name: provider.label,
+          models: [...(provider.models ?? [])],
+          voices: [...(provider.voices ?? [])],
+        };
+      }),
+    );
+    return { providers, active };
+  });
 }
 
 export async function runTtsPersonas(transport: CapabilityTransport) {
