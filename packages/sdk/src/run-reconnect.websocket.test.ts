@@ -82,7 +82,13 @@ const submit = (
 ) => oc.request("chat.send", { ...target, message: "hello", idempotencyKey });
 
 async function expectNext(events: AsyncIterator<OpenClawEvent>, value: unknown) {
-  await expect(events.next()).resolves.toMatchObject({ value });
+  const next = await events.next();
+  expect(next).toMatchObject({ value });
+  return next.value;
+}
+
+async function expectRecovery(events: AsyncIterator<OpenClawEvent>, value: unknown) {
+  expect((await expectNext(events, value))?.raw).toBeUndefined();
 }
 
 function createClient(options: ConstructorParameters<typeof GatewayClientTransport>[0] = {}) {
@@ -144,21 +150,19 @@ it.each(["agent-lifecycle", "chat-delta", "accepted", "chat-final"])(
     const methods: string[] = [];
     respond((request) => {
       methods.push(request.method);
-      return request.method === "chat.send"
-        ? runResult("started")
-        : request.method === "agent.wait"
-          ? runResult("ok", {
-              endedAt: 123,
-              terminalReply:
-                mode === "accepted"
-                  ? { text: "clipped summary" }
-                  : { disposition: "visible", text: outputText.slice(0, 4_096) },
-            })
-          : historyResult({
-              messages: [
-                { role: "assistant", content: outputText, __openclaw: { runId: scope.runId } },
-              ],
-            });
+      if (request.method === "chat.send") {
+        return runResult("started");
+      }
+      if (request.method === "agent.wait") {
+        const terminalReply =
+          mode === "accepted"
+            ? { text: "clipped summary" }
+            : { disposition: "visible", text: outputText.slice(0, 4_096) };
+        return runResult("ok", { endedAt: 123, terminalReply });
+      }
+      return historyResult({
+        messages: [{ role: "assistant", content: outputText, __openclaw: { runId: scope.runId } }],
+      });
     });
     const connection = await connect();
     if (mode === "accepted") {
@@ -324,11 +328,11 @@ it("keeps healthy concurrent event readers alive when another subscriber fails",
   await expect(normalizedFirst).resolves.toMatchObject({
     value: { type: "assistant.delta", data: { text: "hello", delta: "hello" } },
   });
-  const normalizedSecond = await normalized.next();
-  expect(normalizedSecond).toMatchObject({
-    value: { type: "assistant.delta", data: { text: "hello world", delta: " world" } },
+  const normalizedSecond = await expectNext(normalized, {
+    type: "assistant.delta",
+    data: { text: "hello world", delta: " world" },
   });
-  expect(normalizedSecond.value?.raw?.payload).not.toHaveProperty("message");
+  expect(normalizedSecond?.raw?.payload).not.toHaveProperty("message");
 });
 
 it.each(["history", "newer-live-snapshot", "failed-history"])(
@@ -355,16 +359,10 @@ it.each(["history", "newer-live-snapshot", "failed-history"])(
     resolveHistory();
     await waiting;
     if (mode === "history") {
-      const recovered = await events.next();
-      expect(recovered.value).toMatchObject({
+      await expectRecovery(events, {
         type: "assistant.delta",
-        data: {
-          text: "hello recovered",
-          replace: true,
-          recovery: { projection: "chat" },
-        },
+        data: { text: "hello recovered", replace: true, recovery: { projection: "chat" } },
       });
-      expect(recovered.value?.raw).toBeUndefined();
     } else if (mode === "failed-history") {
       await expectNext(events, {
         type: "raw",
@@ -439,12 +437,10 @@ it.each(["queued", "pending-error", "unavailable"])(
     });
     await connection.reconnect();
     if (mode === "unavailable") {
-      const unavailable = await events.next();
-      expect(unavailable.value).toMatchObject({
+      await expectRecovery(events, {
         type: "raw",
         data: { recovery: { status: "unavailable", reason: "run-state-unavailable" } },
       });
-      expect(unavailable.value?.raw).toBeUndefined();
       await vi.advanceTimersByTimeAsync(1_000);
       await rearmed.promise;
     } else {
@@ -469,13 +465,8 @@ it("releases 150 accepted runs before their first output without inferring owner
       return runResult("started", { runId: request.params.idempotencyKey });
     } else if (request.method === "sessions.messages.unsubscribe") {
       const key = request.params.key;
-      return {
-        key:
-          key === "review"
-            ? `agent:${request.params.agentId === "ops" ? "ops" : "main"}:review`
-            : key,
-        subscribed: false,
-      };
+      const owner = request.params.agentId === "ops" ? "ops" : "main";
+      return { key: key === "review" ? `agent:${owner}:review` : key, subscribed: false };
     } else if (request.method === "agent.wait") {
       waited.push(String(request.params.runId));
       return runResult("ok", {

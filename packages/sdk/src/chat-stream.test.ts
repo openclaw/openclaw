@@ -303,20 +303,15 @@ describe("SDK terminal carriers", () => {
     const iterator = events(runId);
     const isMarker = (event: { raw?: GatewayEvent }) => event.raw?.event === "custom.debug";
     const observed: OpenClawEvent[] = [];
-
     await oc.connect();
     if (mode === "replay") {
       const drained = collectUntil(oc.events(), isMarker);
       frames.forEach(transport.emit);
       await drained;
     } else {
-      const firstEvent = iterator.next();
+      const first = iterator.next();
       transport.emit(frames[0]);
-      const first = await firstEvent;
-      if (first.done) {
-        throw new Error("SDK stream closed before its start event");
-      }
-      observed.push(first.value);
+      observed.push(await readEvent(first, { type: "run.started" }));
     }
     const pending = collectUntil({ [Symbol.asyncIterator]: () => iterator }, isMarker);
     if (mode === "live") {
@@ -339,36 +334,24 @@ describe("SDK terminal carriers", () => {
   });
   const start = agent(1, "lifecycle", { phase: "start" });
   const marker: GatewayEvent = { event: "custom.debug", seq: 6, payload: { runId, ts: 6 } };
-
+  const failure = (errorMessage: string, errorKind?: string) => ({
+    state: "error",
+    errorMessage,
+    ...(errorKind ? { errorKind } : {}),
+  });
+  const aborted = (stopReason: string) => ({ state: "aborted", stopReason });
+  const failed = (error: string) => ({ phase: "error", error });
+  const cancelled = (stopReason: string) => ({ phase: "end", aborted: true, stopReason });
+  const success = {
+    state: "final",
+    message: { role: "assistant", content: [{ type: "text", text: "successful fallback" }] },
+  };
   const terminalCases = [
-    [
-      {
-        state: "final",
-        message: { role: "assistant", content: [{ type: "text", text: "successful fallback" }] },
-      },
-      "run.completed",
-      { phase: "end", outputText: "successful fallback" },
-    ],
-    [
-      { state: "error", errorMessage: "fallback exhausted" },
-      "run.failed",
-      { phase: "error", error: "fallback exhausted" },
-    ],
-    [
-      { state: "error", errorKind: "timeout", errorMessage: "provider timed out" },
-      "run.timed_out",
-      { phase: "error", error: "provider timed out" },
-    ],
-    [
-      { state: "aborted", stopReason: "rpc" },
-      "run.cancelled",
-      { phase: "end", aborted: true, stopReason: "rpc" },
-    ],
-    [
-      { state: "aborted", stopReason: "timeout" },
-      "run.timed_out",
-      { phase: "end", aborted: true, stopReason: "timeout" },
-    ],
+    [success, "run.completed", { phase: "end", outputText: "successful fallback" }],
+    [failure("fallback exhausted"), "run.failed", failed("fallback exhausted")],
+    [failure("provider timed out", "timeout"), "run.timed_out", failed("provider timed out")],
+    [aborted("rpc"), "run.cancelled", cancelled("rpc")],
+    [aborted("timeout"), "run.timed_out", cancelled("timeout")],
   ] as const;
 
   it.each([
