@@ -121,7 +121,9 @@ it.each([
   "keeps %s Return native on %s with shortcut %s",
   async (surface, userAgent, sendShortcut) => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue(userAgent);
-    onTestFinished(() => vi.restoreAllMocks());
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const submit = vi.fn();
     const input = vi.fn();
     const { container } =
