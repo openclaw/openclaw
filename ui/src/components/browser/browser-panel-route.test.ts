@@ -407,6 +407,7 @@ it("discards an old route capture with the same target id before fetching or eva
     if (request.path === "/screenshot" && request.query?.profile === "managed") {
       return pending.promise;
     }
+    return undefined;
   });
   const panel = await mountPanel(gateway.client);
   await waitForSolid(() =>
