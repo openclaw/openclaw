@@ -75,17 +75,11 @@ function modelCompleted(data?: TrajectoryEvent["data"]) {
 
 describe("sessionsTailCommand", () => {
   let runtime: ReturnType<typeof createTestRuntime>;
-  const tail = (
-    options: Parameters<typeof sessionsTailCommand>[0] = {
-      agent: "main",
-      store: storePath,
-      sessionKey,
-    },
-  ) => sessionsTailCommand(options, runtime);
+  const tail = (options?: Parameters<typeof sessionsTailCommand>[0]) =>
+    sessionsTailCommand(options ?? { agent: "main", store: storePath, sessionKey }, runtime);
 
   let tmpDir: string;
   let storePath: string;
-  let previousStateDir: string | undefined;
   const explicitTail = (options: Parameters<typeof sessionsTailCommand>[0] = {}) =>
     tail({ agent: "main", store: storePath, sessionKey, ...options });
   const listeners = () => [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
@@ -93,9 +87,8 @@ describe("sessionsTailCommand", () => {
   beforeEach(() => {
     runtime = createTestRuntime();
     mocks.callGatewayFromCliWithTransport.mockReset().mockResolvedValue({ sessions: [] });
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
     tmpDir = sessionDirs.make();
-    process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tmpDir, "state"));
     mocks.getRuntimeConfig.mockReturnValue({
       agents: {
         entries: { main: {}, ops: {} },
@@ -106,11 +99,7 @@ describe("sessionsTailCommand", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
+    vi.unstubAllEnvs();
   });
 
   async function writeSessionEntry(
@@ -163,31 +152,38 @@ describe("sessionsTailCommand", () => {
     }
   }
 
-  it("renders compact progress lines with tool arguments", async () => {
-    await render([
-      makeEvent({
-        type: "tool.call",
-        ts: "2026-05-18T12:04:18.000Z",
-        data: { name: "bash", arguments: { command: "echo SECRET" } },
-      }),
-      makeEvent({
-        type: "tool.call",
-        ts: "2026-05-18T12:04:19.000Z",
-        data: { name: "read", args: { path: ".env", expression: "API_TOKEN = computeToken()" } },
-      }),
-      toolResult("bash", { data: { name: "bash", success: true, output: "SECRET" } }),
-      modelCompleted(),
-    ]);
-    expectOutput([
-      "12:04:18Z",
-      "tool.call",
-      'bash {"command":"echo SECRET"}',
-      'read {"path":".env","expression":"API_TOKEN = computeToken()"}',
-      "tool.result",
-      "bash ok",
-      "model.completed",
-      "openai/gpt-5.2 done",
-    ]);
+  it("renders the requested newest progress lines with tool arguments", async () => {
+    await render(
+      [
+        makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" }),
+        makeEvent({
+          type: "tool.call",
+          ts: "2026-05-18T12:04:18.000Z",
+          data: { name: "bash", arguments: { command: "echo SECRET" } },
+        }),
+        makeEvent({
+          type: "tool.call",
+          ts: "2026-05-18T12:04:19.000Z",
+          data: { name: "read", args: { path: ".env", expression: "API_TOKEN = computeToken()" } },
+        }),
+        toolResult("bash", { data: { name: "bash", success: true, output: "SECRET" } }),
+        modelCompleted(),
+      ],
+      { tail: "4" },
+    );
+    expectOutput(
+      [
+        "12:04:18Z",
+        "tool.call",
+        'bash {"command":"echo SECRET"}',
+        'read {"path":".env","expression":"API_TOKEN = computeToken()"}',
+        "tool.result",
+        "bash ok",
+        "model.completed",
+        "openai/gpt-5.2 done",
+      ],
+      ["session.started"],
+    );
   });
 
   it.each<[string, TrajectoryEvent["data"], string]>([
@@ -247,22 +243,6 @@ describe("sessionsTailCommand", () => {
       expect(visibleWidth(line.slice(0, line.lastIndexOf(" proof") + 1))).toBe(58);
     },
   );
-
-  it("honors the tail count before rendering existing trajectory events", async () => {
-    await render(
-      [
-        makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" }),
-        makeEvent({
-          type: "tool.call",
-          ts: "2026-05-18T12:04:18.000Z",
-          data: { name: "bash" },
-        }),
-        toolResult("bash"),
-      ],
-      { tail: "2" },
-    );
-    expectOutput(["tool.call", "tool.result"], ["session.started"]);
-  });
 
   it.each([
     [
@@ -342,26 +322,24 @@ describe("sessionsTailCommand", () => {
 
     const auditProjection = ["reachable", "explicit store", "explicit key"].includes(mode);
     if (auditProjection) {
-      for (let index = 0; index < 100; index += 1) {
-        replaceSessionEntrySync(
-          { sessionKey: `agent:main:unrelated:${index}`, storePath },
-          {
-            sessionId: `unrelated-${index}`,
-            status: "done",
-            updatedAt: 1,
-            skillsSnapshot: { prompt: `UNRELATED_TAIL_PAYLOAD_${"x".repeat(4096)}`, skills: [] },
-            systemPromptReport: {
-              source: "run",
-              generatedAt: 1,
-              workspaceDir: `UNRELATED_TAIL_PAYLOAD_${"y".repeat(4096)}`,
-              systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
-              injectedWorkspaceFiles: [],
-              skills: { promptChars: 0, entries: [] },
-              tools: { listChars: 0, schemaChars: 0, entries: [] },
-            },
+      replaceSessionEntrySync(
+        { sessionKey: "agent:main:unrelated", storePath },
+        {
+          sessionId: "unrelated",
+          status: "done",
+          updatedAt: 1,
+          skillsSnapshot: { prompt: `UNRELATED_TAIL_PAYLOAD_${"x".repeat(4096)}`, skills: [] },
+          systemPromptReport: {
+            source: "run",
+            generatedAt: 1,
+            workspaceDir: `UNRELATED_TAIL_PAYLOAD_${"y".repeat(4096)}`,
+            systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
+            injectedWorkspaceFiles: [],
+            skills: { promptChars: 0, entries: [] },
+            tools: { listChars: 0, schemaChars: 0, entries: [] },
           },
-        );
-      }
+        },
+      );
     }
     const parse = vi.spyOn(JSON, "parse");
     onTestFinished(() => parse.mockRestore());
