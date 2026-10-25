@@ -71,6 +71,14 @@ function createContext(methods: string[] | null, request: Request, scopes = ["op
 type Source = ReturnType<typeof createContext>;
 type Page = HTMLElementTagNameMap["openclaw-portals-page"];
 const frameOf = (page: Page) => page.querySelector("iframe");
+const button = (page: Page, label: string) =>
+  page.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+const menuItem = (page: Page, label: string) =>
+  page.querySelector<HTMLElement>(`[role="menuitem"][aria-label="${label}"]`);
+const retryButton = (page: Page) =>
+  [...page.querySelectorAll("button")].find((node) => node.textContent?.trim() === "Retry")!;
+const closeButton = (page: Page) =>
+  page.querySelector<HTMLButtonElement>(".portals-preview__close")!;
 const waitForText = (page: Page, text: string) =>
   waitForSolid(() => expect(page.textContent).toContain(text));
 const waitForFrame = (page: Page) => waitForSolid(() => expect(frameOf(page)).not.toBeNull());
@@ -90,6 +98,10 @@ const callsTo = (source: Source, method: string) =>
   source.request.mock.calls.filter(([name]) => name === method);
 const waitForRequest = (source: Source, method: string, params: unknown) =>
   waitForSolid(() => expect(source.request).toHaveBeenCalledWith(method, params));
+const waitForCalls = (source: Source, count: number, method?: string) =>
+  waitForSolid(() =>
+    expect(method ? callsTo(source, method) : source.request.mock.calls).toHaveLength(count),
+  );
 const expectReceipt = (source: Source, requestId: string, status: string, reason: string) =>
   expect(source.request).toHaveBeenCalledWith("ui.command.result", {
     requestId,
@@ -126,27 +138,45 @@ afterEach(() => {
 });
 beforeEach(() => void probePortalReachable.mockReset().mockResolvedValue("reachable"));
 
-it("shows first-read failure and loading while retrying the admitted portal list", async () => {
-  const first = createDeferred<PortalListResult>();
-  const retry = createDeferred<PortalListResult>();
-  const source = createContext(["portal.list"], async () => retry.promise);
-  source.request.mockReturnValueOnce(first.promise);
-  const { page } = await mountPage(source.context, portal.id);
-  await waitForText(page, "Loading");
-  await updatePage(page, { presented: false });
-  await updatePage(page, { presented: true });
-  await waitForText(page, "Loading");
-  first.reject(new Error("Synthetic portal list unavailable"));
-  await waitForText(page, "Synthetic portal list unavailable");
-  const retryButton = page.querySelector<HTMLButtonElement>('[role="alert"] button')!;
-  expect(retryButton.textContent).toBe("Retry");
-  retryButton.click();
-  await waitForSolid(() => expect(callsTo(source, "portal.list")).toHaveLength(2));
-  await waitForText(page, "Loading");
-  expect(page.textContent).not.toContain("Synthetic portal list unavailable");
-  retry.resolve(portalResponse());
-  await waitForFrame(page);
-});
+it.each(["portal.list", "environments.status"] as const)(
+  "retries a failed %s read",
+  async (method) => {
+    const isPortal = method === "portal.list";
+    const first = createDeferred<PortalListResult | EnvironmentSummary>();
+    const retry = createDeferred<PortalListResult | EnvironmentSummary>();
+    const source = createContext([method], async () => retry.promise);
+    source.request.mockReturnValueOnce(first.promise);
+    const { page } = await mountPage(
+      source.context,
+      isPortal ? portal.id : undefined,
+      isPortal ? undefined : "pending-machine",
+    );
+    const loading = isPortal ? "Loading" : "Starting your machine";
+    await waitForText(page, loading);
+    if (isPortal) {
+      await updatePage(page, { presented: false });
+      await updatePage(page, { presented: true });
+      await waitForText(page, loading);
+    }
+    first.reject(new Error("Synthetic read unavailable"));
+    await waitForText(page, "Synthetic read unavailable");
+    if (isPortal) {
+      expect(page.querySelector('[role="alert"] button')).toBe(retryButton(page));
+      expect(retryButton(page).textContent).toBe("Retry");
+    }
+    retryButton(page).click();
+    await waitForCalls(source, 2, method);
+    await waitForText(page, loading);
+    expect(page.textContent).not.toContain("Synthetic read unavailable");
+    retry.resolve(isPortal ? portalResponse() : machine("pending-machine", "available"));
+    if (isPortal) {
+      await waitForFrame(page);
+    } else {
+      await waitForText(page, "Waiting for your application");
+      expect(frameOf(page)).toBeNull();
+    }
+  },
+);
 
 it.each(["catalogued", "uncatalogued", "unsupported"])(
   "waits for connected empty state (%s)",
@@ -206,19 +236,19 @@ it.each(["client", "account", "recovery"] as const)(
     const frame = frameOf(page)!;
     source.updateSnapshot({ phase: "reconnecting", hello: null });
     await page.updateComplete;
-    expect(page.querySelector("iframe")).toBe(frame);
+    expect(frameOf(page)).toBe(frame);
     expect(selectedButton.getAttribute("aria-current")).toBe("true");
-    expect(page.querySelector<HTMLButtonElement>(".portals-preview__close")?.disabled).toBe(true);
+    expect(closeButton(page)?.disabled).toBe(true);
     expect(source.request).toHaveBeenCalledOnce();
 
     source.updateSnapshot({ phase: "connected", hello });
-    await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(2));
-    expect(page.querySelector("iframe")).toBe(frame);
+    await waitForCalls(source, 2);
+    expect(frameOf(page)).toBe(frame);
     refreshed.resolve({
       portals: [defaultPortal, { ...selected, title: "Refreshed selection" }],
     });
     await waitForSolid(() => expect(frame.title).toBe("Refreshed selection portal preview"));
-    expect(page.querySelector("iframe")).toBe(frame);
+    expect(frameOf(page)).toBe(frame);
 
     source.updateSnapshot(
       identity === "client"
@@ -228,12 +258,12 @@ it.each(["client", "account", "recovery"] as const)(
           : { hello: { ...hello, auth: { ...hello.auth, recoveryScope: "second-scope" } } },
     );
     await page.updateComplete;
-    expect(page.querySelector("iframe")).toBeNull();
+    expect(frameOf(page)).toBeNull();
     replacement.resolve({
       portals: identity === "client" ? initial : [{ ...selected, title: "Replacement app" }],
     });
     await waitForTitle(page, identity === "client" ? "Seeded app" : "Replacement app");
-    expect(page.querySelector("iframe")).not.toBe(frame);
+    expect(frameOf(page)).not.toBe(frame);
   },
 );
 
@@ -269,60 +299,52 @@ it("refreshes the embedded frame and keeps Portal actions scoped across desktop 
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
   try {
     const { page } = await mountPage(source.context, portal.id);
-    await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
-    const original = page.querySelector("iframe")!;
+    await waitForFrame(page);
+    const original = frameOf(page)!;
     expect(page.querySelector(".portals-embedded__origin")?.textContent).toBe(
       "https://preview.example.test:8443",
     );
-    const pending = createDeferred<"reachable" | "unreachable" | "blocked">();
+    const pending = createDeferred<PortalReachability>();
     probePortalReachable.mockReturnValueOnce(pending.promise);
-    const refresh = page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!;
+    const refresh = button(page, "Refresh")!;
     refresh.click();
-    await waitForSolid(() => expect(page.querySelector("iframe")).toBeNull());
+    await waitForSolid(() => expect(frameOf(page)).toBeNull());
     expect(refresh.disabled).toBe(true);
     pending.resolve("reachable");
     await pending.promise;
-    await waitForSolid(() => expect(page.querySelector("iframe")).not.toBeNull());
-    const replacement = page.querySelector("iframe")!;
+    await waitForFrame(page);
+    const replacement = frameOf(page)!;
     expect(replacement).not.toBe(original);
     expect(replacement.src).toBe(portal.url);
     expect(replacement.getAttribute("sandbox")).toBe(original.getAttribute("sandbox"));
     expect(probePortalReachable).toHaveBeenCalledTimes(2);
     const openOptions = async () => {
-      page.querySelector<HTMLButtonElement>('button[aria-label="Portal options"]')!.click();
+      button(page, "Portal options")!.click();
       await waitForSolid(() =>
         expect(page.querySelector('[role="menu"]')?.getAttribute("data-state")).toBe("open"),
       );
     };
     await openOptions();
-    page.querySelector<HTMLButtonElement>('[role="menuitem"][aria-label="Copy link"]')!.click();
+    menuItem(page, "Copy link")!.click();
     await waitForSolid(() => expect(writeText).toHaveBeenCalledExactlyOnceWith(portal.publicUrl));
     expect(writeText.mock.calls[0]?.[0]).not.toContain("openclaw_portal");
     page.mobile = true;
     await page.updateComplete;
-    expect(page.querySelector('button[aria-label="Refresh"]')).toBeNull();
+    expect(button(page, "Refresh")).toBeNull();
     await openOptions();
-    expect(page.querySelector('[role="menuitem"][aria-label="Copy link"]')).toBeNull();
-    expect(
-      page.querySelector('[role="menuitem"][aria-label="Open in browser"]')?.getAttribute("href"),
-    ).toBe(portal.url);
+    expect(menuItem(page, "Copy link")).toBeNull();
+    expect(menuItem(page, "Open in browser")?.getAttribute("href")).toBe(portal.url);
     source.updateSnapshot({ hello: gatewayHelloForMethods(methods, ["operator.read"]) });
     await page.updateComplete;
-    const denied = page.querySelector<HTMLButtonElement>(
-      '[role="menuitem"][aria-label="Close portal"]',
-    )!;
+    const denied = menuItem(page, "Close portal")!;
     expect(denied.getAttribute("aria-disabled")).toBe("true");
     denied.click();
-    expect(source.request.mock.calls.filter(([method]) => method === "portal.close")).toHaveLength(
-      0,
-    );
+    expect(callsTo(source, "portal.close")).toHaveLength(0);
     source.updateSnapshot({ hello: gatewayHelloForMethods(methods, ["operator.write"]) });
     await page.updateComplete;
-    page.querySelector<HTMLButtonElement>('[role="menuitem"][aria-label="Close portal"]')!.click();
-    await waitForSolid(() =>
-      expect(source.request).toHaveBeenCalledWith("portal.close", { id: portal.id }),
-    );
-    await waitForSolid(() => expect(page.querySelector("iframe")).toBeNull());
+    menuItem(page, "Close portal")!.click();
+    await waitForRequest(source, "portal.close", { id: portal.id });
+    await waitForSolid(() => expect(frameOf(page)).toBeNull());
   } finally {
     restorePropertyDescriptor(navigator, "clipboard", clipboard);
   }
@@ -337,7 +359,7 @@ it.each([undefined, "pending-machine"])(
       environmentId ? machine(environmentId) : portalResponse(),
     );
     const { page } = await mountPage(source.context, undefined, environmentId);
-    await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(1));
+    await waitForCalls(source, 1);
     source.updateSnapshot({ phase: "reconnecting" });
     await page.updateComplete;
     expect(page.textContent).not.toContain("This action requires operator.read access.");
@@ -350,7 +372,7 @@ it.each([undefined, "pending-machine"])(
     await vi.advanceTimersByTimeAsync(6_000);
     expect(source.request).toHaveBeenCalledTimes(1);
     expect(page.textContent).toContain("This action requires operator.read access.");
-    expect(page.querySelector("iframe")).toBeNull();
+    expect(frameOf(page)).toBeNull();
     expect(page.textContent).not.toContain("Starting your machine");
   },
 );
@@ -375,13 +397,9 @@ it("admits the initial pending environment for a lazy Solid portal", async () =>
       }),
     { wrapper: application.wrapper },
   );
-  try {
-    await waitForRequest(source, "environments.status", { environmentId: environment.id });
-    expect(mounted.container.textContent).toContain("Starting your machine");
-    expect(callsTo(source, "portal.list")).toHaveLength(0);
-  } finally {
-    mounted.unmount();
-  }
+  await waitForRequest(source, "environments.status", { environmentId: environment.id });
+  expect(mounted.container.textContent).toContain("Starting your machine");
+  expect(callsTo(source, "portal.list")).toHaveLength(0);
 });
 
 it("waits for machine startup and an explicitly opened app", async () => {
@@ -393,38 +411,17 @@ it("waits for machine startup and an explicitly opened app", async () => {
   const { page } = await mountPage(source.context, undefined, environment.id);
   await waitForRequest(source, "environments.status", { environmentId: environment.id });
   expect(page.textContent).toContain("Starting your machine");
-  expect(page.querySelector("iframe")).toBeNull();
+  expect(frameOf(page)).toBeNull();
   expect(callsTo(source, "portal.list")).toHaveLength(0);
   environment = { ...environment, status: "available" };
   await vi.advanceTimersByTimeAsync(2_000);
   await page.updateComplete;
   expect(page.textContent).toContain("Waiting for your application");
   await expectNoPolling(source);
-  expect(page.querySelector("iframe")).toBeNull();
+  expect(frameOf(page)).toBeNull();
   toggle(page, { portalId: portal.id });
   await waitForTitle(page, "Seeded app");
   expect(page.requestedEnvironmentId).toBeNull();
-});
-
-it("shows environment read failure and pending retry before the accepted status", async () => {
-  const first = createDeferred<EnvironmentSummary>();
-  const retry = createDeferred<EnvironmentSummary>();
-  const source = createContext(["environments.status"], async () => retry.promise);
-  source.request.mockReturnValueOnce(first.promise);
-  const { page } = await mountPage(source.context, undefined, "pending-machine");
-  await waitForText(page, "Starting your machine");
-  first.reject(new Error("Synthetic environment unavailable"));
-  await waitForText(page, "Synthetic environment unavailable");
-  const retryButton = [...page.querySelectorAll("button")].find(
-    (button) => button.textContent === "Retry",
-  )!;
-  retryButton.click();
-  await waitForSolid(() => expect(callsTo(source, "environments.status")).toHaveLength(2));
-  await waitForText(page, "Starting your machine");
-  expect(page.textContent).not.toContain("Synthetic environment unavailable");
-  retry.resolve(machine("pending-machine", "available"));
-  await waitForText(page, "Waiting for your application");
-  expect(page.querySelector("iframe")).toBeNull();
 });
 
 it("loads only the final environment from same-turn target writes", async () => {
@@ -443,7 +440,7 @@ it("loads only the final environment from same-turn target writes", async () => 
       ["environments.status", { environmentId: environment.id }],
     ]);
     expect(page.textContent).toContain("Waiting for your application");
-    expect(page.querySelector("iframe")).toBeNull();
+    expect(frameOf(page)).toBeNull();
   });
 });
 
@@ -464,7 +461,7 @@ it.each(["success", "failure"] as const)(
     );
     const { page } = await mountPage(source.context, undefined, "old-machine");
     await updatePage(page, { requestedEnvironmentId: replacement.id });
-    await waitForSolid(() => expect(source.request).toHaveBeenCalledTimes(2));
+    await waitForCalls(source, 2);
     await source.request.mock.results[1]?.value;
     await waitForSolid(() =>
       expect(source.request).toHaveBeenLastCalledWith("environments.status", {
@@ -490,7 +487,7 @@ it.each(["success", "failure"] as const)(
       await page.updateComplete;
       expect(page.textContent).toContain("Waiting for your application");
     }
-    expect(page.querySelector("iframe")).toBeNull();
+    expect(frameOf(page)).toBeNull();
     page.remove();
     await expectNoPolling(source);
   },
@@ -513,13 +510,13 @@ it("retains the embedded iframe document through custom element presentation cha
   const sourceWrites = vi.spyOn(frame, "src", "set");
 
   await updatePage(page, { presented: false });
-  expect(page.querySelector("iframe"), "frame after hiding").toBe(frame);
+  expect(frameOf(page), "frame after hiding").toBe(frame);
   title = "Refreshed app";
   toggle(page, { portalId: portal.id, requestId: "show-again" });
   await updatePage(page, { presented: true });
   await waitForTitle(page, "Refreshed app");
 
-  expect(page.querySelector("iframe")).toBe(frame);
+  expect(frameOf(page)).toBe(frame);
   expect(writes.mock.calls.filter(([name]) => name === "src")).toEqual([]);
   expect(sourceWrites).not.toHaveBeenCalled();
   expect(probePortalReachable).toHaveBeenCalledTimes(1);
@@ -534,14 +531,14 @@ it.each(["success", "failure"] as const)(
     const source = closeContext(retired.promise);
     const replacement = closeContext(current.promise);
     const { page } = await mountPage(source.context);
-    const closeButton = () => page.querySelector<HTMLButtonElement>(".portals-preview__close")!;
-    await waitForSolid(() => expect(closeButton()).not.toBeNull());
-    closeButton().click();
-    await waitForSolid(() => expect(closeButton().disabled).toBe(true));
+    const close = () => closeButton(page);
+    await waitForSolid(() => expect(close()).not.toBeNull());
+    close().click();
+    await waitForSolid(() => expect(close().disabled).toBe(true));
     source.updateSnapshot({ client: replacement.context.gateway.snapshot.client });
-    await waitForSolid(() => expect(closeButton()?.disabled).toBe(false));
-    closeButton().click();
-    await waitForSolid(() => expect(closeButton().disabled).toBe(true));
+    await waitForSolid(() => expect(close()?.disabled).toBe(false));
+    close().click();
+    await waitForSolid(() => expect(close().disabled).toBe(true));
     try {
       if (outcome === "success") {
         retired.resolve({ closed: true });
@@ -550,15 +547,15 @@ it.each(["success", "failure"] as const)(
       }
       await retired.promise.catch(() => undefined);
       await page.updateComplete;
-      expect(closeButton().disabled).toBe(true);
+      expect(close().disabled).toBe(true);
       expect(page.textContent).not.toContain("Retired close failed");
-      closeButton().click();
+      close().click();
       expect(callsTo(replacement, "portal.close")).toHaveLength(1);
     } finally {
       current.resolve({ closed: true });
       await current.promise;
     }
-    await waitForSolid(() => expect(closeButton().disabled).toBe(false));
+    await waitForSolid(() => expect(close().disabled).toBe(false));
   },
 );
 
@@ -570,7 +567,7 @@ it("requires write access instead of opening a portal without credentials", asyn
   );
   const { page } = await mountPage(source.context);
   await waitForText(page, "This portal requires an operator with write access.");
-  expect(page.querySelector("iframe")).toBeNull();
+  expect(frameOf(page)).toBeNull();
   expect(page.querySelector(".portals-preview__url")).toBeNull();
   expect(probePortalReachable).not.toHaveBeenCalled();
 });
@@ -581,12 +578,10 @@ it("shows an unreachable notice without mounting the iframe and retries", async 
   const source = closeContext({ closed: true });
   const { page } = await mountPage(source.context);
   await waitForText(page, "Portal not reachable from this browser");
-  expect(page.querySelector("iframe")).toBeNull();
-  page.querySelector<HTMLButtonElement>(".portals-preview__close")?.click();
+  expect(frameOf(page)).toBeNull();
+  closeButton(page)?.click();
   await waitForRequest(source, "portal.close", { id: portal.id });
-  const retry = [...page.querySelectorAll("button")].find(
-    (button) => button.textContent?.trim() === "Retry",
-  );
+  const retry = retryButton(page);
   expect(retry).toBeDefined();
   retry?.click();
   await waitForText(page, "Loading portal");
@@ -612,7 +607,7 @@ it("does not publish a late probe from the previous Gateway", async () => {
   await waitForText(page, "Portal not reachable from this browser");
   oldProbe.resolve("reachable");
   await page.updateComplete;
-  expect(page.querySelector("iframe")).toBeNull();
+  expect(frameOf(page)).toBeNull();
   expect(page.textContent).toContain("Portal not reachable from this browser");
   expect(probePortalReachable).toHaveBeenCalledTimes(2);
 });
