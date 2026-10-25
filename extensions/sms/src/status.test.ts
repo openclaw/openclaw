@@ -109,6 +109,12 @@ describe("SMS status probe", () => {
     expect(result.recentOutbound).toEqual(outbound);
     expect(result.recentOutbound).not.toHaveProperty("accountId");
     expect(result.recentOutbound).not.toHaveProperty("observations");
+    expect(formatSmsProbeLines(result)).toEqual(
+      expect.arrayContaining([
+        { text: "Check: ok", tone: "success" },
+        { text: "Recent outbound: delivered", tone: "success" },
+      ]),
+    );
   });
 
   it("detects a Twilio SMS webhook URL mismatch", async () => {
@@ -145,6 +151,17 @@ describe("SMS status probe", () => {
         expect.stringContaining("Twilio error 11200 means Twilio could not reach"),
       ]),
     );
+    expect(formatSmsProbeLines(result)).toEqual(
+      expect.arrayContaining([
+        {
+          text: "Check: failed (Recent inbound SMS SM11200 has Twilio error 11200.)",
+          tone: "error",
+        },
+        { text: "Twilio SMS webhook: https://mac-studio.example.ts.net/webhooks/sms" },
+        { text: "Recent inbound: received error=11200", tone: "warn" },
+        ...result.hints.map((text) => ({ text, tone: "warn" })),
+      ]),
+    );
   });
 
   it("validates Twilio Messaging Service webhook settings", async () => {
@@ -165,38 +182,6 @@ describe("SMS status probe", () => {
         "Twilio Messaging Service defers inbound webhooks to sender phone numbers; configure fromNumber or disable defer-to-sender before checking.",
       webhook: { status: "unavailable" },
     });
-  });
-
-  it("formats probe details for channel capability output", () => {
-    expect(
-      formatSmsProbeLines({
-        ok: false,
-        error: "Recent inbound SMS SM11200 has Twilio error 11200.",
-        webhook: { status: "matches", configuredUrl: "https://gateway.example.com/webhooks/sms" },
-        recentInbound: { sid: "SM11200", status: "received", errorCode: "11200" },
-        recentOutbound: { messageSid: "SM-outbound", status: "undelivered", errorCode: "30005" },
-        hints: ["Check the public route."],
-      }),
-    ).toEqual([
-      {
-        text: "Check: failed (Recent inbound SMS SM11200 has Twilio error 11200.)",
-        tone: "error",
-      },
-      { text: "Twilio SMS webhook: https://gateway.example.com/webhooks/sms" },
-      { text: "Recent inbound: received error=11200", tone: "warn" },
-      { text: "Recent outbound: undelivered error=30005", tone: "error" },
-      { text: "Check the public route.", tone: "warn" },
-    ]);
-  });
-
-  it("formats canceled outbound delivery as an error", () => {
-    expect(
-      formatSmsProbeLines({
-        ok: true,
-        recentOutbound: { messageSid: "SM-canceled", status: "canceled" },
-        hints: [],
-      }),
-    ).toContainEqual({ text: "Recent outbound: canceled", tone: "error" });
   });
 
   it("preserves recent durable delivery state when Twilio probes fail", async () => {

@@ -23,21 +23,17 @@ function createAccount(
   return createSmsTestAccount({ accountId, ...overrides });
 }
 
-function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
+type ObservationStore = Required<
+  Pick<PluginStateKeyedStore<SmsDeliveryRecord>, "observe" | "compareAndApply" | "entries">
+>;
+
+function createStore(): ObservationStore {
   const values = new Map<string, SmsDeliveryRecord>();
   const observe = (key: string) => ({
     value: structuredClone(values.get(key)),
     comparison: JSON.stringify(values.get(key)) ?? "missing",
   });
-  const store: PluginStateKeyedStore<SmsDeliveryRecord> = {
-    register: async (key, value) => void values.set(key, value),
-    async registerIfAbsent(key, value) {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, value);
-      return true;
-    },
+  const store: ObservationStore = {
     observe: async (key) => observe(key),
     async compareAndApply(key, comparison, intent) {
       const current = observe(key);
@@ -53,16 +49,8 @@ function createStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
       values.set(key, structuredClone(intent.value));
       return { status: "applied" };
     },
-    lookup: async (key) => values.get(key),
-    async consume(key) {
-      const value = values.get(key);
-      values.delete(key);
-      return value;
-    },
-    delete: async (key) => values.delete(key),
     entries: async () =>
       [...values].map(([key, value]) => ({ key, value, createdAt: value.lastObservedAt })),
-    clear: async () => values.clear(),
   };
   getSmsRuntime.mockReturnValue({ state: { openKeyedStore: () => store } });
   return store;
@@ -161,19 +149,22 @@ describe("SMS delivery observations", () => {
     await expect(recordCallback(form)).rejects.toThrow("Invalid Twilio delivery status callback.");
   });
 
-  it.each(["accepted", "scheduled"])(
-    "advances a message from its %s initial state through sent",
-    async (initialStatus) => {
-      createStore();
-      for (const [index, status] of [initialStatus, "queued", "sending", "sent"].entries()) {
-        const current = await recordApiStatus(status, index + 1);
-        expect(current.status).toBe(status);
-      }
+  it("advances through each nonterminal delivery rank and ignores a late queued callback", async () => {
+    createStore();
+    for (const [index, status] of [
+      "accepted",
+      "scheduled",
+      "queued",
+      "sending",
+      "sent",
+    ].entries()) {
+      const current = await recordApiStatus(status, index + 1);
+      expect(current.status).toBe(status);
+    }
 
-      await recordCallback({ MessageSid: "SM123", MessageStatus: "queued" }, 10);
-      expect((await latestRecord()).status).toBe("sent");
-    },
-  );
+    await recordCallback({ MessageSid: "SM123", MessageStatus: "queued" }, 10);
+    expect((await latestRecord()).status).toBe("sent");
+  });
 
   it.each([
     ["scheduled", "canceled", 1, 2, { status: "canceled" }],
@@ -207,45 +198,32 @@ describe("SMS delivery observations", () => {
   });
 
   it.each([
-    {
-      secondStatus: "delivered",
-      status: "delivered",
-      duplicates: [false, true],
-      lastObservedAt: 100,
-      observations: [{ status: "delivered", observedAt: 100 }],
+    ["delivered", true, "delivered", 100],
+    ["failed", false, "conflicted", 101],
+  ] as const)(
+    "retains concurrent %s observations",
+    async (secondStatus, duplicate, status, lastObservedAt) => {
+      createStore();
+      using now = vi.spyOn(Date, "now");
+      now.mockReturnValueOnce(100).mockReturnValueOnce(101);
+      const results = await Promise.all(
+        ["delivered", secondStatus].map((nextStatus) =>
+          recordInitialSmsDeliveryResult({
+            account: createAccount(),
+            result: { sid: "SM123", to: "+15551234567", status: nextStatus },
+          }),
+        ),
+      );
+      expect(results.map((result) => result?.duplicate)).toEqual([false, duplicate]);
+      const first = { status: "delivered", observedAt: 100 };
+      expect(await latestRecord()).toMatchObject({
+        status,
+        firstObservedAt: 100,
+        lastObservedAt,
+        observations: duplicate ? [first] : [first, { status: "failed", observedAt: 101 }],
+      });
     },
-    {
-      secondStatus: "failed",
-      status: "conflicted",
-      duplicates: [false, false],
-      lastObservedAt: 101,
-      observations: [
-        { status: "delivered", observedAt: 100 },
-        { status: "failed", observedAt: 101 },
-      ],
-    },
-  ])("retains concurrent $secondStatus observations", async (expected) => {
-    createStore();
-    using now = vi.spyOn(Date, "now");
-    now.mockReturnValueOnce(100).mockReturnValueOnce(101);
-    const results = await Promise.all(
-      ["delivered", expected.secondStatus].map((status) =>
-        recordInitialSmsDeliveryResult({
-          account: createAccount(),
-          result: { sid: "SM123", to: "+15551234567", status },
-        }),
-      ),
-    );
-
-    expect(results.map((result) => result?.duplicate)).toEqual(expected.duplicates);
-    const record = await latestRecord();
-    expect(record).toMatchObject({
-      status: expected.status,
-      firstObservedAt: 100,
-      lastObservedAt: expected.lastObservedAt,
-      observations: expected.observations,
-    });
-  });
+  );
 
   it("isolates records by local account and account SID but survives token rotation", async () => {
     createStore();
