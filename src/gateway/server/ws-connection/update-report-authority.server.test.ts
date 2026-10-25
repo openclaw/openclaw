@@ -12,7 +12,6 @@ import {
 } from "../../../infra/agent-run-registry.js";
 import type { GithubIssueSubmitHooks, RunGithubCli } from "../../../infra/github-issue.js";
 import type { RestartSentinelPayload } from "../../../infra/restart-sentinel.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -20,11 +19,12 @@ import {
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
 import { gatewayRequest } from "../../request-frame.test-support.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
+import { dispatchProfile } from "../client-fixtures.test-support.js";
+import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
 } from "./authenticated-request-dispatch.test-support.js";
-import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 
 const mocks = vi.hoisted(() => ({
   submitGithubIssue: vi.fn(),
@@ -123,20 +123,8 @@ function createReportHarness(
   client: ReturnType<typeof createOperatorWsClient>,
   getGeneration = () => "current",
 ) {
-  let nextFinished = createDeferredCore();
-  const handler: NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]> = async (
-    options,
-  ) => {
-    try {
-      await updateReportHandler(options as never);
-    } finally {
-      const finished = nextFinished;
-      nextFinished = createDeferredCore();
-      finished.resolve();
-    }
-  };
   const harness = createDispatchTestHarness({
-    extraHandlers: { "update.report": handler },
+    extraHandlers: { "update.report": (options) => updateReportHandler(options as never) },
     buildRequestContext: () =>
       createDirectChatContext({
         getRuntimeConfig: () => ({}),
@@ -155,7 +143,6 @@ function createReportHarness(
     );
   return {
     harness,
-    waitForNextHandler: () => nextFinished.promise,
     dispatch,
     preview: async (id: string) => {
       await dispatch(id, "preview");
@@ -175,23 +162,17 @@ function grantReportAuthority(
     client.internal = { operatorRoleActor: { kind: "system" } };
     return;
   }
-  client.authenticatedUserProfile = {
-    profileId: GATEWAY_OWNER_PROFILE_ID,
+  client.authenticatedUserProfile = dispatchProfile(GATEWAY_OWNER_PROFILE_ID, {
     displayName: "Gateway owner",
     avatarRevision: "owner-avatar",
-    hasAvatar: false,
-    updatedAt: 1,
-  };
+  });
 }
 
 function identifyNonOwner(client: ReturnType<typeof createOperatorWsClient>): void {
-  client.authenticatedUserProfile = {
-    profileId: "profile-non-owner",
+  client.authenticatedUserProfile = dispatchProfile("profile-non-owner", {
     displayName: "Delegated operator",
     avatarRevision: "operator-avatar",
-    hasAvatar: false,
-    updatedAt: 1,
-  };
+  });
 }
 
 const authorityCloseReasons = {
@@ -284,13 +265,11 @@ describe("update report live authority boundary", () => {
       };
       client.internal = { ...client.internal, agentRuntimeIdentity: identity };
       const validateAuthority = createAgentRuntimeApprovalAuthorityValidator();
-      const { harness, waitForNextHandler, preview, submit } = createReportHarness(client);
-      const entered = createDeferredCore();
-      const released = createDeferredCore();
+      const { harness, preview, submit } = createReportHarness(client);
+      const gate = createRequestGate();
       const runGh = vi.fn<RunGithubCli>(async (args) => {
         if (args[0] === "auth") {
-          entered.resolve();
-          await released.promise;
+          await gate.wait();
           return { started: true, status: 0, stdout: Buffer.alloc(0) };
         }
         expect(args).toContain("POST");
@@ -323,17 +302,15 @@ describe("update report live authority boundary", () => {
         expect(validateAuthority(identity)).toBe(true);
         const previewDigest = await preview("runtime-preview");
         expect(await countReportFiles()).toBe(0);
-        const finished = waitForNextHandler();
         const dispatch = submit("runtime-submit", previewDigest);
-        await entered.promise;
+        await gate.entered;
         if (retire && boundary === "auth") {
           expect(releaseAgentRunDelegatedAuthority(claim)).toBe(true);
         }
         expect(validateAuthority(identity)).toBe(!(retire && boundary === "auth"));
         expect(client.invalidated).not.toBe(true);
         expect(client.connectionSignal?.aborted).not.toBe(true);
-        released.resolve();
-        await finished;
+        gate.release();
         await dispatch;
 
         expect(validateAuthority(identity)).toBe(!retire);
@@ -353,7 +330,7 @@ describe("update report live authority boundary", () => {
           expect(harness.close).not.toHaveBeenCalled();
         }
       } finally {
-        released.resolve();
+        gate.release();
         releaseAgentRunDelegatedAuthority(claim);
       }
     },
@@ -367,22 +344,19 @@ describe("update report live authority boundary", () => {
       );
       const client = createOperatorWsClient({ connId: `report-changed-${change}` });
       grantReportAuthority(client, "system-admin");
-      const { harness, waitForNextHandler, preview, submit } = createReportHarness(client);
+      const { harness, preview, submit } = createReportHarness(client);
       const previewDigest = await preview(`preview-changed-${change}`);
-      const entered = createDeferredCore();
-      const released = createDeferredCore();
+      const gate = createRequestGate();
       const runGh = vi.fn<RunGithubCli>(async (args) => {
         expect(args[0]).toBe("auth");
-        entered.resolve();
-        await released.promise;
+        await gate.wait();
         return { started: true, status: 0, stdout: Buffer.alloc(0) };
       });
       mocks.submitGithubIssue.mockImplementationOnce((issue, _runGh, hooks) =>
         transport.submitGithubIssue(issue, runGh, hooks),
       );
-      const finished = waitForNextHandler();
       const dispatch = submit(`changed-${change}`, previewDigest);
-      await entered.promise;
+      await gate.entered;
       mocks.refreshLatest.mockResolvedValue({
         ...failure,
         stats: {
@@ -390,8 +364,7 @@ describe("update report live authority boundary", () => {
           ...(change === "identity" ? { handoffId: "replacement" } : { reason: "rollback-failed" }),
         },
       });
-      released.resolve();
-      await finished;
+      gate.release();
       await dispatch;
 
       expect(runGh).toHaveBeenCalledOnce();
@@ -465,21 +438,18 @@ describe("update report live authority boundary", () => {
   ] as const)("blocks report side effects after %s closes during %s", async (change, stage) => {
     const {
       harness,
-      waitForNextHandler,
       revoke,
       preview,
       dispatch: dispatchReport,
     } = authorityHarness(change, `report-${stage}-${change}`);
     const previewDigest = stage === "sentinel-refresh" ? undefined : await preview("preview");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const gate = createRequestGate();
     let issueCreateCalls = 0;
     if (stage === "auth-preflight") {
       mocks.submitGithubIssue.mockImplementationOnce(
         async (_issue: unknown, _runGh: unknown, hooks: GithubIssueSubmitHooks) => {
           await hooks.afterAuthPreflight?.();
-          entered.resolve();
-          await release.promise;
+          await gate.wait();
           const commitIssueCreate = await hooks.beforeIssueCreate?.();
           commitIssueCreate?.();
           issueCreateCalls += 1;
@@ -493,28 +463,24 @@ describe("update report live authority boundary", () => {
           typeof args[0] === "string" &&
           args[0].includes(`${path.sep}update-reports${path.sep}`)
         ) {
-          entered.resolve();
-          await release.promise;
+          await gate.wait();
         }
         return result;
       });
     } else {
       mocks.refreshLatest.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
+        await gate.wait();
         return failure;
       });
     }
-    const finished = waitForNextHandler();
     const dispatch = dispatchReport(
       "denied",
       stage === "sentinel-refresh" ? "preview" : "submit",
       previewDigest,
     );
-    await entered.promise;
+    await gate.entered;
     revoke();
-    release.resolve();
-    await finished;
+    gate.release();
     await dispatch;
 
     expect(harness.close).toHaveBeenCalledWith(4001, authorityCloseReasons[change]);

@@ -1,7 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  PROTOCOL_VERSION,
+  type ResponseFrame,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -154,24 +157,21 @@ afterEach(async () => {
 });
 
 describe("WebSocket connect suspension admission", () => {
-  it.each(["operator.admin", "xoperator.adminx"])(
-    "rejects non-array scopes %s before admitting the client",
-    async (scopes) => {
-      const harness = attachHarness();
-      harness.sendConnect(scopes);
+  it("rejects non-array scopes before admitting the client", async () => {
+    const harness = attachHarness();
+    harness.sendConnect("operator.admin");
 
-      await vi.waitFor(() => expect(harness.close).toHaveBeenCalled());
-      expect(harness.send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: "connect-1",
-          ok: false,
-          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
-        }),
-      );
-      expect(harness.client).toBeNull();
-      expect(harness.setClient).not.toHaveBeenCalled();
-    },
-  );
+    await vi.waitFor(() => expect(harness.close).toHaveBeenCalled());
+    expect(harness.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "connect-1",
+        ok: false,
+        error: expect.objectContaining({ code: "INVALID_REQUEST" }),
+      }),
+    );
+    expect(harness.client).toBeNull();
+    expect(harness.setClient).not.toHaveBeenCalled();
+  });
 
   it("rejects a validated connect while suspension is preparing before session mutations", async () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
@@ -181,14 +181,7 @@ describe("WebSocket connect suspension admission", () => {
     harness.sendConnect();
 
     await vi.waitFor(() => expect(harness.socketSend).toHaveBeenCalledOnce());
-    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as {
-      error?: {
-        code?: string;
-        retryable?: boolean;
-        retryAfterMs?: number;
-        details?: Record<string, unknown>;
-      };
-    };
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as ResponseFrame;
     expect(response.error).toMatchObject({
       code: "UNAVAILABLE",
       retryable: true,

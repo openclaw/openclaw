@@ -43,6 +43,7 @@ async function openOperatorSocket(
   await once(socket, "open");
   try {
     await connectOk(socket, { token, prePairDevice: headers !== undefined });
+    await expect(sendTraceRequest(socket, "warmup")).resolves.toMatchObject({ ok: true });
     return socket;
   } catch (error) {
     socket.terminate();
@@ -51,12 +52,16 @@ async function openOperatorSocket(
 }
 
 async function sendTraceRequest(socket: WebSocket, id: string): Promise<{ ok: boolean }> {
-  const response = onceMessage<{ type: "res"; id: string; ok: boolean }>(
+  const response = responseFor(socket, id);
+  socket.send(rpc(id));
+  return await response;
+}
+
+function responseFor(socket: WebSocket, id: string | undefined) {
+  return onceMessage<{ type: "res"; id: string; ok: boolean }>(
     socket,
     (value) => value.type === "res" && value.id === id,
   );
-  socket.send(rpc(id));
-  return await response;
 }
 
 const token = "gateway-request-start-test-token";
@@ -99,15 +104,10 @@ async function withServer(
   }
 }
 
-function registerMethods(
-  registry: ReturnType<typeof createEmptyPluginRegistry>,
-  names = Object.keys(registry.gatewayHandlers),
-) {
-  for (const name of names) {
-    const handler = registry.gatewayHandlers[name];
-    if (!handler) {
-      throw new Error(`Missing fixture handler: ${name}`);
-    }
+function installMethods(handlers: ReturnType<typeof createEmptyPluginRegistry>["gatewayHandlers"]) {
+  const registry = createEmptyPluginRegistry();
+  registry.gatewayHandlers = handlers;
+  for (const [name, handler] of Object.entries(handlers)) {
     registry.gatewayMethodDescriptors.push(
       createPluginGatewayMethodDescriptor({
         pluginId: "request-start-proof",
@@ -116,6 +116,20 @@ function registerMethods(
       }),
     );
   }
+  setTestPluginRegistry(registry);
+  return registry;
+}
+
+function installHeldTrace(held: Promise<void>, complete: () => void) {
+  installMethods({
+    "test.trace": async ({ req, respond }) => {
+      if (req.id === "held") {
+        await held;
+        complete();
+      }
+      respond(true);
+    },
+  });
 }
 
 function rpc(id: string, method = "test.trace", params = {}) {
@@ -191,24 +205,23 @@ describe("authenticated operator request starts", () => {
     const held = createDeferredCore();
     const observedAtYield = createDeferredCore<string[]>();
     let sentinel: ReturnType<typeof setImmediate> | undefined;
-    const registry = createEmptyPluginRegistry();
-    registry.gatewayHandlers["test.trace"] = async ({ req, respond }) => {
-      if (req.id === "warmup") {
+    installMethods({
+      "test.trace": async ({ req, respond }) => {
+        if (req.id === "warmup") {
+          respond(true);
+          return;
+        }
+        starts.push(req.id);
+        if (starts.length === 1) {
+          sentinel = setImmediate(() => observedAtYield.resolve([...starts]));
+        }
+        if (req.id !== ids.at(-1)) {
+          await held.promise;
+        }
+        completed.push(req.id);
         respond(true);
-        return;
-      }
-      starts.push(req.id);
-      if (starts.length === 1) {
-        sentinel = setImmediate(() => observedAtYield.resolve([...starts]));
-      }
-      if (req.id !== ids.at(-1)) {
-        await held.promise;
-      }
-      completed.push(req.id);
-      respond(true);
-    };
-    registerMethods(registry);
-    setTestPluginRegistry(registry);
+      },
+    });
     let restoreClock: (() => void) | undefined;
     let allResponses: Promise<unknown> | undefined;
     await withServer(async ({ capture, open }) => {
@@ -216,7 +229,6 @@ describe("authenticated operator request starts", () => {
         const ws = await openOperatorSocket(open, {
           "x-forwarded-for": "198.51.100.10",
         });
-        await expect(sendTraceRequest(ws, "warmup")).resolves.toMatchObject({ ok: true });
         const { stream } = capture.get();
         expect(ws.extensions).toContain("permessage-deflate");
         // This case isolates cheap-start batching. Other owner cases advance the
@@ -233,10 +245,7 @@ describe("authenticated operator request starts", () => {
         });
         // Observe failures immediately; cleanup still joins the response promise.
         void allResponses.catch(() => {});
-        const markerResponse = onceMessage(
-          ws,
-          (value) => value.type === "res" && value.id === ids.at(-1),
-        );
+        const markerResponse = responseFor(ws, ids.at(-1));
         // Chrome also compresses small requests when the extension is negotiated.
         injectReceiveChunk(
           stream,
@@ -262,33 +271,25 @@ describe("authenticated operator request starts", () => {
   it("delivers operator control frames while ordinary request completions overlap", async () => {
     const held = createDeferredCore();
     let completed = false;
-    const registry = createEmptyPluginRegistry();
-    registry.gatewayHandlers["test.trace"] = async ({ req, respond }) => {
-      if (req.id === "held") {
-        await held.promise;
-        completed = true;
-      }
-      respond(true);
-    };
-    registerMethods(registry);
-    setTestPluginRegistry(registry);
+    installHeldTrace(held.promise, () => {
+      completed = true;
+    });
     await withServer(async ({ capture, open }) => {
       const ws = await openOperatorSocket(open);
-      await sendTraceRequest(ws, "warmup");
       const { socket, stream } = capture.get();
       const signal = AbortSignal.timeout(2_000);
       const peerPongs = on(ws, "pong", { signal });
       const serverPongs = on(socket, "pong", { signal });
-      const response = onceMessage(ws, (value) => value.type === "res" && value.id === "held");
+      const response = responseFor(ws, "held");
       void response.catch(() => {});
       try {
-        const marker = onceMessage(ws, (value) => value.type === "res" && value.id === "marker");
+        const marker = responseFor(ws, "marker");
         injectReceiveChunk(stream, [
           maskedFrame(0x89, "first"),
-          maskedFrame(0x81, JSON.stringify({ type: "req", id: "held", method: "test.trace" })),
+          maskedFrame(0x81, rpc("held")),
           maskedFrame(0x8a, "client-pong"),
           maskedFrame(0x89, "second"),
-          maskedFrame(0x81, JSON.stringify({ type: "req", id: "marker", method: "test.trace" })),
+          maskedFrame(0x81, rpc("marker")),
         ]);
         expect((await peerPongs.next()).value?.[0].toString()).toBe("first");
         expect((await peerPongs.next()).value?.[0].toString()).toBe("second");
@@ -311,20 +312,10 @@ describe("authenticated operator request starts", () => {
   it("completes an ordinary operator request after a coalesced native close", async () => {
     const held = createDeferredCore();
     const completed = createDeferredCore();
-    const registry = createEmptyPluginRegistry();
-    registry.gatewayHandlers["test.trace"] = async ({ req, respond }) => {
-      if (req.id === "held") {
-        await held.promise;
-        completed.resolve();
-      }
-      respond(true);
-    };
-    registerMethods(registry);
-    setTestPluginRegistry(registry);
+    installHeldTrace(held.promise, () => completed.resolve());
     await withServer(async ({ capture, open }) => {
       try {
         const ws = await openOperatorSocket(open);
-        await sendTraceRequest(ws, "warmup");
         const { socket, stream } = capture.get();
         const signal = AbortSignal.timeout(2_000);
         const closed = Promise.all([
@@ -338,10 +329,7 @@ describe("authenticated operator request starts", () => {
             responses.push(frame);
           }
         });
-        injectReceiveChunk(stream, [
-          maskedFrame(0x81, JSON.stringify({ type: "req", id: "held", method: "test.trace" })),
-          maskedFrame(0x88, ""),
-        ]);
+        injectReceiveChunk(stream, [maskedFrame(0x81, rpc("held")), maskedFrame(0x88, "")]);
         await closed;
         expect(socket.readyState).toBe(WebSocket.CLOSED);
         held.resolve();
@@ -404,7 +392,6 @@ describe("authenticated operator request starts", () => {
 
   it("keeps local frames raw and compresses remote frames both ways without stalling", async () => {
     await writeConfigFile({ gateway: { trustedProxies: ["127.0.0.1"] } });
-    const registry = createEmptyPluginRegistry();
     const sharedMessages = [
       { text: 'Escaped "segment" 漢字🦞\n'.repeat(4096) },
       { text: randomBytes(1536).toString("base64").repeat(16) },
@@ -414,16 +401,17 @@ describe("authenticated operator request starts", () => {
       sharedBytes,
       deflateRawSync(sharedBytes, { level: 1, finishFlush: zlibConstants.Z_SYNC_FLUSH }),
     );
-    registry.gatewayHandlers["test.echo"] = async ({ req, respond, acceptsDeflatedSegments }) => {
-      respond(true, {
-        echoed: (req.params as { text: string }).text,
-        acceptsDeflatedSegments: acceptsDeflatedSegments === true,
-      });
-    };
-    registry.gatewayHandlers["test.segments"] = async ({ respond }) => {
-      respond(true, { messages: new SerializedJsonArray(sharedBytes) });
-    };
-    registerMethods(registry, ["test.segments", "test.echo"]);
+    const registry = installMethods({
+      "test.echo": async ({ req, respond, acceptsDeflatedSegments }) => {
+        respond(true, {
+          echoed: (req.params as { text: string }).text,
+          acceptsDeflatedSegments: acceptsDeflatedSegments === true,
+        });
+      },
+      "test.segments": async ({ respond }) => {
+        respond(true, { messages: new SerializedJsonArray(sharedBytes) });
+      },
+    });
     // Real Gateways advertise many plugin methods; push hello past the compression threshold.
     for (let index = 0; index < 64; index++) {
       registry.gatewayMethodDescriptors.push(
@@ -434,7 +422,6 @@ describe("authenticated operator request starts", () => {
         }),
       );
     }
-    setTestPluginRegistry(registry);
     await withServer(async ({ capture, open }) => {
       const local = open();
       await once(local, "open");
@@ -482,7 +469,7 @@ describe("authenticated operator request starts", () => {
         text: string,
         send = () => socket.send(rpc(id, "test.echo", { text })),
       ) => {
-        const response = onceMessage(socket, (value) => value.type === "res" && value.id === id);
+        const response = responseFor(socket, id);
         const before = stream.bytesWritten;
         send();
         await expect(response).resolves.toMatchObject({

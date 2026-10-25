@@ -514,13 +514,7 @@ describe("authenticated request mutation custody", () => {
       },
       client,
     );
-    try {
-      await Promise.race([
-        gate.entered,
-        dispatch.then(() => {
-          throw new Error("request returned before reaching its mutation owner");
-        }),
-      ]);
+    await gate.during(dispatch, () => {
       if (scenario === "transport retirement") {
         connection.abort();
       } else if (scenario === "client invalidated") {
@@ -530,10 +524,7 @@ describe("authenticated request mutation custody", () => {
       } else if (scenario === "policy changed") {
         setRuntimeConfigSnapshot({ gateway: { auth: { allowTailscale: true } } });
       }
-    } finally {
-      gate.release();
-      await dispatch;
-    }
+    });
     expect(grantProfileReads).not.toHaveBeenCalled();
     if (scenario === "transport retirement") {
       expect(grantError).toBeUndefined();

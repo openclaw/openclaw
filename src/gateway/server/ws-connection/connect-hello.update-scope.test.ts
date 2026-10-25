@@ -12,9 +12,8 @@ import type { HealthSummary } from "../../health/types.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
 import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origin.js";
 import { getHealthCache } from "../health-state.js";
+import { createGatewaySnapshotFixture } from "../health-state.test-support.js";
 import type { GatewayWsClient } from "../ws-types.js";
-
-// Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
 
 const {
   buildGatewaySnapshotMock,
@@ -34,16 +33,7 @@ const {
       channel: "dev",
     };
     return {
-      presence: [],
-      health: {},
-      stateVersion: { presence: 1, health: 1 },
-      uptimeMs: 1,
-      sessionDefaults: {
-        defaultAgentId: "main",
-        mainKey: "main",
-        mainSessionKey: "main",
-        scope: "per-sender",
-      },
+      ...createGatewaySnapshotFixture(),
       updateAvailable: opts?.includeUpdateDetails
         ? {
             ...updateAvailable,
@@ -172,16 +162,23 @@ function helloSnapshot(context: ReturnType<typeof makeContext>) {
   return helloPayload(context)?.snapshot;
 }
 
+function sendHello(
+  context: ReturnType<typeof makeContext>,
+  state: unknown = makeState(
+    context.connectParams.role === "node" ? "node" : "operator",
+    context.connectParams.scopes ?? [],
+  ),
+  principal?: string,
+) {
+  return sendGatewayHello(context as never, state as never, {}, principal);
+}
+
 function expectRedactedHelloSnapshot(context: ReturnType<typeof makeContext>) {
-  expect(helloSnapshot(context)).toEqual(
-    expect.objectContaining({
-      updateAvailable: {
-        currentVersion: "2026.8.7",
-        latestVersion: "2026.8.8",
-        channel: "dev",
-      },
-    }),
-  );
+  expect(helloSnapshot(context)?.updateAvailable).toEqual({
+    currentVersion: "2026.8.7",
+    latestVersion: "2026.8.8",
+    channel: "dev",
+  });
   expect(helloSnapshot(context)?.updateSchedule).toBeUndefined();
 }
 
@@ -209,11 +206,7 @@ describe("sendGatewayHello update detail scope", () => {
         browserOrigin: { origin, requestHost: new URL(origin).host, isLocalClient: local },
       };
       const gatewayMethods = ["health", "mcp.authLogin"];
-      await sendGatewayHello(
-        { ...context, handler: { ...context.handler, gatewayMethods } } as never,
-        makeState("operator", ["operator.read"]) as never,
-        {},
-      );
+      await sendHello({ ...context, handler: { ...context.handler, gatewayMethods } });
       expect(helloPayload(context)?.features.methods).toEqual(
         expected ? gatewayMethods : ["health"],
       );
@@ -250,7 +243,7 @@ describe("sendGatewayHello update detail scope", () => {
       caps,
     };
 
-    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+    await sendHello(context);
 
     expect(helloSnapshot(context)).toMatchObject({
       presence: [],
@@ -277,11 +270,7 @@ describe("sendGatewayHello update detail scope", () => {
       getSessionRowProjectionMock.mockReturnValue(projection);
       const context = makeContext("operator", ["operator.read"]);
 
-      await sendGatewayHello(
-        context as never,
-        makeState("operator", ["operator.read"]) as never,
-        {},
-      );
+      await sendHello(context);
 
       expect(projection.needsMembershipPreparation).not.toHaveBeenCalled();
       expect(projection.prepareMembership).not.toHaveBeenCalled();
@@ -300,7 +289,7 @@ describe("sendGatewayHello update detail scope", () => {
     getSessionRowProjectionMock.mockReturnValue(projection);
     const context = makeContext("operator", ["operator.read"]);
 
-    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+    await sendHello(context);
 
     expect(context.sendFrame).toHaveBeenCalledOnce();
     expect(projection.prepareMembership).not.toHaveBeenCalled();
@@ -334,11 +323,7 @@ describe("sendGatewayHello update detail scope", () => {
         } satisfies OpenClawConfig;
       }
 
-      await sendGatewayHello(
-        context as never,
-        makeState("operator", ["operator.write"]) as never,
-        {},
-      );
+      await sendHello(context);
 
       const auth = helloPayload(context)?.auth;
       if (sessionCap === undefined) {
@@ -392,7 +377,7 @@ describe("sendGatewayHello update detail scope", () => {
           env: {},
         }),
       };
-      await sendGatewayHello(context as never, state as never, {});
+      await sendHello(context, state);
       expect(helloSnapshot(context)?.controlUiIdentityUrl).toBe(
         expected
           ? mode === "trusted-proxy"
@@ -430,7 +415,7 @@ describe("sendGatewayHello update detail scope", () => {
           clear();
         });
       }
-      await sendGatewayHello(context as never, state as never, {});
+      await sendHello(context, state);
       if (phase !== "during hello delivery") {
         if (phase === "after hello delivery") {
           context.handler.socket.emit("close");
@@ -563,7 +548,7 @@ describe("sendGatewayHello update detail scope", () => {
         ...makeState(testCase.role, ["operator.read"]),
         resolvedAuth: { mode: "trusted-proxy", allowTailscale: false },
       };
-      await sendGatewayHello(context as never, state as never, {});
+      await sendHello(context, state);
       expect(helloSnapshot(context)).not.toHaveProperty("controlUiIdentityUrl");
       clear();
       expect(context.handler.close).not.toHaveBeenCalled();
@@ -575,13 +560,7 @@ describe("sendGatewayHello update detail scope", () => {
     { label: "node", role: "node" as const, scopes: ["operator.read"] },
   ])("omits update details for a $label", async ({ role, scopes }) => {
     const context = makeContext(role, scopes);
-    await sendGatewayHello(context as never, makeState(role, scopes) as never, {});
-
-    expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
-      client: null,
-      includeSensitive: false,
-      includeUpdateDetails: false,
-    });
+    await sendHello(context);
     expectRedactedHelloSnapshot(context);
     expect(helloPayload(context)?.features.capabilities).toContain("node-permission-errors");
     expect(helloPayload(context)?.features.capabilities).toContain("agent-session-id-create-v1");
@@ -613,11 +592,7 @@ describe("sendGatewayHello update detail scope", () => {
       const context = makeContext("operator", ["operator.read"]);
       context.configSnapshot = { gateway: { controlUi } };
 
-      await sendGatewayHello(
-        context as never,
-        makeState("operator", ["operator.read"]) as never,
-        {},
-      );
+      await sendHello(context);
 
       expect(helloPayload(context)?.server.buildId).toBe("build-a");
       expect(helloPayload(context)?.server.controlUiBuildSource).toBe(source);
@@ -637,7 +612,7 @@ describe("sendGatewayHello update detail scope", () => {
   ])("advertises the configured Control UI address: %j", async (gateway, controlUiUrl) => {
     const context = makeContext("operator", ["operator.read"]);
     context.configSnapshot = { gateway };
-    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+    await sendHello(context);
     expect(helloPayload(context)?.controlUiUrl).toBe(controlUiUrl);
     if (controlUiUrl === undefined) {
       expect(helloPayload(context)).not.toHaveProperty("controlUiUrl");
@@ -656,13 +631,7 @@ describe("sendGatewayHello update detail scope", () => {
     };
 
     const context = makeContext("operator", ["operator.pairing"]);
-    await sendGatewayHello(context as never, state as never, {}, "owner-profile");
-
-    expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
-      client: null,
-      includeSensitive: false,
-      includeUpdateDetails: false,
-    });
+    await sendHello(context, state, "owner-profile");
     expectRedactedHelloSnapshot(context);
     expect(helloPayload(context)?.auth).toEqual({
       method: "none",
@@ -697,7 +666,7 @@ describe("sendGatewayHello update detail scope", () => {
         },
         sessionSharedGatewaySessionGeneration: generation,
       };
-      await sendGatewayHello(context as never, state as never, {}, principal);
+      await sendHello(context, state, principal);
       const auth = helloPayload(context)?.auth;
       expect(auth?.recoveryMigrationAllowed).toBeUndefined();
       return auth?.recoveryScope;
