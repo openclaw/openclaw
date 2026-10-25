@@ -39,6 +39,6 @@ export async function connectProofClient(
   instance: Pick<OpenClawTestInstance, "url" | "gatewayToken">,
   options: Omit<Parameters<typeof connectGatewayClient>[0], "url" | "token"> = {},
 ) {
-  const { connectGatewayClient: connect } = await import("../../src/gateway/test-helpers.e2e.js");
-  return connect({ url: instance.url, token: instance.gatewayToken, ...options });
+  const { connectGatewayClient } = await import("../../src/gateway/test-helpers.e2e.js");
+  return connectGatewayClient({ url: instance.url, token: instance.gatewayToken, ...options });
 }
