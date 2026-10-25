@@ -1,9 +1,9 @@
 import { EventEmitter, once } from "node:events";
 import net from "node:net";
-import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import { createMattermostConnectOnce } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
@@ -88,11 +88,7 @@ async function startStalledWebSocketHandshakeServer(): Promise<{
   const server = net.createServer((socket) => {
     accepted.push(socket);
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const { port } = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   return {
     url: `ws://127.0.0.1:${port}`,
     close: async () => {

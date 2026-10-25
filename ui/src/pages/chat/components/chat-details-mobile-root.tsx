@@ -66,7 +66,6 @@ export type ChatDetailsMobileRootProps = {
     | "people"
     | "taskProgress"
     | "subagents"
-    | "processes"
     | "environment"
     | "context"
     | "pullRequests"
@@ -82,7 +81,7 @@ export type ChatDetailsMobileRootProps = {
   taskProgress?: ChatDetailsMobileEntry;
   taskProgressNotice?: JSX.Element;
   subagents?: Omit<ChatDetailsSubagentsProps, "mobile" | "collapsed">;
-  /** Mobile content without another section heading or scroll container. */
+  /** Complete Processes section; its owner retains the empty exit envelope. */
   processes?: JSX.Element;
   /** The complete mobile Environment section, including its own heading and group. */
   environment?: JSX.Element;
@@ -336,11 +335,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           </RootGroup>
         )}
       </Show>
-      <Show when={props.processes}>
-        <RootGroup name="processes" label={props.labels.processes}>
-          {props.processes}
-        </RootGroup>
-      </Show>
+      {props.processes}
     </div>
   );
 }

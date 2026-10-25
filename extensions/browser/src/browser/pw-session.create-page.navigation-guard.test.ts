@@ -16,6 +16,7 @@ import {
   wasBrowserNavigationSourcePreservedAfterPolicyDenial,
   withPageNavigationRequestGuard,
 } from "./pw-session.js";
+import { createMockRoute, type MockRoute } from "./pw-tools-core.guard-test-support.js";
 
 const {
   closePlaywrightBrowserConnection,
@@ -36,12 +37,6 @@ const strictPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
 const blockedTargetMessage =
   "Browser target is unavailable after SSRF policy blocked its navigation.";
 
-type MockRoute = {
-  continue: () => Promise<void>;
-  fallback: () => Promise<void>;
-  fulfill: (response: { status: number; body: string }) => Promise<void>;
-  abort: () => Promise<void>;
-};
 type MockRequest = {
   isNavigationRequest: () => boolean;
   frame: () => object;
@@ -121,15 +116,6 @@ function installBrowserMocks() {
   };
 }
 
-function createMockRoute(overrides?: Partial<MockRoute>): MockRoute {
-  return {
-    continue: vi.fn(async () => {}),
-    fallback: vi.fn(async () => {}),
-    fulfill: vi.fn(async () => {}),
-    abort: vi.fn(async () => {}),
-    ...overrides,
-  };
-}
 let f: ReturnType<typeof installBrowserMocks>;
 function create(opts: Partial<Parameters<typeof createPageViaPlaywright>[0]> = {}) {
   return createPageViaPlaywright({ cdpUrl, url: publicUrl, ...opts });

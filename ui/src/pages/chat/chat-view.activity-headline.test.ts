@@ -95,9 +95,9 @@ function draw(messages: unknown[], overrides: Partial<Parameters<typeof renderCh
   });
 }
 
-it("renders current operation copy through the real transcript and retains completion between tools", () => {
+it("renders current operation copy through the real transcript and retains completion between tools", async () => {
   draw([user, tool("first", "Inspect the first file")]);
-  expect(labels()).toEqual(["Inspect the first file…"]);
+  await waitForSolid(() => expect(labels()).toEqual(["Inspect the first file…"]));
   vi.advanceTimersByTime(2_000);
   draw([user, tool("first", "Inspect the first file", "completed")]);
   expect(labels()).toEqual(["Inspect the first file"]);
@@ -114,7 +114,7 @@ it("renders current operation copy through the real transcript and retains compl
   expect(labels()).toEqual(["Inspect the next file…"]);
 });
 
-it("retains live running activity when history contains an unfinished call", () => {
+it("retains live running activity when history contains an unfinished call", async () => {
   const call = tool("active", "Inspect the active file");
   const history = {
     ...call,
@@ -136,12 +136,12 @@ it("retains live running activity when history contains an unfinished call", () 
     __openclawToolStreamItemEnded: false,
   };
   draw([user, history], { toolMessages: [live] });
-  expect(labels()).toEqual(["Inspect the active file…"]);
+  await waitForSolid(() => expect(labels()).toEqual(["Inspect the active file…"]));
   expect(container.textContent).not.toContain("Outcome unknown");
   expect(container.textContent).not.toContain("1 unknown");
 });
 
-it("limits live copy to the newest activity group in the active run, not history or another run", () => {
+it("limits live copy to the newest activity group in the active run, not history or another run", async () => {
   transcript = createTestTranscript("activity-headline-history");
   saveChatSessionScrollPosition("activity-headline-history", "main", {
     scrollTop: 0,
@@ -171,12 +171,14 @@ it("limits live copy to the newest activity group in the active run, not history
     ],
     { persistCommentary: true },
   );
-  expect(
-    Array.from(
-      container.querySelectorAll(".chat-activity-group__label--live"),
-      (node) => node.textContent,
-    ),
-  ).toEqual(["Latest active file…"]);
+  await waitForSolid(() =>
+    expect(
+      Array.from(
+        container.querySelectorAll(".chat-activity-group__label--live"),
+        (node) => node.textContent,
+      ),
+    ).toEqual(["Latest active file…"]),
+  );
   expect(labels().filter((label) => label === "2 reads")).toHaveLength(3);
 });
 
@@ -184,6 +186,7 @@ it.each(["end", "session", "run", "connection"] as const)(
   "does not carry a pending title across a %s scope change",
   async (scope) => {
     draw([user, tool("first", "Inspect the first file")]);
+    await waitForSolid(() => expect(labels()).toEqual(["Inspect the first file…"]));
     vi.advanceTimersByTime(100);
     const messages = [
       user,

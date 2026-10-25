@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect } from "node:net";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { withEnvAsync, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
@@ -37,14 +38,6 @@ afterAll(() => {
   vi.resetModules();
 });
 
-async function readRequestBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 function createDeepInfraHandler(requests: CapturedRequest[], buffer = WEBM_VIDEO) {
   return (request: IncomingMessage, response: ServerResponse) => {
     void (async () => {
@@ -52,7 +45,7 @@ function createDeepInfraHandler(requests: CapturedRequest[], buffer = WEBM_VIDEO
         method: request.method,
         url: request.url,
         headers: request.headers,
-        body: await readRequestBody(request),
+        body: (await consumeBuffer(request)).toString("utf8"),
       });
       response.writeHead(200, { "content-type": "application/json" });
       response.end(

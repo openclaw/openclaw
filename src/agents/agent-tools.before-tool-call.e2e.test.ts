@@ -153,6 +153,25 @@ describe("before_tool_call loop detection behavior", () => {
     hookRunner.hasHooks.mockReturnValue(false);
   });
 
+  function createObservedChurnWriteTool(sessionId: string, sessionKey: string, runId: string) {
+    const progressReasonsDuringExecution: Array<string | undefined> = [];
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
+      progressReasonsDuringExecution.push(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+      );
+      return createStableNoProgressWriteResult();
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      sessionKey,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    return { progressReasonsDuringExecution, execute, tool };
+  }
+
   function createWrappedTool(
     name: string,
     execute: ReturnType<typeof vi.fn>,
@@ -780,21 +799,11 @@ describe("before_tool_call loop detection behavior", () => {
     const sessionId = "write-churn-rewrite-session";
     const sessionKey = "main";
     const runId = "write-churn-rewrite-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return createStableNoProgressWriteResult();
-    });
-    const loopDetectionContext = {
-      ...enabledLoopDetectionContext,
+    const { progressReasonsDuringExecution, execute, tool } = createObservedChurnWriteTool(
       sessionId,
       sessionKey,
       runId,
-    };
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    );
     const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
 
     for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
@@ -830,21 +839,11 @@ describe("before_tool_call loop detection behavior", () => {
     const sessionId = "write-churn-below-threshold-session";
     const sessionKey = "main";
     const runId = "write-churn-below-threshold-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return createStableNoProgressWriteResult();
-    });
-    const loopDetectionContext = {
-      ...enabledLoopDetectionContext,
+    const { progressReasonsDuringExecution, tool } = createObservedChurnWriteTool(
       sessionId,
       sessionKey,
       runId,
-    };
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    );
     const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md"];
 
     for (const [index, targetPath] of paths.entries()) {

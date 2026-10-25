@@ -8,6 +8,7 @@ import type {
 } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import {
+  createGeminiBackend,
   createClaudeParser,
   createClaudeBackend,
   claudeBlockStart,
@@ -47,6 +48,18 @@ function toolProgressHarness() {
     onToolUseStart: (delta) => starts.push(delta),
   });
   return { parser, progress, starts };
+}
+
+function createToolEventParser() {
+  const starts: CliToolUseStartDelta[] = [];
+  const results: Array<{ toolCallId: string; name: string; isError: boolean; result?: unknown }> =
+    [];
+  const parser = createClaudeParser({
+    backend: createClaudeBackend(),
+    onToolUseStart: (delta) => starts.push(delta),
+    onToolResult: (delta) => results.push(delta),
+  });
+  return { starts, results, parser };
 }
 
 describe("createCliJsonlStreamingParser events", () => {
@@ -216,12 +229,7 @@ describe("createCliJsonlStreamingParser events", () => {
     const starts: CliToolUseStartDelta[] = [];
     const results: CliToolResultDelta[] = [];
     const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "gemini",
-        output: "jsonl",
-        jsonlDialect: "gemini-stream-json",
-        sessionIdFields: ["session_id"],
-      },
+      backend: { ...createGeminiBackend(), sessionIdFields: ["session_id"] },
       providerId: "google-gemini-cli",
       onAssistantDelta: (delta) => deltas.push(delta),
       onToolUseStart: (delta) => starts.push(delta),
@@ -440,11 +448,7 @@ describe("createCliJsonlStreamingParser events", () => {
 
   it("streams detailed Gemini error events over generic result errors", () => {
     const parser = createCliJsonlStreamingParser({
-      backend: {
-        command: "gemini",
-        output: "jsonl",
-        jsonlDialect: "gemini-stream-json",
-      },
+      backend: createGeminiBackend(),
       providerId: "google-gemini-cli",
       onAssistantDelta: () => {},
     });
@@ -482,14 +486,7 @@ describe("createCliJsonlStreamingParser events", () => {
   });
 
   it("surfaces Claude tool_use start and result events", () => {
-    const starts: CliToolUseStartDelta[] = [];
-    const results: Array<{ toolCallId: string; name: string; isError: boolean; result?: unknown }> =
-      [];
-    const parser = createClaudeParser({
-      backend: createClaudeBackend(),
-      onToolUseStart: (delta) => starts.push(delta),
-      onToolResult: (delta) => results.push(delta),
-    });
+    const { starts, results, parser } = createToolEventParser();
 
     parser.push(
       joinJsonlFrames(
@@ -575,14 +572,7 @@ describe("createCliJsonlStreamingParser events", () => {
       isError: false,
     },
   ])("emits hosted result events for $useType", (fixture) => {
-    const starts: CliToolUseStartDelta[] = [];
-    const results: Array<{ toolCallId: string; name: string; isError: boolean; result?: unknown }> =
-      [];
-    const parser = createClaudeParser({
-      backend: createClaudeBackend(),
-      onToolUseStart: (delta) => starts.push(delta),
-      onToolResult: (delta) => results.push(delta),
-    });
+    const { starts, results, parser } = createToolEventParser();
 
     parser.push(
       joinJsonlFrames({

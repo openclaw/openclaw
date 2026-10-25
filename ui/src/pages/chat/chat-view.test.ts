@@ -316,21 +316,27 @@ describe("chat typing status", () => {
       expectedText: "Ayaan, Liam, Maya, Zoe are typing…",
       expectedAvatars: 4,
     },
-  ])("renders $expectedText in the transcript", ({ actors, expectedText, expectedAvatars }) => {
-    const container = renderChatView({ typingActors: actors });
-    const indicator = container.querySelector(".agent-chat__typing-indicator--outside");
+  ])(
+    "renders $expectedText in the transcript",
+    async ({ actors, expectedText, expectedAvatars }) => {
+      const container = renderChatView({ typingActors: actors });
+      await waitForSolid(() =>
+        expect(container.querySelector(".agent-chat__typing-indicator--outside")).not.toBeNull(),
+      );
+      const indicator = container.querySelector(".agent-chat__typing-indicator--outside");
 
-    expect(indicator?.closest('[data-virtual-row-key="presence:typing"]')).not.toBeNull();
-    expect(indicator?.closest(".agent-chat__composer-shell")).toBeNull();
-    expect(indicator?.querySelectorAll("[role=img]")).toHaveLength(expectedAvatars);
-    expect(indicator?.querySelectorAll(".agent-chat__typing-state")).toHaveLength(
-      Math.min(2, actors.length),
-    );
-    expect(
-      indicator?.querySelector(".agent-chat__typing-bubble")?.getAttribute("aria-hidden"),
-    ).toBe("true");
-    expect(indicator?.textContent).toContain(expectedText);
-  });
+      expect(indicator?.closest('[data-virtual-row-key="presence:typing"]')).not.toBeNull();
+      expect(indicator?.closest(".agent-chat__composer-shell")).toBeNull();
+      expect(indicator?.querySelectorAll("[role=img]")).toHaveLength(expectedAvatars);
+      expect(indicator?.querySelectorAll(".agent-chat__typing-state")).toHaveLength(
+        Math.min(2, actors.length),
+      );
+      expect(
+        indicator?.querySelector(".agent-chat__typing-bubble")?.getAttribute("aria-hidden"),
+      ).toBe("true");
+      expect(indicator?.textContent).toContain(expectedText);
+    },
+  );
 });
 
 describe("chat run error", () => {

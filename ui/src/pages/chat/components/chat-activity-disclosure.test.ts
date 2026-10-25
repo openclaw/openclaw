@@ -13,7 +13,6 @@ import {
   createActivityGroupHarness,
   createMessageGroupHarness,
 } from "./chat-message-native.test-support.tsx";
-import { WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import {
   createAssistantMessage,
   createMessageEntry,
@@ -24,6 +23,7 @@ import {
   prepareHistoryGroups,
 } from "./chat-message.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 
 type WorkProps = Parameters<typeof WorkGroupSummary>[0];
 let summaryContainer: HTMLDivElement;

@@ -1280,23 +1280,15 @@ async function prepareCliRunContextWithinReadFence(
       preparedBackendCleanup,
     );
     cleanupPreparedResources = preparedCleanup;
-    const preparedBackendClearEnv = [
-      ...(preparedBackend.backend.clearEnv ?? []),
-      ...(preparedExecution?.clearEnv ?? []),
-    ];
     const { liveSession: _liveSession, ...processPerTurnBackend } = preparedBackend.backend;
     const preparedBackendFinal = {
       ...preparedBackend,
-      backend: {
-        ...(isSideQuestion
-          ? { ...processPerTurnBackend, sessionMode: "none" as const }
-          : params.disableCliLiveSession
-            ? processPerTurnBackend
-            : preparedBackend.backend),
-        ...(preparedBackendClearEnv.length > 0
-          ? { clearEnv: uniqueStrings(preparedBackendClearEnv) }
-          : {}),
-      },
+      backend: isSideQuestion
+        ? { ...processPerTurnBackend, sessionMode: "none" as const }
+        : params.disableCliLiveSession
+          ? processPerTurnBackend
+          : preparedBackend.backend,
+      ...(preparedExecution?.clearEnv ? { resetEnv: preparedExecution.clearEnv } : {}),
       ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
       ...(preparedBackendBeforeExecution
         ? { beforeExecution: preparedBackendBeforeExecution }

@@ -20,8 +20,10 @@ async function listingCommand(directoryPath: string, canonical = directoryPath) 
   });
 }
 
-function spawnCommand(command: string[], prefix: string, event: "close" | "exit") {
-  const child = spawn(command[0]!, [command[1]!, prefix + command[2]!, ...command.slice(3)], {
+async function spawnCommand(command: string[], preload: string, event: "close" | "exit") {
+  const preloadPath = at("worker-preload.cjs");
+  await fs.writeFile(preloadPath, preload);
+  const child = spawn(command[0]!, ["--require", preloadPath, ...command.slice(1)], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   const stdout: Buffer[] = [],
@@ -131,7 +133,11 @@ describe("handleDirList", () => {
           fs.symlinkSync(${JSON.stringify(replacement)}, ${JSON.stringify(current)});
         };
       })();`;
-    const { child, stdout, stderr, exit } = spawnCommand(command, retargetAfterBinding, "close");
+    const { child, stdout, stderr, exit } = await spawnCommand(
+      command,
+      retargetAfterBinding,
+      "close",
+    );
     try {
       expect(await exit, Buffer.concat(stderr).toString("utf8")).toBe(0);
       expect(await fs.readFile(drained, "utf8")).toBe("settled");
@@ -162,7 +168,7 @@ describe("handleDirList", () => {
 
       const drained = at("rejected-worker-drained");
       const observeNaturalExit = `process.once("beforeExit", () => require("node:fs").writeFileSync(${JSON.stringify(drained)}, "settled"));`;
-      const { stdout, exit } = spawnCommand(command, observeNaturalExit, "exit");
+      const { stdout, exit } = await spawnCommand(command, observeNaturalExit, "exit");
       expect(await exit).toBe(78);
       expect(await fs.readFile(drained, "utf8")).toBe("settled");
       expect(Buffer.concat(stdout)).toHaveLength(0);

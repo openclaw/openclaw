@@ -79,7 +79,9 @@ async function expectContextRemoved() {
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  root = tempDirs.make("update-candidate-admission-");
+  const { resolvePreferredOpenClawTmpDir } =
+    await vi.importActual<typeof import("./tmp-openclaw-dir.js")>("./tmp-openclaw-dir.js");
+  root = tempDirs.make("update-candidate-admission-", resolvePreferredOpenClawTmpDir());
   mocks.tmpdir.mockReturnValue(root);
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(path.join(root, "dist", "index.js"), "// candidate entry fixture");

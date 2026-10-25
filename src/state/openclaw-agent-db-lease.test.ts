@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as bootReader from "../infra/update-managed-service-handoff-boot.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
@@ -81,7 +82,12 @@ it("excludes cleaned stale claims while retaining unknown peers until their rele
 
   claimOpenClawAgentDatabaseLease(params, "first", verification);
 
-  expect(verification).toHaveBeenLastCalledWith(false, true, "predecessor-admission-incomplete");
+  expect(verification).toHaveBeenLastCalledWith(
+    false,
+    true,
+    "predecessor-admission-incomplete",
+    false,
+  );
   expect(
     state.db.prepare("SELECT lease_id FROM agent_database_leases ORDER BY lease_id").all(),
   ).toEqual([{ lease_id: "first" }, { lease_id: "unknown-peer" }]);
@@ -90,11 +96,35 @@ it("excludes cleaned stale claims while retaining unknown peers until their rele
   releaseOpenClawAgentDatabaseLease("first", { env: params.env }, "read-only");
   claimOpenClawAgentDatabaseLease(params, "second", verification);
 
-  expect(verification).toHaveBeenLastCalledWith(true, false, undefined);
+  expect(verification).toHaveBeenLastCalledWith(true, false, undefined, false);
   expect(state.db.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([
     { lease_id: "second" },
   ]);
   releaseOpenClawAgentDatabaseLease("second", { env: params.env }, "read-only");
+});
+
+it.each([
+  { name: "an admitted live peer", openedAt: 1, alias: false, lends: true },
+  { name: "a peer with unfinished admission", openedAt: 0, alias: false, lends: false },
+  { name: "a peer on an alias path", openedAt: 1, alias: true, lends: false },
+])("lends integrity only from $name", ({ openedAt, alias, lends }) => {
+  const { params, state } = createLeaseOwner();
+  const peerStartTime = getFileLockProcessStartTime(process.ppid);
+  expect(peerStartTime).not.toBeNull();
+  claimOpenClawAgentDatabaseLease(
+    alias ? { ...params, path: `${params.path}.alias` } : params,
+    "peer",
+  );
+  state.db
+    .prepare(
+      "UPDATE agent_database_leases SET owner_pid = ?, owner_start_time = ?, opened_at = ? WHERE lease_id = 'peer'",
+    )
+    .run(process.ppid, peerStartTime, openedAt);
+  const verification = vi.fn();
+
+  claimOpenClawAgentDatabaseLease(params, "borrower", verification);
+
+  expect(verification).toHaveBeenCalledWith(false, false, "live-or-unknown-owner", lends);
 });
 
 it("records admission on its held claim and refuses to resurrect a released claim", () => {

@@ -67,10 +67,7 @@ async function listenLoopbackServer(server: Server) {
 }
 
 function createOversizedJsonServer(pathname: string): { server: Server; closed: Promise<number> } {
-  let resolveClosed: (sentBytes: number) => void = () => {};
-  const closed = new Promise<number>((resolve) => {
-    resolveClosed = resolve;
-  });
+  const { promise: closed, resolve: resolveClosed } = Promise.withResolvers<number>();
   const server = createServer((req, res) => {
     if (req.url !== pathname) {
       res.writeHead(404, { "content-type": "application/json; charset=utf-8" });
@@ -438,16 +435,13 @@ describe("qa-bus client", () => {
   });
 
   it("bounds message responses that stall after headers", async () => {
-    let markBodyStarted: () => void = () => {};
-    const bodyStarted = new Promise<void>((resolve) => {
-      markBodyStarted = resolve;
-    });
+    const { promise: bodyStarted, resolve: markBodyStarted } = Promise.withResolvers<void>();
     const server = createServer((_req, res) => {
       res.writeHead(200, {
         "content-type": "application/json; charset=utf-8",
         "content-length": "128",
       });
-      res.write('{"message":', markBodyStarted);
+      res.write('{"message":', () => markBodyStarted());
     });
     const { port, stop } = await listenLoopbackServer(server);
     stops.push(stop);

@@ -46,8 +46,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Measured after deferring suggestion rows and person-card content.
-  chatBootJsGzipBytes: 1_275_713,
+  // Streaming token-to-DOM: 1,274,050 B measured + the existing 811 B headroom.
+  // Peter accepted chat growth for less streaming CPU and HTML parsing.
+  chatBootJsGzipBytes: 1_274_861,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
