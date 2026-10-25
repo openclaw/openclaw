@@ -7,6 +7,7 @@ import { isChannelPartialDeliveryError } from "../../channels/turn/partial-deliv
 import { OutboundHandoffRejectedError } from "../../infra/outbound/deliver-handoff.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
+import { LocalMediaAccessError } from "../../media/local-media-access.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { formatForLog } from "../ws-log.js";
@@ -84,6 +85,22 @@ export function createGatewayInflightFailure(
       result: { ok: false, error: authorizationError.error },
     });
   }
+  // A local media path refused by the allowlist fails before any provider send.
+  // Report it as a validation error: UNAVAILABLE reads as "may have been sent",
+  // which keeps a terminal reply's delivery intent pending and makes every later
+  // send in the turn (a corrected path, or plain text) return delivery_ambiguous.
+  const provedUnsent = unsentError !== params.err || params.err instanceof LocalMediaAccessError;
+  const mediaRejection = provedUnsent ? findLocalMediaAccessError(unsentError) : undefined;
+  if (mediaRejection) {
+    return createGatewayInflightResult({
+      ...params,
+      result: {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, mediaRejection.message),
+      },
+      meta: { error: formatForLog(params.err) },
+    });
+  }
   // A channel partial-delivery error carries the receipt of the part that was
   // already delivered (e.g. a caption sent before the media upload failed).
   // Preserve it on the structured error and mark the result non-retryable so
@@ -156,4 +173,15 @@ export function scheduleDeliveredSourceReplyTranscriptMirror(params: {
       });
     }
   });
+}
+
+function findLocalMediaAccessError(error: unknown): LocalMediaAccessError | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current instanceof Error; depth += 1) {
+    if (current instanceof LocalMediaAccessError) {
+      return current;
+    }
+    current = current.cause;
+  }
+  return undefined;
 }
