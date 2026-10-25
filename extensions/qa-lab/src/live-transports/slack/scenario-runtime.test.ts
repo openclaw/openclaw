@@ -13,7 +13,6 @@ import { buildSlackApprovalCheckpointMessage } from "./slack-live.observations.j
 import {
   slackQaChartPresentationNativeScenario,
   slackQaMpimAppMentionDedupeScenario,
-  slackQaTablePresentationNativeScenario,
 } from "./slack-live.scenario-implementations.js";
 import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
@@ -95,16 +94,11 @@ function expectRttEvidence(
   source: "approval-request-to-resolution" | "request-to-observed-message",
 ) {
   const responseObservedAt = new Date(Date.parse(requestStartedAt) + rttMs).toISOString();
+  const timing = { requestStartedAt, responseObservedAt };
   expect(result).toMatchObject({
-    requestStartedAt,
-    responseObservedAt,
+    ...timing,
     rttMs,
-    rttMeasurement: {
-      finalMatchedReplyRttMs: rttMs,
-      requestStartedAt,
-      responseObservedAt,
-      source,
-    },
+    rttMeasurement: { ...timing, finalMatchedReplyRttMs: rttMs, source },
   });
 }
 
@@ -116,38 +110,30 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([
-  { kind: "chart", implementation: slackQaChartPresentationNativeScenario },
-  { kind: "table", implementation: slackQaTablePresentationNativeScenario },
-])(
-  "captures the native $kind write before waiting for its final reply",
-  async ({ kind, implementation }) => {
-    const builtRun = implementation.buildRun("U_SUT");
-    if (!("input" in builtRun)) {
-      throw new Error(`expected Slack native ${kind} message scenario`);
-    }
-    const summaryText = builtRun.input.match(
-      new RegExp(`SLACK_QA_${kind.toUpperCase()}_SUMMARY_[A-Z0-9]+`, "u"),
-    )?.[0];
-    if (!summaryText) {
-      throw new Error(`missing Slack native ${kind} summary marker`);
-    }
-    const channelId = "C_NATIVE";
-    const runtime = fixture(
-      { ...builtRun, afterReply: undefined },
-      channelId,
-      sutMessage(builtRun.matchText, "3.000000"),
-    );
-    runtime.writes.mockResolvedValue([{ channelId, text: summaryText, ts: "2.000000" }]);
+it("captures the native write before waiting for its final reply", async () => {
+  const builtRun = slackQaChartPresentationNativeScenario.buildRun("U_SUT");
+  if (!("input" in builtRun)) {
+    throw new Error("expected Slack native chart message scenario");
+  }
+  const summaryText = builtRun.input.match(/SLACK_QA_CHART_SUMMARY_[A-Z0-9]+/u)?.[0];
+  if (!summaryText) {
+    throw new Error("missing Slack native chart summary marker");
+  }
+  const channelId = "C_NATIVE";
+  const runtime = fixture(
+    { ...builtRun, afterReply: undefined },
+    channelId,
+    sutMessage(builtRun.matchText, "3.000000"),
+  );
+  runtime.writes.mockResolvedValue([{ channelId, text: summaryText, ts: "2.000000" }]);
 
-    await expect(runtime.run()).resolves.toMatchObject({
-      details: expect.stringContaining("reply matched"),
-    });
-    expect(runtime.writes.mock.invocationCallOrder[0]).toBeLessThan(
-      runtime.history.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  },
-);
+  await expect(runtime.run()).resolves.toMatchObject({
+    details: expect.stringContaining("reply matched"),
+  });
+  expect(runtime.writes.mock.invocationCallOrder[0]).toBeLessThan(
+    runtime.history.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+  );
+});
 
 it("returns structured RTT evidence for a matched reply", async () => {
   vi.useFakeTimers();

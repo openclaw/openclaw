@@ -611,7 +611,6 @@ describe("Slack live QA runtime helpers", () => {
         slackRead(index === 1 ? malformed : "", `2.00000${index}`),
       ),
     })).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(Error);
     if (!(error instanceof Error)) {
       throw new Error("expected readback failure");
     }
