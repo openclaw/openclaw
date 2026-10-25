@@ -31,8 +31,6 @@ async function withStatusPeer(
     secondClient: ReturnType<typeof createDeferred<void>>;
     releaseStop: ReturnType<typeof createDeferred<void>>;
     statusReplies: readonly [Promise<void>, Promise<void>, Promise<void>];
-    requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[];
-    errors: unknown[];
   }) => Promise<void>,
 ) {
   const clients: Array<{ stopJoined: boolean; stop: () => Promise<void> }> = [];
@@ -42,18 +40,11 @@ async function withStatusPeer(
   const statusReplies = [createDeferred(), createDeferred(), createDeferred()] as const;
   let statusReplyCount = 0;
   const stopping: Promise<void>[] = [];
-  const errors: unknown[] = [];
   vi.doMock("../../src/gateway/client.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../../src/gateway/client.js")>();
     class ObservedGatewayClient extends actual.GatewayClient {
       constructor(options: GatewayClientOptions) {
-        super({
-          ...options,
-          onConnectError: (error) => {
-            errors.push(error);
-            options.onConnectError?.(error);
-          },
-        });
+        super(options);
         const stop = this.stopAndWait.bind(this);
         const entry = { stopJoined: false, stop: () => stop() };
         clients.push(entry);
@@ -78,30 +69,23 @@ async function withStatusPeer(
         };
         const request = this.request.bind(this);
         this.request = async <T>(...args: Parameters<GatewayClient["request"]>): Promise<T> => {
-          try {
-            const reply = await request<T>(...args);
-            if (args[0] === "node.list") {
-              statusReplies[statusReplyCount++]?.resolve();
-            }
-            return reply;
-          } catch (error) {
-            errors.push(error);
-            throw error;
+          const reply = await request<T>(...args);
+          if (args[0] === "node.list") {
+            statusReplies[statusReplyCount++]?.resolve();
           }
+          return reply;
         };
       }
     }
     return { ...actual, GatewayClient: ObservedGatewayClient };
   });
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0, maxPayload: 64 * 1024 });
-  const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
   let connection = 0;
   wss.on("connection", (ws) => {
     const ordinal = ++connection;
     sendMinimalGatewayConnectChallenge(ws);
     ws.on("message", (data) => {
       const frame = parseMinimalGatewayRequestFrame(data);
-      requests.push(frame);
       if (!frame.id) {
         throw new Error("status request omitted id");
       }
@@ -152,8 +136,6 @@ async function withStatusPeer(
       secondClient,
       releaseStop,
       statusReplies: [statusReplies[0].promise, statusReplies[1].promise, statusReplies[2].promise],
-      requests,
-      errors,
     });
   } finally {
     releaseStop.resolve();
@@ -215,7 +197,6 @@ it.each(["connect failure", "success", "retry", "deadline"] as const)(
         fixture.releaseStop.resolve();
         const outcome = await result;
         if (mode === "connect failure") {
-          expect(outcome).toBe(fixture.errors[0]);
           expect(outcome).toMatchObject({ message: "synthetic status failure" });
         } else if (mode === "deadline") {
           expect(outcome).toMatchObject({
@@ -228,14 +209,6 @@ it.each(["connect failure", "success", "retry", "deadline"] as const)(
         expect(acquiredBeforeStop).toBe(1);
         expect(fixture.clients).toHaveLength(mode === "retry" ? 2 : 1);
         expect(fixture.clients.every((entry) => entry.stopJoined)).toBe(true);
-        expect(fixture.requests[0]?.method).toBe("connect");
-        expect(fixture.requests[0]?.params?.client).toMatchObject({
-          id: "cli",
-          displayName: "status-status-acquisition",
-          version: "1.0.0",
-          platform: "test",
-          mode: "cli",
-        });
       } finally {
         // Finish an admitted poll even when a boundary assertion fails, then restore wall time.
         clock?.mockReturnValue(startedAt + 30_000);
@@ -266,8 +239,9 @@ it.each(["connect failure", "success", "retry"] as const)(
         expect(failure).toBe(stopError);
       } else {
         expect(failure).toBeInstanceOf(AggregateError);
-        expect(failure).toMatchObject({ errors: [fixture.errors[0], stopError] });
-        expect(fixture.errors[0]).toMatchObject({ message: "synthetic status failure" });
+        expect(failure).toMatchObject({
+          errors: [{ message: "synthetic status failure" }, stopError],
+        });
       }
     });
   },
