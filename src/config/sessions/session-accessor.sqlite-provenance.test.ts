@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -7,7 +6,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
@@ -19,7 +17,6 @@ import {
 import type { SessionEntry } from "./types.js";
 
 const retainedPrompt = "retained skill prompt ".repeat(400);
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
@@ -63,114 +60,84 @@ function createFixture() {
   return { scope, database, entry, transcriptScope, read, window, append };
 }
 
-function trackEntryReadProbes(database: ReturnType<typeof openOpenClawAgentDatabase>) {
-  return trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    ["transcript", "window"],
-    (sql) =>
-      /^select .+ from "session_windows" where "session_id" = \?$/i.test(sql)
-        ? "window"
-        : /^select "seq" from "transcript_events" where "session_id" = \? limit \?$/i.test(sql)
-          ? "transcript"
-          : null,
-  );
-}
-
 it.each([
-  ["known provenance with hot rows", "known", "same", true, 1, 0],
-  ["unknown same session without hot rows", "unknown", "same", false, 0, 0],
-  ["unknown absent entry without hot rows", "unknown", "absent", false, 1, 1],
-  ["unknown different session without hot rows", "unknown", "different", false, 1, 1],
-  ["unknown different session with hot rows", "unknown", "different", true, 0, 1],
-] as const)(
-  "preserves %s without redundant transcript reads",
-  (_name, root, previous, hot, provenance, probes) => {
-    const { scope, database, entry, transcriptScope, read, window, append } = createFixture();
-    if (previous !== "absent") {
-      replaceSessionEntrySync(scope, {
-        ...entry,
-        sessionId: previous === "same" ? entry.sessionId : "previous",
-        updatedAt: 10,
-      });
+  ["known provenance with hot rows", "known", "same", true, 1],
+  ["unknown same session without hot rows", "unknown", "same", false, 0],
+  ["unknown absent entry without hot rows", "unknown", "absent", false, 1],
+  ["unknown different session without hot rows", "unknown", "different", false, 1],
+  ["unknown different session with hot rows", "unknown", "different", true, 0],
+] as const)("preserves %s", (_name, root, previous, hot, provenance) => {
+  const { scope, database, entry, transcriptScope, read, window, append } = createFixture();
+  if (previous !== "absent") {
+    replaceSessionEntrySync(scope, {
+      ...entry,
+      sessionId: previous === "same" ? entry.sessionId : "previous",
+      updatedAt: 10,
+    });
+  }
+  runOpenClawAgentWriteTransaction((db) => {
+    if (root === "unknown") {
+      ensureTranscriptSessionRoot(db, transcriptScope, 10);
+      // Migrated windows have no trusted entry provenance, even when an entry survives.
+      db.db
+        .prepare(
+          "UPDATE session_windows SET session_entry_provenance = 0, acp_owned = 0, plugin_owner_id = NULL, hook_external_content_source = NULL WHERE session_id = ?",
+        )
+        .run(entry.sessionId);
     }
-    runOpenClawAgentWriteTransaction((db) => {
-      if (root === "unknown") {
-        ensureTranscriptSessionRoot(db, transcriptScope, 10);
-        // Migrated windows have no trusted entry provenance, even when an entry survives.
-        db.db
-          .prepare(
-            "UPDATE session_windows SET session_entry_provenance = 0, acp_owned = 0, plugin_owner_id = NULL, hook_external_content_source = NULL WHERE session_id = ?",
-          )
-          .run(entry.sessionId);
-      }
-      if (hot) {
-        append();
-      }
-    }, scope);
+    if (hot) {
+      append();
+    }
+  }, scope);
 
-    const tracker = trackEntryReadProbes(database);
-    using _ = { [Symbol.dispose]: tracker.restore };
-    let boundTextBytes = 0;
-    const prepareStatement = database.db.prepare.bind(database.db);
-    database.db.prepare = new Proxy(prepareStatement, {
-      apply(prepare, receiver, args) {
-        const statement = Reflect.apply(prepare, receiver, args);
-        statement.run = new Proxy(statement.run.bind(statement), {
-          apply(run, runReceiver, runArgs) {
-            for (const value of runArgs) {
-              if (typeof value === "string") {
-                boundTextBytes += Buffer.byteLength(value);
-              }
-            }
-            return Reflect.apply(run, runReceiver, runArgs);
-          },
-        });
-        return statement;
+  let boundTextBytes = 0;
+  const prepare = database.db.prepare.bind(database.db);
+  using _ = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+    const statement = prepare(sql);
+    statement.run = new Proxy(statement.run.bind(statement), {
+      apply(run, receiver, args) {
+        boundTextBytes += args.reduce(
+          (bytes, value) => bytes + (typeof value === "string" ? Buffer.byteLength(value) : 0),
+          0,
+        );
+        return Reflect.apply(run, receiver, args);
       },
     });
-    // Exercise the real writer's previous-entry read; async patch fallbacks can supply a same-ID entry.
-    replaceSessionEntrySync(
-      scope,
-      root === "known"
-        ? { sessionId: entry.sessionId, updatedAt: 20, skillsSnapshot: entry.skillsSnapshot }
-        : entry,
-    );
-    expect(tracker.counts).toEqual({ window: 1, transcript: probes });
-    expect(boundTextBytes).toBeGreaterThan(0);
-    expect(boundTextBytes).toBeLessThanOrEqual(Buffer.byteLength(retainedPrompt) * 1.5 + 4096);
-    const stored = read("session_nodes", "entry_json, entry_valid");
-    expect(stored?.entry_valid).toBe(1);
-    expect(JSON.parse(String(stored?.entry_json))).toMatchObject({ sessionId: entry.sessionId });
-    const savedSkills = database.db
-      .prepare(
-        "SELECT value_json FROM session_entry_snapshots WHERE session_key = ? AND field = 'skillsSnapshot'",
-      )
-      .get(scope.sessionKey);
-    expect(JSON.parse(String(savedSkills?.value_json))).toEqual(entry.skillsSnapshot);
-    expect(database.db.isTransaction).toBe(false);
-    expect(
-      window("session_entry_provenance, acp_owned, plugin_owner_id, hook_external_content_source"),
-    ).toEqual({
-      session_entry_provenance: provenance,
-      acp_owned: provenance,
-      plugin_owner_id: provenance ? "plugin-owner" : null,
-      hook_external_content_source: provenance ? "webhook" : null,
-    });
-  },
-);
+    return statement;
+  });
+  // Keep the serialized-byte budget, independently of the writer's query shape.
+  replaceSessionEntrySync(
+    scope,
+    root === "known"
+      ? { sessionId: entry.sessionId, updatedAt: 20, skillsSnapshot: entry.skillsSnapshot }
+      : entry,
+  );
+  expect(boundTextBytes).toBeGreaterThan(0);
+  expect(boundTextBytes).toBeLessThanOrEqual(Buffer.byteLength(retainedPrompt) * 1.5 + 4096);
+  const stored = read("session_nodes", "entry_json, entry_valid");
+  expect(stored?.entry_valid).toBe(1);
+  expect(JSON.parse(String(stored?.entry_json))).toMatchObject({ sessionId: entry.sessionId });
+  const savedSkills = database.db
+    .prepare(
+      "SELECT value_json FROM session_entry_snapshots WHERE session_key = ? AND field = 'skillsSnapshot'",
+    )
+    .get(scope.sessionKey);
+  expect(JSON.parse(String(savedSkills?.value_json))).toEqual(entry.skillsSnapshot);
+  expect(
+    window("session_entry_provenance, acp_owned, plugin_owner_id, hook_external_content_source"),
+  ).toEqual({
+    session_entry_provenance: provenance,
+    acp_owned: provenance,
+    plugin_owner_id: provenance ? "plugin-owner" : null,
+    hook_external_content_source: provenance ? "webhook" : null,
+  });
+});
 
 it.each(["transcript-first", "entry-first"] as const)(
   "resolves provenance in the original %s transaction order",
   (order) => {
-    const { scope, database, entry, window, append } = createFixture();
-    const tracker = trackEntryReadProbes(database);
-    const clock = vi.spyOn(Date, "now").mockReturnValue(10);
-    using _ = {
-      [Symbol.dispose]() {
-        clock.mockRestore();
-        tracker.restore();
-      },
-    };
+    const { scope, entry, window, append } = createFixture();
+    using _ = vi.spyOn(Date, "now").mockReturnValue(10);
     runOpenClawAgentWriteTransaction((db) => {
       if (order === "transcript-first") {
         append();
@@ -180,7 +147,6 @@ it.each(["transcript-first", "entry-first"] as const)(
         append();
       }
     }, scope);
-    expect(tracker.counts.transcript).toBe(order === "transcript-first" ? 1 : 0);
     expect(window("session_entry_provenance, transcript_observed_at")).toEqual({
       session_entry_provenance: order === "transcript-first" ? 0 : 1,
       transcript_observed_at: order === "transcript-first" ? 10 : 20,

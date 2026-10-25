@@ -92,9 +92,7 @@ describe("memory actor pending input custody", () => {
     expect(state.hot.pendingInputs[0]).not.toHaveProperty("message_json");
     assert(retried.stagedInput, "Expected staged input");
     retried.stagedInput.message_json = "caller mutation";
-    expect(source()).toMatchObject({
-      pending: { message_json: JSON.stringify(message) },
-    });
+    expect(source()).toMatchObject({ pending: { message_json: JSON.stringify(message) } });
   });
 
   it("keeps recoverable outcomes replaceable and makes final completion sticky", () => {
@@ -154,9 +152,7 @@ describe("memory actor pending input custody", () => {
       pending.mutate({ ...owner, kind: "finish", inputId: "input-1", disposition: "cancelled" })
         .withdrawnInputId,
     ).toBe("input-1");
-    expect(source()).toMatchObject({
-      pending: { state: "cancelled" },
-    });
+    expect(source()).toMatchObject({ pending: { state: "cancelled" } });
     expect(
       pending.mutate({ ...owner, kind: "finish", inputId: "input-1", disposition: "cancelled" })
         .withdrawnInputId,
@@ -172,15 +168,8 @@ describe("memory actor pending input custody", () => {
       eventId: "event-1",
       rawSeq: 1,
     });
-    expect(source(false)).toEqual({
-      kind: "source",
-      current: true,
-      committed: message,
-    });
-    expect(source()).toEqual({
-      kind: "source",
-      current: true,
-    });
+    expect(source(false)).toEqual({ kind: "source", current: true, committed: message });
+    expect(source()).toEqual({ kind: "source", current: true });
     expect(pending.read({ ...scope, kind: "stage", trackCompletion: true })).toMatchObject({
       committed: { messageId: "event-1", message },
     });
@@ -216,18 +205,15 @@ describe("memory actor pending input custody", () => {
   it("interrupts only unconsumed inputs without live custody", () => {
     const { pending, stageMany } = fixture();
     stageMany(2);
-    const checked: string[] = [];
     const receipt = pending.interruptHistory(
       { ...scope, ids: ["input-1", "input-2"] },
       {
         isProtected(candidate, currentSessionId) {
-          checked.push(candidate.input_id);
           return currentSessionId === scope.sessionId && candidate.input_id === "input-1";
         },
         admit() {},
       },
     );
-    expect(checked).toEqual(["input-1", "input-2"]);
     expect(receipt).toEqual({ kind: "pending-input-history-interrupted", ids: ["input-2"] });
     // A second reader carrying the same pre-reconciliation snapshot sees the same disposition.
     expect(

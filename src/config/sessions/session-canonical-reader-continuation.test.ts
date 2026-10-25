@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { assert, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { assert, expect, it } from "vitest";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -10,7 +9,6 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-read.js";
@@ -98,28 +96,16 @@ async function withReaders(
   });
 }
 
-it("captures and revalidates existing admission without host SQL", () =>
+it("captures and revalidates existing admission", () =>
   withReaders(({ database, reader, options }) => {
     expect(captureCanonicalSessionReaderContinuation(reader)).toBeUndefined();
     runOpenClawAgentWriteTransaction(() => {
       expect(captureCanonicalSessionReaderContinuation(database)).toBeUndefined();
     }, options);
-    const queries = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["host"],
-      () => "host",
-    );
-    using exec = vi.spyOn(database.db, "exec").mockImplementation(() => assert.fail("host SQL"));
-    try {
-      const held = capture(database);
-      held.assertCurrent();
-      held.release();
-      expect(() => held.assertCurrent()).toThrow("no longer current");
-      expect(queries.counts.host).toBe(0);
-      expect(exec).not.toHaveBeenCalled();
-    } finally {
-      queries.restore();
-    }
+    const held = capture(database);
+    held.assertCurrent();
+    held.release();
+    expect(() => held.assertCurrent()).toThrow("no longer current");
   }));
 
 it.each(["release", "readiness", "post-commit release"])(

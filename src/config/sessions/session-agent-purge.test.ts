@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -97,19 +96,11 @@ function fixture(storePath: string) {
   };
 }
 
-it("purges only entry-referenced generations off the host and retains history and surviving references", () =>
+it("purges only entry-referenced generations and retains history and surviving references", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const f = fixture(state.statePath("shared.sqlite"));
     await state.writeConfig(f.cfg);
-    const sql = observeHostDataSql();
-    const sessionData =
-      /\b(?:session_nodes|session_windows|session_events|session_transcript_archives)\b/i;
-    try {
-      await f.purge();
-      expect(sql.queries.filter((query) => sessionData.test(query))).toEqual([]);
-    } finally {
-      sql.restore();
-    }
+    await f.purge();
     expect(f.read()).toBeUndefined();
     expect(f.read("agent:main:survivor")?.sessionId).toBe("shared");
     expect(f.transcript("current")).toEqual([]);

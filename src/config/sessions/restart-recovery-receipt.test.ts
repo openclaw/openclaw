@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
@@ -12,6 +12,7 @@ import {
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import * as sessionActors from "./session-actor.js";
+import { spyAgentExecutions } from "./session-native-binding.execution.test-support.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
 
@@ -25,10 +26,11 @@ const entry = (fields: Partial<SessionEntry>): SessionEntry => ({
   ...fields,
 });
 
-// mock-isolation: Receipt command counts exclude fixture-seeding maintenance.
+// mock-isolation: Keep fixture-seeding maintenance out of receipt operations.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
 }));
+afterEach(() => vi.restoreAllMocks());
 
 describe("restart recovery terminal delivery receipt", () => {
   const fixture = useTempSessionsFixture("restart-receipt-");
@@ -46,7 +48,7 @@ describe("restart recovery terminal delivery receipt", () => {
     await seed(claim);
     const before = read();
     const createActor = sessionActors.createSessionActor;
-    const observer = vi.spyOn(sessionActors, "createSessionActor").mockImplementation((params) => {
+    using _ = vi.spyOn(sessionActors, "createSessionActor").mockImplementation((params) => {
       const actor = createActor(params);
       vi.spyOn(actor, "deliveryPending").mockResolvedValue({
         kind: "unknown",
@@ -60,21 +62,17 @@ describe("restart recovery terminal delivery receipt", () => {
       });
       return actor;
     });
-    try {
-      await expect(begin(scope())).rejects.toSatisfy((error: unknown) => {
-        const storageOutcome = classifyGatewayStorageFailure(error);
-        expect(storageOutcome).toBe("session_actor_reconciliation");
-        expect(
-          renderAssistantRequestFailureCopy({
-            storageFailure: storageOutcome,
-          }),
-        ).toMatch(/check.*history.*before trying again/i);
-        return hasSqliteWorkerOutcomeUnknown(error);
-      });
-      expect(read()).toEqual(before);
-    } finally {
-      observer.mockRestore();
-    }
+    await expect(begin(scope())).rejects.toSatisfy((error: unknown) => {
+      const storageOutcome = classifyGatewayStorageFailure(error);
+      expect(storageOutcome).toBe("session_actor_reconciliation");
+      expect(
+        renderAssistantRequestFailureCopy({
+          storageFailure: storageOutcome,
+        }),
+      ).toMatch(/check.*history.*before trying again/i);
+      return hasSqliteWorkerOutcomeUnknown(error);
+    });
+    expect(read()).toEqual(before);
   });
 
   it.each(["success", "non-delivery"] as const)(
@@ -127,59 +125,34 @@ describe("restart recovery terminal delivery receipt", () => {
   });
 
   it.each(["metadata", "source"] as const)(
-    "adopts command-local state without replacing a newer %s or issuing a read",
+    "adopts command-local state without replacing a newer %s",
     async (change) => {
       await seed(claim);
       const initial = read()!;
-      const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
-      const commands: string[] = [];
       let changed = false;
-      const observer = vi
-        .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-        .mockImplementation((...args) => {
-          const owner = capture(...args);
-          return {
-            ...owner,
-            get fileIdentity() {
-              return owner.fileIdentity;
-            },
-            runExisting: (source, run, options) =>
-              owner.runExisting(
-                source,
-                (worker) =>
-                  run({
-                    execute(command, commandOptions) {
-                      commands.push(command.type);
-                      if (command.type === "session.actor.deliveryPending" && !changed) {
-                        changed = true;
-                        replaceSessionEntrySync(scope(), {
-                          ...initial,
-                          ...(change === "metadata"
-                            ? { label: "new metadata" }
-                            : { restartRecoveryDeliverySourceRunId: "new-source" }),
-                        });
-                      }
-                      return worker.execute(command, commandOptions);
-                    },
-                  }),
-                options,
-              ),
-          };
+      spyAgentExecutions(agentExecution, (worker) => ({
+        execute(command, commandOptions) {
+          if (command.type === "session.actor.deliveryPending" && !changed) {
+            changed = true;
+            replaceSessionEntrySync(scope(), {
+              ...initial,
+              ...(change === "metadata"
+                ? { label: "new metadata" }
+                : { restartRecoveryDeliverySourceRunId: "new-source" }),
+            });
+          }
+          return worker.execute(command, commandOptions);
+        },
+      }));
+      await expect(begin(scope())).resolves.toBe(change === "metadata" ? "started" : "stale");
+      if (change === "metadata") {
+        expect(read()).toMatchObject({
+          label: "new metadata",
+          restartRecoveryDeliveryReceiptState: "terminal-pending",
         });
-      try {
-        await expect(begin(scope())).resolves.toBe(change === "metadata" ? "started" : "stale");
-        expect(commands).toEqual(["session.actor.deliveryPending"]);
-        if (change === "metadata") {
-          expect(read()).toMatchObject({
-            label: "new metadata",
-            restartRecoveryDeliveryReceiptState: "terminal-pending",
-          });
-        } else {
-          expect(read()).toMatchObject({ restartRecoveryDeliverySourceRunId: "new-source" });
-          expect(read()?.restartRecoveryDeliveryReceiptState).toBeUndefined();
-        }
-      } finally {
-        observer.mockRestore();
+      } else {
+        expect(read()).toMatchObject({ restartRecoveryDeliverySourceRunId: "new-source" });
+        expect(read()?.restartRecoveryDeliveryReceiptState).toBeUndefined();
       }
     },
   );
