@@ -72,9 +72,17 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
       JSON.stringify([
         props.props?.sessionKey,
         props.props?.currentAgentId,
+        props.props?.currentSessionId,
         props.props?.selectedSession?.sessionId,
       ]);
-    const identity = createMemo(readIdentity);
+    // Descriptor hydration does not replace the transcript's restored incarnation.
+    const identity = createMemo(() =>
+      JSON.stringify([
+        props.props?.sessionKey,
+        props.props?.currentAgentId,
+        props.props?.currentSessionId,
+      ]),
+    );
     createScrollPosition(() => {
       const owner = processes();
       return {

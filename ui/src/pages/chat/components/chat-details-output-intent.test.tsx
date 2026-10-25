@@ -16,6 +16,7 @@ async function mountOutputs() {
   const value: ChatDetailsProps = {
     sessionKey: "agent:main:details",
     currentAgentId: "main",
+    currentSessionId: "session-1",
     messages: [],
     selectedSession: { key: "agent:main:details", sessionId: "session-1", kind: "direct" },
     desktopPresentation: {
@@ -72,7 +73,7 @@ it("opens Files through the current callback when Outputs refreshes before the v
   expect(navigate).not.toHaveBeenCalled();
 });
 
-it.each(["session", "agent", "incarnation", "visibility"] as const)(
+it.each(["session", "agent", "incarnation", "transcript incarnation", "visibility"] as const)(
   "rejects a visible View all callback after its %s changes",
   async (retirement) => {
     const { element, button, value, navigate } = await mountOutputs();
@@ -89,6 +90,9 @@ it.each(["session", "agent", "incarnation", "visibility"] as const)(
           ...retired,
           selectedSession: { ...value.selectedSession!, sessionId: "session-2" },
         };
+        break;
+      case "transcript incarnation":
+        element.props = { ...retired, currentSessionId: "session-2" };
         break;
       case "visibility":
         element.presented = false;

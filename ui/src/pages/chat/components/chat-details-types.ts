@@ -6,7 +6,7 @@ import type {
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
-import type { ChatSessionProgressProps } from "./chat-composer-types.ts";
+import type { ChatComposerProps, ChatSessionProgressProps } from "./chat-composer-types.ts";
 import type { ChatOutputsDesktopProps } from "./chat-outputs.tsx";
 import type { ChatPanePlacementProps } from "./chat-pane-placement.tsx";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
@@ -77,6 +77,7 @@ export type ChatDetailsOutputs = ChatOutputsDesktopProps;
 // Both the composing view and Details consume this contract; child components
 // must not import their parent renderer to recover accepted pane facts.
 export type ChatDetailsProps = ChatSessionProgressProps &
+  Pick<ChatComposerProps, "currentSessionId"> &
   Pick<
     ChatThreadProps,
     | "selectedSession"

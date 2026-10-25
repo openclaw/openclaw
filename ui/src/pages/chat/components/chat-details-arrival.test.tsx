@@ -8,7 +8,7 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopComposition } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
-function mountDetails() {
+function mountDetails(overrides: Partial<ChatDetailsProps> = {}) {
   vi.useFakeTimers();
   // jsdom has no Web Animations API; real geometry and motion are covered in browser proof.
   const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
@@ -19,6 +19,7 @@ function mountDetails() {
   const initial: ChatDetailsProps = {
     sessionKey: "agent:main:arrival",
     currentAgentId: "main",
+    currentSessionId: "arrival-1",
     messages: [],
     selectedSession: { key: "agent:main:arrival", kind: "direct", sessionId: "arrival-1" },
     desktopPresentation: {
@@ -37,6 +38,7 @@ function mountDetails() {
       renderViewAllIcon: () => null,
     },
     progressCardInitialLoading: true,
+    ...overrides,
   };
   const [details, setDetails] = createSignal(initial);
   const view = mountSolid(() =>
@@ -63,6 +65,25 @@ function mountDetails() {
     group: (name: string) => view.container.querySelector(`[data-details-group="${name}"]`),
   };
 }
+
+it("retains cached Details while its descriptor arrives and replaces a new incarnation", () => {
+  const view = mountDetails({
+    selectedSession: undefined,
+    detailsWorkspace: { root: null, label: null, branch: "feature/cached" },
+  });
+  const section = view.container.querySelector(".chat-details-session");
+  const environment = view.group("environment");
+  expect(environment).not.toBeNull();
+  view.update({
+    selectedSession: { key: view.initial.sessionKey, kind: "direct", sessionId: "arrival-1" },
+  });
+  expect(view.container.querySelector(".chat-details-session")).toBe(section);
+  expect(view.group("environment")).toBe(environment);
+
+  view.update({ currentSessionId: "arrival-2" });
+  expect(view.container.querySelector(".chat-details-session")).not.toBe(section);
+  expect(environment?.isConnected).toBe(false);
+});
 
 it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads", async () => {
   const view = mountDetails();

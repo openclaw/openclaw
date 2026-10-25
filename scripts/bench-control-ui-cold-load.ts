@@ -1234,7 +1234,9 @@ try {
       } else {
         await page.locator(".chat-run-failure").waitFor();
         await page.locator(".chat-activity-group__review-status").first().waitFor();
-        await page.locator(".chat-details-desktop-section").first().waitFor();
+        if (face === "chat" && !values["chat-dashboard-route"]) {
+          await page.locator(".chat-details-desktop-section").first().waitFor();
+        }
         await page.waitForFunction(() =>
           [...document.querySelectorAll<HTMLImageElement>(".chat-avatar-slot img")].some(
             (image) => image.complete && image.naturalWidth > 0,

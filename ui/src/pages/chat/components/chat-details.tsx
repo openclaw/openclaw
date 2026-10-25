@@ -90,7 +90,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       [
         props.chat?.sessionKey,
         props.chat?.currentAgentId,
-        props.chat?.selectedSession?.sessionId,
+        props.chat?.currentSessionId,
         props.chat?.gatewayScope,
       ] as const,
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
@@ -470,8 +470,6 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         dock ? `${DETAILS_WIDTH + (isDesktop ? DETAILS_DESKTOP_INLINE_INSET : 0)}px` : "0px",
       );
       if (open && isDesktop) {
-        // Fetch the docked body while transcript placement still holds its mount.
-        void ChatDetailsDesktopComposition.preload().catch(() => undefined);
         position(layout);
       }
       if (open && (!isDesktop || !conversationVisible) && !dock && !mobileHost) {
@@ -553,7 +551,9 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       <Show when={sessionOpened()}>
         <ChatLazyBoundary
           fallback={
-            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+            desktop() && props.chat?.currentSessionId ? undefined : (
+              <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+            )
           }
         >
           {content.children}

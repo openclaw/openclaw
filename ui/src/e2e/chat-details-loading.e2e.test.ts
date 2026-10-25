@@ -1,5 +1,6 @@
 import { expect, it, onTestFinished } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
@@ -10,63 +11,52 @@ import {
 const suite = createControlUiE2eSuite({ name: "Details loading" });
 
 suite.define(() => {
-  it("loads the docked Details chunk while the transcript is held without mounting its body", async () => {
+  it("keeps the warm Details column blank until its composition loads after the transcript", async () => {
     await suite.withPage({ viewport: { width: 1700, height: 900 } }, async ({ page }) => {
+      const sessionKey = "agent:main:00000000-0000-4000-8000-00000000d201";
+      const text = "The cached transcript is ready before Details.";
+      await installMockGateway(page, {
+        sessions: [
+          {
+            key: sessionKey,
+            sessionId: "00000000-0000-4000-8000-00000000d201",
+            kind: "direct",
+            label: "Inspect reload",
+          },
+        ],
+        historyMessages: [
+          { role: "assistant", content: text, __openclaw: { id: "details-cached", seq: 1 } },
+        ],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await page.locator(".chat-details-desktop-section").first().waitFor();
+      await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+      const warm = await page.evaluate(persistColdLoadWarmState, {
+        sessionKey,
+        sidebarView: "sessions",
+      });
+      expect(warm.messages).toBe(1);
+
       const module = await holdModuleResponse(
         page,
         controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-details-session.tsx"),
       );
       onTestFinished(module.release);
-      const gateway = await installMockGateway(page, {
-        heldMethods: ["chat.startup"],
-        sessions: [
-          {
-            key: "agent:main:main",
-            sessionId: "loading-desktop-details",
-            kind: "direct",
-            label: "Inspect reload",
-          },
-        ],
-        historyMessages: [{ role: "assistant", content: "The transcript is ready." }],
-      });
-      await page.goto(suite.server.baseUrl + "chat");
-      await gateway.waitForRequest("chat.startup");
+      await page.reload();
+      await page.locator(".chat-thread").getByText(text, { exact: true }).waitFor();
       const details = page.locator(".chat-details[data-open]");
       await details.waitFor();
       const moduleUrl = await module.request;
       expect(await details.locator(".chat-details-session").count()).toBe(0);
       expect(await details.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
+      const width = await details.evaluate((panel) => panel.getBoundingClientRect().width);
+      expect(width).toBe(300);
 
       module.release();
-      await page.evaluate((url) => import(url).then(() => undefined), moduleUrl);
-      expect(await details.locator(".chat-details-session").count()).toBe(0);
-      const flashes = await details.evaluateHandle((element) => {
-        let count = 0;
-        const observer = new MutationObserver((records) => {
-          for (const record of records) {
-            for (const node of record.addedNodes) {
-              if (
-                node instanceof Element &&
-                (node.matches("openclaw-panel-loading-skeleton") ||
-                  node.querySelector("openclaw-panel-loading-skeleton"))
-              ) {
-                count += 1;
-              }
-            }
-          }
-        });
-        observer.observe(element, { childList: true, subtree: true });
-        return {
-          stop() {
-            observer.disconnect();
-            return count;
-          },
-        };
-      });
-      await gateway.resolveDeferred("chat.startup");
+      await page.evaluate(`import(${JSON.stringify(moduleUrl)}).then(() => undefined)`);
       await details.locator(".chat-details-session").waitFor();
-      expect(await flashes.evaluate((probe) => probe.stop())).toBe(0);
-      await flashes.dispose();
+      expect(await details.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
+      expect(await details.evaluate((panel) => panel.getBoundingClientRect().width)).toBe(width);
       expect(module.requests()).toBe(1);
     });
   });
