@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -39,18 +40,14 @@ async function createSourceHost(
 
 function retain(host: Awaited<ReturnType<typeof createSourceHost>>) {
   const retained = host.hostCapabilities.retainSourceAuthority?.();
-  if (!retained) {
-    throw new Error("expected retained source authority");
-  }
+  assert(retained, "expected retained source authority");
   cleanup.push(retained.release);
   return retained;
 }
 
 function bindModel(retained: ReturnType<typeof retain>) {
   const binding = retained.bindModelExecution?.({ provider: "fixture", model: "a" });
-  if (!binding) {
-    throw new Error("expected retained model execution authority");
-  }
+  assert(binding, "expected retained model execution authority");
   cleanup.push(binding.release);
   return binding;
 }

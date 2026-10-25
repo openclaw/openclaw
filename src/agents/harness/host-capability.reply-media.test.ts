@@ -1,10 +1,9 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import * as mediaMime from "@openclaw/media-core/mime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -15,17 +14,17 @@ import {
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(resetAgentRunRegistryForTest);
 afterEach(() => vi.restoreAllMocks());
 
 type MediaHost = Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>;
 type TestState = Parameters<Parameters<typeof withOpenClawTestState>[1]>[0];
+type HostOverrides = Partial<Parameters<typeof createAdmittedHostCapabilityTestFixture>[0]>;
 
 async function withMediaHost(
   sessionId: string,
   run: (host: MediaHost, state: TestState) => Promise<void>,
-  overrides: Partial<Parameters<typeof createAdmittedHostCapabilityTestFixture>[0]> = {},
+  overrides: HostOverrides | ((state: TestState) => HostOverrides) = {},
 ) {
   await withOpenClawTestState({ layout: "state-only" }, async (state) => {
     const host = await createAdmittedHostCapabilityTestFixture({
@@ -36,7 +35,7 @@ async function withMediaHost(
       workspaceDir: state.workspaceDir,
       cwd: state.workspaceDir,
       config: {},
-      ...overrides,
+      ...(typeof overrides === "function" ? overrides(state) : overrides),
     });
     try {
       await run(host, state);
@@ -87,9 +86,7 @@ describe("agent harness reply media", () => {
             workspaceRoot: "/remote-workspace",
             readWorkspaceFile,
           });
-          if (result.kind !== "attempt") {
-            throw new Error("expected prepared attempt media");
-          }
+          assert(result.kind === "attempt", "expected prepared attempt media");
           if (sourceReplyDeliveryState !== "missing") {
             expect(readWorkspaceFile).not.toHaveBeenCalled();
             expect(result.preparedMedia).toEqual([]);
@@ -97,9 +94,7 @@ describe("agent harness reply media", () => {
             expect(readWorkspaceFile).toHaveBeenCalledOnce();
             expect(result.preparedMedia).toHaveLength(1);
             const outcome = result.preparedMedia[0]?.outcome;
-            if (!outcome || !("mediaUrl" in outcome)) {
-              throw new Error("expected staged current-input attachment");
-            }
+            assert(outcome && "mediaUrl" in outcome, "expected staged current-input attachment");
             expect(outcome.trustedLocalMedia).toBe(true);
             expect(fs.readFileSync(outcome.mediaUrl)).toEqual(bytes);
           }
@@ -138,9 +133,7 @@ describe("agent harness reply media", () => {
           workspaceRoot: "/remote-workspace",
           readWorkspaceFile,
         });
-        if (result.kind !== "payload") {
-          throw new Error("expected prepared reply payload");
-        }
+        assert(result.kind === "payload", "expected prepared reply payload");
         const mediaUrls = result.payload.mediaUrls ?? [];
         expect(mediaUrls).toHaveLength(2);
         expect(mediaUrls[1]).toBe(httpUrl);
@@ -160,60 +153,45 @@ describe("agent harness reply media", () => {
   });
 
   it("reads reply attachments from the remote sandbox instead of a stale Gateway sandbox", async () => {
-    const fixture = tempDirs.make("openclaw-reply-sandbox-");
-    const workspaceDir = path.join(fixture, "workspace");
-    fs.mkdirSync(workspaceDir);
-    const attempt = {
-      runId: "run-reply-sandbox",
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      cwd: workspaceDir,
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "all",
-              scope: "session",
-              workspaceAccess: "ro",
-              workspaceRoot: path.join(fixture, "sandboxes"),
+    await withMediaHost(
+      "reply-sandbox",
+      async (host, state) => {
+        const sandbox = await ensureSandboxWorkspaceForSession({
+          config: host.attempt.config,
+          sessionKey: host.attempt.sessionKey!,
+          workspaceDir: state.workspaceDir,
+        });
+        assert(sandbox, "expected configured sandbox workspace");
+        fs.writeFileSync(
+          path.join(sandbox.workspaceDir, "artifact.txt"),
+          "stale Gateway sandbox bytes",
+        );
+        const readWorkspaceFile = vi.fn(async () => Buffer.from("remote sandbox bytes"));
+        const result = await host.hostCapabilities.prepareReplyMedia?.({
+          kind: "payload",
+          payload: { text: "MEDIA:./artifact.txt" },
+          workspaceRoot: "/remote-workspace",
+          readWorkspaceFile,
+        });
+        assert(result?.kind === "payload" && result.payload.mediaUrl, "expected remote attachment");
+        expect(fs.readFileSync(result.payload.mediaUrl, "utf8")).toBe("remote sandbox bytes");
+        expect(readWorkspaceFile).toHaveBeenCalledOnce();
+      },
+      (state) => ({
+        config: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                scope: "session",
+                workspaceAccess: "ro",
+                workspaceRoot: state.path("sandboxes"),
+              },
             },
           },
         },
-      } satisfies OpenClawConfig,
-    };
-    const sandbox = await ensureSandboxWorkspaceForSession({
-      config: attempt.config,
-      sessionKey: attempt.sessionKey,
-      workspaceDir,
-    });
-    if (!sandbox) {
-      throw new Error("expected configured sandbox workspace");
-    }
-    fs.writeFileSync(
-      path.join(sandbox.workspaceDir, "artifact.txt"),
-      "stale Gateway sandbox bytes",
+      }),
     );
-    const host = await createAdmittedHostCapabilityTestFixture(attempt);
-    try {
-      const readWorkspaceFile = vi.fn(async () => Buffer.from("remote sandbox bytes"));
-      const result = await host.hostCapabilities.prepareReplyMedia?.({
-        kind: "payload",
-        payload: { text: "MEDIA:./artifact.txt" },
-        workspaceRoot: "/remote-workspace",
-        readWorkspaceFile,
-      });
-      expect(result?.kind).toBe("payload");
-      if (result?.kind !== "payload" || !result.payload.mediaUrl) {
-        throw new Error("expected prepared remote attachment");
-      }
-      expect(fs.readFileSync(result.payload.mediaUrl, "utf8")).toBe("remote sandbox bytes");
-      expect(readWorkspaceFile).toHaveBeenCalledOnce();
-    } finally {
-      host.closeHost();
-      host.closeAdmission();
-    }
   });
 
   it("discards staged reply media when its host closes during MIME detection", async () => {

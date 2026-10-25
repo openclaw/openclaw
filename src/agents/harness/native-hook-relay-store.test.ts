@@ -69,6 +69,13 @@ function renew(record: NativeHookRelayBridgeRecord, updatedAtMs?: number) {
 function remove(record: NativeHookRelayBridgeRecord) {
   return deleteNativeHookRelayBridgeRecordIfOwned({ ...record, stateDbPath: primaryStateDbPath });
 }
+function prune(isPidDead: (pid: number) => boolean | Promise<boolean>, currentPid = 100) {
+  return pruneNativeHookRelayBridgeRecords({
+    currentPid,
+    isPidDead,
+    stateDbPath: primaryStateDbPath,
+  });
+}
 
 describe("native hook relay store", () => {
   it("persists bridge records and closes their worker without caller-thread SQLite", async () => {
@@ -93,17 +100,7 @@ describe("native hook relay store", () => {
     expect(await renew({ ...replacement, expiresAtMs: 40_000 })).toBe(true);
     expect(await remove(replacement)).toBe(true);
     expect(await renew(replacement)).toBe(true);
-    using _ = vi.spyOn(Date, "now").mockReturnValue(30_001);
-    expect(
-      await pruneNativeHookRelayBridgeRecords({
-        currentPid: replacement.pid,
-        isPidDead: () => {
-          throw new Error("Expired rows do not need a PID probe");
-        },
-        stateDbPath: primaryStateDbPath,
-      }),
-    ).toEqual([{ relayId: replacement.relayId, pid: replacement.pid, reason: "expired" }]);
-    expect(await read(replacement.relayId)).toBeUndefined();
+    expect(await read(replacement.relayId)).toStrictEqual(replacement);
     await closeOpenClawStateDatabaseByPathAsync(primaryStateDbPath);
     sql.expectIdle();
     expect(close).not.toHaveBeenCalled();
@@ -125,6 +122,7 @@ describe("native hook relay store", () => {
   });
 
   it("prunes expired and dead bridges while preserving live and unknown pids", async () => {
+    const sql = observeMainThreadSql();
     const expired = bridgeRecord("relay-expired", { pid: 200, expiresAtMs: 9_999 });
     const dead = bridgeRecord("relay-dead", { pid: 201 });
     const live = bridgeRecord("relay-live", { pid: 202 });
@@ -135,12 +133,7 @@ describe("native hook relay store", () => {
     const isPidDead = vi.fn((pid: number) => pid === dead.pid);
 
     using _ = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    const pruned = await pruneNativeHookRelayBridgeRecords({
-      currentPid: 100,
-      isPidDead,
-      stateDbPath: primaryStateDbPath,
-    });
-
+    const pruned = await prune(isPidDead);
     expect(pruned).toHaveLength(2);
     expect(pruned).toEqual(
       expect.arrayContaining([
@@ -155,13 +148,11 @@ describe("native hook relay store", () => {
     expect(await read(dead.relayId)).toBeUndefined();
     expect(await read(live.relayId)).toStrictEqual(live);
     expect(await read(unknown.relayId)).toStrictEqual(unknown);
+    sql.expectIdle();
   });
 
   it("preserves a replacement published during dead-pid planning", async () => {
-    const stale = bridgeRecord("relay-prune-race", {
-      pid: 201,
-      token: "secret-token",
-    });
+    const stale = bridgeRecord("relay-prune-race", { pid: 201, token: "secret-token" });
     const replacement = bridgeRecord("relay-prune-race", {
       pid: 202,
       port: 18_790,
@@ -171,14 +162,10 @@ describe("native hook relay store", () => {
     await write(stale, 1_000);
 
     using _ = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    const pruned = await pruneNativeHookRelayBridgeRecords({
-      currentPid: 100,
-      isPidDead: async (pid) => {
-        expect(pid).toBe(stale.pid);
-        await write(replacement, 2_000);
-        return true;
-      },
-      stateDbPath: primaryStateDbPath,
+    const pruned = await prune(async (pid) => {
+      expect(pid).toBe(stale.pid);
+      await write(replacement, 2_000);
+      return true;
     });
 
     expect(pruned).toStrictEqual([]);
@@ -186,10 +173,7 @@ describe("native hook relay store", () => {
   });
 
   it("isolates records by the exact state database path", async () => {
-    const primary = bridgeRecord("relay-isolated", {
-      pid: 100,
-      token: "config-token",
-    });
+    const primary = bridgeRecord("relay-isolated", { pid: 100, token: "config-token" });
     const secondary = bridgeRecord("relay-isolated", {
       pid: 200,
       port: 18_790,

@@ -26,19 +26,11 @@ import type { AgentHarness } from "./types.js";
 const warn = vi.hoisted(() => vi.fn());
 
 // mock-isolation: Capture warnings without initializing process-wide logging sinks.
-vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => {
-    const logger = {
-      warn,
-      ...Object.fromEntries(
-        ["trace", "debug", "info", "error", "fatal", "raw"].map((level) => [level, vi.fn()]),
-      ),
-      isEnabled: () => false,
-      child: () => logger,
-    };
-    return logger;
-  },
-}));
+vi.mock("../../logging/subsystem.js", async () => {
+  const { createMockSubsystemLogger } =
+    await import("../../../test/helpers/mock-subsystem-logger.js");
+  return { createSubsystemLogger: (name: string) => createMockSubsystemLogger(name, { warn }) };
+});
 
 // Synthetic selection fixtures avoid cold-loading bundled provider artifacts.
 // mock-isolation: selection tests supply ownership without initializing provider runtimes.
