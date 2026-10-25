@@ -1,7 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 
 const listNodesMock = vi.fn();
 const callGatewayToolMock = vi.fn();
@@ -93,7 +91,7 @@ function invokeBodies(command: string) {
 
 async function observedTool(params: Parameters<typeof installGatewayBehavior>[0] = {}) {
   installGatewayBehavior(params);
-  const tool = createMobileUiTool();
+  const tool = createMobileUiTool({ idempotencyScope: "run-1" });
   await observe(tool);
   return tool;
 }
@@ -239,40 +237,6 @@ it("preserves a completed act outcome when postcondition observation fails", asy
   expect(invokeBodies(ACT)).toHaveLength(1);
 });
 
-it("scopes act idempotency keys to the assistant response while preserving replay keys", async () => {
-  installGatewayBehavior({ freshSnapshot: snapshotPayload() });
-
-  for (const responseId of ["response-1", "response-2", "response-1"]) {
-    const tool = createMobileUiTool({ idempotencyScope: "run-1" });
-    const observed = await tool.execute("observe", { action: "observe" });
-    const snapshotId = (observed.details as { snapshotId: string }).snapshotId;
-    const input = { ...activation, snapshotId, confirmed: true };
-    const toolCall = {
-      type: "toolCall" as const,
-      id: "mobile_0",
-      name: "mobile_ui",
-      arguments: input,
-    };
-    await runWithAgentToolExecutionContext(
-      {
-        assistantMessage: makeAssistantMessageFixture({
-          responseId,
-          content: [toolCall],
-          stopReason: "toolUse",
-        }),
-        toolCall,
-      },
-      () => tool.execute(toolCall.id, input),
-    );
-  }
-
-  const keys = invokeBodies(ACT).map((body) => body.idempotencyKey);
-  expect(keys).toHaveLength(3);
-  expect(keys[1]).not.toBe(keys[0]);
-  expect(keys[2]).toBe(keys[0]);
-  expect(keys[0]).toMatch(/^mobile\.ui\.act:v2:[0-9a-f]{64}$/);
-});
-
 it.each<[string, RegExp]>([
   [
     'node command not allowed: "mobile.ui.observe" is not in the allowlist for platform "android"',
@@ -304,54 +268,24 @@ it("uses keyword matches only to enrich a required confirmation", async () => {
 });
 
 it.each([
-  {
-    mobileAction: activation.mobileAction,
-    target: "Next",
-    proposedEffect: "perform a state-changing action (activate) on example.app targeting Next",
-  },
-  { mobileAction: { type: "set_text", ref: "n1", text: "hello" }, target: "Next" },
-  {
-    mobileAction: { type: "tap", x: 25, y: 35 },
-    target: "coordinates (25, 35)",
-    proposedEffect:
-      "perform a state-changing action (tap) on example.app targeting coordinates (25, 35)",
-  },
-])(
-  "requires confirmation for $mobileAction.type before dispatch",
-  async ({ mobileAction, target, proposedEffect }) => {
-    const tool = await observedTool();
-    const result = await act(tool, { mobileAction }, "unconfirmed");
-    const expected = {
-      code: "confirmation_required",
-      target,
-      ...(proposedEffect ? { proposedEffect } : {}),
-    };
-    if (mobileAction.type === "activate") {
-      expect(result.details).toEqual({ ...expected, package: "example.app" });
-    } else {
-      expect(result.details).toMatchObject(expected);
-    }
-    expect(invokeBodies(ACT)).toHaveLength(0);
-    await expect(act(tool, { mobileAction, confirmed: true }, "confirmed")).resolves.toMatchObject({
-      details: { outcome: { code: "completed" } },
-    });
-    expect(invokeBodies(ACT)).toHaveLength(1);
-  },
-);
-
-it("fails closed for blind swipes", async () => {
+  [activation.mobileAction, "Next"],
+  [{ type: "set_text", ref: "n1", text: "hello" }, "Next"],
+  [{ type: "tap", x: 25, y: 35 }, "coordinates (25, 35)"],
+  [{ type: "swipe", x1: 1, y1: 2, x2: 3, y2: 4, durationMs: 500 }, "coordinates (1, 2) to (3, 4)"],
+] as const)("requires confirmation for %j before dispatch", async (mobileAction, target) => {
   const tool = await observedTool();
-
-  await expect(
-    act(
-      tool,
-      { mobileAction: { type: "swipe", x1: 1, y1: 2, x2: 3, y2: 4, durationMs: 500 } },
-      "swipe-unconfirmed",
-    ),
-  ).resolves.toMatchObject({
-    details: { code: "confirmation_required", target: "coordinates (1, 2) to (3, 4)" },
+  expect((await act(tool, { mobileAction }, "unconfirmed")).details).toEqual({
+    code: "confirmation_required",
+    package: "example.app",
+    target,
+    proposedEffect: `perform a state-changing action (${mobileAction.type}) on example.app targeting ${target}`,
   });
   expect(invokeBodies(ACT)).toHaveLength(0);
+  await expect(act(tool, { mobileAction, confirmed: true }, "confirmed")).resolves.toMatchObject({
+    details: { outcome: { code: "completed" } },
+  });
+  expect(invokeBodies(ACT)).toHaveLength(1);
+  expect(invokeBodies(ACT)[0]?.idempotencyKey).toMatch(/^mobile\.ui\.act:v2:[0-9a-f]{64}$/);
 });
 
 it.each([

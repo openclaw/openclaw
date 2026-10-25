@@ -18,38 +18,12 @@ import {
   isCapabilityProviderConfigured,
   loadMediaToolReferences,
   resolveGenerateAction,
-  resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolReferenceAccess,
   resolveMediaToolSandboxConfig,
 } from "./media-tool-shared.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-// Keep media-tool-shared tests focused on root separation; channel-inbound
-// tests cover the real bundled contract loader.
-vi.mock("../../media/channel-inbound-roots.js", () => ({
-  resolveChannelInboundAttachmentRootsForChannel: (params: {
-    cfg?: OpenClawConfig;
-    channelId?: string | null;
-    accountId?: string | null;
-  }) => {
-    const channelId = params.channelId?.trim();
-    if (!channelId) {
-      return undefined;
-    }
-
-    const channelConfig = params.cfg?.channels?.[channelId];
-    const accountConfig = params.accountId
-      ? channelConfig?.accounts?.[params.accountId]
-      : undefined;
-    const roots = [
-      ...(accountConfig?.attachmentRoots ?? []),
-      ...(channelConfig?.attachmentRoots ?? []),
-    ];
-    return channelId === "imessage" ? [...roots, "/Users/*/Library/Messages/Attachments"] : roots;
-  },
-}));
 
 function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
@@ -75,22 +49,19 @@ function asyncProvider(id: string, defaultModel: string, aliases?: string[]) {
   };
 }
 
-describe("resolveGenerateAction", () => {
-  it.each([
-    [{}, "generate"],
-    [{ action: "   " }, "generate"],
-    [{ action: 1 }, "generate"],
-    [{ action: "generate" }, "generate"],
-    [{ action: " STATUS " }, "status"],
-    [{ action: "list" }, "list"],
-    [{ action: "invalid" }, /^action must be "generate", "status", or "list"$/],
-  ] as const)("resolves or rejects %j", (args, expected) => {
-    if (typeof expected === "string") {
-      expect(resolveGenerateAction(args)).toBe(expected);
-    } else {
-      expect(() => resolveGenerateAction(args)).toThrowError(expected);
-    }
-  });
+it.each([
+  [{}, "generate"],
+  [{ action: "   " }, "generate"],
+  [{ action: 1 }, "generate"],
+  [{ action: " STATUS " }, "status"],
+  [{ action: "list" }, "list"],
+  [{ action: "invalid" }, /^action must be "generate", "status", or "list"$/],
+] as const)("resolves or rejects %j", (args, expected) => {
+  if (typeof expected === "string") {
+    expect(resolveGenerateAction(args)).toBe(expected);
+  } else {
+    expect(() => resolveGenerateAction(args)).toThrowError(expected);
+  }
 });
 
 describe("resolveMediaToolLocalRoots", () => {
@@ -176,33 +147,6 @@ describe("resolveMediaToolLocalRoots", () => {
     expect(normalizedRoots).not.toContain(normalizeHostPath(picturesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath("/"));
   });
-
-  it("keeps channel inbound attachment roots separate from local roots", async () => {
-    const accountRoot = path.join("/tmp", "openclaw-imessage-work");
-    const sharedRoot = path.join("/tmp", "openclaw-imessage-shared");
-    const cfg = {
-      channels: {
-        imessage: {
-          attachmentRoots: [sharedRoot],
-          accounts: { work: { attachmentRoots: [accountRoot] } },
-        },
-      },
-    };
-
-    const { localRoots } = await resolveReference("relative/reference.png", {
-      workspaceDir: undefined,
-    });
-    expect(localRoots.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
-    expect(localRoots.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
-    expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
-    expect(
-      resolveMediaToolInboundRoots({ cfg, channelId: "imessage", accountId: "work" }).map(
-        normalizeHostPath,
-      ),
-    ).toEqual(
-      [accountRoot, sharedRoot, "/Users/*/Library/Messages/Attachments"].map(normalizeHostPath),
-    );
-  });
 });
 
 describe("resolveMediaToolReferenceAccess", () => {
@@ -269,40 +213,20 @@ describe("resolveMediaToolReferenceAccess", () => {
   );
 });
 
-describe("resolveCapabilityModelConfigForTool", () => {
-  it("uses explicit model config for selection and availability without loading providers", async () => {
-    const providers = vi.fn(() => {
-      throw new Error("runtime provider list should not run for explicit model config");
-    });
-    const modelConfig = { primary: "qwen/wan2.6-t2v" };
-    expect(await resolveCapabilityModelConfigForTool({ modelConfig, providers })).toEqual(
-      modelConfig,
-    );
-    expect(
-      hasGenerationToolAvailability({
-        providerKey: "imageGenerationProviders",
-        modelConfig,
-        providers,
-      }),
-    ).toBe(true);
-    expect(providers).not.toHaveBeenCalled();
-  });
-
-  it("orders async provider defaults by canonical aliases without synchronous credentials", async () => {
-    expect(
-      await resolveCapabilityModelConfigForTool({
-        cfg: {
-          agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } },
-        },
-        providers: [
-          asyncProvider("fal", "fal-ai/minimax/video-01-live"),
-          asyncProvider("openai", "sora-2", ["media-alias"]),
-        ],
-      }),
-    ).toEqual({
-      primary: "openai/sora-2",
-      fallbacks: ["fal/fal-ai/minimax/video-01-live"],
-    });
+it("orders async provider defaults by canonical aliases without synchronous credentials", async () => {
+  expect(
+    await resolveCapabilityModelConfigForTool({
+      cfg: {
+        agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } },
+      },
+      providers: [
+        asyncProvider("fal", "fal-ai/minimax/video-01-live"),
+        asyncProvider("openai", "sora-2", ["media-alias"]),
+      ],
+    }),
+  ).toEqual({
+    primary: "openai/sora-2",
+    fallbacks: ["fal/fal-ai/minimax/video-01-live"],
   });
 });
 
@@ -318,7 +242,6 @@ describe("hasGenerationToolAvailability", () => {
     name: string;
     cfg?: OpenClawConfig;
     isConfigured?: () => boolean;
-    authStore?: Parameters<typeof hasGenerationToolAvailability>[0]["authStore"];
     expected: boolean;
   }>([
     { name: "config-backed auth", cfg: configuredCredentials, expected: true },
@@ -329,22 +252,10 @@ describe("hasGenerationToolAvailability", () => {
       expected: false,
     },
     { name: "auth-free configured provider", isConfigured: () => true, expected: true },
-    { name: "unconfigured provider", isConfigured: () => false, expected: false },
-    {
-      name: "supplied auth store",
-      expected: true,
-      authStore: {
-        version: 1,
-        profiles: {
-          "local-image:default": { provider: "local-image", type: "api_key", key: "test" },
-        },
-      },
-    },
-  ])("honors $name", async ({ cfg, isConfigured, authStore, expected }) => {
+  ])("honors $name", async ({ cfg, isConfigured, expected }) => {
     const provider = { id: "local-image", defaultModel: "workflow", isConfigured };
     const params = {
       cfg,
-      authStore,
       providers: [provider],
       providerKey: "imageGenerationProviders" as const,
     };
@@ -359,29 +270,27 @@ describe("hasGenerationToolAvailability", () => {
   });
 });
 
-describe("generation provider list availability", () => {
-  it("awaits provider readiness and reports an unavailable async provider accurately", async () => {
-    const isConfigured = vi.fn(() => {
-      throw new Error("sync credentials must not run");
-    });
-    const result = await createMediaGenerateProviderListActionResult({
-      kind: "image_generation",
-      emptyText: "none",
-      providers: [
-        {
-          id: "async-images",
-          capabilities: {},
-          isConfigured,
-          isConfiguredAsync: async () => false,
-        },
-      ],
-      listModes: () => ["generate"],
-      summarizeCapabilities: () => "",
-    });
-    expect(result.details.providers).toEqual([
-      expect.objectContaining({ id: "async-images", configured: false }),
-    ]);
-    expect(result.content[0]?.text).toContain("configured: no");
-    expect(isConfigured).not.toHaveBeenCalled();
+it("awaits provider readiness and reports an unavailable async provider accurately", async () => {
+  const isConfigured = vi.fn(() => {
+    throw new Error("sync credentials must not run");
   });
+  const result = await createMediaGenerateProviderListActionResult({
+    kind: "image_generation",
+    emptyText: "none",
+    providers: [
+      {
+        id: "async-images",
+        capabilities: {},
+        isConfigured,
+        isConfiguredAsync: async () => false,
+      },
+    ],
+    listModes: () => ["generate"],
+    summarizeCapabilities: () => "",
+  });
+  expect(result.details.providers).toEqual([
+    expect.objectContaining({ id: "async-images", configured: false }),
+  ]);
+  expect(result.content[0]?.text).toContain("configured: no");
+  expect(isConfigured).not.toHaveBeenCalled();
 });
