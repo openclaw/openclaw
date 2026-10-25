@@ -3585,7 +3585,6 @@
 ["src/commands/agent-command.test-mocks.ts","../agents/workspace.js","04e94c7c464f586bab4a570ae658c4141631ba798277b33fb450cbbd2fe8d108",1]
 ["src/commands/agent-command.test-mocks.ts","../cli/deps.js","e5ced3f8662923b84af36331d5cf3d3fe6a8f64d876bc7081a71ff47cd6298a8",1]
 ["src/commands/agent-command.test-mocks.ts","../gateway/call.js","cd5bf9fda710a7159c583df8249b4658a5a31bd68929a055ac06f721a10d2b93",1]
-["src/commands/agent-command.test-mocks.ts","../logging/subsystem.js","47e13fac6b7444a72f799fa97e26b5261ed5ff0e5872be6e9ef0b651d9a035c5",1]
 ["src/commands/agent-command.test-mocks.ts","../skills/discovery/agent-filter.js","af2862368019b1f99834b40cf2d1b995b950ae11c253d0e960e2c093a8d70a15",1]
 ["src/commands/agent-command.test-mocks.ts","../skills/loading/workspace-skill-loader.js","2bdf09557162c8a64015b20d419412512385f099b6963f98946a2e141dd3f91c",1]
 ["src/commands/agent-command.test-mocks.ts","../skills/loading/workspace-skill-prompt.js","d3a71b47e7612e803a29831d03af30d7f24ce6ad8bfb641ce624ebbf6a867291",1]
