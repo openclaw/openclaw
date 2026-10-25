@@ -99,6 +99,45 @@ class ChatControllerCatalogTest {
     }
 
   @Test
+  fun catalogDegradationReplacesRecoveredMetadataFailure() =
+    runTest {
+      var metadataFails = false
+      var catalogRefreshFailed = false
+      val (controller, _) =
+        chatControllerTestSetup {
+          gatewayAdvertisesCapability = {
+            it == "session-scoped-chat-metadata" || it == "session-scoped-model-catalog"
+          }
+          respond("chat.metadata") {
+            if (metadataFails) error("Session changed while preparing its metadata. Retry the request.") else """{"commands":[]}"""
+          }
+          respond("models.list") {
+            """{"refreshFailed":$catalogRefreshFailed,"models":[{"id":"chat","name":"Chat","provider":"fixture","available":true}]}"""
+          }
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+
+      metadataFails = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("Could not refresh chat metadata. Tap Refresh to try again.", controller.errorText.value)
+
+      metadataFails = false
+      catalogRefreshFailed = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("Could not refresh models. Tap Refresh to try again.", controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+
+      catalogRefreshFailed = false
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertNull(controller.errorText.value)
+    }
+
+  @Test
   fun sessionCatalogOwnsChoicesAndEmptySuccessDoesNotRetry() =
     runTest {
       var empty = false

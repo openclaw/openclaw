@@ -4805,7 +4805,13 @@ class ChatController internal constructor(
           if (requestSelection != null && isCurrentSessionAction(requestSelection)) {
             if (!catalogSupported && _errorText.value == null) {
               updateLocalizedErrorText(nativeText("Update your Gateway to use session model choices."))
-            } else if (refreshFailed && (_errorText.value == null || _errorText.value == chatMetadataRefreshError)) {
+            } else if (refreshFailed &&
+              (
+                _errorText.value == null ||
+                  _errorText.value == chatMetadataRefreshError ||
+                  _errorText.value == chatMetadataLoadError
+              )
+            ) {
               updateLocalizedErrorText(chatMetadataRefreshError)
             } else if (!refreshFailed &&
               (_errorText.value == chatMetadataRefreshError || _errorText.value == chatMetadataLoadError)
