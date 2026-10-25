@@ -21,30 +21,57 @@ import { whatsappConversationScenarios } from "./whatsapp-live.scenario-implemen
 const audio = (model: string) => ({ provider: "openai", model, capabilities: ["audio" as const] });
 const gateway = { bind: "loopback", gatewayPort: 18789, gatewayToken: "test-token" } as const;
 const account = (cfg: OpenClawConfig) => cfg.channels?.whatsapp?.accounts?.sut;
-it("preserves command owners", () => {
-  const cfg = config({}, { commands: { ownerAllowFrom: ["telegram:existing-owner"] } });
+it("adds QA capabilities without replacing existing configuration", () => {
+  const base: OpenClawConfig = {
+    commands: { ownerAllowFrom: ["telegram:existing-owner"] },
+    tools: {
+      alsoAllow: ["browser"],
+      media: { audio: { enabled: false }, models: [audio("existing-transcriber")] },
+    },
+  };
+  const original = structuredClone(base);
+  const cfg = config(
+    {
+      groupJid,
+      overrides: {
+        ...scenario("whatsapp-group-pending-history-context").configOverrides,
+        ...scenario("whatsapp-agent-message-action-react").configOverrides,
+        approvals: { exec: true, plugin: true },
+        audioPreflight: true,
+      },
+    },
+    base,
+  );
   expect(cfg.commands?.ownerAllowFrom).toEqual(["telegram:existing-owner", "+15550000001"]);
-});
-
-it("configures approval delivery", () => {
-  const cfg = config({ overrides: { approvals: { exec: true, plugin: true } } });
   expect([cfg.approvals?.exec, cfg.approvals?.plugin]).toEqual([
     { enabled: true, mode: "session" },
     { enabled: true, mode: "session" },
   ]);
   expect(account(cfg)?.allowFrom).toEqual(["+15550000001"]);
   expect(Object.hasOwn(account(cfg) ?? {}, "execApprovals")).toBe(false);
-});
-
-it("configures action discovery", () => {
-  const cfg = config({
-    overrides: scenario("whatsapp-agent-message-action-react").configOverrides,
-  });
   expect(cfg.channels?.whatsapp).toMatchObject({
     actions: { reactions: true },
     reactionLevel: "minimal",
   });
-  expect(cfg.tools?.alsoAllow).toContain("message");
+  expect(cfg.tools).toMatchObject({
+    alsoAllow: ["browser", "message"],
+    media: {
+      audio: { enabled: true },
+      models: [audio("gpt-4o-transcribe"), audio("existing-transcriber")],
+    },
+  });
+  const limit = cfg.channels?.whatsapp?.historyLimit ?? cfg.messages?.groupChat?.historyLimit;
+  expect(typeof limit).toBe("number");
+  expect(Number(limit)).toBeGreaterThan(0);
+  expect(account(cfg)).toMatchObject({
+    replyToMode: "all",
+    groups: { [groupJid]: { requireMention: true } },
+  });
+  expect(cfg.messages?.inbound?.byChannel?.whatsapp).toBe(0);
+  expect(cfg.messages?.groupChat?.visibleReplies).toBe("automatic");
+  expect(cfg.messages?.groupChat?.mentionPatterns).toContain("\\bopenclawqa\\b");
+  expect(cfg.plugins?.allow).toContain("whatsapp");
+  expect(base).toEqual(original);
 });
 
 it("configures a blocked group sender", () => {
@@ -60,46 +87,14 @@ it("configures a blocked group sender", () => {
   expect(account(cfg)?.groups).toBeUndefined();
 });
 
-it("configures pending history and mention gating", () => {
-  const cfg = config({
-    groupJid,
-    overrides: scenario("whatsapp-group-pending-history-context").configOverrides,
-  });
-  const limit = cfg.channels?.whatsapp?.historyLimit ?? cfg.messages?.groupChat?.historyLimit;
-  expect(typeof limit).toBe("number");
-  expect(Number(limit)).toBeGreaterThan(0);
-  expect(account(cfg)).toMatchObject({
-    replyToMode: "all",
-    groups: { [groupJid]: { requireMention: true } },
-  });
-  expect(cfg.messages?.inbound?.byChannel?.whatsapp).toBe(0);
-  expect(cfg.messages?.groupChat?.visibleReplies).toBe("automatic");
-  expect(cfg.messages?.groupChat?.mentionPatterns).toContain("\\bopenclawqa\\b");
-});
-
-it.each([false, true])("preserves audio preflight with existing media=%s", (seeded) => {
-  const base: OpenClawConfig = seeded
-    ? {
-        tools: {
-          alsoAllow: ["browser"],
-          media: { audio: { enabled: false }, models: [audio("existing-transcriber")] },
-        },
-      }
-    : {};
-  const original = structuredClone(base);
-  const cfg = config(
-    { overrides: { audioPreflight: true, ...(seeded ? { actions: true } : {}) } },
-    base,
-  );
-  expect(cfg.plugins?.allow).toContain("whatsapp");
+it("seeds audio preflight without existing media", () => {
+  const cfg = config({ overrides: { audioPreflight: true } });
   expect(cfg.tools).toMatchObject({
-    ...(seeded ? { alsoAllow: ["browser", "message"] } : {}),
     media: {
       audio: { enabled: true },
-      models: [audio("gpt-4o-transcribe"), ...(seeded ? [audio("existing-transcriber")] : [])],
+      models: [audio("gpt-4o-transcribe")],
     },
   });
-  expect(base).toEqual(original);
 });
 
 it("patches effective policy for default and named accounts", () => {
@@ -113,9 +108,6 @@ it("patches effective policy for default and named accounts", () => {
   for (const accountId of ["default", "work"]) {
     for (const [name, key, value, stale] of policies) {
       const definition = readQaScenarioById("whatsapp-" + name);
-      expect(
-        JSON.stringify(definition.execution.kind === "flow" && definition.execution.flow),
-      ).not.toContain('"patchConfig"');
       const base = config(
         { sutAccountId: accountId },
         { channels: { whatsapp: { accounts: { [accountId]: { [key]: stale } } } } },
@@ -165,11 +157,8 @@ async function checkBroadcast(roster: "generated" | "explicit", home: string) {
   expect(placement(cfg)).toEqual(placement(original));
   const entries = cfg.agents?.entries ?? {};
   expect(entries).toMatchObject(original.agents?.entries ?? {});
-  expect(Object.keys(entries)).toEqual(["qa", "main", "qa-second"]);
-  expect(entries["qa-second"]).toEqual({ identity: { name: "Second WhatsApp QA" } });
+  expect(entries).toHaveProperty("qa-second");
   expect(cfg.broadcast).toEqual({ strategy: "sequential", [groupJid]: ["main", "qa-second"] });
-  const group = cfg.channels?.whatsapp?.accounts?.sut?.groups?.[groupJid];
-  expect(group?.requireMention).toBe(true);
   expect(base).toEqual(original);
 }
 

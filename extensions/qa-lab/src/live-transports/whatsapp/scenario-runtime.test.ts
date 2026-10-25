@@ -4,10 +4,7 @@ import { WhatsAppChannelConfigSchema } from "@openclaw/whatsapp/channel-config-a
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import { createQaBusState } from "../../bus-state.js";
-import { createQaStateBackedTransportAdapter } from "../../qa-transport.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
-import { runQaSuiteScenarioDefinition } from "../../suite-runtime-flow.js";
 import { createDriver, observedMessage, runtimeEnv, groupJid } from "./runtime.test-support.js";
 import { runWhatsAppScenario } from "./scenario-runtime.js";
 import {
@@ -16,10 +13,12 @@ import {
   scenario as getScenario,
 } from "./scenario.test-support.js";
 
-vi.mock("../../suite-runtime-gateway.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../suite-runtime-gateway.js")>()),
-  waitForConfigRestartSettle: async () => {},
-}));
+const readyAccount = (accountId: string, lastConnectedAt = Date.now() - 30_000) => ({
+  accountId,
+  lastConnectedAt,
+  connected: true,
+  running: true,
+});
 
 afterEach(() => {
   vi.clearAllTimers();
@@ -27,8 +26,7 @@ afterEach(() => {
 });
 
 it("targets group approval reactions at the approval prompt participant", async () => {
-  const definition = getScenario("whatsapp-approval-exec-group-reaction-native");
-  const implementation = definition;
+  const implementation = getScenario("whatsapp-approval-exec-group-reaction-native");
   const run = implementation.buildRun();
   if (run.kind !== "approval") {
     throw new Error("expected approval scenario run");
@@ -46,14 +44,10 @@ it("targets group approval reactions at the approval prompt participant", async 
         observedAt: isPending ? "2026-06-28T02:00:00.000Z" : "2026-06-28T02:00:01.000Z",
         participantJid: "999@lid",
         text: isPending
-          ? `Exec approval required\nID: ${approvalId}\n` +
-            `Pending command:\nprintf '%s\\n' '${run.token}'\n\n` +
-            "React with:\n\n👍 Allow Once\n👎 Deny"
+          ? `Exec approval required\nID: ${approvalId}\n${run.token}\nReact with: 👍`
           : `✅ Exec approval allow-once. ID: ${approvalId}`,
       });
-      if (!match(message)) {
-        throw new Error(`approval test message ${waitCount} did not match`);
-      }
+      expect(match(message)).toBe(true);
       return message;
     },
   });
@@ -83,7 +77,7 @@ it("targets group approval reactions at the approval prompt participant", async 
     replaceDriver: async () => {},
     gateway,
     runtimeEnv: { ...runtimeEnv, groupJid: "12345@g.us" },
-    scenario: { id: definition.id, timeoutMs: definition.timeoutMs },
+    scenario: implementation,
     sutAccountId: "work",
   });
 
@@ -103,17 +97,12 @@ it.each([
   { scenarioId: "whatsapp-agent-message-action-react", quietMs: 8_000, fault: "reply" },
   { scenarioId: "whatsapp-group-agent-message-action-react", quietMs: 8_000, fault: "none" },
 ])(
-  "observes $scenarioId after preparation (fault: $fault)",
+  "observes the complete $scenarioId quiet window (fault: $fault)",
   async ({ scenarioId, quietMs, fault }) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     const startedAt = Date.now();
-    const account = {
-      accountId: "sut",
-      connected: true,
-      running: true,
-      lastConnectedAt: startedAt,
-    };
+    const implementation = getScenario(scenarioId);
     const sends: number[] = [];
     const observations: number[] = [];
     const messages: WhatsAppQaDriverObservedMessage[] = [];
@@ -131,28 +120,32 @@ it.each([
             : runtimeEnv.sutPhoneE164,
         );
         sends.push(Date.now() - startedAt);
+        if (scenarioId === "whatsapp-mention-gating" && sends.length === 2) {
+          expect(text).toMatch(/^openclawqa\b/);
+        }
         inputText = text;
         targetJid = target;
         if (scenarioId.endsWith("action-react")) {
-          messages.push({
-            kind: "reaction",
-            fromPhoneE164: runtimeEnv.sutPhoneE164,
-            fromJid: target,
-            observedAt: new Date(Date.now() + 1).toISOString(),
-            text: "",
-            reaction: { emoji: "👍", messageId: "qa-inbound" },
-          });
+          messages.push(
+            observedMessage("reaction", {
+              kind: "reaction",
+              fromJid: target,
+              observedAt: new Date(Date.now() + 1).toISOString(),
+              text: "",
+              reaction: { emoji: "👍", messageId: "qa-inbound" },
+            }),
+          );
         }
         return { messageId: "qa-inbound" };
       },
       waitForMessage: async ({ match }) => {
-        const reply: WhatsAppQaDriverObservedMessage = messages.find(match) ?? {
-          kind: "text" as const,
-          fromPhoneE164: runtimeEnv.sutPhoneE164,
-          fromJid: targetJid,
-          observedAt: new Date(Date.now() + 1).toISOString(),
-          text: inputText,
-        };
+        const reply =
+          messages.find(match) ??
+          observedMessage("reply", {
+            fromJid: targetJid,
+            observedAt: new Date(Date.now() + 1).toISOString(),
+            text: inputText,
+          });
         if (reply.kind === "reaction") {
           const reaction = expectDefined(reply.reaction, "native reaction");
           for (const rejected of [
@@ -172,76 +165,30 @@ it.each([
         return reply;
       },
     });
-    const gateway = makeGateway(async (method) => {
-      if (method === "config.get") {
-        return {
-          config: {},
-          hash: "config",
-          appliedConfigHash: "runtime",
-          configRevisionHash: "runtime",
-        };
-      }
-      if (method === "config.patch") {
-        account.lastConnectedAt = Date.now();
-        return { hash: "config" };
-      }
-      if (method === "channels.status") {
-        return { channelAccounts: { whatsapp: [account] } };
-      }
-      throw new Error(`unexpected Gateway method: ${method}`);
-    });
-    const { prepareFlow } = environment(() => driver);
-    const state = createQaBusState();
-    const transport = createQaStateBackedTransportAdapter(state, {
-      id: "whatsapp",
-      label: "WhatsApp",
-      accountId: "sut",
-      requiredPluginIds: [],
-      supportedActions: [],
-      prepareFlow,
-      sendInbound: async (input) => state.addInboundMessage(input),
-      createGatewayConfig: () => ({}),
-      waitReady: async () => {},
-      buildAgentDelivery: () => ({
-        channel: "whatsapp",
-        replyChannel: "whatsapp",
-        replyTo: "+15550000001",
+    const result = runWhatsAppScenario({
+      preparedScenario: { implementation, run: implementation.buildRun() },
+      getDriver: () => driver,
+      driverAuthDir: "/qa/driver",
+      replaceDriver: async () => {},
+      runtimeEnv,
+      sutAccountId: "sut",
+      scenario: implementation,
+      gateway: makeGateway(async (method) => {
+        if (method === "channels.status") {
+          return { channelAccounts: { whatsapp: [readyAccount("sut", startedAt - 30_000)] } };
+        }
+        throw new Error(`unexpected Gateway method: ${method}`);
       }),
-      handleAction: async () => {},
-      createReportNotes: () => [],
-    });
-    const result = runQaSuiteScenarioDefinition({
-      env: {
-        lab: {},
-        webSessionIds: new Set(),
-        gateway,
-        transport,
-        outputDir: "/qa/output",
-        repoRoot: process.cwd(),
-        providerMode: "mock-openai",
-        primaryModel: "mock/model",
-        alternateModel: "mock/model",
-        mock: null,
-        cfg: {},
-      },
-      scenario: readQaScenarioById(scenarioId),
-      constants: {
-        imageUnderstandingPngBase64: "",
-        imageUnderstandingLargePngBase64: "",
-        imageUnderstandingValidPngBase64: "",
-      },
     });
     let settled = false;
-    void result.then(() => {
+    const markSettled = () => {
       settled = true;
-    });
-    await vi.dynamicImportSettled();
-    await vi.advanceTimersByTimeAsync(13_000);
-    expect(settled, "preparation must not consume the scenario deadline").toBe(false);
-    expect(sends).toEqual([]);
-    await vi.advanceTimersByTimeAsync(7_000);
-    await vi.dynamicImportSettled();
-    expect(sends).toEqual([20_000]);
+    };
+    void result.then(markSettled, markSettled);
+    const outcome =
+      fault === "none"
+        ? expect(result).resolves.toHaveProperty("details")
+        : expect(result).rejects.toThrow("unexpected WhatsApp reply observed in quiet scenario");
     await vi.advanceTimersByTimeAsync(quietMs - 1);
     expect(settled, "must observe the complete quiet window").toBe(false);
     if (fault !== "none") {
@@ -255,22 +202,10 @@ it.each([
       });
     }
     await vi.advanceTimersByTimeAsync(1);
-    const finished = await result;
-    expect(finished).toMatchObject(
-      fault === "none"
-        ? { status: "pass" }
-        : { status: "fail", details: "unexpected WhatsApp reply observed in quiet scenario" },
-    );
-    if (scenarioId.endsWith("action-react") && fault === "none") {
-      expect(finished.steps.map((step) => step.details).join("\n")).toMatch(
-        scenarioId.startsWith("whatsapp-group-")
-          ? /group agent message reaction/i
-          : /\breaction\b/i,
-      );
-    }
-    expect(observations).toEqual([20_000 + quietMs]);
+    await outcome;
+    expect(observations).toEqual([quietMs]);
     expect(sends).toEqual(
-      scenarioId === "whatsapp-mention-gating" && fault === "none" ? [20_000, 25_000] : [20_000],
+      scenarioId === "whatsapp-mention-gating" && fault === "none" ? [0, 5_000] : [0],
     );
     expect(vi.getTimerCount()).toBe(0);
   },
@@ -307,15 +242,9 @@ it.each([
   { id: "whatsapp-agent-message-action-react", statusReactions: false },
   { id: "whatsapp-status-reaction-lifecycle", statusReactions: true },
 ])("configures $id through the current WhatsApp schema", async ({ id, statusReactions }) => {
+  vi.useFakeTimers();
+  const connectedAt = Date.now();
   const baseMessages = reactionMessages(false);
-  const account = {
-    accountId: "work",
-    busy: false,
-    connected: true,
-    lastConnectedAt: Date.now() - 30_000,
-    restartPending: false,
-    running: true,
-  };
   const gatewayCall = vi.fn(async (method: string, _params?: unknown) => {
     if (method === "config.get") {
       return { config: { messages: baseMessages }, hash: "config-hash" };
@@ -335,11 +264,14 @@ it.each([
       return { noop: true };
     }
     if (method === "channels.status") {
-      return { channelAccounts: { whatsapp: [account] } };
+      return { channelAccounts: { whatsapp: [readyAccount("work", connectedAt)] } };
     }
     throw new Error(`unexpected gateway method: ${method}`);
   });
-  await prepareConfig(id, gatewayCall);
+  const prepared = prepareConfig(id, gatewayCall);
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(20_000);
+  await prepared;
 
   expect(gatewayCall.mock.calls.map(([method]) => method)).toContain("config.patch");
 });

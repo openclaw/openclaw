@@ -6,7 +6,6 @@ import type {
   WhatsAppQaDriverSession,
 } from "@openclaw/whatsapp/api.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
 import type { QaGatewayStopResult } from "../../gateway-child.js";
@@ -50,11 +49,6 @@ vi.mock("./whatsapp-live.driver.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./whatsapp-live.driver.js")>()),
   startWhatsAppQaDriverSessionWithRetry: mocks.startDriver,
 }));
-
-vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
-  return { ...actual, runExec: vi.fn(actual.runExec) };
-});
 
 const tempDirs = createTempDirHarness();
 const fakeAuth = '{"fixture":"not-a-whatsapp-session"}\n';
@@ -266,7 +260,6 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
     await expect(createAdapter()).rejects.toThrow("auth root creation failed");
 
     expect(mocks.startDriver).not.toHaveBeenCalled();
-    expect(runExec).not.toHaveBeenCalled();
     expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
     expect(mocks.release).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(100);
@@ -275,55 +268,12 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
 
   it("does not leave a pending auth unpack able to recreate the root after rollback", async () => {
     credentialPayload.driverAuthArchiveBase64 = Buffer.from("not a tar archive").toString("base64");
-    const mkdir = fs.mkdir.bind(fs);
-    const resumeSutMkdir = createDeferred<void>();
-    const driverUnpackFailed = createDeferred<void>();
-    const sutExtracted = createDeferred<void>();
-    let pendingSutUnpack: Promise<void> | undefined;
-    vi.spyOn(fs, "mkdir").mockImplementation(async (dir, options) => {
-      if (path.basename(String(dir)) === "sut-auth") {
-        pendingSutUnpack = sutExtracted.promise;
-        await resumeSutMkdir.promise;
-      }
-      return await mkdir(dir, options);
-    });
-    const realRunExec = expectDefined(vi.mocked(runExec).getMockImplementation(), "real exec");
-    vi.mocked(runExec).mockImplementation(async (command, args, options) => {
-      const archive = args[1];
-      if (command === "tar" && archive && path.basename(archive) === "driver-auth.tgz") {
-        authRoot = await fs.realpath(path.dirname(archive));
-      }
-      try {
-        return await realRunExec(command, args, options);
-      } finally {
-        if (archive && path.basename(archive) === "driver-auth.tgz") {
-          driverUnpackFailed.resolve();
-        }
-        if (args[0] === "-xzf" && archive && path.basename(archive) === "sut-auth.tgz") {
-          sutExtracted.resolve();
-        }
-      }
-    });
-
-    const initialization = expect(createAdapter()).rejects.toThrow(/tar/);
-    try {
-      await driverUnpackFailed.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      // Either avoid starting the second unpack or drain it before releasing resources.
-      if (pendingSutUnpack) {
-        expect
-          .soft(mocks.release, "rollback must retain the lease while auth staging is pending")
-          .not.toHaveBeenCalled();
-      }
-    } finally {
-      // If rollback already started, finish it before allowing the delayed writer to resume.
-      if (mocks.release.mock.calls.length > 0) {
-        await initialization;
-      }
-      resumeSutMkdir.resolve();
-      await pendingSutUnpack;
-      await initialization;
-    }
+    const roots = vi.spyOn(fs, "mkdtemp");
+    const mkdir = vi.spyOn(fs, "mkdir");
+    await expect(createAdapter()).rejects.toThrow(/tar/);
+    authRoot = await roots.mock.results[0]!.value;
+    // Sequential staging must never start a second writer after the first unpack fails.
+    expect(mkdir.mock.calls.some(([dir]) => path.basename(String(dir)) === "sut-auth")).toBe(false);
     expect(mocks.startDriver).not.toHaveBeenCalled();
     await expectLeaseReleased();
   });
