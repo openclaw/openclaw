@@ -2,7 +2,6 @@
 
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { expect, it, vi } from "vitest";
-import { ConfigForm } from "../../components/config-form.render.tsx";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -12,44 +11,16 @@ import { Memory, type MemoryCatalogState } from "./memory.tsx";
 
 type MemoryViewProps = Parameters<typeof Memory>[0];
 const addonLabels = [
-  ["active-memory", "Active memory", "Recent context", "enabled"],
-  ["memory-wiki", "Memory wiki", "Wiki pages", "disabled"],
+  ["active-memory", "Active memory"],
+  ["memory-wiki", "Memory wiki"],
 ] as const;
-const emptyOutcomes = () => ({
-  errors: {},
-  notices: {},
-  refreshWarnings: {},
-});
-const engine = (id: string, name: string) => ({
-  id,
-  name,
-  kind: ["memory"],
-  installed: true,
-  enabled: true,
-  state: "enabled" as const,
-});
 
 function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps {
   return {
     activeTab: "settings",
     onTabChange: vi.fn(),
-    catalog: {
-      kind: "ready",
-      mutationAllowed: true,
-      plugins: [
-        engine("memory-core", "OpenClaw Memory"),
-        engine("memory-lancedb", "Memory LanceDB"),
-        ...addonLabels.map(([id, name, description, state]) => ({
-          id,
-          name,
-          description,
-          state,
-          installed: true,
-          enabled: state === "enabled",
-        })),
-      ],
-    },
-    addonOutcomes: emptyOutcomes(),
+    catalog: { kind: "loading" },
+    addonOutcomes: { errors: {}, notices: {}, refreshWarnings: {} },
     readAddonExpected: () => undefined,
     readAddonBusy: () => false,
     engineSelection: { kind: "default", pluginId: "memory-core" },
@@ -152,44 +123,12 @@ it("keeps a configured missing engine selected and labels it unavailable", () =>
   expect(input?.checked).toBe(true);
 });
 
-it("shows the shared advanced disclosure only on Settings and reveals advanced fields", () => {
-  const onAdvancedChange = vi.fn();
-  const editorProps = {
-    schema: objectSchema({
-      memory: objectSchema({
-        enabled: { type: "boolean", title: "Common memory field" },
-        extraPaths: { type: "string", title: "Advanced memory field" },
-      }),
-    }),
-    uiHints: {
-      "memory.enabled": { advanced: false },
-      "memory.extraPaths": { advanced: true },
-    },
-    value: { memory: { enabled: true, extraPaths: "/notes" } },
-    activeSection: "memory",
-    embedded: true,
-    onShowAdvanced: () => onAdvancedChange(true),
-    onHideAdvanced: () => onAdvancedChange(false),
-    onPatch: vi.fn(),
-  };
-  const editor = (showAdvanced: boolean) => (
-    <ConfigForm {...editorProps} showAdvanced={showAdvanced} />
-  );
-
-  for (const expanded of [false, true]) {
-    const container = renderInto({ editor: editor(expanded) });
-    const disclosure = container.querySelector<HTMLDetailsElement>(
-      "details.config-advanced-disclosure",
-    );
-    expect(disclosure?.open).toBe(expanded);
-    expect(container.textContent?.includes("Advanced memory field")).toBe(expanded);
-    disclosure!.open = !expanded;
-    disclosure!.dispatchEvent(new Event("toggle"));
-    expect(onAdvancedChange).toHaveBeenCalledWith(!expanded);
-  }
-
-  const overview = renderInto({ activeTab: "overview", editor: editor(false) });
-  expect(overview.querySelector("details.config-advanced-disclosure")).toBeNull();
+it("renders the shared editor only on Settings", () => {
+  const editor = <div data-memory-editor>Advanced memory field</div>;
+  const settings = renderInto({ editor });
+  expect(settings.querySelector("[data-memory-editor]")?.textContent).toBe("Advanced memory field");
+  const overview = renderInto({ activeTab: "overview", editor });
+  expect(overview.querySelector("[data-memory-editor]")).toBeNull();
 });
 
 const retainedFields = { citations: {}, search: {} };

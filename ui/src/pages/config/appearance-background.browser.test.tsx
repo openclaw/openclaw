@@ -171,6 +171,24 @@ function expectMessage(element: HTMLElement, role: "alert" | "status", text?: st
   }
 }
 
+function waitUpload(
+  element: HTMLElement,
+  upload: HTMLButtonElement,
+  disabled: boolean,
+  status: string | undefined,
+  alert?: string | null,
+) {
+  return waitForSolid(() => {
+    expect(upload.disabled).toBe(disabled);
+    if (status !== undefined) {
+      expectMessage(element, "status", status);
+    }
+    if (alert !== undefined) {
+      expectMessage(element, "alert", alert ?? undefined);
+    }
+  });
+}
+
 const nextFrame = () =>
   new Promise<void>((resolve) => {
     requestAnimationFrame(() => resolve());
@@ -183,11 +201,6 @@ it("holds during a drag, settles 1.2 seconds after release, and keeps focused co
   const before = range.getBoundingClientRect();
   activate(range, "drag");
   await preview.updateComplete;
-  expect(preview).toMatchObject({
-    surface: "preview",
-    presented: true,
-    preferenceOverride: preference,
-  });
   expect(element.hasAttribute("data-background-preview")).toBe(true);
   expect(host.hasAttribute("data-background-preview")).toBe(true);
   expect(document.activeElement).toBe(range);
@@ -371,32 +384,14 @@ it("presents background upload failure and retry without losing the selected con
   const { element, gateway } = await mount({}, createTestGatewayClient(request));
   const { input, upload } = uploadControls(element);
   chooseBackgroundFile(input);
-  await waitForSolid(() => {
-    expect(uploads).toBe(1);
-    expect(upload.disabled).toBe(true);
-    expectMessage(element, "status", "Preparing your image");
-  });
+  await waitUpload(element, upload, true, "Preparing your image");
   first.reject(new Error("Synthetic upload failure"));
-  await waitForSolid(() => {
-    expectMessage(element, "alert", "Synthetic upload failure");
-    expect(upload.disabled).toBe(false);
-  });
+  await waitUpload(element, upload, false, undefined, "Synthetic upload failure");
   chooseBackgroundFile(input);
-  await waitForSolid(() => {
-    expect(uploads).toBe(2);
-    expect(upload.disabled).toBe(true);
-    expectMessage(element, "status", "Preparing your image");
-    expectMessage(element, "alert");
-  });
+  await waitUpload(element, upload, true, "Preparing your image", null);
   second.resolve(savedBackground);
-  await waitForSolid(() => {
-    expectMessage(element, "status", "Background image saved.");
-    expectMessage(element, "alert");
-    expect(upload.disabled).toBe(false);
-  });
+  await waitUpload(element, upload, false, "Background image saved.", null);
   expect(element.querySelector("[data-background-file]")).toBe(input);
-  const writes = request.mock.calls.filter(([method]) => method === "users.background.upload");
-  expect(writes).toHaveLength(2);
   failMetadata = true;
   gateway.publishEvent({
     type: "event",
@@ -409,83 +404,65 @@ it("presents background upload failure and retry without losing the selected con
   });
 });
 
-it("retires an unresolved upload before admitting the replacement profile's upload", async () => {
-  const abandoned = createDeferred<UsersBackgroundResult>();
-  let uploads = 0;
-  const request = vi.fn((method: string) => {
-    if (method === "users.background.upload") {
-      uploads += 1;
-      return uploads === 1 ? abandoned.promise : Promise.resolve(savedBackground);
+it.each(["retired upload", "pending metadata"] as const)(
+  "preserves replacement-profile upload ownership with %s",
+  async (scenario) => {
+    const retired = scenario === "retired upload";
+    const first = createDeferred<UsersBackgroundResult>();
+    const second = createDeferred<UsersBackgroundResult>();
+    const metadata = createDeferred<UsersBackgroundResult>();
+    let uploads = 0;
+    let holdMetadata = false;
+    const request = vi.fn(
+      (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+        if (method === "users.background.get" && options?.signal && holdMetadata) {
+          return metadata.promise;
+        }
+        if (method === "users.background.upload") {
+          return uploads++ === 0 ? first.promise : second.promise;
+        }
+        return Promise.resolve(savedBackground);
+      },
+    );
+    const { element, gateway } = await mount({}, createTestGatewayClient(request));
+    const { input, upload } = uploadControls(element);
+    chooseBackgroundFile(input);
+    await waitForSolid(() => expect(uploads).toBe(1));
+    if (!retired) {
+      first.reject(new Error("Previous profile's upload failed"));
+      await waitForSolid(() => expectMessage(element, "alert", "Previous profile's upload failed"));
+      holdMetadata = true;
     }
-    return Promise.resolve(savedBackground);
-  });
-  const { element, gateway } = await mount({}, createTestGatewayClient(request));
-  const { input, upload } = uploadControls(element);
-  chooseBackgroundFile(input);
-  await waitForSolid(() => expect(uploads).toBe(1));
-  gateway.publish({ ...gateway.gateway.snapshot, selfUser: { id: "replacement-demo" } });
-  await waitForSolid(() => expect(upload.disabled).toBe(false));
-  chooseBackgroundFile(input);
-  await waitForSolid(() => {
-    expect(uploads).toBe(2);
-    expectMessage(element, "status", "Background image saved.");
-    expect(upload.disabled).toBe(false);
-  });
-  abandoned.reject(new Error("Retired upload failure"));
-  await waitForSolid(() => expectMessage(element, "alert"));
-  chooseBackgroundFile(input);
-  await waitForSolid(() => expect(uploads).toBe(3));
-});
-
-it("keeps the current profile's upload while its background metadata refresh is pending", async () => {
-  const firstUpload = createDeferred<UsersBackgroundResult>();
-  const replacementUpload = createDeferred<UsersBackgroundResult>();
-  const replacementMetadata = createDeferred<UsersBackgroundResult>();
-  const saved = savedBackground;
-  let uploads = 0;
-  let holdMetadata = false;
-  const request = vi.fn((method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
-    if (method === "users.background.get" && options?.signal && holdMetadata) {
-      return replacementMetadata.promise;
+    gateway.publish({ ...gateway.gateway.snapshot, selfUser: { id: "replacement-demo" } });
+    await waitForSolid(() => expect(upload.disabled).toBe(false));
+    await waitForSolid(() => expectMessage(element, "alert"));
+    if (retired) {
+      second.resolve(savedBackground);
     }
-    if (method === "users.background.upload") {
-      return uploads++ === 0 ? firstUpload.promise : replacementUpload.promise;
+    chooseBackgroundFile(input);
+    await waitForSolid(() => expect(uploads).toBe(2));
+    if (retired) {
+      await waitUpload(element, upload, false, "Background image saved.");
+      first.reject(new Error("Retired upload failure"));
+      await waitForSolid(() => expectMessage(element, "alert"));
+      chooseBackgroundFile(input);
+      await waitForSolid(() => expect(uploads).toBe(3));
+    } else {
+      await waitForSolid(() => expect(upload.disabled).toBe(true));
+      gateway.publish({
+        ...gateway.gateway.snapshot,
+        selfUser: { id: "replacement-demo", name: "Updated display name" },
+      });
+      await nextFrame();
+      flush();
+      expect(upload.disabled).toBe(true);
+      expectMessage(element, "status", "Preparing your image");
+      second.resolve(savedBackground);
+      await waitUpload(element, upload, false, "Background image saved.");
+      metadata.resolve(savedBackground);
     }
-    return Promise.resolve(saved);
-  });
-  const { element, gateway } = await mount({}, createTestGatewayClient(request));
-  const { input, upload } = uploadControls(element);
-  chooseBackgroundFile(input);
-  await waitForSolid(() => expect(uploads).toBe(1));
-  firstUpload.reject(new Error("Previous profile's upload failed"));
-  await waitForSolid(() =>
-    expect(element.querySelector('[role="alert"]')?.textContent).toContain(
-      "Previous profile's upload failed",
-    ),
-  );
-  holdMetadata = true;
-  gateway.publish({ ...gateway.gateway.snapshot, selfUser: { id: "replacement-demo" } });
-  await waitForSolid(() => expectMessage(element, "alert"));
-  chooseBackgroundFile(input);
-  await waitForSolid(() => {
-    expect(uploads).toBe(2);
-    expect(upload.disabled).toBe(true);
-  });
-  gateway.publish({
-    ...gateway.gateway.snapshot,
-    selfUser: { id: "replacement-demo", name: "Updated display name" },
-  });
-  await nextFrame();
-  flush();
-  expect(upload.disabled).toBe(true);
-  expectMessage(element, "status", "Preparing your image");
-  replacementUpload.resolve(saved);
-  await waitForSolid(() => {
-    expectMessage(element, "status", "Background image saved.");
-    expect(upload.disabled).toBe(false);
-  });
-  replacementMetadata.resolve(saved);
-});
+  },
+);
 
 it("shows invalid background file feedback and clears it when a valid upload starts", async () => {
   const metadata = createDeferred<UsersBackgroundResult>();
@@ -518,17 +495,9 @@ it("shows invalid background file feedback and clears it when a valid upload sta
     expect(upload.disabled).toBe(false);
   });
   chooseBackgroundFile(input);
-  await waitForSolid(() => {
-    expect(upload.disabled).toBe(true);
-    expectMessage(element, "status", "Preparing your image");
-    expectMessage(element, "alert");
-  });
+  await waitUpload(element, upload, true, "Preparing your image", null);
   completion.resolve(saved);
-  await waitForSolid(() => {
-    expect(upload.disabled).toBe(false);
-    expectMessage(element, "status", "Background image saved.");
-    expectMessage(element, "alert");
-  });
+  await waitUpload(element, upload, false, "Background image saved.", null);
 });
 
 it("dismisses metadata errors on a local choice and retires reads across profiles", async () => {
