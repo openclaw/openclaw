@@ -125,35 +125,47 @@ it.each([0, 2])(
 );
 
 describe("buildContextEngineCompactionSessionTarget", () => {
-  it("leaves the key absent when a marker has no stored mapping", async () => {
-    expect(
-      await buildContextEngineCompactionSessionTarget({
+  it.each([
+    {
+      name: "unmapped marker",
+      input: {
         sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
         sessionId: "stale-outer-session",
-      }),
-    ).toEqual({
-      agentId: "main",
-      sessionId: "marker-session",
-      storePath: "/tmp/sessions.json",
-    });
-  });
-
-  it("uses the explicit agent owner without inventing a session key", async () => {
-    expect(
-      await buildContextEngineCompactionSessionTarget({
+      },
+      expected: { agentId: "main", sessionId: "marker-session", storePath: "/tmp/sessions.json" },
+    },
+    {
+      name: "explicit agent owner",
+      input: {
         agentId: "worker",
         config: {
-          agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
+          agents: { ownership: "explicit" as const, entries: { main: {}, worker: {} } },
           session: { store: "/tmp/{agentId}/sessions.json" },
         },
         sessionFile: "compat-session",
         sessionId: "compat-session",
-      }),
-    ).toEqual({
-      agentId: "worker",
-      sessionId: "compat-session",
-      storePath: "/tmp/worker/sessions.json",
-    });
+      },
+      expected: {
+        agentId: "worker",
+        sessionId: "compat-session",
+        storePath: "/tmp/worker/sessions.json",
+      },
+    },
+    {
+      name: "adopted session identity",
+      input: {
+        sessionFile: "",
+        sessionId: "previous-session",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "adopted-session",
+          storePath: "/tmp/sessions.json",
+        },
+      },
+      expected: { agentId: "main", sessionId: "adopted-session", storePath: "/tmp/sessions.json" },
+    },
+  ])("does not invent a session key for $name", async ({ input, expected }) => {
+    expect(await buildContextEngineCompactionSessionTarget(input)).toEqual(expected);
   });
 
   it("rejects a partial target that conflicts with the fixed-store owner", async () => {
@@ -170,24 +182,6 @@ describe("buildContextEngineCompactionSessionTarget", () => {
         },
       }),
     ).rejects.toThrow(/belongs to "ops"/u);
-  });
-
-  it("preserves an adopted session id without inventing a session key", async () => {
-    expect(
-      await buildContextEngineCompactionSessionTarget({
-        sessionFile: "",
-        sessionId: "previous-session",
-        sessionTarget: {
-          agentId: "main",
-          sessionId: "adopted-session",
-          storePath: "/tmp/sessions.json",
-        },
-      }),
-    ).toEqual({
-      agentId: "main",
-      sessionId: "adopted-session",
-      storePath: "/tmp/sessions.json",
-    });
   });
 });
 
@@ -430,12 +424,7 @@ describe("normalizeEmbeddedRunAttempt session identity", () => {
 
     await adopt(state, "sqlite:main:session-after:/tmp/sessions.json");
 
-    expect(state.sessionTarget).toEqual({
-      agentId: "main",
-      sessionId: "session-after",
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-    });
+    expect(state.sessionTarget).toEqual(mainTarget("session-after"));
   });
 
   it.each([

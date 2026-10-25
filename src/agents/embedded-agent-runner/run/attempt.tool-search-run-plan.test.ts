@@ -22,15 +22,11 @@ const tool = (name: string): AnyAgentTool => ({
   parameters: Type.Object({}),
   execute: async () => ({ content: [], details: undefined }),
 });
-const clientTools = [
-  {
-    type: "function" as const,
-    function: {
-      name: "client_pick_file",
-      parameters: { type: "object", properties: {} },
-    },
-  },
-];
+const clientTool = (name: string) => ({
+  type: "function" as const,
+  function: { name, parameters: { type: "object", properties: {} } },
+});
+const clientTools = [clientTool("client_pick_file")];
 async function plan(
   options: {
     visibleTools?: AnyAgentTool[];
@@ -206,12 +202,7 @@ describe("embedded attempt tool catalog", () => {
     });
     const result = await plan({
       visibleTools: [remote, tool("native_direct")],
-      clientTools: [
-        {
-          type: "function",
-          function: { name: "sessions_yield", parameters: { type: "object", properties: {} } },
-        },
-      ],
+      clientTools: [clientTool("sessions_yield")],
       toolSearch: { mode: "tools", include: [{ source: "mcp" }] },
       allow: [],
     });
@@ -225,13 +216,7 @@ describe("embedded attempt tool catalog", () => {
 
   it("keeps only deferred clients out of visible/live allowlists, not replay", async () => {
     const result = await plan({
-      clientTools: [
-        ...clientTools,
-        {
-          type: "function",
-          function: { name: "client_direct", parameters: { type: "object", properties: {} } },
-        },
-      ],
+      clientTools: [...clientTools, clientTool("client_direct")],
       toolSearch: {
         mode: "tools",
         include: [{ source: "client" }],
@@ -348,69 +333,57 @@ async function diagnostic(options: Parameters<typeof plan>[0] = {}) {
 
 describe("explicit tool allowlist diagnostics", () => {
   it.each([
-    {
-      entries: ["skill_workshop"],
-      toolsEnabled: true,
-      disableTools: false,
-      expected: "sandboxed run without library-authoring authority",
-    },
-    {
-      entries: ["skill_*"],
-      toolsEnabled: true,
-      disableTools: false,
-      expected: "sandboxed run without library-authoring authority",
-    },
-    {
-      entries: ["query_db"],
-      toolsEnabled: true,
-      disableTools: false,
-      expected: "no registered tools matched",
-    },
-    {
-      entries: ["skill_workshop"],
-      toolsEnabled: false,
-      disableTools: false,
-      expected: "selected model does not support tools",
-    },
-    {
-      entries: ["skill_workshop"],
-      toolsEnabled: true,
-      disableTools: true,
-      expected: "tools are disabled for this run",
-    },
-  ])(
-    "reports the relevant gate for $entries (enabled=$toolsEnabled, disabled=$disableTools)",
-    async ({ entries, toolsEnabled, disableTools, expected }) => {
-      expect(
-        (await diagnostic({ allow: entries, toolsEnabled, disableTools, sandboxed: true }))
-          ?.message,
-      ).toContain(expected);
+    ["skill_workshop", true, false, "sandboxed run without library-authoring authority"],
+    ["skill_*", true, false, "sandboxed run without library-authoring authority"],
+    ["query_db", true, false, "no registered tools matched"],
+    ["skill_workshop", false, false, "selected model does not support tools"],
+    ["skill_workshop", true, true, "tools are disabled for this run"],
+  ] as const)(
+    "reports the relevant gate for %s (enabled=%s, disabled=%s)",
+    async (entry, toolsEnabled, disableTools, expected) => {
+      const error = await diagnostic({
+        allow: [entry],
+        toolsEnabled,
+        disableTools,
+        sandboxed: true,
+      });
+      expect(error?.message).toContain(expected);
     },
   );
 
-  it("fails closed when explicit allowlists resolve to no callable tools", async () => {
-    const error = await diagnostic({ configAllow: [" query_db "] });
-    expect(error?.message).toContain("No callable tools remain");
-    expect(error?.message).toContain("tools.allow: query_db");
-    expect(error?.message).toContain("no registered tools matched");
+  it.each([
+    {
+      name: "unmatched config allowlist",
+      options: { configAllow: [" query_db "] },
+      messages: [
+        "No callable tools remain",
+        "tools.allow: query_db",
+        "no registered tools matched",
+      ],
+    },
+    {
+      name: "runtime allowlist with tools disabled",
+      options: { allow: ["query_db"], disableTools: true },
+      messages: ["runtime toolsAllow: query_db", "tools are disabled for this run"],
+    },
+    {
+      name: "model without tools",
+      options: { agentAllow: ["query_db"], toolsEnabled: false },
+      messages: ["agents.main.tools.allow: query_db", "the selected model does not support tools"],
+    },
+  ])("fails closed for $name", async ({ options, messages }) => {
+    const error = await diagnostic(options);
+    for (const message of messages) {
+      expect(error?.message).toContain(message);
+    }
   });
 
-  it("fails closed for runtime toolsAllow when tools are disabled", async () => {
-    const error = await diagnostic({ allow: ["query_db"], disableTools: true });
-    expect(error?.message).toContain("runtime toolsAllow: query_db");
-    expect(error?.message).toContain("tools are disabled for this run");
-  });
-
-  it("allows inherited config allowlists when a run intentionally disables tools", async () => {
-    expect(
-      await diagnostic({ configAllow: ["lobster", "llm-task"], disableTools: true }),
-    ).toBeNull();
-  });
-
-  it("allows inherited config allowlists when runtime toolsAllow is explicitly empty", async () => {
-    expect(
-      await diagnostic({ configAllow: ["*", "read", "cron"], effectiveToolsAllow: [] }),
-    ).toBeNull();
+  it.each([
+    { configAllow: ["lobster", "llm-task"], disableTools: true },
+    { configAllow: ["*", "read", "cron"], effectiveToolsAllow: [] },
+    {},
+  ])("allows intentionally tool-less or unrestricted runs: %j", async (options) => {
+    expect(await diagnostic(options)).toBeNull();
   });
 
   it("still enforces command-time allowlists for explicitly tool-less runs", async () => {
@@ -421,16 +394,6 @@ describe("explicit tool allowlist diagnostics", () => {
     });
     expect(error?.message).toContain("runtime toolsAllow: query_db");
     expect(error?.message).not.toContain("tools.allow: read");
-  });
-
-  it("fails closed when the selected model cannot use requested tools", async () => {
-    const error = await diagnostic({ agentAllow: ["query_db"], toolsEnabled: false });
-    expect(error?.message).toContain("agents.main.tools.allow: query_db");
-    expect(error?.message).toContain("the selected model does not support tools");
-  });
-
-  it("allows text-only runs without explicit allowlists", async () => {
-    expect(await diagnostic()).toBeNull();
   });
 
   it("allows explicit allowlists when at least one callable tool remains", async () => {

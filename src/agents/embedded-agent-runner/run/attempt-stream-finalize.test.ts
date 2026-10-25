@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 
@@ -197,15 +197,38 @@ function createTimeoutFixture(waitForPendingEvents: FixtureOverrides["waitForPen
   return fixture;
 }
 
+function createRewindFixture(withTrailingEntries = false) {
+  const sessionManager = SessionManager.inMemory();
+  const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
+  const rejectedId = sessionManager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "Rejected first answer" }],
+    stopReason: "stop",
+    timestamp: 2,
+  } as never);
+  if (withTrailingEntries) {
+    sessionManager.appendCustomEntry("trailing-metadata", { source: "hook" });
+    sessionManager.appendCompaction("Summary including rejected answer", promptId, 100);
+  }
+  const originalMessages = sessionManager.buildSessionContext().messages;
+  const activeSession = {
+    agent: { state: { messages: originalMessages } },
+    getActiveToolNames: vi.fn(() => ["read"]),
+    sessionId: "active-session",
+  };
+  const fixture = createFixture({
+    activeSession: activeSession as never,
+    sessionManager: sessionManager as never,
+    repairedRejectedProviderReplay: false,
+    getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
+  });
+  return { fixture, sessionManager, promptId, rejectedId, originalMessages, activeSession };
+}
+
 describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
   it("does not settle a provider failure before partial presentation finishes", async () => {
-    let resolvePartial: (() => void) | undefined;
-    const onPartialReply = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolvePartial = resolve;
-        }),
-    );
+    const partial = createDeferredCore();
+    const onPartialReply = vi.fn(() => partial.promise);
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-partial-provider-failure",
       onBeforeTerminalDelivery: async () => undefined,
@@ -246,34 +269,14 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     await Promise.resolve();
     expect(mocks.settleStream).not.toHaveBeenCalled();
 
-    resolvePartial?.();
+    partial.resolve();
     await finalize;
     expect(mocks.settleStream).toHaveBeenCalledOnce();
   });
 
   it("rewinds the exact rejected branch before the hidden retry can choose NO_REPLY", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
-    const rejectedId = sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "Rejected first answer" }],
-      stopReason: "stop",
-      timestamp: 2,
-    } as never);
-    sessionManager.appendCustomEntry("trailing-metadata", { source: "hook" });
-    sessionManager.appendCompaction("Summary including rejected answer", promptId, 100);
-    const originalMessages = sessionManager.buildSessionContext().messages;
-    const activeSession = {
-      agent: { state: { messages: originalMessages } },
-      getActiveToolNames: vi.fn(() => ["read"]),
-      sessionId: "active-session",
-    };
-    const fixture = createFixture({
-      activeSession: activeSession as never,
-      sessionManager: sessionManager as never,
-      repairedRejectedProviderReplay: false,
-      getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
-    });
+    const { fixture, sessionManager, promptId, rejectedId, originalMessages, activeSession } =
+      createRewindFixture(true);
     const settledStream = settledResult({
       messagesSnapshot: originalMessages,
     });
@@ -355,46 +358,21 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
   it("proceeds to settlement when pending subscription events never settle", async () => {
     vi.useFakeTimers();
-    try {
-      const fixture = createFixture({
-        waitForPendingEvents: vi.fn(() => new Promise<never>(() => {})),
-      });
+    onTestFinished(() => vi.useRealTimers());
+    const fixture = createFixture({
+      waitForPendingEvents: vi.fn(() => new Promise<never>(() => {})),
+    });
 
-      const finalize = runEmbeddedAttemptSettledPhase(fixture.input);
-      await vi.advanceTimersByTimeAsync(119_999);
-      expect(mocks.settleStream).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(finalize).resolves.toEqual({
-        sessionIdUsed: "session-1",
-        sessionFileUsed: "initial.jsonl",
-      });
-      expect(mocks.settleStream).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
+    const finalize = runEmbeddedAttemptSettledPhase(fixture.input);
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(mocks.settleStream).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(finalize).resolves.toEqual(completedAttempt);
+    expect(mocks.settleStream).toHaveBeenCalledOnce();
   });
 
   it("restores the rewound in-memory branch when settlement fails", async () => {
-    const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
-    const rejectedId = sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "Rejected first answer" }],
-      stopReason: "stop",
-      timestamp: 2,
-    } as never);
-    const originalMessages = sessionManager.buildSessionContext().messages;
-    const activeSession = {
-      agent: { state: { messages: originalMessages } },
-      getActiveToolNames: vi.fn(() => ["read"]),
-      sessionId: "active-session",
-    };
-    const fixture = createFixture({
-      activeSession: activeSession as never,
-      sessionManager: sessionManager as never,
-      repairedRejectedProviderReplay: false,
-      getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
-    });
+    const { fixture, sessionManager, promptId, activeSession } = createRewindFixture();
     const settlementError = new Error("settlement failed");
     const promptError = new Error("prompt failed");
     mocks.settleStream.mockImplementation(async (settleInput: SettleMockInput) => {

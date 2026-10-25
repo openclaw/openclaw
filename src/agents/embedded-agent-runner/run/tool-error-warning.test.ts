@@ -1,5 +1,3 @@
-// Tool warning tests ensure failed actions remain visible without exposing
-// verbose execution details unless the operator explicitly requests them.
 import { describe, expect, it } from "vitest";
 import {
   buildPayloads,
@@ -22,33 +20,41 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     expected: { text: string; isError?: boolean },
   ) {
     expectSinglePayloadText(payloads, expected.text);
-    if (expected.isError === undefined) {
-      expect(payloads[0]?.isError).toBeUndefined();
-      return;
-    }
     expect(payloads[0]?.isError).toBe(expected.isError);
   }
 
   function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
-    const payloads = buildPayloads(params);
-    expect(payloads).toHaveLength(0);
+    expect(buildPayloads(params)).toHaveLength(0);
   }
 
-  function expectNoSyntheticCompletionForSession(sessionKey: string) {
-    expectNoPayloads({
-      sessionKey,
-      lastAssistant: makeStoppedAssistant(),
+  function execWarning(
+    meta: string,
+    options: Parameters<typeof buildPayloads>[0] = {},
+    error = "Command exited with code 1",
+  ) {
+    return buildPayloads({
+      lastToolError: { toolName: "exec", meta, error, mutatingAction: true },
+      toolResultFormat: "markdown",
+      verboseLevel: "full",
+      ...options,
     });
   }
 
-  it("adds a fallback error when a tool fails and no assistant output exists", () => {
+  it.each([
+    ["browser", "Browser", "tab not found", "off"],
+    ["browser", "Browser", "connection timeout", "on"],
+    ["browser", "Browser", "connection timeout", "full"],
+    ["exec", "Exec", "/bin/bash: line 1: python: command not found", "off"],
+  ] as const)("renders %s (%s): %s at %s verbosity", (toolName, title, error, verboseLevel) => {
     const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "tab not found" },
+      lastToolError: { toolName, error, ...(toolName === "exec" ? { mutatingAction: true } : {}) },
+      verboseLevel,
     });
-
     expectSingleToolErrorPayload(payloads, {
-      title: "Browser",
-      absentDetail: "tab not found",
+      title,
+      ...(verboseLevel === "full"
+        ? { detail: error }
+        : { absentDetail: toolName === "exec" ? "python: command not found" : error }),
     });
   });
 
@@ -62,26 +68,13 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     expectSinglePayloadText(payloads, "All good");
   });
 
-  it("does not add synthetic completion text for channel sessions", () => {
-    expectNoSyntheticCompletionForSession("agent:main:discord:channel:c123");
-  });
-
-  it("does not add synthetic completion text for group sessions", () => {
-    expectNoSyntheticCompletionForSession("agent:main:telegram:group:g123");
-  });
-
-  it("does not add synthetic completion text when messaging tool already delivered output", () => {
-    expectNoPayloads({
-      sessionKey: "agent:main:discord:direct:u123",
-      didSendViaMessagingTool: true,
-      lastAssistant: makeStoppedAssistant(),
-    });
-  });
-
-  it("does not add synthetic completion text when no tools ran", () => {
-    expectNoPayloads({
-      lastAssistant: makeStoppedAssistant(),
-    });
+  it.each([
+    { sessionKey: "agent:main:discord:channel:c123" },
+    { sessionKey: "agent:main:telegram:group:g123" },
+    { sessionKey: "agent:main:discord:direct:u123", didSendViaMessagingTool: true },
+    {},
+  ])("does not add synthetic completion text: %j", (options) => {
+    expectNoPayloads({ ...options, lastAssistant: makeStoppedAssistant() });
   });
 
   it("adds compact tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
@@ -110,21 +103,6 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
 
     expectSinglePayloadSummary(payloads, {
       text: "Checked the page and recovered with final answer.",
-    });
-  });
-
-  it("keeps exec-like tool error warnings when there is no user-facing reply", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        error: "/bin/bash: line 1: python: command not found",
-        mutatingAction: true,
-      },
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "python: command not found",
     });
   });
 
@@ -159,34 +137,16 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   });
 
   it("hides exec command and cwd metadata without full verbosity", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 /path/to/daily-cost-audit.py (in /private/workspace)",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-      verboseLevel: "off",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ Exec failed (exit 1)",
-      isError: true,
-    });
+    expectSinglePayloadSummary(
+      execWarning("run python3 /path/to/daily-cost-audit.py (in /private/workspace)", {
+        verboseLevel: "off",
+      }),
+      { text: "⚠️ Exec failed (exit 1)", isError: true },
+    );
   });
 
   it("keeps full-verbose exec failure labels outside markdown command text", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 /path/to/daily-cost-audit.py",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-      verboseLevel: "full",
-    });
+    const payloads = execWarning("run python3 /path/to/daily-cost-audit.py");
 
     expectSinglePayloadSummary(payloads, {
       text: "⚠️ Exec failed: `python3 /path/to/daily-cost-audit.py`: Command exited with code 1",
@@ -249,157 +209,61 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   );
 
   it.each([
-    {
-      title: "prefers raw exec metadata when tool progress detail includes it",
-      meta: "run python3 /tmp/audit.py · `python3 /tmp/audit.py`",
-      toolResultFormat: "markdown",
-      expected: "⚠️ Exec failed: `python3 /tmp/audit.py`: Command exited with code 1",
+    ["run python3 /tmp/audit.py · `python3 /tmp/audit.py`", "`python3 /tmp/audit.py`"],
+    [
+      "run node inline script, `node -e 'console.log(1, `x`)'`",
+      "``node -e 'console.log(1, `x`)'``",
+    ],
+    [
+      "run node inline script, `node -e 'console.log(1, `x`)'`",
+      "node -e 'console.log(1, `x`)'",
+      "plain",
+    ],
+    [
+      "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
+      "`node: mac-1 · python3 /tmp/audit.py`",
+    ],
+    ['search "foo,bar" in src, `rg "foo,bar" src`', '`rg "foo,bar" src`'],
+    ['list files in (in progress) · `ls "(in progress)"`', '`ls "(in progress)"`'],
+    ['print text (repo) · `printf "%s" "(repo)"`', '`printf "%s" "(repo)"`'],
+    [
+      "run python3 /tmp/audit.py (in /tmp/build @everyone)",
+      "`python3 /tmp/audit.py (in /tmp/build @everyone)`",
+    ],
+    [
+      "run python3 audit.py (in /tmp/build) · `python3 audit.py`",
+      "`python3 audit.py (in /tmp/build)`",
+    ],
+    [
+      "run python3 audit.py (workspace), node: mac-1, `python3 audit.py`",
+      "`node: mac-1 · python3 audit.py (workspace)`",
+    ],
+    ["check git status (repo), `git status`", "`git status (repo)`"],
+  ] as const)(
+    "formats raw exec context: %s",
+    (meta, formatted, toolResultFormat: "plain" | "markdown" = "markdown") => {
+      expectSinglePayloadSummary(execWarning(meta, { toolResultFormat }), {
+        text: `⚠️ Exec failed: ${formatted}: Command exited with code 1`,
+        isError: true,
+      });
     },
-    {
-      title: "prefers raw exec metadata when the literal command contains backticks",
-      meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
-      toolResultFormat: "markdown",
-      expected: "⚠️ Exec failed: ``node -e 'console.log(1, `x`)'``: Command exited with code 1",
-    },
-    {
-      title: "leaves exec metadata unwrapped for plain tool results",
-      meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
-      toolResultFormat: "plain",
-      expected: "⚠️ Exec failed: node -e 'console.log(1, `x`)': Command exited with code 1",
-    },
-    {
-      title: "preserves raw exec context before trailing raw command metadata",
-      meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
-      toolResultFormat: "markdown",
-      expected: "⚠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py`: Command exited with code 1",
-    },
-    {
-      title: "does not promote display-summary commas into raw exec context",
-      meta: 'search "foo,bar" in src, `rg "foo,bar" src`',
-      toolResultFormat: "markdown",
-      expected: '⚠️ Exec failed: `rg "foo,bar" src`: Command exited with code 1',
-    },
-    {
-      title: "does not treat parenthesized raw command arguments as cwd context",
-      meta: 'list files in (in progress) · `ls "(in progress)"`',
-      toolResultFormat: "markdown",
-      expected: '⚠️ Exec failed: `ls "(in progress)"`: Command exited with code 1',
-    },
-    {
-      title: "does not duplicate compact cwd labels already present in raw command arguments",
-      meta: 'print text (repo) · `printf "%s" "(repo)"`',
-      toolResultFormat: "markdown",
-      expected: '⚠️ Exec failed: `printf "%s" "(repo)"`: Command exited with code 1',
-    },
-    {
-      title: "keeps arbitrary exec cwd suffixes inside markdown command text",
-      meta: "run python3 /tmp/audit.py (in /tmp/build @everyone)",
-      toolResultFormat: "markdown",
-      expected:
-        "⚠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)`: Command exited with code 1",
-    },
-    {
-      title: "preserves raw exec cwd context before trailing raw command metadata",
-      meta: "run python3 audit.py (in /tmp/build) · `python3 audit.py`",
-      toolResultFormat: "markdown",
-      expected: "⚠️ Exec failed: `python3 audit.py (in /tmp/build)`: Command exited with code 1",
-    },
-    {
-      title: "preserves raw exec workspace and node context before trailing raw command metadata",
-      meta: "run python3 audit.py (workspace), node: mac-1, `python3 audit.py`",
-      toolResultFormat: "markdown",
-      expected:
-        "⚠️ Exec failed: `node: mac-1 · python3 audit.py (workspace)`: Command exited with code 1",
-    },
-    {
-      title: "preserves semantic compact repo context before trailing raw command metadata",
-      meta: "check git status (repo), `git status`",
-      toolResultFormat: "markdown",
-      expected: "⚠️ Exec failed: `git status (repo)`: Command exited with code 1",
-    },
-  ] as const)("$title", ({ meta, toolResultFormat, expected }) => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta,
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat,
-      verboseLevel: "full",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: expected,
-      isError: true,
-    });
-  });
+  );
 
   it.each([
-    {
-      name: "strips a literal synthetic run prefix",
-      meta: "run make build",
-      error: "Command failed with exit code 2",
-      expected: "⚠️ Exec failed: `make build`: Command failed with exit code 2",
-    },
-    {
-      name: "preserves a semantic test summary",
-      meta: "run tests",
-      error: "Command failed with exit code 1",
-      expected: "⚠️ Exec failed: `run tests`: Command failed with exit code 1",
-    },
-    {
-      name: "preserves a semantic deploy summary",
-      meta: "run deploy",
-      error: "Command failed with exit code 1",
-      expected: "⚠️ Exec failed: `run deploy`: Command failed with exit code 1",
-    },
-    {
-      name: "preserves a compound summary",
-      meta: "run tests → install dependencies",
-      error: "Command failed with exit code 1",
-      expected:
-        "⚠️ Exec failed: `run tests → install dependencies`: Command failed with exit code 1",
-    },
-    {
-      name: "preserves an inline-script summary",
-      meta: "run node inline script",
-      error: "Command failed with exit code 1",
-      expected: "⚠️ Exec failed: `run node inline script`: Command failed with exit code 1",
-    },
-    {
-      name: "preserves a heredoc summary",
-      meta: "run python3 inline script (heredoc)",
-      error: "Command failed with exit code 1",
-      expected:
-        "⚠️ Exec failed: `run python3 inline script (heredoc)`: Command failed with exit code 1",
-    },
-    {
-      name: "preserves a sed summary",
-      meta: "run sed on file",
-      error: "Command failed with exit code 1",
-      expected: "⚠️ Exec failed: `run sed on file`: Command failed with exit code 1",
-    },
-    {
-      name: "preserves a pipeline summary",
-      meta: "run tests -> show first 3 lines",
-      error: "Command failed with exit code 1",
-      expected:
-        "⚠️ Exec failed: `run tests -> show first 3 lines`: Command failed with exit code 1",
-    },
-  ])("formats exec metadata: $name", ({ meta, error, expected }) => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta,
-        error,
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-      verboseLevel: "full",
+    ["run make build", "make build", 2],
+    ["run tests", "run tests", 1],
+    ["run deploy", "run deploy", 1],
+    ["run tests → install dependencies", "run tests → install dependencies", 1],
+    ["run node inline script", "run node inline script", 1],
+    ["run python3 inline script (heredoc)", "run python3 inline script (heredoc)", 1],
+    ["run sed on file", "run sed on file", 1],
+    ["run tests -> show first 3 lines", "run tests -> show first 3 lines", 1],
+  ] as const)("formats exec summary: %s", (meta, formatted, exit) => {
+    const error = `Command failed with exit code ${exit}`;
+    expectSinglePayloadSummary(execWarning(meta, {}, error), {
+      text: `⚠️ Exec failed: \`${formatted}\`: ${error}`,
+      isError: true,
     });
-
-    expectSinglePayloadSummary(payloads, { text: expected, isError: true });
   });
 
   it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {
@@ -417,30 +281,6 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     expectSinglePayloadSummary(payloads, {
       text: "⚠️ Bash failed: `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` (workspace): Command exited with code 1",
       isError: true,
-    });
-  });
-
-  it("keeps non-recoverable tool errors compact when verbose mode is on", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "connection timeout" },
-      verboseLevel: "on",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Browser",
-      absentDetail: "connection timeout",
-    });
-  });
-
-  it("includes non-recoverable tool error details when verbose mode is full", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "connection timeout" },
-      verboseLevel: "full",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Browser",
-      detail: "connection timeout",
     });
   });
 });

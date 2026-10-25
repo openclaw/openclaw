@@ -36,6 +36,10 @@ function processError(
   };
 }
 
+const stopped = (content: AssistantMessage["content"]) =>
+  makeAgentAssistantMessage({ stopReason: "stop", content });
+const textAssistant = (text: string) => stopped([{ type: "text", text }]);
+
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it.each(["observation-failed", "missing"] as const)(
     "retains delivery custody before selecting current text and media (%s)",
@@ -117,14 +121,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("does not revive signed unphased text when explicit output_text final-answer text is empty", () => {
     expect(
       buildPayloads({
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "stop",
-          content: [
-            signedText("MEDIA:/tmp/old.png", "item_old"),
-            signedText("   ", "item_final", "final_answer", "output_text"),
-          ],
-        } as AssistantMessage,
+        lastAssistant: stopped([
+          signedText("MEDIA:/tmp/old.png", "item_old"),
+          signedText("   ", "item_final", "final_answer", "output_text"),
+        ] as AssistantMessage["content"]),
       }),
     ).toEqual([]);
   });
@@ -151,9 +151,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         content: [],
       }),
       keptAnswer: {
-        assistant: makeAgentAssistantMessage({
-          content: [{ type: "text", text: "Completed answer." }],
-        }),
+        assistant: textAssistant("Completed answer."),
         messageIndex: 1,
       },
     });
@@ -162,9 +160,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
   it("selects each sealed and open segment's answer around NO_REPLY", () => {
     const answers = ["First answer.", "NO_REPLY", "Third answer."];
-    const messages = answers.map((text) =>
-      makeAgentAssistantMessage({ content: [{ type: "text", text }] }),
-    );
+    const messages = answers.map(textAssistant);
     const payloads = buildPayloads({
       assistantTexts: answers.flatMap((text) => ["Checking first.", text]),
       answerSegments: messages.slice(0, 2).map((lastAssistant, index) => ({
@@ -178,12 +174,9 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       assistantMessageIndex: 6,
     });
     expect(payloads.map((payload) => payload.text)).toEqual(["First answer.", "Third answer."]);
-    expect(
-      payloads.map((payload) => getReplyPayloadMetadata(payload)?.assistantMessageIndex),
-    ).toEqual([2, 6]);
-    expect(
-      payloads.map((payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer),
-    ).toEqual([true, undefined]);
+    const metadata = payloads.map((payload) => getReplyPayloadMetadata(payload));
+    expect(metadata.map((entry) => entry?.assistantMessageIndex)).toEqual([2, 6]);
+    expect(metadata.map((entry) => entry?.precedingInputAnswer)).toEqual([true, undefined]);
   });
 
   it.each([
@@ -199,9 +192,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       const earlier = makeAgentAssistantMessage({
         content: parts.map((text) => ({ type, text })) as AssistantMessage["content"],
       });
-      const current = makeAgentAssistantMessage({
-        content: [{ type: "text", text: "Final answer." }],
-      });
+      const current = textAssistant("Final answer.");
       const payloads = buildPayloads({
         assistantTexts: [parts.join("\n"), "Final answer."],
         answerSegments: [
@@ -232,12 +223,12 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 
   it("preserves rich-only internal message-tool source replies", () => {
-    const presentation = {
-      blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
-    } satisfies MessagePresentation;
-    const interactive = {
-      blocks: [{ type: "buttons", buttons: [{ label: "Open", value: "open" }] }],
-    } satisfies InteractiveReply;
+    const buttons = (label: string, value: string) =>
+      ({
+        blocks: [{ type: "buttons", buttons: [{ label, value }] }],
+      }) satisfies MessagePresentation & InteractiveReply;
+    const presentation = buttons("Approve", "approve");
+    const interactive = buttons("Open", "open");
 
     const payloads = buildPayloads({
       assistantTexts: ["ordinary final should stay private"],
@@ -299,11 +290,9 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
   it("adds a tool warning when a tool failure leaves only reasoning", () => {
     const payloads = buildPayloads({
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "thinking", thinking: "Private reasoning only." }],
-      } as AssistantMessage,
+      lastAssistant: stopped([
+        { type: "thinking", thinking: "Private reasoning only." },
+      ] as AssistantMessage["content"]),
       lastToolError: {
         toolName: "message",
         error: "cross-context messaging denied",
@@ -314,11 +303,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expect(payloads).toHaveLength(2);
-    expect(payloads[0]).toMatchObject({ text: "Private reasoning only.", isReasoning: true });
-    expect(payloads[1]).toMatchObject({
-      text: "⚠️ Message failed",
-      isError: true,
-    });
+    expect(payloads).toMatchObject([
+      { text: "Private reasoning only.", isReasoning: true },
+      { text: "⚠️ Message failed", isError: true },
+    ]);
   });
 
   it.each([
@@ -350,13 +338,9 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("preserves media directives when stored assistant text was reduced to visible text only", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Attached image"],
-      lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [
-          signedText("MEDIA:/tmp/reply-image.png\nAttached image", "item_final", "final_answer"),
-        ],
-      } as AssistantMessage,
+      lastAssistant: stopped([
+        signedText("MEDIA:/tmp/reply-image.png\nAttached image", "item_final", "final_answer"),
+      ] as AssistantMessage["content"]),
     });
 
     expectImagePayload(payloads);
@@ -364,33 +348,22 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 });
 
 describe("cron completion after a delivered report", () => {
-  const deliveredReport = {
-    tool: "message",
-    provider: "slack",
-    to: "C_REPORTS",
-    text: "The daily report is complete.",
-  };
-  const completedRun = {
-    isCronTrigger: true,
-    assistantTexts: ["NO_REPLY"],
-    didSendViaMessagingTool: true,
-    messagingToolSentTargets: [deliveredReport],
-    lastToolError: {
-      toolName: "codex_apps.slack.slack_read_thread",
-      error: "429 RATE_LIMITED",
-      mutatingAction: false,
-    },
-  };
-
-  it.each([
-    {
-      name: "a send without visible content",
-      messagingToolSentTargets: [{ ...deliveredReport, text: "", visible: false }],
-    },
-  ])("still reports failure for $name", ({ name: _name, ...overrides }) => {
-    expect(buildPayloads({ ...completedRun, ...overrides })).toEqual([
-      expect.objectContaining({ isError: true }),
-    ]);
+  it("still reports failure for a send without visible content", () => {
+    expect(
+      buildPayloads({
+        isCronTrigger: true,
+        assistantTexts: ["NO_REPLY"],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          { tool: "message", provider: "slack", to: "C_REPORTS", text: "", visible: false },
+        ],
+        lastToolError: {
+          toolName: "codex_apps.slack.slack_read_thread",
+          error: "429 RATE_LIMITED",
+          mutatingAction: false,
+        },
+      }),
+    ).toEqual([expect.objectContaining({ isError: true })]);
   });
 });
 
@@ -398,17 +371,12 @@ describe("buildEmbeddedRunPayloads delivery recovery", () => {
   it("uses persisted delivery facts for a recovered final assistant", () => {
     const payloads = buildPayloads({
       lastAssistant: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "Recovered answer" }],
+        ...textAssistant("Recovered answer"),
         openclawDelivery: {
           audioAsVoice: true,
           replyToCurrent: true,
           replyToId: "message-7",
-          tts: {
-            tagged: true,
-            text: "Recovered speech",
-          },
+          tts: { tagged: true, text: "Recovered speech" },
         },
       } as AssistantMessage,
     });
