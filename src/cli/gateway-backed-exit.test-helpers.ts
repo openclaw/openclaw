@@ -28,7 +28,7 @@ type ExpectedGatewayAuth =
   | { token: string; deviceToken?: never }
   | { token?: never; deviceToken: string };
 
-async function startGateway(
+export async function startGateway(
   handle: ((ws: WebSocket, frame: Request) => void) | Record<string, unknown>,
   connect?: (frame: Request) => Hello,
   host = "127.0.0.1",
@@ -72,6 +72,10 @@ async function startGateway(
     port,
     get connectionCount() {
       return connectionCount;
+    },
+    close: async () => {
+      await closeMinimalGatewayServer(wss);
+      activeServers.delete(wss);
     },
   };
 }
