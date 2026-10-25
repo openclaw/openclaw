@@ -1,13 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import type {
-  ControlUiSessionPullRequest,
-  ControlUiSessionPullRequests,
-} from "./control-ui-contract.js";
+import type { ControlUiSessionPullRequest } from "./control-ui-contract.js";
 import { loadControlUiSessionPullRequestChecks } from "./control-ui-session-pr-check-details.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 
@@ -29,53 +26,70 @@ const chip: ControlUiSessionPullRequest = {
 };
 let scope = 0;
 
-function check(id: number, overrides: Record<string, unknown> = {}) {
+const completed = {
+  status: "completed",
+  conclusion: "success",
+  started_at: "2026-09-14T03:00:00Z",
+  completed_at: "2026-09-14T03:00:10Z",
+};
+
+function check(id: number, overrides: Record<string, unknown> = {}, host = "github.com") {
   return {
     id,
     name: "check-" + id,
-    status: "completed",
-    conclusion: "success",
+    ...completed,
     head_sha: headSha,
     app: { slug: "github-actions" },
     check_suite: { id: 17 },
-    details_url: "https://github.com/openclaw/openclaw/actions/runs/23/job/" + (id + 1000),
-    started_at: "2026-09-14T03:00:00Z",
-    completed_at: "2026-09-14T03:00:10Z",
+    details_url: `https://${host}/openclaw/openclaw/actions/runs/23/job/${id + 1000}`,
     ...overrides,
   };
 }
-function job(checkId: number, overrides: Record<string, unknown> = {}) {
+function step(number: number, name: string, status = "completed", conclusion?: string | null) {
+  return { number, name, status, conclusion };
+}
+function job(checkId: number, overrides: Record<string, unknown> = {}, api = base) {
   return {
     id: checkId + 1000,
     run_id: 23,
     run_attempt: 2,
     head_sha: headSha,
-    check_run_url: base + "/check-runs/" + checkId,
-    status: "completed",
-    conclusion: "success",
-    started_at: "2026-09-14T03:00:00Z",
-    completed_at: "2026-09-14T03:00:10Z",
+    check_run_url: api + "/check-runs/" + checkId,
+    ...completed,
     steps: [
-      { number: 3, name: "Complete job", status: "completed", conclusion: "success" },
-      { number: 1, name: "Set up", status: "completed", conclusion: "success" },
-      { number: 2, name: "Test", status: "completed", conclusion: "success" },
+      step(3, "Complete job", "completed", "success"),
+      step(1, "Set up", "completed", "success"),
+      step(2, "Test", "completed", "success"),
     ],
     ...overrides,
   };
 }
 
-function harness() {
+function harness(host = "github.com") {
+  const api = host === "github.com" ? base : `https://${host}/api/v3/repos/openclaw/openclaw`;
+  const pullUrl = chip.url.replace("github.com", host);
+  if (host !== "github.com") {
+    setRuntimeConfigSnapshot({
+      gateway: {
+        github: { host, apiBaseUrl: `https://${host}/api/v3` },
+        controlUi: { github: { host, token: "synthetic-enterprise-token" } },
+      },
+    });
+  }
   const state = {
-    checks: [check(1)],
-    jobs: [job(1)],
-    upstreamHead: headSha,
+    checks: [check(1, {}, host)],
+    jobs: [job(1, {}, api)],
     status: 200,
-    jobsStatus: 200,
     secondJobPageStatus: 200,
     runHead: headSha,
-    snapshot: { pullRequests: [chip], rateLimited: false } as ControlUiSessionPullRequests,
   };
-  const fetchResponse: typeof fetch = async (input) => {
+  const fetchResponse: typeof fetch = async (input, options) => {
+    if (host !== "github.com") {
+      expect(requestUrl(input).startsWith(api)).toBe(true);
+      expect(new Headers(options?.headers).get("Authorization")).toBe(
+        "Bearer synthetic-enterprise-token",
+      );
+    }
     const url = new URL(requestUrl(input));
     if (state.status !== 200) {
       const response = githubJson({ message: "do not expose upstream diagnostics" }, state.status);
@@ -85,7 +99,7 @@ function harness() {
       return response;
     }
     if (url.pathname.endsWith("/pulls/103469")) {
-      return githubJson(pullListItem({ head: { sha: state.upstreamHead } }));
+      return githubJson(pullListItem({ html_url: pullUrl }));
     }
     const page = Number(url.searchParams.get("page"));
     const paginated = (field: string, rows: unknown[]) =>
@@ -104,22 +118,57 @@ function harness() {
     }
     if (url.pathname.endsWith("/jobs")) {
       expect(url.searchParams.get("filter")).toBe("all");
-      const status = page > 1 ? state.secondJobPageStatus : state.jobsStatus;
+      const status = page > 1 ? state.secondJobPageStatus : 200;
       return status !== 200 ? githubJson({}, status) : paginated("jobs", state.jobs);
     }
     throw new Error("Unexpected route: " + url.href);
   };
+  const snapshot = { pullRequests: [{ ...chip, url: pullUrl }], rateLimited: false };
+  const fetchImpl = vi.fn(fetchResponse);
+  vi.stubGlobal("fetch", fetchImpl);
   const deps = {
     sessionScope: "ci-test-" + ++scope,
     assertCurrent: vi.fn(),
-    fetchImpl: vi.fn(fetchResponse),
-    loadPullRequests: vi.fn(async () => state.snapshot),
+    loadPullRequests: vi.fn(async () => snapshot),
   };
   return {
+    api,
+    host,
     state,
-    deps,
+    ...deps,
+    fetchImpl,
     fetchResponse,
-    load: () => loadControlUiSessionPullRequestChecks(target, deps),
+    load: (
+      params: Partial<typeof target> = {},
+      overrides: Partial<Parameters<typeof loadControlUiSessionPullRequestChecks>[1]> = {},
+    ) => loadControlUiSessionPullRequestChecks({ ...target, ...params }, { ...deps, ...overrides }),
+  };
+}
+
+let h: ReturnType<typeof harness>;
+const unavailable = { status: "unavailable", checks: [] };
+function paginate(failing = false) {
+  const verdict = (i: number) => (failing && i === 100 ? { conclusion: "failure" } : {});
+  h.state.checks = Array.from({ length: 101 }, (_, i) => check(i + 1, verdict(i), h.host));
+  h.state.jobs = Array.from({ length: 101 }, (_, i) => job(i + 1, verdict(i), h.api));
+}
+function holdJobs(readers = 1) {
+  const clone = readers > 1;
+  let waiting = 0;
+  const gate = createDeferred<Response>();
+  const started = createDeferred();
+  h.fetchImpl.mockImplementation(async (input, init) => {
+    if (!requestUrl(input).includes("/jobs?")) {
+      return h.fetchResponse(input, init);
+    }
+    if (++waiting === readers) {
+      started.resolve();
+    }
+    return clone ? gate.promise.then((response) => response.clone()) : gate.promise;
+  });
+  return {
+    started: started.promise,
+    release: () => gate.resolve(githubJson({ total_count: 1, jobs: h.state.jobs })),
   };
 }
 
@@ -128,301 +177,234 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-09-14T04:00:00Z"));
   vi.stubEnv("GH_TOKEN", "");
   vi.stubEnv("GITHUB_TOKEN", "");
+  h = harness();
 });
 afterEach(() => {
   vi.useRealTimers();
   clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
-describe("session PR CI details", () => {
-  it.each(["github.com", "ghe.example.test"])(
-    "paginates and joins checks on the session host %s",
-    async (host) => {
-      const h = harness();
-      const enterpriseBase = "https://ghe.example.test/api/v3/repos/openclaw/openclaw";
-      if (host !== "github.com") {
-        setRuntimeConfigSnapshot({
-          gateway: {
-            github: { host, apiBaseUrl: "https://ghe.example.test/api/v3" },
-            controlUi: { github: { host, token: "synthetic-enterprise-token" } },
-          },
-        });
-        h.state.snapshot = {
-          ...h.state.snapshot,
-          pullRequests: [{ ...chip, url: chip.url.replace("github.com", host) }],
-        };
-      }
-      h.state.checks = Array.from({ length: 101 }, (_, i) =>
-        check(i + 1, i === 100 ? { conclusion: "failure" } : {}),
-      );
-      h.state.jobs = Array.from({ length: 101 }, (_, i) =>
-        job(i + 1, i === 100 ? { conclusion: "failure" } : {}),
-      );
-      if (host !== "github.com") {
-        h.state.jobs = h.state.jobs.map((row) => ({
-          ...row,
-          check_run_url: row.check_run_url.replace(base, enterpriseBase),
-        }));
-        const originalFetch = h.deps.fetchImpl.getMockImplementation()!;
-        h.deps.fetchImpl.mockImplementation(async (input, options) => {
-          const url = requestUrl(input);
-          expect(url.startsWith(enterpriseBase)).toBe(true);
-          expect(new Headers(options?.headers).get("Authorization")).toBe(
-            "Bearer synthetic-enterprise-token",
-          );
-          const response = await originalFetch(url.replace(enterpriseBase, base), options);
-          const body: unknown = await response.json();
-          // The HTTP fixture represents the admitted Enterprise repository, including its PR URL.
-          return githubJson(
-            JSON.parse(
-              JSON.stringify(body).replaceAll("https://github.com/", "https://ghe.example.test/"),
-            ),
-          );
-        });
-      }
-      const result = await h.load();
-      expect(result.status).toBe("ready");
-      expect(result.checks).toHaveLength(101);
-      expect(result.checks[0]).toMatchObject({
-        id: 101,
-        state: "failed",
-        source: "actions",
-        detailsUrl: `https://${host}/openclaw/openclaw/actions/runs/23/job/1101`,
-      });
-      expect(result.checks[0]?.steps?.map((step) => step.number)).toEqual([1, 2, 3]);
-      expect(
-        h.deps.fetchImpl.mock.calls.filter(([input]) => requestUrl(input).includes("/jobs?")),
-      ).toHaveLength(2);
-      expect(h.deps.fetchImpl.mock.calls).toHaveLength(6);
-    },
-  );
-
-  it("keeps non-Actions checks distinct and skips Actions calls for skipped-only suites", async () => {
-    const h = harness();
-    h.state.checks = [
-      check(1, { conclusion: "skipped" }),
-      check(2, {
-        app: { slug: "external-ci" },
-        status: "queued",
-        conclusion: null,
-        details_url: "https://ci.example.test/build/2",
-      }),
-    ];
-    const result = await h.load();
-    expect(result.checks.map((row) => [row.id, row.source, row.state, row.steps])).toEqual([
-      [2, "check", "running", undefined],
-      [1, "actions", "skipped", undefined],
-    ]);
-    expect(result.checks[0]?.detailsUrl).toBe("https://ci.example.test/build/2");
-    expect(
-      h.deps.fetchImpl.mock.calls.some(([input]) => requestUrl(input).includes("/actions/")),
-    ).toBe(false);
-  });
-
-  it("uses only current check identities while retaining successful earlier-attempt jobs", async () => {
-    const h = harness();
-    h.state.checks = [
-      check(2, { name: "rerun", status: "in_progress", conclusion: null }),
-      check(3, { name: "retained" }),
-    ];
-    h.state.jobs = [
-      job(1, { run_attempt: 1, name: "rerun", conclusion: "failure" }),
-      job(2, {
-        status: "in_progress",
-        conclusion: null,
-        steps: [{ number: 1, name: "Current attempt", status: "in_progress", conclusion: null }],
-      }),
-      job(3, { run_attempt: 1 }),
-    ];
+it.each(["github.com", "ghe.example.test"])(
+  "paginates and joins checks on the session host %s",
+  async (host) => {
+    h = harness(host);
+    paginate(true);
     const result = await h.load();
     expect(result.status).toBe("ready");
-    expect(result.checks.map((row) => row.id)).toEqual([2, 3]);
-    expect(result.checks[0]?.steps?.[0]?.name).toBe("Current attempt");
-    expect(result.checks[1]?.steps).toHaveLength(3);
-    h.state.checks = [check(4, { name: "rerun", conclusion: "failure" })];
-    h.state.jobs = [job(4, { conclusion: "failure" })];
-    vi.advanceTimersByTime(30_001);
-    const rerun = await h.load();
-    expect(rerun.checks.map((row) => row.id)).toEqual([4]);
-  });
-
-  it.each(["foreign repository", "missing join", "wrong head", "duplicate steps"])(
-    "does not attach steps for %s",
-    async (failure) => {
-      const h = harness();
-      if (failure === "foreign repository") {
-        h.state.jobs = [
-          job(1, { check_run_url: "https://api.github.com/repos/other/repo/check-runs/1" }),
-        ];
-      }
-      if (failure === "missing join") {
-        h.state.jobs = [job(2, { id: 1 })];
-      }
-      if (failure === "wrong head") {
-        h.state.runHead = "b".repeat(40);
-      }
-      if (failure === "duplicate steps") {
-        h.state.jobs = [
-          job(1, {
-            steps: [
-              { number: 1, name: "a", status: "completed" },
-              { number: 1, name: "b", status: "completed" },
-            ],
-          }),
-        ];
-      }
-      const result = await h.load();
-      expect(result.status).toBe("stale");
-      expect(result.checks[0]?.steps).toBeUndefined();
-      expect(result.error).toBeTruthy();
-    },
-  );
-
-  it("does not treat a failed later jobs page as a complete job inventory", async () => {
-    const h = harness();
-    h.state.checks = Array.from({ length: 101 }, (_, i) => check(i + 1));
-    h.state.jobs = Array.from({ length: 101 }, (_, i) => job(i + 1));
-    h.state.secondJobPageStatus = 403;
-    const result = await h.load();
-    expect(result.status).toBe("stale");
     expect(result.checks).toHaveLength(101);
-    expect(result.checks.every((row) => row.steps === undefined)).toBe(true);
-    expect(result.rateLimited).toBe(false);
-  });
-
-  it("coalesces repeated requests and respects the upstream retry window with stale data", async () => {
-    const h = harness();
-    const [a, b] = await Promise.all([h.load(), h.load()]);
-    expect(a).toEqual(b);
-    expect(h.deps.fetchImpl).toHaveBeenCalledTimes(4);
-    a.checks.splice(0);
-    expect((await h.load()).checks).toHaveLength(1);
-    h.state.status = 429;
-    vi.advanceTimersByTime(30_001);
-    const stale = await h.load();
-    expect(stale).toMatchObject({ status: "stale", rateLimited: true, retryAfterMs: 120_000 });
-    const calls = h.deps.fetchImpl.mock.calls.length;
-    vi.advanceTimersByTime(90_000);
-    expect((await h.load()).status).toBe("stale");
-    expect(h.deps.fetchImpl).toHaveBeenCalledTimes(calls);
-  });
-
-  it("does not reuse details across session generations or credential selections", async () => {
-    const h = harness();
-    await h.load();
-    h.state.status = 404;
-    const nextSession = await loadControlUiSessionPullRequestChecks(target, {
-      ...h.deps,
-      sessionScope: "next-session-" + ++scope,
+    expect(result.checks[0]).toMatchObject({
+      id: 101,
+      state: "failed",
+      source: "actions",
+      detailsUrl: `https://${host}/openclaw/openclaw/actions/runs/23/job/1101`,
     });
-    expect(nextSession).toMatchObject({ status: "unavailable", checks: [] });
-    vi.stubEnv("GH_TOKEN", "another-ci-credential");
-    expect(await h.load()).toMatchObject({ status: "unavailable", checks: [] });
-  });
-
-  it("rejects a client-selected PR/head absent from the session without fetching details", async () => {
-    const h = harness();
+    expect(result.checks[0]?.steps?.map((row) => row.number)).toEqual([1, 2, 3]);
     expect(
-      await loadControlUiSessionPullRequestChecks({ ...target, number: 999 }, h.deps),
-    ).toMatchObject({ status: "unavailable", checks: [] });
-    expect(
-      await loadControlUiSessionPullRequestChecks({ ...target, headSha: "b".repeat(40) }, h.deps),
-    ).toMatchObject({ status: "unavailable", checks: [] });
-    expect(h.deps.fetchImpl).not.toHaveBeenCalled();
-  });
+      h.fetchImpl.mock.calls.filter(([input]) => requestUrl(input).includes("/jobs?")),
+    ).toHaveLength(2);
+    expect(h.fetchImpl.mock.calls).toHaveLength(5);
+  },
+);
 
-  it("bounds distinct concurrent detail loads without multiplying GitHub requests", async () => {
-    const h = harness();
-    const gate = createDeferred<Response>();
-    const started = createDeferred();
-    let waiting = 0;
-    h.deps.fetchImpl.mockImplementation(async (input, init) => {
-      if (requestUrl(input).includes("/jobs?")) {
-        if (++waiting === 4) {
-          started.resolve();
-        }
-        return gate.promise.then((response) => response.clone());
-      }
-      return h.fetchResponse(input, init);
-    });
-    const pending = Array.from({ length: 4 }, (_, i) =>
-      loadControlUiSessionPullRequestChecks(target, {
-        ...h.deps,
-        sessionScope: h.deps.sessionScope + "-" + i,
-      }),
+it("separates non-Actions checks and skips skipped-only Actions suites", async () => {
+  h.state.checks = [
+    check(1, { conclusion: "skipped" }),
+    check(2, {
+      app: { slug: "external-ci" },
+      status: "queued",
+      conclusion: null,
+      details_url: "https://ci.example.test/build/2",
+    }),
+  ];
+  const result = await h.load();
+  expect(result.checks.map((row) => [row.id, row.source, row.state, row.steps])).toEqual([
+    [2, "check", "running", undefined],
+    [1, "actions", "skipped", undefined],
+  ]);
+  expect(result.checks[0]?.detailsUrl).toBe("https://ci.example.test/build/2");
+  expect(h.fetchImpl.mock.calls.some(([input]) => requestUrl(input).includes("/actions/"))).toBe(
+    false,
+  );
+});
+
+it("joins current checks and retains successful earlier-attempt jobs", async () => {
+  h.state.checks = [
+    check(2, { name: "rerun", status: "in_progress", conclusion: null }),
+    check(3, { name: "retained" }),
+  ];
+  h.state.jobs = [
+    job(1, { run_attempt: 1, name: "rerun", conclusion: "failure" }),
+    job(2, {
+      status: "in_progress",
+      conclusion: null,
+      steps: [step(1, "Current attempt", "in_progress", null)],
+    }),
+    job(3, { run_attempt: 1 }),
+  ];
+  const result = await h.load();
+  expect(result.status).toBe("ready");
+  expect(result.checks.map((row) => row.id)).toEqual([2, 3]);
+  expect(result.checks[0]?.steps?.[0]?.name).toBe("Current attempt");
+  expect(result.checks[1]?.steps).toHaveLength(3);
+  h.state.checks = [check(4, { name: "rerun", conclusion: "failure" })];
+  h.state.jobs = [job(4, { conclusion: "failure" })];
+  vi.advanceTimersByTime(30_001);
+  expect((await h.load()).checks.map((row) => row.id)).toEqual([4]);
+});
+
+it.each([
+  [
+    "foreign repository",
+    { jobs: [job(1, { check_run_url: "https://api.github.com/repos/other/repo/check-runs/1" })] },
+  ],
+  ["missing join", { jobs: [job(2, { id: 1 })] }],
+  ["wrong head", { runHead: "b".repeat(40) }],
+  ["duplicate steps", { jobs: [job(1, { steps: [step(1, "a"), step(1, "b")] })] }],
+] as const)("does not attach steps for %s", async (_failure, patch) => {
+  Object.assign(h.state, patch);
+  const result = await h.load();
+  expect(result.status).toBe("stale");
+  expect(result.checks[0]?.steps).toBeUndefined();
+  expect(result.error).toBeTruthy();
+});
+
+it("does not treat a failed later jobs page as a complete job inventory", async () => {
+  paginate();
+  h.state.secondJobPageStatus = 403;
+  const result = await h.load();
+  expect(result.checks).toHaveLength(101);
+  expect(result.checks.every((row) => row.steps === undefined)).toBe(true);
+  expect(result).toMatchObject({ status: "stale", rateLimited: false });
+});
+
+it.each(["new head", "closed"])(
+  "keeps requested-head details when GitHub has a %s PR",
+  async (change) => {
+    h.fetchImpl.mockImplementation((input, init) =>
+      requestUrl(input).includes("/pulls/")
+        ? Promise.resolve(
+            githubJson(
+              pullListItem(
+                change === "closed" ? { state: "closed" } : { head: { sha: "b".repeat(40) } },
+              ),
+            ),
+          )
+        : h.fetchResponse(input, init),
     );
-    await started.promise;
-    const busy = await h.load();
-    expect(busy).toMatchObject({ status: "unavailable", retryAfterMs: 5_000, checks: [] });
-    gate.resolve(githubJson({ total_count: 1, jobs: h.state.jobs }));
-    expect((await Promise.all(pending)).every((value) => value.status === "ready")).toBe(true);
-  });
-
-  it("clears stale private details after access is revoked", async () => {
-    const h = harness();
-    await h.load();
-    h.state.status = 403;
-    vi.advanceTimersByTime(30_001);
-    expect(await h.load()).toMatchObject({ status: "unavailable", checks: [] });
-    h.state.status = 503;
-    vi.advanceTimersByTime(30_001);
-    expect(await h.load()).toMatchObject({ status: "unavailable", checks: [] });
-  });
-
-  it("rejects repository redirects without dispatching credentials to a new target", async () => {
-    const h = harness();
-    h.deps.fetchImpl.mockResolvedValue(
-      new Response(null, {
-        status: 301,
-        headers: { location: "https://api.github.com/repos/other/repo/pulls/103469" },
-      }),
-    );
-    expect(await h.load()).toMatchObject({
-      status: "unavailable",
-      checks: [],
-      error: expect.stringContaining("repository changed"),
+    const result = await h.load();
+    expect(result).toMatchObject({ status: "ready", headSha });
+    expect(result.checks[0]?.steps).toHaveLength(3);
+    h.loadPullRequests.mockResolvedValueOnce({
+      pullRequests: [
+        {
+          ...chip,
+          ...(change === "closed" ? { state: "closed" as const } : { headSha: "b".repeat(40) }),
+        },
+      ],
+      rateLimited: false,
     });
-    expect(h.deps.fetchImpl).toHaveBeenCalledTimes(1);
-  });
+    expect(await h.load()).toMatchObject(unavailable);
+  },
+);
 
-  it.each([true, false])(
-    "rechecks live readers of coalesced details (remaining reader=%s)",
-    async (remainingReader) => {
-      const h = harness();
-      const gate = createDeferred<Response>();
-      const started = createDeferred();
-      h.deps.fetchImpl.mockImplementation(async (input, init) => {
-        if (requestUrl(input).includes("/jobs?")) {
-          started.resolve();
-          return gate.promise;
-        }
-        return h.fetchResponse(input, init);
-      });
-      const first = h.load();
-      let active = true;
-      const second = loadControlUiSessionPullRequestChecks(target, {
-        ...h.deps,
+it("coalesces reads and respects the retry window with stale data", async () => {
+  const [a, b] = await Promise.all([h.load(), h.load()]);
+  expect(a).toEqual(b);
+  expect(h.fetchImpl).toHaveBeenCalledTimes(3);
+  a.checks.splice(0);
+  expect((await h.load()).checks).toHaveLength(1);
+  h.state.status = 429;
+  vi.advanceTimersByTime(30_001);
+  const stale = await h.load();
+  expect(stale).toMatchObject({ status: "stale", rateLimited: true, retryAfterMs: 120_000 });
+  const calls = h.fetchImpl.mock.calls.length;
+  vi.advanceTimersByTime(90_000);
+  expect((await h.load()).status).toBe("stale");
+  expect(h.fetchImpl).toHaveBeenCalledTimes(calls);
+});
+
+it("does not reuse details across session generations or credential selections", async () => {
+  await h.load();
+  h.state.status = 404;
+  const nextSession = await h.load({}, { sessionScope: "next-session-" + ++scope });
+  expect(nextSession).toMatchObject(unavailable);
+  vi.stubEnv("GH_TOKEN", "another-ci-credential");
+  expect(await h.load()).toMatchObject(unavailable);
+});
+
+it("rejects unbound PRs and heads without fetching details", async () => {
+  expect(await h.load({ number: 999 })).toMatchObject(unavailable);
+  expect(await h.load({ headSha: "b".repeat(40) })).toMatchObject(unavailable);
+  expect(h.fetchImpl).not.toHaveBeenCalled();
+});
+
+it("bounds distinct concurrent loads without extra GitHub requests", async () => {
+  const jobs = holdJobs(4);
+  const pending = Array.from({ length: 4 }, (_, i) =>
+    h.load({}, { sessionScope: h.sessionScope + "-" + i }),
+  );
+  await jobs.started;
+  const busy = await h.load();
+  expect(busy).toMatchObject({ status: "unavailable", retryAfterMs: 5_000, checks: [] });
+  jobs.release();
+  expect((await Promise.all(pending)).every((value) => value.status === "ready")).toBe(true);
+});
+
+it("clears stale private details after access is revoked", async () => {
+  await h.load();
+  h.state.status = 403;
+  vi.advanceTimersByTime(30_001);
+  expect(await h.load()).toMatchObject(unavailable);
+  h.state.status = 503;
+  vi.advanceTimersByTime(30_001);
+  expect(await h.load()).toMatchObject(unavailable);
+});
+
+it("rejects repository redirects without credential dispatch", async () => {
+  h.fetchImpl.mockResolvedValue(
+    new Response(null, {
+      status: 301,
+      headers: { location: "https://api.github.com/repos/other/repo/pulls/103469" },
+    }),
+  );
+  expect(await h.load()).toMatchObject({
+    ...unavailable,
+    error: expect.stringContaining("repository changed"),
+  });
+  expect(h.fetchImpl).toHaveBeenCalledTimes(1);
+});
+
+it.each([true, false])(
+  "rechecks live readers of coalesced details (remaining reader=%s)",
+  async (remainingReader) => {
+    const jobs = holdJobs();
+    const first = h.load();
+    let active = true;
+    const second = h.load(
+      {},
+      {
         assertCurrent: () => {
           if (!active) {
             throw new Error("Second reader retired");
           }
         },
-      });
-      await started.promise;
-      active = remainingReader;
-      h.deps.assertCurrent.mockImplementation(() => {
-        throw new Error("session generation changed");
-      });
-      gate.resolve(githubJson({ total_count: 1, jobs: h.state.jobs }));
-      await expect(first).rejects.toThrow("session generation changed");
-      if (remainingReader) {
-        expect((await second).status).toBe("ready");
-      } else {
-        await expect(second).rejects.toThrow("Second reader retired");
-        expect(h.deps.fetchImpl).toHaveBeenCalledTimes(4);
-      }
-    },
-  );
-});
+      },
+    );
+    await jobs.started;
+    active = remainingReader;
+    h.assertCurrent.mockImplementation(() => {
+      throw new Error("session generation changed");
+    });
+    jobs.release();
+    await expect(first).rejects.toThrow("session generation changed");
+    if (remainingReader) {
+      expect((await second).status).toBe("ready");
+    } else {
+      await expect(second).rejects.toThrow("Second reader retired");
+      expect(h.fetchImpl).toHaveBeenCalledTimes(3);
+    }
+  },
+);

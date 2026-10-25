@@ -3,29 +3,40 @@ import { For } from "solid-js";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { parseToolSummary } from "./helpers.ts";
+import type { ParsedSessionLog } from "./helpers.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
-import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
+import type { UsageSessionEntry } from "./types.ts";
 import { renderInsightList } from "./view-overview.tsx";
 
 export function renderSessionSummary(
   session: UsageSessionEntry,
   filteredUsage?: UsageSessionEntry["usage"],
-  filteredLogs?: SessionLogEntry[] | null,
+  filteredLogs?: ParsedSessionLog[] | null,
 ) {
   const usage = filteredUsage || session.usage;
   if (!usage) {
     return <div class="usage-empty-block">{t("usage.details.noUsageData")}</div>;
   }
 
-  const formatTs = (ts?: number): string => (ts ? formatMs(ts) : t("usage.common.emptyValue"));
+  // One compact span: the date once, then both times when the session stayed within a day.
+  const formatActivitySpan = (first?: number, last?: number): string => {
+    if (!first || !last) {
+      return first || last ? formatMs((first || last)!) : t("usage.common.emptyValue");
+    }
+    const day = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+    const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+    const sameDay = day.format(first) === day.format(last);
+    return sameDay
+      ? `${day.format(first)}, ${time.format(first)} – ${time.format(last)}`
+      : `${day.format(first)}, ${time.format(first)} → ${day.format(last)}, ${time.format(last)}`;
+  };
   const hasInterval = filteredLogs !== undefined;
-  const datedLogs = filteredLogs?.filter((log) => log.timestamp > 0);
+  const datedLogs = filteredLogs?.filter(({ log }) => log.timestamp > 0);
   const messageCounts = !hasInterval
     ? usage.messageCounts
     : datedLogs?.length
       ? datedLogs.reduce(
-          (counts, { role }) => {
+          (counts, { log: { role } }) => {
             if (role === "user" || role === "assistant") {
               counts[role] += 1;
               counts.total += 1;
@@ -50,17 +61,20 @@ export function renderSessionSummary(
   if (datedLogs?.length) {
     toolCounts = new Map();
     // Result rows carry tool names for filtering, but only assistant rows record calls.
-    for (const log of datedLogs.filter(({ role }) => role === "assistant")) {
-      for (const [name, count] of parseToolSummary(log.content).tools) {
+    for (const { toolInfo } of datedLogs.filter(({ log }) => log.role === "assistant")) {
+      for (const [name, count] of toolInfo.tools) {
         toolCounts.set(name, (toolCounts.get(name) ?? 0) + count);
       }
     }
   }
-  const toolItems = baseTools.map((tool) => ({
-    label: tool.name,
-    value: `${toolCounts ? (toolCounts.get(tool.name) ?? 0) : hasInterval ? t("usage.common.emptyValue") : tool.count}`,
-    sub: t("usage.overview.calls"),
-  }));
+  const toolItems = baseTools.map((tool) => {
+    const count = toolCounts ? (toolCounts.get(tool.name) ?? 0) : tool.count;
+    return {
+      label: tool.name,
+      value: `${!toolCounts && hasInterval ? t("usage.common.emptyValue") : count}`,
+      weight: !toolCounts && hasInterval ? 0 : count,
+    };
+  });
   const toolCallCount = toolCounts
     ? [...toolCounts.values()].reduce((sum, count) => sum + count, 0)
     : hasInterval
@@ -75,6 +89,7 @@ export function renderSessionSummary(
     usage.modelUsage?.slice(0, 6).map((entry) => ({
       label: entry.model ?? t("usage.common.unknown"),
       value: formatUsageCost(entry.totals.totalCost, 2, entry.totals.usageReport),
+      weight: entry.totals.totalCost || entry.totals.totalTokens / 1e9,
       sub: formatUsageTokens(entry.totals.totalTokens, entry.totals.usageReport),
     })) ?? [];
   const cards = [
@@ -86,7 +101,7 @@ export function renderSessionSummary(
           {" "}
           {hasInterval && !messageCounts
             ? t("usage.common.emptyValue")
-            : `${messageCounts?.user ?? 0} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${messageCounts?.assistant ?? 0} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
+            : `${(messageCounts?.user ?? 0).toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${(messageCounts?.assistant ?? 0).toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
           {hasInterval ? (
             <>
               {" "}
@@ -123,12 +138,7 @@ export function renderSessionSummary(
     {
       labelKey: "usage.details.duration",
       value: formatDurationCompact(usage.durationMs) ?? t("usage.common.emptyValue"),
-      meta: (
-        <>
-          {" "}
-          {formatTs(usage.firstActivity)} → {formatTs(usage.lastActivity)}{" "}
-        </>
-      ),
+      meta: <> {formatActivitySpan(usage.firstActivity, usage.lastActivity)} </>,
     },
   ];
 
@@ -151,7 +161,9 @@ export function renderSessionSummary(
           {({ labelKey, value, meta }) => (
             <div class="stat session-summary-card">
               <div class="session-summary-title">{t(labelKey)}</div>
-              <div class="stat-value session-summary-value">{value}</div>
+              <div class="stat-value session-summary-value">
+                {typeof value === "number" ? value.toLocaleString() : value}
+              </div>
               <div class="session-summary-meta">{meta}</div>
             </div>
           )}

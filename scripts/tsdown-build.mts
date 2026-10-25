@@ -9,6 +9,7 @@ import {
   type SpawnSyncReturns,
 } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
@@ -21,6 +22,7 @@ import {
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
 import { toErrorObject } from "./lib/error-format.mts";
+import { applyLocalTsgoPolicy } from "./lib/local-check-runtime.mts";
 import {
   inspectManagedProcessGroup,
   signalExitCode,
@@ -97,7 +99,14 @@ type OutputRootParams = {
   roots?: string[];
 };
 
-type ResolvedMemoryLimitParams = MemoryLimitParams & { resolvedMaxOldSpaceMb?: number };
+type TsdownMemoryBudget = {
+  maxOldSpaceMb: number;
+  unresolvedCgroupMemory: boolean;
+  capacityBytes: number | null;
+};
+type ResolvedMemoryLimitParams = MemoryLimitParams & {
+  resolvedMemoryBudget?: TsdownMemoryBudget;
+};
 
 type TsdownBuildParams = ResolvedMemoryLimitParams & {
   args?: string[];
@@ -589,9 +598,9 @@ function parseNonNegativeIntegerEnv(value: string | undefined, name: string) {
   return parsed;
 }
 
-function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
-  if (params.resolvedMaxOldSpaceMb !== undefined) {
-    return { maxOldSpaceMb: params.resolvedMaxOldSpaceMb, unresolvedCgroupMemory: false };
+function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}): TsdownMemoryBudget {
+  if (params.resolvedMemoryBudget) {
+    return params.resolvedMemoryBudget;
   }
   const defaultMaxOldSpaceMb =
     (params.platform ?? process.platform) === "win32"
@@ -601,15 +610,15 @@ function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
     (params.env ?? process.env)[TSDOWN_MAX_OLD_SPACE_MB_ENV],
     TSDOWN_MAX_OLD_SPACE_MB_ENV,
   );
+  const { limitBytes, unresolved, capacityBytes } = readProcessMemoryCapacity(params);
   if (envOverride !== null) {
-    return { maxOldSpaceMb: envOverride, unresolvedCgroupMemory: false };
+    return { maxOldSpaceMb: envOverride, unresolvedCgroupMemory: false, capacityBytes };
   }
-  const { limitBytes, unresolved } = readProcessMemoryCapacity(params);
   if (unresolved) {
-    return { maxOldSpaceMb: 1, unresolvedCgroupMemory: true };
+    return { maxOldSpaceMb: 1, unresolvedCgroupMemory: true, capacityBytes };
   }
   if (limitBytes === null) {
-    return { maxOldSpaceMb: defaultMaxOldSpaceMb, unresolvedCgroupMemory: false };
+    return { maxOldSpaceMb: defaultMaxOldSpaceMb, unresolvedCgroupMemory: false, capacityBytes };
   }
 
   const limitMb = Math.floor(limitBytes / 1024 / 1024);
@@ -619,6 +628,7 @@ function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
   return {
     maxOldSpaceMb: Math.min(defaultMaxOldSpaceMb, cgroupCap),
     unresolvedCgroupMemory: false,
+    capacityBytes,
   };
 }
 
@@ -680,8 +690,7 @@ export function describeInsufficientTsdownHeap(
   };
 }
 
-function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryLimitParams = {}) {
-  const { maxOldSpaceMb } = resolveTsdownMemoryBudget(params);
+function normalizeTsdownNodeOptions(nodeOptions: string, maxOldSpaceMb: number) {
   const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
   const normalized: string[] = [];
   let foundMaxOldSpaceSize = false;
@@ -723,9 +732,16 @@ function resolveTsdownEnv(
   params: ResolvedMemoryLimitParams = {},
 ): NodeJS.ProcessEnv {
   const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
+  const budget = resolveTsdownMemoryBudget(params);
+  // The native declaration compiler is Go-based; Node's heap limit does not govern it.
+  const { env: compilerEnv } = applyLocalTsgoPolicy([], env, {
+    logicalCpuCount: os.availableParallelism(),
+    totalMemoryBytes: params.physicalMemoryBytes ?? os.totalmem(),
+    memoryCapacityBytes: budget.capacityBytes,
+  });
   return {
-    ...env,
-    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, params),
+    ...compilerEnv,
+    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, budget.maxOldSpaceMb),
   };
 }
 
@@ -998,7 +1014,7 @@ export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
   const maxOldSpaceMb = budget.maxOldSpaceMb;
   const preparedParams = {
     ...params,
-    resolvedMaxOldSpaceMb: maxOldSpaceMb,
+    resolvedMemoryBudget: budget,
   };
   return {
     env: resolveTsdownEnv(params.env ?? process.env, preparedParams),

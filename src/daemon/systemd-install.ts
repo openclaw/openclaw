@@ -4,13 +4,14 @@ import {
   isUnresolvedShellReference,
   readStateDirDotEnvFromStateDir,
 } from "../config/state-dir-dotenv.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
   resolveGatewayServiceDescription,
 } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
+import { assertServiceInspectionFallbackAllowed } from "./service-inspection-error.js";
 import {
   hasEnvironmentFileSource,
   hasInlineEnvironmentSource,
@@ -38,12 +39,12 @@ import {
   assertSystemdAvailable,
   disableSystemdUserUnitForRemoval,
   execSystemctlUser,
+  isSystemdUnitActive,
   isSystemdUnitMissingDetail,
   isSystemdUserScopeUnavailable,
   readSystemctlDetail,
   reloadSystemdUserManager,
 } from "./systemd-exec.js";
-import { captureSystemdInstallRecovery } from "./systemd-install-recovery.js";
 import { assertNoSystemGatewayOwnership } from "./systemd-scope.js";
 import {
   isNodeSystemdEnvironment,
@@ -153,12 +154,9 @@ export async function refreshLegacySystemdServiceMetadata(
   const deadlineAt = performance.now() + Math.max(1, timeoutMs);
   const remainingTimeoutMs = () => Math.max(1, deadlineAt - performance.now());
   const unitPath = resolveSystemdUnitPath(env);
-  const current = await fs.readFile(unitPath, "utf8").catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const current = await fs
+    .readFile(unitPath, "utf8")
+    .catch((error: unknown) => ignoreMissingPath(error) ?? null);
   if (current === null || removeLegacyGatewayVersionMetadata(current) === current) {
     return false;
   }
@@ -230,7 +228,64 @@ async function writeSystemdUnit(
       const recovery =
         load && !definitionTransaction
           ? await withGatewayServiceInstallationRecovery(
-              () => captureSystemdInstallRecovery(env, existingUnit !== null),
+              async () => {
+                // Capture native policy while the definition writer holds the original artifacts.
+                const unit = `${resolveSystemdServiceName(env)}.service`;
+                let enabled = "disabled";
+                let running = false;
+                if (existingUnit !== null) {
+                  const enablement = await execSystemctlUser(env, ["is-enabled", unit]);
+                  enabled = enablement.stdout.trim();
+                  if (
+                    enablement.termination !== "exit" ||
+                    !["enabled", "enabled-runtime", "disabled", "static", "indirect"].includes(
+                      enabled,
+                    )
+                  ) {
+                    throw new Error(
+                      `Cannot preserve the existing systemd enablement policy before replacing its definition; no service files were changed: ${readSystemctlDetail(enablement)}`,
+                    );
+                  }
+                  const active = await isSystemdUnitActive(env, unit);
+                  if (!active.ok) {
+                    throw new Error(
+                      `Cannot preserve the existing systemd running state before replacing its definition; no service files were changed: ${active.error}`,
+                    );
+                  }
+                  running = active.value;
+                }
+                let activationAttempted = false;
+                let restartAttempted = false;
+                return {
+                  beforeAction: (action: string) => {
+                    activationAttempted = true;
+                    restartAttempted ||= action === "restart";
+                  },
+                  async restore() {
+                    if (!activationAttempted) {
+                      return;
+                    }
+                    const run = async (args: string[]) => {
+                      await assertNoSystemGatewayOwnership(env);
+                      const result = await execSystemctlUser(env, args);
+                      if (result.code !== 0) {
+                        throw new Error(
+                          `systemctl rollback ${args[0]} failed: ${readSystemctlDetail(result)}`,
+                        );
+                      }
+                    };
+                    if (enabled !== "enabled") {
+                      await run(["disable", unit]);
+                      if (enabled === "enabled-runtime") {
+                        await run(["enable", "--runtime", unit]);
+                      }
+                    }
+                    if (restartAttempted) {
+                      await run([running ? "restart" : "stop", unit]);
+                    }
+                  },
+                };
+              },
               async () => false,
             )
           : null;
@@ -426,7 +481,10 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   let existingFile: Awaited<ReturnType<typeof readSystemdEnvironmentFile>>;
   try {
     existingFile = await readSystemdEnvironmentFile(envFilePath);
-  } catch {
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
     return;
   }
   const remaining = Object.fromEntries(
@@ -468,61 +526,56 @@ export async function stageSystemdService({
   return { unitPath };
 }
 
-async function activateSystemdService(params: {
-  env: GatewayServiceEnv;
-  preserveAutoStart?: boolean;
-  beforeAction?: (action: string) => void;
-}) {
-  const unitName = `${resolveSystemdServiceName(params.env)}.service`;
-  // A system unit may appear after publication. Refuse before the user manager
-  // can load a second supervisor for the same gateway name.
-  await assertNoSystemGatewayOwnership(params.env);
-  const runActivation = async (
-    action: "daemon-reload" | "enable" | "restart",
-    retryMissing = true,
-  ): Promise<void> => {
-    const args = action === "daemon-reload" ? [action] : [action, unitName];
-    params.beforeAction?.(action);
-    const result = await execSystemctlUser(params.env, args);
-    if (result.code === 0) {
-      return;
-    }
-    const detail = readSystemctlDetail(result);
-    if (
-      action !== "daemon-reload" &&
-      retryMissing &&
-      result.termination === "exit" &&
-      isSystemdUnitMissingDetail(detail)
-    ) {
-      await runActivation("daemon-reload");
-      return await runActivation(action, false);
-    }
-    if (isSystemdUserScopeUnavailable(detail)) {
-      throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
-    }
-    throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
-  };
-  for (const action of ["daemon-reload", "enable", "restart"] as const) {
-    if (action === "enable" && params.preserveAutoStart) {
-      continue;
-    }
-    await runActivation(action);
-  }
-}
-
 export async function installSystemdService(
   args: GatewayServiceInstallArgs,
 ): Promise<{ unitPath: string }> {
-  const load = (beforeAction?: (action: string) => void) =>
-    activateSystemdService({
-      env: args.env,
-      beforeAction,
-      preserveAutoStart: args.preserveAutoStart,
-    });
+  const load = async (beforeAction?: (action: string) => void) => {
+    const { env, preserveAutoStart } = args;
+    const unitName = `${resolveSystemdServiceName(env)}.service`;
+    // A system unit may appear after publication. Refuse before the user manager
+    // can load a second supervisor for the same gateway name.
+    await assertNoSystemGatewayOwnership(env);
+    const runActivation = async (
+      action: "daemon-reload" | "enable" | "restart",
+      retryMissing = true,
+    ): Promise<void> => {
+      const activationArgs = action === "daemon-reload" ? [action] : [action, unitName];
+      beforeAction?.(action);
+      const result = await execSystemctlUser(env, activationArgs);
+      if (result.code === 0) {
+        return;
+      }
+      const detail = readSystemctlDetail(result);
+      if (
+        action !== "daemon-reload" &&
+        retryMissing &&
+        result.termination === "exit" &&
+        isSystemdUnitMissingDetail(detail)
+      ) {
+        await runActivation("daemon-reload");
+        return await runActivation(action, false);
+      }
+      if (isSystemdUserScopeUnavailable(detail)) {
+        throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+      }
+      throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
+    };
+    for (const action of ["daemon-reload", "enable", "restart"] as const) {
+      if (action === "enable" && preserveAutoStart) {
+        continue;
+      }
+      await runActivation(action);
+    }
+  };
   const { unitPath, backedUp } = await writeSystemdUnit(args, load);
   if (
     args.warn &&
-    hasGatewayServiceLauncherOverride(await readSystemdServiceExecStart(args.env).catch(() => null))
+    hasGatewayServiceLauncherOverride(
+      await readSystemdServiceExecStart(args.env).catch((error: unknown) => {
+        assertServiceInspectionFallbackAllowed(error);
+        return null;
+      }),
+    )
   ) {
     args.warn(
       "Systemd drop-in overrides the managed service command or working directory; inspect, update, or remove the drop-in because reinstalling the base unit does not change the effective launcher.",
@@ -551,14 +604,13 @@ export async function uninstallSystemdService({
     }
     // Unit file was already absent; still clean generated node env state below.
   }
-  await fs.unlink(`${unitPath}.bak`).catch((error: unknown) => {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-  });
+  await fs.unlink(`${unitPath}.bak`).catch(ignoreMissingPath);
   await removeNodeSystemdManagedEnvironmentKeys(env);
   if (removed) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
+    // The manager keeps a deleted unit loaded until it reloads. A retry after a
+    // failed reload finds no unit file and skips this; accepted, rare.
+    await reloadSystemdUserManager(env);
   } else {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
   }

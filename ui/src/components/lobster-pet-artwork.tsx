@@ -4,10 +4,10 @@ import type { LobsterPetLook, LobsterPetPaletteId } from "./lobster-pet-contract
 import { moonPhaseFraction } from "./lobster-pet-moon.ts";
 import {
   GLITCH_GHOSTS,
-  PALETTE_OVERLAYS,
+  PALETTE_PATTERNS,
   PALETTE_RIGHT_CLAW_PROPS,
-  PATTERNED_PALETTES,
 } from "./lobster-pet-palette-sprites.tsx";
+import { LobsterClosedEyes, staticSprite } from "./lobster-pet-sprite.tsx";
 import {
   ACTUAL_LOBSTER,
   ASCII_LOBSTER,
@@ -52,33 +52,22 @@ const PALETTE_GEOMETRY: Partial<Record<LobsterPetPaletteId, typeof PIXEL_LOBSTER
   pixel: PIXEL_LOBSTER,
 };
 
-const ReadingBook = () => (
-  <g class="lob-reading-book" transform="translate(0 2)">
-    <path
-      d="M25 62 Q43 56 59 66 L59 92 Q43 82 25 86 Z M61 66 Q77 56 95 62 L95 86 Q77 82 61 92 Z"
-      fill="var(--lob-claw)"
-      stroke="color-mix(in srgb, var(--lob-claw) 72%, #0a1014)"
-      stroke-width="2.5"
-      stroke-linejoin="round"
-    />
-    <path d="M29 62 Q44 58 59 68 L59 88 Q44 79 29 82 Z" fill="#fffaf0" />
-    <path d="M61 68 Q76 58 91 62 L91 82 Q76 79 61 88 Z" fill="#fffaf0" />
-    <path d="M60 67 L60 89" stroke="#d7cfc0" stroke-width="1.5" />
-    <g stroke="#b8b0a3" stroke-width="1.25" stroke-linecap="round" opacity="0.58">
-      <path d="M34 67 L51 71" />
-      <path d="M34 72 L50 75" />
-      <path d="M67 71 L85 67" />
-      <path d="M68 76 L85 72" />
-      <path d="M70 80 L83 77" />
-    </g>
-    <path
-      class="lob-reading-book__page-glow"
-      d="M31 62 Q45 59 57 68 L57 72 Q44 65 31 67 Z"
-      fill="#ffffff"
-      opacity="0"
-    />
+const ReadingBook = staticSprite(`
+<g class="lob-reading-book" transform="translate(0 2)">
+  <path d="M25 62 Q43 56 59 66 L59 92 Q43 82 25 86 Z M61 66 Q77 56 95 62 L95 86 Q77 82 61 92 Z" fill="var(--lob-claw)" stroke="color-mix(in srgb, var(--lob-claw) 72%, #0a1014)" stroke-width="2.5" stroke-linejoin="round"></path>
+  <path d="M29 62 Q44 58 59 68 L59 88 Q44 79 29 82 Z" fill="#fffaf0"></path>
+  <path d="M61 68 Q76 58 91 62 L91 82 Q76 79 61 88 Z" fill="#fffaf0"></path>
+  <path d="M60 67 L60 89" stroke="#d7cfc0" stroke-width="1.5"></path>
+  <g stroke="#b8b0a3" stroke-width="1.25" stroke-linecap="round" opacity="0.58">
+    <path d="M34 67 L51 71"></path>
+    <path d="M34 72 L50 75"></path>
+    <path d="M67 71 L85 67"></path>
+    <path d="M68 76 L85 72"></path>
+    <path d="M70 80 L83 77"></path>
   </g>
-);
+  <path class="lob-reading-book__page-glow" d="M31 62 Q45 59 57 68 L57 72 Q44 65 31 67 Z" fill="#ffffff" opacity="0"></path>
+</g>
+`);
 
 export type LobsterSvgProps = {
   look: LobsterPetLook;
@@ -142,11 +131,11 @@ export function LobsterSvg(props: LobsterSvgProps) {
               ? SPLIT_HALF()
               : null}
             {props.look.palette.id === "selene" ? seleneMoon(selenePhase) : null}
-            {PALETTE_OVERLAYS[props.look.palette.id]?.() ?? null}
+            {PALETTE_PATTERNS[props.look.palette.id]?.() ?? null}
             {props.look.palette.id === "tinfoil"
               ? TINFOIL_PARTS(!HEADWEAR.has(props.look.accessory))
               : null}
-            {props.look.freckles && !PATTERNED_PALETTES.has(props.look.palette.id)
+            {props.look.freckles && !Object.hasOwn(PALETTE_PATTERNS, props.look.palette.id)
               ? FRECKLE_SPOTS()
               : null}
             {props.look.palette.id === "invisible" ? null : (
@@ -164,17 +153,10 @@ export function LobsterSvg(props: LobsterSvgProps) {
                 <circle cx="46" cy="30.8" r="1.6" fill="var(--lob-glint, #00e5cc)" />
               </g>
             ) : null}
-            <g
-              class="lob-eye-closed"
-              stroke="#0a1014"
-              stroke-width="3"
-              stroke-linecap="round"
-              fill="none"
-              style={closedEyeStyle()}
-            >
+            <LobsterClosedEyes stroke-width="3" style={closedEyeStyle()}>
               <path d="M39 33 Q45 28 51 33" />
               <path d="M69 33 Q75 28 81 33" />
-            </g>
+            </LobsterClosedEyes>
           </>
         )}
         {hasRetroGeometry() ? (

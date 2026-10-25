@@ -18,15 +18,12 @@ export function isModelFallbackDecisionLogEnabled(): boolean {
   return decisionLog.isEnabled("warn");
 }
 
-function buildErrorObservationFields(error?: string) {
-  const observed = buildTextObservationFields(error);
+function buildErrorObservationFields(observed: ReturnType<typeof buildTextObservationFields>) {
   return {
-    errorPreview: observed.textPreview,
     errorHash: observed.textHash,
     errorFingerprint: observed.textFingerprint,
     httpCode: observed.httpCode,
     providerErrorType: observed.providerErrorType,
-    providerErrorMessagePreview: observed.providerErrorMessagePreview,
     requestIdHash: observed.requestIdHash,
   };
 }
@@ -134,8 +131,6 @@ function resolveAuthDecisionLogCoalescing(
   const suppressedDuplicateCount = recentAgeMs < staleWindowMs ? recent?.suppressed : undefined;
   if (recentAgeMs >= staleWindowMs) {
     authDecisionLogCoalesceEntries.delete(key);
-  }
-  if (!authDecisionLogCoalesceEntries.has(key)) {
     for (const [entryKey, entry] of authDecisionLogCoalesceEntries) {
       if (entry.lastLoggedAt < now - staleWindowMs) {
         authDecisionLogCoalesceEntries.delete(entryKey);
@@ -212,13 +207,13 @@ export function logModelFallbackDecision(
     ? `${sanitizeForLog(params.nextCandidate.provider)}/${sanitizeForLog(params.nextCandidate.model)}`
     : "none";
   const reasonText = params.reason ?? "unknown";
-  const observedError = buildErrorObservationFields(params.error);
-  const detailText = observedError.providerErrorMessagePreview ?? observedError.errorPreview;
+  const observed = buildTextObservationFields(params.error);
+  const observedError = buildErrorObservationFields(observed);
+  const detailText = observed.providerErrorMessagePreview ?? observed.textPreview;
   const fallbackStepFields = buildFallbackStepFields(params, detailText);
   const providerErrorTypeSuffix = observedError.providerErrorType
     ? ` providerErrorType=${sanitizeForLog(observedError.providerErrorType)}`
     : "";
-  const detailSuffix = detailText ? ` detail=${sanitizeForLog(detailText)}` : "";
   const logCoalescing = resolveAuthDecisionLogCoalescing(params, observedError);
   if (!logCoalescing.shouldLog) {
     return fallbackStepFields;
@@ -249,7 +244,16 @@ export function logModelFallbackDecision(
     status: params.status,
     code: params.code,
     ...observedError,
-    ...fallbackStepFields,
+    ...(fallbackStepFields
+      ? {
+          fallbackStepType: fallbackStepFields.fallbackStepType,
+          fallbackStepFromModel: fallbackStepFields.fallbackStepFromModel,
+          fallbackStepToModel: fallbackStepFields.fallbackStepToModel,
+          fallbackStepFromFailureReason: fallbackStepFields.fallbackStepFromFailureReason,
+          fallbackStepChainPosition: fallbackStepFields.fallbackStepChainPosition,
+          fallbackStepFinalOutcome: fallbackStepFields.fallbackStepFinalOutcome,
+        }
+      : {}),
     nextCandidateProvider: params.nextCandidate?.provider,
     nextCandidateModel: params.nextCandidate?.model,
     nextCandidateRouteOrigin: params.nextCandidate?.routeOrigin,
@@ -266,11 +270,11 @@ export function logModelFallbackDecision(
       reason: attempt.reason,
       status: attempt.status,
       code: attempt.code,
-      ...buildErrorObservationFields(attempt.error),
+      ...buildErrorObservationFields(buildTextObservationFields(attempt.error)),
     })),
     consoleMessage:
       `model fallback decision: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
-      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}${suppressedSuffix}`,
+      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${suppressedSuffix}`,
   });
   return fallbackStepFields;
 }

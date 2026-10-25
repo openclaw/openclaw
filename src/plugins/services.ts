@@ -2,10 +2,9 @@ import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../gateway/operator-tool-gateway-authority.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
-import type { GatewayPluginEventBroadcastFn } from "../gateway/server-broadcast-types.js";
 import { waitForDiagnosticEventsDrained } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -14,6 +13,7 @@ import { createPluginServiceGatewayEvents } from "./gateway-events.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import { withPluginRetentionOwner } from "./plugin-retention-diagnostics.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
@@ -21,18 +21,25 @@ import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
+import { pluginRuntimeLoaderLogger } from "./runtime/load-context.js";
 import { createPluginServiceAutomationCapabilities } from "./service-automation-capabilities.js";
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
-import type { PluginServiceCronHost } from "./service-cron.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
 import { createPluginServiceHealthReporter } from "./service-health.js";
-import type { OwnedPluginService, PluginServicesOwner } from "./service-lifecycle.types.js";
+import type {
+  OwnedPluginService,
+  PluginServicesHandle,
+  PluginServicesOwner,
+  StartPluginServicesParams,
+} from "./service-lifecycle.types.js";
 import { createPluginServiceNodeInvoker } from "./service-nodes.js";
 import { withPluginServiceScheduler } from "./service-scheduler-binding.js";
 import { createPluginServiceSchedulerRunner } from "./service-scheduler-context.js";
 import { createPluginServiceScheduler } from "./service-scheduler.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
-import type { OpenClawPluginServiceContext, OpenClawPluginServiceContextV2 } from "./types.js";
+import type { OpenClawPluginServiceContextV2 } from "./types.js";
+
+export type { PluginServicesHandle } from "./service-lifecycle.types.js";
 
 const log = createSubsystemLogger("plugins");
 export const PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS = 5_000;
@@ -69,34 +76,7 @@ export function getPluginServiceCleanupSettlement(
   return { error, settled };
 }
 
-type PluginServiceStopResult = { errors: readonly unknown[] };
-
-export type PluginServicesHandle = {
-  reload: (config: OpenClawConfig, serviceIds: ReadonlySet<string>) => Promise<void>;
-  stop: (options?: {
-    strict: true;
-    deadlineAtMs?: number;
-    pluginIds?: ReadonlySet<string>;
-  }) => Promise<void | PluginServiceStopResult>;
-};
-
 const serviceOwners = new WeakMap<PluginServicesHandle, PluginServicesOwner>();
-
-type StartPluginServicesParams = {
-  scheduler: GatewayScheduler;
-  registry: PluginRegistry;
-  config: OpenClawConfig;
-  workspaceDir?: string;
-  startupTrace?: NonNullable<OpenClawPluginServiceContext["startupTrace"]>;
-  broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
-  getCronService?: () => PluginServiceCronHost | null | undefined;
-  oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
-  previous?: PluginServicesHandle | null;
-  deferStartForPluginIds?: ReadonlySet<string>;
-} & (
-  | { throwOnStartError: true; onHandle: (handle: PluginServicesHandle) => void }
-  | { throwOnStartError?: false; onHandle?: (handle: PluginServicesHandle) => void }
-);
 
 function preparePluginServicesOwner(
   registry: PluginRegistry,
@@ -169,6 +149,11 @@ async function startPreparedPluginServices({
   publication: { callback: ((handle: PluginServicesHandle) => void) | undefined };
 }): Promise<PluginServicesHandle> {
   const { services: ownedServices } = owner;
+  for (const entry of ownedServices) {
+    if (entry.pendingReload) {
+      entry.pendingReload = initialConfig;
+    }
+  }
   const canStart = (registration: PluginServiceRegistration) =>
     !owner.closed && owner.registrations.has(registration) && !owner.stopped.has(registration);
   const runBeforeDeadline = async (
@@ -181,7 +166,7 @@ async function startPreparedPluginServices({
     if (deadline === undefined) {
       return operation;
     }
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     const timeoutError = () =>
       new PluginServiceTimeoutError(
         `${label} timed out after ${Math.max(0, remaining)}ms${serviceOwner ? ` (${serviceOwner})` : ""}`,
@@ -202,16 +187,19 @@ async function startPreparedPluginServices({
     }
     return undefined;
   };
+  const beginServiceStop = (entry: OwnedPluginService) => {
+    entry.stopRequested = true;
+    entry.scheduling.scheduler.beginClose();
+    entry.stopNodeInvocations?.();
+    void entry.stopControlUiIngress?.();
+  };
   const stopService = async (
     entry: OwnedPluginService,
     failures?: unknown[],
     deadline?: number,
     beforeStop?: Promise<unknown>,
   ) => {
-    entry.stopRequested = true;
-    entry.scheduling.scheduler.beginClose();
-    entry.stopNodeInvocations?.();
-    void entry.stopControlUiIngress?.();
+    beginServiceStop(entry);
     const recordFailure = (error: unknown) => {
       if (!failures) {
         return;
@@ -281,6 +269,9 @@ async function startPreparedPluginServices({
             void stopping.then(
               () => {
                 entry.cleaned = entry.cleanupErrors.length === 0;
+                if (entry.cleaned && entry.pendingReload) {
+                  entry.owner.resumeReload?.(entry);
+                }
               },
               () => {},
             );
@@ -355,7 +346,7 @@ async function startPreparedPluginServices({
       ]).then(() =>
         runBeforeDeadline(
           waitForDiagnosticEventsDrained,
-          oneShotTimeouts ? Date.now() + oneShotTimeouts.eventDrainMs : resolveDeadline(),
+          oneShotTimeouts ? performance.now() + oneShotTimeouts.eventDrainMs : resolveDeadline(),
           "plugin diagnostic event drain",
           owners,
         ),
@@ -378,12 +369,43 @@ async function startPreparedPluginServices({
       }
     }
     // Fresh one-shot flush budgets start after drain; absolute replacement deadlines span all phases.
-    const stopDeadline = oneShotTimeouts ? Date.now() + oneShotTimeouts.serviceStopMs : undefined;
+    const stopDeadline = oneShotTimeouts && performance.now() + oneShotTimeouts.serviceStopMs;
     for (const entry of afterDrain) {
       await stopService(entry, failures, stopDeadline ?? resolveDeadline(), exporterReady);
     }
   };
   let reloadTail = Promise.resolve();
+  const restartService = async (entry: OwnedPluginService, deferred = false) => {
+    const config = entry.pendingReload;
+    if (
+      !config ||
+      !entry.cleaned ||
+      !canStart(entry.registration) ||
+      deferStartForPluginIds?.has(entry.pluginId)
+    ) {
+      return;
+    }
+    delete entry.pendingReload;
+    if (deferred) {
+      log.warn(
+        `plugin service cleanup completed; restarting deferred reload (plugin=${entry.pluginId}, service=${entry.id})`,
+      );
+    }
+    // Config-only restarts need the same startup budget and cleanup custody as replacement candidates.
+    await startService(entry.registration, config, undefined, true);
+  };
+  owner.resumeReload = (entry) => {
+    // Follow current ownership and serialize with newer reloads; stop clears the pending intent.
+    const resuming = reloadTail.then(async () => {
+      await startupSettled;
+      await restartService(entry, true);
+    });
+    reloadTail = resuming.catch((error: unknown) => {
+      log.warn(
+        `plugin service deferred reload failed (plugin=${entry.pluginId}, service=${entry.id}): ${formatErrorMessage(error)}`,
+      );
+    });
+  };
   const handle: PluginServicesHandle = {
     reload: (config, serviceIds) => {
       const reloading = reloadTail.then(async () => {
@@ -397,24 +419,24 @@ async function startPreparedPluginServices({
         }
         for (const entry of selected) {
           entry.reloading = reloading;
-          entry.stopRequested = true;
-          entry.scheduling.scheduler.beginClose();
-          entry.stopNodeInvocations?.();
-          void entry.stopControlUiIngress?.();
+          entry.pendingReload = config;
+          beginServiceStop(entry);
         }
         try {
           await stopServices(
             selected.toReversed(),
             true,
             undefined,
-            () => Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+            () => performance.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
           );
           for (const entry of selected) {
-            // A timed-out stop retains its instance; only settled cleanup can hand off resources.
-            if (!entry.cleaned || !canStart(entry.registration)) {
-              continue;
+            // A timed-out stop retains its resources and pending restart until actual cleanup.
+            if (!entry.cleaned && entry.cleanupErrors.length === 0 && entry.pendingReload) {
+              log.warn(
+                `plugin service restart deferred until cleanup completes (plugin=${entry.pluginId}, service=${entry.id})`,
+              );
             }
-            await startService(entry.registration, config);
+            await restartService(entry);
           }
         } finally {
           for (const entry of selected) {
@@ -439,13 +461,14 @@ async function startPreparedPluginServices({
         (entry) => !options?.pluginIds || options.pluginIds.has(entry.pluginId),
       );
       for (const entry of selected) {
-        entry.stopRequested = true;
-        entry.scheduling.scheduler.beginClose();
-        entry.stopNodeInvocations?.();
-        void entry.stopControlUiIngress?.();
+        delete entry.pendingReload;
+        beginServiceStop(entry);
       }
       const strict = options?.strict === true;
-      const deadline = strict ? options.deadlineAtMs : undefined;
+      const deadline =
+        strict && options?.deadlineAtMs !== undefined
+          ? performance.now() + Math.max(0, options.deadlineAtMs - Date.now())
+          : undefined;
       return Promise.resolve().then(async () => {
         const failures: unknown[] = [];
         await stopServices(selected.toReversed(), strict, failures, deadline);
@@ -470,9 +493,17 @@ async function startPreparedPluginServices({
     const { service, id } = entry;
     const record = registry.plugins.find((plugin) => plugin.id === entry.pluginId);
     const instance = record && getPluginInstance(record);
+    // Standalone work keeps its host bindings, but never borrows a caller's reusable readers.
+    const runInServiceContext =
+      instance?.lifecycle.runInBackgroundContext ??
+      (<T>(run: () => T) => readOnlyWorkerScope.exit(run));
     // Native service receivers retain their brands; registration owns their invocation scope.
-    const runServiceCleanup = <T>(run: () => T): T =>
-      instance ? instance.runCleanup(run) : runPluginCleanup(service, run);
+    const runServiceCleanup = <T>(run: () => T): T => {
+      const cleanup = () => withPluginRetentionOwner({ serviceId: id }, run);
+      return instance
+        ? instance.runCleanup(() => runInServiceContext(cleanup))
+        : runPluginCleanup(service, cleanup);
+    };
     const traceName = `sidecars.plugin-services.${encodeStartupTraceSegment(entry.pluginId)}.${encodeStartupTraceSegment(entry.id)}`;
     const lease = createPluginRuntimeCapabilityLease("plugin service");
     const gatewayEvents = createPluginServiceGatewayEvents({
@@ -483,12 +514,16 @@ async function startPreparedPluginServices({
     const { health, revoke } = createPluginServiceHealthReporter(entry);
     lease.retain(revoke);
     const runtime = getPluginRegistryRuntime(registry);
-    const scheduling = createPluginServiceScheduler(
-      scheduler,
-      createPluginServiceSchedulerRunner({ registry, record, instance, lease }),
+    const scheduling = runInServiceContext(() =>
+      createPluginServiceScheduler(
+        scheduler,
+        createPluginServiceSchedulerRunner({ registry, record, instance, lease }),
+      ),
     );
     const resolveGatewayContext = runtime ? getGatewayContextResolver(runtime) : undefined;
-    const runServiceStart = createScheduledGatewayRunner(resolveGatewayContext);
+    const runServiceStart = runInServiceContext(() =>
+      createScheduledGatewayRunner(resolveGatewayContext),
+    );
     const { getCron, mcpEvents } = createPluginServiceAutomationCapabilities({
       pluginId: entry.pluginId,
       lease,
@@ -521,12 +556,7 @@ async function startPreparedPluginServices({
       config,
       workspaceDir,
       stateDir: STATE_DIR,
-      logger: {
-        info: (msg) => log.info(msg),
-        warn: (msg) => log.warn(msg),
-        error: (msg) => log.error(msg),
-        debug: (msg) => log.debug(msg),
-      },
+      logger: pluginRuntimeLoaderLogger,
       serviceHealth: health,
       ...(getCron ? { getCron } : {}),
       ...(mcpEvents ? { mcpEvents } : {}),
@@ -535,18 +565,14 @@ async function startPreparedPluginServices({
         : {}),
       ...(gatewayEvents ? { gatewayEvents } : {}),
       ...(controlUiIngress ? { controlUiIngress: controlUiIngress.factory } : {}),
-      ...(startupTrace
-        ? {
-            startupTrace: {
-              measure: (name, run) => startupTrace.measure(scopeTraceName(name), run),
-              ...(startupTrace.detail
-                ? {
-                    detail: (name, metrics) => startupTrace.detail?.(scopeTraceName(name), metrics),
-                  }
-                : {}),
-            },
-          }
-        : {}),
+      ...(startupTrace && {
+        startupTrace: {
+          measure: (name, run) => startupTrace.measure(scopeTraceName(name), run),
+          ...(startupTrace.detail && {
+            detail: (name, metrics) => startupTrace.detail?.(scopeTraceName(name), metrics),
+          }),
+        },
+      }),
       ...(internalDiagnostics ? { internalDiagnostics } : {}),
     };
     const recordCleanupFailure = (error: unknown) => {
@@ -610,9 +636,14 @@ async function startPreparedPluginServices({
         const settled = createDeferredCore();
         ownedService.startup = settled.promise;
         try {
-          ownedService.startupConsumer = instance?.retainConsumer();
+          ownedService.startupConsumer = instance?.retainConsumer(undefined, registry, "work", {
+            reason: "service-start",
+            owner: { serviceId: id },
+          });
           const start = () =>
-            withPluginServiceScheduler(scheduling.scheduler, () => service.start(serviceContext));
+            withPluginRetentionOwner({ serviceId: id }, () =>
+              withPluginServiceScheduler(scheduling.scheduler, () => service.start(serviceContext)),
+            );
           // Reload may originate in an RPC or tool; background work captures
           // service-owned Gateway/worker context, never that caller's authority or generation.
           await runOutsideOperatorToolGatewayAuthority(() =>
@@ -642,7 +673,7 @@ async function startPreparedPluginServices({
       // Bound candidate observation only; raw completion remains owned by the entry.
       await runBeforeDeadline(
         () => (startupTrace ? startupTrace.measure(traceName, invokeStart) : invokeStart()),
-        candidate ? Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS : undefined,
+        candidate ? performance.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS : undefined,
         "plugin service startup",
         `${entry.pluginId}/${id}`,
       );
@@ -666,7 +697,7 @@ async function startPreparedPluginServices({
       await stopService(
         ownedService,
         failures,
-        Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+        performance.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
       );
       return false;
     }
@@ -694,13 +725,14 @@ async function startPreparedPluginServices({
       const retained = ownedServices.find((service) => service.registration === entry);
       if (retained) {
         const reloading = reloads.get(entry);
-        if (!reloading) {
+        if (!reloading && !retained.pendingReload) {
           continue;
         }
         await reloading;
         if (!retained.cleaned || !canStart(entry)) {
           continue;
         }
+        delete retained.pendingReload;
       }
       const failures: unknown[] = [];
       if (!(await startService(entry, initialConfig, failures, throwOnStartError === true))) {

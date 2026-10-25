@@ -1,4 +1,3 @@
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
@@ -24,6 +23,7 @@ import {
 import {
   readSessionActorParticipantPostimage,
   readSessionActorProjectionReceiptFromCells,
+  sessionActorReplicaCellsForPath,
   scopedWriteToken,
   scopedWriteTokens,
 } from "./session-actor-replica-receipts.js";
@@ -40,6 +40,7 @@ import {
   sameSessionActorTranscriptVersion,
   type SessionActorTranscriptReplica,
 } from "./session-actor-transcript-replica.js";
+import { isSessionEntryPublicationSourceCurrent } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
@@ -49,13 +50,17 @@ import type { SessionTranscriptProjectionReceipt } from "./session-transcript-pr
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
 
-// Transcript producers replace changed rows and envelopes; shared subtrees stay
-// immutable. Weak keys do not keep evicted payloads alive.
+// Transcript producers replace changed rows and envelopes. Memoize array items
+// (rows or exact-context events), not their immutable payload descendants.
 const transcriptSizes = new WeakMap<object, number>();
 
 // Residency is a heap estimate, not a wire-size limit. Trusted postimages are
 // acyclic plain data; count strings without allocating or scanning their JSON.
-function estimateReplicaBytes(value: unknown, sizes?: WeakMap<object, number>): number {
+function estimateReplicaBytes(
+  value: unknown,
+  sizes?: WeakMap<object, number>,
+  memoizeDescendants = true,
+): number {
   if (typeof value === "string") {
     return 16 + value.length * 2;
   }
@@ -66,15 +71,16 @@ function estimateReplicaBytes(value: unknown, sizes?: WeakMap<object, number>): 
   if (known !== undefined) {
     return known;
   }
+  const childSizes = memoizeDescendants ? sizes : undefined;
   let bytes = 32;
   if (Array.isArray(value)) {
     bytes = value.reduce<number>(
-      (total, child) => total + 16 + estimateReplicaBytes(child, sizes),
+      (total, child) => total + 16 + estimateReplicaBytes(child, childSizes, false),
       bytes,
     );
   } else {
     for (const key in value) {
-      bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), sizes);
+      bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), childSizes);
     }
   }
   sizes?.set(value, bytes);
@@ -125,8 +131,7 @@ export function ensureReplicaSubscription(): void {
       };
       if (
         !pool.cells.has(sessionActorReplicaTargetKey(target)) &&
-        created.source.writeToken ===
-          readSqliteDatabaseWriteTokenForPath(target.database.nativeLocation)
+        isSessionEntryPublicationSourceCurrent(created.source)
       ) {
         // Creation already owns the complete entry; its first reader need not fetch it again.
         retainSessionActorEntryFacts(
@@ -217,7 +222,15 @@ export function ensureReplicaSubscription(): void {
       if (
         prepared &&
         source.identity === database.physicalIdentity &&
-        prepared.source.writeToken === readSqliteDatabaseWriteTokenForPath(database.nativeLocation)
+        isSessionEntryPublicationSourceCurrent(prepared.source) &&
+        (!prepared.source.admission ||
+          !prepared.actorPostimage ||
+          (prepared.actorPostimage.writeToken !== undefined &&
+            prepared.actorPostimage.writeToken ===
+              scopedWriteToken(
+                { database, sessionKey },
+                prepared.actorPostimage.dependencySessionIds,
+              )))
       ) {
         if (prepared.actorPostimage) {
           retainSnapshot(cell, prepared.actorPostimage, prepared.source.incarnation);
@@ -251,7 +264,7 @@ export function ensureReplicaSubscription(): void {
           const sharingUnchanged = readPreparedSessionSharingChange(change) === "unchanged";
           retainEntry(cell, {
             target: cell.target,
-            entry: structuredClone(prepared.fullEntry),
+            entry: prepared.fullEntry,
             dependencySessionIds,
             writeToken,
             snapshots: "full",
@@ -379,11 +392,8 @@ function touch(cell: ReplicaCell): void {
       forgetUnused(candidate);
       continue;
     }
-    if (
-      pool.cells.size <= MAX_SNAPSHOTS &&
-      pool.snapshots <= MAX_SNAPSHOTS &&
-      (pool.bytes <= MAX_BYTES || pool.snapshots === 1)
-    ) {
+    // Live handles retain empty cells; only resident payloads consume the cache budget.
+    if (pool.snapshots <= MAX_SNAPSHOTS && (pool.bytes <= MAX_BYTES || pool.snapshots === 1)) {
       break;
     }
     discard(candidate);
@@ -391,9 +401,11 @@ function touch(cell: ReplicaCell): void {
   }
 }
 
-export function readSessionActorProjectionReceipt(
-  params: Pick<SessionTranscriptProjectionReceipt, "path" | "sessionId"> & { sessionKey?: string },
-): SessionTranscriptProjectionReceipt | undefined {
+export function readSessionActorProjectionReceipt(params: {
+  path: string;
+  sessionId: string;
+  sessionKey?: string;
+}): SessionTranscriptProjectionReceipt | undefined {
   return readSessionActorProjectionReceiptFromCells(pool.cells.values(), touch, params);
 }
 
@@ -466,13 +478,9 @@ function readCurrentEntryCellForPath(
   admitted?: DatabasePathIdentity,
 ) {
   ensureReplicaSubscription();
-  for (const { target } of pool.cells.values()) {
+  for (const { target } of sessionActorReplicaCellsForPath(pool.cells.values(), params.path)) {
     const { database, sessionKey } = target;
-    if (
-      database.kind === "file" &&
-      database.nativeLocation === params.path &&
-      sessionKey === params.sessionKey
-    ) {
+    if (database.kind === "file" && sessionKey === params.sessionKey) {
       return readCurrentEntryCell({ database, sessionKey }, admitted);
     }
   }
@@ -551,12 +559,14 @@ export function readSessionActorRowFacts(params: {
   if (summary && !projection.activitySummaryWatermark) {
     return undefined;
   }
-  return structuredClone({
+  // The row owns its mutable shell; nested facts already belong to the frozen replica.
+  return {
     sessionKey: params.sessionKey,
     entry: attachSessionEntrySnapshots({ ...state.entry }, {}, "list"),
     hasBoard: projection.hasBoard,
+    transcriptAssistantMessage: "unknown",
     ...(summary ? { activitySummaryWatermark: projection.activitySummaryWatermark } : {}),
-  });
+  };
 }
 
 /** A single cold entry batch and actor commands publish into the same bounded MAIN owner. */

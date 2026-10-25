@@ -1,6 +1,3 @@
-/**
- * Codex app-server agent harness registration and lazy runtime boundaries.
- */
 import type {
   AgentHarnessV2,
   AgentHarnessCompactParams,
@@ -80,10 +77,6 @@ async function disposeSharedCodexAppServerClients(): Promise<void> {
   await dispose?.();
 }
 
-/**
- * Creates the Codex app-server harness used for attempts, side questions,
- * compaction, reset, and disposal.
- */
 export function createCodexAppServerAgentHarness(
   options: CodexAppServerAgentHarnessOptions,
 ): AgentHarnessV2 {
@@ -264,6 +257,15 @@ export function createCodexAppServerAgentHarness(
         bindingStore: options.bindingStore,
         pluginConfig: resolveAttemptPluginConfig(params.config),
       });
+    },
+    readNativeSubagents: async (params) => {
+      const { readCodexNativeSubagents } =
+        await import("./src/app-server/native-subagent-roster.js");
+      assertOwnershipCurrent(params);
+      return await readCodexNativeSubagents(
+        { ...params, assertCurrent: () => assertOwnershipCurrent(params) },
+        { bindingStore: options.bindingStore },
+      );
     },
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =

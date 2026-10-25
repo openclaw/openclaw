@@ -80,10 +80,6 @@ export function readSourceSidecars(pathname: string): SourceSidecars {
   };
 }
 
-function sameSidecars(left: SourceSidecars, right: SourceSidecars): boolean {
-  return left.journal === right.journal && left.shm === right.shm && left.wal === right.wal;
-}
-
 function openPinnedFile(
   pathname: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
@@ -150,7 +146,7 @@ function assertPinnedIdentityUnchanged(file: PinnedFile): void {
   }
 }
 
-function copySourceFile(
+export function copySourceFile(
   sourcePath: string,
   targetPath: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
@@ -215,7 +211,9 @@ function sourceMatchesCopy(
 }
 
 function assertExpectedSidecars(pathname: string, expected: SourceSidecars): void {
-  if (!sameSidecars(readSourceSidecars(pathname), expected)) {
+  const current = readSourceSidecars(pathname);
+  // The WAL index is rebuilt privately; concurrent readers may recreate the source index.
+  if (current.journal !== expected.journal || current.wal !== expected.wal) {
     throw new SqliteSourceChangedError(`SQLite journal state changed while copying: ${pathname}`);
   }
 }
@@ -347,6 +345,11 @@ function* createStableReadOnlyCopyInTempDirectory(
         yield { sourcePath: `${pathname}${suffix}`, targetPath: `${snapshotPath}${suffix}` };
       }
       yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity };
+      if (!sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity)) {
+        throw new SqliteSourceChangedError(
+          `SQLite main database changed while copying: ${pathname}`,
+        );
+      }
       for (const suffix of sidecarSuffixes) {
         if (!sourceMatchesCopy(`${pathname}${suffix}`, `${snapshotPath}${suffix}`)) {
           const label = suffix === "-wal" ? "WAL" : "rollback journal";

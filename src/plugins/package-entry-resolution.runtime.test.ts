@@ -1,8 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import type { PackageManifest } from "./manifest.js";
+import { afterEach, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   resolvePackageRuntimeExtensionSources,
   resolvePackageSetupSource,
@@ -12,103 +11,54 @@ import {
   clearPluginRuntimeArtifactResolutionMemo,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
-const packageRoots: string[] = [];
+const temp = createTempDirTracker();
+type Resolution = Parameters<typeof resolvePackageRuntimeExtensionSources>[0] &
+  Parameters<typeof validatePackageExtensionEntriesForInstall>[0];
 
-function createPackageFixture(params: {
-  sourceExtension: string;
-  runtimeOutputs?: string[];
-  includeSource?: boolean;
-}): { packageDir: string; sourceEntry: string; manifest: PackageManifest } {
-  const packageDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-runtime-entry-")),
-  );
-  packageRoots.push(packageDir);
-  const sourceEntry = `./src/entry${params.sourceExtension}`;
-  if (params.includeSource !== false) {
-    fs.mkdirSync(path.join(packageDir, "src"), { recursive: true });
-    fs.writeFileSync(path.join(packageDir, sourceEntry), "export default {};\n");
-  }
-  for (const relativeOutput of params.runtimeOutputs ?? []) {
-    const outputPath = path.join(packageDir, relativeOutput);
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    fs.writeFileSync(outputPath, "export default {};\n");
-  }
-  return {
+function fixture(
+  sourceExtension: string,
+  runtimeOutputs: readonly string[] = [],
+  includeSource = true,
+) {
+  const packageDir = temp.make("openclaw-package-runtime-entry-");
+  const sourceEntry = `./src/entry${sourceExtension}`;
+  const entries = [...runtimeOutputs, ...(includeSource ? [sourceEntry] : [])];
+  writeTree(
     packageDir,
-    sourceEntry,
-    manifest: {
-      name: "runtime-entry-fixture",
-      version: "1.0.0",
-      openclaw: { extensions: [sourceEntry], setupEntry: sourceEntry },
-    },
+    Object.fromEntries(entries.map((entry) => [entry, "export default {};\n"])),
+  );
+  const resolution: Resolution = {
+    packageDir,
+    extensions: [sourceEntry],
+    origin: "global",
+    sourceLabel: packageDir,
+    diagnostics: [],
+    manifest: { openclaw: { extensions: [sourceEntry], setupEntry: sourceEntry } },
   };
+  return { sourceEntry, resolution };
 }
 
 afterEach(() => {
   clearPluginRuntimeArtifactResolutionMemo();
-  for (const packageRoot of packageRoots.splice(0)) {
-    fs.rmSync(packageRoot, { recursive: true, force: true });
-  }
+  temp.cleanup();
 });
 
-describe("canonical installed package runtime entries", () => {
-  it.each([
-    {
-      name: "TSX source with its flat JavaScript build",
-      sourceExtension: ".tsx",
-      runtimeOutputs: ["dist/entry.js"],
-      expectedRuntime: "dist/entry.js",
-    },
-    {
-      name: "TSX source omitted from a published package",
-      sourceExtension: ".tsx",
-      runtimeOutputs: ["dist/entry.js"],
-      includeSource: false,
-      expectedRuntime: "dist/entry.js",
-    },
-    {
-      name: "TypeScript compiler output that preserves the src directory",
-      sourceExtension: ".ts",
-      runtimeOutputs: ["dist/src/entry.js"],
-      expectedRuntime: "dist/src/entry.js",
-    },
-    {
-      name: "ES module TypeScript output ahead of an unrelated .js artifact",
-      sourceExtension: ".mts",
-      runtimeOutputs: ["dist/entry.js", "dist/entry.mjs"],
-      expectedRuntime: "dist/entry.mjs",
-    },
-    {
-      name: "CommonJS TypeScript output ahead of an unrelated .js artifact",
-      sourceExtension: ".cts",
-      runtimeOutputs: ["dist/entry.js", "dist/entry.cjs"],
-      expectedRuntime: "dist/entry.cjs",
-    },
-  ])("keeps install, discovery, setup, and loading aligned for $name", async (scenario) => {
-    const { packageDir, sourceEntry, manifest } = createPackageFixture(scenario);
-    const installResult = await validatePackageExtensionEntriesForInstall({
-      packageDir,
-      extensions: [sourceEntry],
-      manifest,
-    });
-    const diagnostics: Parameters<typeof resolvePackageRuntimeExtensionSources>[0]["diagnostics"] =
-      [];
-    const runtimeSources = resolvePackageRuntimeExtensionSources({
-      packageDir,
-      manifest,
-      extensions: [sourceEntry],
-      origin: "global",
-      sourceLabel: packageDir,
-      diagnostics,
-    });
-    const setupSource = resolvePackageSetupSource({
-      packageDir,
-      manifest,
-      origin: "global",
-      sourceLabel: packageDir,
-      diagnostics,
-    });
+it.each([
+  [".tsx", ["dist/entry.js"], "dist/entry.js", true],
+  [".tsx", ["dist/entry.js"], "dist/entry.js", false],
+  [".ts", ["dist/src/entry.js"], "dist/src/entry.js", true],
+  [".mts", ["dist/entry.js", "dist/entry.mjs"], "dist/entry.mjs", true],
+  [".cts", ["dist/entry.js", "dist/entry.cjs"], "dist/entry.cjs", true],
+] as const)(
+  "aligns install, discovery, setup, and loading: %s, outputs %j, selected %s, source %s",
+  async (sourceExtension, runtimeOutputs, expectedRuntime, includeSource) => {
+    const { sourceEntry, resolution } = fixture(sourceExtension, runtimeOutputs, includeSource);
+    const { packageDir } = resolution;
+    const install = await validatePackageExtensionEntriesForInstall(resolution);
+    const runtime = resolvePackageRuntimeExtensionSources(resolution);
+    const setup = resolvePackageSetupSource(resolution);
     const artifact = resolvePluginRuntimeArtifact({
       pluginId: "runtime-entry-fixture",
       entryKind: "runtime",
@@ -117,70 +67,53 @@ describe("canonical installed package runtime entries", () => {
       origin: "global",
       preferBuiltPluginArtifacts: true,
     });
-    const expectedSource = fs.realpathSync(path.join(packageDir, scenario.expectedRuntime));
+    const expectedSource = fs.realpathSync(path.join(packageDir, expectedRuntime));
 
-    expect(installResult).toEqual({ ok: true });
-    expect(runtimeSources).toEqual([expectedSource]);
-    expect(setupSource).toBe(expectedSource);
-    expect(artifact.source).toBe(expectedSource);
-    expect(diagnostics).toEqual([]);
-  });
+    expect([install, runtime, setup, artifact.source, resolution.diagnostics]).toEqual([
+      { ok: true },
+      [expectedSource],
+      expectedSource,
+      expectedSource,
+      [],
+    ]);
+  },
+);
 
-  it.each([".ts", ".tsx", ".mts", ".cts"])(
-    "rejects published source-only %s entries while allowing linked source checkouts",
-    async (sourceExtension) => {
-      const { packageDir, sourceEntry, manifest } = createPackageFixture({
-        sourceExtension,
-        runtimeOutputs: ["index.js"],
+it.each([".ts", ".tsx", ".mts", ".cts"])(
+  "rejects published source-only %s entries while allowing linked source checkouts",
+  async (sourceExtension) => {
+    const { sourceEntry, resolution } = fixture(sourceExtension, ["index.js"]);
+    const { packageDir, manifest } = resolution;
+    // A valid JS extension lets the source-only setup entry reach its own validation.
+    for (const extensions of [[sourceEntry], ["./index.js"]]) {
+      const installParams = {
+        packageDir,
+        extensions,
+        manifest: { ...manifest, openclaw: { ...manifest.openclaw, extensions } },
+      };
+      expect(await validatePackageExtensionEntriesForInstall(installParams)).toEqual({
+        ok: false,
+        error: expect.stringContaining("requires compiled runtime output"),
       });
-      // A valid JS extension lets the source-only setup entry reach its own validation.
-      for (const extensions of [[sourceEntry], ["./index.js"]]) {
-        const installParams = {
-          packageDir,
-          extensions,
-          manifest: { ...manifest, openclaw: { ...manifest.openclaw, extensions } },
-        };
-        expect(await validatePackageExtensionEntriesForInstall(installParams)).toEqual({
-          ok: false,
-          error: expect.stringContaining("requires compiled runtime output"),
-        });
-        expect(
-          await validatePackageExtensionEntriesForInstall({
-            ...installParams,
-            allowSourceTypeScriptEntries: true,
-          }),
-        ).toEqual({ ok: true });
-      }
-      const diagnostics: Parameters<
-        typeof resolvePackageRuntimeExtensionSources
-      >[0]["diagnostics"] = [];
-
       expect(
-        resolvePackageRuntimeExtensionSources({
-          packageDir,
-          manifest,
-          extensions: [sourceEntry],
-          origin: "global",
-          sourceLabel: packageDir,
-          diagnostics,
+        await validatePackageExtensionEntriesForInstall({
+          ...installParams,
+          allowSourceTypeScriptEntries: true,
         }),
-      ).toEqual([]);
-      expect(diagnostics).toEqual([
-        expect.objectContaining({
-          message: expect.stringContaining("requires compiled runtime output"),
-        }),
-      ]);
-      expect(
-        resolvePackageRuntimeExtensionSources({
-          packageDir,
-          manifest,
-          extensions: [sourceEntry],
-          origin: "global",
-          requireBuiltRuntimeEntry: false,
-          sourceLabel: packageDir,
-          diagnostics: [],
-        }),
-      ).toEqual([fs.realpathSync(path.join(packageDir, sourceEntry))]);
-    },
-  );
-});
+      ).toEqual({ ok: true });
+    }
+    expect(resolvePackageRuntimeExtensionSources(resolution)).toEqual([]);
+    expect(resolution.diagnostics).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("requires compiled runtime output"),
+      }),
+    ]);
+    expect(
+      resolvePackageRuntimeExtensionSources({
+        ...resolution,
+        requireBuiltRuntimeEntry: false,
+        diagnostics: [],
+      }),
+    ).toEqual([fs.realpathSync(path.join(packageDir, sourceEntry))]);
+  },
+);

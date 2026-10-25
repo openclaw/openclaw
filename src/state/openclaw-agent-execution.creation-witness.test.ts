@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -12,10 +12,9 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionRequest,
-} from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerAdmissionRequest } from "../infra/sqlite-worker-operation-admission.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
@@ -28,7 +27,6 @@ import {
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import {
   agentCreationWitnessTempDirs as tempDirs,
   createAgentCreationWitnessFixture as fixture,
@@ -79,24 +77,22 @@ function initialized(sessionKey: string, sessionId: string) {
     transcriptPublication: transcriptPublication(sessionKey, sessionId),
   };
 }
+function existingTranscript(sessionKey: string) {
+  return { kind: "session-transcript-initialized", sessionKey, transcriptPublication: undefined };
+}
 async function readAliasAndClose(
   options: Options,
   sessionKey: string,
   assertRegistry?: () => void,
 ) {
   const execution = capture(options);
-  try {
-    await expect(initialize(execution, sessionKey, "alias-session")).resolves.toEqual({
-      kind: "session-transcript-initialized",
-      sessionKey,
-      transcriptPublication: undefined,
-    });
-    assertRegistry?.();
-    await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
-    expect(() => execution.assertCurrent()).toThrow(/closed/);
-  } finally {
-    await execution.release();
-  }
+  await using _ = onExit(() => execution.release());
+  await expect(initialize(execution, sessionKey, "alias-session")).resolves.toEqual(
+    existingTranscript(sessionKey),
+  );
+  assertRegistry?.();
+  await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+  expect(() => execution.assertCurrent()).toThrow(/closed/);
 }
 function initialize(execution: Execution, sessionKey: string, sessionId: string) {
   return execution.runExisting(source(), (scope) =>
@@ -139,19 +135,27 @@ it("exposes a prepared generation only after registration publication and keeps 
   claim!.assertCurrent();
   const warmStages: string[] = [];
   const warmSource = source((request) => warmStages.push(request.stage));
-  const host = observeHostDataSql();
-  try {
-    await Promise.all([execution.prepare(warmSource), execution.prepare(warmSource)]);
-    await execution.prepare(warmSource);
-    expect(warmStages).toEqual([]);
-    expect(host.queries).toEqual([]);
-  } finally {
-    host.restore();
-  }
+  await Promise.all([execution.prepare(warmSource), execution.prepare(warmSource)]);
+  await execution.prepare(warmSource);
+  expect(warmStages).toEqual([]);
   claim!.assertCurrent();
   await execution.release();
   expect(() => execution.capturePreparedGenerationClaim()).toThrow(/released/);
   expect(() => claim!.assertCurrent()).toThrow(/released/);
+});
+
+it("refuses writable preparation after its captured physical file disappears", async () => {
+  const options = fixture();
+  openOpenClawAgentDatabase(options);
+  await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+  const execution = capture(options);
+  await using _ = onExit(() => execution.release());
+  fs.unlinkSync(options.path);
+
+  await expect(execution.prepare(source())).rejects.toThrow(
+    "Captured agent database file disappeared before writable preparation",
+  );
+  expect(fs.existsSync(options.path)).toBe(false);
 });
 
 it("retains both borrowers when config changes after a completed native open", async () => {
@@ -210,25 +214,16 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
   const creator = creatorFor(aliased);
   const sibling = capture(options);
   const sessionKey = "agent:main:alias-proof";
-  const command = {
-    type: "session.transcript.initialize" as const,
-    input: { sessionKey, sessionId: "alias-session" },
-  };
-  const existingTranscript = {
-    kind: "session-transcript-initialized",
-    sessionKey,
-    transcriptPublication: undefined,
-  };
   await using _ = onExit(() => releaseAll(creator, sibling));
   await creator.prepare(source());
   const registry = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
     env: options.env,
   }).read();
-  await expect(creator.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
+  await expect(initialize(creator, sessionKey, "alias-session")).resolves.toEqual(
     initialized(sessionKey, "alias-session"),
   );
-  await expect(sibling.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
-    existingTranscript,
+  await expect(initialize(sibling, sessionKey, "alias-session")).resolves.toEqual(
+    existingTranscript(sessionKey),
   );
   expect(registry.assertCurrent).not.toThrow();
   expect(sibling.path).toBe(options.path);
@@ -254,9 +249,9 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
     );
     expect(checkedReplacementProof).toBe(true);
     expect(registry.assertCurrent).toThrow("registry changed");
-    await expect(
-      replacement.runExisting(source(), (scope) => scope.execute(command)),
-    ).resolves.toEqual(initialized(sessionKey, "alias-session"));
+    await expect(initialize(replacement, sessionKey, "alias-session")).resolves.toEqual(
+      initialized(sessionKey, "alias-session"),
+    );
   } finally {
     await replacement.release();
   }
@@ -330,9 +325,7 @@ it.each(["missing", "schema-missing"] as const)(
       await execution.prepare(source());
       return execution.captureGenerationClaim();
     };
-    await using _ = onExit(() =>
-      Promise.allSettled(executions.map((execution) => execution.release())),
-    );
+    await using _ = onExit(() => releaseAll(...executions));
     const results = await Promise.allSettled(observations.map(create));
     expect(results.filter((result) => result.status === "rejected")).toEqual([]);
     const claims = executions.map((execution) => execution.captureGenerationClaim());
@@ -385,20 +378,12 @@ it.skipIf(process.platform === "win32")(
 
 it("keeps the owner's absent target when a later creator observes an unexpected file", async () => {
   const options = fixture();
-  const creator = capture(options, {
-    expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
-  });
-  fs.mkdirSync(path.dirname(options.path), { recursive: true });
-  fs.writeFileSync(options.path, "");
-  const later = capture(options, {
-    expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
-  });
-  try {
-    await expect(later.prepare(source())).rejects.toThrow(/changed before creating open/);
-    expect(fs.readFileSync(options.path)).toHaveLength(0);
-  } finally {
-    await Promise.allSettled([creator.release(), later.release()]);
-  }
+  const creator = creatorFor(options);
+  emptyStore(options);
+  const later = creatorFor(options);
+  await using _ = onExit(() => releaseAll(creator, later));
+  await expect(later.prepare(source())).rejects.toThrow(/changed before creating open/);
+  expect(fs.readFileSync(options.path)).toHaveLength(0);
 });
 
 it("retains the first creator's file witness on a preexisting execution owner", async () => {
@@ -679,9 +664,7 @@ it("retains a creator that joins while a refused generation closes", async () =>
   revoked.assertCurrent = () => {
     throw refusal;
   };
-  await using _ = onExit(() =>
-    Promise.allSettled(executions.map((execution) => execution.release())),
-  );
+  await using _ = onExit(() => releaseAll(...executions));
   await expect(creator.prepare(revoked)).rejects.toBe(refusal);
   const releasing = creator.release();
   // Release enters native cleanup at its first continuation; borrow before close settles.
@@ -697,7 +680,7 @@ it("retains a creator that joins while a refused generation closes", async () =>
   );
 });
 
-it("keeps another captured borrower live after a caller-specific native open refusal", async () => {
+it("keeps another captured borrower live when the initiating caller is revoked during native open", async () => {
   const options = fixture();
   openOpenClawAgentDatabase(options);
   await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
@@ -715,12 +698,20 @@ it("keeps another captured borrower live after a caller-specific native open ref
   const refusal = new Error("Original caller revoked at native open admission");
   let current = true;
   let reachedNativeOpen = false;
-  const revoked = source((request) => {
-    if (request.stage === "open") {
+  const observed = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (
+      request.stage === "open" &&
+      isRecord(request.facts) &&
+      request.facts.databasePath === options.path
+    ) {
       reachedNativeOpen = true;
       current = false;
     }
+    admit(request, grant);
   });
+  using observation = { [Symbol.dispose]: () => observed.mockRestore() };
+  void observation;
+  const revoked = source();
   revoked.assertCurrent = () => {
     if (!current) {
       throw refusal;
@@ -742,34 +733,17 @@ it("rechecks source authority after registration notification before authorizing
   const execution = capture(options);
   const revoked = new Error("Creation source revoked by its registry notification");
   let current = true;
-  const authorizedOpen = vi.fn();
-  const requestSource: AgentDatabaseRequestExecutionSource = {
-    assertCurrent() {
-      if (!current) {
-        throw revoked;
-      }
-    },
-    onRegistryChange() {
-      current = false;
-    },
-    createAdmission(binding) {
-      return () => ({
-        nativeLocations: binding.nativeLocations,
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          binding.authorize(request);
-          if (request.stage === "open") {
-            authorizedOpen();
-          }
-          if (!grant()) {
-            throw new Error("Creation source lost admission");
-          }
-        }, binding.attachment),
-      });
-    },
+  const requestSource = source();
+  requestSource.assertCurrent = () => {
+    if (!current) {
+      throw revoked;
+    }
+  };
+  requestSource.onRegistryChange = () => {
+    current = false;
   };
   await using _ = onExit(() => execution.release());
   await expect(execution.prepare(requestSource)).rejects.toThrow(revoked);
-  expect(authorizedOpen).not.toHaveBeenCalled();
   expect(fs.existsSync(options.path)).toBe(false);
 });
 

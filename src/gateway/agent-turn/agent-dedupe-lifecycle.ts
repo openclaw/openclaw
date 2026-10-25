@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import {
   isSubagentCoordinationInputProvenance,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
+import {
+  getRpcSourceForGateway,
+  hasUnretiredRpcSource,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { logAttachmentFailure } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
@@ -20,6 +25,7 @@ import {
   isPreRegistrationAbortedAgentDedupeEntryForSession,
   readGatewayDedupeEntry,
   replayAgentTurnIfCached,
+  setAbortedAgentDedupeEntries,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
 import type { AgentTurnContext, AgentTurnFrame, AgentTurnIo } from "./types.js";
@@ -33,7 +39,9 @@ export function createAgentDedupeLifecycle(params: {
   agentDedupeKeys: string[];
   suppressVisibleSessionEffects: boolean;
   inputProvenance?: InputProvenance;
-  privateCompletion?: true;
+  reconcileDurableInput?: boolean;
+  assertAdmissionCurrent?: () => void;
+  assertCancellationCurrent?: () => void;
   ownerConnId?: string;
   ownerDeviceId?: string;
   context: AgentTurnContext;
@@ -41,6 +49,7 @@ export function createAgentDedupeLifecycle(params: {
 }) {
   let reserved = false;
   let accepted = false;
+  let preservedStop: ReturnType<typeof readGatewayDedupeEntry>;
   let committedResetCompletion: CommittedResetCompletion | undefined;
   const reservationId = randomUUID();
 
@@ -48,19 +57,34 @@ export function createAgentDedupeLifecycle(params: {
     if (reserved) {
       return;
     }
-    // A private retry bypasses terminal cache replay to reconcile durable input.
+    // A durable retry bypasses terminal cache replay to reconcile its input.
     // Preserve an exact intentional Stop for the resolved admission guard.
+    const previous = readGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      keys: params.agentDedupeKeys,
+    });
+    const previousIsIntentionalStop = isPreRegistrationAbortedAgentDedupeEntryForSession({
+      entry: previous,
+      runId: params.runId,
+      sessionKey,
+      agentId: dedupeAgentId,
+    });
+    const hasCurrentSource = () =>
+      hasUnretiredRpcSource(
+        params.runId,
+        { sessionKey, agentId: dedupeAgentId },
+        params.context.resolveGatewayContext,
+      );
+    const previousPayload = asOptionalRecord(previous?.payload);
+    // A queued Stop remains final after its source retires. Executed input
+    // reconciles through its durable completion instead of this transient cache.
+    const stoppedBeforeExecution =
+      previousPayload?.timeoutPhase === "queue" && previousPayload.providerStarted === false;
     if (
-      isPreRegistrationAbortedAgentDedupeEntryForSession({
-        entry: readGatewayDedupeEntry({
-          dedupe: params.context.dedupe,
-          keys: params.agentDedupeKeys,
-        }),
-        runId: params.runId,
-        sessionKey,
-        agentId: dedupeAgentId,
-      })
+      previousIsIntentionalStop &&
+      (!params.reconcileDurableInput || hasCurrentSource() || stoppedBeforeExecution)
     ) {
+      preservedStop = previous;
       return;
     }
     const acceptedAt = Date.now();
@@ -71,9 +95,9 @@ export function createAgentDedupeLifecycle(params: {
     setGatewayDedupeEntries({
       dedupe: params.context.dedupe,
       keys: params.agentDedupeKeys,
-      // Durable private input decides replay after the prior controller ends.
+      // Durable input decides replay after the prior controller ends.
       // Its new reservation must retire stale sticky terminal projections.
-      ...(params.privateCompletion && !params.context.chatAbortControllers.has(params.runId)
+      ...(params.reconcileDurableInput && !hasCurrentSource()
         ? { startNewAttempt: true as const }
         : {}),
       entry: {
@@ -129,7 +153,17 @@ export function createAgentDedupeLifecycle(params: {
           preflight: params,
           context: params.context,
           io: params.io,
-          acceptedOnly: params.privateCompletion,
+          // A refused reservation may replay only the exact Stop preserved by
+          // this target, never an unrelated or replaced terminal cache entry.
+          acceptedOnly:
+            params.reconcileDurableInput &&
+            !(
+              preservedStop &&
+              readGatewayDedupeEntry({
+                dedupe: params.context.dedupe,
+                keys: params.agentDedupeKeys,
+              }) === preservedStop
+            ),
         })
       ) {
         return undefined;
@@ -185,6 +219,45 @@ export function createAgentDedupeLifecycle(params: {
     reserved = false;
   };
 
+  const cancelOwnedReservation = (target: {
+    agentId?: string;
+    sessionKey?: string;
+    stopReason: string;
+  }) => {
+    if (accepted) {
+      return false;
+    }
+    try {
+      params.assertAdmissionCurrent?.();
+    } catch {
+      const source = getRpcSourceForGateway(params.runId, params.context.resolveGatewayContext);
+      // A canceled execution owner may record its own cancellation, but cannot
+      // replace an explicit Stop publisher or ignore independent authority loss.
+      if (!params.assertCancellationCurrent || source?.adapter.projectSessionTerminalPending) {
+        return false;
+      }
+      try {
+        params.assertCancellationCurrent();
+      } catch {
+        return false;
+      }
+    }
+    const keys = ownedReservationKeys();
+    if (keys.length !== params.agentDedupeKeys.length) {
+      return false;
+    }
+    setAbortedAgentDedupeEntries({
+      dedupe: params.context.dedupe,
+      keys,
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      runId: params.runId,
+      stopReason: target.stopReason,
+    });
+    accepted = true;
+    return true;
+  };
+
   const bindSessionTarget = (target: {
     sessionKey: string;
     agentId?: string;
@@ -232,6 +305,7 @@ export function createAgentDedupeLifecycle(params: {
     reserve,
     bindSessionTarget,
     clearUnaccepted,
+    cancelOwnedReservation,
     isReserved: () => reserved,
     markAccepted: (value: boolean) => {
       accepted = value;

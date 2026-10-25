@@ -1,3 +1,4 @@
+import type { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { ConversationAuthority } from "./conversation-authority.types.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
@@ -49,6 +50,11 @@ export type SessionEntryPatchCommit = {
   next: SessionEntry | undefined;
   operationLabel: "session-entry.patch" | "session-entry-target.patch";
   validateCanonicalKeys: boolean;
+  returnEntry?: false;
+  retainedEntry?: {
+    writeToken: string;
+    writeScopes: Parameters<typeof readSqliteDatabaseScopedWriteToken>[1];
+  };
   consumePendingReset?: boolean;
   providerReviewMutation?: boolean;
   shouldCommitIf?: SessionEntryPatchGuard["shouldCommitIf"];
@@ -60,7 +66,15 @@ export type SessionEntryPatchCommit = {
 
 export type SessionEntryPatchCommitted = {
   kind: "session-entry-patch";
-  entry: SessionEntry | null;
+  /** Null is absent/refused; undefined omits only the caller's entry result. */
+  entry?: SessionEntry | null;
+  /** Reuses the host's exact preimage; all authority facts are restored before the commit grant. */
+  entryDelta?: {
+    sessionKey: string;
+    values: Array<[string, unknown]>;
+    removed: string[];
+    returnEntry: boolean;
+  };
   applied: boolean;
   lifecycleEffects?: SessionLifecyclePatchEffects;
   publication?: SessionEntryReplacementPublication;

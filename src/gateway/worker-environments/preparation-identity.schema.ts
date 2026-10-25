@@ -48,6 +48,7 @@ const EmptyPreparation = Preparation.omit({
 
 export type WorkerPreparationArtifacts = z.infer<typeof WorkerPreparationArtifactsSchema>;
 export type WorkerProjectPreparationIdentity = z.infer<typeof Preparation>;
+export type WorkerEmptyPreparationIdentity = z.infer<typeof EmptyPreparation>;
 
 /** Immutable artifact facts are separate from the reserve's demand/expiry/consumption tuple. */
 export function readWorkerProjectPreparation(

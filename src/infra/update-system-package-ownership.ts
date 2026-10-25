@@ -8,8 +8,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { ignoreMissingPath } from "./errno.js";
 import { isPathInside } from "./fs-safe.js";
-import { hasNodeErrorCode } from "./path-guards.js";
 import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 
 export const PKG_INSPECTION_TIMEOUT_MS = 30_000;
@@ -81,11 +81,10 @@ export type SystemPackageOwnershipInspection = ReturnType<
 async function readPackageFiles(
   owner: NonNullable<ReturnType<typeof packageOwner>>,
   timeoutMs: number,
-  runCommand: typeof runCommandBuffered,
 ): Promise<string[]> {
   // -N prevents the base-system pkg launcher from bootstrapping. Pin the builtin
   // query: pkg expands aliases once, and plugin initialization precedes dispatch.
-  const result = await runCommand([...owner.command], {
+  const result = await runCommandBuffered([...owner.command], {
     timeoutMs,
     env: owner.env,
     maxOutputBytes: { stdout: 16 * 1024 * 1024, stderr: 64 * 1024 },
@@ -118,7 +117,6 @@ const log = createSubsystemLogger("update");
 export function createSystemPackageOwnershipInspection(
   timeoutMs = PKG_INSPECTION_TIMEOUT_MS,
   options: {
-    runCommand?: typeof runCommandBuffered;
     onWarning?: (message: string) => void;
   } = {},
 ) {
@@ -168,12 +166,7 @@ export function createSystemPackageOwnershipInspection(
   const canonicalDirectory = (directory: string): Promise<string> =>
     getOrCreatePromise(directories, directory, async () => {
       const stat = await read("paths", "lstat", () =>
-        fs.lstat(directory).catch((error: unknown) => {
-          if (hasNodeErrorCode(error, "ENOENT")) {
-            return null;
-          }
-          throw error;
-        }),
+        fs.lstat(directory).catch((error: unknown) => ignoreMissingPath(error) ?? null),
       );
       if (stat) {
         return read("paths", "realpath", () => fs.realpath(directory));
@@ -195,7 +188,7 @@ export function createSystemPackageOwnershipInspection(
     const inventory = await read(
       "database",
       `${owner.manager} query`,
-      () => (files ??= readPackageFiles(owner, budget, options.runCommand ?? runCommandBuffered)),
+      () => (files ??= readPackageFiles(owner, budget)),
     );
     const matches = (candidate: string, file: string) =>
       entryOnly ? candidate === file : isPathInside(candidate, file);

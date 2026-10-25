@@ -12,7 +12,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists, root as fsRoot } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
-import { readChunkWithIdleTimeout } from "../infra/http-response-body-timeout.js";
 import type { TimedInstallModeOptions } from "../infra/install-mode-options.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -78,11 +77,6 @@ type LoadedMarketplace = {
 };
 
 type MarketplaceManifestOrigin = "local" | "remote";
-
-type ResolvedLocalMarketplaceSource = {
-  manifestPath: string;
-  rootDir: string;
-};
 
 type KnownMarketplaceRecord = {
   installLocation?: string;
@@ -553,17 +547,6 @@ async function loadMarketplace(params: {
     };
   };
 
-  const loadResolvedLocalMarketplace = async (
-    local: ResolvedLocalMarketplaceSource,
-    sourceLabel: string,
-  ): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> =>
-    loadMarketplaceFromManifestFile({
-      manifestPath: local.manifestPath,
-      sourceLabel,
-      rootDir: local.rootDir,
-      origin: "local",
-    });
-
   // Resolve aliases against one snapshot so a cycle cannot retain a plugin lifecycle lease.
   const knownMarketplaces = await readClaudeKnownMarketplaces();
   const visitedKnownMarketplaces = new Set<string>();
@@ -585,7 +568,11 @@ async function loadMarketplace(params: {
     if (known.installLocation) {
       const local = await resolveLocalMarketplaceSource(known.installLocation);
       if (local?.ok) {
-        return await loadResolvedLocalMarketplace(local, source);
+        return await loadMarketplaceFromManifestFile({
+          ...local,
+          sourceLabel: source,
+          origin: "local",
+        });
       }
     }
 
@@ -602,7 +589,11 @@ async function loadMarketplace(params: {
   }
 
   if (local?.ok) {
-    return await loadResolvedLocalMarketplace(local, local.manifestPath);
+    return await loadMarketplaceFromManifestFile({
+      ...local,
+      sourceLabel: local.manifestPath,
+      origin: "local",
+    });
   }
 
   const cloned = await cloneMarketplaceRepo({
@@ -661,14 +652,6 @@ function formatMarketplaceDownloadError(url: string, detail: string): string {
   );
 }
 
-function hasStreamingResponseBody(
-  response: Response,
-): response is Response & { body: ReadableStream<Uint8Array> } {
-  return Boolean(
-    response.body && typeof (response.body as { getReader?: unknown }).getReader === "function",
-  );
-}
-
 function parseMarketplaceContentLength(raw: string): number {
   const trimmed = raw.trim();
   if (!/^\d+$/.test(trimmed)) {
@@ -679,35 +662,6 @@ function parseMarketplaceContentLength(raw: string): number {
     throw new Error(`invalid content-length header: ${raw}`);
   }
   return size;
-}
-
-async function* marketplaceResponseChunks(
-  body: ReadableStream<Uint8Array>,
-  timeoutMs: number,
-): AsyncIterable<Uint8Array> {
-  const reader = body.getReader();
-  try {
-    while (true) {
-      const { done, value } = await readChunkWithIdleTimeout(
-        reader,
-        timeoutMs,
-        ({ chunkTimeoutMs }) => new Error(`download timed out after ${chunkTimeoutMs}ms`),
-      );
-      if (done) {
-        return;
-      }
-      if (!value?.length) {
-        continue;
-      }
-
-      yield value;
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
 }
 
 async function downloadUrlToTempFile(
@@ -724,10 +678,9 @@ async function downloadUrlToTempFile(
       error: string;
     }
 > {
-  let sourceFileName = "plugin.tgz";
   let workspace: TempWorkspace | undefined;
   try {
-    sourceFileName = resolveSafeMarketplaceDownloadFileName(url, sourceFileName);
+    const sourceFileName = resolveSafeMarketplaceDownloadFileName(url, "plugin.tgz");
     const downloadTimeoutMs = resolveMarketplaceDownloadTimeoutMs(timeoutMs);
     const { response, finalUrl, release } = await fetchWithSsrFGuard({
       url,
@@ -747,14 +700,6 @@ async function downloadUrlToTempFile(
           error: formatMarketplaceDownloadError(url, "empty response body"),
         };
       }
-      // Fail closed unless we can stream and enforce the archive size bound incrementally.
-      if (!hasStreamingResponseBody(response)) {
-        return {
-          ok: false,
-          error: formatMarketplaceDownloadError(url, "streaming response body unavailable"),
-        };
-      }
-
       const contentLength = response.headers.get("content-length");
       if (contentLength) {
         const size = parseMarketplaceContentLength(contentLength);
@@ -774,15 +719,11 @@ async function downloadUrlToTempFile(
       const createdWorkspace = workspace;
       const targetPath = workspace.path(fileName);
       const destination = await fsRoot(workspace.dir);
-      await destination.create(
-        fileName,
-        marketplaceResponseChunks(response.body, downloadTimeoutMs),
-        {
-          maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
-          mode: 0o666 & ~process.umask(),
-          durable: false,
-        },
-      );
+      await destination.create(fileName, response.body, {
+        maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
+        mode: 0o666 & ~process.umask(),
+        durable: false,
+      });
       return {
         ok: true,
         path: targetPath,
@@ -1052,9 +993,16 @@ export async function installPluginFromMarketplace(
 
   let installCleanup: (() => Promise<void>) | undefined;
   try {
-    const entry = loaded.marketplace.manifest.plugins.find(
+    const entries = loaded.marketplace.manifest.plugins.filter(
       (plugin) => plugin.name === params.plugin,
     );
+    if (entries.length > 1) {
+      return {
+        ok: false,
+        error: `plugin "${params.plugin}" is ambiguous in marketplace ${loaded.marketplace.sourceLabel}: ${entries.length} entries share this name; remove or rename the duplicate entries`,
+      };
+    }
+    const [entry] = entries;
     if (!entry) {
       const known = loaded.marketplace.manifest.plugins.map((plugin) => plugin.name).toSorted();
       return {

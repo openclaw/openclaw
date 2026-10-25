@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { captureSource } from "./scan-bundled.mjs";
 
 const exec = promisify(execFile);
 const script = fileURLToPath(new URL("query.mjs", import.meta.url));
@@ -23,6 +27,85 @@ const consumer = {
     unknownCount: 0,
   },
 };
+
+async function bundledFixture(t, unnamed = false) {
+  const root = await mkdtemp(path.join(tmpdir(), "sdk-impact-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const plugins = [];
+  for (const [pluginId, packageName] of [
+    ["local", "@openclaw/local"],
+    ["published", "example"],
+  ]) {
+    const relativeRoot = `extensions/${pluginId}`;
+    await mkdir(path.join(root, relativeRoot), { recursive: true });
+    await writeFile(
+      path.join(root, relativeRoot, "openclaw.plugin.json"),
+      JSON.stringify({ id: pluginId }),
+    );
+    if (!unnamed || pluginId !== "local") {
+      await writeFile(
+        path.join(root, relativeRoot, "package.json"),
+        JSON.stringify({ name: packageName, openclaw: { extensions: ["./index.ts"] } }),
+      );
+    }
+    plugins.push({
+      pluginId,
+      packageName: unnamed && pluginId === "local" ? null : packageName,
+      relativeRoot,
+      sdkUsage: {
+        schemaVersion: 1,
+        analysisVersion: "1",
+        inputKind: "source",
+        status: "complete",
+        coverage: { filesDiscovered: 1, filesAnalyzed: 1, filesExcluded: 0 },
+        entries: [
+          {
+            key,
+            kind: "api-member",
+            identity: "api.registerTool",
+            classification: "runtime",
+            referenceKinds: ["call"],
+            evidence: consumer.evidence,
+            deprecationCodes: [],
+          },
+        ],
+        unknowns: [],
+      },
+    });
+  }
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+  await exec("git", ["init", "-q", root]);
+  await exec("git", ["-C", root, "add", "."]);
+  await exec("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "commit",
+    "-qm",
+    "fixture",
+  ]);
+  const { source, plugins: metadata } = await captureSource(root);
+  for (const [index, item] of plugins.entries()) {
+    Object.assign(item, metadata[index]);
+  }
+  const report = {
+    schemaVersion: 1,
+    traversalComplete: true,
+    generatedAt: "2026-10-17T00:00:00Z",
+    inspectorVersion: "0.4.3",
+    source,
+    plugins,
+  };
+  const file = path.join(root, "inventory.json");
+  const save = () => writeFile(file, JSON.stringify(report));
+  await save();
+  return { root, file, report, save };
+}
 function coverage(status = "complete", unknownCount = 0) {
   return { scope: "page", items: [{ ...plugin, status, unknownCount }], nextCursor: null };
 }
@@ -341,4 +424,107 @@ test("CLI keeps large paginated inventories readable without losing aggregate co
     exampleLimit: null,
     omitted: { items: 0, gaps: 0, warnings: 0 },
   });
+});
+
+test("bundled consumers are included once across sources and remain visible with a release window", async (t) => {
+  const fixture = await bundledFixture(t);
+  const { code, report } = await query(
+    t,
+    (url) => {
+      const releasedSince = Number(url.searchParams.get("releasedSince"));
+      return url.pathname.endsWith("/coverage")
+        ? {
+            ...coverage(),
+            releasedSince,
+            items: [
+              { ...plugin, releaseCreatedAt: releasedSince, status: "complete", unknownCount: 0 },
+            ],
+          }
+        : {
+            key,
+            releasedSince,
+            items: [{ ...consumer, releaseCreatedAt: releasedSince }],
+            nextCursor: null,
+          };
+    },
+    ["--bundled", fixture.file, "--months", "3"],
+  );
+  assert.equal(code, 0, JSON.stringify(report));
+  assert.equal(report.distinctPlugins, 1);
+  assert.equal(report.bundled.distinctPlugins, 2);
+  assert.equal(report.bundled.coverage.complete, 2);
+  assert.equal(report.bundled.releaseWindow, null);
+  assert.equal(report.combined.distinctPlugins, 2);
+  assert.equal(report.combined.overlappingConsumers, 1);
+  assert.equal(report.combined.eligiblePlugins, 2);
+  assert.equal(report.combined.assessment, "observed-consumers");
+});
+
+test("bundled gaps cannot turn an empty ClawHub result into a confident zero", async (t) => {
+  const fixture = await bundledFixture(t);
+  fixture.report.plugins[0].sdkUsage.entries = [];
+  fixture.report.plugins[1].sdkUsage.entries = [];
+  fixture.report.plugins[1].sdkUsage.status = "partial";
+  fixture.report.plugins[1].sdkUsage.unknowns = [
+    { path: "index.ts", line: 1, reason: "computed member" },
+  ];
+  await fixture.save();
+  const respond = (url) =>
+    url.pathname.endsWith("/coverage") ? coverage() : { key, items: [], nextCursor: null };
+  const { report } = await query(t, respond, ["--bundled", fixture.file]);
+  assert.ok(report.combined, JSON.stringify(report));
+  assert.equal(report.combined.distinctPlugins, 0);
+  assert.equal(report.combined.assessment, "incomplete-coverage");
+  assert.equal(report.bundled.coverage.partial, 1);
+  assert.equal(report.bundled.coverage.unresolvedReferences, 1);
+  const missing = await query(t, respond);
+  assert.equal(missing.report.combined.distinctPlugins, null);
+  assert.equal(missing.report.combined.assessment, "unavailable");
+});
+
+test("stale or incomplete bundled inventories fail instead of reusing a zero", async (t) => {
+  const fixture = await bundledFixture(t);
+  const respond = (url) =>
+    url.pathname.endsWith("/coverage") ? coverage() : { key, items: [], nextCursor: null };
+  const original = structuredClone(fixture.report);
+  for (const mutate of [
+    () => {
+      fixture.report.plugins.pop();
+    },
+    () => {
+      fixture.report.source.commit = "0".repeat(40);
+    },
+  ]) {
+    Object.assign(fixture.report, structuredClone(original));
+    mutate();
+    await fixture.save();
+    const result = await query(t, respond, ["--bundled", fixture.file]);
+    assert.equal(result.code, 1);
+    assert.equal(result.report.distinctPlugins, null);
+    assert.match(result.report.error, /inventory roster|inventory commit/);
+  }
+});
+
+test("manifest-only bundled plugins preserve consumers without inventing exact cross-source overlap", async (t) => {
+  const fixture = await bundledFixture(t, true);
+  // Only the unnamed local plugin uses the method; the public match might be it.
+  fixture.report.plugins[1].sdkUsage.entries = [];
+  await fixture.save();
+  const { code, report } = await query(
+    t,
+    (url) =>
+      url.pathname.endsWith("/coverage")
+        ? coverage()
+        : { key, items: [consumer], nextCursor: null },
+    ["--bundled", fixture.file],
+  );
+  assert.equal(code, 0, JSON.stringify(report));
+  assert.equal(report.bundled.distinctPlugins, 1);
+  assert.equal(report.bundled.coverage.complete, 1);
+  assert.equal(report.bundled.coverage.partial, 1);
+  assert.equal(report.bundled.gaps[0].status, "partial");
+  assert.match(report.bundled.gaps[0].error, /implicit host entrypoint/);
+  assert.equal(report.combined.distinctPlugins, null);
+  assert.deepEqual(report.combined.distinctPluginBounds, { min: 1, max: 2 });
+  assert.equal(report.combined.observedPluginIdentities, 2);
 });

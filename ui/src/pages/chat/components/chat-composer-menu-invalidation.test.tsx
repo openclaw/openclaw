@@ -3,82 +3,41 @@ import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import {
+  docsServer,
+  docsTools,
+  makeCapabilities,
+  makeMenu,
+} from "./chat-composer-menu.test-support.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import type {
-  ChatComposerPlusMenuProps,
-  ChatComposerPlusMenuView,
-} from "./chat-composer-plus-menu.types.ts";
+import type { ChatComposerPlusMenuProps } from "./chat-composer-plus-menu.types.ts";
 
-it.each<ChatComposerPlusMenuView>([
-  "root",
-  "skills",
-  "connectors",
-  "tools:docs",
-  "library:missing",
-])(
+it.each(["root", "skills", "connectors", "tools:docs", "library:missing"] as const)(
   "retains %s menu content on unrelated publications and admits in-place display changes",
   async (view) => {
-    const menu: ChatComposerPlusMenuProps = {
-      attachments: {},
-      disabled: false,
-      open: false,
+    const skillName = vi.fn(() => "Focused skill");
+    const menu: ChatComposerPlusMenuProps = makeMenu({
       view,
-      toolOverrides: null,
       onOpenChange: (open) => {
         menu.open = open;
         setProps(snapshot());
       },
-      onViewChange: vi.fn(),
-      capabilityMenu: {
-        basePath: "/control",
-        skills: [{ key: "focused", name: "Focused skill", enabled: true, baseEnabled: true }],
-        skillsLoading: false,
-        skillsError: false,
-        mcpServers: [
+      capabilityMenu: makeCapabilities({
+        skills: [
           {
-            name: "docs",
+            key: "focused",
+            get name() {
+              return skillName();
+            },
+            set name(value: string) {
+              skillName.mockImplementation(() => value);
+            },
             enabled: true,
-            transport: "stdio",
-            target: "docs-server",
-            auth: null,
-            signIn: null,
-            toolFilter: false,
-            parallel: false,
-            tls: null,
+            baseEnabled: true,
           },
         ],
-        toolsEffectiveResult: {
-          agentId: "main",
-          profile: "full",
-          groups: [
-            {
-              id: "mcp",
-              label: "MCP",
-              source: "mcp",
-              tools: [
-                {
-                  id: "docs_search",
-                  label: "Search documents",
-                  description: "Search",
-                  rawDescription: "Search",
-                  source: "mcp",
-                  mcpServer: "docs",
-                  mcpToolName: "search",
-                },
-              ],
-            },
-          ],
-        },
-        toolsEffectiveLoading: false,
-        toolsEffectiveError: false,
-        toolAccessMutationBlockedReason: null,
-        webSearchBaseEnabled: true,
-        mutationBlockedReason: null,
-        canAdmin: true,
-        adminBlockedReason: null,
-        onLoadSkills: vi.fn(),
-        onPatchToolOverrides: vi.fn(),
-        onNavigate: vi.fn(),
+        mcpServers: [docsServer(true)],
+        toolsEffectiveResult: docsTools(),
         onOpenToolAccess: vi.fn(),
         library: {
           result: null,
@@ -91,20 +50,24 @@ it.each<ChatComposerPlusMenuView>([
           onRead: vi.fn(),
           onActivate: vi.fn(),
         },
-      },
-    };
+      }),
+    });
     const snapshot = () => ({ ...menu, capabilityMenu: { ...menu.capabilityMenu! } });
     const [props, setProps] = createSignal(snapshot());
     const mounted = mountSolid(() => <ChatComposerPlusMenu menu={props()} />);
     flush();
+    expect(skillName).not.toHaveBeenCalled();
     mounted.container.querySelector<HTMLButtonElement>(".agent-chat__input-btn--attach")!.click();
-    await waitForSolid(() =>
-      expect(
-        mounted.container
-          .querySelector(".agent-chat__capability-menu-panel")
-          ?.matches(":popover-open"),
-      ).toBe(true),
-    );
+    const content = mounted.container.querySelector(".agent-chat__capability-menu-panel")!;
+    await waitForSolid(() => expect(content.matches(":popover-open")).toBe(true));
+    const expectedContent = {
+      root: "Web search",
+      skills: "Focused skill",
+      connectors: "docs",
+      "tools:docs": "Search documents",
+      "library:missing": "Library ready",
+    }[view];
+    await waitForSolid(() => expect(content.textContent).toContain(expectedContent));
     const observer = new MutationObserver(() => {});
     observer.observe(mounted.container, { childList: true, subtree: true });
     onTestFinished(() => observer.disconnect());
@@ -112,7 +75,14 @@ it.each<ChatComposerPlusMenuView>([
       setProps(snapshot());
       flush();
     };
-    const content = mounted.container.querySelector(".agent-chat__capability-menu-panel")!;
+    const item = (value: string) => {
+      const row = content.querySelector(`[data-value="${value}"]`)!;
+      return {
+        checked: row.getAttribute("aria-checked"),
+        disabled: row.matches(":disabled"),
+        text: row.textContent,
+      };
+    };
     const children = [...content.querySelectorAll("*")];
     refresh();
     expect(observer.takeRecords()).toHaveLength(0);
@@ -123,40 +93,29 @@ it.each<ChatComposerPlusMenuView>([
       case "root":
         capability.webSearchBaseEnabled = false;
         refresh();
-        expect(
-          content.querySelector('[data-value="toggle-web-search"]')?.getAttribute("aria-checked"),
-        ).toBe("false");
-        expect(
-          content.querySelector('[data-value="toggle-web-search"]')?.matches(":disabled"),
-        ).toBe(true);
+        expect(item("toggle-web-search")).toMatchObject({ checked: "false", disabled: true });
         break;
       case "skills":
         capability.skills![0]!.name = "Renamed skill";
         capability.skills![0]!.enabled = false;
         refresh();
-        expect(content.querySelector('[data-value="skill:focused"]')?.textContent).toContain(
-          "Renamed skill",
-        );
-        expect(
-          content.querySelector('[data-value="skill:focused"]')?.getAttribute("aria-checked"),
-        ).toBe("false");
+        expect(item("skill:focused")).toMatchObject({
+          checked: "false",
+          text: expect.stringContaining("Renamed skill"),
+        });
         break;
       case "connectors":
         capability.mcpServers[0]!.enabled = false;
         refresh();
-        expect(content.querySelector('[data-value="connector:docs"]')?.textContent).toContain(
-          "Disabled",
-        );
-        expect(
-          content.querySelector('[data-value="connector:docs"]')?.getAttribute("aria-checked"),
-        ).toBe("false");
+        expect(item("connector:docs")).toMatchObject({
+          checked: "false",
+          text: expect.stringContaining("Disabled"),
+        });
         break;
       case "tools:docs":
         menu.toolOverrides = { mcpToolsDeny: { docs: ["search"] } };
         refresh();
-        expect(
-          content.querySelector('[data-value="mcp-tool:search"]')?.getAttribute("aria-checked"),
-        ).toBe("false");
+        expect(item("mcp-tool:search").checked).toBe("false");
         break;
       case "library:missing":
         capability.library!.notice = "Refreshed library";

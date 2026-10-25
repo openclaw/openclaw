@@ -45,9 +45,8 @@ type PreferenceScope = Pick<
   "source" | "client" | "connected" | "recoveryScope" | "connectionEpoch"
 > & { profileId: string | undefined };
 
-type PreferenceWriter = { write: Promise<void> };
 type PreferenceWrites = {
-  agents: Map<string, PreferenceWriter>;
+  agents: Map<string, { write: Promise<void> }>;
   revision: object;
   listeners: Set<(agentId: string, preference: NewSessionPreference, consumed: boolean) => void>;
 };
@@ -259,7 +258,7 @@ export class DraftPreferenceState {
         return;
       }
       const isCurrent = () => ownsConnection() && (accepted || this.preferenceScope === scope);
-      // A disconnected controller must still fence work admitted to its Gateway queue.
+      // A disconnected preference owner must still fence work admitted to its Gateway queue.
       const queued = this.preferenceModeValue !== "local";
       const write = async () => {
         if (queued) {

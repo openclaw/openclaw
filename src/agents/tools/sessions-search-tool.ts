@@ -51,7 +51,7 @@ const SESSIONS_SEARCH_INDEXING_WARNING =
   "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
 
 const SessionsSearchToolSchema = Type.Object({
-  user: requesterProfileSchema(),
+  user: requesterProfileSchema({ defaultToTurnOwner: true }),
   query: Type.String({
     minLength: 1,
     maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS,
@@ -195,6 +195,7 @@ async function listVisibleSearchSessions(params: {
             ownerSessionKey?: unknown;
             parentSessionKey?: unknown;
             spawnedBy?: unknown;
+            childOwnerSessionKeys?: string[];
           }>;
           hasMore?: boolean;
           nextOffset?: number;
@@ -216,6 +217,7 @@ async function listVisibleSearchSessions(params: {
           }
           const visibilityRow = {
             key: row.key,
+            childOwnerSessionKeys: row.childOwnerSessionKeys,
             ...(typeof row.agentId === "string"
               ? { agentId: row.agentId }
               : agentId

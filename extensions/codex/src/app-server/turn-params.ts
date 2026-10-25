@@ -135,7 +135,14 @@ export async function buildTurnStartParams(
         buildHarnessVisibleReplyGuidance({
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           messageToolAvailable: options.messageToolAvailable === true,
+          currentConversation: {
+            agentSessionKey: params.sessionKey,
+            currentChannelProvider: params.messageChannel ?? params.messageProvider,
+            currentChannelId: params.currentChannelId,
+            currentMessagingTarget: params.currentMessagingTarget,
+          },
           requireExplicitMessageTarget: options.requireExplicitMessageTarget,
+          messageToolFinalByDefault: params.messageToolFinalByDefault,
         }),
       ].join("\n"),
     },

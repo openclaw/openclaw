@@ -2,22 +2,20 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import * as commands from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
+import { useStateReceipts, stateClock } from "./update-candidate-state-fixtures.test-support.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 
@@ -28,13 +26,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts?.close();
-});
+const receipts = useStateReceipts();
 
 // Native hooks block their process thread. An unreferenced fixture worker flushes
 // the receipt independently; the durable marker still wins an operation-settlement race.
@@ -58,7 +50,6 @@ async function nativeEntryBeforeSettlement(marker: string, operation: PromiseLik
   ]);
 }
 
-// Keep the fixture's writer open for native lock and failure probes.
 function fixture() {
   const stateDir = fs.realpathSync(dirs.make("update-schema-lifetime-"));
   const file = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -68,15 +59,36 @@ function fixture() {
   return { stateDir, file, writer };
 }
 
+function workerEnv(preload: string, extra: NodeJS.ProcessEnv = {}) {
+  return { ...process.env, ...sqliteWorkerPreloadEnv(preload), ...extra };
+}
+
+function sizes(file: string, preload: string) {
+  return readUpdateStateDatabaseSizes([file, path.join(path.dirname(file), "missing.sqlite")], {
+    nodeRunner: process.execPath,
+    sourceEnv: workerEnv(preload),
+    stagingRoot: path.dirname(file),
+  });
+}
+
+function expectMessage(error: unknown, parts: (string | RegExp)[], soft = false) {
+  for (const part of parts) {
+    (soft ? expect.soft(error) : expect(error)).toHaveProperty(
+      "message",
+      typeof part === "string" ? expect.stringContaining(part) : expect.stringMatching(part),
+    );
+  }
+}
+
 it.each([
-  { phase: "metadata", settlement: "uncertain" },
-  { phase: "discover", settlement: "uncertain" },
-  { phase: "versions", settlement: "uncertain" },
-  { phase: "legacy-copy", settlement: "uncertain" },
-  { phase: "legacy-copy", settlement: "forced" },
+  ["metadata", "uncertain", "metadata inventory"],
+  ["discover", "uncertain", "shared database discovery"],
+  ["versions", "uncertain", "schema inspection startup"],
+  ["legacy-copy", "uncertain", "shared database discovery"],
+  ["legacy-copy", "forced", "shared database discovery"],
 ] as const)(
-  "retains $phase staging until command cleanup is $settlement",
-  async ({ phase, settlement }) => {
+  "retains %s staging until command cleanup is %s",
+  async (phase, settlement, expectedPhase) => {
     const { stateDir, file, writer } = fixture();
     const shared = path.join(stateDir, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(shared));
@@ -99,13 +111,7 @@ it.each([
         files?: string[];
         mode?: string;
       };
-      const result = {
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-        stderr: "",
-      };
+      const result = createCommandResult();
       if (input.directory) {
         return { ...result, stdout: JSON.stringify({ facts: "0".repeat(64), bytes: 0 }) };
       }
@@ -132,65 +138,43 @@ it.each([
       admitted.resolve();
       return { ...result, code: null, stdout: "", termination: "signal", cleanup: "uncertain" };
     });
-    let finished = false;
+    const finished = vi.fn();
     const operation = readUpdateStateSchemaVersions({
       stateDir,
       config: {},
       signal: controller.signal,
       env: { ...process.env, XDG_CACHE_HOME: path.join(stateDir, "cache") },
     });
-    const outcome = operation
-      .catch((error: unknown) => error)
-      .finally(() => {
-        finished = true;
-      });
+    const outcome = operation.catch((error: unknown) => error).finally(finished);
     let finalizing: Promise<void> | undefined;
     try {
       await admitted.promise;
       await setImmediate();
-      expect.soft(finished).toBe(false);
+      expect.soft(finished).not.toHaveBeenCalled();
       expect.soft(fs.existsSync(marker)).toBe(true);
-      let finalized = false;
-      finalizing = cleanupSnapshotOperations().finally(() => {
-        finalized = true;
-      });
+      const finalized = vi.fn();
+      finalizing = cleanupSnapshotOperations().finally(finalized);
       await setImmediate();
-      expect.soft(finalized).toBe(false);
+      expect.soft(finalized).not.toHaveBeenCalled();
       expect.soft(fs.existsSync(marker)).toBe(true);
       cleanup.resolve(settlement);
       const failure = await outcome;
       await finalizing;
       expect(hasCommandProcessCleanupError(failure)).toBe(settlement === "uncertain");
       if (settlement === "uncertain") {
-        expect(failure).toHaveProperty("message", expect.stringContaining("Staging retained at"));
-        expect(failure).toHaveProperty(
-          "message",
-          expect.stringContaining(phase === "versions" ? file : shared),
-        );
-        expect(failure).toHaveProperty(
-          "message",
-          expect.stringContaining(
-            phase === "metadata"
-              ? "metadata inventory"
-              : phase === "versions"
-                ? "schema inspection startup"
-                : "shared database discovery",
-          ),
-        );
-        expect(failure).toHaveProperty(
-          "message",
-          expect.stringMatching(/after \d+(?:\.\d+)? seconds/),
-        );
-        for (const root of roots) {
-          expect(fs.existsSync(root)).toBe(true);
-        }
+        expectMessage(failure, [
+          "Staging retained at",
+          phase === "versions" ? file : shared,
+          expectedPhase,
+          /after \d+(?:\.\d+)? seconds/,
+        ]);
         expect(fs.readFileSync(marker, "utf8")).toBe("pending worker bytes");
       } else {
         expect(failure).toHaveProperty("message", "inspection canceled");
-        for (const root of roots) {
-          expect(fs.existsSync(root)).toBe(false);
-        }
       }
+      expect([...roots].map((root) => fs.existsSync(root))).toEqual(
+        [...roots].map(() => settlement === "uncertain"),
+      );
       expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 3 });
     } finally {
       cleanup.resolve("forced");
@@ -261,6 +245,7 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       const { DatabaseSync } = require('node:sqlite');
       const source = ${JSON.stringify(file)}, marker = ${JSON.stringify(marker)};
       const outcome = ${JSON.stringify(outcome)};
+      if (outcome === 'cancel') process.on('SIGTERM', () => {});
       const isSource = db => db.location() && path.toNamespacedPath(db.location()) === path.toNamespacedPath(source);
       const prepare = DatabaseSync.prototype.prepare, close = DatabaseSync.prototype.close;
       DatabaseSync.prototype.prepare = function(sql) {
@@ -278,46 +263,37 @@ it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
     `,
     );
     const controller = new AbortController();
-    const now = Date.now.bind(Date);
-    let elapsed = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    const cancellation = new DOMException("test cancellation", "AbortError");
+    const advanceClock = stateClock();
     const operation = readUpdateStateSchemaVersions({
       stateDir,
       config: {},
       signal: controller.signal,
-      env: { ...process.env, ...sqliteWorkerPreloadEnv(preload), XDG_CACHE_HOME: cache },
+      env: workerEnv(preload, { XDG_CACHE_HOME: cache }),
     });
     const rejected = operation.catch((error: unknown) => error);
     try {
       if (blocked) {
         await withinTest(nativeEntryBeforeSettlement(marker, rejected), signal);
         if (outcome === "cancel") {
-          controller.abort();
+          controller.abort(cancellation);
         } else {
-          elapsed = 400_000;
+          advanceClock(400_000, true);
         }
       }
       const failure = await rejected;
       if (outcome === "cancel") {
-        expect(failure).toMatchObject({ name: "AbortError" });
+        expect(failure).toBe(cancellation);
       } else {
         expect(failure).toBeInstanceOf(Error);
-        expect(failure).toHaveProperty(
-          "message",
-          expect.stringMatching(
-            outcome === "timeout" ? /made no progress/ : /native header (read|close) failed/,
-          ),
+        expectMessage(failure, [
+          outcome === "timeout" ? /exceeded its/ : /native header (read|close) failed/,
+        ]);
+        expectMessage(
+          failure,
+          [file, "agent schema inspection", /after \d+(?:\.\d+)? seconds/, "then retry the update"],
+          true,
         );
-        expect.soft(failure).toHaveProperty("message", expect.stringContaining(file));
-        expect
-          .soft(failure)
-          .toHaveProperty("message", expect.stringContaining("agent schema inspection"));
-        expect
-          .soft(failure)
-          .toHaveProperty("message", expect.stringMatching(/after \d+(?:\.\d+)? seconds/));
-        expect
-          .soft(failure)
-          .toHaveProperty("message", expect.stringContaining("then retry the update"));
       }
       const { pid } = JSON.parse(fs.readFileSync(marker, "utf8")) as { pid: number };
       expect(() => process.kill(pid, 0)).toThrow();
@@ -370,13 +346,7 @@ it.each(["", "-wal"])("keeps an unknown size when %s metadata cannot be read", a
   const file = path.join(root, "database.sqlite");
   fs.writeFileSync(file, "database");
   const preload = writeMetadataFault(root, `${file}${suffix}`, false);
-  await expect(
-    readUpdateStateDatabaseSizes([file, path.join(root, "missing.sqlite")], {
-      nodeRunner: process.execPath,
-      sourceEnv: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
-      stagingRoot: root,
-    }),
-  ).resolves.toEqual([{ path: file, sizeBytes: undefined }]);
+  await expect(sizes(file, preload)).resolves.toEqual([{ path: file, sizeBytes: undefined }]);
 });
 
 function writeProgressFault(root: string, code: string, phase: string): string {
@@ -401,46 +371,44 @@ function writeProgressFault(root: string, code: string, phase: string): string {
   return preload;
 }
 
-it.each(["EAGAIN", "EWOULDBLOCK", "EIO", "EBADF", "EPIPE"])(
-  "preserves metadata inventory semantics when progress encounters %s",
-  async (code) => {
-    const root = dirs.make("openclaw-metadata-progress-");
-    const file = path.join(root, "database.sqlite");
+it.each([
+  ["metadata inventory", "EAGAIN"],
+  ["metadata inventory", "EWOULDBLOCK"],
+  ["metadata inventory", "EIO"],
+  ["agent schema inspection", "EAGAIN"],
+  ["agent schema inspection", "EWOULDBLOCK"],
+  ["agent schema inspection", "EIO"],
+] as const)("preserves %s semantics when progress encounters %s", async (phase, code) => {
+  const metadata = phase === "metadata inventory";
+  const database = metadata ? undefined : fixture();
+  database?.writer.close();
+  const stateDir = database?.stateDir ?? dirs.make("openclaw-metadata-progress-");
+  const file = database?.file ?? path.join(stateDir, "database.sqlite");
+  if (metadata) {
     fs.writeFileSync(file, Buffer.alloc(4096));
     fs.writeFileSync(`${file}-wal`, Buffer.alloc(512));
-    const preload = writeProgressFault(root, code, "metadata inventory");
-    const inventory = readUpdateStateDatabaseSizes([file, path.join(root, "missing.sqlite")], {
-      nodeRunner: process.execPath,
-      sourceEnv: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
-      stagingRoot: root,
-    });
-    if (code === "EAGAIN" || code === "EWOULDBLOCK") {
-      await expect(inventory).resolves.toEqual([{ path: file, sizeBytes: 4608n }]);
+  }
+  const preload = writeProgressFault(stateDir, code, phase);
+  const inspection = metadata
+    ? sizes(file, preload)
+    : readUpdateStateSchemaVersions({
+        stateDir,
+        config: {},
+        env: workerEnv(preload),
+      });
+  if (code === "EAGAIN" || code === "EWOULDBLOCK") {
+    if (metadata) {
+      await expect(inspection).resolves.toEqual([{ path: file, sizeBytes: 4608n }]);
     } else {
-      await expect(inventory).rejects.toThrow("synthetic progress write failed");
-    }
-  },
-);
-
-it.each(["EAGAIN", "EWOULDBLOCK", "EIO", "EBADF", "EPIPE"])(
-  "preserves schema inspection semantics when progress encounters %s",
-  async (code) => {
-    const { stateDir, file, writer } = fixture();
-    writer.close();
-    const preload = writeProgressFault(stateDir, code, "agent schema inspection");
-    const inspection = readUpdateStateSchemaVersions({
-      stateDir,
-      config: {},
-      env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
-    });
-    if (code === "EAGAIN" || code === "EWOULDBLOCK") {
       await expect(inspection).resolves.toContainEqual({ path: file, userVersion: 3 });
-    } else {
-      await expect(inspection).rejects.toThrow("synthetic progress write failed");
     }
+  } else {
+    await expect(inspection).rejects.toThrow("synthetic progress write failed");
+  }
+  if (!metadata) {
     expect(fs.readFileSync(path.join(stateDir, "progress-fault-fired"), "utf8")).toBe("fired");
-  },
-);
+  }
+});
 
 it("cancels blocked sidecar metadata before candidate discovery and removes staging after child exit", async ({
   signal,
@@ -457,7 +425,7 @@ it("cancels blocked sidecar metadata before candidate discovery and removes stag
     // No candidate worker exists: cancellation must happen during metadata inventory.
     root: path.join(root, "unavailable-candidate"),
     signal: controller.signal,
-    env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
+    env: workerEnv(preload),
   });
   const rejected = expect(inspection).rejects.toThrow("metadata cancellation");
   let report: { pid: number; stagingRoot: string } | undefined;

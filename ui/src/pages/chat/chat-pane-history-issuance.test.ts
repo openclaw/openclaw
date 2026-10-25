@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -13,24 +14,20 @@ import { loadChatHistory } from "./chat-history.ts";
 import { requestCalls } from "./chat-host.test-support.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
-const agentsList: AgentsListResult = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender",
-  agents: [{ id: "main" }],
-};
+const agentsList: AgentsListResult = makeBootRoster();
 
 function createCanonicalRoutePane(
-  handlers: Record<string, () => unknown> = {},
+  handlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
   fallback: () => unknown = () => ({}),
 ) {
-  const request = vi.fn((method: string) =>
-    Promise.resolve(method === "agents.list" ? agentsList : (handlers[method] ?? fallback)()),
+  const request = vi.fn((method: string, params: Record<string, unknown>) =>
+    Promise.resolve(method === "agents.list" ? agentsList : (handlers[method] ?? fallback)(params)),
   );
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
   vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
   const { pane, state } = createTestChatPane({ client, sessions });
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   const sessionDefaults = {
     defaultAgentId: "main",
     mainKey: "main",
@@ -43,6 +40,7 @@ function createCanonicalRoutePane(
     lastActiveSessionKey: state.sessionKey,
   } as typeof state.settings;
   Object.assign(pane, { sessionKey: "main", connectedClient: null, active: true, presented: true });
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   const snapshot = {
     ...pane.context.gateway.snapshot,
     assistantAgentId: "main",
@@ -57,6 +55,27 @@ function assistantHistory(text: string) {
   return { messages: [{ role: "assistant", content: [{ type: "text", text }] }] };
 }
 
+it("shows the subscribed initial transcript without another history round trip", async () => {
+  const { pane, state, snapshot, request } = createCanonicalRoutePane({
+    "sessions.messages.subscribe": () => ({
+      key: "agent:main:current",
+      initialHistory: { ok: true, payload: assistantHistory("Initial subscription transcript") },
+    }),
+  });
+  pane.sessionKey = state.sessionKey;
+  pane.applyGatewaySnapshot(snapshot);
+  await vi.waitFor(() =>
+    expect(state.chatMessages).toEqual(
+      assistantHistory("Initial subscription transcript").messages,
+    ),
+  );
+  expect(getChatHistoryLoadState(state).phase).toBe("committed");
+  expect(requestCalls(request, "chat.startup")).toHaveLength(0);
+  expect(requestCalls(request, "sessions.messages.subscribe")[0]?.[1]).toMatchObject({
+    initialHistory: { limit: 80, maxBytes: 256 * 1024, knownState: {} },
+  });
+});
+
 async function expectRecoveredHistory(
   state: ReturnType<typeof createCanonicalRoutePane>["state"],
   request: ReturnType<typeof vi.fn>,
@@ -67,7 +86,13 @@ async function expectRecoveredHistory(
   await vi.waitFor(() => expect(requestCalls(request, method)).toHaveLength(attempts));
   expect(request).toHaveBeenCalledWith(
     method,
-    { sessionKey: state.sessionKey, limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 },
+    {
+      sessionKey: state.sessionKey,
+      knownState: {},
+      limit: 80,
+      maxBytes: 256 * 1024,
+      toolResultMaxChars: 2_000,
+    },
     { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
   );
   await vi.waitFor(() => expect(state.chatMessages).toEqual(assistantHistory(text).messages));
@@ -85,7 +110,9 @@ it("does not request the optional header platform while initial history is pendi
       return history.promise;
     },
   });
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   pane.sessionKey = state.sessionKey;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   state.loadAssistantIdentity = vi.fn(async () => undefined);
   const hello = { ...snapshot.hello, features: { methods: ["system.info"], events: [] } };
   pane.context.gateway.snapshot.hello = hello;

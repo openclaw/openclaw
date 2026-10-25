@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -121,14 +122,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 } };`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      contracts: { speechProviders: [id] },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    contracts: { speechProviders: [id] },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
   const cfg: OpenClawConfig = {
     plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
     tts: { provider: id, providers: { [id]: {} } },
@@ -144,6 +142,15 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     plugin,
     state,
     run,
+    hasEvent: (phase: string) => events.some((event) => event.phase === phase),
+    expectOpen(disposals?: number) {
+      for (const { database, disposals: count } of connections) {
+        expect(database.isOpen).toBe(true);
+        if (disposals !== undefined) {
+          expect(count).toBe(disposals);
+        }
+      }
+    },
     async runTest(operation: () => Promise<void>) {
       try {
         await withEnvAsync(
@@ -174,6 +181,33 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       Reflect.deleteProperty(globalThis, key);
     },
   };
+}
+
+type Fixture = ReturnType<typeof createFixture>;
+
+function fallbackConfig(primary: Fixture, fallback: Fixture): OpenClawConfig {
+  return {
+    ...primary.cfg,
+    plugins: {
+      allow: [primary.id, fallback.id],
+      load: { paths: [primary.plugin.file, fallback.plugin.file] },
+      slots: { memory: "none" },
+    },
+    tts: { provider: primary.id, providers: { [primary.id]: {}, [fallback.id]: {} } },
+  };
+}
+
+async function withReader(
+  result: Awaited<ReturnType<Fixture["run"]>>,
+  runReader: (reader: ReadableStreamDefaultReader<Uint8Array>) => Promise<void>,
+) {
+  const reader = result.audioStream!.getReader();
+  try {
+    await runReader(reader);
+  } finally {
+    reader.releaseLock();
+    await result.release?.();
+  }
 }
 
 function expectClosed(fixture: ReturnType<typeof createFixture>) {
@@ -207,8 +241,7 @@ describe("streaming speech registration ownership", () => {
     await fixture.runTest(async () => {
       const result = await fixture.run();
       expect(result.success).toBe(true);
-      const reader = result.audioStream!.getReader();
-      try {
+      await withReader(result, async (reader) => {
         expect((await reader.read()).value).toEqual(pcm);
         if (options.ending === "error") {
           await expect(reader.read()).rejects.toThrow("native read failure");
@@ -216,17 +249,14 @@ describe("streaming speech registration ownership", () => {
           expect((await reader.read()).done).toBe(true);
         }
         if (options.explicitRelease) {
-          expect(fixture.state.events.some((event) => event.phase === "release")).toBe(false);
-          expect(fixture.state.connections.every((entry) => entry.database.isOpen)).toBe(true);
+          expect(fixture.hasEvent("release")).toBe(false);
+          fixture.expectOpen();
           await result.release?.();
           await result.release?.();
           expect(fixture.state.events.filter((event) => event.phase === "release").length).toBe(1);
         }
         expectClosed(fixture);
-      } finally {
-        reader.releaseLock();
-        await result.release?.();
-      }
+      });
     });
   });
 
@@ -235,7 +265,7 @@ describe("streaming speech registration ownership", () => {
     await fixture.runTest(async () => {
       const result = await fixture.run();
       await result.release?.();
-      expect(fixture.state.events.some((event) => event.phase === "pull")).toBe(false);
+      expect(fixture.hasEvent("pull")).toBe(false);
       expectClosed(fixture);
     });
   });
@@ -252,21 +282,16 @@ describe("streaming speech registration ownership", () => {
         const registry = inspection?.registry ?? loadPluginRegistryHandle({ config: fixture.cfg });
         const result = await withPluginRuntimeRegistryScope(registry, fixture.run);
         await inspection?.release();
-        const reader = result.audioStream!.getReader();
-        try {
+        await withReader(result, async (reader) => {
           expect((await reader.read()).value).toEqual(pcm);
           expect((await reader.read()).done).toBe(true);
           await result.release?.();
           if (kind === "managed") {
             expectClosed(fixture);
           } else {
-            expect(fixture.state.connections.every((entry) => entry.database.isOpen)).toBe(true);
-            expect(fixture.state.connections.every((entry) => entry.disposals === 0)).toBe(true);
+            fixture.expectOpen(0);
           }
-        } finally {
-          reader.releaseLock();
-          await result.release?.();
-        }
+        });
       });
     },
   );
@@ -288,9 +313,9 @@ describe("streaming speech registration ownership", () => {
           });
         try {
           await nextTurn();
-          expect(fixture.state.events.some((event) => event.phase === "release")).toBe(true);
+          expect(fixture.hasEvent("release")).toBe(true);
           expect(settled).toBe(false);
-          expect(fixture.state.connections.every((entry) => entry.database.isOpen)).toBe(true);
+          fixture.expectOpen();
           fixture.state.tail.resolve();
           await closing;
           await read;
@@ -319,18 +344,9 @@ describe("streaming speech registration ownership", () => {
       const fallback = createFixture({ id: "fallback-stream" });
       try {
         await primary.runTest(async () => {
-          const cfg: OpenClawConfig = {
-            ...primary.cfg,
-            plugins: {
-              allow: [primary.id, fallback.id],
-              load: { paths: [primary.plugin.file, fallback.plugin.file] },
-              slots: { memory: "none" },
-            },
-            tts: { provider: primary.id, providers: { [primary.id]: {}, [fallback.id]: {} } },
-          };
           const pending = textToSpeechStream({
             text: "projection fallback",
-            cfg,
+            cfg: fallbackConfig(primary, fallback),
             prefsPath: primary.prefsPath,
           });
           try {
@@ -343,9 +359,8 @@ describe("streaming speech registration ownership", () => {
             expect(fallback.state.calls).toBe(0);
             primary.state.releaseResume.resolve();
             const result = await pending;
-            expect(result.success).toBe(true);
-            expect(result.provider).toBe(fallback.id);
-            expect(primary.state.events.some((event) => event.phase === "released")).toBe(true);
+            expect(result).toMatchObject({ success: true, provider: fallback.id });
+            expect(primary.hasEvent("released")).toBe(true);
             await result.release?.();
             expectClosed(primary);
             expectClosed(fallback);
@@ -364,8 +379,7 @@ describe("streaming speech registration ownership", () => {
     const fixture = createFixture({ invalidMetadata: true });
     await fixture.runTest(async () => {
       const result = await fixture.run();
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Streaming TTS conversion failed");
+      expect(result).toMatchObject({ success: false, error: "Streaming TTS conversion failed" });
       expect(fixture.state.events.filter((event) => event.phase === "release").length).toBe(1);
       expectClosed(fixture);
     });
@@ -376,29 +390,16 @@ describe("streaming speech registration ownership", () => {
     const fallback = createFixture({ id: "fallback-stream" });
     try {
       await primary.runTest(async () => {
-        const cfg: OpenClawConfig = {
-          ...primary.cfg,
-          plugins: {
-            allow: [primary.id, fallback.id],
-            load: { paths: [primary.plugin.file, fallback.plugin.file] },
-            slots: { memory: "none" },
-          },
-          tts: { provider: primary.id, providers: { [primary.id]: {}, [fallback.id]: {} } },
-        };
         const result = await textToSpeechStream({
           text: "partial failure",
-          cfg,
+          cfg: fallbackConfig(primary, fallback),
           prefsPath: primary.prefsPath,
         });
-        const reader = result.audioStream!.getReader();
-        try {
+        await withReader(result, async (reader) => {
           expect((await reader.read()).value).toEqual(pcm);
           await expect(reader.read()).rejects.toThrow("native read failure");
           expect(fallback.state.calls).toBe(0);
-        } finally {
-          reader.releaseLock();
-          await result.release?.();
-        }
+        });
       });
     } finally {
       await fallback.cleanup();
@@ -421,8 +422,7 @@ describe("streaming speech registration ownership", () => {
       const fixture = createFixture({ explicitRelease: false, initialState });
       await fixture.runTest(async () => {
         const result = await fixture.run();
-        const reader = result.audioStream!.getReader();
-        try {
+        await withReader(result, async (reader) => {
           if (initialState === "chunk") {
             expect((await reader.read()).value).toEqual(pcm);
           }
@@ -437,10 +437,7 @@ describe("streaming speech registration ownership", () => {
           } else {
             expect((await reader.read()).done).toBe(true);
           }
-        } finally {
-          reader.releaseLock();
-          await result.release?.();
-        }
+        });
       });
     },
   );

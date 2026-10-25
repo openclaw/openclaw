@@ -65,13 +65,34 @@ export function createSessionRowRefresh(
         const selected = new Set(
           [...batch.keys()].filter((id) => {
             const row = owner.rows.get(id);
-            return row && (owner.dirty.has(id) || isCold(row));
+            return row && (owner.dirty.has(id) || !records.ready(row));
           }),
         );
         if (selected.size > 0) {
-          await owner.runAsOwner(() => readRows(selected, { archived: true }));
-          // Retained facts can finish through microtasks; let the loop run between row slices.
-          await yieldSessionListWork();
+          await owner.runAsOwner(() => readRows(selected, { materializeCold: true }));
+          for (;;) {
+            // Wake each key once its accepted slice finishes, not every page after every slice.
+            for (const [id, read] of batch) {
+              if (!owner.rows.get(id)?.pendingDatabaseFacts) {
+                releaseExactRead(id, read);
+                batch.delete(id);
+                read.completion.resolve();
+              }
+            }
+            await yieldSessionListWork();
+            const state = owner.state();
+            if (
+              state.disposed ||
+              state.topologyDirty ||
+              !state.registryPrepared ||
+              owner.catalog.needsInitialRead ||
+              owner.placementFacts.needsPreparation ||
+              owner.membership.needsPreparation ||
+              !owner.runAsOwner(() => materializer.refreshPending([...batch.keys()]))
+            ) {
+              break;
+            }
+          }
         }
       }
       for (const read of batch.values()) {
@@ -119,7 +140,7 @@ export function createSessionRowRefresh(
         continue;
       }
       const row = owner.lookup(query);
-      if (row && (owner.dirty.has(records.identity(row)) || isCold(row))) {
+      if (row && (owner.dirty.has(records.identity(row)) || !records.ready(row))) {
         selected.add(records.identity(row));
       }
     }
@@ -171,7 +192,7 @@ export function createSessionRowRefresh(
   }
   function readRows(
     selected: ReadonlySet<string>,
-    options: { archived?: boolean; materialize?: boolean } = {},
+    options: { materializeCold?: boolean; materialize?: boolean } = {},
   ) {
     return withSessionRowDatabaseFacts(
       {
@@ -388,26 +409,6 @@ export function createSessionRowRefresh(
       pending && !owner.state().disposed;
       pending = exactPreparationsIdle
     ) {
-      const state = owner.state();
-      if (
-        !state.topologyDirty &&
-        state.registryPrepared &&
-        !owner.catalog.needsInitialRead &&
-        !owner.placementFacts.needsPreparation &&
-        !owner.membership.needsPreparation
-      ) {
-        // Accepted exact facts need no worker read and may finish while their page remains pinned.
-        const ids: string[] = [];
-        for (const id of exactReads.keys()) {
-          ids.push(id);
-          if (ids.length === MAX_CONCURRENT_EXACT_ROW_READS * MAX_SESSION_ROW_FACTS_KEYS) {
-            break;
-          }
-        }
-        if (materializer.refreshPending(ids)) {
-          return;
-        }
-      }
       await pending.promise;
     }
     for (

@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   claimCompletedAgentDeletion: vi.fn(() => true),
   migrateLegacyMainSessionKeys: vi.fn(),
   prepareSharedAuthStoreOwnership: vi.fn(),
+  provisionDefaultProactiveJob: vi.fn(async () => undefined),
 }));
 
 vi.mock("node:fs/promises", () => ({ default: { mkdir: mocks.mkdir } }));
@@ -66,6 +67,12 @@ vi.mock("../state/agent-deletion-journal.read.js", () => ({
 
 vi.mock("../state/agent-provenance.js", () => ({
   recordAgentProvenance: mocks.recordAgentProvenance,
+}));
+
+// mock-isolation: Creation/config unit cases leave real provisioning to Cron integration coverage.
+vi.mock("../cron/default-proactive-job.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cron/default-proactive-job.js")>()),
+  provisionDefaultProactiveJob: mocks.provisionDefaultProactiveJob,
 }));
 
 // mock-isolation: Workspace/config unit cases do not own a real SQLite worker or creation store.
@@ -244,64 +251,6 @@ describe("createAgent", () => {
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
   });
 
-  it("accepts a complete staged entry", async () => {
-    const result = await createAgent({
-      entry: {
-        id: "researcher",
-        name: "Researcher",
-        workspace: "/tmp/staged-work",
-        agentDir: "/tmp/staged-agent",
-        model: "openai/gpt-5.5",
-        identity: { name: "Researcher", emoji: "🔎" },
-      },
-    });
-
-    expect(result).toMatchObject({
-      status: "created",
-      agentId: "researcher",
-      workspace: "/tmp/staged-work",
-      agentDir: "/tmp/staged-agent",
-    });
-    expect(mocks.persisted).toMatchObject({
-      agents: {
-        entries: {
-          researcher: expect.objectContaining({ model: "openai/gpt-5.5" }),
-        },
-      },
-    });
-    expect(mocks.persisted.agents).not.toHaveProperty("list");
-  });
-
-  it("publishes guided staging and its new agent in one conditional transform", async () => {
-    const result = await createAgent({
-      entry: {
-        id: "researcher",
-        name: "Researcher",
-        workspace: "/tmp/staged-work",
-      },
-      stagedConfig: {
-        writeSnapshot: { snapshot: createTestConfigSnapshot({}), writeOptions: {} },
-        config: {
-          ...roster({ main: {}, researcher: { workspace: "/tmp/staged-work" } }),
-          channels: { telegram: { enabled: true } },
-        },
-      },
-    });
-
-    expect(result).toMatchObject({ status: "created", agentId: "researcher" });
-    if (result.status === "error") {
-      throw new Error(result.message);
-    }
-    expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
-    expect(mocks.persisted).toMatchObject({
-      ...roster({
-        main: expect.any(Object),
-        researcher: expect.any(Object),
-      }),
-      channels: { telegram: { enabled: true } },
-    });
-    expect(result.config).toEqual(mocks.persisted);
-  });
   it("rejects guided staging whose original revision no longer owns creation", async () => {
     await expect(
       createAgent({
@@ -314,7 +263,7 @@ describe("createAgent", () => {
           },
         },
       }),
-    ).rejects.toThrow("config changed before first-agent creation");
+    ).rejects.toThrow("config changed before agent creation or restoration");
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
 

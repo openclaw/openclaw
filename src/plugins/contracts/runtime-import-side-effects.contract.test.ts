@@ -1,4 +1,3 @@
-// Runtime import side-effect contract tests cover cold import behavior for plugin runtime code.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-utils/prepare-compiled-subprocesses.js";
@@ -13,11 +12,6 @@ const getLoadedChannelPlugin = vi.hoisted(() =>
 );
 const getActivePluginChannelRegistryVersion = vi.hoisted(() => vi.fn(() => 1));
 
-const CHANNEL_REGISTRY_SEAM = "listChannelPlugins()";
-const CHANNEL_REGISTRY_WHY =
-  "it boots active channel metadata on hot runtime/config import paths and turns cheap module evaluation into plugin registry work.";
-const CHANNEL_REGISTRY_FIX =
-  "keep the seam behind a lazy getter/runtime boundary so import stays cold and the first real lookup loads once.";
 const HOT_RUNTIME_IMPORT_CASES = [
   [
     "src/plugin-sdk/approval-handler-adapter-runtime.ts",
@@ -31,49 +25,40 @@ const HOT_RUNTIME_IMPORT_CASES = [
     "src/plugin-sdk/approval-reference-runtime.ts",
     () => import("../../plugin-sdk/approval-reference-runtime.js"),
   ],
-  ["src/plugins/runtime/runtime-system.ts", () => import("../runtime/runtime-system.js")],
+  ["src/plugins/runtime/runtime-base.ts", () => import("../runtime/runtime-base.js")],
   ["src/web-search/runtime.ts", () => import("../../web-search/runtime.js")],
   ["src/web-fetch/runtime.ts", () => import("../../web-fetch/runtime.js")],
 ] as const;
 
 function mockChannelRegistry() {
-  vi.doMock("../../channels/plugins/index.js", async () => {
-    const actual = await vi.importActual<typeof import("../../channels/plugins/index.js")>(
+  vi.doMock("../../channels/plugins/index.js", async () => ({
+    ...(await vi.importActual<typeof import("../../channels/plugins/index.js")>(
       "../../channels/plugins/index.js",
-    );
-    return {
-      ...actual,
-      normalizeChannelId: (raw?: string | null) => raw ?? null,
-    };
-  });
-  vi.doMock("../../channels/plugins/registry.js", async () => {
-    const actual = await vi.importActual<typeof import("../../channels/plugins/registry.js")>(
+    )),
+    normalizeChannelId: (raw?: string | null) => raw ?? null,
+  }));
+  vi.doMock("../../channels/plugins/registry.js", async () => ({
+    ...(await vi.importActual<typeof import("../../channels/plugins/registry.js")>(
       "../../channels/plugins/registry.js",
-    );
-    return {
-      ...actual,
-      listChannelPlugins,
-      getLoadedChannelPlugin,
-    };
-  });
-  vi.doMock("../../plugins/runtime.js", async () => {
-    const actual = await vi.importActual<typeof import("../../plugins/runtime.js")>(
+    )),
+    listChannelPlugins,
+    getLoadedChannelPlugin,
+  }));
+  vi.doMock("../../plugins/runtime.js", async () => ({
+    ...(await vi.importActual<typeof import("../../plugins/runtime.js")>(
       "../../plugins/runtime.js",
-    );
-    return {
-      ...actual,
-      getActivePluginChannelRegistryVersion,
-    };
-  });
+    )),
+    getActivePluginChannelRegistryVersion,
+  }));
 }
 
 function expectNoChannelRegistryDuringImport(moduleId: string) {
   assertNoImportTimeSideEffects({
     moduleId,
-    forbiddenSeam: CHANNEL_REGISTRY_SEAM,
+    forbiddenSeam: "listChannelPlugins()",
     calls: listChannelPlugins.mock.calls,
-    why: CHANNEL_REGISTRY_WHY,
-    fixHint: CHANNEL_REGISTRY_FIX,
+    why: "hot runtime/config imports must not boot active channel metadata",
+    fixHint: "keep registry work behind a lazy getter/runtime boundary",
   });
   expect(getActivePluginChannelRegistryVersion).not.toHaveBeenCalled();
   expect(getLoadedChannelPlugin).not.toHaveBeenCalled();
@@ -97,27 +82,19 @@ describe("runtime import side-effect contracts", () => {
   it("keeps markdown table defaults cold and reads the loaded registry", async () => {
     mockChannelRegistry();
     const markdownTables = await import("../../config/markdown-tables.js");
+    const resolve = () =>
+      markdownTables.resolveMarkdownTableMode({ channel: "telegram", supportsBlockTables: true });
 
     expectNoChannelRegistryDuringImport("src/config/markdown-tables.ts");
 
-    expect(
-      markdownTables.resolveMarkdownTableMode({
-        channel: "telegram",
-        supportsBlockTables: true,
-      }),
-    ).toBe("bullets");
+    expect(resolve()).toBe("bullets");
     expect(getActivePluginChannelRegistryVersion).not.toHaveBeenCalled();
     expect(listChannelPlugins).not.toHaveBeenCalled();
     getLoadedChannelPlugin.mockReturnValueOnce({
       id: "telegram",
       messaging: { defaultMarkdownTableMode: "block" },
     });
-    expect(
-      markdownTables.resolveMarkdownTableMode({
-        channel: "telegram",
-        supportsBlockTables: true,
-      }),
-    ).toBe("block");
+    expect(resolve()).toBe("block");
     expect(getActivePluginChannelRegistryVersion).not.toHaveBeenCalled();
     expect(listChannelPlugins).not.toHaveBeenCalled();
     expect(getLoadedChannelPlugin).toHaveBeenCalledWith("telegram");
@@ -129,14 +106,8 @@ describe("runtime import side-effect contracts", () => {
     expectNoChannelRegistryDuringImport(moduleId);
   });
 
-  it("keeps runtime-channel off direct channel registry imports", () => {
-    const source = fs.readFileSync("src/plugins/runtime/runtime-channel.ts", "utf8");
-    expect(source).not.toContain("../../channels/plugins/registry");
-    expect(source).not.toContain("../channels/plugins/registry");
-  });
-
-  it("keeps runtime index off direct channel registry imports", () => {
-    const source = fs.readFileSync("src/plugins/runtime/index.ts", "utf8");
+  it.each(["runtime-channel", "index"])("keeps %s off direct channel registry imports", (name) => {
+    const source = fs.readFileSync(`src/plugins/runtime/${name}.ts`, "utf8");
     expect(source).not.toContain("../../channels/plugins/registry");
     expect(source).not.toContain("../channels/plugins/registry");
   });

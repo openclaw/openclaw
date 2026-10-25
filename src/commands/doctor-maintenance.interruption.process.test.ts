@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,21 +6,26 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { doctorOutputEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { createNodeEvalArgs, resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import {
+  createNodeEvalArgs,
+  resolveTestNodeExecPath,
+  spawnNodeEvalSync,
+} from "../test-utils/node-process.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const registrar = resolveRuntimeWorkerUrl(doctorOutputEntrypoints.maintenance);
+type InterruptionOptions = {
+  pendingApproval?: boolean;
+  restoringApproval?: boolean;
+  progress?: boolean;
+  archiveSignal?: "SIGINT" | "SIGTERM" | "SIGHUP";
+  closedChildStdin?: boolean;
+};
 
 // Keep the maintenance, restoration, signal, and console owners real. Native
 // service and database adapters record effects only in this process's fixture.
-function interruptionScript(
-  eventsPath: string,
-  pendingApproval: boolean,
-  restoringApproval: boolean,
-  progress: boolean,
-  archiveSignal?: "SIGINT" | "SIGTERM",
-  closedChildStdin = false,
-) {
+function interruptionScript(eventsPath: string, options: InterruptionOptions) {
+  const { pendingApproval, restoringApproval, progress, archiveSignal, closedChildStdin } = options;
   return `
     import { registerHooks } from "node:module";
     import { once } from "node:events";
@@ -54,7 +59,7 @@ function interruptionScript(
       ["/config/paths.js", 'export const isDefaultInstallIdentity = () => true;'],
       ["/commands/doctor-service-repair-policy.js", 'export const shouldManageGatewayService = async () => true; export const isServiceRepairExternallyManaged = () => false; export const resolveUpdateParentGatewayActivation = () => undefined;'],
       ["/commands/doctor-maintenance-admission.js", 'export const resolveDoctorUpdateAdmission = () => ({ assertCurrent() {}, recordContinuation() {} });'],
-      ["/commands/doctor-agent-lease-refusal.js", 'export const assertDoctorAgentLeaseAdmission = async () => {}; export const preflightExternalDoctorAgentLease = async () => {};'],
+      ["/commands/doctor-agent-lease-refusal.js", 'export const admitDoctorAgentLeases = ({ acquire }) => acquire(); export const assertDoctorAgentLeaseAdmission = async () => {}; export const preflightExternalDoctorAgentLease = async () => {};'],
       ["/commands/doctor-maintenance-stale-service.js", 'export const inspectStaleDoctorGateway = async () => undefined;'],
       ["/infra/gateway-lock-legacy.js", 'export const assertLegacyGatewayStoppedForMaintenance = async () => {};'],
       ["/infra/gateway-lock.js", 'export const acquireGatewayLock = async () => { let active = true; return { assertCurrent(assertPolicy) { if (!active) throw new Error("Fixture Gateway ownership released"); assertPolicy?.(); if (!active) throw new Error("Fixture Gateway ownership released"); }, run(operation) { if (!active) throw new Error("Fixture Gateway ownership released"); return operation(); }, async release() { active = false; } }; };'],
@@ -77,13 +82,13 @@ function interruptionScript(
     } });
     const { enableConsoleCapture } = await import(${JSON.stringify(new URL("../../logging/console.js", registrar).href)});
     const { beginDoctorMaintenance } = await import(${JSON.stringify(new URL("../../commands/doctor-maintenance.js", registrar).href)});
-    const { createNonExitingRuntime } = await import(${JSON.stringify(new URL("../../runtime.js", registrar).href)});
+    const { createNonExitingRuntime, ExitError } = await import(${JSON.stringify(new URL("../../runtime.js", registrar).href)});
     enableConsoleCapture();
     fixture.runDoctor = async () => {
+    const { PassThrough } = await import("node:stream");
     let progressSpinner;
     if (${progress}) {
       const { spinner } = await import("@clack/prompts");
-      const { PassThrough } = await import("node:stream");
       const output = new PassThrough();
       output.resume();
       progressSpinner = spinner({ output });
@@ -93,7 +98,6 @@ function interruptionScript(
     const maintenance = await beginDoctorMaintenance({ root, options: { repair: true, nonInteractive: true },
       runtime });
     fixture.approve = async () => {
-      const { PassThrough } = await import("node:stream");
       const { createDoctorPrompter } = await import(${JSON.stringify(new URL("../../commands/doctor-prompter.js", registrar).href)});
       Object.defineProperty(process.stdin, "isTTY", { value: true });
       const input = new PassThrough();
@@ -176,7 +180,6 @@ function interruptionScript(
     const { withCliProcessScope } = await import(${JSON.stringify(new URL("../runtime-cleanup-scope.js", registrar).href)});
     const { registerMaintenanceCommands } = await import(${JSON.stringify(registrar.href)});
     const { Command } = await import("commander");
-    const { ExitError } = await import(${JSON.stringify(new URL("../../runtime.js", registrar).href)});
     installCliSignalExitHandlers();
     const program = new Command();
     registerMaintenanceCommands(program);
@@ -191,14 +194,13 @@ function interruptionScript(
 it.skipIf(process.platform === "win32")(
   "preserves the embedding process's ignored SIGPIPE after maintenance releases",
   () => {
-    const result = spawnSync(
-      resolveTestNodeExecPath(),
-      createNodeEvalArgs(`
+    const result = spawnNodeEvalSync(
+      `
         const { holdDoctorMaintenanceExit } = await import(${JSON.stringify(new URL("../../commands/doctor-maintenance-exit.js", registrar).href)});
         holdDoctorMaintenanceExit().release();
         process.kill(process.pid, "SIGPIPE");
         setImmediate(() => process.stdout.write("still running"));
-      `),
+      `,
       { encoding: "utf8", timeout: 30_000 },
     );
     expect(result.error, result.stderr).toBeUndefined();
@@ -208,34 +210,24 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it.skipIf(process.platform === "win32").each([
+const interruptionCases: (InterruptionOptions & { interruption: string; code: number })[] = [
   { interruption: "closed stdout", code: 141 },
-  { interruption: "SIGINT during archives", code: 130 },
-  { interruption: "closed child stdin", code: 0 },
-  { interruption: "SIGTERM with progress", code: 143 },
-  { interruption: "SIGTERM while approving", code: 143 },
-  { interruption: "SIGTERM while restoring", code: 143 },
-] as const)(
+  { interruption: "SIGINT during archives", code: 130, archiveSignal: "SIGINT" },
+  { interruption: "closed child stdin", code: 0, closedChildStdin: true },
+  { interruption: "SIGTERM with progress", code: 143, archiveSignal: "SIGTERM", progress: true },
+  { interruption: "SIGHUP during archives", code: 129, archiveSignal: "SIGHUP" },
+  { interruption: "SIGTERM while approving", code: 143, pendingApproval: true },
+  { interruption: "SIGTERM while restoring", code: 143, restoringApproval: true },
+];
+it.skipIf(process.platform === "win32").each(interruptionCases)(
   "restores its stopped Gateway before $interruption exits",
-  async ({ interruption, code }) => {
+  async ({ interruption, code, ...options }) => {
     const root = dirs.make("doctor-interruption-");
     const eventsPath = path.join(root, "events.json");
-    const pendingApproval = interruption === "SIGTERM while approving";
-    const restoringApproval = interruption === "SIGTERM while restoring";
-    const archives =
-      interruption === "SIGINT during archives" || interruption === "SIGTERM with progress";
+    const { pendingApproval, restoringApproval, archiveSignal, closedChildStdin } = options;
     const child = spawn(
       resolveTestNodeExecPath(),
-      createNodeEvalArgs(
-        interruptionScript(
-          eventsPath,
-          pendingApproval,
-          restoringApproval,
-          interruption === "SIGTERM with progress",
-          archives ? (interruption === "SIGINT during archives" ? "SIGINT" : "SIGTERM") : undefined,
-          interruption === "closed child stdin",
-        ),
-      ),
+      createNodeEvalArgs(interruptionScript(eventsPath, options)),
       {
         env: {
           ...process.env,
@@ -261,28 +253,25 @@ it.skipIf(process.platform === "win32").each([
     });
     child.stdout!.resume();
     const closed = once(child, "close");
-    try {
-      const ready = await Promise.race([
+    const message = () =>
+      Promise.race([
         once(child, "message"),
         closed.then(() => {
-          throw new Error("Doctor exited before stopping its service: " + stderr);
+          throw new Error("Doctor exited before its next IPC message: " + stderr);
         }),
       ]);
+    try {
+      const ready = await message();
       expect(ready[0]).toBe("stopped");
-      const terminationSignal = interruption === "SIGINT during archives" ? "SIGINT" : "SIGTERM";
+      const terminationSignal = archiveSignal ?? "SIGTERM";
       if (pendingApproval || restoringApproval) {
-        const approval = Promise.race([
-          once(child, "message"),
-          closed.then(() => {
-            throw new Error("Doctor exited before requesting approval: " + stderr);
-          }),
-        ]);
+        const approval = message();
         child.send("continue", () => {});
         expect((await approval)[0]).toBe("approval");
         child.kill("SIGTERM");
       } else if (interruption === "closed stdout") {
         child.stdout!.destroy();
-      } else if (!archives && interruption !== "closed child stdin") {
+      } else if (!archiveSignal && !closedChildStdin) {
         child.kill(terminationSignal);
       }
       if (!pendingApproval && !restoringApproval) {
@@ -293,8 +282,8 @@ it.skipIf(process.platform === "win32").each([
       expect(JSON.parse(fs.readFileSync(eventsPath, "utf8")), stderr).toEqual([
         "stopped",
         ...(pendingApproval ? ["approval-declined"] : []),
-        ...(interruption === "closed child stdin" ? ["child-stdin-closed"] : []),
-        ...(archives
+        ...(closedChildStdin ? ["child-stdin-closed"] : []),
+        ...(archiveSignal
           ? ["archive-started", "archives-cancelled", "repair-cancelled"]
           : ["repair-complete"]),
         "stores-closed",
@@ -304,7 +293,7 @@ it.skipIf(process.platform === "win32").each([
       ]);
       expect(signal, stderr).toBeNull();
       expect(exitCode, stderr).toBe(code);
-      if (interruption === "closed child stdin") {
+      if (closedChildStdin) {
         expect(stderr).not.toContain("Doctor interrupted");
       } else {
         expect(stderr).toContain(

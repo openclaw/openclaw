@@ -4,6 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fingerprintRuntime from "./desktop-generation-fingerprint.js";
 import {
   createCodexDesktopGenerationService,
   waitForCodexDesktopGeneration,
@@ -22,47 +23,54 @@ type WatchRegistration = {
   watcher: FakeWatcher;
 };
 
-function createServiceContext(
-  warn: OpenClawPluginServiceContextV2["logger"]["warn"],
-  serviceHealth: NonNullable<OpenClawPluginServiceContextV2["serviceHealth"]>,
-): OpenClawPluginServiceContextV2 {
-  return {
-    config: {},
-    stateDir: "/unused",
-    scheduler: createTestPluginServiceScheduler(),
-    logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn },
-    serviceHealth,
-  };
-}
+const watchPath = vi.hoisted(() =>
+  vi.fn<
+    (
+      watchedPath: string,
+      options: { recursive: boolean },
+      listener: WatchRegistration["listener"],
+    ) => FSWatcher
+  >(),
+);
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  watch: watchPath,
+}));
+vi.mock("./desktop-generation-fingerprint.js", { spy: true });
 
 function createHarness(initialFingerprint: string, initialWatchFailures = 0) {
   let watchFailures = initialWatchFailures;
   let fingerprint = initialFingerprint;
   const registrations: WatchRegistration[] = [];
-  const readFingerprint = vi.fn(async () => fingerprint);
+  const readFingerprint = vi
+    .spyOn(fingerprintRuntime, "readMacOSDesktopGenerationFingerprint")
+    .mockClear()
+    .mockImplementation(async () => fingerprint);
   const onGenerationChange = vi.fn();
   const clearFailure = vi.fn();
   const reportFailure = vi.fn();
   const warn = vi.fn();
   let watchAttempts = 0;
-  const context = createServiceContext(warn, { clearFailure, reportFailure });
-  const service = createCodexDesktopGenerationService(
-    { onGenerationChange },
-    {
-      platform: "darwin",
-      readFingerprint,
-      watchPath: (watchedPath, options, listener) => {
-        watchAttempts += 1;
-        if (watchFailures > 0) {
-          watchFailures -= 1;
-          throw new Error("watch registration unavailable");
-        }
-        const watcher = new FakeWatcher();
-        registrations.push({ watchedPath, recursive: options.recursive, listener, watcher });
-        return watcher as FSWatcher;
-      },
-    },
-  );
+  const context: OpenClawPluginServiceContextV2 = {
+    config: {},
+    stateDir: "/unused",
+    scheduler: createTestPluginServiceScheduler(),
+    logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn },
+    serviceHealth: { clearFailure, reportFailure },
+  };
+  watchPath.mockImplementation((watchedPath, options, listener) => {
+    watchAttempts += 1;
+    if (watchFailures > 0) {
+      watchFailures -= 1;
+      throw new Error("watch registration unavailable");
+    }
+    const watcher = new FakeWatcher();
+    registrations.push({ watchedPath, recursive: options.recursive, listener, watcher });
+    return watcher as FSWatcher;
+  });
+  const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  const service = createCodexDesktopGenerationService({ onGenerationChange });
+  platform.mockRestore();
   return {
     service,
     context,
@@ -95,18 +103,24 @@ describe("Codex desktop generation service", () => {
       }
     | undefined;
 
+  function createHarnessForTest(fingerprint: string, failures = 0) {
+    vi.useFakeTimers();
+    const result = createHarness(fingerprint, failures);
+    current = result;
+    return result;
+  }
+
   afterEach(async () => {
     if (current) {
       await current.service.stop?.(current.context);
     }
     current = undefined;
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("refreshes on acquisition when the stable root cannot be watched", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness("desktop-unwatched", Infinity);
-    current = harness;
+    const harness = createHarnessForTest("desktop-unwatched", Infinity);
     await harness.service.start(harness.context);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(harness.reportFailure).toHaveBeenCalledOnce();
@@ -118,9 +132,7 @@ describe("Codex desktop generation service", () => {
   });
 
   it("keeps the stable parent watch and publishes a settled bundle replacement", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness("desktop-x");
-    current = harness;
+    const harness = createHarnessForTest("desktop-x");
     await startAndSettle(harness);
     harness.onGenerationChange.mockClear();
     harness.clearFailure.mockClear();
@@ -141,9 +153,7 @@ describe("Codex desktop generation service", () => {
   });
 
   it("ignores unrelated applications and refreshes on demand after a watcher error", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness("desktop-errors");
-    current = harness;
+    const harness = createHarnessForTest("desktop-errors");
     await startAndSettle(harness);
     const oldArm = [...harness.registrations];
     const applications = oldArm.find((entry) => entry.watchedPath === "/Applications");
@@ -163,9 +173,7 @@ describe("Codex desktop generation service", () => {
   });
 
   it("does not publish a generation after service stop during settling", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness("desktop-stop");
-    current = harness;
+    const harness = createHarnessForTest("desktop-stop");
     await harness.service.start(harness.context);
 
     await harness.service.stop?.(harness.context);
@@ -181,9 +189,7 @@ describe("Codex desktop generation service", () => {
   it.each(["change", "error"])(
     "ignores watcher %s callbacks after scheduler admission closes",
     async (event) => {
-      vi.useFakeTimers();
-      const harness = createHarness("desktop-closing");
-      current = harness;
+      const harness = createHarnessForTest("desktop-closing");
       await startAndSettle(harness);
       harness.context.scheduler.beginClose();
 
@@ -202,11 +208,9 @@ describe("Codex desktop generation service", () => {
   );
 
   it("joins an admitted fingerprint read before service retirement completes", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness("desktop-in-flight");
+    const harness = createHarnessForTest("desktop-in-flight");
     const read = createDeferred<string>();
     harness.readFingerprint.mockImplementationOnce(() => read.promise);
-    current = harness;
     await harness.service.start(harness.context);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(harness.readFingerprint).toHaveBeenCalledOnce();

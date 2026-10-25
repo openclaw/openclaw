@@ -14,12 +14,12 @@ import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error
 import { readRunFailureNotice } from "../../shared/run-failure-notice.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as historySanitize from "../chat-display-projection.sanitize.js";
+import { createChatHistoryActivityProjection } from "../chat-history-budget.js";
+import { readChatHistoryPageKernel } from "../chat-history-page-kernel.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 import * as anchorReader from "../session-transcript-readers.js";
 import { readSessionMessagesAsync } from "../session-transcript-readers.js";
-import { createChatHistoryActivityProjection } from "./chat-history-budget.js";
-import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 
 afterEach(() => vi.restoreAllMocks());
 

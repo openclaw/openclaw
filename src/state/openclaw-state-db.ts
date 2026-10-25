@@ -16,7 +16,10 @@ import {
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { captureSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  invalidateSqliteSchemaFacts,
+} from "../infra/sqlite-schema-facts.js";
 import {
   openSqliteReadOnlyDatabase,
   prepareSqliteReadOnlyLocation,
@@ -39,7 +42,6 @@ import {
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
-  confirmCachedOpenClawStateDatabaseIntegrity,
   openClawStateDatabaseCache as stateDbCache,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
@@ -102,14 +104,6 @@ export { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-m
 export { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 export { detectOpenClawStateDatabaseSchemaMigrations } from "./openclaw-state-db-schema-discovery.js";
 
-/** Reject a fresh shared-state open after known corruption until repair clears it. */
-function assertOpenClawStateDatabaseFreshOpenAllowed(
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  const env = options.env ?? process.env;
-  stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(resolveDatabasePath(options), env);
-}
-
 const deferredStateDatabases = new WeakSet<EngineConnection>();
 
 function readPublishedStateSchemaVersion(database: EngineConnection): number {
@@ -124,11 +118,13 @@ function readPublishedStateSchemaVersion(database: EngineConnection): number {
 }
 
 function repairDoctorStateDatabase(
-  options: OpenClawStateDatabaseOptions,
+  options: OpenClawStateDatabaseOptions & { integrityCheck?: "quick" | "full" },
   scope: "doctor" | "indexes" | "readability" | "version",
 ): { changes: string[]; warnings: string[] } {
   if (isStatePostgres()) {
-    requireNativeDatabaseFile("postgres", "repair");
+    // The engine owner admits PostgreSQL's catalog; SQLite file repairs do not apply.
+    openOpenClawStateDatabase(options);
+    return { changes: [], warnings: [] };
   }
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
@@ -138,15 +134,18 @@ function repairDoctorStateDatabase(
   }
   if (scope === "readability") {
     // A writer close can checkpoint WAL and invalidate a generation-bound corruption refusal.
-    assertOpenClawStateDatabaseFreshOpenAllowed(options);
+    stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
   }
   return withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () =>
-    repairStateSchema(pathname, env, scope),
+    repairStateSchema(pathname, env, scope, options.integrityCheck),
   );
 }
 
 export function repairOpenClawStateDatabaseSchema(
-  options: OpenClawStateDatabaseOptions & { versionMigrationOnly?: boolean } = {},
+  options: OpenClawStateDatabaseOptions & {
+    versionMigrationOnly?: boolean;
+    integrityCheck?: "quick" | "full";
+  } = {},
 ): {
   changes: string[];
   warnings: string[];
@@ -156,28 +155,32 @@ export function repairOpenClawStateDatabaseSchema(
 
 /** Explicit Doctor maintenance before config readers encounter a quarantined index. */
 export function repairOpenClawStateDatabaseIndexesForDoctor(
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { integrityCheck?: "quick" | "full" } = {},
 ): { changes: string[]; warnings: string[] } {
-  return repairDoctorStateDatabase(options, "indexes");
+  return repairDoctorStateDatabase(
+    { ...options, integrityCheck: options.integrityCheck ?? "full" },
+    "indexes",
+  );
 }
 
 /** Repair known catalog damage and preserve orphan rows before Doctor backs up or loads state. */
 export function repairOpenClawStateDatabaseReadabilityForDoctor(
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { integrityCheck?: "quick" | "full" } = {},
 ): { changes: string[]; warnings: string[] } {
   return repairDoctorStateDatabase(options, "readability");
 }
 
 /** Prepare schema and retire resources only when the admitted operation actually repairs it. */
 export async function prepareOpenClawStateDatabaseSchema(
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { integrityCheck?: "quick" | "full" } = {},
   mode: "automatic" | "doctor-preparation" | "doctor" = "automatic",
 ): Promise<{
   changes: string[];
   warnings: string[];
 }> {
   if (isStatePostgres()) {
-    requireNativeDatabaseFile("postgres", "repair");
+    openOpenClawStateDatabase(options);
+    return { changes: [], warnings: [] };
   }
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
@@ -200,18 +203,25 @@ export async function prepareOpenClawStateDatabaseSchema(
     let needsRepair = mode === "doctor";
     if (mode === "doctor-preparation") {
       try {
-        assertOpenClawStateDatabaseFreshOpenAllowed(options);
+        stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
       } catch {
         // The full repair must clear quarantine before dependent readers can proceed.
         needsRepair = true;
       }
     }
-    return needsRepair || needsOpenClawStateDatabaseSchemaRepair(pathname, scope)
-      ? withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () => {
-          repairStarted = true;
-          return repairStateSchema(pathname, env, scope);
-        })
-      : { changes: [], warnings: [] };
+    if (
+      !needsRepair &&
+      !needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck)
+    ) {
+      return { changes: [], warnings: [] };
+    }
+    repairStarted = true;
+    // Retire prior writers and publish their native-close receipts before the
+    // private repair handle validates its source and acquires exclusive custody.
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    return withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () =>
+      repairStateSchema(pathname, env, scope, options.integrityCheck),
+    );
   } finally {
     // Readiness checks borrow the live generation; only admitted repair retires it.
     if (repairStarted) {
@@ -223,7 +233,11 @@ export async function prepareOpenClawStateDatabaseSchema(
 /** Bootstrap fresh/native-only state canonically before startup checkpoint access. */
 export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   callback: (db: EngineConnection) => T,
-  options: OpenClawStateDatabaseOptions & { atomic?: boolean; sealOnClose?: boolean } = {},
+  options: OpenClawStateDatabaseOptions & {
+    atomic?: boolean;
+    sealOnClose?: boolean;
+    singleStatement?: true;
+  } = {},
 ): T {
   assertOpenClawStateSchemaRepairAllowed(resolveDatabasePath(options));
   if (isStatePostgres()) {
@@ -256,7 +270,10 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
         return callback(db);
       },
       { env: options.env, path: database.path },
-      { operationLabel: "state.startup-checkpoint.write" },
+      {
+        operationLabel: "state.startup-checkpoint.write",
+        singleStatement: options.singleStatement,
+      },
     );
     if (options.sealOnClose) {
       stateDbCache.closeOpenClawStateDatabaseByPath(database.path);
@@ -280,14 +297,20 @@ export function initializeNativeOpenClawStateDatabase(
 
 /** Open existing shared state without creating, migrating, chmodding, or configuring it. */
 export async function openExistingOpenClawStateDatabaseReadOnly(
-  options: OpenClawStateDatabaseOptions & { requireCanonicalSchema?: boolean } = {},
+  options: OpenClawStateDatabaseOptions & {
+    requireCanonicalSchema?: boolean;
+    integrityCheck?: "quick" | "full";
+  } = {},
 ): Promise<OpenClawStateDatabase | undefined> {
   const pathname = resolveDatabasePath(options);
   isExistingOpenClawStateSchema(pathname);
   if (!existsSync(pathname)) {
     return undefined;
   }
-  assertOpenClawStateDatabaseFreshOpenAllowed(options);
+  stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+    pathname,
+    options.env ?? process.env,
+  );
   const prepared = isStatePostgres() ? pathname : await prepareSqliteReadOnlyLocation(pathname);
   const connection = openOpenClawStateReadConnection(pathname, prepared);
   const { db } = connection.database;
@@ -298,7 +321,7 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
       assertExistingOpenClawStateRuntimeSchema(db, pathname);
     } else {
       assertSupportedStateSchemaVersion(db, pathname);
-      assertSqliteIntegrity(db, pathname);
+      assertSqliteIntegrity(db, pathname, { check: options.integrityCheck });
       if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
         assertOpenClawStateDatabaseForMaintenance(db, { pathname });
       }
@@ -342,7 +365,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   const pathname = options.database?.path ?? resolveDatabasePath(options);
   if (isArtifactPreservingStateRead("agent", pathname)) {
     assertStateFileSnapshotAllowed();
-    assertOpenClawStateDatabaseFreshOpenAllowed(options);
+    stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
     const db = openSqliteReadOnlyDatabase(pathname, { timeout: busyTimeoutMs });
     assertSupportedStateSchemaVersion(db, pathname);
     return readOnlyStateDatabase({ db, path: pathname }, () => {
@@ -383,7 +406,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
     const open = (remaining: () => number) => {
       getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
       stateDbCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
-      assertOpenClawStateDatabaseFreshOpenAllowed(options);
+      stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
       if (cached) {
         // A closed handle can leave Kysely and WAL helpers cached.
         stateDbCache.closeStaleCachedOpenClawStateDatabase(cached);
@@ -631,6 +654,13 @@ export function runOpenClawStateWriteTransaction<T>(
               }
               if (database) {
                 assertTransactionUsable(database.db);
+                // A schema owner interrupted first admission. Reopen after it settles;
+                // the schema admitted before the wait no longer describes that handoff.
+                if (!isPostgresSqlConnection(database.db)) {
+                  invalidateSqliteSchemaFacts(database.db);
+                }
+                stateDbCache.closeOpenClawStateDatabaseByPath(database.path);
+                database = undefined;
               }
               return true;
             },
@@ -694,7 +724,6 @@ function assertStateDatabaseSchemaAdmission(database: OpenClawStateDatabase): vo
 }
 
 export {
-  recordOpenClawStateDatabaseOpenFailure,
   clearOpenClawStateDatabaseOpenFailure,
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabase,
@@ -702,10 +731,3 @@ export {
   isOpenClawStateDatabaseOpen,
   closeOpenClawStateDatabaseForTest,
 } from "./openclaw-state-db-cache.js";
-
-export async function confirmOpenClawStateDatabaseIntegrity(pathname: string) {
-  if (isStatePostgres()) {
-    requireNativeDatabaseFile("postgres", "integrity");
-  }
-  return confirmCachedOpenClawStateDatabaseIntegrity(pathname);
-}

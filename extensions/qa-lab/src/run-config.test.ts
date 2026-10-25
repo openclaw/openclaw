@@ -28,29 +28,14 @@ const profiles: QaScorecardTaxonomyReport["profiles"] = (
   scenarioRefs: [],
 }));
 
-const scenarios = [
-  ...(
-    [
-      ["dm-chat-baseline", "DM baseline", "dm", "test DM", "reply"],
-      ["thread-lifecycle", "Thread lifecycle", "thread", "test thread", "thread reply"],
-    ] as const
-  ).map(([id, title, surface, objective, criterion]) => ({
-    id,
-    title,
-    surface,
-    objective,
-    successCriteria: [criterion],
-    execution: { kind: "flow" as const },
-  })),
-  {
-    id: "control-ui-chat-flow-playwright",
-    title: "Control UI Playwright",
-    surface: "control-ui",
-    objective: "test Control UI",
-    successCriteria: ["playwright pass"],
-    execution: { kind: "playwright" as const, path: "ui/src/e2e/chat-flow.e2e.test.ts" },
-  },
-];
+const scenarios = ["dm-chat-baseline", "thread-lifecycle"].map((id) => ({
+  id,
+  title: id,
+  surface: "test",
+  objective: "test",
+  successCriteria: ["pass"],
+  execution: { kind: "flow" as const },
+}));
 
 describe("qa run config", () => {
   const catalog = readQaScenarioPack();
@@ -63,13 +48,20 @@ describe("qa run config", () => {
       scorecardReport.profiles,
     );
   const planFor = (
-    selection: ReturnType<typeof normalizeQaRunSelection>,
+    input: Record<string, unknown>,
     options: Omit<
       Parameters<typeof resolveQaLabRunPlan>[0],
       "selection" | "scenarios" | "scorecardReport"
     > = {},
   ) =>
-    resolveQaLabRunPlan({ selection, scenarios: catalog.scenarios, scorecardReport, ...options });
+    resolveQaLabRunPlan({
+      selection: selectCatalog(input),
+      scenarios: catalog.scenarios,
+      scorecardReport,
+      ...options,
+    });
+  const contains = (value: Record<string, unknown>) =>
+    expect.arrayContaining([expect.objectContaining(value)]);
 
   it("normalizes live selections and deduplicates scenario ids", () => {
     expect(
@@ -95,38 +87,32 @@ describe("qa run config", () => {
     });
   });
 
-  it("rejects removed provider compatibility names", () => {
-    expect(() => select({ providerMode: "live-openai" })).toThrow(
-      "unknown QA provider mode: live-openai",
-    );
+  it.each([
+    [{ providerMode: "live-openai" }, "unknown QA provider mode: live-openai"],
+    [{ scenarioIds: ["thread-lifecycle", "missing"] }, "unknown QA scenario id(s): missing"],
+    [
+      { profile: false, scenarioIds: ["thread-lifecycle"] },
+      "QA runner profile must be a non-empty string",
+    ],
+    [
+      { profile: "", scenarioIds: ["thread-lifecycle"] },
+      "QA runner profile must be a non-empty string",
+    ],
+    [{ runtimePair: ["codex", "openclaw"] }, 'runtimePair must be ["openclaw", "codex"]'],
+    [null, "request must be a JSON object"],
+    [{ channelDriver: "renamed-cli-policy" }, "unknown QA channel driver: renamed-cli-policy"],
+  ] as const)("rejects invalid selection %j", (input, error) => {
+    expect(() => select(input)).toThrow(error);
   });
 
   it("keeps implicit profile membership server-owned and rejects an explicit empty selection", () => {
     const snapshot = createIdleQaRunnerSnapshot(profiles);
-    expect(snapshot.status).toBe("idle");
-    expect(snapshot.selection.scenarioIds).toBeNull();
-    expect(snapshot.plan).toBeNull();
+    expect(snapshot).toMatchObject({
+      status: "idle",
+      selection: { scenarioIds: null },
+      plan: null,
+    });
     expect(() => select({ scenarioIds: [] })).toThrow("scenarioIds must be a non-empty array");
-  });
-
-  it("fails closed on unknown explicit scenario ids", () => {
-    expect(() => select({ scenarioIds: ["thread-lifecycle", "missing"] })).toThrow(
-      "unknown QA scenario id(s): missing",
-    );
-  });
-
-  it("fails closed on malformed explicit profiles", () => {
-    for (const profile of [false, ""] as const) {
-      expect(() => select({ profile, scenarioIds: ["thread-lifecycle"] })).toThrow(
-        "QA runner profile must be a non-empty string",
-      );
-    }
-  });
-
-  it("rejects a reversed runtime pair instead of silently changing its order", () => {
-    expect(() => select({ runtimePair: ["codex", "openclaw"] })).toThrow(
-      'runtimePair must be ["openclaw", "codex"]',
-    );
   });
 
   it("keeps portable threads but excludes module flows from Crabline plans", () => {
@@ -168,95 +154,86 @@ describe("qa run config", () => {
   });
 
   it("resolves mixed execution kinds and reports runtime-pair-lane exclusions", () => {
-    const mixedSelection = selectCatalog({
+    const mixedPlan = planFor({
       providerMode: "live-frontier",
       scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
     });
-    const mixedPlan = planFor(mixedSelection);
-    expect(mixedPlan.status).toBe("ready");
-    expect(mixedPlan.executionKinds).toEqual(["flow", "playwright"]);
+    expect(mixedPlan).toMatchObject({ status: "ready", executionKinds: ["flow", "playwright"] });
 
-    const pairSelection = selectCatalog({
+    const pairPlan = planFor({
       runtimePair: ["openclaw", "codex"],
       runtimePairLane: "core",
     });
-    const pairPlan = planFor(pairSelection);
     expect(pairPlan.status).toBe("ready");
     expect(pairPlan.selectedScenarios.map((scenario) => scenario.id)).toContain(
       "runtime-first-hour-20-turn",
     );
     expect(pairPlan.exclusions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          scenarioId: "codex-plugin-cold-install",
-          reasons: ["runtimePair requires execution.kind=flow"],
-        }),
-      ]),
+      contains({
+        scenarioId: "codex-plugin-cold-install",
+        reasons: ["runtimePair requires execution.kind=flow"],
+      }),
     );
   });
 
   it("validates explicit runtime-pair-lane selections without expanding them", () => {
     const selectedId = "runtime-first-hour-20-turn";
-    const selection = selectCatalog({
+    const plan = planFor({
       runtimePair: ["openclaw", "codex"],
       runtimePairLane: "core",
       scenarioIds: [selectedId],
     });
 
-    const plan = planFor(selection);
-
     expect(plan.status).toBe("ready");
     expect(plan.selectedScenarios.map((scenario) => scenario.id)).toEqual([selectedId]);
 
-    const outsideLaneSelection = selectCatalog({
+    const outsideLanePlan = planFor({
       runtimePairLane: "core",
       scenarioIds: ["dm-chat-baseline"],
     });
-    const outsideLanePlan = planFor(outsideLaneSelection);
-    expect(outsideLanePlan.status).toBe("invalid");
-    expect(outsideLanePlan.selectedScenarios).toEqual([]);
+    expect(outsideLanePlan).toMatchObject({ status: "invalid", selectedScenarios: [] });
     expect(outsideLanePlan.exclusions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          scenarioId: "dm-chat-baseline",
-          reasons: ["runtimePairLane=core"],
-        }),
-      ]),
+      contains({
+        scenarioId: "dm-chat-baseline",
+        reasons: ["runtimePairLane=core"],
+      }),
     );
   });
 
   it("preserves canonical unresolved live dispatch and rejects unsupported driver channels", () => {
-    const liveSelection = selectCatalog({
-      channelDriver: "live",
-      providerMode: "live-frontier",
-      scenarioIds: ["dm-chat-baseline"],
+    const unresolvedLivePlan = planFor(
+      {
+        channelDriver: "live",
+        providerMode: "live-frontier",
+        scenarioIds: ["dm-chat-baseline"],
+      },
+      {
+        supportsChannel: () => true,
+      },
+    );
+    expect(unresolvedLivePlan).toMatchObject({
+      status: "ready",
+      selectedScenarios: [{ id: "dm-chat-baseline", effectiveChannel: null }],
     });
-    const unresolvedLivePlan = planFor(liveSelection, {
-      supportsChannel: () => true,
-    });
-    expect(unresolvedLivePlan.status).toBe("ready");
-    expect(unresolvedLivePlan.selectedScenarios).toEqual([
-      expect.objectContaining({ id: "dm-chat-baseline", effectiveChannel: null }),
-    ]);
 
-    const crablineSelection = selectCatalog({
-      channel: "qa-channel",
-      channelDriver: "crabline",
-      providerMode: "live-frontier",
-      scenarioIds: ["dm-chat-baseline"],
-    });
-    const unsupportedCrablinePlan = planFor(crablineSelection, {
-      defaultChannel: "telegram",
-      supportsChannel: (channel) => channel === "telegram",
-    });
+    const unsupportedCrablinePlan = planFor(
+      {
+        channel: "qa-channel",
+        channelDriver: "crabline",
+        providerMode: "live-frontier",
+        scenarioIds: ["dm-chat-baseline"],
+      },
+      {
+        defaultChannel: "telegram",
+        supportsChannel: (channel) => channel === "telegram",
+      },
+    );
     expect(unsupportedCrablinePlan.status).toBe("invalid");
     expect(unsupportedCrablinePlan.exclusions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          scenarioId: "dm-chat-baseline",
-          reasons: ["unsupported crabline channel=qa-channel"],
-        }),
-      ]),
+      contains({
+        scenarioId: "dm-chat-baseline",
+        reasons: ["unsupported crabline channel=qa-channel"],
+      }),
     );
   });
 
@@ -265,21 +242,18 @@ describe("qa run config", () => {
       (entry) => entry.execution.channel && entry.execution.channel !== "qa-channel",
     );
     expect(scenario).toBeDefined();
-    const selection = selectCatalog({ providerMode: "live-frontier", scenarioIds: [scenario!.id] });
-
-    const plan = planFor(selection);
+    const plan = planFor({ providerMode: "live-frontier", scenarioIds: [scenario!.id] });
 
     expect(plan.status).toBe("invalid");
-    expect(plan.exclusions).toEqual(
-      expect.arrayContaining([expect.objectContaining({ scenarioId: scenario!.id })]),
-    );
+    expect(plan.exclusions).toEqual(contains({ scenarioId: scenario!.id }));
     expect(plan.errors.join(" ")).toContain("Explicit QA scenario selection is not runnable");
   });
 
   it("returns an invalid resolved plan for a qa-channel execution override", () => {
-    const selection = selectCatalog({ channel: "telegram", scenarioIds: ["dm-chat-baseline"] });
-
-    const plan = planFor(selection, { defaultChannel: "qa-channel" });
+    const plan = planFor(
+      { channel: "telegram", scenarioIds: ["dm-chat-baseline"] },
+      { defaultChannel: "qa-channel" },
+    );
 
     expect(plan.status).toBe("invalid");
     expect(plan.errors).toContain(
@@ -291,13 +265,14 @@ describe("qa run config", () => {
   });
 
   it("distinguishes declared constraints from the suite-resolved effective channel", () => {
-    const selection = selectCatalog({
-      channelDriver: "crabline",
-      providerMode: "live-frontier",
-      scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
-    });
-
-    const plan = planFor(selection, { defaultChannel: "telegram" });
+    const plan = planFor(
+      {
+        channelDriver: "crabline",
+        providerMode: "live-frontier",
+        scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
+      },
+      { defaultChannel: "telegram" },
+    );
 
     expect(plan.selectedScenarios).toEqual(
       expect.arrayContaining([
@@ -312,15 +287,6 @@ describe("qa run config", () => {
           effectiveChannel: null,
         }),
       ]),
-    );
-  });
-
-  it("rejects malformed requests and unknown channel drivers", () => {
-    expect(() => normalizeQaRunSelection(null, scenarios, profiles)).toThrow(
-      "request must be a JSON object",
-    );
-    expect(() => select({ channelDriver: "renamed-cli-policy" })).toThrow(
-      "unknown QA channel driver: renamed-cli-policy",
     );
   });
 

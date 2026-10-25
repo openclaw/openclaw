@@ -21,8 +21,9 @@ import type {
   MemorySessionTarget,
 } from "../config/sessions/session-memory-targets.types.js";
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 export type {
@@ -30,7 +31,31 @@ export type {
   MemorySessionTarget,
 } from "../config/sessions/session-memory-targets.types.js";
 
-/** @deprecated Await loadArchivedSessionsAsync. Final compatibility day: 2026-12-31. */
+/** Read only search-hit identities and their aliases through the canonical store owner. */
+export async function loadMemorySearchSessionStore(
+  cfg: OpenClawConfig,
+  options: {
+    agentId?: string;
+    sessionKeys: readonly string[];
+    sessionIds: readonly string[];
+  },
+) {
+  const { agentId, ...transcriptSelection } = options;
+  const { loadCombinedSessionStoreForGatewayCoreAsync } =
+    await import("../config/sessions/combined-store-gateway-read.js");
+  const { store, storePath } = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, {
+    agentId,
+    includeIncognito: false,
+    projection: "list",
+    transcriptSelection,
+  });
+  return {
+    storePath,
+    store: Object.fromEntries(Object.entries(store).filter(([key]) => !isIncognitoSessionKey(key))),
+  };
+}
+
+/** @deprecated Await loadArchivedSessionsAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function loadArchivedSessions(
   params: Parameters<typeof listSessionTranscriptArchivesReadOnly>[0],
 ) {
@@ -82,7 +107,7 @@ export type {
   SessionTranscriptCorpusEntry,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 
-/** @deprecated Await loadMemorySessionMetadataAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await loadMemorySessionMetadataAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function loadMemorySessionMetadata(params: {
   agentId: string;
   sessionId: string;
@@ -161,7 +186,7 @@ export async function loadMemorySessionMetadataBatchAsync(params: {
   );
 }
 
-/** @deprecated Await resolveMemorySessionTargetsAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await resolveMemorySessionTargetsAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveMemorySessionTargets(params: MemorySessionSelectors): MemorySessionTarget[] {
   warnPluginSdkDeprecation({
     family: "memory-session-sync-inventory",

@@ -8,10 +8,10 @@ import {
   readGitObjectStorageDependencies,
   readGitWorktreeAdministrations,
   type GitObjectStorageDependencies,
-  type GitWorktreeAdministration,
 } from "../../infra/git-root.js";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import { indexWorktreePaths } from "./gc-dependencies.js";
 import type {
   GitWorktreeOperations,
@@ -59,14 +59,10 @@ function checkoutKey(checkout: string) {
 
 function administrationInventory(commonDir: string, assertBudget: () => void) {
   const inventory = readGitWorktreeAdministrations(commonDir, assertBudget);
-  const byCheckout = new Map<string, GitWorktreeAdministration[]>();
-  for (const entry of inventory.entries) {
+  const byCheckout = groupRecords(inventory.entries, (entry) => {
     assertBudget();
-    const key = checkoutKey(entry.checkoutPath);
-    const entries = byCheckout.get(key) ?? [];
-    entries.push(entry);
-    byCheckout.set(key, entries);
-  }
+    return checkoutKey(entry.checkoutPath);
+  });
   return { ...inventory, byCheckout };
 }
 

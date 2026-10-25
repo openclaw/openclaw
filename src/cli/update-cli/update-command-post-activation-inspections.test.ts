@@ -7,40 +7,49 @@ import {
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const doctorStep = (selectors: string[] | null, cwd = "/synthetic/candidate") => ({
+  name: "openclaw doctor",
+  command: "doctor --fix",
+  cwd,
+  durationMs: 0,
+  exitCode: 0,
+  deferredInspectionCheckIds: selectors,
+});
+
+async function inspectFixture(
+  label: string,
+  script: string,
+  selectors: string[],
+  result: Partial<UpdateRunResult> = {},
+) {
+  const root = tempDirs.make(label);
+  await fs.mkdir(path.join(root, "dist"));
+  await fs.writeFile(path.join(root, "dist/index.js"), script);
+  return runPostActivationInspections({
+    root,
+    gatewayReady: true,
+    nodeRunner: process.execPath,
+    result: updateResult({
+      durationMs: 0,
+      steps: [doctorStep(selectors, root)],
+      ...result,
+    }),
+  });
+}
 
 it("includes nondefault inspections in the retry command after advisory findings", async () => {
-  const root = tempDirs.make("doctor-advisory-retry-");
-  await fs.mkdir(path.join(root, "dist"));
-  await fs.writeFile(
-    path.join(root, "dist/index.js"),
+  const observed = await inspectFixture(
+    "doctor-advisory-retry-",
     `process.stdout.write(JSON.stringify({
       ok: false, checksRun: 1,
       findings: [{ checkId: "core/doctor/hooks-model", severity: "info", message: "Review hooks." }]
     })); process.exitCode = 1;`,
+    ["core/doctor/hooks-model"],
   );
-  const observed = await runPostActivationInspections({
-    root,
-    gatewayReady: true,
-    nodeRunner: process.execPath,
-    result: {
-      status: "ok",
-      mode: "npm",
-      durationMs: 0,
-      steps: [
-        {
-          name: "openclaw doctor",
-          command: "doctor --fix",
-          cwd: root,
-          durationMs: 0,
-          exitCode: 0,
-          deferredInspectionCheckIds: ["core/doctor/hooks-model"],
-        },
-      ],
-    },
-  });
   expect(observed.status).toBe("ok");
   expect(observed.steps.at(-1)?.advisory?.message).toContain(
     "openclaw doctor --lint --all --severity-min info",
@@ -51,36 +60,17 @@ it("passes selectors as literal arguments and reports checks the target did not 
   const root = tempDirs.make("doctor-unrun-selectors-");
   const argvPath = path.join(root, "argv.json");
   const selector = "target:Missing Check; $(echo unused)";
-  await fs.mkdir(path.join(root, "dist"));
-  await fs.writeFile(
-    path.join(root, "dist/index.js"),
+  const observed = await inspectFixture(
+    "doctor-literal-selectors-",
     `
 const fs = require("node:fs");
 fs.writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));
 process.stdout.write(JSON.stringify({ ok: false, checksRun: 0, findings: [] }));
 process.exitCode = 1;
 `,
+    [selector],
+    { mode: "git" },
   );
-  const observed = await runPostActivationInspections({
-    root,
-    gatewayReady: true,
-    nodeRunner: process.execPath,
-    result: {
-      status: "ok",
-      mode: "git",
-      durationMs: 0,
-      steps: [
-        {
-          name: "openclaw doctor",
-          command: "doctor --fix",
-          cwd: root,
-          durationMs: 0,
-          exitCode: 0,
-          deferredInspectionCheckIds: [selector],
-        },
-      ],
-    },
-  });
   expect(JSON.parse(await fs.readFile(argvPath, "utf8"))).toContain(`--only=${selector}`);
   expect(observed.status).toBe("ok");
   expect(observed.steps.at(-1)).toMatchObject({
@@ -90,37 +80,18 @@ process.exitCode = 1;
 });
 
 it("keeps the version change but flags inspections a missing post-swap module left unrun", async () => {
-  const root = tempDirs.make("doctor-missing-module-");
-  await fs.mkdir(path.join(root, "dist"));
   // The replaced package no longer has a chunk this run expected.
-  await fs.writeFile(
-    path.join(root, "dist/index.js"),
+  const observed = await inspectFixture(
+    "doctor-missing-module-",
     `process.stderr.write("Error [ERR_MODULE_NOT_FOUND]: Cannot find module 'dist/doctor-health-contributions-old.mjs'\\n");
 process.exitCode = 13;
 `,
-  );
-  const observed = await runPostActivationInspections({
-    root,
-    gatewayReady: true,
-    nodeRunner: process.execPath,
-    result: {
-      status: "ok",
-      mode: "npm",
-      durationMs: 0,
+    ["core/doctor/command-owner"],
+    {
       after: { version: "2026.10.6" },
       before: { version: "2026.10.5" },
-      steps: [
-        {
-          name: "openclaw doctor",
-          command: "doctor --fix",
-          cwd: root,
-          durationMs: 0,
-          exitCode: 0,
-          deferredInspectionCheckIds: ["core/doctor/command-owner"],
-        },
-      ],
     },
-  });
+  );
   expect(observed.status).toBe("ok");
   const report = renderUpdateRunReport(updateRunReportInputFromResult(observed));
   expect(report.headline).toBe(
@@ -137,14 +108,14 @@ it.each([null, "not-an-array", [" "], { length: 0 }].map((selectors) => ({ selec
     // Decode a malformed wire receipt rather than constructing a valid typed step.
     const result: UpdateRunResult = JSON.parse(`{
       "status": "ok", "mode": "git", "durationMs": 0,
-      "steps": [
-        { "name": "openclaw doctor", "command": "doctor --fix",
-          "cwd": "/synthetic/candidate", "durationMs": 0, "exitCode": 0,
-          "deferredInspectionCheckIds": ["core/doctor/command-owner"] },
-        { "name": "post-plugin doctor", "command": "doctor --fix",
-          "cwd": "/synthetic/candidate", "durationMs": 0, "exitCode": 0,
-          "deferredInspectionCheckIds": ${JSON.stringify(selectors)} }
-      ]
+      "steps": ${JSON.stringify([
+        doctorStep(["core/doctor/command-owner"]),
+        {
+          ...doctorStep(null),
+          name: "post-plugin doctor",
+          deferredInspectionCheckIds: selectors,
+        },
+      ])}
     }`);
     const observed = await runPostActivationInspections({
       root: "/synthetic/candidate",
@@ -166,21 +137,11 @@ it.each([null, "not-an-array", [" "], { length: 0 }].map((selectors) => ({ selec
 it.each(["doctor", "inline lint"])(
   "does not turn an empty deferred set from %s into an unfiltered lint pass",
   async (receiptOwner) => {
-    const result: UpdateRunResult = {
-      status: "ok",
+    const result = updateResult({
       mode: "git",
       durationMs: 0,
-      steps: [
-        {
-          name: "openclaw doctor",
-          command: "doctor --fix",
-          cwd: "/synthetic/candidate",
-          durationMs: 0,
-          exitCode: 0,
-          deferredInspectionCheckIds: receiptOwner === "doctor" ? [] : null,
-        },
-      ],
-    };
+      steps: [doctorStep(receiptOwner === "doctor" ? [] : null)],
+    });
     if (receiptOwner === "inline lint") {
       result.postUpdate = {
         plugins: {

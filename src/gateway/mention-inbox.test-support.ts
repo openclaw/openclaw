@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import type { Result } from "@openclaw/normalization-core/result";
 import { expect, vi } from "vitest";
 import {
@@ -8,7 +9,10 @@ import {
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -31,9 +35,32 @@ import { usersMentionableHandlers } from "./server-methods/users-mentionable.js"
 export const SESSION_KEY = "agent:main:dashboard:mention-test";
 export const SESSION_ID = "mention-test-session";
 const handlers = { ...mentionHandlers, ...usersMentionableHandlers };
+
+export function expectMentionError(
+  result: unknown,
+  code: string,
+  details: Partial<ErrorShape> = {},
+) {
+  expect(result).toMatchObject({ ok: false, error: { code, ...details } });
+}
+
+export function mentionRoles(
+  definitions: Record<string, GatewayOperatorRoleDefinition> = {},
+): OpenClawConfig {
+  return {
+    gateway: {
+      roles: {
+        default: "reader",
+        definitions: {
+          reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
+          ...definitions,
+        },
+      },
+    },
+  };
+}
 type InboxFixtureOptions = {
   notifications?: boolean;
-  beforeInbox?: () => void;
   retainProfileCatalog?: boolean;
 };
 
@@ -65,16 +92,16 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
   setDisplayName(alice.id, "Alice");
   setDisplayName(bob.id, "Bob");
   setDisplayName(carol.id, "Carol");
-  const aliceClient = { ...identifiedClient(alice.id, "Alice"), connId: "alice" };
-  const bobClient = { ...identifiedClient(bob.id, "Bob"), connId: "bob-one" };
-  const bobSecond = { ...identifiedClient(bob.id, "Bob"), connId: "bob-two" };
-  const carolClient = { ...identifiedClient(carol.id, "Carol"), connId: "carol" };
+  const aliceClient = Object.assign(identifiedClient(alice.id, "Alice"), { connId: "alice" });
+  const bobClient = Object.assign(identifiedClient(bob.id, "Bob"), { connId: "bob-one" });
+  const bobSecond = Object.assign(identifiedClient(bob.id, "Bob"), { connId: "bob-two" });
+  const carolClient = Object.assign(identifiedClient(carol.id, "Carol"), { connId: "carol" });
   const clients: GatewayClient[] = [aliceClient, bobClient, bobSecond, carolClient];
   const broadcast = vi.fn();
   const push = vi.fn<NonNullable<Parameters<typeof createMentionInbox>[0]["onMentionCreated"]>>();
-  const setSession = (entry: Partial<SessionEntry>, sessionKey = SESSION_KEY) =>
+  const setSession = (entry: Partial<SessionEntry>, sessionKey = SESSION_KEY, storePath?: string) =>
     upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
+      { agentId: "main", sessionKey, storePath },
       {
         sessionId: SESSION_ID,
         updatedAt: Date.now(),
@@ -99,7 +126,6 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     inboxes.add(inbox);
     return inbox;
   };
-  options.beforeInbox?.();
   const committedSources = new Map<string, MentionCommittedInput["committedSource"]>();
   const inbox = openInbox();
   const context = { mentionInbox: inbox, getRuntimeConfig: () => cfg } as GatewayRequestContext;
@@ -147,10 +173,24 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
     carolClient,
     clients,
     inbox,
+    async items(client: GatewayClient = bobClient, target = inbox) {
+      return (await readMentionInbox(target, client)).items;
+    },
     call,
     broadcast,
     push,
     setSession,
+    async replaceSessionIdentity(sessionId = "replacement-session") {
+      await setSession({ sessionId });
+      const file = statSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), { bigint: true });
+      emitSessionIdentityMutation({
+        agentId: "main",
+        databaseIdentity: `${file.dev}:${file.ino}`,
+        kind: "replace",
+        previous: { sessionId: SESSION_ID, sessionKeys: [SESSION_KEY] },
+        current: { sessionId, sessionKeys: [SESSION_KEY] },
+      });
+    },
     openInbox,
     async dispose() {
       try {
@@ -161,15 +201,12 @@ async function createFixture(cfg: OpenClawConfig, options: InboxFixtureOptions) 
       }
     },
     post(sourceId = "source-one", overrides: Partial<MentionCommittedInput> = {}, target = inbox) {
-      let committedSource = committedSources.get(sourceId);
-      if (!committedSource) {
-        committedSource = {
-          generation: "test-generation",
-          sequence: committedSources.size + 1,
-          timestamp: Date.now(),
-        };
-        committedSources.set(sourceId, committedSource);
-      }
+      const committedSource = committedSources.get(sourceId) ?? {
+        generation: "test-generation",
+        sequence: committedSources.size + 1,
+        timestamp: Date.now(),
+      };
+      committedSources.set(sourceId, committedSource);
       return target.recordCommittedInputAsync({
         sourceId,
         committedSource,

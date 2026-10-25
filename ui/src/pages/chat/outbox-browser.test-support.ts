@@ -2,6 +2,7 @@ import { Blob as NodeBlob, File as NodeFile } from "node:buffer";
 import { IDBFactory } from "fake-indexeddb";
 import { beforeEach, onTestFinished, vi } from "vitest";
 import * as payloads from "../../lib/blob-data-url.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 
 export function useChatSendBrowserFixture(): void {
@@ -58,11 +59,7 @@ export function installOutboxBrowserStorage(): void {
   documentLocks.set(browserNavigator, locks);
   Object.defineProperty(browserNavigator, "locks", { configurable: true, value: locks });
   const restoreLocks = () => {
-    if (descriptor) {
-      Object.defineProperty(browserNavigator, "locks", descriptor);
-    } else {
-      Reflect.deleteProperty(browserNavigator, "locks");
-    }
+    restorePropertyDescriptor(browserNavigator, "locks", descriptor);
   };
   vi.spyOn(payloads, "readBlobAsDataUrl").mockImplementation(
     async (blob) =>

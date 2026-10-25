@@ -59,7 +59,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     model: RuntimeModel,
     attempts: readonly PreparedAgentRuntimeAuthAttempt[],
   ) => AgentHarness;
-  markStage?: (stage: string) => void;
 }) {
   const runParams = params.runParams;
   runParams.authProfileBinding?.assertCurrent();
@@ -90,6 +89,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const authStoreOptions = {
     migrationProvider: params.provider,
     config: runParams.config,
+    inheritedAuthDir: params.preparedModelRuntime?.inheritedAuthDir,
     profileId: runParams.authProfileId,
     allowKeychainPrompt: false,
   };
@@ -101,7 +101,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     );
     externalCliAuthScope = resolveExternalCliAuthScope(noExternalAuthStore);
   }
-  params.markStage?.("scope");
 
   // Provider pins own ambient overlays at this loader seam. Stored profiles
   // and explicit bindings remain available for the cross-class auth contracts.
@@ -120,7 +119,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
         params.agentDir,
         authStoreOptions,
       )));
-  params.markStage?.("store");
 
   const requestedProfileId = runParams.authProfileId?.trim() || undefined;
   const lockedProfileId =
@@ -278,9 +276,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   let resolvedAuthPreparation = createAuthPreparation();
   for (let preparation = 0; ; preparation += 1) {
     params.applyResolvedRuntimeModel(await materializeAuthPlan(resolvedAuthPreparation.plan));
-    if (preparation === 0) {
-      params.markStage?.("prepare-plan");
-    }
     const selectedHarness = params.selectHarnessForPreparedAttempts(
       params.getEffectiveModel(),
       resolvedAuthPreparation.attempts,
@@ -296,7 +291,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     params.setAgentHarness(selectedHarness);
     resolvedAuthPreparation = createAuthPreparation();
   }
-  params.markStage?.("harness");
 
   return {
     attemptAuthProfileStore,

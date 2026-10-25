@@ -35,21 +35,6 @@ export function requireRef(value: unknown): string {
   return ref;
 }
 
-export function requireRefOrSelector(
-  ref: string | undefined,
-  selector: string | undefined,
-): { ref?: string; selector?: string } {
-  const trimmedRef = normalizeOptionalString(ref) ?? "";
-  const trimmedSelector = normalizeOptionalString(selector) ?? "";
-  if (!trimmedRef && !trimmedSelector) {
-    throw new Error("ref or selector is required");
-  }
-  return {
-    ref: trimmedRef || undefined,
-    selector: trimmedSelector || undefined,
-  };
-}
-
 export function normalizeTimeoutMs(timeoutMs: number | undefined, fallback: number): number {
   const parsed = parseFiniteNumber(timeoutMs);
   return Math.max(500, Math.min(120_000, Math.floor(parsed ?? fallback)));
@@ -61,7 +46,7 @@ export function toAIFriendlyError(error: unknown, selector: string): Error {
   }
   const message = stripVTControlCharacters(formatErrorMessage(error));
   const headline = (message.split("\n", 1)[0] ?? message).replace(
-    /^(?:Error:\s*)?(?:locator\.\w+:\s*)?(?:Error:\s*)?/,
+    /^(?:Error:\s*)?(?:(?:locator\.)?\w+:\s*)?(?:Error:\s*)?/,
     "",
   );
   const locatorTimeout = /^Timeout \d+ms exceeded\./.test(headline);

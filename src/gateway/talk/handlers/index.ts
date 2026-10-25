@@ -109,7 +109,7 @@ type TalkSpeakReason =
   | "invalid_audio_result";
 
 function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  const scopes = client?.connect?.scopes ?? [];
   return scopes.includes(ADMIN_SCOPE) || scopes.includes(TALK_SECRETS_SCOPE);
 }
 
@@ -154,15 +154,6 @@ function withTalkBaseTtsSpeakerSelectionCompat(
         return [providerId, normalized];
       }),
     );
-  }
-  for (const [key, value] of Object.entries(baseTts)) {
-    if (key === "providers") {
-      continue;
-    }
-    const record = asOptionalRecord(value);
-    if (record) {
-      next[key] = withSpeakerSelectionCompat(record);
-    }
   }
   return next;
 }
@@ -343,7 +334,7 @@ function readTalkCatalog(
             { inheritRequestScope: false },
           ),
         );
-        if ((!expired || !retained.snapshot) && !lifetime?.aborted) {
+        if (!lifetime?.aborted) {
           retained.snapshot = snapshot;
         }
         if (!expired) {
@@ -562,6 +553,9 @@ async function buildTalkCatalog(
           }
           if (capabilities?.voicesByModel) {
             entry.voicesByModel = capabilities.voicesByModel;
+          }
+          if (capabilities?.modelFamilySettings) {
+            entry.modelFamilySettings = capabilities.modelFamilySettings;
           }
           if (provider.aliases?.length) {
             entry.aliases = [...provider.aliases];

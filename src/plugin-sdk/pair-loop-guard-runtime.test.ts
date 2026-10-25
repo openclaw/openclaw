@@ -1,6 +1,3 @@
-/**
- * Tests pairing loop guard runtime helpers for channel setup flows.
- */
 import { describe, expect, it } from "vitest";
 import {
   createPairLoopGuard,
@@ -17,112 +14,69 @@ const settings: PairLoopGuardSettings = {
   cooldownMs: 5_000,
 };
 
+const base = {
+  scopeId: "scope-1",
+  conversationId: "conversation-1",
+  senderId: "participant-a",
+  receiverId: "participant-b",
+  settings,
+};
+
+function createFixture(overrides: Partial<PairLoopGuardSettings> = {}) {
+  const guard = createPairLoopGuard();
+  const fixtureSettings = { ...settings, ...overrides };
+  const record = (event: Partial<Parameters<typeof guard.recordAndCheck>[0]>) =>
+    guard.recordAndCheck({ ...base, settings: fixtureSettings, ...event });
+  return { guard, record };
+}
+
 describe("createPairLoopGuard", () => {
   it("suppresses either direction once a participant pair exceeds the window budget", () => {
-    const guard = createPairLoopGuard();
-    const base = { scopeId: "scope-1", conversationId: "conversation-1", settings };
+    const { record } = createFixture();
 
+    expect(record({ nowMs: 1_000 })).toEqual({ suppressed: false });
     expect(
-      guard.recordAndCheck({
-        ...base,
-        senderId: "participant-a",
-        receiverId: "participant-b",
-        nowMs: 1_000,
-      }),
+      record({ senderId: "participant-b", receiverId: "participant-a", nowMs: 1_010 }),
     ).toEqual({ suppressed: false });
-    expect(
-      guard.recordAndCheck({
-        ...base,
-        senderId: "participant-b",
-        receiverId: "participant-a",
-        nowMs: 1_010,
-      }),
-    ).toEqual({ suppressed: false });
-    expect(
-      guard.recordAndCheck({
-        ...base,
-        senderId: "participant-a",
-        receiverId: "participant-b",
-        nowMs: 1_020,
-      }),
-    ).toEqual({ suppressed: false });
+    expect(record({ nowMs: 1_020 })).toEqual({ suppressed: false });
 
-    const result = guard.recordAndCheck({
-      ...base,
-      senderId: "participant-b",
-      receiverId: "participant-a",
-      nowMs: 1_030,
-    });
+    const result = record({ senderId: "participant-b", receiverId: "participant-a", nowMs: 1_030 });
 
     expect(result).toEqual({ suppressed: true, cooldownUntilMs: 1_030 + settings.cooldownMs });
   });
 
   it("keeps scopes and conversations independent", () => {
-    const guard = createPairLoopGuard();
-    const base = {
-      scopeId: "scope-1",
-      conversationId: "conversation-1",
-      senderId: "participant-a",
-      receiverId: "participant-b",
-      settings,
-    };
+    const { record } = createFixture();
 
     for (let index = 0; index < settings.maxEventsPerWindow + 1; index += 1) {
-      guard.recordAndCheck({ ...base, nowMs: 1_000 + index });
+      record({ nowMs: 1_000 + index });
     }
 
-    expect(guard.recordAndCheck({ ...base, conversationId: "conversation-2" })).toEqual({
-      suppressed: false,
-    });
-    expect(guard.recordAndCheck({ ...base, scopeId: "scope-2" })).toEqual({ suppressed: false });
+    expect(record({ conversationId: "conversation-2" })).toEqual({ suppressed: false });
+    expect(record({ scopeId: "scope-2" })).toEqual({ suppressed: false });
   });
 
   it("does not consume another budget slot when the same event is retried", () => {
-    const guard = createPairLoopGuard();
-    const strictSettings = { ...settings, maxEventsPerWindow: 1 };
-    const base = {
-      scopeId: "scope-1",
-      conversationId: "conversation-1",
-      senderId: "participant-a",
-      receiverId: "participant-b",
-      settings: strictSettings,
-    };
+    const { record } = createFixture({ maxEventsPerWindow: 1 });
 
-    expect(guard.recordAndCheck({ ...base, eventId: "event-1", nowMs: 1_000 })).toEqual({
-      suppressed: false,
-    });
-    expect(guard.recordAndCheck({ ...base, eventId: "event-1", nowMs: 1_000 })).toEqual({
-      suppressed: false,
-    });
-    const second = guard.recordAndCheck({ ...base, eventId: "event-2", nowMs: 1_001 });
+    expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({ suppressed: false });
+    expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({ suppressed: false });
+    const second = record({ eventId: "event-2", nowMs: 1_001 });
     expect(second).toEqual({
       suppressed: true,
-      cooldownUntilMs: 1_001 + strictSettings.cooldownMs,
+      cooldownUntilMs: 1_001 + settings.cooldownMs,
     });
-    expect(guard.recordAndCheck({ ...base, eventId: "event-2", nowMs: 1_001 })).toEqual(second);
+    expect(record({ eventId: "event-2", nowMs: 1_001 })).toEqual(second);
   });
 
   it("does not retain distinct suppressed event identities during cooldown", () => {
-    const guard = createPairLoopGuard();
-    const strictSettings = { ...settings, maxEventsPerWindow: 1 };
-    const base = {
-      scopeId: "scope-cooldown",
-      conversationId: "conversation-cooldown",
-      senderId: "participant-a",
-      receiverId: "participant-b",
-      settings: strictSettings,
-    };
+    const { guard, record } = createFixture({ maxEventsPerWindow: 1 });
 
-    expect(guard.recordAndCheck({ ...base, eventId: "event-1", nowMs: 1_000 })).toEqual({
-      suppressed: false,
-    });
-    expect(guard.recordAndCheck({ ...base, eventId: "event-2", nowMs: 1_001 }).suppressed).toBe(
-      true,
-    );
+    expect(record({ eventId: "event-1", nowMs: 1_000 })).toEqual({ suppressed: false });
+    expect(record({ eventId: "event-2", nowMs: 1_001 }).suppressed).toBe(true);
     for (let index = 0; index < 1_000; index += 1) {
       expect(
-        guard.recordAndCheck({
-          ...base,
+        record({
           eventId: `suppressed-${index}`,
           nowMs: 1_002 + index,
         }).suppressed,
@@ -132,90 +86,49 @@ describe("createPairLoopGuard", () => {
     expect(guard.snapshot()).toEqual([
       expect.objectContaining({
         recentCount: 0,
-        cooldownUntilMs: 1_001 + strictSettings.cooldownMs,
+        cooldownUntilMs: 1_001 + settings.cooldownMs,
       }),
     ]);
   });
 
   it("uses each tracked pair's own window when pruning inactive entries", () => {
-    const guard = createPairLoopGuard();
+    const { guard, record } = createFixture();
     const longWindowSettings = { ...settings, windowMs: 120_000 };
 
-    guard.recordAndCheck({
-      scopeId: "scope-1",
-      conversationId: "conversation-1",
-      senderId: "participant-a",
-      receiverId: "participant-b",
-      settings: longWindowSettings,
-      nowMs: 1_000,
-    });
-    guard.recordAndCheck({
-      scopeId: "scope-1",
-      conversationId: "conversation-1",
-      senderId: "participant-c",
-      receiverId: "participant-d",
-      settings,
-      nowMs: 61_001,
-    });
+    record({ settings: longWindowSettings, nowMs: 1_000 });
+    record({ senderId: "participant-c", receiverId: "participant-d", nowMs: 61_001 });
 
     expect(guard.snapshot()).toHaveLength(2);
   });
 
   it("does not count future event timestamps against older reordered events", () => {
-    const guard = createPairLoopGuard();
-    const strictSettings = { ...settings, maxEventsPerWindow: 1 };
-    const base = {
-      scopeId: "scope-1",
-      conversationId: "conversation-1",
-      senderId: "participant-a",
-      receiverId: "participant-b",
-      settings: strictSettings,
-    };
+    const { record } = createFixture({ maxEventsPerWindow: 1 });
 
-    expect(guard.recordAndCheck({ ...base, nowMs: 120_000 })).toEqual({ suppressed: false });
-    expect(guard.recordAndCheck({ ...base, nowMs: 0 })).toEqual({ suppressed: false });
-    expect(guard.recordAndCheck({ ...base, nowMs: 120_500 })).toEqual({
+    expect(record({ nowMs: 120_000 })).toEqual({ suppressed: false });
+    expect(record({ nowMs: 0 })).toEqual({ suppressed: false });
+    expect(record({ nowMs: 120_500 })).toEqual({
       suppressed: true,
-      cooldownUntilMs: 120_500 + strictSettings.cooldownMs,
+      cooldownUntilMs: 120_500 + settings.cooldownMs,
     });
   });
 
   it("does not apply a future cooldown to an older reordered event", () => {
-    const guard = createPairLoopGuard();
-    const strictSettings = { ...settings, maxEventsPerWindow: 1 };
-    const base = {
-      scopeId: "scope-1",
-      conversationId: "conversation-1",
-      senderId: "participant-a",
-      receiverId: "participant-b",
-      settings: strictSettings,
-    };
+    const { record } = createFixture({ maxEventsPerWindow: 1 });
 
-    expect(guard.recordAndCheck({ ...base, nowMs: 120_000 })).toEqual({ suppressed: false });
-    expect(guard.recordAndCheck({ ...base, nowMs: 120_500 })).toEqual({
+    expect(record({ nowMs: 120_000 })).toEqual({ suppressed: false });
+    expect(record({ nowMs: 120_500 })).toEqual({
       suppressed: true,
-      cooldownUntilMs: 120_500 + strictSettings.cooldownMs,
+      cooldownUntilMs: 120_500 + settings.cooldownMs,
     });
-    expect(guard.recordAndCheck({ ...base, nowMs: 0 })).toEqual({ suppressed: false });
+    expect(record({ nowMs: 0 })).toEqual({ suppressed: false });
   });
 
   it("does not track disabled, invalid, or self-pair events", () => {
-    const guard = createPairLoopGuard();
-    const base = {
-      scopeId: "scope-1",
-      conversationId: "conversation-1",
-      senderId: "participant-a",
-      receiverId: "participant-b",
-      settings,
-    };
+    const { guard, record } = createFixture();
 
-    expect(guard.recordAndCheck({ ...base, settings: { ...settings, enabled: false } })).toEqual({
-      suppressed: false,
-    });
-    expect(guard.recordAndCheck({ ...base, conversationId: "" })).toEqual({ suppressed: false });
-    expect(guard.recordAndCheck({ ...base, receiverId: "participant-a" })).toEqual({
-      suppressed: false,
-    });
+    expect(record({ settings: { ...settings, enabled: false } })).toEqual({ suppressed: false });
+    expect(record({ conversationId: "" })).toEqual({ suppressed: false });
+    expect(record({ receiverId: "participant-a" })).toEqual({ suppressed: false });
     expect(guard.snapshot()).toEqual([]);
   });
 });
@@ -245,17 +158,11 @@ describe("resolvePairLoopGuardSettings", () => {
     });
   });
 
-  it("honors enabled=false from either channel or shared defaults", () => {
+  it.each(["channel", "defaults"] as const)("honors enabled=false from %s", (source) => {
     expect(
       resolvePairLoopGuardSettings({
-        config: { enabled: false },
-        defaultsConfig: { enabled: true },
-        defaultEnabled: true,
-      }).enabled,
-    ).toBe(false);
-    expect(
-      resolvePairLoopGuardSettings({
-        defaultsConfig: { enabled: false },
+        config: source === "channel" ? { enabled: false } : undefined,
+        defaultsConfig: { enabled: source === "channel" },
         defaultEnabled: true,
       }).enabled,
     ).toBe(false);

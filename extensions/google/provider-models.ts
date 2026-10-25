@@ -90,28 +90,6 @@ function templateIdsForProvider(
   return family[0];
 }
 
-function buildGoogleTemplateSources(params: {
-  providerId: string;
-  templateProviderId?: string;
-  family: GoogleForwardCompatFamily;
-}) {
-  const defaultTemplateProviderId = params.templateProviderId?.trim()
-    ? params.templateProviderId
-    : isGoogleGeminiCliProvider(params.providerId)
-      ? "google"
-      : GOOGLE_GEMINI_CLI_PROVIDER_ID;
-  const preferredExternalFirst =
-    isGoogleGeminiCliProvider(params.providerId) && params.family[3] === true;
-  const orderedTemplateProviderIds = preferredExternalFirst
-    ? [defaultTemplateProviderId, params.providerId]
-    : [params.providerId, defaultTemplateProviderId];
-
-  return normalizeUniqueTrimmedStringList(orderedTemplateProviderIds).map((providerId) => ({
-    providerId,
-    templateIds: templateIdsForProvider(providerId, params.family),
-  }));
-}
-
 type FamilyForwardCompatCase = Parameters<
   typeof resolveFamilyForwardCompatModel
 >[0]["cases"][number];
@@ -210,7 +188,6 @@ export function resolveGoogleStaticModelId(
 
 export function resolveGoogleGeminiForwardCompatModel(params: {
   providerId: string;
-  templateProviderId?: string;
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
   const trimmed = normalizeGeminiProRequestId(params.ctx.modelId.trim());
@@ -225,11 +202,19 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     cases: GOOGLE_FORWARD_COMPAT_CASES.map(({ family, match, patch }) => ({
       match,
       get templateSources() {
-        return buildGoogleTemplateSources({
-          providerId: params.providerId,
-          templateProviderId: params.templateProviderId,
-          family,
-        });
+        const selectedProviderId = params.providerId;
+        const defaultTemplateProviderId = isGoogleGeminiCliProvider(selectedProviderId)
+          ? "google"
+          : GOOGLE_GEMINI_CLI_PROVIDER_ID;
+        const preferredExternalFirst =
+          isGoogleGeminiCliProvider(selectedProviderId) && family[3] === true;
+        const orderedTemplateProviderIds = preferredExternalFirst
+          ? [defaultTemplateProviderId, selectedProviderId]
+          : [selectedProviderId, defaultTemplateProviderId];
+        return normalizeUniqueTrimmedStringList(orderedTemplateProviderIds).map((providerId) => ({
+          providerId,
+          templateIds: templateIdsForProvider(providerId, family),
+        }));
       },
       patch,
     })),

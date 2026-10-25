@@ -255,6 +255,13 @@ OpenClaw preserves their partial content and reports a length-limited result.
 Function calls in that partial response remain incomplete instead of becoming
 an executable tool-use turn.
 
+The managed Gemini and Vertex transports stop reading when a compatible proxy
+sends `data: [DONE]`, release the response body, and ignore later frames. A valid
+candidate finish reason is still required for a successful result. First-frame
+quota errors participate in API-key rotation. For Gemini's first-response retry,
+usage metadata, response IDs, and empty or unspecified finish states do not count
+as generated output or disable the existing retry deadline.
+
 ## Web search
 
 The bundled `gemini` web-search provider uses Gemini Google Search grounding.
@@ -421,6 +428,10 @@ available.
 - Auth: `tts.providers.google.apiKey`, `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`
 - Output: WAV for regular TTS attachments, Opus for voice-note targets, PCM for Talk/telephony
 - Voice-note output: Google PCM is wrapped as WAV and transcoded to 48 kHz Opus with `ffmpeg`
+
+Malformed or oversized successful TTS responses are reported without automatically
+submitting another Google synthesis request. Transient network failures, HTTP 5xx
+responses, and responses with no audio retain one automatic retry.
 
 OpenClaw sends Gemini 3.8 TTS through the Interactions API
 (`POST /v1beta/interactions`) with `store: false`. Google also documents 3.8 on

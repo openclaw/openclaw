@@ -17,22 +17,6 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
   return { ...actual, getGlobalHookRunner: vi.fn() };
 });
 
-function nextApprovalRequest(broker: EmbeddedPluginApprovalBroker): {
-  promise: Promise<PluginApprovalRequest>;
-  dispose: () => void;
-} {
-  let unsubscribe = () => {};
-  const promise = new Promise<PluginApprovalRequest>((resolve) => {
-    unsubscribe = broker.subscribe((event) => {
-      if (event.event === "plugin.approval.requested") {
-        unsubscribe();
-        resolve(event.payload);
-      }
-    });
-  });
-  return { promise, dispose: () => unsubscribe() };
-}
-
 describe("trusted approval rewrite isolation", () => {
   const runBeforeToolCallMock = vi.fn<HookRunner["runBeforeToolCall"]>();
 
@@ -87,11 +71,17 @@ describe("trusted approval rewrite isolation", () => {
         },
       };
       runBeforeToolCallMock.mockResolvedValue(hookResult);
-      const broker = new EmbeddedPluginApprovalBroker();
+      const trustedRequestEvent = Promise.withResolvers<PluginApprovalRequest>();
+      const rewriteRequestEvent = Promise.withResolvers<PluginApprovalRequest>();
+      let onRequest = trustedRequestEvent.resolve;
+      const broker = new EmbeddedPluginApprovalBroker((event) => {
+        if (event.event === "plugin.approval.requested") {
+          onRequest(event.payload);
+        }
+      });
       setEmbeddedMode(true);
       setEmbeddedPluginApprovalBroker(broker);
       let settled = false;
-      const trustedRequestEvent = nextApprovalRequest(broker);
       const pending = runBeforeToolCallHook({
         toolName: "exec",
         toolKind: "code_mode_exec",
@@ -100,12 +90,11 @@ describe("trusted approval rewrite isolation", () => {
         settled = true;
         return result;
       });
-      let rewriteRequestEvent: ReturnType<typeof nextApprovalRequest> | undefined;
       try {
         const trustedRequest = await trustedRequestEvent.promise;
         expect(trustedRequest.request.title).toBe("Policy approval");
         expect(runBeforeToolCallMock).not.toHaveBeenCalled();
-        rewriteRequestEvent = nextApprovalRequest(broker);
+        onRequest = rewriteRequestEvent.resolve;
         expect(broker.resolve(trustedRequest.id, "allow-once")).toBe(true);
 
         const rewriteRequest = await rewriteRequestEvent.promise;
@@ -133,15 +122,8 @@ describe("trusted approval rewrite isolation", () => {
         }
         expect(broker.listPending()).toHaveLength(0);
       } finally {
-        trustedRequestEvent.dispose();
-        rewriteRequestEvent?.dispose();
         broker.stop();
-        try {
-          await pending;
-        } finally {
-          setEmbeddedPluginApprovalBroker(null);
-          setEmbeddedMode(false);
-        }
+        await pending;
       }
     },
   );

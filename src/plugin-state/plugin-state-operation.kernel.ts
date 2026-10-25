@@ -16,6 +16,7 @@ import {
 import { listPluginStateEntries, selectPluginStateBatchRows } from "./plugin-state-store.reads.js";
 import {
   readPluginStateRetention,
+  readPluginStateRetentionBatch,
   registerPluginStateEntry,
 } from "./plugin-state-store.retention.js";
 import type {
@@ -66,6 +67,7 @@ export function executePluginStateOperation(
       retention?: ReturnType<typeof readPluginStateRetention>;
     }
   >();
+  let preparedRetention = false;
   const requireScope = (index: number, write = false) => {
     if (!active) {
       throw invalidInput("Plugin state transaction has already returned.");
@@ -113,12 +115,13 @@ export function executePluginStateOperation(
       if (keys.length > 10_000) {
         throw invalidInput("Plugin state operations accept at most 10000 lookup keys.");
       }
-      const missing = new Map<string, { index: number; key: string }>();
+      const missing = new Map<string, ReturnType<typeof requireScope> & { key: string }>();
       for (const { store: index, key: rawKey } of keys) {
-        const { options, view } = requireScope(index);
+        const scope = requireScope(index);
+        const { options, view } = scope;
         const key = toUSVString(validateKey(rawKey, "lookup"));
         if (!view.scanned && !view.entries.has(key)) {
-          missing.set(JSON.stringify([options.namespace, key]), { index, key });
+          missing.set(JSON.stringify([options.namespace, key]), { ...scope, key });
         }
       }
       const requested = [...missing.values()];
@@ -127,20 +130,14 @@ export function executePluginStateOperation(
           (database) =>
             selectPluginStateBatchRows(
               database,
-              requested.map(({ index, key }) => ({
-                ...requireScope(index).options,
-                key,
-              })),
+              requested.map(({ options, key }) => ({ ...options, key })),
               Date.now(),
             ),
           () => [],
         );
-        for (const [position, { index, key }] of requested.entries()) {
+        for (const [position, { view, key }] of requested.entries()) {
           const row = rows[position];
-          requireScope(index).view.entries.set(
-            key,
-            row ? rowToEntry(row, "lookup", store.path) : undefined,
-          );
+          view.entries.set(key, row ? rowToEntry(row, "lookup", store.path) : undefined);
         }
       }
       // SAFETY: Positional results retain the plugin's selected namespace value types.
@@ -180,6 +177,28 @@ export function executePluginStateOperation(
       const retained = isRetainedPluginStateNamespace(scope.namespace);
       const existing = !retained && read(index, key) !== undefined;
       const now = Date.now();
+      if (!preparedRetention && writable.size <= 4 && !retained && !view.scanned) {
+        preparedRetention = true;
+        // Small operations may inspect an unwritten declared namespace; facts stay invocation-local.
+        const scopes = [...writable]
+          .map((writableIndex) => requireScope(writableIndex, true))
+          .filter(
+            ({ options: candidate, view: candidateView }) =>
+              !isRetainedPluginStateNamespace(candidate.namespace) &&
+              !candidateView.scanned &&
+              !candidateView.retention,
+          );
+        if (scopes.length > 1) {
+          const retention = readPluginStateRetentionBatch(store!.db, {
+            pluginId: scope.pluginId,
+            namespaces: [...new Set(scopes.map(({ options: candidate }) => candidate.namespace))],
+            now,
+          });
+          for (const { options: candidate, view: candidateView } of scopes) {
+            candidateView.retention = retention.get(candidate.namespace);
+          }
+        }
+      }
       if (!view.retention && !retained) {
         view.retention = view.scanned
           ? {
@@ -189,7 +208,7 @@ export function executePluginStateOperation(
                 Infinity,
               ),
               now,
-              sweepPending: true,
+              sweepPending: "unknown",
             }
           : readPluginStateRetention(store!.db, { ...scope, now });
       }
@@ -219,6 +238,10 @@ export function executePluginStateOperation(
     delete(index, rawKey) {
       const { options, view } = requireScope(index, true);
       const key = toUSVString(validateKey(rawKey, "delete"));
+      // An unknown key can invalidate quota facts without a read solely to maintain them.
+      if (!view.scanned && !view.entries.has(key)) {
+        view.retention = undefined;
+      }
       const existing = view.retention ? read(index, key) !== undefined : false;
       const deleted = deletePluginStateEntry(store!.db, { ...options, key }) > 0;
       if (existing && deleted && view.retention) {

@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../src/state/openclaw-state-db.generated.js";
 import {
   WORKER_RESULT_SENTINEL,
@@ -203,9 +204,8 @@ async function readDurableRows() {
 }
 
 function listSqliteFiles(root: string): string[] {
-  return fs
-    .readdirSync(root, { recursive: true })
-    .map(String)
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.relativePath)
     .filter((entry) => entry.includes(".sqlite"))
     .toSorted();
 }
@@ -505,6 +505,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
   let sessionEffects = 0;
   let recoveryProjections = 0;
   let lostContextCompletions = 0;
+  let retiredObligations = 0;
   const sweeper = createSubagentRegistrySweeper({
     runs,
     resumedRuns: new Set(),
@@ -526,6 +527,8 @@ async function runSweepSample(childCount: number): Promise<Sample> {
       return 1;
     },
     resumeRequesterSettleWake: () => {},
+    // These synthetic rows suppress session effects and carry no requester delivery obligations.
+    resumePendingRequesterSettlements: () => false,
     startSubagentAnnounceCleanupFlow: () => true,
     completeCleanupBookkeeping: async () => {},
     isCleanupOwnerCurrent: (entry) =>
@@ -548,6 +551,9 @@ async function runSweepSample(childCount: number): Promise<Sample> {
       sessionEffects += 1;
     },
     retireSupersededRun: async () => {},
+    retireObligations: async () => {
+      retiredObligations += 1;
+    },
     getRunsForChildSession: getSubagentRunsForChildSession,
     getRunsForCollectorGroup: () => [],
     warn: () => {},
@@ -563,10 +569,11 @@ async function runSweepSample(childCount: number): Promise<Sample> {
       retainedCurrent === childCount &&
       sessionEffects === 0 &&
       recoveryProjections === childCount &&
-      lostContextCompletions === 0;
+      lostContextCompletions === 0 &&
+      retiredObligations === 0;
     if (!ok) {
       throw new Error(
-        `registry sweep invariant failed: ${JSON.stringify({ childCount, removedRows, retainedCurrent, sessionEffects, recoveryProjections, lostContextCompletions })}`,
+        `registry sweep invariant failed: ${JSON.stringify({ childCount, removedRows, retainedCurrent, sessionEffects, recoveryProjections, lostContextCompletions, retiredObligations })}`,
       );
     }
     return {
@@ -579,6 +586,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
         sessionEffects,
         recoveryProjections,
         lostContextCompletions,
+        retiredObligations,
       },
     };
   } finally {

@@ -1,8 +1,8 @@
 {
   "name": "@openclaw/mcp-relay",
-  "version": "2026.10.4",
+  "version": "2026.10.7",
   "private": true,
-  "description": "OpenClaw outbound MCP relay connector",
+  "description": "OpenClaw outbound MCP relay plugin",
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

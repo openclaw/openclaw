@@ -1,7 +1,9 @@
 import type { Selectable } from "kysely";
+import type { CronJobCreate } from "../cron/types.js";
 import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { ClawCronJob } from "./manifest-contract.js";
 
@@ -14,16 +16,16 @@ export type PersistedClawCronRef = {
   declarationKey: string;
   schedulerJobId?: string;
   status: "pending" | "complete" | "failed" | "removed";
-  job: ClawCronJob;
+  job: ClawCronJob | { automation: CronJobCreate };
   error?: string;
   createdAtMs: number;
   updatedAtMs: number;
 };
 
-export type CronRefDatabase = Pick<DB, "claw_cron_refs">;
-export type CronRefRow = Selectable<CronRefDatabase["claw_cron_refs"]>;
+type CronRefDatabase = Pick<DB, "claw_cron_refs">;
+type CronRefRow = Selectable<CronRefDatabase["claw_cron_refs"]>;
 
-export function rowToClawCronRef(row: CronRefRow): PersistedClawCronRef {
+function rowToClawCronRef(row: CronRefRow): PersistedClawCronRef {
   return {
     schemaVersion: row.schema_version,
     agentId: row.agent_id,
@@ -40,27 +42,8 @@ export function rowToClawCronRef(row: CronRefRow): PersistedClawCronRef {
   };
 }
 
-export function clawCronRefToRow(ref: PersistedClawCronRef): CronRefRow {
-  return {
-    schema_version: ref.schemaVersion,
-    agent_id: ref.agentId,
-    manifest_id: ref.manifestId,
-    declaration_key: ref.declarationKey,
-    scheduler_job_id: ref.schedulerJobId ?? null,
-    status: ref.status,
-    job_json: JSON.stringify(ref.job),
-    error: ref.error ?? null,
-    created_at_ms: ref.createdAtMs,
-    updated_at_ms: ref.updatedAtMs,
-  };
-}
-
 export function readAllClawCronRefsInDatabase(db: EngineConnection): PersistedClawCronRef[] {
-  if (
-    !db /* sqlite-allow-raw: read-only Claw cron table-existence probe. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_cron_refs'")
-      .get()
-  ) {
+  if (!tableExists(db, "claw_cron_refs")) {
     return [];
   }
   const query = getNodeSqliteKysely<CronRefDatabase>(db)

@@ -1,4 +1,3 @@
-// Shared real-registry and SQLite fixture for restart ownership integration tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,8 +12,10 @@ import {
   listSessionEntriesCore,
 } from "../../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { hasErrnoCode } from "../../../infra/errno.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import {
@@ -41,7 +42,6 @@ import {
   activateSubagentRegistry,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 // mock-isolation: Registry recovery owns both announcement exports without loading delivery state.
 vi.mock("../announce/subagent-announce.js", () => ({
@@ -55,17 +55,11 @@ vi.mock("../../../infra/agent-events.js", async (importOriginal) => {
   return { ...actual, onAgentEvent: vi.fn(actual.onAgentEvent) };
 });
 
-export function makeRestartRecoveryRun(
-  overrides: Partial<SubagentRunRecordOverrides>,
-): SubagentRunRecord {
+export function makeRestartRecoveryRun(overrides: Partial<SubagentRunRecordOverrides>) {
   return createCanonicalSubagentRunFixture(
     createSubagentRunRecord({
       runId: "run",
-      childSessionKey: "agent:main:subagent:child",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "restart-recoverable work",
-      cleanup: "keep",
       createdAt: Date.now(),
       startedAt: Date.now(),
       ...overrides,
@@ -77,23 +71,19 @@ export function useSubagentRestartRecoveryFixture(
   options: { reuseDatabaseWorkers?: boolean } = {},
 ) {
   const dispatchAgent = vi.fn();
-  const gatewayRuntime: GatewayRecoveryRuntime = {
-    prepareRestartRecovery: () => undefined,
-    dispatchSessionMethod: vi.fn(),
+  const gatewayRuntime = createMockGatewayRecoveryRuntime({
     dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
     waitForAgent: vi.fn(async () => ({
       status: "pending",
     })) as GatewayRecoveryRuntime["waitForAgent"],
-    sendRecoveryNotice: vi.fn(),
-  };
+  });
   const activateGatewayRuntime = async () => {
     const gatewayContext = {
       recoveryRuntime: gatewayRuntime,
-      chatAbortControllers: new Map(),
       resolveGatewayContext: () => gatewayContext as never,
     };
     bindGatewayContextResolver(gatewayRuntime, gatewayContext.resolveGatewayContext);
-    await activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+    await activateSubagentRegistry(gatewayContext.resolveGatewayContext).settled;
   };
 
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -113,10 +103,7 @@ export function useSubagentRestartRecoveryFixture(
         }
         throw error;
       });
-    for (const agent of agents) {
-      if (!agent.isDirectory()) {
-        continue;
-      }
+    for (const agent of agents.filter((entry) => entry.isDirectory())) {
       const target = {
         agentId: agent.name,
         storePath: resolveSessionStorePathCore(undefined, { agentId: agent.name }),
@@ -125,11 +112,10 @@ export function useSubagentRestartRecoveryFixture(
         sessionKey,
         deleteOwnedWindows: true,
       }));
-      if (removals.length === 0) {
-        continue;
+      if (removals.length) {
+        // Reused identities must lose their old transcript windows as well as their entries.
+        await applySessionEntryLifecycleMutation({ ...target, removals, skipMaintenance: true });
       }
-      // Reused identities must lose their old transcript windows as well as their entries.
-      await applySessionEntryLifecycleMutation({ ...target, removals, skipMaintenance: true });
     }
     await drainSessionStateForTest({ stateDir });
   }
@@ -172,14 +158,17 @@ export function useSubagentRestartRecoveryFixture(
 
   afterEach(async () => {
     const failures: unknown[] = [];
-    try {
-      await settle(false);
-    } catch (error) {
-      failures.push(error);
-    }
+    const collectFailure = async (cleanup: () => Promise<unknown>) => {
+      try {
+        await cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    await collectFailure(() => settle(false));
     // Preserve stores and their environment while detached delivery still owns them.
     if (getActiveGatewayRootWorkCount() === 0) {
-      try {
+      await collectFailure(async () => {
         await resetSubagentRegistryForTests({ persist: options.reuseDatabaseWorkers === true });
         if (options.reuseDatabaseWorkers && tempStateDir) {
           await resetSessions(tempStateDir);
@@ -189,30 +178,17 @@ export function useSubagentRestartRecoveryFixture(
         clearRuntimeConfigSnapshot();
         if (tempStateDir && !options.reuseDatabaseWorkers) {
           // Resource cleanup finished; removal failure must not retain a retired owner.
-          try {
-            await fs.rm(tempStateDir, {
-              recursive: true,
-              force: true,
-              maxRetries: 5,
-              retryDelay: 50,
-            });
-          } catch (error) {
-            failures.push(error);
-          }
+          const stateDir = tempStateDir;
+          await collectFailure(() =>
+            fs.rm(stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
+          );
         }
         envSnapshot.restore();
         vi.restoreAllMocks();
         tempStateDir = null;
-      } catch (error) {
-        failures.push(error);
-      }
+      });
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Subagent restart recovery cleanup failed");
-    }
+    throwCollectedErrors(failures, "Subagent restart recovery cleanup failed");
   });
 
   return {

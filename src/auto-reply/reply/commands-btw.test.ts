@@ -76,39 +76,20 @@ describe("handleBtwCommand", () => {
     expect(runBtwSideQuestionMock).not.toHaveBeenCalled();
   });
 
-  it.each(["image", "described image"] as const)(
-    "forwards current undescribed images: %s",
-    async (attachment) => {
-      const params = buildParams("/btw describe this");
-      params.sessionEntry = session();
-      const dir = tempDirs.make("openclaw-btw-images-");
-      const data =
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
-      const file = path.join(dir, "photo.png");
-      await writeFile(file, Buffer.from(data, "base64"));
-      params.ctx.media = [
-        { path: file, contentType: "image/png", kind: "image", workspaceDir: dir },
-      ];
-      if (attachment === "described image") {
-        params.ctx.Body = "[Image]\nDescription:\na tiny dot image";
-        params.ctx.MediaUnderstanding = [
-          {
-            kind: "image.description",
-            attachmentIndex: 0,
-            provider: "test",
-            model: "test",
-            text: "a tiny dot image",
-          },
-        ];
-      }
-      await run(params);
-      const args = runnerArgs();
-      expect(args.question).toBe("describe this");
-      expect(args.images).toEqual(
-        attachment === "image" ? [{ type: "image", data, mimeType: "image/png" }] : undefined,
-      );
-    },
-  );
+  it("forwards current undescribed images", async () => {
+    const params = buildParams("/btw describe this");
+    params.sessionEntry = session();
+    const dir = tempDirs.make("openclaw-btw-images-");
+    const data =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+    const file = path.join(dir, "photo.png");
+    await writeFile(file, Buffer.from(data, "base64"));
+    params.ctx.media = [{ path: file, contentType: "image/png", kind: "image", workspaceDir: dir }];
+    await run(params);
+    const args = runnerArgs();
+    expect(args.question).toBe("describe this");
+    expect(args.images).toEqual([{ type: "image", data, mimeType: "image/png" }]);
+  });
 
   it("delegates to the side-question runner", async () => {
     const params = activeParams();
@@ -125,6 +106,10 @@ describe("handleBtwCommand", () => {
     params.ctx.SenderUsername = "rosita";
     params.ctx.SenderE164 = "+15550001";
     params.ctx.MessageThreadId = "thread-1";
+    params.ctx.OriginatingTo = "source-target";
+    params.ctx.NativeChannelId = "native:source";
+    params.ctx.ChatType = "channel";
+    params.command.to = "slash:transport";
     params.sessionEntry = {
       ...session(),
       groupId: "group-1",
@@ -154,6 +139,10 @@ describe("handleBtwCommand", () => {
       messageProvider: "whatsapp",
       agentAccountId: "account-1",
       messageThreadId: "thread-1",
+      chatId: "native:source",
+      chatType: "channel",
+      messageTo: "source-target",
+      currentChannelId: "native:source",
       sandboxSessionKey: "agent:main:runtime-policy",
       groupId: "group-1",
       groupChannel: "#ops",
@@ -177,22 +166,6 @@ describe("handleBtwCommand", () => {
       toolContext: { currentChannelProvider: "whatsapp" },
     });
     expectReply(result, "nothing important", "what changed?");
-  });
-
-  it("uses the originating target before the command transport target", async () => {
-    const params = activeParams();
-    params.ctx.OriginatingTo = "channel:source";
-    params.ctx.NativeChannelId = "native:source";
-    params.ctx.ChatType = "channel";
-    params.command.to = "slash:transport";
-    runBtwSideQuestionMock.mockResolvedValue({ text: "source target" });
-    await run(params);
-    expectObjectFields(runnerArgs(), {
-      chatId: "native:source",
-      chatType: "channel",
-      messageTo: "channel:source",
-      currentChannelId: "native:source",
-    });
   });
 
   it("does not mint current-turn context for Gateway chat with an explicit origin", async () => {
@@ -219,4 +192,24 @@ describe("handleBtwCommand", () => {
     expectObjectFields(runnerArgs().sessionEntry, { sessionId: "target-session" });
     expectReply(result, "target context", "what changed?");
   });
+
+  it.each([
+    [
+      "/btw why does this fail?\nError: ENOSPC\n  at write",
+      "why does this fail?\nError: ENOSPC\n  at write",
+    ],
+    ["/btw\nwhy does this fail?", "why does this fail?"],
+    ["/side first\n\nsecond", "first\n\nsecond"],
+  ])(
+    "passes every line of a multi-line side question to the runner: %s",
+    async (body, question) => {
+      runBtwSideQuestionMock.mockResolvedValue({ text: "answer" });
+      const params = activeParams(body);
+
+      const result = await run(params);
+
+      expect(runnerArgs().question).toBe(question);
+      expectReply(result, "answer", question);
+    },
+  );
 });

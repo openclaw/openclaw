@@ -116,12 +116,12 @@ export async function runAdmittedUpdate(
         }
         const execute = () => {
           executionStarted = true;
-          if (refusal) {
-            assertInitializationCurrent?.();
-            throw refusal;
-          }
           return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
             withCommandProcessScope(async () => {
+              if (refusal) {
+                assertInitializationCurrent?.();
+                throw refusal;
+              }
               deadline?.signal.throwIfAborted();
               await executeUpdate(opts, presentation, executor);
               deadline?.signal.throwIfAborted();

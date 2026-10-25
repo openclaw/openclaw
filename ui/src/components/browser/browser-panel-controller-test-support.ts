@@ -1,16 +1,30 @@
 import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import { afterEach, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { PanelLifecycleController } from "../solid-panel-controller.ts";
 import type { BrowserDashboardTarget, BrowserInspectedNode } from "./browser-client.ts";
 import {
-  BrowserPanelController,
-  type BrowserPanelControllerHost,
-} from "./browser-panel-controller.ts";
+  createBrowserPanel,
+  type BrowserPanel,
+  type BrowserPanelHost,
+} from "./browser-panel-owner.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 import type { BrowserTabTarget } from "./browser-target.ts";
 
 const BROWSER_PANEL_TEST_PAGE_TITLE = "Page";
+
+export function stubBrowserPanelTestStageBounds(stage: Element): void {
+  vi.spyOn(stage, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: 100,
+    bottom: 100,
+    width: 100,
+    height: 100,
+    toJSON: () => ({}),
+  });
+}
 
 export type BrowserRequestEnvelope = {
   method: string;
@@ -72,9 +86,8 @@ export function createBrowserPanelTestMetrics(url: string, title = BROWSER_PANEL
   return { result: { cssWidth: 100, cssHeight: 100, title, url } };
 }
 
-export class TestBrowserPanelHost implements BrowserPanelControllerHost {
-  readonly controllers: PanelLifecycleController[] = [];
-  readonly requestUpdate = vi.fn();
+export class TestBrowserPanelHost implements BrowserPanelHost {
+  readonly notify = vi.fn();
   readonly updateComplete = Promise.resolve(true);
   readonly renderRoot = document.createElement("div");
   readonly stage = document.createElement("div");
@@ -90,32 +103,14 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   constructor(public client: GatewayBrowserClient | null) {
     const stage = this.stage;
     stage.className = "bp-stage";
-    vi.spyOn(stage, "getBoundingClientRect").mockReturnValue({
-      x: 0,
-      y: 0,
-      left: 0,
-      top: 0,
-      right: 100,
-      bottom: 100,
-      width: 100,
-      height: 100,
-      toJSON: () => ({}),
-    });
+    stubBrowserPanelTestStageBounds(stage);
     this.renderRoot.append(stage);
   }
 
-  addController(controller: PanelLifecycleController): void {
-    if (controller instanceof BrowserPanelController) {
-      controller.input.elements.stage = this.stage;
-    }
-    this.controllers.push(controller);
-  }
-
-  removeController(controller: PanelLifecycleController): void {
-    const index = this.controllers.indexOf(controller);
-    if (index >= 0) {
-      this.controllers.splice(index, 1);
-    }
+  createPanel(): BrowserPanel {
+    const panel = createBrowserPanel(this, this.notify);
+    panel.input.elements.stage = this.stage;
+    return panel;
   }
 
   browserPanelIsOpen(): boolean {
@@ -137,8 +132,8 @@ export function createBrowserPanelTestController(
   client: GatewayBrowserClient,
   targetId: string,
   url?: string,
-): BrowserPanelController {
-  const controller = new BrowserPanelController(new TestBrowserPanelHost(client));
+): BrowserPanel {
+  const controller = new TestBrowserPanelHost(client).createPanel();
   controller.activeTargetId = targetId;
   controller.view = createView(targetId, url);
   return controller;
@@ -208,4 +203,16 @@ export function stubScreenshotMedia(): void {
       } as Response;
     }),
   );
+}
+
+// Open the native action menu before querying its lazy entries.
+export async function openBrowserActions(panel: HTMLElement) {
+  const trigger = panel.querySelector<HTMLButtonElement>(
+    '.bp-toolbar button[aria-haspopup="menu"]',
+  )!;
+  if (trigger.getAttribute("aria-expanded") !== "true") {
+    trigger.click();
+    await flushBrowserResponses();
+  }
+  return document.getElementById(trigger.getAttribute("aria-controls")!)!;
 }

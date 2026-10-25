@@ -4,7 +4,6 @@ import { samplePageCacheResidency } from "@openclaw/proc-safe/diagnostics";
 export type SqlitePageCacheResidency = {
   scope: "file-sample";
   sampledPages: number;
-  residentPages: number;
   residentRatio: number;
   pageSize: number;
   sizeBytes: number;
@@ -29,7 +28,6 @@ export function readSqlitePageCacheResidency(
     return {
       scope: "file-sample",
       sampledPages,
-      residentPages,
       residentRatio: sampledPages === 0 ? 1 : residentPages / sampledPages,
       pageSize,
       sizeBytes: stat.size,

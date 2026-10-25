@@ -1,10 +1,12 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** OpenAI's webhook profile, not the experimental polling/streaming extensions. */
 export const MCP_EVENTS_PROFILE = "openai-webhook-2026-07-28";
@@ -38,14 +40,6 @@ export class CallbackError extends Error {
   ) {
     super(message);
   }
-}
-
-export function record(value: unknown): Record<string, unknown> | undefined {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  // SAFETY: non-null, non-array objects expose string-indexed values only as unknown.
-  return value as Record<string, unknown>;
 }
 
 function boundedString(value: unknown, maxBytes = 1024): value is string {
@@ -98,7 +92,7 @@ export function canonicalArguments(value: Record<string, unknown>): string {
 }
 
 export function identityHash(parts: readonly string[]): string {
-  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+  return hashText(JSON.stringify(parts));
 }
 
 export function createSigningSecret(): string {
@@ -164,9 +158,6 @@ export function parseCallback(
   webhookId: string,
   definition: EventDefinition,
 ): { kind: "verification"; challenge: string } | { kind: "event"; event: ApplicationEvent } {
-  if (body.length > MAX_EVENT_BYTES) {
-    throw new CallbackError(413, "Event exceeds 256 KiB");
-  }
   let value: Record<string, unknown> | undefined;
   try {
     value = record(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)));

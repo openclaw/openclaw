@@ -37,16 +37,16 @@ import {
   type WorktreeBasePreparation,
 } from "./base-ref.js";
 import { readRepositoryBranches } from "./branches.runtime.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
+import { git, gitIdentity } from "./git-fixture.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
 
 function trackBaseLookupCallers(repo: string, count: number) {
   const current = new AsyncLocalStorage<number>();
@@ -203,10 +203,7 @@ describe("ManagedWorktreeService branch discovery", () => {
 
       const next = await git(
         remote,
-        "-c",
-        "user.name=OpenClaw Test",
-        "-c",
-        "user.email=openclaw-test@example.invalid",
+        ...gitIdentity,
         "commit-tree",
         "HEAD^{tree}",
         "-p",
@@ -455,16 +452,9 @@ describe("ManagedWorktreeService branch discovery", () => {
   it("discovers a renamed remote default without substituting local HEAD", async () => {
     useInProcessWorktreeCapacityTransport();
     const disk = fsSync.statfsSync(root);
-    vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-      type: disk.type,
-      files: disk.files,
-      frsize: disk.frsize,
-      ffree: disk.ffree,
-      bsize: 4096,
-      blocks: 1024 ** 4 / 4096,
-      bavail: (100 * 1024 ** 3) / 4096,
-      bfree: (100 * 1024 ** 3) / 4096,
-    });
+    vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+      createWorktreeCapacityStatfs(disk, 100 * 1024 ** 3),
+    );
     const remote = await createRemote();
     await git(repo, "fetch", "origin");
     await git(repo, "remote", "set-head", "origin", "-a");
@@ -488,11 +478,18 @@ describe("ManagedWorktreeService branch discovery", () => {
   });
 
   it("warns when the fetched default commit is more than seven days old", async () => {
-    const timestamp = Number(await git(repo, "show", "-s", "--format=%ct", "HEAD"));
+    const timestamp = Math.floor(Date.now() / 1000) - 8 * 86_400;
+    const date = new Date(timestamp * 1000).toISOString();
+    await execFileAsync(
+      "git",
+      ["-C", repo, "commit", "--allow-empty", "-m", "old default fixture"],
+      {
+        env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+      },
+    );
     await createRemote();
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
-      now: () => (timestamp + 8 * 86_400) * 1000,
     });
     const logs = createWarnLogCapture("worktree-base-age");
     try {

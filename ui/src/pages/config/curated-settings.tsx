@@ -1,9 +1,7 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, For, Match, onCleanup, Switch, untrack } from "solid-js";
+import { createMemo, For, Match, onSettled, Switch, untrack } from "solid-js";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
-import "../../components/select-picker.ts";
-import type { PickerParams } from "../../components/select-picker.ts";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   LearnMoreLink,
   SettingsDefaultDescription,
@@ -14,6 +12,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import {
   curatedSettingsConfigPath,
   type CuratedSettingsDefault,
@@ -99,7 +98,7 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
       ? value
       : props.spec.kind === "toggle" && props.spec.displayDefault;
   };
-  const text = () => {
+  const text = createMemo(() => {
     const value = field().value;
     return props.spec.kind === "number"
       ? typeof value === "number"
@@ -108,7 +107,7 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
       : typeof value === "string"
         ? value
         : "";
-  };
+  });
   const bounds = () => (props.spec.kind === "number" ? props.spec.bounds : null);
   return (
     <Switch>
@@ -124,17 +123,25 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
         <SettingsRow
           {...row}
           control={
-            <CuratedModelPicker
+            <ModelPicker
               label={t(props.spec.labelKey)}
-              customLabel={props.spec.kind === "model" ? t(props.spec.customLabelKey) : ""}
               value={text()}
-              defaultValue={defaultValue()}
               disabled={props.settings.disabled}
-              placeholder={
-                props.spec.kind === "model" && props.spec.placeholderKey
-                  ? t(props.spec.placeholderKey)
-                  : ""
-              }
+              options={[
+                {
+                  value: "",
+                  label: defaultValue(),
+                  provider: providerIdFromModelRef(defaultValue()) ?? undefined,
+                },
+              ]}
+              custom={{
+                label: props.spec.kind === "model" ? t(props.spec.customLabelKey) : "",
+                placeholder:
+                  props.spec.kind === "model" && props.spec.placeholderKey
+                    ? t(props.spec.placeholderKey)
+                    : "",
+                commit: "change",
+              }}
               onChange={(model) =>
                 props.settings.onPatch(props.spec.path, model.trim() || undefined)
               }
@@ -182,7 +189,7 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
               spellcheck="false"
               aria-label={t(props.spec.labelKey)}
               disabled={props.settings.disabled}
-              value={text()}
+              ref={liveValue(text)}
               placeholder={defaultValue()}
               onChange={(event) => {
                 const input = event.currentTarget;
@@ -212,79 +219,6 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
   );
 }
 
-type CuratedModelOption = { value: string; label: string; provider?: string };
-type CuratedModelPickerProps = {
-  label: string;
-  customLabel: string;
-  value: string;
-  defaultValue: string;
-  disabled: boolean;
-  placeholder: string;
-  onChange: (value: string) => void;
-};
-
-function CuratedModelPicker(props: CuratedModelPickerProps) {
-  let input!: HTMLInputElement;
-  const customValue = () =>
-    props.value === "__openclaw_custom_model__"
-      ? "__openclaw_custom_model___"
-      : "__openclaw_custom_model__";
-  const params = (): PickerParams<CuratedModelOption> => ({
-    label: props.label,
-    value: props.value,
-    options: [
-      {
-        value: "",
-        label: props.defaultValue,
-        provider: providerIdFromModelRef(props.defaultValue) ?? undefined,
-      },
-      { value: customValue(), label: props.customLabel },
-    ],
-    get disabled() {
-      return props.disabled;
-    },
-    searchable: true,
-    showOptionTooltips: false,
-    className: "model-picker__select ",
-    renderLeading: (option) =>
-      option.provider ? (
-        <ProviderBrandIcon provider={option.provider} class="model-picker__provider-icon" />
-      ) : undefined,
-    onChange: props.onChange,
-    onChangeTarget: (value) => {
-      if (value === customValue()) {
-        input.hidden = false;
-        queueMicrotask(() => input.focus());
-        return;
-      }
-      input.hidden = true;
-      props.onChange(value);
-    },
-  });
-  return (
-    <div class="model-picker">
-      <openclaw-select-picker
-        class="settings-select picker-select model-picker__select "
-        style={{ width: "100%", "min-width": "min(138px,100%)" }}
-        prop:params={params()}
-      />
-      <input
-        ref={(element) => {
-          input = element;
-        }}
-        class="settings-input model-picker__custom"
-        aria-label={props.customLabel}
-        aria-invalid="false"
-        placeholder={props.placeholder}
-        value={props.value}
-        hidden={!props.value || props.value === customValue()}
-        disabled={props.disabled}
-        onChange={(event) => props.onChange(event.currentTarget.value)}
-      />
-    </div>
-  );
-}
-
 function CuratedSections(props: {
   presentation: CuratedSettingsPresentation;
   config: Record<string, unknown> | null;
@@ -293,24 +227,27 @@ function CuratedSections(props: {
   onPatch: (sectionPath: readonly string[], path: readonly string[], value: unknown) => void;
 }) {
   // A retained handler belongs to this mounted config target, not a later owner.
-  const sectionPath = untrack(() => props.path);
-  let active = true;
-  onCleanup(() => {
-    active = false;
+  const initialSectionPath = untrack(() => props.path);
+  let active = false;
+  onSettled(() => {
+    active = true;
+    return () => {
+      active = false;
+    };
   });
   const settings: CuratedSettingsProps = {
     get document() {
       return props.config;
     },
     get values() {
-      return asConfigRecord(fieldAtPath(props.config, sectionPath).value);
+      return asConfigRecord(fieldAtPath(props.config, initialSectionPath).value);
     },
     get disabled() {
       return props.disabled;
     },
     onPatch: (path, value) => {
       if (active && !props.disabled) {
-        props.onPatch(sectionPath, path, value);
+        props.onPatch(initialSectionPath, path, value);
       }
     },
   };
@@ -337,7 +274,7 @@ export function CuratedSettingsPanel(props: {
   disabled: boolean;
   onPatch: (sectionPath: readonly string[], path: readonly string[], value: unknown) => void;
 }) {
-  const path = createMemo(() => curatedSettingsConfigPath(props.presentation, props.parameters));
+  const path = () => curatedSettingsConfigPath(props.presentation, props.parameters);
   return (
     <>
       <p class="settings-page__intro">

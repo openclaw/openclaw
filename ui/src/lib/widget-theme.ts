@@ -4,6 +4,7 @@ import {
   type WidgetThemeMessage,
   type WidgetThemeToken,
 } from "../../../src/shared/widget-theme.ts";
+import { listen } from "./reactive/listener.ts";
 
 const HOST_TOKEN_SOURCES: Record<WidgetThemeToken, string> = {
   surface: "--bg",
@@ -80,7 +81,9 @@ export function buildWidgetThemeMessage(): WidgetThemeMessage {
 }
 
 export function postWidgetTheme(frame: HTMLIFrameElement, targetOrigin = "*"): void {
-  frame.contentWindow?.postMessage(buildWidgetThemeMessage(), targetOrigin);
+  const message = buildWidgetThemeMessage();
+  frame.style.colorScheme = message.mode;
+  frame.contentWindow?.postMessage(message, targetOrigin);
 }
 
 /** Explicit registration also reaches widgets inside a chat component's shadow root. */
@@ -98,19 +101,9 @@ function widgetThemeState(root: HTMLElement): WidgetThemeState {
   const state: WidgetThemeState = { frames: new Map() };
   widgetThemes.set(root, state);
   const publish = () => {
-    const registered = state.frames;
-    for (const frame of root.ownerDocument.querySelectorAll<HTMLIFrameElement>(
-      ".chat-tool-card__preview-frame, .board-widget__frame",
-    )) {
-      if (!registered.has(frame)) {
-        postWidgetTheme(frame);
-      }
-    }
-    for (const [frame, origin] of registered) {
+    for (const [frame, origin] of state.frames) {
       if (frame.isConnected) {
         postWidgetTheme(frame, origin);
-      } else {
-        registered.delete(frame);
       }
     }
   };
@@ -138,7 +131,9 @@ function widgetThemeState(root: HTMLElement): WidgetThemeState {
     attributes: true,
     attributeFilter: ["href", "rel", "media", "disabled"],
   });
-  head.addEventListener(
+  // This singleton shares the document root's lifetime with its stylesheet observer.
+  listen(
+    head,
     "load",
     (event) => {
       if (event.target instanceof HTMLLinkElement && isStylesheet(event.target)) {

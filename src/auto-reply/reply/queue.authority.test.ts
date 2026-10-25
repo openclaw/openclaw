@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
@@ -20,10 +20,9 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
-import { createQueueCase } from "./queue.case.test-support.js";
+import { createQueueCase as makeQueueCase } from "./queue.case.test-support.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
-  clearFollowupQueueForTest,
   createQueueTestRun as createRun,
   createQueueSettings,
   installQueueRuntimeErrorSilencer,
@@ -31,9 +30,26 @@ import {
 import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-import { resolveFollowupAbortSignal } from "./queue/types.js";
+import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 installQueueRuntimeErrorSilencer();
+const keys = new Set<string>();
+const queueKey = (key: string) => {
+  keys.add(key);
+  return key;
+};
+const createQueueCase = (...args: Parameters<typeof makeQueueCase>) => {
+  const q = makeQueueCase(...args);
+  queueKey(q.key);
+  return q;
+};
+afterEach(() => {
+  keys.forEach((key) => clearFollowupQueue(key));
+  keys.clear();
+});
+const webchatRun = (prompt: string, execution: Partial<FollowupRun["run"]> = {}) =>
+  createRun({ prompt, originatingChannel: "webchat" }, execution);
+
 function createOperatorAuthority() {
   let references = 1;
   const controller = new AbortController();
@@ -66,40 +82,76 @@ function createOperatorAuthority() {
   };
 }
 
+function prepareOperatorAdmission(run: FollowupRun, runId: string) {
+  return prepareChannelRunAdmission({
+    cfg: {},
+    runId,
+    agentId: "agent",
+    ingressKind: "channel",
+    boundary: "auto-reply.agent-runner",
+    operatorAuthority: run.operatorAuthority,
+  });
+}
+
 describe("followup queue authority", () => {
   it.each(["collect", "overflow"] as const)(
     "keeps restart-restricted input separate through a %s drain",
     async (mode) => {
       const q = createQueueCase({ mode: "collect", cap: mode === "overflow" ? 1 : 50 });
+      const admissionConfigs = [{ tools: { deny: ["write"] } }, { tools: { deny: ["exec"] } }];
       for (const restricted of [true, false]) {
-        const run = createRun({
-          prompt: restricted ? "interrupted task" : "new task",
-          originatingChannel: "webchat",
-        });
+        const run = webchatRun(restricted ? "interrupted task" : "new task");
+        run.readAdmissionConfig = () => admissionConfigs[restricted ? 0 : 1]!;
         if (restricted) {
           run.forceRestartSafeTools = true;
           run.forceCodeModeTools = true;
         }
         q.add(run);
       }
-      try {
-        q.start();
-        await vi.waitFor(() => expect(getExistingFollowupQueue(q.key)).toBeUndefined());
-        expect(q.calls).toHaveLength(2);
-        expect(q.calls[0]?.prompt).toContain("interrupted task");
-        expect(q.calls[0]?.prompt).not.toContain("new task");
-        expect(q.calls[0]).toMatchObject({
-          forceRestartSafeTools: true,
-          forceCodeModeTools: true,
-        });
-        expect(q.calls[1]?.prompt).toContain("new task");
-        expect(q.calls[1]?.forceRestartSafeTools).not.toBe(true);
-        expect(q.calls[1]?.forceCodeModeTools).not.toBe(true);
-      } finally {
-        clearFollowupQueueForTest(q.key);
-      }
+      q.start();
+      await vi.waitFor(() => expect(getExistingFollowupQueue(q.key)).toBeUndefined());
+      expect(q.calls).toHaveLength(2);
+      expect(q.calls.map((run) => run.readAdmissionConfig?.())).toEqual(admissionConfigs);
+      expect(q.calls[0]?.prompt).toContain("interrupted task");
+      expect(q.calls[0]?.prompt).not.toContain("new task");
+      expect(q.calls[0]).toMatchObject({
+        forceRestartSafeTools: true,
+        forceCodeModeTools: true,
+      });
+      expect(q.calls[1]?.prompt).toContain("new task");
+      expect(q.calls[1]?.forceRestartSafeTools).not.toBe(true);
+      expect(q.calls[1]?.forceCodeModeTools).not.toBe(true);
     },
   );
+
+  it("keeps different original requesters in separate collected turns on the same route", async () => {
+    const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
+    for (const [index, senderId] of ["alice", "bob", "bob"].entries()) {
+      q.enqueue(
+        {
+          prompt: `${senderId} request ${index}`,
+          originatingChannel: "telegram",
+          originatingTo: "shared-chat",
+        },
+        {
+          senderId: "shared-receiver",
+          requesterOrigin: {
+            sessionKey: "agent:research:telegram:group:requesters",
+            messageProvider: "telegram",
+            senderId,
+          },
+        },
+      );
+    }
+    await q.drain();
+    expect(q.calls.map(({ prompt }) => prompt.match(/(?:alice|bob) request \d/g))).toEqual([
+      ["alice request 0"],
+      ["bob request 1", "bob request 2"],
+    ]);
+    expect(q.calls[0]?.prompt).not.toContain("bob request");
+    expect(q.calls[1]?.prompt).not.toContain("alice request");
+    expect(q.calls[1]?.run.requesterOrigin?.senderId).toBe("bob");
+  });
 
   it("keeps a restricted sender's tool policy and task root through a collect drain", async () => {
     const q = createQueueCase({ mode: "collect" }, 2);
@@ -108,79 +160,56 @@ describe("followup queue authority", () => {
       deny: ["exec"],
     };
     for (const restricted of [true, false]) {
-      const run = createRun({
-        prompt: restricted ? "guest request" : "later unrestricted request",
-        originatingChannel: "telegram",
-        originatingTo: "chat-1",
+      q.enqueue(
+        {
+          prompt: restricted ? "guest request" : "later unrestricted request",
+          originatingChannel: "telegram",
+          originatingTo: "chat-1",
+        },
+        {
+          senderId: "sender-1",
+          senderIsOwner: false,
+          conversationToolPolicy: restricted ? conversationToolPolicy : undefined,
+          sessionRoot: "/tmp/requester-task",
+          workspaceDir: "/tmp/requester-task",
+          thinkingCatalog: [{ provider: "openai", id: "gpt-test", input: ["text"] }],
+          skipProviderRuntimeHints: true,
+        },
+      );
+    }
+    await q.drain();
+    expect(q.calls).toHaveLength(2);
+    for (const [index, queued] of q.calls.entries()) {
+      const params = await buildEmbeddedRunExecutionParams({
+        run: queued.run,
+        provider: "openai",
+        model: "gpt-test",
+        runId: `queued-${index}`,
+        sessionCtx: {},
+        hasRepliedRef: undefined,
       });
-      run.run = {
-        ...run.run,
-        senderId: "sender-1",
+      const policy = resolveRequesterToolPolicies({
+        config: params.config,
+        agentId: queued.run.agentId,
+        senderId: queued.run.senderId,
+        conversationPolicy: params.conversationToolPolicy,
+      });
+      expect(queued.run.senderId).toBe("sender-1");
+      expect(params).toMatchObject({
         senderIsOwner: false,
-        conversationToolPolicy: restricted ? conversationToolPolicy : undefined,
         sessionRoot: "/tmp/requester-task",
         workspaceDir: "/tmp/requester-task",
-        thinkingCatalog: [{ provider: "openai", id: "gpt-test", input: ["text"] }],
-        skipProviderRuntimeHints: true,
-      };
-      q.add(run);
-    }
-    try {
-      await q.drain();
-      expect(q.calls).toHaveLength(2);
-      const observed = [];
-      for (const queued of q.calls) {
-        const params = await buildEmbeddedRunExecutionParams({
-          run: queued.run,
-          provider: "openai",
-          model: "gpt-test",
-          runId: `queued-${observed.length}`,
-          sessionCtx: {},
-          hasRepliedRef: undefined,
-        });
-        const policy = resolveRequesterToolPolicies({
-          config: params.config,
-          agentId: queued.run.agentId,
-          senderId: queued.run.senderId,
-          conversationPolicy: params.conversationToolPolicy,
-        });
-        observed.push({
-          senderId: queued.run.senderId,
-          senderIsOwner: params.senderIsOwner,
-          source: policy.inheritedToolPolicySource,
-          canSpawn: isToolAllowedByPolicies("sessions_spawn", [policy.groupPolicy]),
-          canExec: isToolAllowedByPolicies("exec", [policy.groupPolicy]),
-          sessionRoot: params.sessionRoot,
-          workspaceDir: params.workspaceDir,
-        });
-      }
-      expect(observed).toEqual([
-        {
-          senderId: "sender-1",
-          senderIsOwner: false,
-          source: "sender",
-          canSpawn: true,
-          canExec: false,
-          sessionRoot: "/tmp/requester-task",
-          workspaceDir: "/tmp/requester-task",
-        },
-        {
-          senderId: "sender-1",
-          senderIsOwner: false,
-          source: undefined,
-          canSpawn: true,
-          canExec: true,
-          sessionRoot: "/tmp/requester-task",
-          workspaceDir: "/tmp/requester-task",
-        },
-      ]);
-    } finally {
-      clearFollowupQueueForTest(q.key);
+      });
+      expect([
+        policy.inheritedToolPolicySource,
+        isToolAllowedByPolicies("sessions_spawn", [policy.groupPolicy]),
+        isToolAllowedByPolicies("exec", [policy.groupPolicy]),
+      ]).toEqual([index === 0 ? "sender" : undefined, true, index !== 0]);
     }
   });
 
   it("admits consecutive compatible operator input in FIFO order after its request returns", async () => {
-    const key = "test-collect-original-operator";
+    const key = queueKey("test-collect-original-operator");
     const source = createOperatorAuthority();
     const authority = source.authority;
     const variants = [
@@ -198,80 +227,60 @@ describe("followup queue authority", () => {
     ];
     const observed: Array<{ prompt: string; profileId?: string; scopes?: readonly string[] }> = [];
     const failures: unknown[] = [];
-    try {
-      for (const [index, operatorAuthority] of variants.entries()) {
-        enqueueFollowupRun(
-          key,
-          {
-            ...createRun({ prompt: `request ${index}`, originatingChannel: "webchat" }),
-            operatorAuthority,
-          },
-          createQueueSettings(),
-        );
-      }
-      source.releaseRequest();
-      scheduleFollowupDrain(key, async (run) => {
-        const prepared = prepareChannelRunAdmission({
-          cfg: {},
-          runId: `queued-operator-${observed.length}`,
-          agentId: "agent",
-          ingressKind: "channel",
-          boundary: "auto-reply.agent-runner",
-          operatorAuthority: run.operatorAuthority,
-        });
-        try {
-          await admitFollowupRunLifecycle(run);
-          const beforeAdmission = readPreparedRunOperatorAuthority(prepared);
-          const context = await prepared.admit("embedded");
-          const admitted = readAdmittedRunOperatorAuthority(context);
-          resolveAdmittedRunActiveAssertion(context)?.();
-          observed.push({
-            prompt: run.prompt,
-            profileId: admitted?.profileId,
-            scopes: beforeAdmission?.scopes,
-          });
-        } catch (error) {
-          failures.push(error);
-        } finally {
-          prepared.close();
-          completeFollowupRunLifecycle(run);
-        }
-      });
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-      expect(failures).toEqual([]);
-      expect(observed.map((run) => run.profileId)).toEqual([
-        "guest",
-        "maintainer",
-        "guest",
-        "guest",
-        undefined,
-        "guest",
-      ]);
-      expect(observed[0]?.prompt).toContain("request 0");
-      expect(observed[0]?.prompt).toContain("request 1");
-      expect(observed[0]?.prompt).toContain("request 2");
-      expect(observed.slice(1).map((run) => run.prompt.match(/request \d/g))).toEqual([
-        ["request 3"],
-        ["request 4"],
-        ["request 5"],
-        ["request 6"],
-        ["request 7"],
-      ]);
-      expect(observed[2]?.scopes).toEqual(["operator.admin"]);
-      expect(source.references()).toBe(0);
-    } finally {
-      clearFollowupQueue(key);
+    for (const [index, operatorAuthority] of variants.entries()) {
+      enqueueFollowupRun(
+        key,
+        {
+          ...webchatRun(`request ${index}`),
+          operatorAuthority,
+        },
+        createQueueSettings(),
+      );
     }
+    source.releaseRequest();
+    scheduleFollowupDrain(key, async (run) => {
+      const prepared = prepareOperatorAdmission(run, `queued-operator-${observed.length}`);
+      try {
+        await admitFollowupRunLifecycle(run);
+        const beforeAdmission = readPreparedRunOperatorAuthority(prepared);
+        const context = await prepared.admit("embedded");
+        const admitted = readAdmittedRunOperatorAuthority(context);
+        resolveAdmittedRunActiveAssertion(context)?.();
+        observed.push({
+          prompt: run.prompt,
+          profileId: admitted?.profileId,
+          scopes: beforeAdmission?.scopes,
+        });
+      } catch (error) {
+        failures.push(error);
+      } finally {
+        prepared.close();
+        completeFollowupRunLifecycle(run);
+      }
+    });
+    await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+    expect(failures).toEqual([]);
+    expect(observed.map((run) => [run.profileId, run.prompt.match(/request \d/g)])).toEqual([
+      ["guest", ["request 0", "request 1", "request 2"]],
+      ["maintainer", ["request 3"]],
+      ["guest", ["request 4"]],
+      ["guest", ["request 5"]],
+      [undefined, ["request 6"]],
+      ["guest", ["request 7"]],
+    ]);
+    expect(observed[2]?.scopes).toEqual(["operator.admin"]);
+    expect(source.references()).toBe(0);
   });
 
-  it("keeps original grant revocation effective after collect retires an older client cancel", async () => {
-    const key = "test-collect-operator-revocation";
-    const source = createOperatorAuthority();
-    const firstCancel = new AbortController();
-    const secondCancel = new AbortController();
-    const effects: string[] = [];
-    const observations: boolean[] = [];
-    try {
+  it.for(["older client", "latest client", "operator grant"] as const)(
+    "honors %s cancellation ownership after collect admission",
+    async (cancellation, { signal }) => {
+      const key = queueKey(`test-collect-operator-revocation-${cancellation}`);
+      const source = createOperatorAuthority();
+      const firstCancel = new AbortController();
+      const secondCancel = new AbortController();
+      const done = createDeferredCore();
+      const effects: string[] = [];
       for (const [index, abortSignal] of [firstCancel.signal, secondCancel.signal].entries()) {
         enqueueFollowupRun(
           key,
@@ -286,71 +295,81 @@ describe("followup queue authority", () => {
       source.releaseRequest();
       scheduleFollowupDrain(key, async (run) => {
         const abortSignal = resolveFollowupAbortSignal(run);
-        const prepared = prepareChannelRunAdmission({
-          cfg: {},
-          runId: "collected-operator-revocation",
-          agentId: "agent",
-          ingressKind: "channel",
-          boundary: "auto-reply.agent-runner",
-          operatorAuthority: run.operatorAuthority,
-        });
+        const prepared = prepareOperatorAdmission(run, "collected-operator-revocation");
         try {
           await admitFollowupRunLifecycle(run);
           const context = await prepared.admit("embedded");
           const assertCurrent = resolveAdmittedRunActiveAssertion(context)!;
-          firstCancel.abort();
-          observations.push(abortSignal?.aborted === true);
-          assertCurrent();
-          effects.push("before revocation");
-          await Promise.resolve();
-          source.controller.abort();
-          observations.push(abortSignal?.aborted === true);
-          try {
+          const performEffect = (label: string) => {
             assertCurrent();
-            effects.push("after revocation");
-          } catch {
-            // The real admitted-run guard must reject before the modeled effect.
+            abortSignal?.throwIfAborted();
+            effects.push(label);
+          };
+          performEffect("before cancellation");
+          const controller =
+            cancellation === "operator grant"
+              ? source.controller
+              : cancellation === "older client"
+                ? firstCancel
+                : secondCancel;
+          controller.abort();
+          if (cancellation === "older client") {
+            expect(abortSignal?.aborted).toBe(false);
+            performEffect("after older client cancellation");
+            source.controller.abort();
           }
+          expect(abortSignal?.aborted).toBe(true);
+          if (cancellation !== "latest client") {
+            // Original grant revocation still applies after an older client is retired.
+            expect(assertCurrent).toThrow();
+          }
+          expect(() => performEffect("after cancellation")).toThrow();
+        } catch (error) {
+          done.reject(error);
         } finally {
           prepared.close();
           completeFollowupRunLifecycle(run);
+          done.resolve();
         }
       });
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-      expect(observations).toEqual([false, true]);
-      expect(effects).toEqual(["before revocation"]);
+      await withinTest(done.promise, signal);
+      expect(effects).toEqual(
+        cancellation === "older client"
+          ? ["before cancellation", "after older client cancellation"]
+          : ["before cancellation"],
+      );
       expect(source.references()).toBe(0);
-    } finally {
-      clearFollowupQueue(key);
-    }
-  });
+    },
+  );
 
   it.each(["old", "new", "summarize"] as const)(
     "releases original source holds exactly once across %s overflow and queue clearing",
-    (dropPolicy) => {
-      const key = `test-operator-overflow-${dropPolicy}`;
+    async (dropPolicy) => {
+      const key = queueKey(`test-operator-overflow-${dropPolicy}`);
       const source = createOperatorAuthority();
-      try {
-        for (let index = 0; index < 5; index += 1) {
-          enqueueFollowupRun(
-            key,
-            { ...createRun({ prompt: `request ${index}` }), operatorAuthority: source.authority },
-            createQueueSettings({ cap: 1, dropPolicy }),
-          );
-        }
-        source.releaseRequest();
-        expect(source.references()).toBe(dropPolicy === "summarize" ? 3 : 1);
-        clearFollowupQueue(key);
-        clearFollowupQueue(key);
-        expect(source.references()).toBe(0);
-      } finally {
-        clearFollowupQueue(key);
+      const runs: ReturnType<typeof createRun>[] = [];
+      for (let index = 0; index < 5; index += 1) {
+        const run = createRun({ prompt: "request " + index });
+        run.operatorAuthority = source.authority;
+        runs.push(run);
+        enqueueFollowupRun(key, run, createQueueSettings({ cap: 1, dropPolicy }));
       }
+      source.releaseRequest();
+      await Promise.all(
+        runs
+          .filter((run) => run.controllerInput?.custody.completed)
+          .map((run) => run.controllerInput!.settlement.promise),
+      );
+      expect(source.references()).toBe(dropPolicy === "summarize" ? 3 : 1);
+      clearFollowupQueue(key);
+      clearFollowupQueue(key);
+      await Promise.all(runs.map((run) => run.controllerInput!.settlement.promise));
+      expect(source.references()).toBe(0);
     },
   );
 
   it("retains an independent operator source hold for a stranded delivery retry", async () => {
-    const key = "test-operator-delivery-retry";
+    const key = queueKey("test-operator-delivery-retry");
     const source = createOperatorAuthority();
     const parent = createRun({ prompt: "original request" });
     parent.operatorAuthority = source.authority;
@@ -363,7 +382,7 @@ describe("followup queue authority", () => {
       sourceReplyDeliveryMode: "message_tool_only",
       sendPolicyDenied: false,
       successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
+
       isRoomEvent: false,
     });
     if (recovery.kind !== "retry") {
@@ -371,27 +390,24 @@ describe("followup queue authority", () => {
     }
     let delivered = false;
     const failures: unknown[] = [];
-    try {
-      enqueueFollowupRun(key, recovery.run, createQueueSettings());
-      completeFollowupRunLifecycle(parent);
-      expect(source.references()).toBe(1);
-      scheduleFollowupDrain(key, async (run) => {
-        try {
-          run.operatorAuthority?.assertCurrent();
-          delivered = run.operatorAuthority?.profileId === "guest";
-        } catch (error) {
-          failures.push(error);
-        } finally {
-          completeFollowupRunLifecycle(run);
-        }
-      });
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-      expect(failures).toEqual([]);
-      expect(delivered).toBe(true);
-      expect(source.references()).toBe(0);
-    } finally {
-      clearFollowupQueue(key);
-    }
+    enqueueFollowupRun(key, recovery.run, createQueueSettings());
+    completeFollowupRunLifecycle(parent);
+    await parent.controllerInput!.settlement.promise;
+    expect(source.references()).toBe(1);
+    scheduleFollowupDrain(key, async (run) => {
+      try {
+        run.operatorAuthority?.assertCurrent();
+        delivered = run.operatorAuthority?.profileId === "guest";
+      } catch (error) {
+        failures.push(error);
+      } finally {
+        completeFollowupRunLifecycle(run);
+      }
+    });
+    await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+    expect(failures).toEqual([]);
+    expect(delivered).toBe(true);
+    expect(source.references()).toBe(0);
   });
 
   it("splits collect batches when queued authority facts change", async () => {
@@ -445,7 +461,7 @@ describe("followup queue authority", () => {
         { connId: "browser-b", profileId: "profile-a" },
       ];
       for (const [index, gatewayUiCommandTarget] of targets.entries()) {
-        const run = createRun({ prompt: `selection ${index + 1}`, originatingChannel: "webchat" });
+        const run = webchatRun(`selection ${index + 1}`);
         run.run.gatewayUiCommandTarget = gatewayUiCommandTarget;
         run.run.clientCaps = ["ui-commands"];
         run.run.senderIsOwner = true;
@@ -462,14 +478,9 @@ describe("followup queue authority", () => {
       for (const [callIndex, group] of groups.entries()) {
         const call = q.calls[callIndex];
         expect(call?.run.gatewayUiCommandTarget).toEqual(targets[group.at(-1)!]);
-        for (const index of targets.keys()) {
-          const selection = `selection ${index + 1}`;
-          if (group.includes(index)) {
-            expect(call?.prompt).toContain(selection);
-          } else {
-            expect(call?.prompt).not.toContain(selection);
-          }
-        }
+        expect(call?.prompt.match(/selection \d+/g)).toEqual(
+          group.map((index) => `selection ${index + 1}`),
+        );
       }
     },
   );
@@ -482,7 +493,7 @@ describe("followup queue authority", () => {
       const settled = createDeferredCore();
       const q = createQueueCase({ cap: mode === "overflow" ? 3 : 50 });
       const sources = Array.from({ length: mode === "overflow" ? 9 : 3 }, (_, index) =>
-        createRun({ prompt: `selection ${index}`, originatingChannel: "webchat" }),
+        webchatRun(`selection ${index}`),
       );
       sources[0]!.run.provider = "earlier-provider";
       for (const index of [1, 2]) {
@@ -532,38 +543,37 @@ describe("followup queue authority", () => {
   }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:collect-policy";
-      const firstStore = state.statePath("collect-first.sqlite");
-      const secondStore = state.statePath("collect-second.sqlite");
+      const policySessionKey = "agent:policy:collect-policy";
+      const firstStore = state.statePath("collect-main.sqlite");
+      const secondStore = state.statePath("collect-policy.sqlite");
+      const storeTemplate = state.statePath("collect-{agentId}.sqlite");
       for (const storePath of [firstStore, secondStore]) {
         await upsertSessionEntryCore(
-          { agentId: "main", sessionKey, storePath, env: state.env },
+          { agentId: "policy", sessionKey: policySessionKey, storePath, env: state.env },
           { sessionId: "collect-policy", updatedAt: 1, sandboxMode: "off" },
         );
       }
       // Settle setup owners before observing reads, including their WAL maintenance.
       await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-      const sources = [firstStore, secondStore].map((storePath, index) => {
-        const run = createRun({
-          prompt: `policy selection ${index}`,
-          originatingChannel: "webchat",
-        });
-        Object.assign(run.run, {
+      // Both executions belong to main's physical store. Independent policy lookup
+      // resolves the template for the policy agent, retaining the second-store wait.
+      const sources = [firstStore, storeTemplate].map((storePath, index) =>
+        webchatRun(`policy selection ${index}`, {
           agentId: "main",
           sessionKey,
-          runtimePolicySessionKey: sessionKey,
+          runtimePolicySessionKey: policySessionKey,
           senderIsOwner: true,
           gatewayUiCommandTarget: { connId: "shared-browser", profileId: "viewer" },
           clientCaps: ["ui-commands"],
           config: {
             session: { store: storePath },
-            agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
+            agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {}, policy: {} } },
             tools: {
               sandbox: { tools: { allow: ["*"], deny: index === 0 ? ["screen", "theme"] : [] } },
             },
           },
-        });
-        return run;
-      });
+        }),
+      );
       const q = createQueueCase({ debounceMs: 0 }, 2);
       const entered = createDeferredCore();
       const resume = createDeferredCore();
@@ -611,7 +621,7 @@ describe("followup queue authority", () => {
             .prepare(
               "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
             )
-            .run(sessionKey);
+            .run(policySessionKey);
         } finally {
           foreign.close();
         }
@@ -638,28 +648,27 @@ describe("followup queue authority", () => {
   });
 
   it("keys collect batches by turn allowlists, intersections, disablement, and roles", () => {
-    const createAuthorityRun = () =>
-      createRun({ prompt: "authority", originatingChannel: "slack", originatingTo: "channel:A" });
-    const baseline = createAuthorityRun();
-    const toolsAllow = createAuthorityRun();
-    toolsAllow.toolsAllow = ["exec"];
-    const disabled = createAuthorityRun();
-    disabled.disableTools = true;
-    const roles = createAuthorityRun();
-    roles.run.memberRoleIds = ["operator"];
-    const firstIntersection = createAuthorityRun();
-    firstIntersection.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
-    const secondIntersection = createAuthorityRun();
-    secondIntersection.toolsAllow = attachToolAllowlistIntersection(
-      ["exec"],
-      [["exec"], ["message"]],
-    );
-    const baselineKey = resolveFollowupDeliveryStorageKey(baseline);
-    expect(resolveFollowupDeliveryStorageKey(toolsAllow)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryStorageKey(disabled)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryStorageKey(roles)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryStorageKey(firstIntersection)).not.toBe(
-      resolveFollowupDeliveryStorageKey(secondIntersection),
+    const keyFor = (
+      overrides: Partial<FollowupRun> = {},
+      runOverrides: Partial<FollowupRun["run"]> = {},
+    ) =>
+      resolveFollowupDeliveryStorageKey(
+        createRun(
+          {
+            prompt: "authority",
+            originatingChannel: "slack",
+            originatingTo: "channel:A",
+            ...overrides,
+          },
+          runOverrides,
+        ),
+      );
+    const baselineKey = keyFor();
+    expect(keyFor({ toolsAllow: ["exec"] })).not.toBe(baselineKey);
+    expect(keyFor({ disableTools: true })).not.toBe(baselineKey);
+    expect(keyFor({}, { memberRoleIds: ["operator"] })).not.toBe(baselineKey);
+    expect(keyFor({ toolsAllow: attachToolAllowlistIntersection(["exec"], [["exec"]]) })).not.toBe(
+      keyFor({ toolsAllow: attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]) }),
     );
   });
 });

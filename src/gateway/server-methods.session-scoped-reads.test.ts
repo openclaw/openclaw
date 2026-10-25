@@ -6,17 +6,20 @@ import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepar
 import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessions from "../config/sessions/session-accessor.js";
+import * as sessionDiff from "../sessions/session-diff.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { gatewayRequest } from "./request-frame.test-support.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
+import { sessionsDiffHandlers } from "./server-methods/sessions-diff.js";
 import * as fileAssets from "./server-methods/sessions-file-assets.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
 import { fetchSessionFileDownload } from "./server-methods/sessions-files.test-support.js";
@@ -31,6 +34,7 @@ const profileState = { scenario: "minimal", prepareProfileCatalog: true } as con
 afterEach(() => vi.restoreAllMocks());
 
 const methods = [
+  "sessions.diff",
   "sessions.files.list",
   "sessions.files.get",
   "sessions.files.assets",
@@ -47,25 +51,26 @@ function dispatchRead(
 ) {
   return handleGatewayRequest({
     ...options,
-    req: {
-      type: "req",
-      id: method,
-      method,
-      params: {
-        sessionKey: key,
-        agentId: "main",
-        ...(method === "sessions.files.get" || method === "sessions.files.assets"
-          ? { path: "note.txt" }
-          : {}),
-        ...(method === "sessions.files.assets" ? { refs: [] } : {}),
-      },
-    },
+    req: gatewayRequest(method, method, {
+      sessionKey: key,
+      agentId: "main",
+      ...(method === "sessions.files.get" || method === "sessions.files.assets"
+        ? { path: "note.txt" }
+        : {}),
+      ...(method === "sessions.files.assets" ? { refs: [] } : {}),
+    }),
     isWebchatConnect: () => false,
-    extraHandlers: { ...sessionsFilesHandlers, ...sessionRewindHandlers },
+    extraHandlers: { ...sessionsDiffHandlers, ...sessionsFilesHandlers, ...sessionRewindHandlers },
   });
 }
 
 function prepareRead(method: (typeof methods)[number], beforeReturn: () => Promise<void>) {
+  if (method === "sessions.diff") {
+    return vi.spyOn(sessionDiff, "loadCheckoutDiff").mockImplementation(async () => {
+      await beforeReturn();
+      return { sessionKey: key, files: [], additions: 0, deletions: 0 };
+    });
+  }
   if (method === "sessions.files.assets") {
     return vi.spyOn(fileAssets, "getSessionWorkspaceAssets").mockImplementation(async () => {
       await beforeReturn();
@@ -136,12 +141,10 @@ describe("narrow session read owners", () => {
       const respond = vi.fn();
       const dispatch = () =>
         handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "download",
-            method: "sessions.files.download",
-            params: { sessionKey: key, path: "original.bin" },
-          },
+          req: gatewayRequest("download", "sessions.files.download", {
+            sessionKey: key,
+            path: "original.bin",
+          }),
           client: reader,
           context,
           respond,
@@ -221,12 +224,7 @@ describe("narrow session read owners", () => {
             const client = { ...reader, connId: `${method}-${row.name}` };
             const respond = vi.fn();
             await handleGatewayRequest({
-              req: {
-                type: "req",
-                id: client.connId,
-                method,
-                params: { key: sessionKey, agentId: "main" },
-              },
+              req: gatewayRequest(client.connId, method, { key: sessionKey, agentId: "main" }),
               client,
               context,
               respond,
@@ -261,12 +259,9 @@ describe("narrow session read owners", () => {
         reader.connect.scopes = ["operator.read"];
         const respond = vi.fn();
         await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "broad-describe",
-            method: "sessions.describe",
-            params: { key: "agent:main:read-foreign-draft" },
-          },
+          req: gatewayRequest("broad-describe", "sessions.describe", {
+            key: "agent:main:read-foreign-draft",
+          }),
           client: reader,
           context,
           respond,
@@ -310,12 +305,7 @@ describe("narrow session read owners", () => {
         const respond = vi.fn();
         let current = true;
         const request = handleGatewayRequest({
-          req: {
-            type: "req",
-            id: change,
-            method: "sessions.messages.subscribe",
-            params: { key, agentId: "main" },
-          },
+          req: gatewayRequest(change, "sessions.messages.subscribe", { key, agentId: "main" }),
           client,
           context,
           respond,
@@ -427,12 +417,10 @@ describe("narrow session read owners", () => {
             });
             const respond = vi.fn();
             const request = handleGatewayRequest({
-              req: {
-                type: "req",
-                id: `${grant}-${visibility}`,
-                method,
-                params: { agentId: "main", sessionKey: key },
-              },
+              req: gatewayRequest(`${grant}-${visibility}`, method, {
+                agentId: "main",
+                sessionKey: key,
+              }),
               client,
               context,
               respond,
@@ -531,13 +519,15 @@ describe("narrow session read owners", () => {
     });
   });
 
-  it.each(methods)("%s retains shared VIEW and hides foreign drafts before I/O", async (method) => {
+  it.each(
+    methods.flatMap((method) => (["none", "view"] as const).map((role) => ({ method, role }))),
+  )("$method enforces $role read access", async ({ method, role }) => {
     await withOpenClawTestState(profileState, async () => {
-      const reader = roleClient("view", "scoped-reader");
+      const reader = roleClient(role, "scoped-reader");
       reader.connect.scopes = ["operator.sessions.read"];
       const owner = roleClient("view", "scoped-owner");
       const cfg = rolePolicyConfig();
-      cfg.gateway!.roles!.definitions.view!.scopes.push("operator.admin");
+      cfg.gateway!.roles!.definitions[role]!.scopes.push("operator.admin");
       setRuntimeConfigSnapshot(cfg);
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       prepareGatewayRecipientProfile(reader);
@@ -568,8 +558,9 @@ describe("narrow session read owners", () => {
         );
         io.mockClear();
         const response = await request();
-        expect(response.mock.calls[0]?.[0]).toBe(visibility === "shared");
-        expect(io).toHaveBeenCalledTimes(visibility === "shared" ? 1 : 0);
+        const visible = visibility === "shared" && role === "view";
+        expect(response.mock.calls[0]?.[0], JSON.stringify(response.mock.calls)).toBe(visible);
+        expect(io).toHaveBeenCalledTimes(visible ? 1 : 0);
       }
       // Broad nonadmin readers use the same visibility owner; adding narrow write cannot bypass it.
       await sessions.upsertSessionEntryCore(
@@ -746,12 +737,11 @@ describe("narrow session read owners", () => {
         });
         const respond = vi.fn();
         const request = handleGatewayRequest({
-          req: {
-            type: "req",
-            id: `remote-${revoke}`,
-            method: "sessions.files.get",
-            params: { sessionKey: key, agentId: "main", path: "note.txt" },
-          },
+          req: gatewayRequest(`remote-${revoke}`, "sessions.files.get", {
+            sessionKey: key,
+            agentId: "main",
+            path: "note.txt",
+          }),
           client: reader,
           context,
           respond,

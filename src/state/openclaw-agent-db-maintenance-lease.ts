@@ -61,8 +61,10 @@ async function runMaintenanceScope<T>(
   };
   const lease: OpenClawStateLeaseContext = {
     signal: owner.signal,
+    assertCurrent,
     assertOwned: assertCurrent,
     assertOwnedInTransaction: assertCurrent,
+    holdWriteFence: owner.holdWriteFence,
     ...(owner.renew
       ? {
           renew() {

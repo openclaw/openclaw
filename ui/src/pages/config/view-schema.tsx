@@ -1,9 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createMemo } from "solid-js";
+import { For } from "solid-js";
+import {
+  analyzeConfigSchema,
+  type ConfigSchemaAnalysis,
+} from "../../components/config-form.analyze.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
-import { analyzeConfigSchema, type ConfigSchemaAnalysis } from "../../components/config-form.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ConfigViewState } from "./view-types.ts";
 
 export function asConfigSchema(value: unknown): JsonSchema | null {
   if (!isRecord(value)) {
@@ -14,22 +16,10 @@ export function asConfigSchema(value: unknown): JsonSchema | null {
 }
 
 export function getConfigSchemaAnalysis(
-  viewState: ConfigViewState,
   schema: JsonSchema | null,
   include?: ReadonlySet<string> | null,
   exclude?: ReadonlySet<string> | null,
 ): ConfigSchemaAnalysis {
-  const includeKey = include ? [...include].join("\u001f") : "";
-  const excludeKey = exclude ? [...exclude].join("\u001f") : "";
-  const cached = viewState.schemaAnalysisCache;
-  if (
-    cached &&
-    cached.schema === schema &&
-    cached.includeKey === includeKey &&
-    cached.excludeKey === excludeKey
-  ) {
-    return cached.analysis;
-  }
   let scopedSchema = schema;
   if (schema && schemaType(schema) === "object" && schema.properties) {
     const properties: Record<string, JsonSchema> = {};
@@ -40,9 +30,7 @@ export function getConfigSchemaAnalysis(
     }
     scopedSchema = { ...schema, properties };
   }
-  const analysis = analyzeConfigSchema(scopedSchema);
-  viewState.schemaAnalysisCache = { schema, includeKey, excludeKey, analysis };
-  return analysis;
+  return analyzeConfigSchema(scopedSchema);
 }
 
 export function configValueExistsAtPath(
@@ -74,12 +62,12 @@ export function configValueExistsAtPath(
 }
 
 export function UnsupportedPathSummary(props: { paths: string[] }) {
-  const message = createMemo(() => {
+  const message = () => {
     const marker = "__OPENCLAW_CONFIG_PATHS__";
     const key =
       props.paths.length === 1 ? "configView.formUnsafeCount" : "configView.formUnsafeCountPlural";
     return t(key, { count: String(props.paths.length), paths: marker }).split(marker);
-  });
+  };
   return (
     <span class="config-content-callout__text">
       {message()[0]}

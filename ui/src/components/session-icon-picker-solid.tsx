@@ -6,6 +6,7 @@ import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import {
@@ -16,7 +17,19 @@ import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, ShortcutText } from "./solid/kbd.tsx";
 
+registerSessionOrganizationEnglish();
+
+export type AppearancePickerFocus = (
+  target: "first" | "grid" | "custom",
+  roving?: boolean,
+  canFocus?: () => boolean,
+) => void;
+
 export type AppearancePickerProps = {
+  mobile?: boolean;
+  sessionLabel?: string;
+  ref?: (handle: AppearancePickerFocus) => void;
+  controlRef?: () => (element: HTMLElement) => void;
   allowSvg?: boolean;
   clearable?: boolean;
   mode: "grid" | "custom";
@@ -32,11 +45,36 @@ export type AppearancePickerProps = {
   onSelect: (event: MouseEvent, icon: string | null) => void;
   onShowCustom: (event: MouseEvent) => void;
   onBack: (event: Event) => void;
-  onInput: (event: InputEvent) => void;
+  onInput: (event: InputEvent & { currentTarget: HTMLTextAreaElement }) => void;
   onApply: (event: Event) => void;
 };
 
 export function AppearancePicker(props: AppearancePickerProps) {
+  const choices = new Map<string | null, HTMLButtonElement>();
+  const colors = new Map<string | null, HTMLButtonElement>();
+  let custom: HTMLButtonElement | undefined;
+  let input: HTMLTextAreaElement | undefined;
+  onSettled(() => {
+    props.ref?.((target, roving, canFocus) =>
+      onSettled(() => {
+        if (canFocus?.() === false) {
+          return;
+        }
+        if (target === "first") {
+          [...colors.values(), ...choices.values()]
+            .find((button) => button.isConnected && !button.disabled)
+            ?.focus();
+          return;
+        }
+        if (target === "grid" && roving) {
+          for (const button of choices.values()) {
+            button.tabIndex = button === custom ? 0 : -1;
+          }
+        }
+        (target === "grid" ? custom : input)?.focus();
+      }),
+    );
+  });
   const accepted = () => {
     const normalized = normalizeSessionIconValue(props.customIconValue);
     return (
@@ -49,23 +87,45 @@ export function AppearancePicker(props: AppearancePickerProps) {
       : ([...EMOJI_CHOICES, ...SESSION_ICON_GLYPH_IDS].find((icon) => icon === props.currentIcon) ??
         EMOJI_CHOICES[0]),
   );
-  const choice = (icon: string | null, glyph = false) => (
+  // `slot` keys roving focus; the repeated clear choice gets its own and is never the tab stop.
+  const choice = (icon: string | null, glyph = false, slot: string | null = icon) => (
     <button
       type="button"
       class={["session-menu__icon-choice", { "session-menu__icon-choice--glyph": glyph }]}
       data-form-control
       aria-label={glyph ? (icon ?? t("sessionsView.noIcon")) : undefined}
       aria-pressed={props.currentIcon === icon ? "true" : "false"}
-      tabindex={icon === tabStop() ? 0 : -1}
+      tabindex={slot === tabStop() ? 0 : -1}
       disabled={props.disabled}
       title={props.disabledReason ?? (icon === null ? t("sessionsView.noIcon") : undefined)}
-      ref={nativeListener("click", (event) => props.onSelect(event, icon))}
+      ref={[
+        props.controlRef?.(),
+        (element) => choices.set(slot, element),
+        nativeListener("click", (event) => props.onSelect(event, icon)),
+      ]}
     >
       {icon === null ? <Icon name="circleX" /> : glyph ? <SessionIconGraphic icon={icon} /> : icon}
     </button>
   );
   return (
-    <div class="session-menu__appearance">
+    <div class={["session-menu__appearance", { "session-menu__appearance--mobile": props.mobile }]}>
+      {props.mobile && (
+        <div class="session-menu__appearance-identity">
+          <span>
+            {props.currentIcon ? (
+              props.currentIcon.startsWith(SESSION_ICON_SVG_DATA_URL_PREFIX) ||
+              SESSION_ICON_GLYPH_IDS.some((id) => id === props.currentIcon) ? (
+                <SessionIconGraphic icon={props.currentIcon} />
+              ) : (
+                props.currentIcon
+              )
+            ) : (
+              <Icon name="circleX" />
+            )}
+          </span>
+          <span>{props.sessionLabel}</span>
+        </div>
+      )}
       <div class="session-menu__icon-section-label">{t("sessionsView.setColorMenu")}</div>
       <div class="session-menu__colors" role="group" aria-label={t("sessionsView.setColorMenu")}>
         <For each={props.clearable === false ? SESSION_COLOR_IDS : [null, ...SESSION_COLOR_IDS]}>
@@ -89,7 +149,11 @@ export function AppearancePicker(props: AppearancePickerProps) {
                 aria-pressed={selected() ? "true" : "false"}
                 disabled={props.colorDisabled}
                 title={props.colorDisabledReason ?? label()}
-                ref={nativeListener("click", (event) => props.onSelectColor(event, color))}
+                ref={[
+                  props.controlRef?.(),
+                  (element) => colors.set(color, element),
+                  nativeListener("click", (event) => props.onSelectColor(event, color)),
+                ]}
               >
                 <span
                   class={[
@@ -113,14 +177,26 @@ export function AppearancePicker(props: AppearancePickerProps) {
       <div class="session-menu__icon-picker session-menu__icon-panel" data-mode={props.mode}>
         <div
           class="session-menu__icon-options"
-          aria-hidden={props.mode !== "grid" ? "true" : undefined}
-          inert={props.mode !== "grid"}
+          aria-hidden={!props.mobile && props.mode !== "grid" ? "true" : undefined}
+          inert={!props.mobile && props.mode !== "grid"}
           role="group"
           aria-label={t("sessionsView.setIconMenu")}
-          ref={nativeListener("keydown", handleAppearanceGridKeydown)}
+          ref={nativeListener("keydown", (event) =>
+            handleAppearanceGridKeydown(
+              event,
+              [...choices.values()]
+                .filter((button) => button.isConnected && !button.disabled)
+                .toSorted((a, b) =>
+                  a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+                ),
+            ),
+          )}
         >
           <div class="session-menu__icon-section-label">{t("sessionsView.iconEmojiSection")}</div>
+          {/* Emoji and glyph share one icon slot; both sections lead with the same clear
+              choice, but only the first one is a tab stop. */}
           <div class="session-menu__icon-grid">
+            {props.clearable !== false ? choice(null, true) : undefined}
             <For each={EMOJI_CHOICES}>{(icon) => choice(icon)}</For>
             <button
               type="button"
@@ -133,21 +209,25 @@ export function AppearancePicker(props: AppearancePickerProps) {
               tabindex={-1}
               disabled={props.disabled}
               title={props.disabledReason}
-              ref={nativeListener("click", (event) => props.onShowCustom(event))}
+              ref={[
+                props.controlRef?.(),
+                (element) => choices.set("", (custom = element)),
+                nativeListener("click", (event) => props.onShowCustom(event)),
+              ]}
             >
               <Icon name="moreHorizontal" />
             </button>
           </div>
           <div class="session-menu__icon-section-label">{t("sessionsView.iconGlyphSection")}</div>
           <div class="session-menu__icon-grid">
-            {props.clearable !== false ? choice(null, true) : undefined}
+            {props.clearable !== false ? choice(null, true, "glyph:none") : undefined}
             <For each={SESSION_ICON_GLYPH_IDS}>{(icon) => choice(icon, true)}</For>
           </div>
         </div>
         <div
           class="session-menu__icon-custom-entry"
-          aria-hidden={props.mode !== "custom" ? "true" : undefined}
-          inert={props.mode !== "custom"}
+          aria-hidden={!props.mobile && props.mode !== "custom" ? "true" : undefined}
+          inert={!props.mobile && props.mode !== "custom"}
         >
           <div class="session-menu__icon-custom-header">
             <button
@@ -155,7 +235,7 @@ export function AppearancePicker(props: AppearancePickerProps) {
               class="session-menu__icon-back"
               data-form-control
               aria-label={t("common.back")}
-              ref={nativeListener("click", (event) => props.onBack(event))}
+              ref={[props.controlRef?.(), nativeListener("click", (event) => props.onBack(event))]}
             >
               <Icon name="arrowLeft" />
             </button>
@@ -166,6 +246,15 @@ export function AppearancePicker(props: AppearancePickerProps) {
           <div class="session-menu__icon-custom-controls">
             <textarea
               class="session-menu__icon-custom-input"
+              placeholder={
+                props.mobile
+                  ? t(
+                      props.allowSvg
+                        ? "sessionsView.customIconHintNoShortcut"
+                        : "sessionsView.customEmojiHintNoShortcut",
+                    )
+                  : undefined
+              }
               data-form-control
               rows="1"
               autocomplete="off"
@@ -174,23 +263,27 @@ export function AppearancePicker(props: AppearancePickerProps) {
               )}
               value={props.customIconValue}
               onInput={(event) => props.onInput(event)}
-              ref={nativeListener("keydown", (event) => {
-                if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) {
-                  return;
-                }
-                event.preventDefault();
-                event.stopPropagation();
-                if (accepted() && !props.disabled) {
-                  props.onApply(event);
-                }
-              })}
+              ref={[
+                props.controlRef?.(),
+                (element) => (input = element),
+                nativeListener("keydown", (event) => {
+                  if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (accepted() && !props.disabled) {
+                    props.onApply(event);
+                  }
+                }),
+              ]}
             />
             <button
               type="button"
               class="session-menu__icon-set"
               data-form-control
               disabled={!accepted() || props.disabled}
-              ref={nativeListener("click", (event) => props.onApply(event))}
+              ref={[props.controlRef?.(), nativeListener("click", (event) => props.onApply(event))]}
             >
               {t("sessionsView.customEmojiSet")}
             </button>
@@ -223,8 +316,9 @@ export function AppearancePicker(props: AppearancePickerProps) {
             data-form-control
             disabled={props.disabled || props.colorDisabled}
             title={props.disabledReason ?? props.colorDisabledReason}
-            ref={nativeListener("click", (event) => props.onReset(event))}
+            ref={[props.controlRef?.(), nativeListener("click", (event) => props.onReset(event))]}
           >
+            {props.mobile && <Icon name="rotateCcw" />}
             {t("sessionsView.resetAppearance")}
           </button>
         </>
@@ -233,25 +327,17 @@ export function AppearancePicker(props: AppearancePickerProps) {
   );
 }
 
-function handleAppearanceGridKeydown(event: KeyboardEvent) {
+function handleAppearanceGridKeydown(event: KeyboardEvent, choices: HTMLButtonElement[]) {
   const choice = event.target;
-  if (!(choice instanceof HTMLButtonElement)) {
-    return;
-  }
   const offset =
     event.key === "ArrowLeft" || event.key === "ArrowUp"
       ? -1
       : event.key === "ArrowRight" || event.key === "ArrowDown"
         ? 1
         : undefined;
-  if (offset === undefined || !(event.currentTarget instanceof HTMLElement)) {
+  if (offset === undefined || !(choice instanceof HTMLButtonElement)) {
     return;
   }
-  const choices = Array.from(
-    event.currentTarget.querySelectorAll<HTMLButtonElement>(
-      ".session-menu__icon-choice:not(:disabled)",
-    ),
-  );
   const index = choices.indexOf(choice);
   if (index < 0) {
     return;
@@ -295,77 +381,63 @@ type AppearanceAction =
   | { kind: "set-color"; color: string | null }
   | { kind: "reset-appearance" };
 export function useSessionMenuAppearance(
-  host: HTMLElement,
   readState: () => {
-    session: { icon: string | null; color: string | null };
+    session: { icon: string | null; color: string | null; label?: string };
     actionDisabledReasons: Partial<Record<"set-icon" | "set-color", string>>;
   },
   actionDisabled: (kind: "set-icon" | "set-color") => boolean,
   runAction: (action: AppearanceAction) => void,
+  controlRef?: () => (element: HTMLElement) => void,
 ) {
   const [mode, setMode] = createSignal<"grid" | "custom">("grid");
   const [customValue, setCustomValue] = createSignal("");
-  const focusAfterRender = (target: "custom" | "grid") =>
-    onSettled(() => {
-      if (target === "custom") {
-        host.querySelector<HTMLTextAreaElement>(".session-menu__icon-custom-input")?.focus();
-      } else {
-        const custom = host.querySelector<HTMLButtonElement>(".session-menu__icon-choice--custom");
-        for (const choice of host.querySelectorAll<HTMLButtonElement>(
-          ".session-menu__icon-choice",
-        )) {
-          choice.tabIndex = choice === custom ? 0 : -1;
-        }
-        custom?.focus();
-      }
-    });
+  let focus: AppearancePickerFocus | undefined;
   const prepare = () => {
     setMode("grid");
     setCustomValue("");
   };
+  const selectAppearance = (event: Event, action: AppearanceAction) => {
+    event.stopPropagation();
+    runAction(action);
+  };
   const showIconGrid = (event?: Event) => {
     event?.stopPropagation();
     prepare();
-    focusAfterRender("grid");
+    focus?.("grid", true);
   };
   return {
     prepare,
+    focusFirst: (canFocus?: () => boolean) => focus?.("first", undefined, canFocus),
     showIconGrid,
-    render: () => (
+    render: (mobile = false, onReady?: () => void) => (
       <AppearancePicker
+        controlRef={controlRef}
+        mobile={mobile}
+        sessionLabel={readState().session.label}
+        ref={(handle) => {
+          focus = handle;
+          onReady?.();
+        }}
         allowSvg
         mode={mode()}
         currentIcon={readState().session.icon}
         currentColor={readState().session.color}
         colorDisabled={actionDisabled("set-color")}
         colorDisabledReason={readState().actionDisabledReasons["set-color"]}
-        onSelectColor={(event, color) => {
-          event.stopPropagation();
-          runAction({ kind: "set-color", color });
-        }}
-        onReset={(event) => {
-          event.stopPropagation();
-          runAction({ kind: "reset-appearance" });
-        }}
+        onSelectColor={(event, color) => selectAppearance(event, { kind: "set-color", color })}
+        onReset={(event) => selectAppearance(event, { kind: "reset-appearance" })}
         customIconValue={customValue()}
         disabled={actionDisabled("set-icon")}
         disabledReason={readState().actionDisabledReasons["set-icon"]}
-        onSelect={(event, icon) => {
-          event.stopPropagation();
-          runAction({ kind: "set-icon", icon });
-        }}
+        onSelect={(event, icon) => selectAppearance(event, { kind: "set-icon", icon })}
         onShowCustom={(event) => {
           event.stopPropagation();
           setMode("custom");
           setCustomValue("");
-          focusAfterRender("custom");
+          focus?.("custom");
         }}
         onBack={showIconGrid}
-        onInput={(event) => {
-          if (event.currentTarget instanceof HTMLTextAreaElement) {
-            setCustomValue(event.currentTarget.value);
-          }
-        }}
+        onInput={(event) => setCustomValue(event.currentTarget.value)}
         onApply={(event) => {
           event.stopPropagation();
           const icon = normalizeSessionIconValue(customValue());

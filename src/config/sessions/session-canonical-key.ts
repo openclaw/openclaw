@@ -30,7 +30,7 @@ import {
   getSqliteReadScopeRevision,
   type SqliteReadScopeRevision,
 } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
   normalizeAgentId,
@@ -59,8 +59,9 @@ import {
 } from "./session-accessor.sqlite-owner-projection.js";
 import {
   canonicalSessionKeyMigrationRequiredError,
-  validateCanonicalSessionRow,
+  validateCanonicalSessionRowEntry,
 } from "./session-canonical-row.js";
+import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -159,7 +160,7 @@ export function readWithCanonicalSessionAdmission<T>(
   // The actual guard requested admission before validation or publication. Retry
   // the materialized read under one snapshot, including policy/receipt changes.
   return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-    runSqliteDeferredTransactionSync(database.db, read),
+    runSqliteReadSnapshotSync(database.db, read),
   );
 }
 
@@ -335,7 +336,7 @@ export function readWithCanonicalSessionReaderContinuation<T>(
     }
   };
   const value = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-    runSqliteDeferredTransactionSync(database.db, () => {
+    runSqliteReadSnapshotSync(database.db, () => {
       const previous = canonicalReadScope.current;
       canonicalReadScope.current = scope;
       try {
@@ -514,7 +515,15 @@ export function scanCanonicalSqliteSessionEntries(
   )) {
     // Retained windows have no entry, but their keys remain part of a listing snapshot.
     metadata?.keys.push(row.session_key);
-    const entry = validateCanonicalSessionRow(row);
+    const entry = validateCanonicalSessionRowEntry(
+      row,
+      row.entry_valid === 1
+        ? parseCanonicalSqliteSessionEntry({
+            entry_json: row.entry_json,
+            current_session_id: row.current_session_id,
+          })
+        : null,
+    );
     if (!entry) {
       continue;
     }

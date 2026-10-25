@@ -65,7 +65,7 @@ path; it does not permit raw native callers or untrusted proof to reuse a
 lease across revisions.
 Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
-these checks. All providers require Crabbox 0.77.0 or newer.
+these checks. All providers require Crabbox 0.79.2 or newer.
 
 For direct and coordinator-managed leases, TTL is total lifetime from creation, including hydration; idle timeout is the inactivity window, and the earlier deadline wins. Crabbox defaults both to 30 minutes and the maximum to four hours; coordinator owner or organization overrides and trusted direct-provider configuration can allow up to 24 hours. Read effective policy and clamp notices rather than assuming the requested duration was granted. `--keep` skips normal command cleanup but does not prevent expiry. Plain heartbeats and manual desktop use do not extend total TTL; `run` requests bounded auto-extension only while the command executes. Creation-fixed providers need enough TTL at allocation. Extension refusals and budget exhaustion do not authorize another provider or an unlimited chain of leases.
 
@@ -526,7 +526,7 @@ The shared skill's command placeholders map to the focused commands in this
 guide. Its trusted bootstrap is `scripts/crabbox-untrusted-bootstrap.sh`; the
 untrusted path above invokes the installed trusted CLI, never the PR's wrapper.
 For an explicitly selected local-container lane, the existing example image is
-`node:24-bookworm` and the install command is
+`node:24.22.1-trixie` and the install command is
 `corepack pnpm install --frozen-lockfile --store-dir .pnpm-store`, followed by
 the chosen test. Keep `--no-hydrate` and a repository-local dependency store
 when host caches cannot cross filesystems. The OpenClaw broker login endpoint

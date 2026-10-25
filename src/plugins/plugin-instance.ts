@@ -6,13 +6,12 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { releasePluginCacheInstance, withPluginCache, type PluginCache } from "./plugin-cache.js";
 import { createPluginBackgroundRunner } from "./plugin-instance-background.js";
 import { createPluginInstanceBindings } from "./plugin-instance-bindings.js";
-import { DisposalFailures, type DisposalCleanup } from "./plugin-instance-disposal.js";
 import {
   PluginInstanceDrainTimeoutError,
   PluginInstanceUnavailableError,
 } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation as invocation } from "./plugin-instance-invocation.js";
-import { PluginCallToken } from "./plugin-instance-owned-values.js";
+import { PluginReplacementReservation } from "./plugin-instance-replacement.js";
 import {
   pluginInstanceState,
   pluginInvocationContext,
@@ -26,7 +25,12 @@ import type {
   PluginInstanceDisposalResult,
   PluginInstanceLifecycle,
   PluginModuleLoaderRecovery,
+  PluginRetentionSnapshot,
+  PluginRetentionReason,
+  PluginRetentionOwner,
+  PluginWorkRelease,
 } from "./plugin-instance.types.js";
+import { PluginReferenceDiagnostics } from "./plugin-retention-diagnostics.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { releasePluginInstanceRegistry } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -37,6 +41,11 @@ const { values: valueInstances } = pluginInstanceState;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 const log = createSubsystemLogger("plugins/cleanup");
 type PluginInstanceCall = { registry?: PluginRegistry; cleanup: boolean; ownerJoined: boolean };
+type DisposalCleanup = {
+  failures: unknown[];
+  hostFailure?: { error: unknown };
+  moduleCleanups: Array<() => void | Promise<void>>;
+};
 
 export class PluginInstance {
   readonly slots = new Map<string | symbol, { runtime: unknown }>();
@@ -50,8 +59,8 @@ export class PluginInstance {
   private captureModuleRecovery?: () => PluginModuleLoaderRecovery;
   private moduleSourceExists?: false | ((source: string) => boolean);
   private accepting = true;
-  private replacementReserved = false;
   private readonly retainedWork = new Set<object>();
+  private readonly referenceDiagnostics = new PluginReferenceDiagnostics();
   private readonly calls = new Map<object, PluginInstanceCall>();
   private callsExpired = false;
   private forcedRetirement = false;
@@ -80,7 +89,11 @@ export class PluginInstance {
     <T>(run: () => T) => this.run(run),
     <T>(run: () => T) => this.runConsumer(run),
   );
-  private disposal?: Promise<PluginInstanceDisposalResult>;
+  private disposal?: {
+    observed: Promise<PluginInstanceDisposalResult>;
+    settled: Promise<PluginInstanceDisposalResult>;
+  };
+  private readonly replacement = new PluginReplacementReservation(this.pluginId);
   readonly owner?: PluginInstanceOwner;
   private readonly runtimeScope: Parameters<typeof withPluginRuntimePluginScope>[0];
 
@@ -154,7 +167,7 @@ export class PluginInstance {
 
   /** The reload is waiting for this instance's live work. */
   get replacementPending(): boolean {
-    return this.replacementReserved;
+    return this.replacement.pending;
   }
 
   holdsPendingReplacement(token: object): boolean {
@@ -171,7 +184,7 @@ export class PluginInstance {
       return scoped.run(run);
     }
     if (!this.accepting || this.owner?.revoked) {
-      throw new PluginInstanceUnavailableError(this.pluginId);
+      throw this.replacement.refuseFreshCall(this.accepting);
     }
     return this.invoke(run);
   }
@@ -187,7 +200,7 @@ export class PluginInstance {
     }
     // Fresh ordinary calls never inherit a scope's retained-consumer admission.
     if (!this.accepting || this.owner?.revoked) {
-      throw new PluginInstanceUnavailableError(this.pluginId);
+      throw this.replacement.refuseFreshCall(this.accepting);
     }
     return this.invoke(run, this.lease({ registry, joinDisposal: options?.joinDisposal }));
   }
@@ -213,14 +226,26 @@ export class PluginInstance {
   }
 
   /** Track finite host work without granting invocation authority or joining disposal. */
-  retainWork(): () => void {
+  retainWork(reason: PluginRetentionReason = "unknown"): PluginWorkRelease {
     const token = {};
     this.retainedWork.add(token);
-    return () => {
+    return this.referenceDiagnostics.workRelease(token, this.activeCall()?.token, reason, () => {
       if (this.retainedWork.delete(token)) {
         this.waiters.forEach((wake) => wake());
       }
-    };
+    });
+  }
+
+  /** Observe live holds without changing admission, release, or plugin execution. */
+  retentionSnapshot(
+    options: { limit?: number; includeOwners?: boolean } = {},
+  ): PluginRetentionSnapshot {
+    return this.referenceDiagnostics.snapshot(
+      this,
+      this.owner?.registry,
+      [this.retainedWork, this.consumers.keys(), this.calls.keys()],
+      options,
+    );
   }
 
   get retainedWorkCount(): number {
@@ -266,10 +291,7 @@ export class PluginInstance {
         `Plugin ${this.pluginId} cannot replace itself from its own active call; retry after the call finishes.`,
       );
     }
-    this.replacementReserved = true;
-    return () => {
-      this.replacementReserved = false;
-    };
+    return this.replacement.reserve();
   }
 
   /** Retain executable use or idle donor custody through its physical completion. */
@@ -277,16 +299,25 @@ export class PluginInstance {
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,
     kind: "work" | "custody" = "work",
+    diagnostics: { reason?: PluginRetentionReason; owner?: PluginRetentionOwner } = {},
   ): PluginInstanceConsumer {
     const current = this.activeCall();
     const parent = current && this.consumers.get(current.token);
     // Only an exact live retained consumer can derive admission after ordinary closure.
     if ((!this.accepting || this.owner?.revoked) && !parent?.active) {
-      throw new Error(`Plugin ${this.pluginId} is retiring`);
+      const refusal = parent ? undefined : this.replacement.refuseFreshCall(this.accepting);
+      throw refusal?.replacement ? refusal : new Error(`Plugin ${this.pluginId} is retiring`);
     }
     const released = createDeferredCore();
     const token = { active: true, completion: released.promise, registry, kind };
     this.consumers.set(token, token);
+    const reference = this.referenceDiagnostics.record(
+      token,
+      current?.token,
+      kind === "custody" ? "custody" : "consumer",
+      diagnostics.reason ?? "consumer",
+      diagnostics.owner,
+    );
     let closing: Promise<void> | undefined;
     const release = () => {
       token.active = false;
@@ -310,6 +341,7 @@ export class PluginInstance {
           // Close operation callbacks before entering a separate host teardown token.
           // Its release must not join the disposal waiting on this physical hold.
           token.active = false;
+          reference.cleanupState = "pending";
           closing = new Promise<void>((resolve) => {
             resolve(
               this.invoke(
@@ -431,7 +463,7 @@ export class PluginInstance {
   private lease(
     options: { registry?: PluginRegistry } & (
       | { cleanup?: false; joinDisposal?: boolean }
-      | { cleanup: true; hostCleanup?: boolean }
+      | { cleanup: true }
     ) = {},
   ): PluginInstanceCallLease {
     const current = this.activeCall();
@@ -443,14 +475,16 @@ export class PluginInstance {
     if (!options.registry && current && this.consumers.has(current.token)) {
       return { token: current.token, release: () => undefined };
     }
-    const token = new PluginCallToken(
-      {},
-      (options.cleanup && options.hostCleanup) ||
-        (current !== undefined && PluginCallToken.isHostCleanup(current.token)),
-    );
+    const token = {};
     const cleanup = options.cleanup === true || parent?.cleanup === true;
     // Not joining disposal never grants teardown authority to ordinary work; its
     // lifecycle owner stops and joins that work during cleanup instead.
+    this.referenceDiagnostics.record(
+      token,
+      current?.token,
+      cleanup ? "cleanup" : "call",
+      cleanup ? "cleanup" : "call",
+    );
     this.calls.set(token, { registry, cleanup, ownerJoined: !cleanup && !joinDisposal });
     return {
       token,
@@ -460,7 +494,7 @@ export class PluginInstance {
         // Earlier borrowers may feed other calls or hand off a stream. Only the
         // last borrower joins disposal; cleanup callbacks cannot await themselves.
         return joinDisposal && this.calls.size === 0 && !this.controller.signal.aborted
-          ? this.disposal
+          ? this.disposal?.observed
           : undefined;
       },
     };
@@ -567,13 +601,16 @@ export class PluginInstance {
     this.accepting ||= !this.disposal && !this.controller.signal.aborted && !this.owner?.revoked;
   }
 
-  dispose(beforeCleanup?: () => void | Promise<void>): Promise<PluginInstanceDisposalResult> {
+  dispose(
+    beforeCleanup?: () => void | Promise<void>,
+    options?: { waitForSettlement?: boolean },
+  ): Promise<PluginInstanceDisposalResult> {
     if (beforeCleanup && this.disposal) {
       return Promise.reject(new Error(`Plugin ${this.pluginId} disposal already started`));
     }
     if (!this.disposal) {
       this.quiesce();
-      const terminalFailures = (this.disposalFailures = new DisposalFailures(this));
+      const terminalFailures = (this.disposalFailures = new Set<unknown>());
       const work = new AsyncWorkScope(terminalFailures);
       // Physical cleanup outlives the releasing caller's invocation scope.
       const physical = pluginInvocationContext.exit(() =>
@@ -588,7 +625,7 @@ export class PluginInstance {
         }
       });
       void settled.catch(() => {});
-      this.disposal = new Promise((resolve, reject) => {
+      const observed = new Promise<PluginInstanceDisposalResult>((resolve, reject) => {
         const timer = setTimeout(() => {
           const fact = {
             activeCallCount: this.calls.size,
@@ -604,14 +641,20 @@ export class PluginInstance {
             fact,
           );
           log.warn(error.message);
-          resolve(terminalFailures.result([error, ...terminalFailures]));
+          resolve({ errors: [error, ...terminalFailures] });
         }, SHUTDOWN_TIMEOUT_MS);
         void physical.then(resolve, reject).finally(() => clearTimeout(timer));
       });
       // Self-retirement is joined by the last returning call or stream.
-      void this.disposal.catch(() => {});
+      this.disposal = { observed, settled: physical };
+      void observed.catch(() => {});
     }
-    return this.activeCall() ? Promise.resolve({ errors: [] }) : this.disposal;
+    // Final resource owners join physical cleanup; reload observers keep their bounded report.
+    return this.activeCall()
+      ? Promise.resolve({ errors: [] })
+      : options?.waitForSettlement
+        ? this.disposal.settled
+        : this.disposal.observed;
   }
 
   private abortDisposal(work: AsyncWorkScope): void {
@@ -632,9 +675,9 @@ export class PluginInstance {
     }
     const failures: unknown[] = [];
     let hostFailure: { error: unknown } | undefined;
-    const runCleanup = (cleanup: () => void | Promise<void>, hostCleanup = false) =>
+    const runCleanup = (cleanup: () => void | Promise<void>) =>
       cleanupWork.track(() =>
-        this.invoke(cleanup, this.lease({ cleanup: true, hostCleanup }), terminalFailures),
+        this.invoke(cleanup, this.lease({ cleanup: true }), terminalFailures),
       );
     try {
       // Owner-joined work often stops only when its cleanup runs; draining it
@@ -661,13 +704,13 @@ export class PluginInstance {
       // Host hooks own their bounds; explicit cleanup starts its budget after they settle.
       try {
         // This internal lease cannot join the disposal promise awaiting these hooks.
-        await runCleanup(beforeCleanup, true);
+        await runCleanup(beforeCleanup);
       } catch (error) {
         // Host admission/persistence guards are not plugin cleanup callbacks.
         hostFailure = { error };
       }
     }
-    const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
+    const deadline = performance.now() + SHUTDOWN_TIMEOUT_MS;
     this.abortDisposal(cleanupWork);
     const moduleCleanups: Array<() => void | Promise<void>> = [];
     for (const [cleanup, kind] of Array.from(this.cleanups).toReversed()) {
@@ -676,9 +719,13 @@ export class PluginInstance {
         continue;
       }
       try {
-        await raceWithTimeout(runCleanup(cleanup), Math.max(0, deadline - Date.now()), () => {
-          throw new Error(`Plugin ${this.pluginId} cleanup did not settle`);
-        });
+        await raceWithTimeout(
+          runCleanup(cleanup),
+          Math.max(0, deadline - performance.now()),
+          () => {
+            throw new Error(`Plugin ${this.pluginId} cleanup did not settle`);
+          },
+        );
       } catch (error) {
         failures.push(error);
       }
@@ -689,11 +736,13 @@ export class PluginInstance {
 
   private async finishDisposal(
     cleanupCompletion: Promise<DisposalCleanup>,
-    terminalFailures: DisposalFailures,
+    terminalFailures: Set<unknown>,
   ): Promise<PluginInstanceDisposalResult> {
     const { failures, hostFailure, moduleCleanups } = await cleanupCompletion;
     // Expired calls lose authority, but retain their code until they actually return.
     await this.waitForCalls(() => false, new AbortController().signal);
+    // Retire captured membership before module cleanup can wait on its source worker.
+    this.moduleSourceExists &&= false;
     for (const cleanup of moduleCleanups) {
       try {
         await this.invoke(cleanup, this.lease({ cleanup: true }));
@@ -708,8 +757,6 @@ export class PluginInstance {
     this.moduleLoader = undefined;
     this.setupCache = undefined;
     this.captureModuleRecovery = undefined;
-    // Release captured paths without reopening the never-bound bundled-library fallback.
-    this.moduleSourceExists &&= false;
     this.slots.clear();
     for (const failure of terminalFailures) {
       if (!failures.includes(failure)) {
@@ -732,6 +779,6 @@ export class PluginInstance {
         releasePluginInstanceRegistry(this.owner);
       }
     }
-    return terminalFailures.result(failures);
+    return { errors: failures };
   }
 }

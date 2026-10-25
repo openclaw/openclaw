@@ -14,7 +14,7 @@ import {
 } from "../agent-tool-source-execution-guard.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
-import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
+import { updateMediaGenerationOperation } from "../media-generation-activity.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 import { resolveSandboxConfigForAgent } from "../sandbox/config.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
@@ -67,7 +67,6 @@ export type MediaGenerateToolOptions = {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;
   fsPolicy?: ToolFsPolicy;
-  scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
 };
 
 const GENERATION_LABELS = {
@@ -96,7 +95,6 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
         agentDir: options?.agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
-        authProfileStoreSource: options?.authProfileStoreSource,
         modelConfig: cfg.agents?.defaults?.mediaModels?.[GENERATION_LABELS[providerKey]],
         providerKey,
         providers: preparedProviders,
@@ -105,12 +103,10 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
   ) {
     return null;
   }
-  const scheduleBackgroundWork =
-    options?.scheduleBackgroundWork ??
-    createDefaultMediaGenerateBackgroundScheduler({
-      toolName: `${GENERATION_LABELS[providerKey]}_generate`,
-      onCrash: (message, meta) => logger.error(message, meta),
-    });
+  const scheduleBackgroundWork = createDefaultMediaGenerateBackgroundScheduler({
+    toolName: `${GENERATION_LABELS[providerKey]}_generate`,
+    onCrash: (message, meta) => logger.error(message, meta),
+  });
   const outputSandbox = options?.sandbox;
   const sandboxSessionKey = options?.sandboxSessionKey ?? options?.agentSessionKey;
   const readOutputPolicy = (config: OpenClawConfig) => ({
@@ -290,11 +286,6 @@ export async function prepareMediaGenerationTask<
   try {
     resources?.assertOpen();
     prepared = resources ? await resources.run(prepare) : await prepare();
-    if (prepared.kind === "task") {
-      // Cancellation fences admission; accepted work retains resources independently.
-      signal?.throwIfAborted();
-      resources?.assertOpen();
-    }
   } catch (error) {
     const title = `${params.generationLabel.charAt(0).toUpperCase()}${params.generationLabel.slice(1)}`;
     return rethrowAfterMediaCleanup(
@@ -385,23 +376,14 @@ export async function runMediaGenerationTask(params: {
           return { execution: start() };
         });
       } catch (error) {
-        lifecycle.failTaskRun({ handle, error });
+        lifecycle.failTaskRun({ handle });
         throw error;
       }
     };
 
     if (handle?.detach) {
-      recordRecentMediaGenerationTaskStartForSession({
-        sessionKey: params.sessionKey,
-        agentId: params.requesterAgentId,
-        taskKind: `${generationLabel}_generation`,
-        sourcePrefix: toolName,
-        taskId: handle.taskId,
-        runId: handle.runId,
-        taskLabel: params.prompt,
+      updateMediaGenerationOperation(handle.runId, {
         requestKey: params.requestKey,
-        providerId: params.providerId,
-        progressSummary,
       });
       await admitExecution(() =>
         scheduleMediaGenerationTaskCompletion({
@@ -443,8 +425,6 @@ export async function runMediaGenerationTask(params: {
       const executed = await execution;
       lifecycle.completeTaskRun({
         handle,
-        provider: executed.provider,
-        model: executed.model,
         count: executed.count,
       });
       return {
@@ -452,7 +432,7 @@ export async function runMediaGenerationTask(params: {
         details: executed.details,
       };
     } catch (error) {
-      lifecycle.failTaskRun({ handle, error });
+      lifecycle.failTaskRun({ handle });
       throw error;
     }
   } catch (error) {

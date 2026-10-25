@@ -59,8 +59,7 @@ async function mutateExternalState(
         // A config reload may race this submitted mutation; the worker uses this snapshot.
         snapshot: {
           nowMs: state.deps.nowMs(),
-          cronConfig:
-            change.kind === "failure" ? structuredClone(state.deps.cronConfig) : undefined,
+          cronConfig: change.kind === "failure" ? state.deps.cronConfig : undefined,
         },
         publish(outcome) {
           committed = outcome;

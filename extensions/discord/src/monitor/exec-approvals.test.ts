@@ -3,11 +3,8 @@ import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildExecApprovalCustomId, parseExecApprovalData } from "../approval-custom-id.js";
-import {
-  parseCustomId,
-  type BaseComponentInteraction,
-  type ComponentData,
-} from "../internal/discord.js";
+import { parseCustomId } from "../internal/components.base.js";
+import type { BaseComponentInteraction, ComponentData } from "../internal/discord.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -354,7 +351,6 @@ describe("discord exec approval monitor helpers", () => {
         cfg,
         accountId: "default",
         config: { enabled: true, approvers: ["123"] },
-        gatewayUrl: "ws://127.0.0.1:18789",
       });
 
       expect(ctx.getApprovers()).toEqual(["123"]);
@@ -370,7 +366,6 @@ describe("discord exec approval monitor helpers", () => {
         channel: "discord",
         accountId: "default",
         senderId: "123",
-        gatewayUrl: "ws://127.0.0.1:18789",
       });
     },
   );

@@ -146,6 +146,7 @@ function registerSyntheticPlugin(api: OpenClawPluginApi) {
             const result = await runWithLocalStateOwner<MemoryCliSearchOutcome | undefined>({
               method: "memory.search.owner",
               target: "fixture search",
+              databaseEngine: "configured",
               params: {
                 query: value,
                 ...(opts.agent === undefined ? {} : { agentId: opts.agent }),
@@ -348,6 +349,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  fs.writeFileSync(path.join(root, "openclaw.json"), "{}\n");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
   resetConfigRuntimeState();
@@ -483,9 +485,10 @@ describe("synthetic plugin commands respect the local state owner", () => {
           return backfillExecution();
         });
       } else if (family === "search") {
-        fixture.searchClose.mockImplementationOnce(async () => {
+        fixture.search.mockImplementationOnce(async () => {
           entered.resolve();
           await finish.promise;
+          return [];
         });
       } else {
         fixture.status.mockImplementationOnce(async () => {
@@ -549,8 +552,24 @@ describe("synthetic plugin commands respect the local state owner", () => {
     expect(fs.existsSync(resolveGatewayLockPaths(process.env).ownerLockPath)).toBe(false);
   });
 
-  it("routes memory search limits and JSON output through the discovered owner", async () => {
+  it("routes configured memory search and options without local database credentials", async () => {
     await occupyState();
+    vi.stubEnv("MISSING_ROUTED_CLI_DATABASE_DSN", undefined);
+    fs.writeFileSync(
+      path.join(root, "openclaw.json"),
+      JSON.stringify({
+        database: {
+          engine: "postgres",
+          postgres: {
+            connection: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_ROUTED_CLI_DATABASE_DSN",
+            },
+          },
+        },
+      }),
+    );
     const hits = [
       {
         path: "memory/fact.md",

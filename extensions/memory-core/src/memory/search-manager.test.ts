@@ -28,12 +28,20 @@ describe("builtin memory search manager", () => {
     closeMemoryIndexManagersForAgent.mockClear();
   });
 
-  it("returns the builtin initialization error", async () => {
-    memoryIndexGet.mockRejectedValueOnce(new Error("index unavailable"));
+  it("preserves the builtin initialization error code", async () => {
+    memoryIndexGet.mockRejectedValueOnce(
+      Object.assign(new Error("index unavailable"), {
+        code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED",
+      }),
+    );
 
     await expect(
       getMemorySearchManager({ cfg: {} as OpenClawConfig, agentId: "main" }),
-    ).resolves.toMatchObject({ manager: null, error: "index unavailable" });
+    ).resolves.toMatchObject({
+      manager: null,
+      error: "index unavailable",
+      code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED",
+    });
   });
 
   it("normalizes the agent id before scoped cleanup", async () => {

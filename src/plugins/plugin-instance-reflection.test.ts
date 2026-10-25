@@ -1,9 +1,8 @@
-import { runInNewContext, runInThisContext } from "node:vm";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
-
-const cases = [{ realm: "VM", kind: "array" }] as const;
+import { expectUnavailable } from "./plugin-instance.test-support.js";
 
 let instance: PluginInstance;
 beforeEach(() => {
@@ -13,10 +12,10 @@ afterEach(async () => {
   await instance.dispose();
 });
 
-function createSource(realm: "host" | "VM", kind: "object" | "function" | "array"): object {
-  const expression = kind === "object" ? "{}" : kind === "array" ? "[]" : "function exported() {}";
-  const source = `Object.defineProperty(Object.assign(${expression}, { execute() { return "current"; } }), "reader", { configurable: true, get() { return this.execute; } })`;
-  return realm === "VM" ? runInNewContext(source) : runInThisContext(source);
+function createSource(): object {
+  return runInNewContext(
+    `Object.defineProperty(Object.assign([], { execute() { return "current"; } }), "reader", { configurable: true, get() { return this.execute; } })`,
+  );
 }
 
 describe("managed plugin reflection", () => {
@@ -57,8 +56,8 @@ describe("managed plugin reflection", () => {
     expect(() => view.execute()).toThrow("reloaded or disabled");
   });
 
-  it.each(cases)("defines fixed data on $realm $kind views atomically", async ({ realm, kind }) => {
-    const source = createSource(realm, kind);
+  it("defines fixed data on VM array views atomically", async () => {
+    const source = createSource();
     const view = instance.wrap(source);
     const descriptor = { value: 1, configurable: false, writable: false, enumerable: true };
     expect(Reflect.defineProperty(view, "fixed", descriptor)).toBe(true);
@@ -71,55 +70,45 @@ describe("managed plugin reflection", () => {
     expect(Reflect.defineProperty(view, "fixed", { value: 2 })).toBe(false);
     expect(Reflect.get(source, "fixed")).toBe(1);
     await instance.dispose();
-    expect(() => Reflect.defineProperty(view, "late", { value: 2 })).toThrow(
-      "reloaded or disabled",
-    );
+    expectUnavailable(() => Reflect.defineProperty(view, "late", { value: 2 }));
     expect(Object.hasOwn(source, "late")).toBe(false);
   });
 
-  it.each(cases)(
-    "keeps existing $realm $kind methods fenced when made fixed",
-    async ({ realm, kind }) => {
-      const source = createSource(realm, kind);
-      const view = instance.wrap(source);
-      const execute = Reflect.get(view, "execute");
-      expect(
-        Reflect.defineProperty(view, "execute", { configurable: false, writable: false }),
-      ).toBe(true);
-      const descriptor = Object.getOwnPropertyDescriptor(view, "execute");
-      expect(descriptor).toMatchObject({ configurable: false, writable: false, value: execute });
-      expect(Reflect.get(view, "execute")).toBe(execute);
-      expect(Reflect.apply(execute, view, [])).toBe("current");
-      await instance.dispose();
-      expect(() => Reflect.apply(execute, view, [])).toThrow("reloaded or disabled");
-      expect(() => Reflect.apply(Reflect.get(view, "execute"), view, [])).toThrow(
-        "reloaded or disabled",
-      );
-    },
-  );
+  it("keeps existing VM array methods fenced when made fixed", async () => {
+    const source = createSource();
+    const view = instance.wrap(source);
+    const execute = Reflect.get(view, "execute");
+    expect(Reflect.defineProperty(view, "execute", { configurable: false, writable: false })).toBe(
+      true,
+    );
+    const descriptor = Object.getOwnPropertyDescriptor(view, "execute");
+    expect(descriptor).toMatchObject({ configurable: false, writable: false, value: execute });
+    expect(Reflect.get(view, "execute")).toBe(execute);
+    expect(Reflect.apply(execute, view, [])).toBe("current");
+    await instance.dispose();
+    expectUnavailable(
+      () => Reflect.apply(execute, view, []),
+      () => Reflect.apply(Reflect.get(view, "execute"), view, []),
+    );
+  });
 
-  it.each(cases)(
-    "keeps existing $realm $kind accessors fenced when made fixed",
-    async ({ realm, kind }) => {
-      const view = instance.wrap(createSource(realm, kind));
-      expect(Reflect.defineProperty(view, "reader", { configurable: false })).toBe(true);
-      const descriptor = Object.getOwnPropertyDescriptor(view, "reader")!;
-      expect(descriptor.configurable).toBe(false);
-      const execute = descriptor.get!.call(view);
-      expect(Reflect.apply(execute, view, [])).toBe("current");
-      await instance.dispose();
-      expect(() => descriptor.get!.call(view)).toThrow("reloaded or disabled");
-      expect(() => Reflect.get(view, "reader")).toThrow("reloaded or disabled");
-      expect(() => Reflect.apply(execute, view, [])).toThrow("reloaded or disabled");
-    },
-  );
+  it("keeps existing VM array accessors fenced when made fixed", async () => {
+    const view = instance.wrap(createSource());
+    expect(Reflect.defineProperty(view, "reader", { configurable: false })).toBe(true);
+    const descriptor = Object.getOwnPropertyDescriptor(view, "reader")!;
+    expect(descriptor.configurable).toBe(false);
+    const execute = descriptor.get!.call(view);
+    expect(Reflect.apply(execute, view, [])).toBe("current");
+    await instance.dispose();
+    expectUnavailable(
+      () => descriptor.get!.call(view),
+      () => Reflect.get(view, "reader"),
+      () => Reflect.apply(execute, view, []),
+    );
+  });
 
   it("rejects freezing before changing either object's extensibility", async () => {
-    const source = {
-      execute() {
-        return "current";
-      },
-    };
+    const source = { execute: () => "current" };
     const view = instance.wrap(source);
     expect(() => Object.freeze(view)).toThrow(TypeError);
     expect(Object.isExtensible(view)).toBe(true);
@@ -131,68 +120,45 @@ describe("managed plugin reflection", () => {
 });
 
 const proxyOperations = [
-  { name: "get", read: (view: object) => Reflect.get(view, "value"), expected: 1 },
-  { name: "has", read: (view: object) => Reflect.has(view, "value"), expected: true },
-  {
-    name: "ownKeys",
-    read: (view: object) => Reflect.ownKeys(view),
-    expected: ["value", "execute"],
-  },
-  {
-    name: "getOwnPropertyDescriptor",
-    read: (view: object) => Reflect.getOwnPropertyDescriptor(view, "value")?.value,
-    expected: 1,
-  },
-  {
-    name: "getPrototypeOf",
-    read: (view: object) => Reflect.getPrototypeOf(view),
-    expected: Object.prototype,
-  },
-];
-
-const proxyCases = proxyOperations.map((operation) => ({
-  operation,
-  placement: operation.name === "get" ? "inherited" : "direct",
-}));
+  ["get", (view: object) => Reflect.get(view, "value"), 1],
+  ["has", (view: object) => Reflect.has(view, "value"), true],
+  ["ownKeys", Reflect.ownKeys, ["value", "execute"]],
+  [
+    "getOwnPropertyDescriptor",
+    (view: object) => Reflect.getOwnPropertyDescriptor(view, "value")?.value,
+    1,
+  ],
+  ["getPrototypeOf", Reflect.getPrototypeOf, Object.prototype],
+] as const;
 
 describe("managed plugin proxy exports", () => {
-  it.each(proxyCases)(
-    "admits $placement $operation.name traps and fences retirement",
-    async (testCase) => {
+  it.each(proxyOperations)(
+    "admits %s traps and fences retirement",
+    async (name, read, expected) => {
       const admissions: boolean[] = [];
-      const record = () => admissions.push(instance.hasActiveCall);
+      const record =
+        <Args extends unknown[], Result>(reflect: (...args: Args) => Result) =>
+        (...args: Args): Result => {
+          admissions.push(instance.hasActiveCall);
+          return reflect(...args);
+        };
       const target = { value: 1, execute: () => "current" };
       const proxy = new Proxy(target, {
-        get(object, key, receiver) {
-          record();
-          return Reflect.get(object, key, receiver);
-        },
-        has(object, key) {
-          record();
-          return Reflect.has(object, key);
-        },
-        ownKeys(object) {
-          record();
-          return Reflect.ownKeys(object);
-        },
-        getOwnPropertyDescriptor(object, key) {
-          record();
-          return Reflect.getOwnPropertyDescriptor(object, key);
-        },
-        getPrototypeOf(object) {
-          record();
-          return Reflect.getPrototypeOf(object);
-        },
+        get: record(Reflect.get),
+        has: record(Reflect.has),
+        ownKeys: record(Reflect.ownKeys),
+        getOwnPropertyDescriptor: record(Reflect.getOwnPropertyDescriptor),
+        getPrototypeOf: record(Reflect.getPrototypeOf),
       });
-      const source: object = testCase.placement === "direct" ? proxy : Object.create(proxy);
+      const source: object = name === "get" ? Object.create(proxy) : proxy;
       const view = instance.wrap(source);
       admissions.length = 0;
-      expect(testCase.operation.read(view)).toEqual(testCase.operation.expected);
+      expect(read(view)).toEqual(expected);
       expect(admissions.length).toBeGreaterThan(0);
       expect(admissions.every(Boolean)).toBe(true);
       await instance.dispose();
       admissions.length = 0;
-      expect(() => testCase.operation.read(view)).toThrow("reloaded or disabled");
+      expectUnavailable(() => read(view));
       expect(admissions).toEqual([]);
     },
   );

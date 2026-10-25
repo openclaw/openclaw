@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginCapabilityConsentReview } from "../plugins/capability-summary.js";
@@ -72,18 +73,10 @@ function createCapabilityConsentReview(): PluginCapabilityConsentReview {
     name: "Alpha plugin",
     version: "2.0.0",
     source: { kind: "npm", spec: "@acme/alpha", integrity: "sha512-alpha" },
-    declared: {
-      channels: [],
-      providers: [],
+    declared: createPluginDeclaredSurface({
       tools: ["read", "write"],
       contracts: ["gatewayMethodDispatch: alpha.run"],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    },
+    }),
     grants: {
       hooks: {
         allowPromptInjection: { effective: true },
@@ -775,14 +768,6 @@ it("persists successful bulk updates before reporting errors", async () => {
         pluginId: "beta",
         status: "error",
         message: "Failed to update beta: registry timeout",
-        channelFallback: {
-          requestedSpec: "@openclaw/beta@beta",
-          usedSpec: "@openclaw/beta@latest",
-          requestedLabel: "beta",
-          usedLabel: "latest",
-          reason: "failed",
-          message: "Beta channel unavailable; tried latest.",
-        },
       },
     ],
     true,
@@ -799,7 +784,6 @@ it("persists successful bulk updates before reporting errors", async () => {
   });
   expect(runtimeErrors).toContain("Failed to update beta: registry timeout");
   expect(logs).toContain("Updated alpha -> 1.1.0");
-  expect(logs).toContain("Beta channel unavailable; tried latest.");
   expect(logs).not.toContain("Failed to update beta: registry timeout");
 });
 

@@ -1,18 +1,15 @@
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-/**
- * Embedded-agent message text utilities.
- * Extracts visible assistant text, reasoning summaries, thinking-tag blocks,
- * and compact tool metadata for channel delivery and transcript replay.
- */
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
+  isAssistantTextContentBlockType,
   normalizeAssistantPhase,
   parseAssistantTextSignature,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
 import { assistantVisibleTextFilters } from "../shared/text/assistant-visible-text.js";
+import { findNativeToolMarkerTextBlocks } from "../shared/text/native-tool-marker.js";
 import {
   applyTextFilters,
   createTextProjection,
@@ -48,10 +45,6 @@ function sanitizeAssistantText(
   );
 }
 
-function isAssistantTextContentBlockType(value: unknown): boolean {
-  return value === "text" || value === "input_text" || value === "output_text";
-}
-
 export function sanitizeAssistantVisibleStreamText(
   text: string,
   phase?: AssistantPhase,
@@ -85,6 +78,11 @@ function prepareEmbeddedAssistantTextForPhase(
   requestedPhase: AssistantPhase,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
 ): () => string {
+  // Replacement callbacks own their text; source snapshots project inside their callback.
+  const nativeToolMarkerBlocks =
+    requestedPhase === "final_answer" && !prepareText
+      ? findNativeToolMarkerTextBlocks(msg)
+      : undefined;
   const prepareRender = (selectedPhase: AssistantPhase | undefined, renderText: () => string) => {
     const errorContext = msg.stopReason === "error";
     return () => {
@@ -177,7 +175,9 @@ function prepareEmbeddedAssistantTextForPhase(
   }
   return prepareRender(selectedPhase, () =>
     groupedParts
-      .map(({ text, phase }) => sanitizeAssistantText(text, phase))
+      .map(({ text, phase, contentIndex }) =>
+        nativeToolMarkerBlocks?.has(contentIndex) ? "" : sanitizeAssistantText(text, phase),
+      )
       .filter((text) => text.trim())
       .join("\n")
       .trimEnd(),
@@ -274,7 +274,7 @@ const THINKING_TAG_CLOSE_RE = new RegExp(
   String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "i",
 );
-export const THINKING_TAG_SCAN_RE = new RegExp(
+const THINKING_TAG_SCAN_RE = new RegExp(
   String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "gi",
 );
@@ -293,7 +293,7 @@ export type ThinkingTagStreamState = {
 };
 
 export function createAssistantStreamBlockState() {
-  return { thinking: false, final: false, inlineCode: createInlineCodeState() };
+  return { reasoningDepth: 0, final: false, inlineCode: createInlineCodeState() };
 }
 
 export function createThinkingTagStreamState(): ThinkingTagStreamState {

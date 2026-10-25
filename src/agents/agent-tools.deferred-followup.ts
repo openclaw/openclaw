@@ -19,8 +19,8 @@ const TOOL_FOLLOWUPS = [
   [
     "gateway",
     "openclaw",
-    "Never via shell.",
-    "Never via shell. Other system changes: use openclaw tool.",
+    "Use runtime-owned actions.",
+    "Use runtime-owned actions. Other system changes: use openclaw tool.",
   ],
   [
     "sessions_search",

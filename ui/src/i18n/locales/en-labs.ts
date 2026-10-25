@@ -3,6 +3,21 @@ import { en } from "./en.ts";
 
 const enLabs = {
   labsPage: {
+    swarm: {
+      title: en.labsPage.swarm.title,
+      groupTitle: "Parallel tasks",
+      defaultPhase: en.labsPage.swarm.defaultPhase,
+      progress: "{complete} of {total}",
+      active: "{running} running · {queued} queued · {failed} failed or stopped",
+      finished: "{done} completed · {failed} failed or stopped",
+      completed: "{done} completed",
+      failedOrStopped: "Failed or stopped",
+      childOutcome: "Child runs finished. Check the conversation for the final response.",
+      childOutcomeProcessing: "Child runs finished. The parent is processing their results.",
+      details: "Child details",
+      detailsUnavailable: "Child details are unavailable. Counts include all accepted workers.",
+      otherGroups: "{count} more active groups",
+    },
     configure: "Configure",
     configureFeature: "Configure {name}",
     decisionAssistance: {
@@ -32,7 +47,7 @@ const enLabs = {
     advisor: {
       title: "Advisor",
       description:
-        "Every few tool calls or minutes of agent work, Advisor reviews the conversation on the session's own model. If it spots avoidable work (drifting from the request, repeated or stalled tool calls), it offers one short correction to the active run, or the next turn when steering is unavailable. Adds model calls.",
+        "Advisor reviews the conversation on the session's own model every few tool calls or minutes. If the agent is going off course, it steers the active run with one short correction. Adds model calls.",
     },
     composerPredictions: {
       title: "Composer predictions",
@@ -73,6 +88,10 @@ const enLabs = {
 } satisfies TranslationMap;
 
 export const registerLabsEnglish = Object.assign(
-  () => Object.assign(en.labsPage, enLabs.labsPage),
+  () => {
+    const { swarm, ...labsPage } = enLabs.labsPage;
+    Object.assign(en.labsPage, labsPage);
+    Object.assign(en.labsPage.swarm, swarm);
+  },
   { catalog: enLabs },
 );

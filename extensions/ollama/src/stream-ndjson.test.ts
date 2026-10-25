@@ -1,5 +1,9 @@
+// This suite owns NDJSON record framing and size bounds. Reader-cancellation
+// lifecycle cases stay with the guarded stream tests in stream-runtime.test.ts.
+// Match the complete content-free diagnostic, not just its prefix.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
 import { parseNdjsonStream } from "./stream-ndjson.js";
 
 function mockNdjsonReader(lines: string[], options: { trailingNewline?: boolean } = {}) {
@@ -39,13 +43,7 @@ describe("parseNdjsonStream", () => {
   it("resets the record limit after each newline", async () => {
     const legalRecord = new Uint8Array(9 * 1024 * 1024 + 1).fill(0x20);
     legalRecord[legalRecord.length - 1] = 0x0a;
-    const reader = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(legalRecord);
-        controller.enqueue(legalRecord);
-        controller.close();
-      },
-    }).getReader();
+    const reader = createClosedChunkStream([legalRecord, legalRecord]).getReader();
 
     await expectNoParsedChunks(reader);
   });

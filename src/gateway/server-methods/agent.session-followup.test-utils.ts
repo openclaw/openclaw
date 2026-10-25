@@ -15,7 +15,10 @@ import {
   resumeSubagentRun,
   registerSubagentRun,
 } from "../../agents/subagents/registry/subagent-registry.js";
-import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import {
+  settleSubagentRegistryPersistenceWork,
+  writeSubagentSessionEntry,
+} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -23,6 +26,11 @@ import {
   testing as registryTesting,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import {
+  getRpcSourceExpiresAt,
+  getRpcSourceIdentity,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import {
   seedReleasedYieldedSubagentRun,
@@ -35,6 +43,7 @@ import {
   getAgentTestMocks,
   invokeAgent,
   makeContext,
+  requireValue,
 } from "./agent.test-harness.js";
 
 const mocks = getAgentTestMocks();
@@ -203,6 +212,13 @@ describe("gateway agent follow-up activity", () => {
           canonicalKey: childSessionKey,
         }));
         if (persisted) {
+          await writeSubagentSessionEntry({
+            stateDir: root,
+            agentId: "main",
+            sessionKey: childSessionKey,
+            defaultSessionId: currentEntry.sessionId,
+            lifecycleRevision: currentEntry.lifecycleRevision,
+          });
           seedReleasedYieldedSubagentRun({
             previousRunId,
             childSessionKey,
@@ -274,7 +290,7 @@ describe("gateway agent follow-up activity", () => {
         };
         const terminal = createDeferred();
         const respond = vi.fn((ok, payload) => {
-          if (ok && payload?.status === "ok") {
+          if (!ok || payload?.status === "ok" || payload?.status === "error") {
             terminal.resolve();
           }
         });
@@ -301,17 +317,22 @@ describe("gateway agent follow-up activity", () => {
           expect(mocks.agentCommand.mock.calls.at(-1)?.[0].timeout).toBe(
             expectedSeconds?.toString(),
           );
-          const admitted = context.chatAbortControllers.get(runId)!;
-          expect(admitted.sessionId).toBe(currentEntry.sessionId);
+          const source = rpcSourceTesting.get(runId);
+          const identity = source && getRpcSourceIdentity(source);
+          expect(identity?.sessionKey).toBe(childSessionKey);
+          expect(identity?.sessionId).toBe(currentEntry.sessionId);
           expect(mocks.agentCommand.mock.calls.at(-1)?.[0].sessionId).toBe(currentEntry.sessionId);
+          const admitted = requireValue(source, "admitted source missing");
           const expectedMs =
             expectedSeconds === 0
               ? MAX_TIMER_TIMEOUT_MS
               : (expectedSeconds ?? configuredTimeout ?? 172_800) * 1000;
-          expect(admitted.expiresAtMs).toBe(
-            resolveAgentRunExpiresAtMs({ now: admitted.startedAtMs, timeoutMs: expectedMs }),
+          expect(getRpcSourceExpiresAt(admitted)).toBe(
+            resolveAgentRunExpiresAtMs({
+              now: requireValue(admitted.adapter.timing, "source timing missing").queuedAtMs,
+              timeoutMs: expectedMs,
+            }),
           );
-          expect(context.chatAbortControllers.get(runId)?.sessionKey).toBe(childSessionKey);
           const callCount = mocks.agentCommand.mock.calls.length;
           await invokeAgent(request, { context, reqId: "replay", client: backendGatewayClient() });
           expect(mocks.agentCommand).toHaveBeenCalledTimes(callCount);

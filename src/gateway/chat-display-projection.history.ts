@@ -9,6 +9,7 @@ import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import {
   isCompletionReportInputProvenance,
+  isCronExecutionInputProvenance,
   isSubagentCoordinationInputProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
@@ -400,6 +401,9 @@ function shouldHideProjectedHistoryMessage(
     // Keep the agent's authored outcome visible, including requests for user help.
     return true;
   }
+  if (roleContent.role === "user" && isCronExecutionInputProvenance(provenance)) {
+    return true;
+  }
   if (roleContent.role === "user" && isCompletionReportInputProvenance(message.provenance)) {
     return true;
   }
@@ -544,7 +548,14 @@ export function filterVisibleProjectedHistoryMessages(
     if (
       next &&
       nextRoleContent &&
-      isHeartbeatOkResponse(nextRoleContent) &&
+      isHeartbeatOkResponse(
+        nextRoleContent,
+        undefined,
+        Boolean(
+          currentRoleContent &&
+          isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT, { heartbeatOnly: true }),
+        ),
+      ) &&
       !isProjectedForwardedMessage(next)
     ) {
       changed = true;

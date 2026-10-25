@@ -35,8 +35,6 @@ type SenderGateVerdict =
         | { accepted: false; transient: boolean }
       ));
 
-export type MailAuthenticator = typeof authenticate;
-
 function matchesImapSender(sender: string, entries: readonly string[]): boolean {
   const at = sender.lastIndexOf("@");
   if (at < 1) {
@@ -163,7 +161,6 @@ export async function evaluateImapSender(params: {
   raw: Buffer;
   internalDate: Date;
   account: ImapAccountConfig;
-  authenticator?: MailAuthenticator;
 }): Promise<SenderGateVerdict> {
   const fromValues = params.mail.from?.value ?? [];
   const fromHeaders = params.mail.headerLines.filter(({ key }) => key.toLowerCase() === "from");
@@ -183,7 +180,7 @@ export async function evaluateImapSender(params: {
   let result: AuthenticateResult | undefined;
   try {
     const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: 1 });
-    result = await (params.authenticator ?? authenticate)(params.raw, {
+    result = await authenticate(params.raw, {
       resolver: async (domain, type) =>
         type === "TXT" ? await resolver.resolveTxt(domain) : await resolver.resolve(domain),
       disableArc: true,

@@ -67,7 +67,6 @@ type LoginQrRaceResult =
   | { outcome: "failed"; message: string };
 
 const ACTIVE_LOGIN_TTL_MS = 3 * 60_000;
-const MAX_QR_RENDER_CHASES = 10;
 const activeLogins = new Map<string, ActiveLogin>();
 
 async function resetActiveLogin(accountId: string, reason?: string) {
@@ -96,6 +95,8 @@ function notifyQrUpdate(login: ActiveLogin) {
 function updateLoginQrState(accountId: string, login: ActiveLogin, qr: string, notify = false) {
   login.qr = qr;
   login.qrVersion += 1;
+  // A rotated QR must not join the previous version's in-flight render.
+  login.qrRenderPromise = null;
   if (notify) {
     notifyQrUpdate(login);
   }
@@ -133,31 +134,18 @@ async function ensureQrDataUrl(params: {
   }
 
   const renderPromise = (async () => {
-    for (let attempt = 0; attempt < MAX_QR_RENDER_CHASES; attempt += 1) {
-      const latest = activeLogins.get(params.accountId);
-      if (!latest || latest.id !== params.loginId || !latest.qr) {
-        throw new Error("WhatsApp QR is no longer active.");
-      }
-      if (latest.qrDataUrl && latest.qrDataUrlVersion === latest.qrVersion) {
-        return latest.qrDataUrl;
-      }
-
-      const qr = latest.qr;
-      const qrVersion = latest.qrVersion;
-      const dataUrl = await renderQrPngDataUrl(qr);
-      const refreshed = activeLogins.get(params.accountId);
-      if (!refreshed || refreshed.id !== params.loginId) {
-        return dataUrl;
-      }
-      if (refreshed.qrVersion === qrVersion && refreshed.qr === qr) {
-        refreshed.qrDataUrl = dataUrl;
-        refreshed.qrDataUrlVersion = qrVersion;
-        notifyQrUpdate(refreshed);
-        return dataUrl;
-      }
+    const dataUrl = await renderQrPngDataUrl(params.qr);
+    const latest = activeLogins.get(params.accountId);
+    if (
+      latest?.id === params.loginId &&
+      latest.qrVersion === params.qrVersion &&
+      latest.qr === params.qr
+    ) {
+      latest.qrDataUrl = dataUrl;
+      latest.qrDataUrlVersion = params.qrVersion;
+      notifyQrUpdate(latest);
     }
-
-    throw new Error("WhatsApp QR kept refreshing before the latest image could render.");
+    return dataUrl;
   })();
 
   current.qrRenderPromise = renderPromise;

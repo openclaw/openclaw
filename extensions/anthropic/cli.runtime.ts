@@ -13,46 +13,22 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import { readReplayedTaskId, recordTaskOwnership } from "./cli-runtime-tasks.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 
-function readReplayedTaskId(
-  message: Record<string, unknown>,
-  submittedInputUuids: ReadonlySet<string>,
-): string | undefined {
-  if (
-    message.type !== "user" ||
-    message.isReplay !== true ||
-    message.parent_tool_use_id !== null ||
-    (typeof message.uuid === "string" && submittedInputUuids.has(message.uuid)) ||
-    !isRecord(message.message)
-  ) {
-    return undefined;
-  }
-  // Before Claude Code 2.1.274, inline notification receipts omitted origin.
-  if (
-    message.origin !== undefined &&
-    (!isRecord(message.origin) ||
-      message.origin.kind !== "task-notification" ||
-      message.origin.subkind !== undefined)
-  ) {
-    return undefined;
-  }
-  const content = message.message.content;
-  const first = Array.isArray(content) ? content[0] : undefined;
-  const text =
-    typeof content === "string"
-      ? content
-      : isRecord(first) && first.type === "text" && typeof first.text === "string"
-        ? first.text
-        : "";
-  return /^<task-notification>\s*<task-id>([^<]+)<\/task-id>/u.exec(text)?.[1];
-}
-
+/**
+ * Host-internal, like the forwarded auth credential and not part of the plugin SDK: a host
+ * whose history owner can change while the run lasts (a native login) passes a check for
+ * where saved turn context leaves after startup, the prompt send and the prompt hook answer.
+ */
+export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
+  assertPrivateInputCurrent?: () => void;
+};
 type ClaudeCliTurn = {
-  context: CliBackendExecuteContext;
+  context: ClaudeCliExecuteContext;
   controller: AbortController;
   userInput: ReturnType<typeof createClaudeCliUserInputAuthorizer>;
   events: PassThrough;
@@ -64,10 +40,10 @@ type ClaudeCliTurn = {
   /** Hook reruns carry no input UUID and may rewrite text; retain their native input owner. */
   promptInputUuid: string;
   sawTerminalResult: boolean;
+  interrupted: boolean;
   foregroundTaskIds: Set<string>;
   foregroundBashToolUseIds: Set<string>;
   pendingBackgroundTaskIds: Set<string>;
-  subagentTaskIds: Set<string>;
   taskNotifications: Map<string, "queued" | "replayed">;
   /** Same-turn inputs written to native, keyed by UUID until their lifecycle completes. */
   injectedInputs: Map<
@@ -94,12 +70,21 @@ type ClaudeCliSession = {
   idleTimer?: ReturnType<typeof setTimeout>;
   hasInputLifecycle: boolean;
   closed: boolean;
+  // Tasks outlive inputs; false marks subagent work with no parent-stream query.
+  taskOwners: Map<string, string | false>;
+  // Native notification results identify task runs rather than task IDs.
+  taskRuns: Map<string, string>;
 };
 const sessions = new WeakMap<CliBackendLiveSessionHandle, ClaudeCliSession>();
 
 function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   const turn = session.currentTurn;
-  if (!turn || turn.controller.signal.aborted || turn.context.abortSignal?.aborted) {
+  if (
+    !turn ||
+    turn.interrupted ||
+    turn.controller.signal.aborted ||
+    turn.context.abortSignal?.aborted
+  ) {
     return undefined;
   }
   // A warm child can emit prior-input callbacks while the next admitted input is queued.
@@ -112,6 +97,24 @@ function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   } catch {
     return undefined;
   }
+}
+
+function privateInputHolds(turn: ClaudeCliTurn): boolean {
+  try {
+    turn.context.assertPrivateInputCurrent?.();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function carriesTurnContext(request: Record<string, unknown>, response: unknown): boolean {
+  return (
+    request.callback_id === "UserPromptSubmit" &&
+    isRecord(response) &&
+    isRecord(response.hookSpecificOutput) &&
+    response.hookSpecificOutput.additionalContext !== undefined
+  );
 }
 
 async function authorizeTool(
@@ -347,7 +350,39 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       Array.isArray(message.capabilities) && message.capabilities.includes("msg_lifecycle_v1");
   }
   const turn = session.currentTurn;
+  let taskId: string | undefined;
+  if (message.type === "system") {
+    const input = turn && (!session.hasInputLifecycle || turn.inputStarted) ? turn : undefined;
+    const inputUuid = input?.inputUuid ?? "";
+    if (message.subtype === "background_tasks_changed") {
+      if (Array.isArray(message.tasks)) {
+        for (const task of message.tasks) {
+          if (!isRecord(task)) {
+            continue;
+          }
+          const id = recordTaskOwnership(session, task, inputUuid);
+          if (
+            id &&
+            input &&
+            !input.interrupted &&
+            session.taskOwners.get(id) === input.inputUuid &&
+            (task.task_type === "local_agent" ||
+              task.task_type === "local_workflow" ||
+              (task.task_type === "local_bash" && input.foregroundTaskIds.has(id)))
+          ) {
+            // Disappearing from a snapshot does not acknowledge the queued answer.
+            input.pendingBackgroundTaskIds.add(id);
+          }
+        }
+      }
+    } else {
+      taskId = recordTaskOwnership(session, message, inputUuid);
+    }
+  }
   if (!turn) {
+    return;
+  }
+  if (turn.interrupted) {
     return;
   }
   if (message.type === "command_lifecycle") {
@@ -404,37 +439,20 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   ) {
     return;
   }
-  if (message.type === "system" && message.subtype === "task_started") {
-    if (message.owned_by_subagent === true) {
-      if (typeof message.task_id === "string" && message.task_id) {
-        turn.subagentTaskIds.add(message.task_id);
-      }
-    } else if (typeof message.task_id === "string" && message.task_id) {
-      // task_type is optional here; the background task list names it later.
-      if (message.is_backgrounded === false) {
-        turn.foregroundTaskIds.add(message.task_id);
-      }
-      const foregroundBash =
-        typeof message.tool_use_id === "string" &&
-        turn.foregroundBashToolUseIds.delete(message.tool_use_id);
-      if (foregroundBash && message.is_backgrounded === true) {
-        turn.pendingBackgroundTaskIds.add(message.task_id);
-      }
+  if (
+    message.type === "system" &&
+    message.subtype === "task_started" &&
+    taskId &&
+    session.taskOwners.get(taskId) === turn.inputUuid
+  ) {
+    if (message.is_backgrounded === false) {
+      turn.foregroundTaskIds.add(taskId);
     }
-  }
-  if (message.type === "system" && message.subtype === "background_tasks_changed") {
-    for (const task of Array.isArray(message.tasks) ? message.tasks : []) {
-      if (!isRecord(task) || typeof task.task_id !== "string" || !task.task_id) {
-        continue;
-      }
-      if (
-        task.task_type === "local_agent" ||
-        task.task_type === "local_workflow" ||
-        (task.task_type === "local_bash" && turn.foregroundTaskIds.has(task.task_id))
-      ) {
-        // Leaving the live task list is not acknowledgement of its queued answer.
-        turn.pendingBackgroundTaskIds.add(task.task_id);
-      }
+    const foregroundBash =
+      typeof message.tool_use_id === "string" &&
+      turn.foregroundBashToolUseIds.delete(message.tool_use_id);
+    if (foregroundBash && message.is_backgrounded === true) {
+      turn.pendingBackgroundTaskIds.add(taskId);
     }
   }
   // A replay receipt acknowledges consumption within the current query. Keep its
@@ -445,21 +463,18 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     turn.foregroundTaskIds.delete(replayedTaskId);
     turn.taskNotifications.set(replayedTaskId, "replayed");
   }
-  if (
-    message.type === "system" &&
-    message.subtype === "task_notification" &&
-    typeof message.task_id === "string" &&
-    message.task_id &&
-    // Subagent completions have no parent result and must not consume its queue slots.
-    !turn.subagentTaskIds.delete(message.task_id)
-  ) {
-    // Include non-held tasks: each queued notification has its own ordered result.
-    turn.taskNotifications.set(message.task_id, "queued");
-  }
-  if (message.type === "result") {
-    // Only another input start or answer supersedes a held result. Idle/status
-    // trailers are bookkeeping, not evidence that native opened another query.
-    await emitHeldInterimResult(turn);
+  if (message.type === "system" && message.subtype === "task_notification" && taskId) {
+    if (message.status === "stopped") {
+      // Stopped work has no notification query to wait for.
+      turn.pendingBackgroundTaskIds.delete(taskId);
+      turn.foregroundTaskIds.delete(taskId);
+      turn.taskNotifications.delete(taskId);
+    } else if (turn.foregroundTaskIds.has(taskId) && !turn.pendingBackgroundTaskIds.has(taskId)) {
+      turn.foregroundTaskIds.delete(taskId);
+    } else {
+      // Older inputs still consume their own ordered notification result.
+      turn.taskNotifications.set(taskId, "queued");
+    }
   }
   let completesTurn = false;
   let holdsForInput = false;
@@ -468,25 +483,27 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       message.is_error === true ||
       (typeof message.subtype === "string" && message.subtype.startsWith("error")) ||
       (typeof message.result === "string" && hasClaudeRawToolInvocation(message.result));
-    const taskNotification =
-      isRecord(message.origin) &&
-      message.origin.kind === "task-notification" &&
-      message.origin.subkind === undefined;
-    if (taskNotification && message.subtype === "success" && !failed) {
+    const origin = isRecord(message.origin) ? message.origin : undefined;
+    const taskNotification = origin?.kind === "task-notification" && origin.subkind === undefined;
+    const runTaskId =
+      taskNotification && typeof origin?.runId === "string"
+        ? session.taskRuns.get(origin.runId)
+        : undefined;
+    const notifiedTaskId = taskNotification
+      ? (runTaskId ?? turn.taskNotifications.keys().next().value)
+      : undefined;
+    // A prior input's continuation answers that input, not this one. Without a run ID
+    // the queue order is the only correlation, so a failure still ends this turn.
+    const priorInputResult =
+      notifiedTaskId !== undefined &&
+      session.taskOwners.get(notifiedTaskId) !== turn.inputUuid &&
+      (!failed || runTaskId !== undefined);
+    if (taskNotification && message.subtype === "success" && !failed && notifiedTaskId) {
       // A later task can finish during this query. Consume one notification, not all
       // completed tasks; retain pending work on failure so completeTurn retires it.
-      const taskId = turn.taskNotifications.keys().next().value;
-      if (taskId) {
-        turn.taskNotifications.delete(taskId);
-        turn.pendingBackgroundTaskIds.delete(taskId);
-        turn.foregroundTaskIds.delete(taskId);
-      }
-    }
-    // Inline receipts have no separate result. The query just answered them too.
-    for (const [taskId, state] of turn.taskNotifications) {
-      if (state === "replayed") {
-        turn.taskNotifications.delete(taskId);
-      }
+      turn.taskNotifications.delete(notifiedTaskId);
+      turn.pendingBackgroundTaskIds.delete(notifiedTaskId);
+      turn.foregroundTaskIds.delete(notifiedTaskId);
     }
     // A batched notification can acknowledge input without running the model.
     const queuedContinuation =
@@ -496,11 +513,20 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       message.result === "" &&
       message.stop_reason === null &&
       message.terminal_reason === undefined;
-    turn.sawTerminalResult = true;
-    // Background work holds successful interim results, never terminal failures.
-    completesTurn = (turn.pendingBackgroundTaskIds.size === 0 && !queuedContinuation) || failed;
-    // Injected input holds a successful result until its lifecycle says whether it was the last.
-    holdsForInput = completesTurn && !failed && turn.injectedInputs.size > 0;
+    if (!priorInputResult) {
+      // A prior input cannot supersede this input's held answer or replay receipts.
+      await emitHeldInterimResult(turn);
+      for (const [replayedId, state] of turn.taskNotifications) {
+        if (state === "replayed") {
+          turn.taskNotifications.delete(replayedId);
+        }
+      }
+      turn.sawTerminalResult = true;
+      // Background work holds successful interim results, never terminal failures.
+      completesTurn = (turn.pendingBackgroundTaskIds.size === 0 && !queuedContinuation) || failed;
+      // Injected input holds a successful result until its lifecycle says whether it was the last.
+      holdsForInput = completesTurn && !failed && turn.injectedInputs.size > 0;
+    }
   }
   if (holdsForInput) {
     turn.heldResult = message;
@@ -525,6 +551,8 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
     capability,
     hasInputLifecycle: false,
     closed: false,
+    taskOwners: new Map(),
+    taskRuns: new Map(),
     handle: {
       generation: randomUUID(),
       fingerprint: capability?.fingerprint ?? randomUUID(),
@@ -542,7 +570,7 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
 }
 
 export async function* executeClaudeCli(
-  context: CliBackendExecuteContext,
+  context: ClaudeCliExecuteContext,
   secretInput?: ClaudeCliSecretInput,
 ): AsyncIterable<Record<string, unknown>> {
   context.assertCurrent?.();
@@ -575,11 +603,11 @@ export async function* executeClaudeCli(
     promptSubmitted: false,
     promptInputUuid: inputUuid,
     sawTerminalResult: false,
+    interrupted: false,
     foregroundTaskIds: new Set(),
     foregroundBashToolUseIds: new Set(),
     pendingBackgroundTaskIds: new Set(),
     injectedInputs: new Map(),
-    subagentTaskIds: new Set(),
     taskNotifications: new Map(),
   };
   session.currentTurn = turn;
@@ -621,7 +649,10 @@ export async function* executeClaudeCli(
             // The transport invokes this synchronously at its final write, after all awaits.
             return () => {
               if (admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted) {
-                return response;
+                // Saved turn context leaves here, so it takes the private-input check too.
+                return carriesTurnContext(request, response) && !privateInputHolds(admittedTurn)
+                  ? {}
+                  : response;
               }
               const message = "The OpenClaw run is no longer active.";
               if (request.subtype === "can_use_tool") {
@@ -653,9 +684,39 @@ export async function* executeClaudeCli(
         await transport.initialize();
       }
       context.assertCurrent?.();
+      context.assertPrivateInputCurrent?.();
       if (session.closed || session.currentTurn !== turn) {
         throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
       }
+      context.registerTurnInterrupt?.({
+        async interrupt() {
+          context.assertCurrent?.();
+          if (session.currentTurn !== turn && turn.sawTerminalResult) {
+            return;
+          }
+          if (session.closed || session.currentTurn !== turn || turn.controller.signal.aborted) {
+            throw new Error("The Claude CLI turn is no longer active.");
+          }
+          turn.interrupted = true;
+          // The host requests this only after consuming a successful yield tool result.
+          // Native interrupt would persist a false user stop in the resumable transcript.
+          turn.sawTerminalResult = true;
+          // Native output owns the session ID; the input ID may still name a fork's parent.
+          if (
+            !turn.events.write({
+              type: "result",
+              subtype: "success",
+              is_error: false,
+              result: "",
+            })
+          ) {
+            await once(turn.events, "drain", { signal: turn.controller.signal });
+          }
+          completeTurn(session, turn);
+          session.handle.close("idle");
+          await session.handle.waitForExit();
+        },
+      });
       await transport.send(createUserInput(context, context.prompt, turn.inputUuid));
       context.registerMessageInjection?.({
         isAvailable: () =>

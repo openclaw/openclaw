@@ -5,6 +5,10 @@ import { pathToFileURL } from "node:url";
 import type { NodePath } from "@babel/traverse";
 import type { CallExpression, Program, Statement } from "@babel/types";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import {
+  annotateRuntimeExecutionError,
+  noteRuntimePluginExecution,
+} from "../infra/runtime-profile.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {
@@ -42,7 +46,6 @@ export type PluginModuleLoaderFactory = typeof createJiti;
 type ResolvePluginModuleLoaderCacheEntryParams = {
   modulePath: string;
   importerUrl: string;
-  argvEntry?: string;
   preferBuiltDist?: boolean;
   loaderFilename?: string;
   aliasMap?: Record<string, string>;
@@ -190,8 +193,8 @@ function preserveJitiDynamicImportResults(loader: ReturnType<typeof createJiti>)
 function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCacheEntryParams) {
   const loaderFilename = toSafeImportPath(params.loaderFilename ?? params.modulePath);
   const tryNative = params.tryNative ?? resolvePluginLoaderTryNative(params.modulePath, params);
-  // Explicit maps are content-keyed and captured before a retained loader can escape.
-  const explicit = params.aliasMap ? { ...params.aliasMap } : undefined;
+  // Explicit maps are producer-owned facts; loaders retain their content-keyed view.
+  const explicit = params.aliasMap;
   const aliases = explicit
     ? {
         cacheKey: createPluginLoaderModuleCacheKey({ tryNative, aliasMap: explicit }),
@@ -201,7 +204,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
       }
     : preparePluginLoaderAliases({
         modulePath: params.modulePath,
-        argv1: params.argvEntry ?? process.argv[1],
+        argv1: process.argv[1],
         moduleUrl: params.importerUrl,
         devSourceRoot: params.devSourceRoot,
         pluginSdkResolution: params.pluginSdkResolution,
@@ -297,31 +300,36 @@ function createPluginModuleLoader(
     if (cached) {
       return cached.value;
     }
+    noteRuntimePluginExecution(target);
     // Lazy transforms and nested imports must read the creating generation,
     // even when a retained loader is invoked from a newer operation scope.
-    const loaded = withPluginCache(params.cache, () => {
-      pluginModuleLoaderStats.calls += 1;
-      if (params.tryNative) {
-        const native = tryNativeRequireJavaScriptModule(target, {
-          aliasMap: resolveNativeAlias,
-          fallbackOnMissingDependency: true,
-        });
-        if (native.ok) {
-          pluginModuleLoaderStats.nativeHits += 1;
-          return native.moduleExport;
+    try {
+      const loaded = withPluginCache(params.cache, () => {
+        pluginModuleLoaderStats.calls += 1;
+        if (params.tryNative) {
+          const native = tryNativeRequireJavaScriptModule(target, {
+            aliasMap: resolveNativeAlias,
+            fallbackOnMissingDependency: true,
+          });
+          if (native.ok) {
+            pluginModuleLoaderStats.nativeHits += 1;
+            return native.moduleExport;
+          }
+          pluginModuleLoaderStats.nativeMisses += 1;
+          pluginModuleLoaderStats.sourceTransformFallbacks += 1;
+        } else {
+          // Jiti shares Node's CJS cache, but native ESM chunks are not in it.
+          // Explicit source-transform callers keep their graph separate from native loads.
+          pluginModuleLoaderStats.sourceTransformForced += 1;
         }
-        pluginModuleLoaderStats.nativeMisses += 1;
-        pluginModuleLoaderStats.sourceTransformFallbacks += 1;
-      } else {
-        // Jiti shares Node's CJS cache, but native ESM chunks are not in it.
-        // Explicit source-transform callers keep their graph separate from native loads.
-        pluginModuleLoaderStats.sourceTransformForced += 1;
-      }
-      recordSourceTransformTarget(target);
-      return getLoadWithSourceTransform()(target);
-    });
-    source.variants.set(params.scopedCacheKey, { exports: { value: loaded } });
-    return loaded;
+        recordSourceTransformTarget(target);
+        return getLoadWithSourceTransform()(target);
+      });
+      source.variants.set(params.scopedCacheKey, { exports: { value: loaded } });
+      return loaded;
+    } catch (error) {
+      throw annotateRuntimeExecutionError(error, "Plugin module loading");
+    }
   };
 }
 
@@ -441,7 +449,9 @@ export function loadPluginPublicSurfaceModuleSync(
   }
   const sentinel: Record<string, unknown> = {};
   const boundaryRoot = getPluginCacheRoot(params.boundaryRoot).rootDir;
-  source.disposeModule ??= () => clearPluginModuleRequireCache(modulePath, boundaryRoot);
+  if (params.capturedSource || params.origin !== "bundled") {
+    source.disposeModule ??= () => clearPluginModuleRequireCache(modulePath, boundaryRoot);
+  }
   source.publicSurface = { exports: sentinel };
   try {
     Object.assign(sentinel, params.loadModule(modulePath));

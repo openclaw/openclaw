@@ -1,9 +1,12 @@
-import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { definePluginEntry, type OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createPluginRuntimeProcessEntrypoint,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { findModel } from "./src/catalog.js";
 import { ConfigSchema, resolveOnnxConfig } from "./src/config.js";
-import { createOnnxProvider } from "./src/decisions.js";
+import { createPreparedOnnxProvider } from "./src/decisions.js";
 import { InferenceWorkerClient } from "./src/worker-client.js";
 
 function selectedModels(config: OpenClawConfig): string[] {
@@ -33,13 +36,14 @@ export default definePluginEntry({
     if (!api.runtimeSource) {
       throw new Error("ONNX requires runtime entrypoint metadata from its OpenClaw host.");
     }
-    const workerUrl = new URL(
-      `./src/inference.worker${path.extname(api.runtimeSource)}`,
-      pathToFileURL(api.runtimeSource),
+    const workerUrl = resolveRuntimeWorkerUrl(
+      createPluginRuntimeProcessEntrypoint("onnxInference", pathToFileURL(api.runtimeSource).href),
     );
     const config = resolveOnnxConfig(api.pluginConfig, api.resolvePath);
     const client = new InferenceWorkerClient({ workerUrl, config });
-    api.registerDecisionProvider(createOnnxProvider(client, (message) => api.logger.warn(message)));
+    api.registerDecisionProvider(
+      createPreparedOnnxProvider(client, (message) => api.logger.warn(message)),
+    );
     api.registerService({
       id: "onnx-worker",
       async start(context) {

@@ -14,15 +14,16 @@ import { GatewayClientRequestError } from "../gateway/client.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { resolveExplicitGatewayAuth } from "../gateway/credentials.js";
 import {
-  loadDeviceIdentityIfPresent,
-  loadOrCreateDeviceIdentity,
-} from "../infra/device-identity.js";
+  loadDeviceIdentityIfPresentAsync,
+  loadOrCreateDeviceIdentityAsync,
+} from "../infra/device-identity-async.js";
+import { isTruthyEnvValue } from "../infra/env.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
 import { canReuseNodeHostDeviceToken } from "./gateway-auth.js";
@@ -154,7 +155,7 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
 export async function loadResumableNodeHostGateway(): Promise<NodeHostGatewayConfig | undefined> {
   // A failed first enrollment saves the endpoint before any device token exists.
   const gateway = (await loadNodeHostConfig())?.gateway;
-  const identity = gateway ? loadDeviceIdentityIfPresent() : null;
+  const identity = gateway ? await loadDeviceIdentityIfPresentAsync() : null;
   return gateway &&
     identity &&
     (await canReuseNodeHostDeviceToken({
@@ -169,8 +170,21 @@ export async function loadResumableNodeHostGateway(): Promise<NodeHostGatewayCon
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
   await initializeSqliteRuntimeCapabilities();
-  ensureNodeHostStateReady();
+  await ensureNodeHostStateReady();
   const cfg = await captureRuntimeConfigAsyncReader()();
+  if (
+    !isNodeHostLauncherChild() &&
+    !opts.ephemeral &&
+    /[/\\]dist[/\\]index\.(?:js|mjs)$/.test(process.argv[1] ?? "") &&
+    cfg.nodeHost?.autoUpdate?.enabled !== false &&
+    cfg.update?.checkOnStart !== false &&
+    !isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE) &&
+    !isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)
+  ) {
+    writeStderrLine(
+      "node auto-update unavailable: this process bypasses the node launcher. Run openclaw doctor --fix to repair the installed node service, or start openclaw node run through the package CLI.",
+    );
+  }
   const savedConfig = await loadNodeHostConfig();
   const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
@@ -187,7 +201,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     opts.gatewayBootstrapExpiresAtMs !== undefined &&
     opts.gatewayBootstrapExpiresAtMs <= Date.now()
   ) {
-    const identity = loadDeviceIdentityIfPresent();
+    const identity = await loadDeviceIdentityIfPresentAsync();
     if (
       opts.preferGatewayBootstrapToken ||
       opts.gatewayAuthFromEnv ||
@@ -262,7 +276,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     commands: config.commands,
   });
   logInfo(`node-host: advertised commands: ${preparedRuntime.manifest.commands.join(", ")}`);
-  const deviceIdentity = loadOrCreateDeviceIdentity();
+  const deviceIdentity = await loadOrCreateDeviceIdentityAsync();
   const { token, password } =
     gatewayBootstrapToken || reuseDeviceTokenOnly
       ? {}
@@ -508,7 +522,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           failures.push(error);
         }
       }
-      throwNodeHostCleanupErrors(failures, "node host shutdown cleanup failed");
+      throwCollectedErrors(failures, "node host shutdown cleanup failed");
     } finally {
       clearInterval(lifetimeInterval);
     }

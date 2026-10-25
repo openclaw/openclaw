@@ -38,6 +38,12 @@ Copy the **state directory** (`~/.openclaw/` by default) and your **workspace** 
 Run `openclaw status` on the old machine to confirm your state directory path. Custom profiles use `~/.openclaw-<profile>/` or a path set via `OPENCLAW_STATE_DIR`.
 </Tip>
 
+After moving or renaming the state directory, run `openclaw gateway restart`.
+The Gateway keeps its state and install paths from startup, so a full restart is
+required; a reload is not enough. Then run `openclaw doctor` to confirm there is
+no CLI/Gateway state-directory mismatch. Use the intended profile or
+`OPENCLAW_STATE_DIR` for both commands.
+
 ### Migration steps
 
 <Steps>

@@ -8,7 +8,7 @@ Run sandboxed tools on a machine leased by Crabbox. OpenClaw manages the remote 
 
 ## Crabbox backend
 
-Initial support is for direct Daytona leases. Crabbox 0.77.0 or newer is required, including fixed-lease recovery, repository-owned `exec`, and `stop --current-repo`. OpenClaw prepares a verified managed distribution when the selected executable is missing or outdated, preserving the operator's binary and config; `openclaw doctor --fix` prepares configured sandboxes too. Authenticate Crabbox for Daytona on the Gateway host, then check support from the workspace that will own the sandbox:
+Initial support is for direct Daytona leases. Crabbox 0.79.2 or newer is required, including fixed-lease recovery, repository-owned `exec`, and `stop --current-repo`. OpenClaw prepares a verified managed distribution when the selected executable is missing or outdated, preserving the operator's binary and config; `openclaw doctor --fix` prepares configured sandboxes too. Authenticate Crabbox for Daytona on the Gateway host, then check support from the workspace that will own the sandbox:
 
 ```bash
 crabbox exec --check --provider daytona
@@ -57,6 +57,8 @@ Every remote command, file operation, upload, and staged-exec cleanup runs throu
 The `sandbox` block registers the backend. `provider`, `class`, `ttl`, and `idleTimeout` are optional and fall back to the Crabbox configuration on the host. Set `binary` to select a particular Crabbox executable; otherwise OpenClaw discovers a sibling build or uses `crabbox` from `PATH`. `agents.defaults.sandbox.ssh.workspaceRoot` still selects the remote root. Other SSH settings, including `target` and identity settings, do not configure the Crabbox transport: Crabbox owns its private provider connection.
 
 Provider credentials are inherited by the local Crabbox process. They are not automatically copied into the remote command environment. OpenClaw stages the requested remote environment privately through the same command owner, preserving raw file bytes and command output.
+
+If lease inspection fails, `openclaw sandbox list` reports the error instead of showing the runtime as stopped. Resolve the reported Crabbox or provider error and retry. A confirmed missing or released lease still appears as stopped.
 
 TTL is total lifetime from creation; idle timeout is the inactivity window. The earlier deadline ends the lease. Omitted values inherit host configuration, or Crabbox's 30-minute TTL and idle defaults. Policy may clamp requests. The default maximum is four hours; trusted direct-provider `maxTTL` configuration can allow up to 24 hours. `keep` does not exempt a sandbox from expiry. The example's `2h` / `30m` is a bounded multi-turn request, not a persistence guarantee.
 

@@ -13,7 +13,6 @@ import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-
 import type { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import type {
   SessionIdentityMutation,
@@ -25,6 +24,31 @@ import type { restoreSubagentRunsFromDisk } from "./subagent-registry-persistenc
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
+const snapshotRuns = (runs: Map<string, SubagentRunRecord>) => new Map(runs);
+
+export function createSessionEntryReadMocks(sessionStore: Record<string, SessionEntry>) {
+  return {
+    readSessionEntryReadOnlyInWorker: vi.fn<
+      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
+    >(async (scope, assertCurrent) => {
+      assertCurrent?.();
+      const entry = await Promise.resolve(sessionStore[scope.sessionKey]);
+      assertCurrent?.();
+      return entry;
+    }),
+    withSessionEntryReadOnlyInWorker: vi.fn<typeof withSessionEntryReadOnlyInWorker>(
+      async (scope, assertCurrent, consume) => {
+        assertCurrent();
+        const result = await consume(
+          { ok: true, value: sessionStore[scope.sessionKey] },
+          { kind: "file", assertCurrent },
+        );
+        assertCurrent();
+        return result;
+      },
+    ),
+  };
+}
 
 export function createSubagentRegistryMockState() {
   const sessionIdentityMutationListeners = new Set<SessionIdentityMutationListener>();
@@ -107,9 +131,9 @@ export function createSubagentRegistryMockState() {
         return next;
       },
     ),
-    resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
-      return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
-    }),
+    resolveAgentIdFromSessionKey: vi.fn(
+      (sessionKey: string) => sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
+    ),
     resolveStorePath: vi.fn(() => "/tmp/test-session-store.json"),
     emitSessionLifecycleEvent: vi.fn(),
     onSessionIdentityMutation: vi.fn((listener: SessionIdentityMutationListener) =>
@@ -120,14 +144,8 @@ export function createSubagentRegistryMockState() {
     ),
     persistRegistryRows: vi.fn<MockSubagentRegistryRows>(),
     restoreSubagentRunsFromDisk: vi.fn<typeof restoreSubagentRunsFromDisk>(async () => 0),
-    getSubagentRunsSnapshotForRead: vi.fn(
-      (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) =>
-        new Map(runs),
-    ),
-    getSubagentRunsSnapshotForChildSession: vi.fn(
-      (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) =>
-        new Map(runs),
-    ),
+    getSubagentRunsSnapshotForRead: vi.fn(snapshotRuns),
+    getSubagentRunsSnapshotForChildSession: vi.fn(snapshotRuns),
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
     runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
@@ -142,11 +160,6 @@ export function createSubagentRegistryMockState() {
     removeInternalSessionEffectsSession: vi.fn(async () => {}),
     resolveAgentTimeoutMs: vi.fn(() => 1_000),
     dispatchRecoveryAgent: vi.fn(),
-    getGatewayRecoveryRuntime: vi.fn(() => ({
-      dispatchAgent: mocks.dispatchRecoveryAgent as GatewayRecoveryRuntime["dispatchAgent"],
-      waitForAgent: vi.fn(),
-      sendRecoveryNotice: vi.fn(),
-    })),
     lifecycleGeneration: "test-generation",
   };
   return Object.assign(mocks, {
@@ -185,11 +198,8 @@ export function createSubagentRegistryMockState() {
         assertCurrent,
         readSessionSettings: () => {
           assertCurrent();
-          const entry = mocks.entries[input.sessionKey];
-          return {
-            permissionMode: entry?.permissionMode,
-            toolOverrides: entry?.toolOverrides,
-          };
+          const { permissionMode, toolOverrides } = mocks.entries[input.sessionKey] ?? {};
+          return { permissionMode, toolOverrides };
         },
         bindCreation: () => {
           throw new Error("Registry fixtures do not supply committed session creation receipts.");

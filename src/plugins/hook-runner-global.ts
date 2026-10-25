@@ -18,13 +18,6 @@ import { createHookRunner, type HookRunner } from "./hooks.js";
 export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): void {
   state.registry = registry;
   ensureGlobalHookRunner();
-
-  const hookCount = registry.hooks.length;
-  if (hookCount > 0) {
-    createSubsystemLogger("plugins").debug(
-      `hook runner initialized with ${hookCount} registered hooks`,
-    );
-  }
 }
 
 /**
@@ -34,7 +27,7 @@ export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): 
  */
 export function ensureGlobalHookRunner(): HookRunner {
   if (!state.hookRunner) {
-    state.hookRunner = createHookRunner(createLiveHookRegistryFacade(state), {
+    state.hookRunner = createHookRunner(createLiveHookRegistryFacade(), {
       logger: createSubsystemLogger("plugins"),
       catchErrors: true,
       failurePolicyByHook: {

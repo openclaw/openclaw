@@ -15,11 +15,6 @@ type NormalizedOpenAICompletionsDelta = {
   toolCalls: ChatCompletionToolCallDelta[];
 };
 
-type OpenAICompletionsToolCallFinalizationOptions = {
-  allowSilentToolCallPromotion?: boolean;
-  onConfirmedToolCall?: (block: ToolCall, contentIndex: number) => void;
-};
-
 /** Keep encrypted provider reasoning attached to the first matching tool call. */
 export function createOpenAIEncryptedToolCallReasoningTracker() {
   const firstBlocks = new Map<string, { block: ToolCall; signature?: string }>();
@@ -235,7 +230,10 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
 /** Publish only executable calls; streaming scratch state never belongs in replay. */
 export function finalizeOpenAICompletionsToolCalls(
   output: Pick<AssistantMessage, "content" | "stopReason" | "errorMessage">,
-  options: OpenAICompletionsToolCallFinalizationOptions = {},
+  options: {
+    allowSilentToolCallPromotion?: boolean;
+    onConfirmedToolCall?: (block: ToolCall, contentIndex: number) => void;
+  } = {},
 ): void {
   const isToolCall = (block: AssistantMessage["content"][number]): block is ToolCall =>
     block.type === "toolCall";

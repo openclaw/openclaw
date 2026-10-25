@@ -1,76 +1,25 @@
-import type { JSX } from "@solidjs/web";
 import { Dynamic } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import {
   presenceViewerActivity,
   presenceActivityLabel,
   presenceViewerLabel,
-  projectOnlinePresenceViewers,
-  profilePresenceViewer,
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
-import { sidebarOnlineCountFor, SidebarOnlineOrder } from "./sidebar-online-order.ts";
+import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
+import { sidebarOnlineCountFor } from "./sidebar-online-order.ts";
+import { resolveSidebarOnline } from "./sidebar-online-state.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
-import "./sidebar-collapse-toggle.tsx";
+import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 
-const onlineOrders = new WeakMap<
-  HTMLElement,
-  {
-    gateway: ApplicationGateway | undefined;
-    revision: number | undefined;
-    viewerId: string | undefined;
-    order: SidebarOnlineOrder;
-  }
->();
-
-export function sidebarOnlineOrder(host: AppSidebarRenderHost): SidebarOnlineOrder {
-  const element = host.hostElement;
-  const gateway = host.sessionDataContext?.gateway;
-  const revision = gateway?.connectionRevision;
-  const viewerId = host.sidebarSnapshot?.footer?.id ?? gateway?.snapshot.selfUser?.id;
-  let cached = onlineOrders.get(element);
-  if (
-    !cached ||
-    cached.gateway !== gateway ||
-    cached.revision !== revision ||
-    cached.viewerId !== viewerId
-  ) {
-    cached = { gateway, revision, viewerId, order: new SidebarOnlineOrder() };
-    onlineOrders.set(element, cached);
-  }
-  return cached.order;
-}
-
-export function resolveSidebarOnline(host: AppSidebarRenderHost) {
-  const saved = host.sidebarSnapshot;
-  return sidebarOnlineOrder(host).resolve({
-    users:
-      saved?.onlineUsers ??
-      (host.sessionData.presencePayload
-        ? projectOnlinePresenceViewers(host.sessionData.presencePayload)
-        : null),
-    counts: saved ? new Map(saved.onlineCounts) : host.sessionData.ownerCounts.counts,
-    countsFailed: !saved && host.sessionData.ownerCounts.error !== null,
-    presentation: saved ? "snapshot" : "live",
-    sortMode: host.people.sortMode,
-    statusFilter: host.people.statusFilter,
-    offlineUsers:
-      saved?.offlineUsers ??
-      (host.people.directory?.result?.profiles ?? [])
-        .filter((profile) => !profile.mergedInto)
-        .map(profilePresenceViewer),
-    presenceFilter: host.people.presenceFilter,
-  });
-}
-
-export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element {
+export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
+  const host = props.host;
   const sectionId = "online";
   const snapshot = () => host.sidebarSnapshot;
   const online = createMemo(() => resolveSidebarOnline(host));
@@ -103,7 +52,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
           ]}
           onChange={(value) => {
             if (value === "online" || value === "all") {
-              host.people.setPresenceFilter(value);
+              host.people.set("presenceFilter", value);
             }
           }}
         />
@@ -125,16 +74,16 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
         >
           <Icon name="listFilter" />
         </button>
-        <openclaw-sidebar-collapse-toggle prop:onToggle={() => host.onToggleSidebar?.()} />
+        <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
       </div>
-      {host.people.directory?.loading && (
+      {host.peopleView?.directory()?.loading && (
         <span class="sidebar-session-empty-hint">{t("common.loading")}</span>
       )}
-      {Boolean(host.people.directory?.error) && (
+      {Boolean(host.peopleView?.directory()?.error) && (
         <button
           type="button"
           class="sidebar-online__retry"
-          onClick={() => void host.people.directory?.load(true)}
+          onClick={() => void host.peopleView?.directory()?.load(true)}
         >
           {t("presence.directoryFailed")}
         </button>
@@ -160,11 +109,14 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                     running: String(workload()!.running),
                   })
                 : t("presence.sessions.unavailable");
-            const activity = () =>
-              personActivityLink(user().identity?.id, routing(), presenceViewerLabel(user()));
+            const activity = createMemo(() =>
+              personActivityLink(user().identity?.id, routing(), presenceViewerLabel(user())),
+            );
+            let row: HTMLElement;
 
             return (
               <div
+                ref={(element) => (row = element)}
                 class="sidebar-online__row"
                 draggable={!snapshot() && user().identity?.type === "profile" ? "true" : "false"}
                 onDragStart={(event: DragEvent) => {
@@ -180,6 +132,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                 data-person-card
               >
                 <Dynamic
+                  ref={(element: HTMLElement) => host.personCardTriggers.set(row, element)}
                   component={activity() ? "a" : "button"}
                   class="sidebar-online__person"
                   type={activity() ? undefined : "button"}
@@ -198,11 +151,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                   })}
                 >
                   <span class="sidebar-online__avatar" aria-hidden="true">
-                    <openclaw-viewer-avatar
-                      prop:user={user()}
-                      prop:markAsViewer={false}
-                      variant="footer"
-                    />
+                    <ViewerAvatar user={user()} markAsViewer={false} variant="footer" />
                   </span>
                   <span class="sidebar-online__person-name">{presenceViewerLabel(user())}</span>
                   {workload() && (workload()!.open > 0 || workload()!.running > 0) ? (

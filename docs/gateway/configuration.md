@@ -52,7 +52,7 @@ field map and defaults.
   <Tab title="CLI (one-liners)">
     ```bash
     openclaw config get agents.defaults.workspace
-    openclaw config set agents.defaults.heartbeat.every "2h"
+    openclaw config set agents.defaults.userTimezone "Europe/Vienna"
     openclaw config unset plugins.entries.brave.config.webSearch.apiKey
     ```
   </Tab>
@@ -88,6 +88,11 @@ carries through nested objects, wildcard (`*`), array-item (`[]`), and `anyOf`/
 `oneOf`/`allOf` branches. Runtime plugin and channel schemas merge in when the
 manifest registry is loaded.
 
+Use `config.get` to read a redacted config snapshot without building the form
+schema. Request `config.schema` or `config.schema.lookup` when you need field
+metadata. The Gateway shares these results across clients and refreshes them
+when the active config or plugin generation changes.
+
 Every config leaf has a common or advanced presentation tier in `uiHints`.
 `advanced: false` marks common settings and `advanced: true` marks advanced
 settings. A leaf inherits the nearest ancestor tier when it has no direct hint.
@@ -98,7 +103,7 @@ Startup migration uses the same fixed, prompt-free transforms as `openclaw docto
 
 When validation still fails:
 
-- The Gateway does not boot
+- `openclaw gateway run` reports the config issues and exits with code `78`, with SQLite or PostgreSQL state
 - Only diagnostic commands work (`openclaw doctor`, `openclaw logs`, `openclaw health`, `openclaw status`)
 - Run `openclaw doctor` to see exact issues
 - Run `openclaw doctor --fix` (`--repair` is the same flag, and `--yes` skips prompts) to apply repairs
@@ -116,6 +121,12 @@ The Gateway blocks writes that look like accidental clobbers - dropping the effe
 allows destructive changes. Mode checks resolve `$include` and environment references
 first. Missing `meta` is recorded as a write anomaly. Promotion to last-known-good is
 skipped when a candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
+Suspicious external reductions and stub-shaped snapshots also leave the trusted
+recovery copy unchanged during startup and hot reload. An ordinary accepted edit
+to an already-truncated file does not approve that earlier loss for replacing the
+backup, so Doctor can still restore the intact configuration.
+The health owner carries that anomaly across automatic metadata stamping and later
+reads; stamping a missing `meta` section does not restore the lost settings.
 
 ## Configuration pages
 
@@ -145,7 +156,7 @@ the page that now holds the content.
 - <a id="configure-sessions-and-resets" />[Configure sessions and resets](/gateway/configuration/common-tasks#configure-sessions-and-resets)
 - <a id="enable-sandboxing" />[Enable sandboxing](/gateway/configuration/common-tasks#enable-sandboxing)
 - <a id="enable-relay-backed-push-for-official-ios-builds" />[Enable relay-backed push for official iOS builds](/gateway/configuration/common-tasks#enable-relay-backed-push-for-official-ios-builds)
-- <a id="set-up-heartbeat-periodic-check-ins" />[Set up heartbeat (periodic check-ins)](/gateway/configuration/common-tasks#set-up-heartbeat-periodic-check-ins)
+- <a id="set-up-heartbeat-periodic-check-ins" />[Set up periodic check-ins](/gateway/configuration/common-tasks#set-up-heartbeat-periodic-check-ins)
 - <a id="configure-cron-jobs" />[Configure cron jobs](/gateway/configuration/common-tasks#configure-cron-jobs)
 - <a id="set-up-webhooks-hooks" />[Set up webhooks (hooks)](/gateway/configuration/common-tasks#set-up-webhooks-hooks)
 - <a id="configure-multi-agent-routing" />[Configure multi-agent routing](/gateway/configuration/common-tasks#configure-multi-agent-routing)

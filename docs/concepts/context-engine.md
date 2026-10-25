@@ -100,6 +100,26 @@ their caller-owned lifetime.
 
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
+### Provider compaction ownership
+
+On direct OpenAI API-key routes using `openai-responses`, when the active context
+engine declares `info.ownsCompaction: true`, OpenClaw disables native compaction
+and stored Responses checkpoint replay by default. Set
+`params.responsesServerCompaction` explicitly to `true` to opt in. Engines that
+do not own compaction, including `legacy`, retain the existing default-on behavior
+on eligible routes. Native ChatGPT sign-in (`openai-chatgpt-responses`), the Codex
+app-server harness, and other providers are unchanged.
+
+Preexisting Responses checkpoints are bypassed while this ownership guard is
+active; their stored data is not deleted. Explicit opt-in allows a matching
+Responses checkpoint to take precedence over the selected engine's assembled
+context. Choose it only when you want provider-managed context to override engine
+assembly for those requests.
+
+On these direct API-key routes, memory-extraction (memory flush) turns always
+disable native compaction and checkpoint replay, even with explicit opt-in, so
+extraction can use the unsummarized history.
+
 ### Subagent lifecycle (optional)
 
 OpenClaw calls two optional subagent lifecycle hooks:
@@ -161,7 +181,7 @@ export default function register(api) {
       },
     },
 
-    async ingest({ sessionId, message, isHeartbeat }) {
+    async ingest({ sessionId, message }) {
       // Store the message in your data store
       return { ingested: true };
     },
@@ -265,7 +285,11 @@ and implement `commitTurn(...)` as one atomic write keyed by
 The `messages` payload contains only the inclusive range from the admitted user
 entry through the accepted terminal entry. Engines that need the earlier
 transcript during bootstrap or rebuild should read it through the transcript
-cursor API, `readSessionTranscriptVisibleMessageDelta(...)`.
+cursor API, `readSessionTranscriptVisibleMessageDelta(...)` from
+`openclaw/plugin-sdk/context-engine-transcript-runtime`. Pass
+`start: "reset-window"` so a fresh drain begins at the latest same-session reset
+instead of importing pre-reset history; see
+[Context engine transcript cursor](/plugins/sdk-runtime/agent#context-engine-transcript-cursor).
 Pre-turn transcript reads during bootstrap, maintenance, assembly, and retries
 then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted
@@ -477,12 +501,62 @@ A no-op `compact()` is unsafe for an active non-owning engine because it disable
 
 ## Configuration reference
 
+### Plugin and engine IDs
+
+The slot selects the ID passed to `api.registerContextEngine()`, not necessarily
+the plugin's manifest ID. A plugin with different IDs declares its engines in
+`openclaw.plugin.json` so OpenClaw can identify the owner before executing it:
+
+```json
+{
+  "id": "vendor-plugin",
+  "kind": "context-engine",
+  "contextEngineIds": ["canonical-engine"],
+  "configSchema": { "type": "object", "additionalProperties": false }
+}
+```
+
+Enable `plugins.entries.vendor-plugin`, and select
+`plugins.slots.contextEngine: "canonical-engine"`. Engine IDs are case-sensitive.
+Registration must use one of the declared IDs. Two plugins declaring the same
+engine do not establish an unambiguous startup owner.
+
+Installation automatically selects a single declared engine when the slot is
+unset, `legacy`, or still contains that plugin's old ID. It preserves an explicit
+custom engine or `none`. With multiple declared engines, installation leaves the
+selection unchanged and asks you to choose an ID explicitly; declaration order
+does not select a default. Existing plugins that omit `contextEngineIds` retain
+the equal-plugin-ID/engine-ID convention. Declare IDs before relying on divergent
+IDs for automatic activation.
+
+Earlier releases stored the plugin ID as the selector when installing such a
+plugin, so its engine never loaded and every turn used `legacy`. Run
+`openclaw doctor --fix` (updates run it for you) to replace that selector with
+the plugin's single declared engine. Doctor changes it only when that owner is
+independently enabled and no other eligible plugin declares the same engine;
+otherwise it keeps the selector and tells you which engine ID to set.
+
+The install record retains declared ownership, allowing uninstall to reset the
+selected engine even if the plugin files are missing or cannot load. Updating a
+plugin refreshes these declarations. If an update removes your explicitly selected
+engine, select another supported ID. A differently named owner must be independently
+enabled or allowlisted; its declaration alone does not authorize loading. Explicit
+disablement and denylists still win, and a nonempty allowlist must include that
+owner. An undeclared equal-ID plugin retains slot-based activation when no
+manifest declares the selected engine ID. If matching declarations exist but none
+of their owners is eligible, legacy fallback requires independent enablement via
+`plugins.entries.<pluginId>.enabled: true` or inclusion in `plugins.allow`; the
+slot alone does not authorize a same-named plugin.
+
+For linked installations, a missing `plugins.load.paths` target still fails CLI
+config validation before uninstall can run; restore or correct that path first.
+
 ```json5
 {
   plugins: {
     slots: {
       // Select the active context engine. Default: "legacy".
-      // Set to a plugin id to use a plugin engine.
+      // Set to a registered engine ID to use a plugin engine.
       contextEngine: "legacy",
     },
   },

@@ -2,7 +2,8 @@ import { For, Show, createMemo } from "solid-js";
 import { handleCopyButton } from "../../../components/copy-button-state.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   visibleWorkspaceConflictPaths,
   workspaceConflictCount,
@@ -11,18 +12,25 @@ import {
   type WorkspaceResultConflict,
 } from "../workspace-conflict.ts";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 function ConflictCopyAction(props: { text: string; label: string }) {
   return (
     <For each={[props.text]}>
-      {(text) => (
-        <button
-          class="btn btn--sm chat-copy-btn"
-          type="button"
-          onClick={(event) => void handleCopyButton(event, text, props.label)}
-        >
-          <span data-copy-label>{props.label}</span>
-        </button>
-      )}
+      {(text) => {
+        let label!: HTMLSpanElement;
+        return (
+          <button
+            class="btn btn--sm chat-copy-btn"
+            type="button"
+            onClick={(event) => void handleCopyButton(event, text, props.label, { label })}
+          >
+            <span ref={(element) => (label = element)} data-copy-label>
+              {props.label}
+            </span>
+          </button>
+        );
+      }}
     </For>
   );
 }
@@ -44,7 +52,7 @@ export function WorkspaceConflictNotice(props: {
   return (
     <Show when={props.conflict}>
       {(conflict) => {
-        const count = createMemo(() => workspaceConflictCount(conflict()));
+        const count = () => workspaceConflictCount(conflict());
         const visible = createMemo(() => visibleWorkspaceConflictPaths(conflict()));
         const commands = createMemo(() => workspaceConflictGitCommands(conflict()));
         return (
@@ -171,11 +179,13 @@ export function WorkspaceConflictTranscriptMessage(props: {
   conflict: WorkspaceResultConflict;
   messageKey: string;
   entryId?: string;
+  ref?: (element: HTMLDivElement) => void;
 }) {
-  const count = createMemo(() => workspaceConflictCount(props.conflict));
+  const count = () => workspaceConflictCount(props.conflict);
   const visible = createMemo(() => visibleWorkspaceConflictPaths(props.conflict));
   return (
     <div
+      ref={props.ref}
       class="chat-bubble chat-bubble--workspace-conflict"
       data-message-id={props.messageKey}
       data-entry-id={props.entryId || undefined}

@@ -1,7 +1,61 @@
 import { expect, it } from "vitest";
+import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { recordSkillFileHost } from "../skills/skill-file-host.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { findSkillUsageMatch } from "./agent-tools.before-tool-call.diagnostics.js";
+import {
+  getBeforeToolCallPolicyDiagnosticState,
+  hasBeforeToolCallPolicy,
+} from "./agent-tools.before-tool-call.policy.js";
+
+it("reports trusted policy diagnostics through guarded readers", () => {
+  resetGlobalHookRunner();
+  const registry = createEmptyPluginRegistry();
+  let policyIdReads = 0;
+  registry.trustedToolPolicies = [
+    {
+      pluginId: "fuzzplugin",
+      pluginName: "Fuzz Plugin",
+      source: "test",
+      policy: {
+        description: "synthetic trusted policy",
+        evaluate: () => undefined,
+        get id(): string {
+          policyIdReads += 1;
+          throw new Error("fuzzplugin trusted policy id is unreadable");
+        },
+      },
+    },
+    {
+      pluginId: "mockplugin",
+      pluginName: "Mock Plugin",
+      source: "test",
+      policy: {
+        id: "mockpolicy",
+        description: "mock policy",
+        evaluate: () => undefined,
+      },
+    },
+  ];
+  setActivePluginRegistry(registry);
+
+  try {
+    expect(hasBeforeToolCallPolicy()).toBe(true);
+    expect(policyIdReads).toBe(0);
+    expect(getBeforeToolCallPolicyDiagnosticState()).toEqual({
+      hasBeforeToolCallHook: false,
+      trustedToolPolicies: [
+        { id: "fuzzplugin", pluginId: "fuzzplugin", pluginName: "Fuzz Plugin" },
+        { id: "mockpolicy", pluginId: "mockplugin", pluginName: "Mock Plugin" },
+      ],
+    });
+  } finally {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetGlobalHookRunner();
+  }
+});
 
 it("attributes colliding physical and virtual Skill reads to their source hosts", () => {
   const filePath = "/project/skills/guide/SKILL.md";

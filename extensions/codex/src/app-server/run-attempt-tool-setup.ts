@@ -2,7 +2,6 @@ import {
   embeddedAgentLog,
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
-  supportsModelTools,
   type EmbeddedRunAttemptParams,
   type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -11,6 +10,7 @@ import {
   formatMcpCodexApprovalRemedy,
   materializeStaticMcpToolsForHarnessRun,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { formatStageTimings } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexComputerContextEpoch } from "./computer-context.js";
 import { resolveCodexPluginsPolicy, shouldAutoApproveCodexAppServerApprovals } from "./config.js";
@@ -27,16 +27,14 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
-import {
-  resolveInactiveCodexHeartbeatResponseDescriptor,
-  selectInactiveCodexHeartbeatResponseTool,
-} from "./heartbeat-tool-fallback.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import type { NativePendingChild } from "./native-subagent-monitor-types.js";
-import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
+import {
+  hasCodexNativeToolCatalog,
+  loadCodexAttemptNativeToolCatalog,
+} from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import { requestPluginApprovalOutcome } from "./plugin-approval-roundtrip.js";
-import type { CodexDynamicToolSpec } from "./protocol.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import { emitCodexAppServerEvent, runCodexCleanupStep } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
@@ -46,7 +44,7 @@ import {
   captureScheduledCodexAppAuthority,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
-import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import { releaseCodexProbeClient } from "./shared-client.js";
 
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const {
@@ -264,34 +262,28 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         }
       : {}),
   };
-  let nativeSpecs: CodexDynamicToolSpec[] | undefined;
-  if (hasCodexNativeToolCatalog(mutable.startupBinding)) {
-    runAbortController.signal.throwIfAborted();
-    connection.assertCurrent();
-    const client = await connection.attemptClientFactory({
-      assertCurrent: connection.assertLegacyCurrent,
-      startOptions: connection.appServer.start,
-      authProfileId: connection.startupClientAuthProfileId,
-      agentDir,
-      config: params.config,
-      timeoutMs: connection.appServer.requestTimeoutMs,
-    });
-    try {
-      nativeSpecs = await loadCodexNativeToolCatalog({
-        client,
-        authority: connection.authority,
-        binding: mutable.startupBinding,
-        appServer: connection.appServer,
+  const nativeSpecs = await loadCodexAttemptNativeToolCatalog({
+    binding: mutable.startupBinding,
+    ephemeral: isIncognitoSessionKey(params.sessionKey),
+    authority: connection.authority,
+    appServer: connection.appServer,
+    agentDir,
+    signal: runAbortController.signal,
+    acquireClient: () =>
+      connection.attemptClientFactory({
+        assertCurrent: connection.assertLegacyCurrent,
+        startOptions: connection.appServer.start,
+        authProfileId: connection.startupClientAuthProfileId,
         agentDir,
-        assertCurrent: () => {
-          runAbortController.signal.throwIfAborted();
-          connection.assertCurrent();
-        },
-      });
-    } finally {
-      releaseLeasedSharedCodexAppServerClient(client);
-    }
-  }
+        config: params.config,
+        timeoutMs: connection.appServer.requestTimeoutMs,
+      }),
+    releaseClient: (client) => releaseCodexProbeClient(client, connection.attemptClientFactory),
+    assertCurrent: () => {
+      runAbortController.signal.throwIfAborted();
+      connection.assertCurrent();
+    },
+  });
   let requireExplicitMessageTarget: boolean | undefined;
   let configuredMcp: Awaited<ReturnType<typeof materializeStaticMcpToolsForHarnessRun>> | undefined;
   let scopedMcpTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>>;
@@ -336,7 +328,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       ? []
       : await buildDynamicTools({
           ...commonToolParams,
-          forceHeartbeatTool: true,
           ignoreDisableMessageTool: true,
           ignoreRuntimePlan: true,
         });
@@ -380,6 +371,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       cwd: effectiveCwd ?? effectiveWorkspace,
       sandboxToolPolicy: sandbox?.tools,
       conversationToolPolicy: params.conversationToolPolicy,
+      requesterOrigin: params.requesterOrigin,
+      operatorProfileId: params.operatorProfileId,
+      conversationId: params.conversationId,
       inputProvenance: params.inputProvenance,
       trustedInternalHandoff: params.trustedInternalHandoff,
       scheduledToolPolicy: params.scheduledToolPolicy,
@@ -506,6 +500,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      messageToolFinalByDefault: params.messageToolFinalByDefault,
       onToolOutcome: onCodexToolOutcome,
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
       trigger: params.trigger,
@@ -518,34 +513,13 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? { turnSourceThreadId: params.currentThreadTs }
         : {}),
     };
-    const heartbeatFallbackDescriptor = resolveInactiveCodexHeartbeatResponseDescriptor({
-      registeredTools: registeredWithScopedMcp,
-      ...(nativeSpecs ? { registeredSpecs: nativeSpecs } : {}),
-    });
-    const heartbeatFallbackTool =
-      heartbeatFallbackDescriptor && supportsModelTools(params.model)
-        ? selectInactiveCodexHeartbeatResponseTool({
-            descriptor: heartbeatFallbackDescriptor,
-            disableTools: params.disableTools,
-            toolsAllow: params.toolsAllow,
-            pluginConfig,
-          })
-        : undefined;
-    const registeredFallbackTools =
-      params.trigger === "heartbeat" ||
-      params.enableHeartbeatTool === true ||
-      params.forceHeartbeatTool === true ||
-      !heartbeatFallbackTool
-        ? undefined
-        : params.hostCapabilities.bindToolSurface([heartbeatFallbackTool], {
-            cwd: effectiveCwd ?? effectiveWorkspace,
-          });
     const toolBridge = createCodexDynamicToolBridge({
       assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
-      registeredFallbackTools,
       registeredSpecs: nativeSpecs,
+      requireExactRegisteredDefinitions:
+        nativeSpecs !== undefined && !hasCodexNativeToolCatalog(mutable.startupBinding),
       signal: runAbortController.signal,
       computerContextEpoch,
       functionToolsOnly: isCodexResponsesOAuth(connection.startupPreparedAuth),
@@ -553,6 +527,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? "direct"
         : resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
             connectionClass: connection.appServer.connectionClass,
+            nativeToolSurfaceEnabled,
           }),
       directToolNames: resolveCodexDynamicToolDirectNames(
         params,

@@ -4,60 +4,29 @@ import {
   buildPluginCapabilitySummary,
   computeDeclaredSurfaceHash,
 } from "../plugins/capability-summary.js";
-import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import type { installManagedPlugin } from "../plugins/management-mutations.js";
-import type { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
-import { installClawPackages } from "./packages.boundary.test-support.js";
+import {
+  installClawPackages,
+  testPluginPackage as pkg,
+  testPluginProbe,
+  withStagedInspection,
+  testPackageLease,
+} from "./packages.boundary.test-support.js";
 import { emptyPluginCapabilityEvidence, packageInstallPlan } from "./packages.test-support.js";
 import { projectClawPluginCapabilityReviews } from "./plugin-capability-review.js";
-import type { PersistedClawPackageRef } from "./provenance.js";
 
-const integrity = `sha256:${"a".repeat(64)}`;
-const pkg = {
-  kind: "plugin" as const,
-  source: "clawhub" as const,
-  ref: "@owner/audit",
-  version: "2.0.1",
-  integrity,
-};
-const probePlugin = vi.fn(async (request: Parameters<typeof installPluginFromClawHub>[0]) => {
-  await request.onPluginArtifactInspect?.({
-    pluginId: "audit",
-    stagedArtifactDir: "/tmp/staged-audit",
-    mode: "install",
-  });
-  return {
-    ok: true as const,
-    pluginId: "audit",
-    packageName: pkg.ref,
-    targetDir: "/tmp/audit",
-    extensions: [],
-    clawhub: {
-      source: "clawhub" as const,
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: pkg.ref,
-      clawhubFamily: "code-plugin" as const,
-      integrity,
-    },
-  };
-});
+const { integrity } = pkg;
+const probePlugin = vi.fn(
+  withStagedInspection(async () => testPluginProbe({ targetDir: "/tmp/audit" })),
+);
 const baseDeps = {
   probePlugin,
   inspectPluginCapabilities: () => emptyPluginCapabilityEvidence,
-  preflightPlugin: vi.fn(async (params: Parameters<typeof preflightPluginInstall>[0]) => ({
+  preflightPlugin: vi.fn(async () => ({
     ok: true as const,
     action: "install" as const,
-    request: { rawSpec: params.rawSpec, installKind: "plugin" as const },
   })),
-  acquirePackageLease: vi.fn(async () => ({
-    identity: {
-      scope: "claw-package-lifecycle" as const,
-      key: "test-package",
-      owner: "test-owner",
-    },
-    heartbeat: vi.fn(),
-    release: vi.fn(),
-  })),
+  acquirePackageLease: vi.fn(async () => testPackageLease()),
 };
 
 describe("Claw plugin install consent", () => {
@@ -82,25 +51,16 @@ describe("Claw plugin install consent", () => {
     ]);
   });
 
-  it("refuses to project an unblocked plugin without complete capability evidence", () => {
-    const planned = packageInstallPlan([pkg]);
-    Object.assign(planned.actions[0]!.details!, {
-      declaredCapabilities: { tools: ["audit.read"] },
-    });
-
-    expect(() => projectClawPluginCapabilityReviews(planned)).toThrow(
-      /incomplete review evidence/u,
-    );
-  });
-
-  it("refuses to project an unblocked plugin without artifact integrity", () => {
-    const planned = packageInstallPlan([pkg]);
-    Object.assign(planned.actions[0]!.details!, { integrity: undefined });
-
-    expect(() => projectClawPluginCapabilityReviews(planned)).toThrow(
-      /incomplete review evidence/u,
-    );
-  });
+  it.each([{ declaredCapabilities: { tools: ["audit.read"] } }, { integrity: undefined }])(
+    "refuses incomplete plugin review evidence: %j",
+    (missingEvidence) => {
+      const planned = packageInstallPlan([pkg]);
+      Object.assign(planned.actions[0]!.details!, missingEvidence);
+      expect(() => projectClawPluginCapabilityReviews(planned)).toThrow(
+        /incomplete review evidence/u,
+      );
+    },
+  );
 
   it("passes exact Claw-owner capability consent into the canonical plugin installer", async () => {
     const review = buildPluginCapabilityConsentReview({
@@ -118,15 +78,12 @@ describe("Claw plugin install consent", () => {
         reviewToken: review.reviewToken,
       });
     });
-    const persistPackageRef = vi.fn(() => ({ status: "pending" }) as PersistedClawPackageRef);
 
     await installClawPackages(packageInstallPlan([pkg]), {
       pluginConsent: { onCapabilityConsent },
       deps: {
         ...baseDeps,
         installPlugin,
-        persistPackageRef,
-        completePackageRef: (ref, status) => ({ ...ref, status }),
       },
     });
 
@@ -144,14 +101,12 @@ describe("Claw plugin install consent", () => {
 
   it("stops Add before installer or record writes without Claw-owner consent", async () => {
     const installPlugin = vi.fn();
-    const persistPackageRef = vi.fn();
     await expect(
       installClawPackages(packageInstallPlan([pkg]), {
-        deps: { ...baseDeps, installPlugin, persistPackageRef },
+        deps: { ...baseDeps, installPlugin },
       }),
     ).rejects.toMatchObject({ code: "plugin_consent_required" });
     expect(installPlugin).not.toHaveBeenCalled();
-    expect(persistPackageRef).not.toHaveBeenCalled();
   });
 
   it("invalidates Add when an effective plugin grant is revoked after review", async () => {
@@ -163,17 +118,15 @@ describe("Claw plugin install consent", () => {
     }).grants;
     Object.assign(planned.actions[0]!.details!, { capabilityGrants: reviewedGrants });
     const installPlugin = vi.fn();
-    const persistPackageRef = vi.fn();
 
     await expect(
       installClawPackages(planned, {
         pluginConsent: {
           onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
         },
-        deps: { ...baseDeps, installPlugin, persistPackageRef },
+        deps: { ...baseDeps, installPlugin },
       }),
     ).rejects.toMatchObject({ code: "package_owner_state_changed" });
     expect(installPlugin).not.toHaveBeenCalled();
-    expect(persistPackageRef).not.toHaveBeenCalled();
   });
 });

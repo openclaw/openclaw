@@ -4,6 +4,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { WizardNextResult } from "../../api/types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
+  museCodeCapability,
   loginHarness,
   openPicker,
   selectProvider,
@@ -20,23 +21,7 @@ afterEach(() => {
 });
 it("shows distinct verification and activation phases before offering the named Muse starter", async () => {
   const { context, request, answer } = loginHarness({
-    capabilities: [
-      {
-        provider: "meta",
-        apiKeySupported: true,
-        quickApiKeySetup: true,
-        loginOptions: [
-          {
-            id: "meta/muse-code",
-            brandId: "meta",
-            label: "Muse Code",
-            kind: "device-code",
-            featured: true,
-            requiresSetup: true,
-          },
-        ],
-      },
-    ],
+    capabilities: [museCodeCapability()],
   });
   const refresh = deferred();
   const activation = deferred<WizardNextResult>();
@@ -126,7 +111,10 @@ it("shows distinct verification and activation phases before offering the named 
     );
     page.querySelector<HTMLButtonElement>("[data-login-start-chat]")!.click();
     await waitForSolid(() =>
-      expect(create).toHaveBeenCalledWith({ agentId: "writer", model: "meta/muse-spark-1.3" }),
+      expect(create).toHaveBeenCalledWith(
+        { agentId: "writer", model: "meta/muse-spark-1.3" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
   } finally {
     activation.resolve({ done: true, status: "cancelled" });

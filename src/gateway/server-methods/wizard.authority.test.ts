@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as embeddedAgent from "../../agents/embedded-agent.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -26,6 +27,11 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 import { publishWizardLoginSession, startWizardLogin } from "./wizard-login.js";
 import { wizardHandlers } from "./wizard.js";
 
+// mock-isolation: Authority probes exercise the live request scope, not a model runtime.
+vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
+
+afterEach(() => vi.restoreAllMocks());
+
 it.each([
   { revoked: false, progress: false },
   { revoked: false, progress: true },
@@ -44,6 +50,38 @@ it.each([
       const continueProbe = createDeferredCore();
       let captureError: unknown;
       let probe: Awaited<ReturnType<typeof runSetupInferenceTurn>> | undefined;
+      vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async () => {
+        if (revoked) {
+          invalidateGatewayDeviceRevocation(context, "wizard-device", "operator");
+        }
+        const scope = expectDefined(getPluginRuntimeGatewayRequestScope(), "probe scope");
+        try {
+          const captured = expectDefined(
+            await captureGatewayOperatorRunAuthority({
+              client: scope.client ?? null,
+              context,
+              hasCurrentClientAuthority: scope.hasCurrentClientAuthority,
+            }),
+            "probe operator authority",
+          );
+          try {
+            captured.authority.assertCurrent();
+          } finally {
+            captured.release();
+          }
+        } catch (error) {
+          captureError = error;
+          console.info("setup-inference authority capture:", error);
+          throw error;
+        }
+        return {
+          payloads: [{ text: "OK" }],
+          meta: {
+            durationMs: 1,
+            executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.6-sol" },
+          },
+        };
+      });
       context.wizardRunner = async (_opts, _runtime, prompter) => {
         await prompter.confirm({ message: "Verify saved sign-in?" });
         if (progress) {
@@ -62,42 +100,6 @@ it.each([
             agentDir: state.agentDir(),
             sourceConfig: config,
             runConfig: config,
-          },
-          deps: {
-            createTempDir: async () => state.workspaceDir,
-            removeTempDir: async () => {},
-            runEmbeddedAgent: async () => {
-              if (revoked) {
-                invalidateGatewayDeviceRevocation(context, "wizard-device", "operator");
-              }
-              const scope = expectDefined(getPluginRuntimeGatewayRequestScope(), "probe scope");
-              try {
-                const captured = expectDefined(
-                  await captureGatewayOperatorRunAuthority({
-                    client: scope.client ?? null,
-                    context,
-                    hasCurrentClientAuthority: scope.hasCurrentClientAuthority,
-                  }),
-                  "probe operator authority",
-                );
-                try {
-                  captured.authority.assertCurrent();
-                } finally {
-                  captured.release();
-                }
-              } catch (error) {
-                captureError = error;
-                console.info("setup-inference authority capture:", error);
-                throw error;
-              }
-              return {
-                payloads: [{ text: "OK" }],
-                meta: {
-                  durationMs: 1,
-                  executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.6-sol" },
-                },
-              };
-            },
           },
         });
         if (!probe.ok) {

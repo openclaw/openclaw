@@ -1,11 +1,7 @@
+import assert from "node:assert/strict";
 import fsSync from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import {
-  captureRuntimeConfigAsyncReader,
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
@@ -17,109 +13,95 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { replaceTranscriptEventsSync } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { replaceTranscriptEventsSync as replaceEvents } from "../../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "../../../../src/config/sessions/session-actor-memory-owner.js";
-import { runWithSessionTranscriptReadFence } from "../../../../src/config/sessions/session-transcript-read-fence.js";
+import { runWithSessionTranscriptReadFence as withReadFence } from "../../../../src/config/sessions/session-transcript-read-fence.js";
 import { registerSecretValueForRedaction } from "../../../../src/logging/secret-redaction-registry.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../../../src/state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.paths.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../../../src/state/openclaw-state-db.js";
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../../src/test-utils/openclaw-test-state.js";
 import {
   buildSessionEntry,
   buildSessionEntries,
   matchesSessionEntryPrefixHash,
+  type BuildSessionEntryOptions,
   type SessionFileEntry,
 } from "./session-files.js";
-import {
-  readSessionResetRecallCutoff,
-  readSessionResetRecallCutoffInProcess,
-} from "./session-reset-recall-read.js";
+import { readSessionResetRecallCutoff as readCutoff } from "./session-reset-recall-read.js";
+import { readSessionResetRecallCutoffInProcess as readCutoffInline } from "./session-reset-recall-read.worker.js";
 
 function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
-  if (!entry) {
-    throw new Error("expected session entry");
-  }
+  assert(entry, "expected session entry");
   return entry;
 }
 
 let tmpDir: string;
-let previousStateDir: string | undefined;
-let previousConfigPath: string | undefined;
+let state: OpenClawTestState;
 
-beforeEach(() => {
-  tmpDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "session-reset-revision-test-"));
-  previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-  Reflect.set(process.env, "OPENCLAW_STATE_DIR", tmpDir);
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+const sessionScope = (sessionId: string, sessionKey = `agent:main:chat:${sessionId}`) => ({
+  agentId: "main",
+  sessionId,
+  sessionKey,
+  storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
 });
-
-afterEach(async () => {
-  memorySessionActorOwners.closeDatabase({
-    agentId: "main",
-    path: resolveIncognitoOpenClawAgentSqlitePath({
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: tmpDir },
-    }),
+const messageEvent = (id: string, role: string, content: unknown, parentId?: string | null) => ({
+  type: "message",
+  id,
+  message: { role, content },
+  ...(parentId !== undefined ? { parentId } : {}),
+});
+const msg = (role: string, content: unknown, metadata?: Record<string, unknown>) => ({
+  role,
+  content,
+  ...metadata,
+});
+const internalMessage = (content: string, sourceTool: string) =>
+  msg("user", content, { provenance: { kind: "internal_system", sourceTool } });
+const cutoffSymbol = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
+const cutoffDescriptor = (entry: SessionFileEntry) =>
+  Object.getOwnPropertyDescriptor(entry, cutoffSymbol);
+const persist = (scope: ReturnType<typeof sessionScope>, role: string, content: string) =>
+  persistSessionTranscriptTurn(scope, {
+    messages: [{ message: { role, content } }],
+    touchSessionEntry: true,
+    updateMode: "none",
   });
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  if (previousStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", previousStateDir);
-  }
-  if (previousConfigPath === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", previousConfigPath);
-  }
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  fsSync.rmSync(tmpDir, { recursive: true, force: true });
+const append = (
+  scope: ReturnType<typeof sessionScope>,
+  eventId: string,
+  message: Parameters<typeof appendTranscriptMessage>[1]["message"],
+) => appendTranscriptMessage(scope, { eventId, message });
+const exportEntry = async (
+  scope: ReturnType<typeof sessionScope>,
+  options: BuildSessionEntryOptions = {},
+) => requireSessionEntry(await buildSessionEntry(scope.sessionKey, { ...scope, ...options }));
+
+beforeEach(async () => {
+  state = await createOpenClawTestState({ prefix: "session-revision-test-", layout: "state-only" });
+  tmpDir = state.stateDir;
+});
+afterEach(async () => {
+  await state.cleanup();
 });
 
 describe("SQLite session snapshots and reset content revision", () => {
   it("keeps batched incremental exports current across sessions, appends and rewrites", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "incremental-export",
-      sessionKey: "agent:main:chat:incremental-export",
-      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
-    };
+    const scope = sessionScope("incremental");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const sibling = {
-      ...scope,
-      sessionId: "batch-sibling",
-      sessionKey: "agent:main:chat:batch-sibling",
-    };
+    const sibling = sessionScope("sibling");
     await upsertSessionEntryCore(sibling, { sessionId: sibling.sessionId, updatedAt: 1 });
-    await appendTranscriptMessage(sibling, {
-      eventId: "sibling-question",
-      message: { role: "user", content: "A separate session preference." },
-    });
+    await append(sibling, "sibling-question", msg("user", "Sibling preference."));
     const first = {
       type: "message",
       id: "heartbeat",
-      message: {
-        role: "user",
-        content: "Internal poll.",
-        provenance: { kind: "internal_system", sourceTool: "heartbeat" },
-      },
+      message: internalMessage("Poll.", "heartbeat"),
     };
-    expect(replaceTranscriptEventsSync(scope, [first])).toBe(true);
+    expect(replaceEvents(scope, [first])).toBe(true);
     const fullExport = () =>
       buildSessionEntry(scope.sessionKey, { ...scope, onTranscriptMessage() {} });
-    let expectedSibling = "User: A separate session preference.";
+    let expectedSibling = "User: Sibling preference.";
     const workerExport = async () => {
       const [entry, siblingEntry] = await buildSessionEntries([
         { absPath: scope.sessionKey, options: scope },
@@ -133,93 +115,62 @@ describe("SQLite session snapshots and reset content revision", () => {
     };
     expect(await workerExport()).toEqual(await fullExport());
 
-    await appendTranscriptMessage(scope, {
-      eventId: "heartbeat-answer",
-      message: { role: "assistant", content: "Excluded heartbeat continuation." },
-    });
-    await appendTranscriptMessage(scope, {
-      eventId: "question",
-      message: {
-        role: "user",
-        content: "A searchable new preference.",
-        __openclaw: { senderIsOwner: true },
-      },
-    });
+    await append(scope, "heartbeat-answer", msg("assistant", "Heartbeat reply."));
+    await append(
+      scope,
+      "question",
+      msg("user", "New preference.", { __openclaw: { senderIsOwner: true } }),
+    );
     const appended = requireSessionEntry(await workerExport());
     expect(appended).toEqual(await fullExport());
-    expect(appended.content).toBe("User: A searchable new preference.");
-    expect(appended.lineMap).toEqual([3]);
+    expect(appended).toMatchObject({ content: "User: New preference.", lineMap: [3] });
     expect(appended.lineProvenance[0]?.originClass).toBe("owner");
     expect(await workerExport()).toEqual(appended);
 
-    await appendTranscriptMessage(sibling, {
-      eventId: "sibling-answer",
-      message: { role: "assistant", content: "The sibling's committed update." },
-    });
-    expectedSibling += "\nAssistant: The sibling's committed update.";
+    await append(sibling, "sibling-answer", msg("assistant", "Sibling reply."));
+    expectedSibling += "\nAssistant: Sibling reply.";
 
     expect(
-      replaceTranscriptEventsSync(scope, [
-        { ...first, message: { role: "user", content: "Rewritten searchable preference." } },
-      ]),
+      replaceEvents(scope, [{ ...first, message: msg("user", "Rewritten preference.") }]),
     ).toBe(true);
     const rewritten = requireSessionEntry(await workerExport());
     expect(rewritten).toEqual(await fullExport());
-    expect(rewritten.content).toBe("User: Rewritten searchable preference.");
-    expect(rewritten.lineMap).toEqual([1]);
+    expect(rewritten).toMatchObject({
+      content: "User: Rewritten preference.",
+      lineMap: [1],
+    });
   });
 
   it.each(["interactive", "dreaming", "cron"])(
     "preserves SQLite/archive output and callback observations for %s transcripts",
     async (kind) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "parity",
-        sessionKey: "agent:main:chat:parity",
-        storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
-      };
+      const scope = sessionScope("parity");
       const observedAt = Date.parse("2026-07-01T10:00:00.000Z");
+      const payload = "x".repeat(64_000);
+      const thought = { type: "thinking", thinking: payload };
       const messages = [
-        { role: "user", content: "Owner preference.", __openclaw: { senderIsOwner: true } },
-        { role: "assistant", content: "Derived answer.", __openclaw: { turnTainted: true } },
-        {
-          role: "user",
-          content: "Internal poll.",
-          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
-        },
-        { role: "toolResult", content: "Background result.", details: "x".repeat(64_000) },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              name: "write",
-              arguments: { path: "MEMORY.md", content: "Internal note." },
-            },
-          ],
-        },
-        { role: "assistant", content: "Excluded heartbeat output." },
-        {
-          role: "user",
-          content: "Recalled text.",
-          provenance: { kind: "internal_system", sourceTool: "memory_get" },
-        },
-        { role: "assistant", content: "Excluded recalled output." },
-        {
-          role: "user",
-          content: [{ type: "image", source: "photo.jpg" }],
+        msg("user", "Owner.", { __openclaw: { senderIsOwner: true } }),
+        msg("assistant", "Derived.", { __openclaw: { turnTainted: true } }),
+        internalMessage("Poll.", "heartbeat"),
+        { role: "toolResult", content: "Tool result.", details: payload },
+        msg("assistant", [
+          {
+            type: "toolCall",
+            name: "write",
+            arguments: { path: "MEMORY.md", content: "Note." },
+          },
+        ]),
+        msg("assistant", "Heartbeat output."),
+        internalMessage("Recall.", "memory_get"),
+        msg("assistant", "Recall output."),
+        msg("user", [{ type: "image", source: "photo.jpg" }], {
           __openclaw: { senderIsOwner: true },
-        },
-        { role: "assistant", content: [{ type: "text", text: "Photo answer." }] },
-        {
-          role: "assistant",
+        }),
+        msg("assistant", [{ type: "text", text: "Photo." }]),
+        msg("assistant", [thought, { type: "text", text: "" }], {
           timestamp: 1000,
-          content: [
-            { type: "thinking", thinking: "x".repeat(64_000) },
-            { type: "text", text: "" },
-          ],
-          providerReplay: { payload: "x".repeat(64_000) },
-        },
+          providerReplay: { payload },
+        }),
       ];
       const records = [
         { type: "custom", customType: "metadata", data: {} },
@@ -231,7 +182,7 @@ describe("SQLite session snapshots and reset content revision", () => {
         })),
       ];
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: observedAt });
-      expect(replaceTranscriptEventsSync(scope, records)).toBe(true);
+      expect(replaceEvents(scope, records)).toBe(true);
       const archivePath = path.join(tmpDir, "parity.jsonl.deleted.2026-07-01T10-00-00.000Z");
       fsSync.writeFileSync(archivePath, records.map((record) => JSON.stringify(record)).join("\n"));
       fsSync.utimesSync(archivePath, observedAt / 1000, observedAt / 1000);
@@ -242,27 +193,21 @@ describe("SQLite session snapshots and reset content revision", () => {
       };
       const sqliteObserver = vi.fn();
       const archiveObserver = vi.fn();
-      const sqlite = requireSessionEntry(
-        await buildSessionEntry(scope.sessionKey, {
-          ...scope,
-          ...options,
-          updatedAtMs: observedAt,
-          onTranscriptMessage: sqliteObserver,
-        }),
-      );
+      const sqlite = await exportEntry(scope, {
+        ...options,
+        updatedAtMs: observedAt,
+        onTranscriptMessage: sqliteObserver,
+      });
       const archive = requireSessionEntry(
         await buildSessionEntry(archivePath, {
           ...options,
           onTranscriptMessage: archiveObserver,
         }),
       );
-      const worker = requireSessionEntry(
-        await buildSessionEntry(scope.sessionKey, {
-          ...scope,
-          ...options,
-          updatedAtMs: observedAt,
-        }),
-      );
+      const worker = await exportEntry(scope, {
+        ...options,
+        updatedAtMs: observedAt,
+      });
 
       expect(sqlite).toEqual({
         ...archive,
@@ -270,15 +215,12 @@ describe("SQLite session snapshots and reset content revision", () => {
         path: "sessions/main/parity.jsonl",
         revisionMs: readTranscriptStatsSync(scope).lastMutationAtMs,
       });
-      expect(sqlite.content).toBe(
-        kind === "interactive"
-          ? "User: Owner preference.\nAssistant: Derived answer.\nAssistant: Photo answer."
-          : "",
-      );
-      expect(sqlite.lineMap).toEqual(kind === "interactive" ? [2, 3, 11] : []);
-      expect(sqlite.messageTimestampsMs).toEqual(
-        kind === "interactive" ? [observedAt, observedAt, observedAt] : [],
-      );
+      expect(sqlite).toMatchObject({
+        content:
+          kind === "interactive" ? "User: Owner.\nAssistant: Derived.\nAssistant: Photo." : "",
+        lineMap: kind === "interactive" ? [2, 3, 11] : [],
+        messageTimestampsMs: kind === "interactive" ? [observedAt, observedAt, observedAt] : [],
+      });
       expect(sqlite.lineProvenance.map((line) => line.originClass)).toEqual(
         kind === "interactive" ? ["owner", "untrusted", "agent"] : [],
       );
@@ -287,24 +229,14 @@ describe("SQLite session snapshots and reset content revision", () => {
         .map((message) => [message, "timestamp" in message ? 1_000_000 : observedAt]);
       expect(sqliteObserver.mock.calls).toEqual(observations);
       expect(archiveObserver.mock.calls).toEqual(observations);
-      const cutoff = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
       expect(worker).toEqual(sqlite);
-      expect(Object.getOwnPropertyDescriptor(worker, cutoff)).toEqual(
-        Object.getOwnPropertyDescriptor(sqlite, cutoff),
-      );
-      expect(Object.getOwnPropertyDescriptor(sqlite, cutoff)).toEqual(
-        Object.getOwnPropertyDescriptor(archive, cutoff),
-      );
+      expect(cutoffDescriptor(worker)).toEqual(cutoffDescriptor(sqlite));
+      expect(cutoffDescriptor(sqlite)).toEqual(cutoffDescriptor(archive));
     },
   );
 
-  it("preserves registered secret text in worker and inline transcript exports", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "registered-secret-export",
-      sessionKey: "agent:main:chat:registered-secret-export",
-      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
-    };
+  it("preserves registered secrets in worker and inline exports", async () => {
+    const scope = sessionScope("secret");
     const content = "API_TOKEN = computeToken() sk-abc123456789012345678";
     registerSecretValueForRedaction(content);
     const sessionEntry = { sessionId: scope.sessionId, updatedAt: 1 };
@@ -312,22 +244,9 @@ describe("SQLite session snapshots and reset content revision", () => {
       fallbackEntry: sessionEntry,
       skipMaintenance: true,
     });
-    expect(
-      replaceTranscriptEventsSync(scope, [
-        {
-          type: "message",
-          id: "source-text",
-          message: { role: "user", content },
-        },
-      ]),
-    ).toBe(true);
-    const worker = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
-    const inline = requireSessionEntry(
-      await buildSessionEntry(scope.sessionKey, {
-        ...scope,
-        parseYieldEveryLines: 1,
-      }),
-    );
+    expect(replaceEvents(scope, [messageEvent("source-text", "user", content)])).toBe(true);
+    const worker = await exportEntry(scope);
+    const inline = await exportEntry(scope, { parseYieldEveryLines: 1 });
     expect(worker.content).toBe(`User: ${content}`);
     expect(inline.content).toBe(worker.content);
     expect(inline.hash).toBe(worker.hash);
@@ -337,34 +256,30 @@ describe("SQLite session snapshots and reset content revision", () => {
     "keeps missing and incognito exports non-persisting (incognito=%s)",
     async (incognito) => {
       const scope = {
-        agentId: "main",
-        sessionId: "nonpersisting-export",
-        sessionKey: incognito
-          ? "agent:main:dashboard:incognito-export"
-          : "agent:main:chat:nonpersisting-export",
+        ...sessionScope(
+          "missing",
+          incognito ? "agent:main:dashboard:incognito-export" : "agent:main:chat:missing",
+        ),
         storePath: path.join(tmpDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
       };
       expect(await buildSessionEntry(scope.sessionKey, scope)).toBeNull();
       expect(await buildSessionEntries([{ absPath: scope.sessionKey, options: scope }])).toEqual([
         null,
       ]);
-      expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "invalid" });
+      expect(await readCutoff(scope)).toEqual({ state: "invalid" });
       expect(fsSync.existsSync(scope.storePath)).toBe(false);
       await upsertSessionEntryCore(scope, {
         sessionId: scope.sessionId,
         updatedAt: 1,
         ...(incognito ? { incognito: true } : {}),
       });
-      await appendTranscriptMessage(scope, {
-        eventId: "visible",
-        message: { role: "user", content: "Visible transcript" },
-      });
+      await append(scope, "visible", msg("user", "Visible transcript"));
       expect((await buildSessionEntry(scope.sessionKey, scope))?.content).toBe(
         "User: Visible transcript",
       );
       const [batched] = await buildSessionEntries([{ absPath: scope.sessionKey, options: scope }]);
       expect(batched?.content).toBe("User: Visible transcript");
-      expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "absent" });
+      expect(await readCutoff(scope)).toEqual({ state: "absent" });
       expect(fsSync.existsSync(scope.storePath)).toBe(!incognito);
       if (incognito) {
         const namespace = {
@@ -389,38 +304,19 @@ describe("SQLite session snapshots and reset content revision", () => {
   );
 
   it("finishes the transcript snapshot before callbacks can replace its rows", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "callback-snapshot",
-      sessionKey: "agent:main:callback-snapshot",
-      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
-    };
+    const scope = sessionScope("snapshot", "agent:main:snapshot");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const first = {
-      type: "message",
-      id: "first",
-      parentId: null,
-      message: { role: "user", content: "first" },
-    };
-    const kept = {
-      type: "message",
-      id: "kept",
-      parentId: "first",
-      message: { role: "assistant", content: "kept" },
-    };
+    const first = messageEvent("first", "user", "first", null);
+    const kept = messageEvent("kept", "assistant", "kept", "first");
     const records = [
       first,
-      {
-        type: "message",
-        id: "tool-result",
-        message: { role: "toolResult", content: "payload-only-probe".repeat(4096) },
-      },
+      messageEvent("tool-result", "toolResult", "payload-only-probe".repeat(4096)),
       kept,
       { type: "reset", id: "reset", parentId: "kept", firstKeptEntryId: "kept" },
     ];
-    expect(replaceTranscriptEventsSync(scope, records)).toBe(true);
-    const before = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
-    expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "valid", cutoffLine: 3 });
+    expect(replaceEvents(scope, records)).toBe(true);
+    const before = await exportEntry(scope);
+    expect(await readCutoff(scope)).toEqual({ state: "valid", cutoffLine: 3 });
     const parse = JSON.parse;
     const payloadGuard = vi.spyOn(JSON, "parse").mockImplementation((...args) => {
       if (args[0].includes("payload-only-probe")) {
@@ -429,7 +325,7 @@ describe("SQLite session snapshots and reset content revision", () => {
       return Reflect.apply(parse, JSON, args);
     });
     try {
-      expect(readSessionResetRecallCutoffInProcess(scope)).toEqual({
+      expect(readCutoffInline(scope)).toEqual({
         state: "valid",
         cutoffLine: 3,
       });
@@ -437,103 +333,57 @@ describe("SQLite session snapshots and reset content revision", () => {
       payloadGuard.mockRestore();
     }
     const observed: unknown[] = [];
-    const during = requireSessionEntry(
-      await buildSessionEntry(scope.sessionKey, {
-        ...scope,
-        parseYieldEveryLines: 1,
-        onTranscriptMessage: (message) => {
-          observed.push(message);
-          if (observed.length === 1) {
-            expect(replaceTranscriptEventsSync(scope, [first])).toBe(true);
-          }
-        },
-      }),
-    );
+    const during = await exportEntry(scope, {
+      parseYieldEveryLines: 1,
+      onTranscriptMessage: (message) => {
+        observed.push(message);
+        if (observed.length === 1) {
+          expect(replaceEvents(scope, [first])).toBe(true);
+        }
+      },
+    });
 
     expect(during).toEqual(before);
     expect(observed).toEqual([first.message, kept.message]);
-    const cutoff = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
-    expect(Object.getOwnPropertyDescriptor(during, cutoff)).toMatchObject({
+    expect(cutoffDescriptor(during)).toMatchObject({
       configurable: false,
       enumerable: false,
       writable: false,
       value: { state: "valid", cutoffLine: 3 },
     });
-    const after = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
+    const after = await exportEntry(scope);
     expect(after.content).toBe("User: first");
-    expect(Object.getOwnPropertyDescriptor(after, cutoff)?.value).toEqual({ state: "absent" });
+    expect(cutoffDescriptor(after)?.value).toEqual({ state: "absent" });
   });
 
   it("carries the admitted input fence through the reset metadata worker", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "metadata-fence",
-      sessionKey: "agent:main:chat:metadata-fence",
-      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
-    };
+    const scope = sessionScope("fence");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    expect(
-      replaceTranscriptEventsSync(scope, [
-        {
-          type: "message",
-          id: "admitted",
-          parentId: null,
-          message: { role: "user", content: "input" },
-        },
-      ]),
-    ).toBe(true);
+    expect(replaceEvents(scope, [messageEvent("admitted", "user", "input", null)])).toBe(true);
     const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
-    if (!anchor) {
-      throw new Error("expected persisted input anchor");
-    }
+    assert(anchor, "expected persisted input anchor");
     await appendTranscriptEvent(scope, { type: "reset", id: "later-reset", parentId: "admitted" });
-    expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "valid", cutoffLine: 2 });
+    expect(await readCutoff(scope)).toEqual({ state: "valid", cutoffLine: 2 });
     expect(
-      await runWithSessionTranscriptReadFence(
-        { ...anchor, logicalTurnId: "metadata-read", role: "user" },
-        () => readSessionResetRecallCutoff(scope),
+      await withReadFence({ ...anchor, logicalTurnId: "metadata-read", role: "user" }, () =>
+        readCutoff(scope),
       ),
     ).toEqual({ state: "absent" });
   });
 
   it("accepts a transcript append but invalidates its prefix hash after reset", async () => {
     await captureRuntimeConfigAsyncReader()();
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = "agent:main:chat:reset-revision";
-    const sessionId = "reset-revision";
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId, updatedAt: 1 },
-    );
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      {
-        messages: [{ message: { role: "user", content: "unchanged exported text" } }],
-        touchSessionEntry: true,
-        updateMode: "none",
-      },
-    );
-    const buildOptions = {
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath,
-      updatedAtMs: 1,
-    };
-    const before = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
+    const scope = sessionScope("revision");
+    const { storePath, sessionKey, sessionId } = scope;
+    fsSync.mkdirSync(path.dirname(storePath), { recursive: true });
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+    await persist(scope, "user", "unchanged exported text");
+    const buildOptions = { updatedAtMs: 1 };
+    const before = await exportEntry(scope, buildOptions);
     const beforeLineCount = before.content.split("\n").length;
 
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      {
-        messages: [{ message: { role: "assistant", content: "ordinary appended text" } }],
-        touchSessionEntry: true,
-        updateMode: "none",
-      },
-    );
-    const afterAppend = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
+    await persist(scope, "assistant", "ordinary appended text");
+    const afterAppend = await exportEntry(scope, buildOptions);
     expect(matchesSessionEntryPrefixHash(afterAppend, beforeLineCount, before.hash)).toBe(true);
 
     await resetSessionEntryLifecycle({
@@ -548,11 +398,9 @@ describe("SQLite session snapshots and reset content revision", () => {
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
     });
 
-    const after = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
-    expect(after.content).toBe(afterAppend.content);
-    expect(after.lineMap).toEqual(afterAppend.lineMap);
-    const cutoffSymbol = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
-    expect(Object.getOwnPropertyDescriptor(after, cutoffSymbol)).toMatchObject({
+    const after = await exportEntry(scope, buildOptions);
+    expect(after).toMatchObject({ content: afterAppend.content, lineMap: afterAppend.lineMap });
+    expect(cutoffDescriptor(after)).toMatchObject({
       enumerable: false,
       value: { state: "valid", cutoffLine: expect.any(Number) },
     });

@@ -1,3 +1,6 @@
+// Recursive normalization is asserted at the outgoing stream request in
+// stream-runtime.test.ts. Add helper cases here only for distinct root or
+// nested-object contracts.
 import { describe, expect, it } from "vitest";
 import { normalizeOllamaToolSchema } from "./tool-schema.runtime.js";
 

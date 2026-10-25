@@ -4,8 +4,9 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 /** Exact execution binding for owner-native outbound message lifecycle facts. */
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -75,7 +76,11 @@ export function ensureTerminalMessageExecutionBindingSchema(
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
-      ensureTerminalBindingSchema(db);
+      if (isPostgresSqlConnection(db)) {
+        ensureStatePostgresFragment(db, "outbound_message_execution_bindings");
+      } else {
+        ensureTerminalBindingSchema(db);
+      }
     },
     { ...options, database },
     { operationLabel: "audit.outbound-message.execution-binding.schema.ensure" },

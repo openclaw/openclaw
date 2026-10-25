@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Match, Show, Switch, createEffect, createMemo, untrack } from "solid-js";
+import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -8,8 +8,9 @@ import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../../packages/gateway-protocol/src/session-agent-status.js";
+import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import { resolveToolDisplayIcon } from "../../lib/chat/tool-display-icon.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../../lib/session-owner.ts";
 import {
   summarizeSidebarSessionAttention,
@@ -28,11 +29,13 @@ import {
 import type { resolveSidebarSessionSubtitle } from "../session-row-subtitle.ts";
 import { createSessionRunVisibility as sessionRunVisibility } from "../session-run-visibility-controller.ts";
 import { ChannelAvatar } from "./channel-avatar.tsx";
+import "../tooltip.ts";
 import { Icon } from "./icon.tsx";
 import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
-import "../tooltip.ts";
 
-export type SessionRunVisibility = typeof sessionRunVisibility;
+registerEnglishCatalog(registerChatToolLabelsEnglish);
+
+type SessionRunVisibility = typeof sessionRunVisibility;
 export { sessionRunVisibility };
 
 function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
@@ -42,7 +45,13 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
   const icon = () => sessionAttentionIconName(props.attention);
   return (
     <Show when={props.attention.kind !== "none"}>
-      <openclaw-tooltip prop:content={parts().preview ? "" : parts().status} open-on-click>
+      {/* Sidebar rows sit against the app rail; open inline to the right so the
+          tooltip never clamps over the rail or the row's own title. */}
+      <openclaw-tooltip
+        prop:content={parts().preview ? "" : parts().status}
+        prop:placement="right"
+        open-on-click
+      >
         <span
           class={[
             "sidebar-session-attention__icon",
@@ -80,20 +89,17 @@ function SessionAttentionIcon(props: { attention: SidebarSessionAttention }) {
     </Show>
   );
 }
-type SessionGlyphRing = "circle" | "pair";
-
 const PAIR_TRACE_PATH = "M0,-9.798A11,11 0 1 1 0,9.798A11,11 0 1 1 0,-9.798Z";
-type SessionGlyphOptions = {
+export function SessionGlyph(props: {
   content: JSX.Element;
   running: boolean;
   queued?: boolean;
   runningLabel?: string;
   circular?: boolean;
   badge?: JSX.Element;
-  ring?: SessionGlyphRing;
+  ring?: "circle" | "pair";
   runVisibility?: SessionRunVisibility;
-};
-export function SessionGlyph(props: SessionGlyphOptions) {
+}) {
   const label = () =>
     props.runningLabel ?? t(props.queued ? "sessionsView.statusQueued" : "sessionsView.activeRun");
   const glyph = () => (
@@ -108,13 +114,50 @@ export function SessionGlyph(props: SessionGlyphOptions) {
       ]}
     >
       <span class="session-glyph__content">{props.content}</span>
-      <Show when={props.running}>
-        <SessionGlyphRun
-          pair={props.ring === "pair"}
-          queued={props.queued}
-          label={label()}
-          runVisibility={props.runVisibility}
-        />
+      <Show when={props.running && (props.runVisibility ?? true)} keyed>
+        {(createVisibility) => {
+          const [offscreen, setOffscreen] = createSignal(false);
+          const observe = (typeof createVisibility === "function" ? createVisibility : undefined)?.(
+            setOffscreen,
+          );
+          return (
+            <Show
+              when={props.ring === "pair"}
+              fallback={
+                <span
+                  ref={(element) => observe?.(element)}
+                  class={[
+                    "session-glyph__ring",
+                    {
+                      "session-glyph__ring--queued": props.queued,
+                      "session-run-indicator--offscreen": offscreen(),
+                    },
+                  ]}
+                  role="img"
+                  aria-label={label()}
+                />
+              }
+            >
+              <svg
+                class={["session-glyph__trace", { "session-glyph__trace--queued": props.queued }]}
+                viewBox="-16 -11 32 22"
+                role="img"
+                aria-label={label()}
+              >
+                <path class="session-glyph__trace-track" d={PAIR_TRACE_PATH} />
+                <path
+                  ref={(element) => observe?.(element)}
+                  class={[
+                    "session-glyph__trace-run",
+                    { "session-run-indicator--offscreen": offscreen() },
+                  ]}
+                  d={PAIR_TRACE_PATH}
+                  pathLength="100"
+                />
+              </svg>
+            </Show>
+          );
+        }}
       </Show>
       {props.badge}
     </span>
@@ -124,57 +167,6 @@ export function SessionGlyph(props: SessionGlyphOptions) {
       <openclaw-tooltip prop:content={props.runningLabel} prop:describe={false}>
         {glyph()}
       </openclaw-tooltip>
-    </Show>
-  );
-}
-
-function SessionGlyphRun(props: {
-  pair: boolean;
-  queued?: boolean;
-  label: string;
-  runVisibility?: SessionRunVisibility;
-}) {
-  const observe = untrack(() => props.runVisibility?.());
-  let indicator: Element | undefined;
-  // Class bindings can clear the offscreen class; refresh native visibility after that commit.
-  createEffect(
-    () => [props.queued, props.pair],
-    () => {
-      if (indicator) {
-        observe?.(indicator);
-      }
-    },
-  );
-  return (
-    <Show
-      when={props.pair}
-      fallback={
-        <span
-          ref={(element) => {
-            indicator = element;
-          }}
-          class={["session-glyph__ring", { "session-glyph__ring--queued": props.queued }]}
-          role="img"
-          aria-label={props.label}
-        />
-      }
-    >
-      <svg
-        class={["session-glyph__trace", { "session-glyph__trace--queued": props.queued }]}
-        viewBox="-16 -11 32 22"
-        role="img"
-        aria-label={props.label}
-      >
-        <path class="session-glyph__trace-track" d={PAIR_TRACE_PATH} />
-        <path
-          ref={(element) => {
-            indicator = element;
-          }}
-          class="session-glyph__trace-run"
-          d={PAIR_TRACE_PATH}
-          pathLength="100"
-        />
-      </svg>
     </Show>
   );
 }
@@ -223,8 +215,7 @@ export function SessionRowBadges(props: SessionRowBadgesParams) {
   );
 }
 
-type SidebarSessionSubtitle = ReturnType<typeof resolveSidebarSessionSubtitle>;
-export function SidebarSessionSubtitle(props: SidebarSessionSubtitle) {
+export function SidebarSessionSubtitle(props: ReturnType<typeof resolveSidebarSessionSubtitle>) {
   const label = () =>
     props.toolName ? `${t("chat.toolCards.tool")}: ${props.toolName}` : undefined;
   return (
@@ -339,6 +330,7 @@ export type TeamSessionSlotsProps = {
   childCount: number;
   groupConflicts?: number;
   runVisibility?: SessionRunVisibility;
+  statusOnly?: boolean;
 };
 
 export function TeamSessionSlots(props: TeamSessionSlotsProps) {
@@ -355,13 +347,14 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
       summary().attention.kind !== "none" ||
       summary().failed ||
       Boolean(props.groupConflicts) ||
-      summary().active > 0 ||
-      Boolean(idleChild()),
+      (!props.statusOnly && (summary().active > 0 || Boolean(idleChild()))),
   );
   return (
-    <Show when={props.childCount > 0 || summary().unread > 0 || hasState()}>
+    <Show
+      when={(!props.statusOnly && (props.childCount > 0 || summary().unread > 0)) || hasState()}
+    >
       <span class="sidebar-session-team-state">
-        <Show when={props.childCount > 0 || summary().unread > 0}>
+        <Show when={!props.statusOnly && (props.childCount > 0 || summary().unread > 0)}>
           <span class="sidebar-session-team-state__counts">
             <Show when={props.childCount > 0}>
               <span
@@ -412,7 +405,7 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
                   <Icon name="globe" />
                 </span>
               </Match>
-              <Match when={summary().active > 0}>
+              <Match when={!props.statusOnly && summary().active > 0}>
                 <SessionGlyph
                   content={undefined}
                   running={true}
@@ -420,7 +413,9 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
                   runVisibility={props.runVisibility}
                 />
               </Match>
-              <Match when={idleChild()}>{(row) => <SessionIdleState session={row()} />}</Match>
+              <Match when={!props.statusOnly && idleChild()}>
+                {(row) => <SessionIdleState session={row()} />}
+              </Match>
             </Switch>
           </span>
         </Show>
@@ -447,7 +442,7 @@ function SessionIcon(props: { icon: string }) {
   );
 }
 
-type SessionLeadingStateProps = {
+export function renderSessionLeadingState(props: {
   session: SidebarRecentSession;
   ownerActor?: SessionCreatedActor | null;
   attribution: "created" | "owned" | "archived";
@@ -456,9 +451,7 @@ type SessionLeadingStateProps = {
   trailingState?: boolean;
   icon?: JSX.Element;
   runVisibility?: SessionRunVisibility;
-};
-
-export function renderSessionLeadingState(props: SessionLeadingStateProps) {
+}) {
   const session = () => props.session;
   const subagentsWorking = createMemo(
     () => !props.trailingState && session().runningChildCount > 0,
@@ -570,21 +563,8 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
     </Show>
   );
   return {
-    get running() {
-      return running();
-    },
+    running,
     leadingIndicator,
-    get visible() {
-      return (
-        showGlyph() ||
-        (!props.trailingState &&
-          (session().isChild
-            ? Boolean(resolveSessionIdleBadge(session().status, t))
-            : session().unread))
-      );
-    },
-    get renderedIdentities() {
-      return renderedIdentities();
-    },
+    renderedIdentities,
   };
 }

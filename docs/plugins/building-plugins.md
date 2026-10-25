@@ -17,11 +17,11 @@ You do not need to add an external plugin to the OpenClaw repository. Publish
 the package to [ClawHub](/clawhub) and users install it with:
 
 ```bash
-openclaw plugins install clawhub:<package-name>
+openclaw plugins install <package-name>
 ```
 
-Bare package specs install from npm. Use the `clawhub:` prefix when you want
-ClawHub resolution.
+Package specs install from ClawHub by default. Use `npm:<package>` to install
+from npm, or `clawhub:<package>` to select ClawHub explicitly.
 
 ## Requirements
 
@@ -69,7 +69,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.36"
+    "typebox": "1.3.37"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -246,7 +246,7 @@ local proof.
     Install the published package through ClawHub:
 
     ```bash
-    openclaw plugins install clawhub:your-org/your-plugin
+    openclaw plugins install your-org/your-plugin
     ```
 
   </Step>

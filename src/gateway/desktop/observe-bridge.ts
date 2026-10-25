@@ -178,7 +178,6 @@ export function handleDesktopObserveUpgrade(
   head: Buffer,
   deps: {
     registry: Pick<DesktopSessionRegistry, "attachObserver" | "claimStream">;
-    getBufferedAmount?: (ws: WebSocket) => number;
   },
 ): boolean {
   const resource = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -303,19 +302,17 @@ export function handleDesktopObserveUpgrade(
           return;
         }
         ws.send(chunk, { binary: true });
-        const bufferedAmount = () => deps.getBufferedAmount?.(ws) ?? ws.bufferedAmount;
-        if (bufferedAmount() <= PAUSE_BUFFERED_BYTES || resumeTimer) {
+        if (ws.bufferedAmount <= PAUSE_BUFFERED_BYTES || resumeTimer) {
           return;
         }
         desktopSocket.pause();
         resumeTimer = setInterval(() => {
-          if (bufferedAmount() <= PAUSE_BUFFERED_BYTES) {
+          if (ws.bufferedAmount <= PAUSE_BUFFERED_BYTES) {
             clearInterval(resumeTimer);
             resumeTimer = undefined;
             desktopSocket.resume();
           }
-        }, RESUME_CHECK_MS);
-        resumeTimer.unref?.();
+        }, RESUME_CHECK_MS).unref();
       });
       if (browserRemainder.length > 0) {
         forwardClientChunk(browserRemainder);

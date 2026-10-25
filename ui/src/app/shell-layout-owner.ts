@@ -5,6 +5,7 @@ const TRAITS = [
   ["settingsPage", "content--settings-page"],
   ["settingsWide", "content--settings-wide"],
   ["settingsWorkspace", "content--settings-workspace"],
+  ["cronEditor", "content--cron-editor"],
   ["memoryPage", "content--memory-page"],
   ["logsPage", "content--logs-page"],
   ["activityPage", "content--activity-page"],
@@ -23,6 +24,7 @@ export function shellLayoutOwnerForHost(host: Element): ShellLayoutOwner | undef
 /** Both renderers publish to this synchronous owner before measuring descendants. */
 export class ShellLayoutOwner {
   private readonly reporters = new Map<object, { host: Element; traits: ShellLayoutTraits }>();
+  private readonly footerControls = new Set<HTMLElement>();
   private content?: Element;
 
   readonly contentRef = (content: Element | undefined) => {
@@ -62,6 +64,37 @@ export class ShellLayoutOwner {
     }
   }
 
+  registerFooterControlSurface(element: HTMLElement): () => void {
+    this.footerControls.add(element);
+    return () => this.footerControls.delete(element);
+  }
+
+  readonly footerControlsOverlap = (
+    bounds: Pick<DOMRectReadOnly, "left" | "right" | "top" | "bottom">,
+  ): boolean => {
+    for (const surface of this.footerControls) {
+      if (
+        !surface.isConnected ||
+        !this.content?.contains(surface) ||
+        !surface.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+      ) {
+        continue;
+      }
+      const rect = surface.getBoundingClientRect();
+      if (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.left < bounds.right &&
+        rect.right > bounds.left &&
+        rect.top < bounds.bottom &&
+        rect.bottom > bounds.top
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   get current(): ShellLayoutTraits {
     const traits: ShellLayoutTraits = {};
     for (const [token, reporter] of this.reporters) {
@@ -86,6 +119,7 @@ export class ShellLayoutOwner {
   }
 
   dispose() {
+    this.footerControls.clear();
     this.reporters.clear();
     this.apply();
   }

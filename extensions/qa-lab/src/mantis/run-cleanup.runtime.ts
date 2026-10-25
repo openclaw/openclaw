@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasNodeErrorCode, pathEntryExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import { assertNoSymlinkParents } from "openclaw/plugin-sdk/security-runtime";
 import {
   MantisCommandCleanupError,
@@ -21,10 +22,9 @@ type MantisCleanupDeadline = {
 };
 
 class MantisCleanupDeadlineError extends Error {
-  constructor(deadline: MantisCleanupDeadline, operation: string, cause?: unknown) {
+  constructor(deadline: MantisCleanupDeadline, operation: string) {
     super(
       `${deadline.lane} worktree cleanup exceeded its total ${deadline.timeoutMs}ms deadline while ${operation}`,
-      cause === undefined ? undefined : { cause },
     );
     this.name = "MantisCleanupDeadlineError";
   }
@@ -59,25 +59,9 @@ function rethrowMantisCleanupBoundaryError(error: unknown): void {
   }
 }
 
-function isNotFoundError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-}
-
 function isPathWithinOrEqual(parentPath: string, childPath: string): boolean {
   const relative = path.relative(parentPath, childPath);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.lstat(filePath);
-    return true;
-  } catch (error) {
-    if (isNotFoundError(error)) {
-      return false;
-    }
-    throw error;
-  }
 }
 
 async function verifyMantisDirectoryOwnership(params: {
@@ -98,7 +82,7 @@ async function verifyMantisDirectoryOwnership(params: {
     try {
       stat = await fs.lstat(directory, { bigint: true });
     } catch (error) {
-      if (isNotFoundError(error)) {
+      if (hasNodeErrorCode(error, "ENOENT")) {
         return false;
       }
       throw error;
@@ -116,7 +100,7 @@ async function normalizeWorktreePath(filePath: string, repoRoot: string): Promis
   try {
     return await fs.realpath(resolvedPath);
   } catch (error) {
-    if (!isNotFoundError(error)) {
+    if (!hasNodeErrorCode(error, "ENOENT")) {
       throw error;
     }
   }
@@ -194,7 +178,7 @@ function createCleanupVerificationAggregate(params: {
 type RemoveMantisWorktreeParams = {
   commandTimeouts: MantisCommandTimeouts;
   lane: "baseline" | "candidate";
-  ownership?: MantisDirectoryOwnership;
+  ownership: MantisDirectoryOwnership;
   repoRoot: string;
   runner: MantisCommandRunner;
   worktreeDir: string;
@@ -220,20 +204,6 @@ async function removeMantisWorktreeBeforeDeadline(
   const listRegisteredPaths = () =>
     listRegisteredWorktreePaths({ ...params, createExecution: createCleanupExecution });
 
-  if (!ownership) {
-    const registeredWorktreePaths = await listRegisteredPaths();
-    if (!registeredWorktreePaths.includes(normalizedWorktreeDir)) {
-      if (await pathExists(params.worktreeDir)) {
-        throw retainedDirectoryError(
-          new Error("the failed worktree add did not yield an ownership receipt"),
-        );
-      }
-      return;
-    }
-    throw new Error(`${params.lane} worktree cleanup left registered path ${params.worktreeDir}`, {
-      cause: new Error("Mantis cannot prove ownership without a directory receipt"),
-    });
-  }
   const verifyOwnership = () =>
     verifyMantisDirectoryOwnership({
       ownership,
@@ -291,7 +261,7 @@ async function removeMantisWorktreeBeforeDeadline(
     });
   }
 
-  if (await pathExists(params.worktreeDir)) {
+  if (await pathEntryExists(params.worktreeDir)) {
     try {
       const stillOwned = await verifyOwnership();
       const entries = stillOwned ? await fs.readdir(params.worktreeDir) : undefined;
@@ -334,7 +304,7 @@ export async function removeLegacyMantisWorktrees(params: {
     stage: "worktree-cleanup",
     timeoutMs: resolveMantisCleanupRemainingMs(deadline, "listing legacy worktrees"),
   });
-  if (!(await pathExists(legacyRoot))) {
+  if (!(await pathEntryExists(legacyRoot))) {
     return;
   }
   const normalizedLegacyRoot = await normalizeWorktreePath(legacyRoot, params.repoRoot);
@@ -353,7 +323,7 @@ export async function removeLegacyMantisWorktrees(params: {
     if (!registeredPaths.includes(path.join(normalizedLegacyRoot, lane))) {
       continue;
     }
-    if (!(await pathExists(worktreeDir))) {
+    if (!(await pathEntryExists(worktreeDir))) {
       throw new Error(`${lane} legacy worktree cleanup left registered path ${worktreeDir}`, {
         cause: new Error("the historical Mantis worktree path is missing"),
       });

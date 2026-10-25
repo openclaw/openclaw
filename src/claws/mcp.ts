@@ -12,7 +12,6 @@ export type { PersistedClawMcpServerRef } from "./mcp-records.js";
 
 export class ClawMcpInstallError extends Error {
   constructor(
-    readonly code: string,
     message: string,
     readonly mcpServers: PersistedClawMcpServerRef[],
   ) {
@@ -35,8 +34,6 @@ export async function installClawMcpServersStateless(
   plan: ClawAddPlan,
   options: ClawMutationStateOptions & {
     assertForwardCurrent?: () => void;
-    setMcpServer?: typeof setConfiguredMcpServer;
-    listMcpServers?: typeof listConfiguredMcpServers;
     nowMs?: number;
   } = {},
 ): Promise<PersistedClawMcpServerRef[]> {
@@ -51,21 +48,19 @@ export async function installClawMcpServersStateless(
       const server = action.details ? mcpServerFromActionDetails(action.details) : undefined;
       if (!server) {
         throw new ClawMcpInstallError(
-          "mcp_plan_invalid",
           `MCP server action ${JSON.stringify(action.id)} is invalid.`,
           refs,
         );
       }
-      const listed = await (options.listMcpServers ?? listConfiguredMcpServers)();
+      const listed = await listConfiguredMcpServers();
       assertCurrent();
       if (!listed.ok) {
-        throw new ClawMcpInstallError("mcp_preflight_failed", listed.error, refs);
+        throw new ClawMcpInstallError(listed.error, refs);
       }
       const configured = listed.mcpServers[action.id];
       const configDigest = digestClawMcpServer(server);
       if (configured && digestClawMcpServer(configured) !== configDigest) {
         throw new ClawMcpInstallError(
-          "mcp_config_conflict",
           `MCP server ${JSON.stringify(action.id)} already exists with different configuration.`,
           refs,
         );
@@ -85,7 +80,7 @@ export async function installClawMcpServersStateless(
       };
       if (!configured) {
         try {
-          const result = await (options.setMcpServer ?? setConfiguredMcpServer)({
+          const result = await setConfiguredMcpServer({
             name: action.id,
             server,
             createOnly: true,
@@ -93,7 +88,7 @@ export async function installClawMcpServersStateless(
             assertCurrent,
           });
           if (!result.ok) {
-            throw new ClawMcpInstallError("mcp_install_failed", result.error, refs);
+            throw new ClawMcpInstallError(result.error, refs);
           }
           refs.push(ref);
           assertCurrent();
@@ -101,7 +96,7 @@ export async function installClawMcpServersStateless(
           if (error instanceof ClawMcpInstallError) {
             throw error;
           }
-          throw new ClawMcpInstallError("mcp_install_uncertain", coerceErrorMessage(error), refs);
+          throw new ClawMcpInstallError(coerceErrorMessage(error), refs);
         }
       }
       if (configured) {
@@ -115,10 +110,7 @@ export async function installClawMcpServersStateless(
 /** Remove unchanged MCP entries introduced before a failed Add published its agent. */
 export async function rollbackStatelessClawMcpServers(
   refs: PersistedClawMcpServerRef[],
-  options: ClawMutationStateOptions & {
-    listMcpServers?: typeof listConfiguredMcpServers;
-    unsetMcpServer?: typeof unsetConfiguredMcpServer;
-  } = {},
+  options: ClawMutationStateOptions = {},
 ): Promise<string[]> {
   const errors: string[] = [];
   for (const ref of refs.toReversed()) {
@@ -131,7 +123,7 @@ export async function rollbackStatelessClawMcpServers(
           assertOwned();
           options.assertCurrent?.();
         };
-        const listed = await (options.listMcpServers ?? listConfiguredMcpServers)();
+        const listed = await listConfiguredMcpServers();
         assertCurrent();
         if (!listed.ok) {
           throw new Error(listed.error);
@@ -144,7 +136,7 @@ export async function rollbackStatelessClawMcpServers(
         if (digestClawMcpServer(configured) !== ref.configDigest) {
           return;
         }
-        const removed = await (options.unsetMcpServer ?? unsetConfiguredMcpServer)({
+        const removed = await unsetConfiguredMcpServer({
           name: ref.name,
           expectedServer: configured,
           skipLifecycleLease: true,

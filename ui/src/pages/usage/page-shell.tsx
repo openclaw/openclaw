@@ -1,31 +1,24 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { createMemo, untrack } from "solid-js";
+import { createMemo } from "solid-js";
 import type { SessionsUsageResult } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { PanelRefreshStatus as PanelRefreshStatusView } from "../../components/solid/panel-refresh-status.tsx";
-import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { projectAgentSelection } from "../../lib/reactive/application.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
-import { getLocale, t } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 
 export function UsagePageShell(props: {
-  context: ApplicationContext;
   result: SessionsUsageResult | null;
   children: JSX.Element;
 }) {
-  // The bridge replaces this view when the application provider changes.
-  const context = untrack(() => props.context);
+  const context = useApplication();
   const agents = projectAgents(context.agents);
   const selection = projectAgentSelection(context.agentSelection);
-  const header = createMemo(() => {
-    getLocale();
-    return { title: titleForRoute("usage"), subtitle: subtitleForRoute("usage") };
-  });
   const additionalAgentIds = createMemo(
     () =>
       props.result?.sessions
@@ -34,29 +27,20 @@ export function UsagePageShell(props: {
   );
   return (
     <>
-      <SettingsPageHeader
-        title={header().title}
-        subtitle={header().subtitle}
+      <HubPageHeader
+        active="usage"
+        docsUrl="https://docs.openclaw.ai/concepts/usage-tracking"
         actions={
           <AgentScopeControl
             agents={agents.read().agentsList?.agents ?? []}
             additionalAgentIds={additionalAgentIds()}
-            selection={props.context.agentSelection}
+            selection={context.agentSelection}
             selectedId={selection.read().state.scopeId}
           />
         }
       />
       <SettingsWorkspace>{props.children}</SettingsWorkspace>
     </>
-  );
-}
-
-export function renderUsageLoadingStatus(label: JSX.Element) {
-  return (
-    <span class="settings-status settings-status--accent">
-      <span class="usage-loading-spinner" aria-hidden="true" />
-      {label}
-    </span>
   );
 }
 

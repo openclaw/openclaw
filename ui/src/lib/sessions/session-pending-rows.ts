@@ -20,17 +20,6 @@ type PendingRowCopyHost = PendingRowHost & {
   copyRow: (row: GatewaySessionRow, patch: Partial<GatewaySessionRow>) => GatewaySessionRow;
 };
 
-/** `canonical` is what the Gateway confirmed; `previous` is the value the intent replaced. */
-type PendingRowPatch<T> = {
-  token: symbol;
-  order: number;
-  sessionId: string | undefined;
-  hasProjectedRow: boolean;
-  isCurrent?: () => boolean;
-  previous: T;
-  next: T;
-  canonical: T;
-};
 export type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
 type SessionFastModeFields = Pick<GatewaySessionRow, "fastMode" | "effectiveFastMode">;
 export const optimisticSessionRowFields = [
@@ -38,6 +27,13 @@ export const optimisticSessionRowFields = [
   "pinnedAt",
   "unread",
   "category",
+  "label",
+  "icon",
+  "color",
+  "archived",
+  "archivedAt",
+  "archivedBy",
+  "archiveReason",
   "thinkingLevel",
   "fastMode",
   "effectiveFastMode",
@@ -60,6 +56,8 @@ export type SessionPatchRowFact = {
   readCutoff?: number;
   fields:
     | { label: GatewaySessionRow["label"] }
+    | { icon: GatewaySessionRow["icon"] }
+    | { color: GatewaySessionRow["color"] }
     | { category: GatewaySessionRow["category"] }
     | SessionPinFields
     | { pinned: true }
@@ -186,7 +184,7 @@ export function resolvePredecessorRowTarget(
     : null;
 }
 
-function createOptimisticRowPatches<T>(
+export function createOptimisticRowPatches<T>(
   host: PendingRowHost,
   fields: {
     read: (row: GatewaySessionRow | undefined) => T;
@@ -195,7 +193,19 @@ function createOptimisticRowPatches<T>(
     observe: (previous: T, row: GatewaySessionRow, names: readonly string[]) => T;
   },
 ) {
-  const pending = new Map<string, PendingRowPatch<T>>();
+  const pending = new Map<
+    string /** `canonical` is what the Gateway confirmed; `previous` is the value the intent replaced. */,
+    {
+      token: symbol;
+      order: number;
+      sessionId: string | undefined;
+      hasProjectedRow: boolean;
+      isCurrent?: () => boolean;
+      previous: T;
+      next: T;
+      canonical: T;
+    }
+  >();
   let nextOrder = 0;
   const owns = (target: PendingRowPresentationTarget, token: symbol): boolean => {
     const current = pending.get(target.identity);
@@ -317,7 +327,14 @@ function createOptimisticRowPatches<T>(
 }
 
 export function createOptimisticRowField<
-  Field extends "category" | "unread" | "thinkingLevel" | "contextWindow",
+  Field extends
+    | "label"
+    | "icon"
+    | "color"
+    | "category"
+    | "unread"
+    | "thinkingLevel"
+    | "contextWindow",
 >(host: PendingRowCopyHost, field: Field) {
   return createOptimisticRowPatches(host, {
     read: (row) => row?.[field],
@@ -348,8 +365,6 @@ export function createOptimisticPinPatches(host: PendingRowCopyHost) {
     },
   };
 }
-
-type SessionSettingsPatch = Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">;
 
 /** Settings share the row-intent owner; their token group is captured before queued dispatch. */
 export function createOptimisticSettingsPatches(host: PendingRowCopyHost) {
@@ -387,7 +402,10 @@ export function createOptimisticSettingsPatches(host: PendingRowCopyHost) {
           }
         : undefined;
     },
-    prepare(patch: SessionSettingsPatch, isCurrent: () => boolean) {
+    prepare(
+      patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">,
+      isCurrent: () => boolean,
+    ) {
       const starts: Array<
         readonly [Pick<typeof thinking, "settle" | "owns">, ReturnType<typeof thinking.prepare>]
       > = [];

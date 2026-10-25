@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
-import { resolveSandboxContext } from "./sandbox.js";
+import { resolveSandboxContext } from "./sandbox/context.js";
 import {
   type resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
@@ -108,6 +109,7 @@ export async function preparePluginHarnessWorkspace(
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxParams) {
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.workspace.policy");
   const assertRunCurrent = params.admittedRunContext
     ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
     : undefined;
@@ -133,11 +135,14 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
     runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
       assertCurrent();
       if (sandboxRuntimeStatus?.sandboxed) {
+        phases.mark("attempt.setup.workspace.baseline_wait");
         await params.awaitSessionDiffBaseline?.();
         assertCurrent();
       }
+      phases.mark("attempt.setup.workspace.mkdir");
       await fs.mkdir(resolvedWorkspace, { recursive: true });
       assertCurrent();
+      phases.mark("attempt.setup.workspace.sandbox");
       const sandbox = sandboxRuntimeStatus
         ? await resolveSandboxContext({
             config: params.config,
@@ -152,6 +157,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
           })
         : null;
       try {
+        phases.mark("attempt.setup.workspace.roots");
         assertCurrent();
         const projectedWorkspace =
           sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
@@ -179,6 +185,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
           await fs.mkdir(effectiveWorkspace, { recursive: true });
         }
         assertCurrent();
+        phases.mark("attempt.setup.workspace.policy_finalize");
         return {
           effectiveCwd: sandbox?.enabled
             ? effectiveWorkspace
@@ -207,7 +214,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         throw error;
       }
     });
-  return params.placementSandbox
+  return await (params.placementSandbox
     ? prepareWorkspace()
     : withSandboxRuntimeStatusInWorker(
         {
@@ -220,5 +227,5 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         },
         { env: process.env, cwd: process.cwd(), assertCurrent },
         prepareWorkspace,
-      );
+      ));
 }

@@ -14,6 +14,8 @@ export const ControlUiLinkReaderMetadataSchema = closedObject({
   imageMethod: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   /** Forward this pane's session key; the receiving owner still authorizes every read. */
   sessionScoped: Type.Optional(Type.Boolean()),
+  /** Supports overview-first detail requests with independently loaded sections. */
+  progressive: Type.Optional(Type.Boolean()),
 });
 
 export const ControlUiLinkReaderDescriptorSchema = closedObject({

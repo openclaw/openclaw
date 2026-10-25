@@ -209,6 +209,8 @@ export type GatewayServiceReadOptions = {
   systemdReadBinding?: SystemdServiceReadBinding;
   timeoutMs?: number;
   requireEffective?: boolean;
+  /** Reinstall may replace an absent LaunchAgent plist; existing definitions still require strict reads. */
+  allowMissingDefinition?: boolean;
   /** Carry the command reader's verdict into runtime inspection without repeating it. */
   commandInspection?: GatewayServiceCommandInspection;
   onCommandInspection?: (inspection: GatewayServiceCommandInspection) => void;
@@ -441,7 +443,6 @@ export type GatewayServiceState = {
 };
 
 export type GatewayServiceStartRepairIssue = {
-  code: "missing-program" | "port-mismatch" | "temporary-program";
   message: string;
 };
 

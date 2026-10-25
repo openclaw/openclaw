@@ -48,4 +48,10 @@ it("follows the replacement Gateway version and ignores the retired source", () 
   publishVersion(second, "2026.10.4");
   flush();
   expect(view.container.textContent).toContain("2026.10.4");
+  second.publish({ ...second.gateway.snapshot, phase: "reconnecting" });
+  flush();
+  expect(view.container.textContent).toContain("2026.10.4");
+  second.publish({ ...second.gateway.snapshot, phase: "stopped", hello: null });
+  flush();
+  expect(view.container.textContent).not.toContain("2026.10.4");
 });

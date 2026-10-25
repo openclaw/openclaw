@@ -5,7 +5,6 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
-  errorShape,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -47,6 +46,7 @@ import {
 import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   formatDateLabel,
@@ -80,11 +80,7 @@ async function resolveSessionUsageFileOrRespond(
 ) {
   const key = normalizeOptionalString(params?.key);
   if (!key) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `key is required for ${detail}`),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, `key is required for ${detail}`);
     return null;
   }
   const sessionOwner = resolveRequestedSessionAgentId(
@@ -104,11 +100,7 @@ async function resolveSessionUsageFileOrRespond(
     resolved = undefined;
   }
   if (!resolved) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `Invalid session key: ${key}`),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, `Invalid session key: ${key}`);
     return null;
   }
   return { config, key, ...resolved };
@@ -120,13 +112,13 @@ function resolveUsageDateRangeOrRespond(
 ): { interpretation: DateInterpretation; range: DateRange } | null {
   const interpretation = resolveDateInterpretation(params);
   if (!interpretation.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, interpretation.error));
+    respondError(respond, ErrorCodes.INVALID_REQUEST, interpretation.error);
     return null;
   }
 
   const range = resolveDateRange(params, interpretation.value);
   if (!range.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, range.error));
+    respondError(respond, ErrorCodes.INVALID_REQUEST, range.error);
     return null;
   }
   return { interpretation: interpretation.value, range: range.value };
@@ -161,23 +153,20 @@ export const usageHandlers: GatewayRequestHandlers = {
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
     if (!isGatewayAdmin(client ?? null) && operatorSessionCap(client ?? null, config) === "none") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "Aggregate usage includes sessions hidden by your operator role; ask an administrator to review Gateway-wide usage.",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.FORBIDDEN,
+        "Aggregate usage includes sessions hidden by your operator role; ask an administrator to review Gateway-wide usage.",
       );
       return;
     }
     const { startMs, endMs } = range;
     const agentId = normalizeOptionalString(params?.agentId);
     if (params?.agentScope === "all" && agentId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "agentScope=all cannot be combined with agentId"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "agentScope=all cannot be combined with agentId",
       );
       return;
     }
@@ -247,18 +236,18 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       : undefined;
     const includeContextWeight = p.includeContextWeight ?? false;
+    const includeAllContext = extractQueryTerms(overviewOptions?.query ?? "").some(
+      (term) => term.key?.toLowerCase() === "has" && term.value.toLowerCase() === "context",
+    );
     const creatorKey = normalizeOptionalString(p.creatorKey);
     const specificKey = normalizeOptionalString(p.key) ?? null;
     const requestedAgentId = normalizeOptionalString(p.agentId);
     const requestedAllAgents = p.agentScope === "all";
     if (requestedAllAgents && (requestedAgentId || specificKey)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "agentScope=all cannot be combined with key or agentId",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "agentScope=all cannot be combined with key or agentId",
       );
       return;
     }
@@ -294,14 +283,14 @@ export const usageHandlers: GatewayRequestHandlers = {
         endMs,
         includeUntimestamped,
         dayBucket,
-        limit,
         groupingMode,
         specificKey,
         includeContextWeight,
         creatorKey,
-        ...(overviewOptions
-          ? { overviewKey: JSON.stringify([p.projection, overviewOptions]) }
-          : {}),
+        // Paging, sorting, and usage filters derive from the same source snapshot.
+        overview: overviewOptions !== undefined,
+        committedOnly: p.projection === "overview",
+        includeAllContext,
         ...(visibilityIdentity ? { visibilityIdentity } : {}),
         load: async () => {
           const now = Date.now();
@@ -336,11 +325,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           }
 
           // Context queries need the saved report for every candidate; ordinary reads hydrate the page.
-          if (
-            extractQueryTerms(overviewOptions?.query ?? "").some(
-              (term) => term.key?.toLowerCase() === "has" && term.value.toLowerCase() === "context",
-            )
-          ) {
+          if (includeAllContext) {
             await budget.read(
               () => loadUsageSessionContext(mergedEntries, visibilityFilter),
               () => undefined,
@@ -349,6 +334,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           const sessions: SessionUsageEntry[] = [];
           const { summaries, computing, cacheStatus } = await loadUsageSessionSummaries({
             entries: mergedEntries,
+            committedOnly: p.projection === "overview",
             read: budget.read,
             config,
             startMs,
@@ -407,6 +393,9 @@ export const usageHandlers: GatewayRequestHandlers = {
                   status: "partial" as const,
                 }
               : cacheStatus,
+            ...(budget.exhausted()
+              ? { partial: { reason: "time-budget" as const, message: budget.hint } }
+              : {}),
             sources: visibleEntries,
             accessRevision: loadedAccessRevision,
             sessionRevision: loadedSessionRevision,
@@ -415,7 +404,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       });
     } catch (err) {
       if (err instanceof UsageSessionInvalidRequestError) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, err.message));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, err.message);
         return;
       }
       throw err;
@@ -604,7 +593,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           };
       const partial = budget.exhausted()
         ? { reason: "time-budget" as const, message: budget.hint }
-        : undefined;
+        : (result.partial ?? result.cacheStatus?.partial);
       if (partial && "overview" in slice) {
         slice.overview.queryWarnings.push(partial.message);
       }
@@ -652,10 +641,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
 
     if (!timeseries) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `No transcript found for session: ${resolved.key}`),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `No transcript found for session: ${resolved.key}`,
       );
       return;
     }

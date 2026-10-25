@@ -1,5 +1,6 @@
 /** Applies agent compaction settings and small-context overflow guards. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { AgentCompactionMode } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
@@ -8,13 +9,6 @@ import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { SettingsManager } from "./sessions/settings-manager.js";
 
 export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
-
-function toPositiveInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
 
 /** Applies configured compaction reserve/keep-recent settings to an agent settings manager. */
 export function applyAgentCompactionSettingsFromConfig(params: {
@@ -30,8 +24,8 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   // prepared manager; same-manager resource reloads reuse cfg and reapply explicit values.
   const configuredEnabled = compactionCfg?.enabled;
 
-  const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  const contextTokenBudget = toPositiveInt(params.contextTokenBudget);
+  const configuredKeepRecentTokens = compactionCfg?.keepRecentTokens;
+  const contextTokenBudget = floorPositiveFiniteNumber(params.contextTokenBudget);
   const requestedReserveTokens = Math.max(
     currentReserveTokens,
     DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
@@ -71,7 +65,7 @@ export function resolveEffectiveCompactionMode(cfg?: OpenClawConfig): AgentCompa
   if (compaction?.provider) {
     return "safeguard";
   }
-  return compaction?.mode === "safeguard" ? "safeguard" : "default";
+  return compaction?.mode ?? "default";
 }
 
 // z.ai-style silent overflow can compact a successful turn before our provider call (#75799).
@@ -97,7 +91,6 @@ export function isSilentOverflowProneModel(model: {
   );
 }
 
-// Reapply after resource reload: settingsManager.reload() restores the disk setting.
 export function applyAgentAutoCompactionGuard(params: {
   settingsManager: SettingsManager;
   contextEngineInfo?: ContextEngineInfo;

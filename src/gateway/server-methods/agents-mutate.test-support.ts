@@ -1,14 +1,34 @@
 import type { Stats } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, type vi, type Mock } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import type {
   AgentDeletionJournalCleanupPath,
   AgentDeletionJournalEntry,
 } from "../../state/agent-deletion-journal.js";
 import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
+import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 
 export { expectRecordFields };
+
+export async function callAgentHandler(
+  handler: GatewayRequestHandler,
+  method: string,
+  params: Record<string, unknown>,
+  options: Pick<GatewayRequestHandlerOptions, "context"> &
+    Partial<Pick<GatewayRequestHandlerOptions, "client" | "hasCurrentClientAuthority">>,
+) {
+  const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
+  await handler({
+    req: { type: "req", id: method, method },
+    params,
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    ...options,
+  });
+  return respond;
+}
 
 export type MockAgentEntry = {
   id: string;

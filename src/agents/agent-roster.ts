@@ -1,7 +1,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { LegacyAgentListEntry } from "../config/legacy.roster.js";
 import type { AgentConfig } from "../config/types.agents.js";
-import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  LEGACY_IMPLICIT_AGENT_ID,
+  normalizeAgentId,
+  normalizeOptionalAgentId,
+} from "../routing/session-key.js";
+import { SYSTEM_AGENT_ROSTER_ENTRIES } from "../system-agent/agent-id.js";
 
 type AgentEntry = AgentConfig;
 type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
@@ -111,6 +117,42 @@ export function listAgentIds(cfg: AgentRosterConfig): string[] {
     return [LEGACY_IMPLICIT_AGENT_ID];
   }
   return [...new Set(agents.map((entry) => normalizeAgentId(entry?.id)))];
+}
+
+/** Lists ACP harness ids and ACP-runtime roster agents named by config; native agents are excluded. */
+export function resolveConfiguredAcpHarnessIds(cfg: OpenClawConfig): Set<string> {
+  const ids = new Set<string>();
+  for (const agent of listAgentEntries(cfg)) {
+    if (agent.runtime?.type !== "acp") {
+      continue;
+    }
+    ids.add(normalizeAgentId(agent.id));
+    const acpAgent = normalizeOptionalAgentId(agent.runtime.acp?.agent);
+    if (acpAgent) {
+      ids.add(acpAgent);
+    }
+  }
+  const candidates = [
+    cfg.acp?.defaultAgent,
+    ...(cfg.acp?.allowedAgents ?? []).filter((entry) => entry.trim() !== "*"),
+  ];
+  for (const entry of candidates) {
+    const id = normalizeOptionalAgentId(entry);
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+/** Lists configured roster and ACP harness targets for subagent policy. */
+export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): Set<string> {
+  return new Set([...listAgentIds(cfg), ...resolveConfiguredAcpHarnessIds(cfg)]);
+}
+
+/** Reserved system agents belong to the Gateway without authored roster entries. */
+export function listGatewayOwnedAgentIds(cfg: AgentRosterConfig): string[] {
+  return [...new Set([...listAgentIds(cfg), ...SYSTEM_AGENT_ROSTER_ENTRIES.map(({ id }) => id)])];
 }
 
 export function tryResolveSoleAgentId(cfg: AgentRosterConfig): string | undefined {

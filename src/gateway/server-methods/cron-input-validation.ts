@@ -7,7 +7,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
+import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -28,6 +30,7 @@ import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normal
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
+  isCronOperatorSourceParent,
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
 } from "../../cron/session-target.js";
@@ -35,11 +38,14 @@ import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveHookExternalContentSource } from "../../security/external-content-source.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
@@ -272,6 +278,7 @@ export async function captureCronCreatorSession(
   cfg: OpenClawConfig,
   hasRuntimeAuthority = false,
 ) {
+  const operatorAuthority = caller.client?.internal?.operatorRunAuthority;
   const hasConversationResult =
     job.sessionTarget !== "main" &&
     (job.payload.kind === "agentTurn" ||
@@ -292,12 +299,46 @@ export async function captureCronCreatorSession(
           lifecycleRevision: creatorSession.lifecycleRevision,
         }
       : undefined;
+  // An authenticated operator turn records its device and grant for the job's
+  // parent, so every occurrence rechecks them instead of the creator profile.
+  const operatorSource =
+    callerScope &&
+    loaded &&
+    creatorSession &&
+    operatorAuthority &&
+    operatorScopeSatisfied("operator.write", operatorAuthority.scopes) &&
+    job.payload.kind === "agentTurn" &&
+    isCronOperatorSourceParent(
+      { sessionTarget: job.sessionTarget, sourceConversation },
+      loaded.canonicalKey,
+    ) &&
+    caller.client?.internal?.agentRuntimeIdentity
+      ? createRestartRecoveryOperatorSource({
+          authority: operatorAuthority,
+          entry: creatorSession,
+          agentId: loaded.agentId,
+          sessionKey: loaded.canonicalKey,
+          sourceRunId: caller.client.internal.agentRuntimeIdentity.operationalRunInstance.runId,
+        })
+      : undefined;
   // Operator-supplied sessions bind delivery only; agent callers inherit creator facts.
   const actor = callerScope
     ? creatorSession?.createdActor
     : resolveOperatorSessionCreation(caller.client).actor;
   const actorId = normalizeOptionalString(actor?.id);
-  const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
+  const legacyActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
+  const createdActor = callerScope
+    ? attributeDelegatedSessionCreator(
+        legacyActor,
+        callerScope.creatorProfileId,
+        callerScope.agentId,
+      )
+    : legacyActor;
+  const executionSessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? "";
+  const executionSession =
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && executionSessionKey
+      ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionSessionKey, agentId })
+      : undefined;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
@@ -306,13 +347,21 @@ export async function captureCronCreatorSession(
             cfg,
             agentId: agentId ?? resolveDefaultAgentId(cfg),
             model: job.payload.model,
+            isGmailHook:
+              (job.payload.externalContentSource ??
+                resolveHookExternalContentSource(
+                  parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
+                )) === "gmail",
             sessionEntry: callerScope ? creatorSession : undefined,
+            executionSessionEntry: executionSession?.entry,
           },
           caller,
         )
       : undefined;
   return {
     ...inference,
+    ...(operatorSource ? { operatorSource } : {}),
+    assertOperatorSourceCurrent: operatorSource ? operatorAuthority?.assertCurrent : undefined,
     ...(sourceConversation ? { sourceConversation } : {}),
     ...(createdActor ? { createdActor } : {}),
     ...(callerScope && creatorSession?.skillLibrarySelections
@@ -336,9 +385,9 @@ export async function captureCronUpdatedInferenceBinding(
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
     : null;
-  // CLI backends own their login: creation records no binding for them, so an
-  // unbound job must not demand a stored account. A job that already records one
-  // keeps its rejection until an authorized transition replaces that account.
+  // A native CLI login records no binding, so an unbound job must not demand a stored
+  // account. A job that already records one keeps its rejection until an authorized
+  // transition replaces that account.
   const cliExecution = selection
     ? resolveCliRuntimeExecutionProvider({
         cfg,
@@ -348,7 +397,7 @@ export async function captureCronUpdatedInferenceBinding(
         authProfileId: selection.profileId,
       })
     : undefined;
-  if (!model || (cliExecution && !nextJob.inferenceBinding) || !selection?.profileId) {
+  if (!model || !selection?.profileId) {
     if (patch.agentId !== undefined && nextJob.inferenceBinding) {
       // A move may keep the account only when the new agent sees the same credential owner.
       const authority = await acquireCronInferenceAuthorization({
@@ -373,6 +422,9 @@ export async function captureCronUpdatedInferenceBinding(
     caller,
   );
   if (!inference.inferenceBinding) {
+    if (cliExecution && !nextJob.inferenceBinding) {
+      return undefined;
+    }
     throw new Error("The selected automation account is unavailable.");
   }
   return inference;

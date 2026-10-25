@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import {
@@ -8,22 +6,19 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import {
-  appendTranscriptMessage,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
-import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { bootstrapHarnessContextEngine } from "./context-engine-lifecycle.js";
+import { createContextEngine as createEngine } from "./context-engine-lifecycle.test-support.js";
 import {
-  cleanupSessionStateForTest,
-  useSessionStoreTempDirs,
-} from "../../test-utils/session-state-cleanup.js";
-import {
-  bootstrapHarnessContextEngine,
-  finalizeHarnessContextEngineTurn,
-} from "./context-engine-lifecycle.js";
+  appendTurnMessage,
+  createTurnTarget,
+  finalizeTurn,
+} from "./context-engine-turn.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-context-terminal-");
 
@@ -37,15 +32,7 @@ function requireTranscriptTarget(params: {
   if (!sessionKey) {
     throw new Error("context engine transcript reads require a session key");
   }
-  return {
-    sessionId,
-    sessionKey,
-    ...(params.sessionTarget?.agentId ? { agentId: params.sessionTarget.agentId } : {}),
-    ...(params.sessionTarget?.storePath ? { storePath: params.sessionTarget.storePath } : {}),
-    ...(params.sessionTarget?.threadId !== undefined
-      ? { threadId: params.sessionTarget.threadId }
-      : {}),
-  };
+  return { ...params.sessionTarget, sessionId, sessionKey };
 }
 
 function readMessageContent(message: AgentMessage): unknown {
@@ -54,58 +41,34 @@ function readMessageContent(message: AgentMessage): unknown {
 
 describe("context engine transcript cursor contract", () => {
   it("records a reconstructed terminal anchor despite an intervening transcript append", async () => {
-    const target = {
-      agentId: "main",
-      sessionId: "terminal-append",
-      sessionKey: "agent:main:terminal-append",
-      storePath: path.join(sessionDirs.make(), "sessions.json"),
-    };
+    const target = createTurnTarget(
+      path.join(sessionDirs.make(), "sessions.json"),
+      "terminal-append",
+    );
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const user = await appendTranscriptMessage(target, {
-      message: { role: "user", content: "request" },
-      now: 1_000,
-    });
-    const terminal = await appendTranscriptMessage(target, {
-      message: { role: "assistant", content: "reply" },
-      parentId: user!.messageId,
-      now: 2_000,
-    });
+    const user = await appendTurnMessage(target, "user", "request", 1_000);
+    const terminal = await appendTurnMessage(target, "assistant", "reply", 2_000, user!.messageId);
     const readAnchor = transcriptAnchors.readActiveTranscriptEntryAnchorAsync;
     const read = vi
       .spyOn(transcriptAnchors, "readActiveTranscriptEntryAnchorAsync")
       .mockImplementation(async (...args) => {
         const anchor = await readAnchor(...args);
         // Append after the snapshot is read, before finalization consumes its terminal anchor.
-        await appendTranscriptMessage(target, {
-          message: { role: "assistant", content: "later reply" },
-          now: 3_000,
-        });
+        await appendTurnMessage(target, "assistant", "later reply", 3_000);
         return anchor;
       });
     const record = vi.fn();
-    const engine: ContextEngine = {
-      info: { id: "terminal-proof", name: "Terminal proof" },
-      ingest: async () => ({ ingested: true }),
-      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-      compact: async () => ({ ok: true, compacted: false }),
-    };
     try {
-      await finalizeHarnessContextEngineTurn({
-        contextEngine: engine,
+      await finalizeTurn({
+        contextEngine: createEngine(),
         sessionIdUsed: target.sessionId,
         sessionKey: target.sessionKey,
         sessionFile: target.storePath,
-        messagesSnapshot: [],
-        prePromptMessageCount: 0,
-        promptError: false,
-        aborted: false,
-        yieldAborted: false,
         turnCandidate: {
           admission: { ...user!.anchor!, logicalTurnId: "turn", role: "user" },
           terminalEntryId: terminal!.messageId,
           record,
         },
-        warn: vi.fn(),
       });
       expect(read).toHaveBeenCalledOnce();
       expect(record).toHaveBeenCalledExactlyOnceWith(
@@ -119,14 +82,10 @@ describe("context engine transcript cursor contract", () => {
   });
 
   it("bootstraps, resumes appends, and rebuilds after replacement through the public SDK", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-engine-cursor-"));
-    const storePath = path.join(tempDir, "sessions.json");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
     const target = {
-      agentId: "main",
-      sessionId: "context-engine-cursor",
-      sessionKey: "agent:main:context-engine-cursor",
+      ...createTurnTarget(storePath, "context-engine-cursor"),
       sessionEntry: { sessionId: "context-engine-cursor", updatedAt: 10 },
-      storePath,
     };
     const projectedMessages: AgentMessage[] = [];
     let cursor: string | undefined;
@@ -161,7 +120,7 @@ describe("context engine transcript cursor contract", () => {
         }
       }
     };
-    const engine: ContextEngine = {
+    const engine = createEngine({
       info: {
         id: "cursor-proof",
         name: "Cursor proof",
@@ -171,27 +130,31 @@ describe("context engine transcript cursor contract", () => {
         await consumeVisibleTranscript(params);
         return { bootstrapped: true, importedMessages: projectedMessages.length };
       },
-      ingest: async () => ({ ingested: true }),
-      assemble: async (params) => ({ messages: params.messages, estimatedTokens: 0 }),
-      compact: async () => ({ ok: true, compacted: false }),
       afterTurn: consumeVisibleTranscript,
-    };
+    });
     const skipMaintenance: NonNullable<
       Parameters<typeof bootstrapHarnessContextEngine>[0]["runMaintenance"]
     > = async () => undefined;
+    const lifecycle = {
+      contextEngine: engine,
+      sessionKey: target.sessionKey,
+      sessionTarget: target,
+      sessionFile: "sqlite://context-engine-cursor",
+      runMaintenance: skipMaintenance,
+      warn: () => {},
+    };
+    const finish = (promptError = false) =>
+      finalizeTurn({
+        ...lifecycle,
+        promptError,
+        sessionIdUsed: target.sessionId,
+      });
 
     try {
       setRuntimeConfigSnapshot({ session: { store: storePath } });
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 10 });
-      const first = await appendTranscriptMessage(target, {
-        message: { role: "user", content: "first" },
-        now: 1_000,
-      });
-      await appendTranscriptMessage(target, {
-        message: { role: "assistant", content: "second" },
-        parentId: first?.messageId,
-        now: 2_000,
-      });
+      const first = await appendTurnMessage(target, "user", "first", 1_000);
+      await appendTurnMessage(target, "assistant", "second", 2_000, first?.messageId);
       const admitted = await createUserTurnTranscriptRecorder({
         message: { role: "user", content: "third", timestamp: 3_000 },
         target,
@@ -203,68 +166,21 @@ describe("context engine transcript cursor contract", () => {
       const admission = admitted.admission;
 
       await bootstrapHarnessContextEngine({
+        ...lifecycle,
         hadSessionFile: true,
-        contextEngine: engine,
         sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        sessionFile: "sqlite://context-engine-cursor",
         transcriptReadFence: admission,
-        runMaintenance: skipMaintenance,
-        warn: () => {},
       });
       expect(projectedMessages.map(readMessageContent)).toEqual(["first", "second"]);
 
-      await appendTranscriptMessage(target, {
-        message: { role: "assistant", content: "fourth" },
-        parentId: admitted.messageId,
-        now: 4_000,
-      });
-      await finalizeHarnessContextEngineTurn({
-        contextEngine: engine,
-        promptError: false,
-        aborted: false,
-        yieldAborted: false,
-        sessionIdUsed: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        sessionFile: "sqlite://context-engine-cursor",
-        messagesSnapshot: [],
-        prePromptMessageCount: 0,
-        runMaintenance: skipMaintenance,
-        warn: () => {},
-      });
-      expect(projectedMessages.map(readMessageContent)).toEqual([
-        "first",
-        "second",
-        "third",
-        "fourth",
-      ]);
+      await appendTurnMessage(target, "assistant", "fourth", 4_000, admitted.messageId);
+      await finish();
+      const history = ["first", "second", "third", "fourth"];
+      expect(projectedMessages.map(readMessageContent)).toEqual(history);
 
-      await appendTranscriptMessage(target, {
-        message: { role: "user", content: "failed turn" },
-        now: 5_000,
-      });
-      await finalizeHarnessContextEngineTurn({
-        contextEngine: engine,
-        promptError: true,
-        aborted: false,
-        yieldAborted: false,
-        sessionIdUsed: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        sessionFile: "sqlite://context-engine-cursor",
-        messagesSnapshot: [],
-        prePromptMessageCount: 0,
-        runMaintenance: skipMaintenance,
-        warn: () => {},
-      });
-      expect(projectedMessages.map(readMessageContent)).toEqual([
-        "first",
-        "second",
-        "third",
-        "fourth",
-      ]);
+      await appendTurnMessage(target, "user", "failed turn", 5_000);
+      await finish(true);
+      expect(projectedMessages.map(readMessageContent)).toEqual(history);
 
       await replaceTranscriptEvents(target, [
         {
@@ -275,26 +191,11 @@ describe("context engine transcript cursor contract", () => {
           message: { role: "user", content: "replacement" },
         },
       ]);
-      await finalizeHarnessContextEngineTurn({
-        contextEngine: engine,
-        promptError: false,
-        aborted: false,
-        yieldAborted: false,
-        sessionIdUsed: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        sessionFile: "sqlite://context-engine-cursor",
-        messagesSnapshot: [],
-        prePromptMessageCount: 0,
-        runMaintenance: skipMaintenance,
-        warn: () => {},
-      });
+      await finish();
       expect(resetCount).toBe(1);
       expect(projectedMessages.map(readMessageContent)).toEqual(["replacement"]);
     } finally {
       clearRuntimeConfigSnapshot();
-      await cleanupSessionStateForTest({ stateDir: tempDir });
-      fs.rmSync(tempDir, { force: true, recursive: true });
     }
   });
 });

@@ -1,3 +1,4 @@
+import type { ReportFixtureFetch } from "../../report-network.test-support.js";
 import type { DiscordSourceConfig, SourceRuntime } from "../../types.js";
 
 export const config: DiscordSourceConfig = {
@@ -35,9 +36,8 @@ export function json(body: unknown, status = 200, headers?: HeadersInit) {
 
 export function runtime(
   handler: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined,
-  signal?: AbortSignal,
 ): SourceRuntime & {
-  fetchImpl: NonNullable<SourceRuntime["fetchImpl"]>;
+  fetchImpl: ReportFixtureFetch;
   requests: URL[];
   logs: string[];
 } {
@@ -47,7 +47,6 @@ export function runtime(
   return {
     requests,
     logs,
-    signal,
     logger: { info: log, warn: log, error: log, debug: log },
     fetchImpl: async (input, init) => {
       const url = new URL(input);

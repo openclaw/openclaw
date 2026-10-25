@@ -1,3 +1,6 @@
+/** Canonical route-capability schema for provider-owned manifest augmentation. */
+export { ModelInferenceCapabilitiesSchema } from "../../packages/model-catalog-core/src/model-inference-capabilities.js";
+
 export type {
   JsonValue,
   DecisionEntry,

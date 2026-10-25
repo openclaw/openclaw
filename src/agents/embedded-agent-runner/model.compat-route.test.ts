@@ -15,6 +15,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./model.fixture.test-support.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
 import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 import { resolveRuntimeHooks } from "./model.provider-hooks.js";
@@ -33,6 +34,23 @@ const configuredModel: ModelDefinitionConfig = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   maxTokens: 4096,
 };
+
+function providerConfig(
+  route: Pick<ModelProviderConfig, "api" | "baseUrl">,
+  models: ModelDefinitionConfig[],
+  providerId = provider,
+): OpenClawConfig {
+  return { models: { providers: { [providerId]: { ...route, models } } } };
+}
+
+function configVariants(source: OpenClawConfig, fixture: ReturnType<typeof createCatalogFixture>) {
+  return [
+    source,
+    materializeRuntimeConfig(source, {
+      manifestRegistry: fixture.metadataSnapshot.manifestRegistry,
+    }),
+  ];
+}
 
 function createCatalogFixture(
   route: { api: NonNullable<ModelProviderConfig["api"]>; baseUrl: string } = catalogRoute,
@@ -65,39 +83,37 @@ function createCatalogFixture(
 function createResolutionOptions(
   config: OpenClawConfig,
   { route, catalogModel, metadataSnapshot }: ReturnType<typeof createCatalogFixture>,
+  providerId = provider,
 ) {
   const stores = createEmptyAgentDiscoveryStores();
-  stores.modelRegistry.registerProvider(provider, { ...route, models: [catalogModel] });
-  const configuredRuntimeModels = [{ provider, modelId: catalogModel.id, model: catalogModel }];
+  stores.modelRegistry.registerProvider(providerId, { ...route, models: [catalogModel] });
+  const configuredRuntimeModels = [
+    { provider: providerId, modelId: catalogModel.id, model: catalogModel },
+  ];
   const preparedModelRuntime: PreparedModelRuntimeSnapshot = {
-    catalogOwner: undefined,
-    agentDir: "/tmp/route-compat-fixture",
-    activeProjectKeys: [],
-    allowGatewaySubagentBinding: false,
-    config,
-    observationConfig: config,
-    isCurrent: () => true,
-    authModes: {},
-    metadataSnapshot,
-    modelCatalog: { entries: [], routeVariants: [] },
+    ...createEmptyPreparedModelRuntimeFixture({
+      agentDir: "/tmp/route-compat-fixture",
+      config,
+      metadataSnapshot,
+      createStores: () => stores,
+    }),
     configuredRuntimeModels,
     findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
       configuredRuntimeModels,
       metadataSnapshot,
     ),
     inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
-    createStores: () => stores,
   };
   return { ...stores, preparedModelRuntime, skipAgentDiscovery: true };
 }
 
 describe("model route compatibility", () => {
   it("retains prepared OpenRouter reasoning capabilities on the catalog route", async () => {
-    const baseUrl = "https://openrouter.ai/api/v1";
     const reasoning = true;
     const providerId = "openrouter";
     const id = "anthropic/claude-opus-5.5";
-    const route = { api: "openai-completions" as const, baseUrl: "https://openrouter.ai/api/v1" };
+    const baseUrl = "https://openrouter.ai/api/v1";
+    const route = { api: "openai-completions" as const, baseUrl };
     const catalogModel = {
       ...makeProviderModelFixture({ provider: providerId, id, ...route }),
       reasoning: true,
@@ -118,54 +134,26 @@ describe("model route compatibility", () => {
         supportsDeveloperRole: false,
       },
     };
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          openrouter: {
-            api: route.api,
-            baseUrl,
-            models: [
-              {
-                id,
-                name: id,
-                reasoning,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextTokens: 520_000,
-                maxTokens: 128_000,
-              },
-            ],
-          },
+    const config = providerConfig(
+      route,
+      [
+        {
+          ...configuredModel,
+          id,
+          name: id,
+          reasoning,
+          contextTokens: 520_000,
+          maxTokens: 128_000,
         },
-      },
-    };
+      ],
+      providerId,
+    );
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
-    const configuredRuntimeModels = [{ provider: providerId, modelId: id, model: configured }];
-    const stores = createEmptyAgentDiscoveryStores();
-    stores.modelRegistry.registerProvider(providerId, {
-      api: route.api,
-      baseUrl,
-      models: [configured],
-    });
-    const preparedModelRuntime: PreparedModelRuntimeSnapshot = {
-      catalogOwner: undefined,
-      agentDir: "/tmp/prepared-openrouter-reasoning",
-      activeProjectKeys: [],
-      allowGatewaySubagentBinding: false,
+    const { preparedModelRuntime } = createResolutionOptions(
       config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
-      metadataSnapshot,
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels,
-      findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
-        configuredRuntimeModels,
-        metadataSnapshot,
-      ),
-      inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
-      createStores: () => stores,
-    };
+      { route, catalogModel: configured, metadataSnapshot },
+      providerId,
+    );
     const resolved = await resolveModelAsync(providerId, id, undefined, config, {
       preparedModelRuntime,
       skipAgentDiscovery: true,
@@ -178,11 +166,13 @@ describe("model route compatibility", () => {
       allowBundledStaticCatalogFallback: true,
     });
     expect(resolved.error).toBeUndefined();
-    expect(resolved.model?.contextTokens).toBe(520_000);
-    expect(resolved.model?.reasoning).toBe(reasoning);
-    expect(resolved.model?.compat).toMatchObject({
-      supportsReasoningEffort: true,
-      supportedReasoningEfforts: expect.arrayContaining(["xhigh"]),
+    expect(resolved.model).toMatchObject({
+      contextTokens: 520_000,
+      reasoning,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: expect.arrayContaining(["xhigh"]),
+      },
     });
     expect(resolved.model?.thinkingLevelMap).toEqual({ off: null });
     expect(clampThinkingLevel(resolved.model!, "xhigh")).toBe("xhigh");
@@ -252,26 +242,11 @@ describe("model route compatibility", () => {
       const fixture = createCatalogFixture(catalog);
       const { catalogModel, metadataSnapshot } = fixture;
       await withPluginRuntimeGenerationScope({ metadataSnapshot }, async () => {
-        const source: OpenClawConfig = {
-          models: {
-            providers: {
-              [provider]: {
-                ...route,
-                models: [
-                  {
-                    ...configuredModel,
-                    ...(authored ? { compat: authored } : {}),
-                  },
-                ],
-              },
-            },
-          },
-        };
-        const materialized = materializeRuntimeConfig(source, {
-          manifestRegistry: metadataSnapshot.manifestRegistry,
-        });
+        const source = providerConfig(route, [
+          { ...configuredModel, ...(authored ? { compat: authored } : {}) },
+        ]);
         // Both config-file loads and callers with already normalized inline rows use this resolver.
-        for (const config of [source, materialized]) {
+        for (const config of configVariants(source, fixture)) {
           const resolved = await resolveModelAsync(provider, catalogModel.id, undefined, config, {
             ...createResolutionOptions(config, fixture),
             skipProviderRuntimeHooks: true,
@@ -295,12 +270,10 @@ describe("model route compatibility", () => {
             forceDirectMessageTool: false,
             isRawModelRun: false,
           });
-          expect
-            .soft(surface.codeModeControlsEnabled, configSource)
-            .toBe(expected?.codeMode === "preferred");
-          expect
-            .soft(surface.toolSearchControlsEnabled, configSource)
-            .toBe(expected?.codeMode !== "preferred");
+          expect.soft(surface, configSource).toMatchObject({
+            codeModeControlsEnabled: expected?.codeMode === "preferred",
+            toolSearchControlsEnabled: expected?.codeMode !== "preferred",
+          });
         }
       });
     },
@@ -311,17 +284,8 @@ describe("model route compatibility", () => {
     const fixture = createCatalogFixture();
     const { catalogModel, metadataSnapshot } = fixture;
     await withPluginRuntimeGenerationScope({ metadataSnapshot }, async () => {
-      const source: OpenClawConfig = {
-        models: {
-          providers: {
-            [provider]: { ...catalogRoute, models: [] },
-          },
-        },
-      };
-      const materialized = materializeRuntimeConfig(source, {
-        manifestRegistry: metadataSnapshot.manifestRegistry,
-      });
-      for (const config of [source, materialized]) {
+      const source = providerConfig(catalogRoute, []);
+      for (const config of configVariants(source, fixture)) {
         const resolved = await resolveModelAsync(provider, catalogModel.id, undefined, config, {
           ...createResolutionOptions(config, fixture),
           authProfileMode: "api_key",

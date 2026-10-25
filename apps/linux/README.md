@@ -57,10 +57,16 @@ requirement.
 See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
 for package updates, desktop limitations, and native-app distinctions.
 
-New Session uses `Cmd+Shift+O` on macOS and `Ctrl+Shift+O` on Linux and Windows
-only while its dashboard is focused. Quick Chat keeps the separate global
+New Session uses `Cmd+N` on macOS and `Ctrl+N` on Linux and Windows
+only while its dashboard is focused. Web browsers keep `Cmd+Shift+O` or
+`Ctrl+Shift+O`. Quick Chat keeps the separate global
 `Cmd+Shift+Space` or `Ctrl+Shift+Space` shortcut, including when another app is
 in front.
+
+New Quick Chat shortcut assignments cannot use either New Session chord. An
+existing saved `Cmd+N` or `Ctrl+N` Quick Chat binding keeps its behavior after
+upgrading; change it in Quick Chat's shortcut settings to use that chord for
+New Session instead.
 
 ## Chrome setup bridge
 
@@ -402,6 +408,11 @@ opens or focuses an existing Gateway window without reloading its current page;
 selection is remembered across app restarts. Removing a selected Gateway returns
 the main window to Primary and closes that Gateway's other windows.
 
+Each saved Gateway keeps its own dashboard storage, so an approved device pairing
+survives switching and restarts. Removing a saved Gateway retires that storage:
+saving the same address again starts a new dashboard session that pairs again,
+and the old storage is deleted the next time the app starts.
+
 If a saved Gateway cannot load, its window returns to the local connection editor
 so you can correct the address or credentials. An edited endpoint becomes the
 remembered selection only after its dashboard loads successfully.
@@ -491,6 +502,9 @@ CLI launchers without a managed marker for the rollback selection.
 ## Updates
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. Windows uses the regular `windows-stable` channel, downloads the update first, and runs its installer only after **Restart to update**. The macOS test build uses the separate opt-in desktop-test channel and self-updates like the AppImage build.
+
+All desktop platforms offer numbered correction releases such as `2026.9.3-1`
+as updates to `2026.9.3`.
 
 If the Windows installer cannot launch, the companion stays open, reports the error, and keeps the downloaded update available for another **Restart to update** attempt.
 

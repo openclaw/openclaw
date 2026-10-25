@@ -15,19 +15,18 @@ import {
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
 import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
+import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { descendantCards } from "./chat-message-activity-operation.tsx";
 import type { ActivityOperationProps } from "./chat-message-bubble-options.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
-import { BrowserTabPreviews, syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
+import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
-import {
-  ChatToolOutcomeSummary,
-  ChatToolReviewOutcome,
-} from "./chat-tool-outcome-summary.solid.tsx";
+import { ToolOutcomeSummary, ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 
 function prepareActivityGroup(
   groups: readonly MessageGroupData[],
@@ -148,10 +147,14 @@ function ActivityGroupBody(props: {
   options: NativeMessageGroupOptions;
   renderEntries: ActivityEntries;
 }) {
+  let disclosureContent: HTMLSpanElement | undefined;
+  const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const state = () => props.state;
-  const overrides = createMemo(() => props.state.toolCardOverrides);
+  const overrides = () => props.state.toolCardOverrides;
   const soleStep = () => state().soleStep && !props.options.bubbleMode;
   const compact = () => Boolean(props.options.bubbleMode);
+  const liveBubble = () =>
+    compact() && props.groups.some((group) => group.key === props.options.bubbleActivityGroupKey);
   return (
     <div
       class={[
@@ -159,6 +162,7 @@ function ActivityGroupBody(props: {
         {
           "chat-activity-group--step": soleStep(),
           "chat-activity-group--bubble": compact(),
+          "chat-activity-group--working": liveBubble(),
           "is-open": !soleStep() && state().activityExpanded,
         },
       ]}
@@ -170,8 +174,11 @@ function ActivityGroupBody(props: {
           type="button"
           aria-expanded={state().activityExpanded ? "true" : "false"}
           aria-controls={state().activityBodyId}
-          onPointerEnter={syncToolDisclosureOverflow}
-          onFocus={syncToolDisclosureOverflow}
+          aria-label={
+            liveBubble() && !state().headline?.title ? t("chat.view.workingDetails") : undefined
+          }
+          onPointerEnter={syncOverflow}
+          onFocus={syncOverflow}
           onClick={() =>
             props.options.onToggleToolMessageExpanded?.(
               state().activityDisclosureId,
@@ -180,6 +187,8 @@ function ActivityGroupBody(props: {
           }
         >
           <ChatActivityHeadline
+            bubbleMode={liveBubble()}
+            contentRef={(element) => (disclosureContent = element)}
             scope={JSON.stringify([
               props.options.sessionKey,
               props.options.connectionEpoch,
@@ -193,20 +202,22 @@ function ActivityGroupBody(props: {
               .outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped")
               .map(({ label }) => label)}
           />{" "}
-          <ChatToolReviewOutcome
-            outcome={state().reviewOutcome}
-            reviewer={state().approvalReviews[0]?.label}
-            style={{ display: "contents" }}
-          />
-          <Show when={!state().activityExpanded}>
-            <ChatToolOutcomeSummary
-              cards={state().cards.filter(
-                (card) => card.callId && state().visibleCalls.has(card.callId),
-              )}
-              includeCount={true}
-              activity={state().visibleActivity}
-              style={{ display: "contents" }}
+          <openclaw-chat-tool-review-outcome style={{ display: "contents" }}>
+            <ToolReviewOutcome
+              outcome={state().reviewOutcome}
+              reviewer={state().approvalReviews[0]?.label}
             />
+          </openclaw-chat-tool-review-outcome>
+          <Show when={!state().activityExpanded}>
+            <openclaw-chat-tool-outcome-summary style={{ display: "contents" }}>
+              <ToolOutcomeSummary
+                cards={state().cards.filter(
+                  (card) => card.callId && state().visibleCalls.has(card.callId),
+                )}
+                includeCount={true}
+                activity={state().visibleActivity}
+              />
+            </openclaw-chat-tool-outcome-summary>
           </Show>
           <span class="chat-tool-row__chevron" aria-hidden="true">
             <Icon name="chevronRight" />

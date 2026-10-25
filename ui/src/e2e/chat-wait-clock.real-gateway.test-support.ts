@@ -1,13 +1,12 @@
 import { createServer, type ServerResponse } from "node:http";
+import { buffer } from "node:stream/consumers";
 import { expect } from "vitest";
+import { writeToolCall } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../../test/helpers/openai-responses-sse.ts";
-import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 
 export const waitClockFixture = {
   key: "agent:main:dashboard:wait-clock-proof",
@@ -23,40 +22,22 @@ export const waitClockFixture = {
 };
 
 export async function createWaitClockInstance(port: number, controlUiRoot: string) {
-  const instance = await createOpenClawTestInstance({
+  const instance = await createChatGatewayInstance({
     name: "wait-clock",
+    provider: "wait-fixture",
+    identity: "Review assistant",
+    model: "parent",
+    agents: { ownership: "explicit" },
+    defaults: { workspace: "${OPENCLAW_WORKSPACE_DIR}" },
+    apiKey: "synthetic-wait-fixture-key",
+    baseUrl: "http://127.0.0.1:" + port + "/v1",
+    models: ["parent", "child"].map((id) => ({ id, name: id })),
     // Admission below requires built artifacts; never let the helper rebuild during proof.
     entrypoint: ["dist/index.js"],
-    env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
     config: {
       update: { checkOnStart: false },
       gateway: { controlUi: { enabled: true, root: controlUiRoot } },
-      cron: { enabled: false },
       tools: { profile: "full", codeMode: false, toolSearch: false },
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          workspace: "${OPENCLAW_WORKSPACE_DIR}",
-          model: "wait-fixture/parent",
-          modelPolicy: { allow: ["wait-fixture/*"] },
-        },
-        entries: { main: { identity: { name: "Review assistant" } } },
-      },
-      models: {
-        catalogRefresh: { enabled: false },
-        providers: {
-          "wait-fixture": {
-            api: "openai-responses",
-            apiKey: "synthetic-wait-fixture-key",
-            baseUrl: "http://127.0.0.1:" + port + "/v1",
-            models: [
-              { id: "parent", name: "Fixture parent" },
-              { id: "child", name: "Fixture child" },
-            ],
-          },
-        },
-      },
-      plugins: { allow: [] },
     },
   });
   instance.env.OPENCLAW_WORKSPACE_DIR = instance.state.path("public-workspace");
@@ -75,50 +56,17 @@ function toolResult(input: ProviderInput[] | undefined, toolName: string) {
   const result: {
     status?: string;
     childSessionKey?: string;
-    runId?: string;
     pendingChildren?: unknown[];
   } = JSON.parse(output!);
   return result;
 }
 
-function writeTool(
-  response: ServerResponse,
-  name: string,
-  callId: string,
-  args: Record<string, unknown>,
-) {
-  const item = {
-    type: "function_call",
-    id: "fc_" + callId,
-    call_id: callId,
-    name,
-    arguments: JSON.stringify(args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    {
-      type: "response.function_call_arguments.done",
-      output_index: 0,
-      item_id: item.id,
-      arguments: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: callId,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+function writeReply(response: ServerResponse, text: string, id: string) {
+  writeOpenAiResponsesText(response, {
+    text,
+    messageId: `${id}_reply`,
+    responseId: `${id}_response`,
+  });
 }
 
 /** Model transport only: the Gateway executes all tools and owns the native child registry. */
@@ -144,12 +92,8 @@ export async function startWaitClockProvider() {
             response.writeHead(404).end();
             return;
           }
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
           const body: { model: string; tools?: Array<{ name?: string }>; input?: ProviderInput[] } =
-            JSON.parse(Buffer.concat(chunks).toString("utf8"));
+            JSON.parse((await buffer(request)).toString("utf8"));
           if (body.model === "child") {
             expect(childResponse, "the child must not retry while held").toBeUndefined();
             childResponse = response;
@@ -159,10 +103,8 @@ export async function startWaitClockProvider() {
           expect(body.model).toBe("parent");
           const step = parentRequests++;
           if (step === 0) {
-            expect(body.tools).toEqual(
-              expect.arrayContaining([expect.objectContaining({ name: "sessions_spawn" })]),
-            );
-            writeTool(response, "sessions_spawn", "launch_review", {
+            expect(body.tools).toContainEqual(expect.objectContaining({ name: "sessions_spawn" }));
+            writeToolCall(response, "sessions_spawn", {
               runtime: "subagent",
               visible: true,
               agentId: "main",
@@ -177,33 +119,25 @@ export async function startWaitClockProvider() {
             receipts.push({ step, tool: "sessions_spawn", result });
             expect(result.status).toBe("accepted");
             expect(result.childSessionKey).toMatch(/^agent:main:dashboard:/);
-            writeTool(response, "sessions_yield", "initial_yield", {
+            writeToolCall(response, "sessions_yield", {
               acknowledgment: waitClockFixture.acknowledgment,
             });
           } else if (step === 2) {
             expect(JSON.stringify(body.input)).toContain(waitClockFixture.updatePrompt);
             expect(childReleased).toBe(false);
-            writeTool(response, "sessions_yield", "update_yield", {});
+            writeToolCall(response, "sessions_yield", {});
           } else if (step === 3) {
             const result = toolResult(body.input, "sessions_yield");
             receipts.push({ step, tool: "sessions_yield", result });
             // Never manufacture already_pending: this must come from the real registry/tool owner.
             expect(result.status).toBe("already_pending");
             expect(result.pendingChildren).toHaveLength(1);
-            writeOpenAiResponsesText(response, {
-              text: waitClockFixture.updateReply,
-              messageId: "update_reply",
-              responseId: "update_response",
-            });
+            writeReply(response, waitClockFixture.updateReply, "update");
           } else {
             expect(step, "exactly one completion turn must resume the parent").toBe(4);
             expect(childReleased).toBe(true);
             expect(JSON.stringify(body.input)).toContain(waitClockFixture.childReply);
-            writeOpenAiResponsesText(response, {
-              text: waitClockFixture.resumedReply,
-              messageId: "resumed_reply",
-              responseId: "resumed_response",
-            });
+            writeReply(response, waitClockFixture.resumedReply, "resumed");
           }
         })();
         handlers.add(handler);
@@ -231,11 +165,7 @@ export async function startWaitClockProvider() {
         throw new Error("The actual child provider request is not pending");
       }
       childReleased = true;
-      writeOpenAiResponsesText(childResponse, {
-        text: waitClockFixture.childReply,
-        messageId: "child_reply",
-        responseId: "child_response",
-      });
+      writeReply(childResponse, waitClockFixture.childReply, "child");
     },
     async stop() {
       if (stopped) {

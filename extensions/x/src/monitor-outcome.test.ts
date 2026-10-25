@@ -5,8 +5,8 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { xPlugin } from "./channel.js";
 import { XConfigSchema } from "./config-schema.js";
-import { client, config, fixture, post, type Payload } from "./test-support/monitor-fixture.js";
-import { createQueue } from "./test-support/monitor.js";
+import { completedMonitor } from "./test-support/completed-monitor.js";
+import { client, config, fixture, post } from "./test-support/monitor-fixture.js";
 
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
@@ -18,6 +18,7 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => ({
   sendDurableMessageBatch: vi.fn(async () => ({ status: "sent", results: [], receipt: {} })),
 }));
 const routeSend = vi.mocked(sendDurableMessageBatch);
+const routedText = (index = 0) => routeSend.mock.calls[index]![0].payloads[0]!.text;
 
 // Verbatim shape of a deleted public tweet: model prose, not an isError payload.
 const deletedTweet =
@@ -30,35 +31,43 @@ beforeEach(() => {
 });
 afterEach(() => clearRuntimeConfigSnapshot());
 
-async function runTurn(finals: ReplyPayload[], route = true) {
+async function runTurn(
+  finals: ReplyPayload[],
+  { route = true, visibleSessionUrl }: { route?: boolean; visibleSessionUrl?: string | null } = {},
+) {
   const cfg: OpenClawConfig = structuredClone(config);
   if (route) {
     cfg.channels!.x!.failureRoute = failureRoute;
   }
-  const completed = Promise.withResolvers<void>();
-  const test = fixture({
-    cfg,
-    finals,
-    posts: [post("501", "10")],
-    queue: createQueue<Payload>({ onCompleted: () => completed.resolve() }),
-  });
-  test.start();
-  try {
-    await completed.promise;
-  } finally {
-    await test.stop();
-  }
+  const test = completedMonitor({ cfg, finals, visibleSessionUrl });
+  await test.run();
   return test;
 }
 
 describe("X reply outcomes", () => {
   it("withholds an untagged failure narrative from X and drops it without a route", async () => {
-    const test = await runTurn([{ text: deletedTweet }], false);
+    const test = await runTurn([{ text: deletedTweet }], { route: false });
     expect(test.api.reply).not.toHaveBeenCalled();
     expect(routeSend).not.toHaveBeenCalled();
     expect(test.logger.info).toHaveBeenCalledWith(
       "reply withheld post=501 reason=unclassified route=none",
     );
+  });
+
+  it("posts runtime status notices without declaring model success", async () => {
+    const text = "Your message is queued for a new turn after the current turn finishes.";
+    const test = await runTurn(
+      [
+        { text, isStatusNotice: true },
+        { text: deletedTweet },
+        { text: "⚠️ Agent failed before reply", isError: true, isStatusNotice: true },
+      ],
+      { visibleSessionUrl: null },
+    );
+    expect(test.replies).toEqual([{ text, parent: "501" }]);
+    expect(routeSend).toHaveBeenCalledTimes(2);
+    expect(routedText()).toContain("(no success tag)");
+    expect(routedText(1)).toContain("(error reply)");
   });
 
   it("routes a declared failure through core outbound with the post, author, and a redacted summary", async () => {
@@ -76,9 +85,9 @@ describe("X reply outcomes", () => {
       "X reply withheld (reported failure) for @config_maintainer: https://x.com/config_maintainer/status/501",
     );
     expect(text).toContain("session creation failed.");
-    expect(text).not.toContain("[[x_failure]]");
-    expect(text).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
-    expect(text).not.toContain("@everyone");
+    expect(text).not.toMatch(
+      /\[\[x_failure\]\]|ghp_abcdefghijklmnopqrstuvwxyz0123456789|@everyone/,
+    );
     expect(test.logger.info).toHaveBeenCalledWith(
       "reply withheld post=501 reason=failure route=discord result=sent",
     );
@@ -93,7 +102,7 @@ describe("X reply outcomes", () => {
     ]);
     expect(test.api.reply).not.toHaveBeenCalled();
     expect(routeSend).toHaveBeenCalledOnce();
-    expect(routeSend.mock.calls[0]![0].payloads[0]!.text).toContain("(error reply)");
+    expect(routedText()).toContain("(error reply)");
     expect(test.logger.info).toHaveBeenCalledWith("reply dropped post=501 reason=silent");
     expect(test.logger.info).toHaveBeenCalledWith("reply dropped post=501 reason=empty");
   });

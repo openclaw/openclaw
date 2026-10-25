@@ -6,25 +6,20 @@ import {
 import { handleGatewayRequest } from "./server-methods.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 function setup() {
   setRuntimeConfigSnapshot({});
   const started = 1_900_000_000_000;
-  const clock = vi.spyOn(Date, "now").mockReturnValue(started);
+  vi.spyOn(Date, "now").mockReturnValue(started);
   const tabs = ["one", "two"].map((tab): GatewayWsClient => ({
     socket: { readyState: 1 } as GatewayWsClient["socket"],
     connId: `activity-rpc-${tab}`,
     presenceKey: `activity-rpc-${tab}`,
     usesSharedGatewayAuth: false,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.read"],
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-    },
+    connect: gatewayConnect(["operator.read"]),
     authenticatedUserId: "activity-rpc@example.test",
     personPresence: { onlineSince: started - 10_000 },
   }));
@@ -42,7 +37,7 @@ function setup() {
     });
     return respond;
   };
-  return { started, clock, tabs, clients, request, publish: params.runtime.publishPresence };
+  return { started, tabs, clients, request, publish: params.runtime.publishPresence };
 }
 
 afterEach(() => {
@@ -56,7 +51,7 @@ describe("presence.activity registered request", () => {
       {
         payload: { lastActivityAt: 1 },
         code: "INVALID_REQUEST",
-        message: "invalid presence.activity params",
+        message: expect.stringContaining("invalid presence.activity params"),
       },
       { scopes: ["operator.pairing"], code: "FORBIDDEN", message: "missing scope: operator.read" },
       { role: "node", code: "INVALID_REQUEST" },
@@ -73,12 +68,7 @@ describe("presence.activity registered request", () => {
         undefined,
         expect.objectContaining({
           code: row.code,
-          ...(row.message
-            ? {
-                message:
-                  row.code === "FORBIDDEN" ? row.message : expect.stringContaining(row.message),
-              }
-            : {}),
+          ...(row.message ? { message: row.message } : {}),
         }),
       );
       expect(publish).not.toHaveBeenCalled();

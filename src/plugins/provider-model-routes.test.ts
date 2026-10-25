@@ -8,13 +8,34 @@ import {
   resolveProviderModelRoutes,
 } from "./provider-model-routes.js";
 
+function createIndeterminateRouteMock() {
+  return vi.fn((_context: ProviderResolveModelRoutesContext) => ({
+    kind: "indeterminate" as const,
+  }));
+}
+
 describe("provider model route adapter", () => {
+  it("forwards a non-chat capability without inventing route intent", () => {
+    const resolveModelRoutes = createIndeterminateRouteMock();
+    resolveProviderModelRoutes({
+      provider: "fixture",
+      modelId: "native",
+      capability: "decision",
+      env: {},
+      surface: { resolveModelRoutes },
+    });
+    expect(resolveModelRoutes).toHaveBeenCalledWith({
+      provider: "fixture",
+      modelId: "native",
+      capability: "decision",
+      env: {},
+      requestTransportOverrides: "none",
+    });
+  });
   it.each(["explicit", "inherited"] as const)(
     "preserves %s consumer intent precedence against a provider pin",
     (source) => {
-      const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-        kind: "indeterminate" as const,
-      }));
+      const resolveModelRoutes = createIndeterminateRouteMock();
       resolveProviderModelRoutes({
         provider: "openai",
         modelId: "gpt-5.4-mini",
@@ -45,9 +66,7 @@ describe("provider model route adapter", () => {
   it.each(["provider", "model"] as const)(
     "projects an explicit %s runtime pin without treating the adapter as a pin",
     (scope) => {
-      const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-        kind: "indeterminate" as const,
-      }));
+      const resolveModelRoutes = createIndeterminateRouteMock();
       const config: OpenClawConfig = {
         models: {
           providers: {
@@ -159,9 +178,7 @@ describe("provider model route adapter", () => {
   });
 
   it("passes the live environment view instead of cloning it", () => {
-    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-      kind: "indeterminate" as const,
-    }));
+    const resolveModelRoutes = createIndeterminateRouteMock();
 
     resolveProviderModelRoutes({
       provider: "openai",
@@ -213,9 +230,7 @@ describe("provider model route adapter", () => {
   });
 
   it("preserves provider-scoped nested ids through route resolution", () => {
-    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-      kind: "indeterminate" as const,
-    }));
+    const resolveModelRoutes = createIndeterminateRouteMock();
     const config = {
       models: {
         providers: {
@@ -302,9 +317,7 @@ describe("provider model route adapter", () => {
     ["canonical config for legacy selection", "gpt-5.4", "gpt-5.4-codex"],
     ["legacy config for canonical selection", "gpt-5.4-codex", "gpt-5.4"],
   ] as const)("canonicalizes provider-owned aliases: %s", (_label, configuredId, requestedId) => {
-    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-      kind: "indeterminate" as const,
-    }));
+    const resolveModelRoutes = createIndeterminateRouteMock();
     const normalizeModelCatalogId = vi.fn(({ modelId }: { modelId: string }) =>
       modelId === "gpt-5.4-codex" ? "gpt-5.4" : modelId,
     );
@@ -347,9 +360,7 @@ describe("provider model route adapter", () => {
   });
 
   it("forwards one reversed physical route group in one artifact call", () => {
-    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-      kind: "indeterminate" as const,
-    }));
+    const resolveModelRoutes = createIndeterminateRouteMock();
     const resolveRoutes = createProviderModelRoutesResolver({
       provider: "openai",
       env: {},
@@ -376,9 +387,7 @@ describe("provider model route adapter", () => {
   });
 
   it("locks configured route facts while keeping the environment live", () => {
-    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-      kind: "indeterminate" as const,
-    }));
+    const resolveModelRoutes = createIndeterminateRouteMock();
     const configuredModel: {
       id: string;
       api: ModelApi;
@@ -435,9 +444,7 @@ describe("provider model route adapter", () => {
   });
 
   it("merges duplicate route facts only for the requested canonical model", () => {
-    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-      kind: "indeterminate" as const,
-    }));
+    const resolveModelRoutes = createIndeterminateRouteMock();
     const config = {
       models: {
         providers: {
@@ -483,9 +490,7 @@ describe("provider model route adapter", () => {
 
   it("captures separate override facts for canonical duplicate rows", () => {
     const firstHeaders: Record<string, string> = {};
-    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-      kind: "indeterminate" as const,
-    }));
+    const resolveModelRoutes = createIndeterminateRouteMock();
     const resolveRoutes = createProviderModelRoutesResolver({
       provider: "openai",
       env: {},
@@ -535,9 +540,7 @@ describe("provider model route adapter", () => {
   });
 
   it("keeps case-distinct provider keys and unknown model ids separate", () => {
-    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-      kind: "indeterminate" as const,
-    }));
+    const resolveModelRoutes = createIndeterminateRouteMock();
     const config = {
       models: {
         providers: {
@@ -586,9 +589,7 @@ describe("provider model route adapter", () => {
     ["provider auth header", { authHeader: false }, {}],
     ["model headers", {}, { headers: { "x-model-route": "custom" } }],
   ])("projects %s without exposing its value", (_label, providerPatch, modelPatch) => {
-    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
-      kind: "indeterminate" as const,
-    }));
+    const resolveModelRoutes = createIndeterminateRouteMock();
     const config = {
       models: {
         providers: {

@@ -1,6 +1,6 @@
 // Memory Core owns Gateway indexes for both local and host-provided files.
 import { getAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveAgentWorkspaceDir,
@@ -27,6 +27,7 @@ type MemorySearchManagerParams = {
 type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
   error?: string;
+  code?: string;
   debug: {
     backend: "builtin";
     purpose: MemorySearchManagerPurpose;
@@ -49,7 +50,7 @@ export async function getMemorySearchManager(
       manager: await MemoryIndexManager.get({ ...params, memoryFiles: access?.memoryFiles }),
     };
   } catch (err) {
-    result = { manager: null, error: formatErrorMessage(err) };
+    result = { manager: null, error: formatErrorMessage(err), code: extractErrorCode(err) };
   }
   return {
     ...result,

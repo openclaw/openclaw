@@ -4,26 +4,22 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../../channel-meta.js";
 import { buildSlackAssistantThreadMetadata } from "../context.js";
 import type { SlackMonitorContext, SlackAssistantThreadContext } from "../context.js";
-
-type SlackAssistantThreadPayload = {
-  user_id?: string;
-  context?: SlackAssistantThreadContextPayload;
-  channel_id?: string;
-  thread_ts?: string;
-};
+import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 
 type SlackAssistantThreadContextPayload =
   AssistantThreadStartedEvent["assistant_thread"]["context"];
 
-type SlackAssistantThreadEvent = {
-  type: "assistant_thread_started" | "assistant_thread_context_changed";
-  assistant_thread?: SlackAssistantThreadPayload;
-  context?: SlackAssistantThreadContextPayload;
-  event_ts?: string;
-};
-
 function normalizeAssistantThread(
-  event: SlackAssistantThreadEvent,
+  event: {
+    type: "assistant_thread_started" | "assistant_thread_context_changed";
+    assistant_thread?: {
+      context?: SlackAssistantThreadContextPayload;
+      channel_id?: string;
+      thread_ts?: string;
+    };
+    context?: SlackAssistantThreadContextPayload;
+    event_ts?: string;
+  },
   getPrevious?: (channelId: string, threadTs: string) => SlackAssistantThreadContext | undefined,
 ) {
   const thread = event.assistant_thread;
@@ -47,7 +43,6 @@ function normalizeAssistantThread(
   return {
     assistantChannelId: channelId,
     threadTs,
-    userId: thread.user_id?.trim() || previous?.userId,
     channelId: resolveContextString("channel_id", previous?.channelId),
     teamId: resolveContextString("team_id", previous?.teamId),
     enterpriseId:
@@ -104,7 +99,7 @@ export function registerSlackAssistantEvents(params: {
     "assistant_thread_started",
     "assistant_thread_context_changed",
   ] as const) {
-    ctx.app.event(eventName, async ({ event, body }) => {
+    ctx.app.event(eventName, async ({ event, body, context }) => {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
       }
@@ -117,6 +112,7 @@ export function registerSlackAssistantEvents(params: {
       ctx.saveSlackAssistantThreadContext(assistantThread);
       if (eventName === "assistant_thread_started") {
         await ctx.setSlackSuggestedPrompts({
+          ...(resolveSlackIngressTurnLifecycle(context) ? { retryTransientErrors: true } : {}),
           channelId: assistantThread.assistantChannelId,
           threadTs: assistantThread.threadTs,
           title: "Try asking",

@@ -1,7 +1,7 @@
 import { asOptionalRecord, stableStringify } from "@openclaw/normalization-core";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { parseRetryAfterErrorSeconds } from "../internal/retry-after.js";
+import { resolveProviderErrorRetrySeconds } from "../internal/retry-after.js";
 import { projectDiagnosticValue, redactDiagnosticText } from "./credential-redaction.js";
 
 const MAX_ERROR_BODY_LENGTH = 4000;
@@ -134,8 +134,9 @@ export function projectProviderError(
 ): ProviderErrorProjection {
   try {
     // Diagnostic projection intentionally discards non-display response headers.
-    // Capture only the safe timing scalar before that lossy boundary.
-    const retryAfterSeconds = parseRetryAfterErrorSeconds(error);
+    // Capture only the safe timing scalar before that lossy boundary, including
+    // RetryInfo that body truncation would cut off.
+    const retryAfterSeconds = resolveProviderErrorRetrySeconds(error);
     const localSnapshot = projectDiagnosticValue(error);
     let snapshot = localSnapshot;
     try {

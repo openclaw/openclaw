@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { markPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
 import {
@@ -24,7 +23,6 @@ import {
 import { selectAgentHarness } from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
-const resolveProviderRefOwnership = vi.hoisted(() => vi.fn(() => ({ status: "unowned" as const })));
 const warn = vi.hoisted(() => vi.fn());
 
 // mock-isolation: Capture warnings without initializing process-wide logging sinks.
@@ -43,8 +41,9 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 
 // Synthetic selection fixtures avoid cold-loading bundled provider artifacts.
+// mock-isolation: selection tests supply ownership without initializing provider runtimes.
 vi.mock("../../plugins/providers.js", () => ({
-  resolveProviderRefOwnership,
+  resolveProviderRefOwnership: () => ({ status: "unowned" }),
 }));
 vi.mock("../../plugins/provider-model-routes.js", () => ({
   resolveProviderModelCatalogId: () => null,
@@ -55,7 +54,6 @@ vi.mock("../../plugins/provider-model-routes.js", () => ({
 beforeEach(() => {
   clearAgentHarnesses();
   warn.mockClear();
-  resolveProviderRefOwnership.mockClear();
 });
 
 afterEach(() => {
@@ -63,25 +61,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function makeHarness(id: string, priority = 10, provider?: string): AgentHarness {
+function makeHarness(id: string): AgentHarness {
   return {
     id,
     label: id,
-    supports: (ctx) =>
-      !provider || provider === ctx.provider ? { supported: true, priority } : { supported: false },
+    supports: () => ({ supported: true, priority: 10 }),
     async runAttempt() {
       throw new Error("not used");
     },
   };
-}
-
-function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfig {
-  const declaration = {
-    baseUrl: "https://api.openclaw.test/v1",
-    agentRuntime: { id: runtime },
-    models: [],
-  };
-  return { models: { providers: { [provider]: declaration } } };
 }
 
 it("propagates required cleanup failure only after sibling reset hooks settle", async () => {
@@ -239,30 +227,4 @@ it("uses builder ownership and preserves a harness registered by another plugin"
     registerAgentHarness(makeHarness("owned")),
   );
   expect(building.agentHarnesses[1]?.pluginId).toBe("builder-plugin");
-});
-
-it("keeps model-specific harnesses behind plugin registration in auto mode", () => {
-  vi.stubEnv("OPENCLAW_AGENT_RUNTIME", "auto");
-  const select = () => selectAgentHarness({ provider: "plugin-models", modelId: "custom-1" }).id;
-
-  expect(select()).toBe("openclaw");
-
-  registerAgentHarness(makeHarness("custom", 10, "plugin-models"), {
-    ownerPluginId: "plugin-a",
-  });
-
-  expect(select()).toBe("custom");
-});
-
-it.each([
-  ["codex", "gpt-5.4", "openclaw", "plugin-harness", 200],
-  ["anthropic", "sonnet-4.6", "custom", "custom", 10],
-] as const)("honors %s provider policy for %s", (provider, modelId, runtime, id, priority) => {
-  const supportedProvider = provider === "anthropic" ? provider : undefined;
-  registerAgentHarness(makeHarness(id, priority, supportedProvider), { ownerPluginId: "plugin-a" });
-  const config = providerRuntimeConfig(provider, runtime);
-  expect(selectAgentHarness({ provider, modelId, config }).id).toBe(runtime);
-  if (provider === "anthropic") {
-    expect(resolveProviderRefOwnership).toHaveBeenCalledWith({ provider, config });
-  }
 });

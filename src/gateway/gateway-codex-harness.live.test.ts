@@ -38,6 +38,7 @@ import {
   type CapturedAgentEvent,
   type CodexNativeUsageSnapshot,
 } from "../../test/helpers/gateway-codex-harness.js";
+import { storeLiveApiKeyProfile } from "../../test/helpers/live-api-key-profile.js";
 import {
   renderBitmapTextPngBase64,
   renderSolidColorPngBase64,
@@ -65,7 +66,6 @@ import {
   buildCodexHarnessAppServerArgs,
   buildCodexHarnessLargeOutputCommand,
   CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
-  EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexStatusCommandText,
   isExpectedYieldedAgentTimeout,
@@ -1610,11 +1610,21 @@ async function verifyCodexGuardianProbe(params: {
 async function verifyCodexCronMcpProbe(params: {
   client: GatewayClient;
   env: NodeJS.ProcessEnv;
+  modelKey: string;
   port: number;
   sessionKey: string;
   token: string;
 }): Promise<void> {
-  const cronProbe = createLiveCronProbeSpec();
+  const profileId =
+    CODEX_HARNESS_AUTH_MODE === "api-key" && parseModelKey(params.modelKey).provider === "openai"
+      ? await storeLiveApiKeyProfile(
+          { url: `ws://127.0.0.1:${params.port}`, gatewayToken: params.token },
+          { provider: "openai", apiKey: params.env.OPENAI_API_KEY, agentId: "dev" },
+        )
+      : undefined;
+  const cronProbe = createLiveCronProbeSpec({
+    model: profileId ? `${params.modelKey}@${profileId}` : undefined,
+  });
   let createdJob: CronListJob | undefined;
   let lastReply = "";
 
@@ -2658,7 +2668,7 @@ describeLive("gateway live (Codex harness)", () => {
               events: gatewayEvents,
               sessionKey,
               command: "/codex models",
-              expectedText: [...EXPECTED_CODEX_MODELS_COMMAND_TEXT],
+              expectedText: "usable model evidence",
               isExpectedText: isStrictExpectedCodexModelsCommandText,
               predicateOnly: true,
             });
@@ -2686,6 +2696,7 @@ describeLive("gateway live (Codex harness)", () => {
               logCodexLiveStep("cron-mcp-probe:start", { sessionKey });
               await verifyCodexCronMcpProbe({
                 client: activeClient,
+                modelKey,
                 sessionKey,
                 port,
                 token,

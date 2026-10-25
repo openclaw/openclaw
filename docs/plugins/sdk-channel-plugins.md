@@ -341,11 +341,21 @@ when initialization must finish before the child runs.
 
     For channels that accept both current top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
+    The scoped, top-level, and hybrid config adapter builders read allowlists and
+    default targets from the account returned by `resolveAccount`. To use a
+    different, lightweight account shape for these read-only accessors, provide
+    `resolveAccessorAccount`; `resolveAllowFrom` and `resolveDefaultTo` then receive
+    that projection. A separate accessor type requires its own resolver. The
+    builders do not convert a runtime account into another account shape.
+
     For channel-specific secret activation, `createChannelSecretContract` from
     `openclaw/plugin-sdk/channel-secret-basic-runtime` combines `channelKey`,
     `account`/`channel` registry specs, and a `collect` callback. The callback receives
     `config`, `defaults`, `context`, `channelKey`, `channel`, and the resolved account
-    `surface`; it runs only when the channel record exists. Keep activation rules in the callback.
+    `surface`; it runs only when the channel record exists. Channels that start an implicit
+    default alongside named accounts supply `hasImplicitDefaultAccount`, using the same
+    credential-readiness rule as account listing. The shared surface then includes that
+    default as a consumer of root secrets. Keep field activation rules in `collect`.
 
     Config-backed logout handlers can use `clearAccountFieldsFromConfigSection`
     from `openclaw/plugin-sdk/channel-config-helpers`. Pass `cfg`, `sectionKey`,
@@ -526,9 +536,31 @@ when initialization must finish before the child runs.
       to avoid reparsing literal text in its own normalization code.
     </Accordion>
 
-    ### Group tool-policy adapters
+    <a id="group-tool-policy-adapters"></a>
 
-    A channel that implements `group.resolveToolPolicy` and supports
+    ### Conversation tool-policy adapters
+
+    Resolve configured permissions at execution admission. Direct conversations
+    use `security.resolveDirectToolPolicy(context)`; shared conversations use
+    `groups.resolveToolPolicy(context)`. The host passes current `cfg` and the
+    original authenticated account, sender, and conversation facts. Direct
+    callbacks receive an explicit `conversationId`; use that value rather than
+    inferring a chat from the destination execution session key.
+    Resolve through your plugin's existing account/config helpers.
+
+    Preserve requester facts across delegation, not previously calculated policy.
+    A new delegated execution resolves destination policy for the original
+    requester; an already admitted execution keeps its prepared policy. Human
+    input still waiting for admission uses current configuration when admitted.
+    Shared history is unchanged, and delegation may reach a more capable agent
+    under its destination authorization.
+
+    `access.toolPolicy` and `MsgContext.ConversationToolPolicy` remain deprecated
+    original-request snapshots for external plugins. Migrate configuration-derived
+    producers to the adapters above; see the
+    [compatibility lifetime](/plugins/sdk-migration/compatibility-policy#channel-prepared-tool-policy).
+
+    A channel that implements `groups.resolveToolPolicy` and supports
     `toolsBySender` must forward the complete `ChannelGroupContext` to its
     shared policy resolver. In particular, honor `senderPolicyMode: "never"`
     by skipping sender-specific overlays at both the matched-group and wildcard

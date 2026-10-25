@@ -1,10 +1,10 @@
-import type { SessionRefreshOptions, SessionRefreshOutcome } from "./session-capability.ts";
 import {
   sessionListAgentMatcher,
   sessionMutationRefreshOutcome,
   type SessionRefreshAttempt,
 } from "./session-list-query.ts";
 import type { SessionListRefreshHost } from "./session-managed-list-refresh.ts";
+import type { SessionRefreshOptions, SessionRefreshOutcome } from "./session-types.ts";
 
 type MutationRefreshOperations = {
   foreground: () => { agentId?: string; initial: boolean };

@@ -9,15 +9,21 @@ import {
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
+import { cancelSessionEffectHandoff } from "../../sessions/session-controller.lifecycle-observation.js";
 import {
-  beginSessionWorkAdmission,
-  cancelSessionWorkAdmissionHandoff,
-  interruptSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  interruptSessionControllerEffects,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
+import {
+  getReservedRpcSourceInput,
+  requestRpcSourceCancellation,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { agentRunHandler } from "./agent-run-handler.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -44,13 +50,71 @@ import {
   waitForAgentCommandCall,
   waitForAgentCommandCallAfter,
   invokeAgent,
+  observeAgentLifecycleAdmission,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
 import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
+import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = getAgentTestMocks();
+
+async function holdMainSessionMutation(sessionKey: string) {
+  let releaseMutation = () => {};
+  const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
+  const mutation = runSessionMutation({
+    policy: "wait",
+    scope: getAgentTestStorePath(),
+    identities: [sessionKey, "existing-session-id"],
+    run: async () => {
+      markMutationStarted();
+      await new Promise<void>((release) => {
+        releaseMutation = release;
+      });
+    },
+  });
+  await mutationStarted;
+  return { mutation, releaseMutation };
+}
+
+function createVisionAgentContext(root: string): GatewayRequestContext {
+  useTestStateDir(root);
+  mockMainSessionEntry({
+    sessionId: "existing-session-id",
+    model: "vision-model",
+    modelProvider: "test",
+    modelOverride: "vision-model",
+    modelOverrideSource: "user",
+    providerOverride: "test",
+  });
+  mocks.updateSessionStore.mockResolvedValue(undefined);
+  mockSuccessfulAgentCommand();
+  return {
+    ...makeContext(),
+    loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(async () => [
+      {
+        id: "vision-model",
+        name: "vision-model",
+        provider: "test",
+        input: ["image"],
+      },
+    ]),
+  };
+}
+
+async function writeTerminalMainTranscript(root: string, sessionFile: string, now: number) {
+  const sessionsDir = `${root}/sessions`;
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const transcriptPath = `${sessionsDir}/${sessionFile}`;
+  await fs.writeFile(
+    transcriptPath,
+    `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
+    "utf8",
+  );
+  await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+  return sessionsDir;
+}
 
 describe("gateway agent handler", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-gateway-agent-base-");
@@ -374,7 +438,7 @@ describe("gateway agent handler", () => {
     );
     mocks.agentCommand.mockClear();
     const context = makeContext();
-    const ownerClient = { connId: "owner-conn" } as AgentHandlerArgs["client"];
+    const ownerClient = { ...operatorWriteCliClient(), connId: "owner-conn" };
     const pending = invokeAgent(
       {
         message: "hi",
@@ -385,41 +449,155 @@ describe("gateway agent handler", () => {
       },
       { context, client: ownerClient, reqId: runId, flushDispatch: false },
     );
-    await waitForAssertion(() => {
+    try {
+      await waitForAssertion(() => {
+        expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+          runId,
+          agentId: "ops",
+          status: "accepted",
+        });
+      });
+      expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("sessionKey");
+
+      const source = requireValue(getReservedRpcSourceInput(runId), "expected routing source");
+      expect(source.target).toBeUndefined();
+      let sourceSettled = false;
+      void source.settlement.promise.then(() => {
+        sourceSettled = true;
+      });
+      const abortRespond = vi.fn();
+      const abortOptions: Parameters<typeof handleChatAbortRequest>[0] = {
+        params: { sessionKey: "agent:ops:main", runId },
+        respond: abortRespond,
+        context,
+        req: { type: "req", id: "abort-recipient-route", method: "chat.abort" },
+        client: ownerClient,
+        isWebchatConnect: () => false,
+      };
+      for (const denial of [
+        {
+          sessionKey: "agent:ops:main",
+          client: { ...ownerClient, connId: "another-connection" },
+          message: "unauthorized",
+        },
+        {
+          sessionKey: "agent:main:main",
+          client: ownerClient,
+          message: "runId does not match agentId",
+        },
+      ]) {
+        const denied = vi.fn();
+        await handleChatAbortRequest({
+          ...abortOptions,
+          params: { sessionKey: denial.sessionKey, runId },
+          client: denial.client,
+          respond: denied,
+        });
+        expectRespondError(denied, { code: ErrorCodes.INVALID_REQUEST, message: denial.message });
+      }
+      const narrowRespond = vi.fn();
+      const narrowOptions = {
+        ...abortOptions,
+        respond: narrowRespond,
+        sessionMutationAuthorization: {
+          admittedTarget: {
+            agentId: "ops",
+            sessionKey: "agent:ops:main",
+            sessionId: "placeholder-main",
+          },
+          assertCurrent() {},
+          assertTargetCurrent() {},
+        },
+      };
+      bindGatewayRequestHandlerMutationAuthority(
+        narrowOptions,
+        narrowOptions,
+        undefined,
+        "operator.sessions.write",
+      );
+      await handleChatAbortRequest(narrowOptions);
+      expectRespondError(narrowRespond, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "runId does not match session incarnation",
+      });
+      await expect(
+        handleChatAbortRequest({ ...abortOptions, hasCurrentClientAuthority: () => false }),
+      ).rejects.toThrow("Gateway requester authority changed");
+      expect(source.abortSignal.aborted).toBe(false);
+      expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "accepted" });
+
+      await handleChatAbortRequest(abortOptions);
+      expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+        aborted: true,
+        runIds: [runId],
+      });
       expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
         runId,
-        agentId: "ops",
-        status: "accepted",
+        status: "timeout",
+        stopReason: "rpc",
       });
-    });
-    expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("sessionKey");
+      expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("sessionKey");
 
-    const abortRespond = vi.fn();
-    await handleChatAbortRequest({
-      params: { sessionKey: "agent:ops:main", runId },
-      respond: abortRespond as never,
+      expect(source.abortSignal.aborted).toBe(true);
+      expect(sourceSettled).toBe(false);
+      finishRoute({ sessionKey });
+      await pending;
+      await source.settlement.promise;
+      await flushScheduledDispatchStep();
+
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+    } finally {
+      finishRoute({ sessionKey });
+      await pending;
+    }
+  });
+
+  it("releases routing custody when the original caller authority is revoked", async () => {
+    const runId = "recipient-session-route-revoked";
+    const sessionKey = "agent:ops:whatsapp:work:direct:+15551234567";
+    const route = createDeferredCore<{ sessionKey: string }>();
+    let callerActive = true;
+    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
+    mocks.resolveAgentExplicitRecipientSession.mockReturnValue(route.promise);
+    mocks.agentCommand.mockClear();
+    const context = makeContext();
+    const respond = vi.fn();
+    const pending = agentRunHandler({
+      params: {
+        message: "hi",
+        agentId: "ops",
+        channel: "whatsapp",
+        to: "+15551234567",
+        idempotencyKey: runId,
+      },
       context,
-      req: { type: "req", id: "abort-recipient-route", method: "chat.abort" },
-      client: ownerClient,
+      respond,
+      req: { type: "req", id: runId, method: "agent" },
+      client: operatorWriteCliClient(),
       isWebchatConnect: () => false,
+      hasCurrentClientAuthority: () => callerActive,
     });
-
-    expectRecordFields(mockCallArg(abortRespond, 0, 1), {
-      aborted: true,
-      runIds: [runId],
-    });
-    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
-      runId,
-      status: "timeout",
-      stopReason: "rpc",
-    });
-    expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("sessionKey");
-
-    finishRoute({ sessionKey });
-    await pending;
-    await flushScheduledDispatchStep();
-
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    try {
+      await waitForAssertion(() => {
+        expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "accepted" });
+      });
+      const source = requireValue(getReservedRpcSourceInput(runId), "expected routing source");
+      callerActive = false;
+      route.resolve({ sessionKey });
+      await pending;
+      await source.settlement.promise;
+      expectRespondError(respond, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "agent runtime authority is no longer active",
+      });
+      expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+      expect(getReservedRpcSourceInput(runId)).toBeUndefined();
+      expect(source.target).toBeUndefined();
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+    } finally {
+      route.resolve({ sessionKey });
+      await pending;
+    }
   });
 
   it("clears pending dedupe when explicit recipient session routing fails", async () => {
@@ -732,7 +910,7 @@ describe("gateway agent handler", () => {
           [false, undefined, { code: ErrorCodes.UNAVAILABLE, message: inputError.message }],
         ]);
         expect(mocks.agentCommand).not.toHaveBeenCalled();
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        expect(rpcSourceTesting.has(runId)).toBe(false);
         expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
       } finally {
         releaseCleanup.resolve();
@@ -825,21 +1003,10 @@ describe("gateway agent handler", () => {
     mocks.updateSessionStore.mockClear();
     const sessionKey = "agent:main:main";
     const runId = "idem-abort-during-admission";
-    let releaseMutation = () => {};
-    const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
-    const mutation = runExclusiveSessionLifecycleMutation("patch", {
-      scope: getAgentTestStorePath(),
-      identities: [sessionKey, "existing-session-id"],
-      run: async () => {
-        markMutationStarted();
-        await new Promise<void>((release) => {
-          releaseMutation = release;
-        });
-      },
-    });
-    await mutationStarted;
+    const { mutation, releaseMutation } = await holdMainSessionMutation(sessionKey);
     const context = makeContext();
     const respond = vi.fn();
+    const admission = await observeAgentLifecycleAdmission(runId);
     const request = invokeAgent(
       {
         message: "do not run after abort",
@@ -849,32 +1016,56 @@ describe("gateway agent handler", () => {
       },
       { context, respond, reqId: runId },
     );
-    await waitForAssertion(() => {
+    let cancellation: Promise<void> | undefined;
+    let sourceSettlement: Promise<void> | undefined;
+    try {
+      await Promise.race([
+        admission.requested,
+        request.then(() => {
+          throw new Error("Request completed before lifecycle admission");
+        }),
+      ]);
       expect(context.dedupe.has(`agent:${runId}`)).toBe(true);
-    });
-    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+      expect(mocks.updateSessionStore).not.toHaveBeenCalled();
 
-    const abortRespond = vi.fn();
-    await handleChatAbortRequest({
-      params: { sessionKey, runId },
-      respond: abortRespond as never,
-      context,
-      req: { type: "req", id: "abort-req", method: "chat.abort" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
-    releaseMutation();
-    await mutation;
-    await request;
+      const source = requireValue(rpcSourceTesting.get(runId), "preparing source missing");
+      sourceSettlement = source.input.settlement.promise;
+      const abortRespond = vi.fn();
+      cancellation = handleChatAbortRequest({
+        params: { sessionKey, runId },
+        respond: abortRespond as never,
+        context,
+        req: { type: "req", id: "abort-req", method: "chat.abort" },
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      await cancellation;
+      expect(source.input.abortSignal.aborted).toBe(true);
+      expect(rpcSourceTesting.get(runId)).toBe(source);
+      expect(mockCallArg(abortRespond)).toBe(true);
+      expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+        aborted: true,
+        runIds: [runId],
+      });
+      expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+      releaseMutation();
+      await mutation;
+      await request;
+      await sourceSettlement;
 
-    expect(mockCallArg(abortRespond)).toBe(true);
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(context.chatAbortControllers.has(runId)).toBe(false);
-    expect(
-      respond.mock.calls.some(
-        ([ok, payload]) => ok === true && (payload as { status?: string })?.status === "timeout",
-      ),
-    ).toBe(true);
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+      expect(rpcSourceTesting.has(runId)).toBe(false);
+      expect(
+        respond.mock.calls.some(
+          ([ok, payload]) => ok === true && (payload as { status?: string })?.status === "timeout",
+        ),
+      ).toBe(true);
+    } finally {
+      releaseMutation();
+      await Promise.allSettled([mutation, request, cancellation]);
+      await sourceSettlement;
+      admission.restore();
+    }
   });
 
   it("does not revive an expired reservation after lifecycle admission waits", async () => {
@@ -882,21 +1073,10 @@ describe("gateway agent handler", () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:main";
     const runId = "idem-expired-during-admission";
-    let releaseMutation = () => {};
-    const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
-    const mutation = runExclusiveSessionLifecycleMutation("patch", {
-      scope: getAgentTestStorePath(),
-      identities: [sessionKey, "existing-session-id"],
-      run: async () => {
-        markMutationStarted();
-        await new Promise<void>((release) => {
-          releaseMutation = release;
-        });
-      },
-    });
-    await mutationStarted;
+    const { mutation, releaseMutation } = await holdMainSessionMutation(sessionKey);
     const context = makeContext();
     const respond = vi.fn();
+    const admission = await observeAgentLifecycleAdmission(runId);
     const request = invokeAgent(
       {
         message: "do not run after queue expiry",
@@ -907,33 +1087,43 @@ describe("gateway agent handler", () => {
       { context, respond, reqId: runId },
     );
     const dedupeKey = `agent:${runId}`;
-    await waitForAssertion(() => {
+    try {
+      await Promise.race([
+        admission.requested,
+        request.then(() => {
+          throw new Error("Request completed before lifecycle admission");
+        }),
+      ]);
       expect(context.dedupe.has(dedupeKey)).toBe(true);
-    });
-    const reserved = context.dedupe.get(dedupeKey);
-    context.dedupe.set(dedupeKey, {
-      ts: reserved?.ts ?? Date.now(),
-      ok: true,
-      payload: {
-        ...(reserved?.payload as Record<string, unknown>),
-        expiresAtMs: Date.now() - 1,
-      },
-    });
+      const reserved = context.dedupe.get(dedupeKey);
+      context.dedupe.set(dedupeKey, {
+        ts: reserved?.ts ?? Date.now(),
+        ok: true,
+        payload: {
+          ...(reserved?.payload as Record<string, unknown>),
+          expiresAtMs: Date.now() - 1,
+        },
+      });
 
-    releaseMutation();
-    await mutation;
-    await request;
+      releaseMutation();
+      await mutation;
+      await request;
 
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(context.chatAbortControllers.has(runId)).toBe(false);
-    expect(
-      respond.mock.calls.some(
-        ([ok, payload]) =>
-          ok === true &&
-          (payload as { status?: string; stopReason?: string })?.status === "timeout" &&
-          (payload as { stopReason?: string }).stopReason === "timeout",
-      ),
-    ).toBe(true);
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+      expect(rpcSourceTesting.has(runId)).toBe(false);
+      expect(
+        respond.mock.calls.some(
+          ([ok, payload]) =>
+            ok === true &&
+            (payload as { status?: string; stopReason?: string })?.status === "timeout" &&
+            (payload as { stopReason?: string }).stopReason === "timeout",
+        ),
+      ).toBe(true);
+    } finally {
+      releaseMutation();
+      await Promise.allSettled([mutation, request]);
+      admission.restore();
+    }
   });
 
   it("preserves a newer terminal reservation result after lifecycle admission waits", async () => {
@@ -941,21 +1131,10 @@ describe("gateway agent handler", () => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:main";
     const runId = "idem-terminal-during-admission";
-    let releaseMutation = () => {};
-    const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
-    const mutation = runExclusiveSessionLifecycleMutation("patch", {
-      scope: getAgentTestStorePath(),
-      identities: [sessionKey, "existing-session-id"],
-      run: async () => {
-        markMutationStarted();
-        await new Promise<void>((release) => {
-          releaseMutation = release;
-        });
-      },
-    });
-    await mutationStarted;
+    const { mutation, releaseMutation } = await holdMainSessionMutation(sessionKey);
     const context = makeContext();
     const respond = vi.fn();
+    const admission = await observeAgentLifecycleAdmission(runId);
     const request = invokeAgent(
       {
         message: "do not overwrite the replacement result",
@@ -966,28 +1145,38 @@ describe("gateway agent handler", () => {
       { context, respond, reqId: runId },
     );
     const dedupeKey = `agent:${runId}`;
-    await waitForAssertion(() => {
+    try {
+      await Promise.race([
+        admission.requested,
+        request.then(() => {
+          throw new Error("Request completed before lifecycle admission");
+        }),
+      ]);
       expect(context.dedupe.has(dedupeKey)).toBe(true);
-    });
-    const replacement = {
-      ts: Date.now(),
-      ok: true,
-      payload: { runId, status: "ok", summary: "replacement completed" },
-    };
-    context.dedupe.set(dedupeKey, replacement);
+      const replacement = {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId, status: "ok", summary: "replacement completed" },
+      };
+      context.dedupe.set(dedupeKey, replacement);
 
-    releaseMutation();
-    await mutation;
-    await request;
+      releaseMutation();
+      await mutation;
+      await request;
 
-    expect(context.dedupe.get(dedupeKey)).toBe(replacement);
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenLastCalledWith(
-      true,
-      replacement.payload,
-      undefined,
-      expect.objectContaining({ cached: true, runId }),
-    );
+      expect(context.dedupe.get(dedupeKey)).toBe(replacement);
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenLastCalledWith(
+        true,
+        replacement.payload,
+        undefined,
+        expect.objectContaining({ cached: true, runId }),
+      );
+    } finally {
+      releaseMutation();
+      await Promise.allSettled([mutation, request]);
+      admission.restore();
+    }
   });
 
   it("runs gateway agent work inside its lifecycle admission context", async () => {
@@ -996,7 +1185,7 @@ describe("gateway agent handler", () => {
     const sessionId = "existing-session-id";
     mocks.agentCommand.mockImplementationOnce(async () => {
       await expect(
-        interruptSessionWorkAdmissions({
+        interruptSessionControllerEffects({
           scope: getAgentTestStorePath(),
           identities: [sessionKey, sessionId],
           timeoutMs: 5,
@@ -1029,7 +1218,7 @@ describe("gateway agent handler", () => {
       const scope = getAgentTestStorePath();
       primeMainAgentRun({ sessionId });
       mocks.agentCommand.mockClear();
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope,
         identities: [sessionKey, sessionId],
         assertAllowed: () => {},
@@ -1037,13 +1226,14 @@ describe("gateway agent handler", () => {
       const handoffId = admission.createHandoff();
       const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
       let mutationRan = false;
-      const mutation = runExclusiveSessionLifecycleMutation("patch", {
+      const mutation = runSessionMutation({
+        policy: "wait",
         scope,
         identities: [sessionKey, sessionId],
         prepare: async () => {
           markMutationStarted();
           expect(
-            await interruptSessionWorkAdmissions({
+            await interruptSessionControllerEffects({
               scope,
               identities: [sessionKey, sessionId],
               reason,
@@ -1077,7 +1267,7 @@ describe("gateway agent handler", () => {
         );
         await mutation;
 
-        expect(cancelSessionWorkAdmissionHandoff(handoffId)).toBe(false);
+        expect(cancelSessionEffectHandoff(handoffId)).toBe(false);
         expect(mutationRan).toBe(true);
         expect(mocks.agentCommand).not.toHaveBeenCalled();
         expect(respond).toHaveBeenCalledWith(
@@ -1087,95 +1277,97 @@ describe("gateway agent handler", () => {
           expect.objectContaining({ cached: true, runId }),
         );
       } finally {
-        cancelSessionWorkAdmissionHandoff(handoffId);
+        cancelSessionEffectHandoff(handoffId);
         admission.release();
         await mutation;
       }
     },
   );
 
-  it.each(["generic", "explicit restart", "terminal Stop", "already stopped"] as const)(
-    "preserves Gateway lifecycle interruption semantics: %s",
-    async (interruption) => {
-      primeMainAgentRun();
-      const sessionKey = "agent:main:main";
-      const sessionId = "existing-session-id";
-      const terminal = interruption === "terminal Stop" || interruption === "already stopped";
-      const restart = interruption === "explicit restart";
-      const reason = terminal
-        ? createAgentRunDirectAbortError()
-        : interruption === "explicit restart"
-          ? createAgentRunRestartAbortError()
-          : undefined;
-      const settled = createDeferredCore();
-      let observedAbortReason: unknown;
-      mocks.agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
-        await new Promise<void>((resolve) => {
-          const finish = () => {
-            observedAbortReason = opts.abortSignal?.reason;
-            resolve();
-          };
-          if (opts.abortSignal?.aborted) {
-            finish();
-            return;
-          }
-          opts.abortSignal?.addEventListener("abort", finish, { once: true });
-        });
-        await settled.promise;
-        throw observedAbortReason;
-      });
-      const context = makeContext();
-      const runId = `idem-agent-lifecycle-${interruption}`;
-      await invokeAgent(
-        {
-          message: "interrupt this admitted turn",
-          agentId: "main",
-          sessionKey,
-          idempotencyKey: runId,
-        },
-        { context, reqId: runId },
-      );
-      await waitForAgentCommandCall();
-
-      const abortEntry = requireValue(
-        context.chatAbortControllers.get(runId),
-        "admitted controller",
-      );
-      if (interruption === "already stopped") {
-        abortEntry.abortStopReason = "rpc";
-        abortEntry.controller.abort(reason);
-      }
-      const draining = interruptSessionWorkAdmissions({
-        scope: getAgentTestStorePath(),
-        identities: [sessionKey, sessionId],
-        reason: interruption === "already stopped" ? createAgentRunRestartAbortError() : reason,
-      });
-      try {
-        expect(abortEntry.abortStopReason).toBe(restart ? "restart" : "rpc");
-        if (reason) {
-          expect(abortEntry.controller.signal.reason).toBe(reason);
+  it.each([
+    "generic",
+    "explicit restart",
+    "terminal Stop",
+    "terminal Stop with late failure",
+    "already stopped",
+  ] as const)("preserves Gateway lifecycle interruption semantics: %s", async (interruption) => {
+    primeMainAgentRun();
+    const sessionKey = "agent:main:main";
+    const sessionId = "existing-session-id";
+    const lateFailure = interruption === "terminal Stop with late failure";
+    const terminal =
+      interruption === "terminal Stop" || interruption === "already stopped" || lateFailure;
+    const restart = interruption === "explicit restart";
+    const reason = terminal
+      ? createAgentRunDirectAbortError()
+      : interruption === "explicit restart"
+        ? createAgentRunRestartAbortError()
+        : undefined;
+    const settled = createDeferredCore();
+    let observedAbortReason: unknown;
+    mocks.agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
+      await new Promise<void>((resolve) => {
+        const finish = () => {
+          observedAbortReason = opts.abortSignal?.reason;
+          resolve();
+        };
+        if (opts.abortSignal?.aborted) {
+          finish();
+          return;
         }
-      } finally {
-        settled.resolve();
-        await draining;
-      }
-      await flushScheduledDispatchStep();
-
-      expect(isAgentRunRestartAbortReason(observedAbortReason)).toBe(restart);
-      expect(isAgentRunDirectAbortReason(observedAbortReason)).toBe(terminal);
-      if (reason) {
-        expect(observedAbortReason).toBe(reason);
-      }
-      expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
-        runId,
-        status: interruption === "generic" ? "error" : "timeout",
-        ...(interruption === "generic" ? {} : { stopReason: restart ? "restart" : "rpc" }),
+        opts.abortSignal?.addEventListener("abort", finish, { once: true });
       });
-      if (interruption === "generic") {
-        expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("stopReason");
+      await settled.promise;
+      throw lateFailure ? new Error("late provider failure") : observedAbortReason;
+    });
+    const context = makeContext();
+    const runId = `idem-agent-lifecycle-${interruption}`;
+    await invokeAgent(
+      {
+        message: "interrupt this admitted turn",
+        agentId: "main",
+        sessionKey,
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId },
+    );
+    await waitForAgentCommandCall();
+
+    const abortEntry = requireValue(rpcSourceTesting.get(runId), "admitted controller");
+    if (interruption === "already stopped") {
+      abortEntry.adapter.abortStopReason = "rpc";
+      requestRpcSourceCancellation(abortEntry, reason);
+    }
+    const draining = interruptSessionControllerEffects({
+      scope: getAgentTestStorePath(),
+      identities: [sessionKey, sessionId],
+      reason: interruption === "already stopped" ? createAgentRunRestartAbortError() : reason,
+    });
+    try {
+      expect(abortEntry.adapter.abortStopReason).toBe(restart ? "restart" : "rpc");
+      if (reason) {
+        expect(abortEntry.input.abortSignal.reason).toBe(reason);
       }
-    },
-  );
+    } finally {
+      settled.resolve();
+      await draining;
+    }
+    await flushScheduledDispatchStep();
+
+    expect(isAgentRunRestartAbortReason(observedAbortReason)).toBe(restart);
+    expect(isAgentRunDirectAbortReason(observedAbortReason)).toBe(terminal);
+    if (reason) {
+      expect(observedAbortReason).toBe(reason);
+    }
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      status: interruption === "generic" ? "error" : "timeout",
+      ...(interruption === "generic" ? {} : { stopReason: restart ? "restart" : "rpc" }),
+    });
+    if (interruption === "generic") {
+      expect(context.dedupe.get(`agent:${runId}`)?.payload).not.toHaveProperty("stopReason");
+    }
+  });
 
   it("does not mutate a session archived before the initial store update", async () => {
     primeMainAgentRun();
@@ -1298,29 +1490,7 @@ describe("gateway agent handler", () => {
   });
 
   it("durably admits managed media for inline image agent runs", async () => {
-    const root = sessionDirs.make();
-    useTestStateDir(root);
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      model: "vision-model",
-      modelProvider: "test",
-      modelOverride: "vision-model",
-      modelOverrideSource: "user",
-      providerOverride: "test",
-    });
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mockSuccessfulAgentCommand();
-    const context = {
-      ...makeContext(),
-      loadGatewayModelCatalog: vi.fn(async () => [
-        {
-          id: "vision-model",
-          name: "vision-model",
-          provider: "test",
-          input: ["image"],
-        },
-      ]),
-    } as unknown as GatewayRequestContext;
+    const context = createVisionAgentContext(sessionDirs.make());
 
     await invokeAgent(
       {
@@ -1363,29 +1533,7 @@ describe("gateway agent handler", () => {
   });
 
   it("durably admits managed media for offloaded image agent runs", async () => {
-    const root = sessionDirs.make();
-    useTestStateDir(root);
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      model: "vision-model",
-      modelProvider: "test",
-      modelOverride: "vision-model",
-      modelOverrideSource: "user",
-      providerOverride: "test",
-    });
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mockSuccessfulAgentCommand();
-    const context = {
-      ...makeContext(),
-      loadGatewayModelCatalog: vi.fn(async () => [
-        {
-          id: "vision-model",
-          name: "vision-model",
-          provider: "test",
-          input: ["image"],
-        },
-      ]),
-    } as unknown as GatewayRequestContext;
+    const context = createVisionAgentContext(sessionDirs.make());
 
     await invokeAgent(
       {
@@ -1634,17 +1782,8 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    const root = sessionDirs.make();
-    const sessionsDir = `${root}/sessions`;
-    await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = "terminal-main-session.jsonl";
-    const transcriptPath = `${sessionsDir}/${sessionFile}`;
-    await fs.writeFile(
-      transcriptPath,
-      `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
-      "utf8",
-    );
-    await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+    const sessionsDir = await writeTerminalMainTranscript(sessionDirs.make(), sessionFile, now);
     const staleEntry = {
       sessionId: "terminal-main-session",
       sessionFile,
@@ -1696,17 +1835,8 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    const root = sessionDirs.make();
-    const sessionsDir = `${root}/sessions`;
-    await fs.mkdir(sessionsDir, { recursive: true });
     const sessionFile = "terminal-main-session.jsonl";
-    const transcriptPath = `${sessionsDir}/${sessionFile}`;
-    await fs.writeFile(
-      transcriptPath,
-      `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
-      "utf8",
-    );
-    await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+    const sessionsDir = await writeTerminalMainTranscript(sessionDirs.make(), sessionFile, now);
     const existingEntry = {
       sessionId: "terminal-main-session",
       sessionFile,
@@ -1761,17 +1891,8 @@ describe("gateway agent handler", () => {
       setDateOnlyFakeClockActive(true);
       vi.setSystemTime(now);
 
-      const root = sessionDirs.make();
-      const sessionsDir = `${root}/sessions`;
-      await fs.mkdir(sessionsDir, { recursive: true });
       const sessionFile = `terminal-main-${runKind}.jsonl`;
-      const transcriptPath = `${sessionsDir}/${sessionFile}`;
-      await fs.writeFile(
-        transcriptPath,
-        `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
-        "utf8",
-      );
-      await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+      const sessionsDir = await writeTerminalMainTranscript(sessionDirs.make(), sessionFile, now);
       const existingEntry = {
         sessionId: "terminal-main-session",
         sessionFile,

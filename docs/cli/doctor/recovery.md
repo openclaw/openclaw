@@ -9,6 +9,9 @@ read_when:
 These sections cover repairing the Gateway service, its remote and Control UI
 prerequisites, and the credentials it starts with.
 
+Doctor's Gateway health checks and heartbeat schedule planning reuse existing
+identities without creating a device identity, including during `--fix`.
+
 ## Gateway service recovery
 
 Run `openclaw gateway status --deep` to inspect the installed service and its
@@ -51,6 +54,14 @@ can verify ownership of the replacement. The warning reports whether the
 definition was unchanged, restored, or needs inspection; follow the reported
 status and installer commands after the active maintenance or update finishes.
 Unverified restoration keeps recovery pending instead of claiming a safe restart.
+
+State migration requires the Gateway and other state writers to be stopped; it
+does not require a writable or up-to-date service definition. An inactive
+systemd service can migrate even when its stop timeout is short or its native
+policy cannot be refreshed. Doctor reports those service issues as warnings.
+Policy refresh checks current native ownership, so a removed system unit does
+not keep an earlier system-owned observation in force. A live system unit still
+belongs to its system supervisor and is never replaced by a competing user unit.
 
 When explicit repair stops a managed Gateway, Doctor waits for that process to
 release shared-state lifecycle ownership within the service stop deadline before
@@ -106,8 +117,17 @@ within that same ownership scope. Its own maintenance window does not trigger a
 lock wait or an offline-maintenance refusal; requester revocation still stops repair.
 
 When maintenance cannot acquire state ownership, Doctor includes the underlying
-schema or filesystem error. A shared-state database from a newer OpenClaw build
+schema or filesystem error. Manual `openclaw doctor --fix` reports contention
+immediately. Updater-run Doctor first waits, up to 20 minutes by default, for a non-Gateway
+OpenClaw process, such as a CLI command, to release state or close its agent
+database, printing the holder's PID and progress (see [how updates run](/cli/update/how-updates-run#when-restart-is-skipped-or-fails)). A shared-state database from a newer OpenClaw build
 stays unchanged; rerun Doctor with a build that supports that database version.
+
+On Windows, Doctor can release a legacy agent database lease with no recorded
+process-start identity when its acquisition predates the current boot by more
+than five minutes. It warns with the released lease ID. Same-boot leases and
+leases whose boot time cannot be read still block maintenance: stop the Gateway
+and other OpenClaw processes, or reboot, then rerun `openclaw doctor --fix`.
 
 If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
 or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for

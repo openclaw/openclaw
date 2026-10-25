@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { assertUpdateDatabaseEngineContexts } from "./update-database-engine-admission.js";
+import { assertUpdateDatabaseEngineContexts as admitEngines } from "./update-database-engine-admission.js";
 
 vi.mock("../snapshot/database-backup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../snapshot/database-backup.js")>()),
@@ -14,22 +14,19 @@ vi.mock("../snapshot/database-backup.js", async (importOriginal) => ({
 }));
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+const engines = ["sqlite", "postgres"];
+const families = ["state", "agent", "workboard", "logbook", "team-reports"];
+type Context = Parameters<typeof admitEngines>[0][number];
+
+function withDatabase(context: Context, database: OpenClawConfig["database"]): Context {
+  const postgres = { connection: "postgresql://synthetic.invalid/update-admission" };
+  return { ...context, config: { ...context.config, database: { ...database, postgres } } };
+}
 
 async function store(engine: "sqlite" | "postgres", enabled = true) {
   const stateDir = directories.make("update-engine-admission-");
   const file = path.join(stateDir, "plugins", "workboard", "workboard.sqlite");
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  using db = openNodeSqliteDatabase(file);
-  if (engine === "postgres") {
-    db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
-    db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, ?, ?)").run(
-      "e3b4e990-c0f1-4ec7-a5d1-4e1c6824f80f",
-      "postgres",
-      "retained_workboard",
-    );
-  } else {
-    db.exec("CREATE TABLE evidence (value TEXT); INSERT INTO evidence VALUES ('retained')");
-  }
+  await createStore(file, engine, "retained_workboard");
   return {
     file,
     context: {
@@ -39,32 +36,43 @@ async function store(engine: "sqlite" | "postgres", enabled = true) {
   };
 }
 
+async function createStore(file: string, engine: "sqlite" | "postgres", schema: string) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  using db = openNodeSqliteDatabase(file);
+  if (engine === "postgres") {
+    db.exec(`CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT);
+      INSERT INTO openclaw_engine_anchor VALUES ('e3b4e990-c0f1-4ec7-a5d1-4e1c6824f80f','postgres','${schema}')`);
+  } else {
+    db.exec("CREATE TABLE evidence (value TEXT); INSERT INTO evidence VALUES ('retained')");
+  }
+}
+
+const reversePort = /Reverse-port to SQLite with the current binary/;
 it.each([
-  { declaration: undefined },
-  { declaration: ["sqlite"] },
-  { declaration: [] },
-  { declaration: "postgres" },
-])(
-  "refuses an unsupported PostgreSQL target before mutation: $declaration",
-  async ({ declaration }) => {
-    const { file, context } = await store("postgres");
+  ["postgres", true, undefined, reversePort],
+  ["postgres", true, ["sqlite"], reversePort],
+  ["postgres", true, [], reversePort],
+  ["postgres", true, "postgres", reversePort],
+  ["postgres", true, engines, null],
+  ["sqlite", true, undefined, null],
+  ["postgres", false, undefined, /target does not support the PostgreSQL store/],
+] as const)(
+  "preserves the %s store (enabled=%s, target=%j)",
+  async (engine, enabled, declaration, error) => {
+    const { file, context } = await store(engine, enabled);
     const before = await fs.readFile(file);
     const activate = vi.fn();
-    await expect(
-      assertUpdateDatabaseEngineContexts([context], declaration).then(activate),
-    ).rejects.toThrow(/Reverse-port to SQLite with the current binary/);
-    expect(activate).not.toHaveBeenCalled();
+    const admission = admitEngines([context], declaration, ["workboard"]).then(activate);
+    if (error) {
+      await expect(admission).rejects.toThrow(error);
+    } else {
+      await admission;
+    }
+    expect(activate).toHaveBeenCalledTimes(error ? 0 : 1);
     expect(await fs.readFile(file)).toEqual(before);
     expect(await fs.readdir(path.dirname(file))).toEqual(["workboard.sqlite"]);
   },
 );
-
-it("admits a matching PostgreSQL target without changing its anchor", async () => {
-  const { file, context } = await store("postgres");
-  const before = await fs.readFile(file);
-  await assertUpdateDatabaseEngineContexts([context], ["sqlite", "postgres"], ["workboard"]);
-  expect(await fs.readFile(file)).toEqual(before);
-});
 
 it.each(["sqlite", "postgres"] as const)(
   "reads a legacy registry before deciding whether its retained %s agent prevents downgrade",
@@ -73,22 +81,14 @@ it.each(["sqlite", "postgres"] as const)(
     const registry = path.join(context.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
     const retained = path.join(directories.make("retained-agent-engine-"), "agent.sqlite");
     await fs.mkdir(path.dirname(registry), { recursive: true });
+    await createStore(retained, engine, "retained_agent");
     {
-      using db = openNodeSqliteDatabase(retained);
-      if (engine === "postgres") {
-        db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
-        db.prepare(
-          "INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', 'retained_agent')",
-        ).run("e3b4e990-c0f1-4ec7-a5d1-4e1c6824f80f");
-      } else {
-        db.exec("CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES ('retained')");
-      }
       using shared = openNodeSqliteDatabase(registry);
       shared.exec("PRAGMA user_version=17; CREATE TABLE agent_databases(path TEXT)");
       shared.prepare("INSERT INTO agent_databases VALUES (?)").run(retained);
     }
     const before = await Promise.all([fs.readFile(registry), fs.readFile(retained)]);
-    const inspection = assertUpdateDatabaseEngineContexts([context], undefined);
+    const inspection = admitEngines([context], undefined);
     if (engine === "postgres") {
       await expect(inspection).rejects.toThrow(retained);
     } else {
@@ -100,117 +100,40 @@ it.each(["sqlite", "postgres"] as const)(
 
 it.each([
   { engine: "sqlite", families: { workboard: { engine: "postgres" } } },
-  { engine: "postgres", families: { workboard: { engine: "sqlite" } } },
-  { engine: "sqlite", families: { state: { engine: "postgres" } } },
-] satisfies NonNullable<OpenClawConfig["database"]>[])(
-  "refuses mixed-engine updates even when the candidate supports PostgreSQL (%j)",
-  async (database) => {
-    const { file, context } = await store("sqlite");
-    const before = await fs.readFile(file);
-    const activate = vi.fn();
-    await expect(
-      assertUpdateDatabaseEngineContexts(
-        [{ ...context, config: { ...context.config, database } }],
-        ["sqlite", "postgres"],
-      ).then(activate),
-    ).rejects.toThrow(/update for mixed-engine installs is not supported yet; use a single engine/);
-    expect(activate).not.toHaveBeenCalled();
-    expect(await fs.readFile(file)).toEqual(before);
-  },
-);
-
-it("checks every context before accepting a PostgreSQL-capable candidate", async () => {
-  const { context } = await store("sqlite");
-  await expect(
-    assertUpdateDatabaseEngineContexts(
-      [
-        context,
-        { ...context, config: { database: { families: { state: { engine: "postgres" } } } } },
-      ],
-      ["postgres"],
-    ),
-  ).rejects.toThrow(/update for mixed-engine installs is not supported yet/);
-});
-
-it.each([
-  { engine: "sqlite", families: {} },
-  { engine: "sqlite", families: { agent: { engine: "sqlite" } } },
-  {
-    engine: "sqlite",
-    families: {
-      state: { engine: "postgres" },
-      agent: { engine: "postgres" },
-      workboard: { engine: "postgres" },
-      logbook: { engine: "postgres" },
-      "team-reports": { engine: "postgres" },
-    },
-  },
   {
     engine: "postgres",
-    families: {
-      state: { engine: "sqlite" },
-      agent: { engine: "sqlite" },
-      workboard: { engine: "sqlite" },
-      logbook: { engine: "sqlite" },
-      "team-reports": { engine: "sqlite" },
-    },
+    families: { agent: { engine: "sqlite" }, workboard: { engine: "sqlite" } },
   },
+  { engine: "sqlite", families: { state: { engine: "postgres" } } },
+  { engine: "sqlite", families: { agent: { engine: "sqlite" } } },
 ] satisfies NonNullable<OpenClawConfig["database"]>[])(
-  "refuses family-config updates until targets understand the config shape (%j)",
+  "admits selected mixed families without changing store bytes (%j)",
   async (database) => {
     const { file, context } = await store("sqlite");
     const before = await fs.readFile(file);
-    const activate = vi.fn();
-    await expect(
-      assertUpdateDatabaseEngineContexts(
-        [{ ...context, config: { ...context.config, database } }],
-        ["sqlite", "postgres"],
-      ).then(activate),
-    ).rejects.toThrow(/Update with database\.families overrides.*matching database\.engine/);
-    expect(activate).not.toHaveBeenCalled();
+    await admitEngines([withDatabase(context, database)], engines, families);
     expect(await fs.readFile(file)).toEqual(before);
   },
 );
+
+it("checks every context for its selected PostgreSQL family", async () => {
+  const { context } = await store("sqlite");
+  await expect(
+    admitEngines(
+      [context, withDatabase(context, { families: { state: { engine: "postgres" } } })],
+      ["postgres"],
+      ["workboard"],
+    ),
+  ).rejects.toThrow(/target does not declare support for the PostgreSQL state family/);
+});
 
 it("protects selected PostgreSQL families before any anchor has been created", async () => {
   const { context } = await store("sqlite");
-  const postgres = {
-    ...context,
-    config: {
-      ...context.config,
-      database: {
-        engine: "postgres",
-        postgres: { connection: "postgresql://synthetic.invalid/update-admission" },
-      },
-    } satisfies OpenClawConfig,
-  };
-  await expect(assertUpdateDatabaseEngineContexts([postgres], ["sqlite"])).rejects.toThrow(
+  const postgres = withDatabase(context, { engine: "postgres" });
+  await expect(admitEngines([postgres], ["sqlite"])).rejects.toThrow(
     /target does not support the configured PostgreSQL families.*Reverse-port to SQLite/,
   );
-  // Every selected family has matched capture and rollback support.
-  await expect(
-    assertUpdateDatabaseEngineContexts(
-      [postgres],
-      ["sqlite", "postgres"],
-      ["state", "agent", "workboard", "logbook", "team-reports"],
-    ),
-  ).resolves.toBeUndefined();
-});
-
-it("leaves a SQLite install unchanged when the target omits its optional declaration", async () => {
-  const { file, context } = await store("sqlite");
-  const before = await fs.readFile(file);
-  await assertUpdateDatabaseEngineContexts([context], undefined);
-  expect(await fs.readFile(file)).toEqual(before);
-});
-
-it("protects a retained PostgreSQL anchor when Workboard is disabled", async () => {
-  const { file, context } = await store("postgres", false);
-  const before = await fs.readFile(file);
-  await expect(assertUpdateDatabaseEngineContexts([context], undefined)).rejects.toThrow(
-    /target does not support the PostgreSQL store/,
-  );
-  expect(await fs.readFile(file)).toEqual(before);
+  await expect(admitEngines([postgres], engines, families)).resolves.toBeUndefined();
 });
 
 it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -224,10 +147,8 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     await fs.chmod(historical, 0o000);
     try {
       await expect(fs.lstat(marker)).rejects.toMatchObject({ code: "EACCES" });
-      await expect(
-        assertUpdateDatabaseEngineContexts([context], ["sqlite", "postgres"], ["workboard"]),
-      ).resolves.toBeUndefined();
-      await expect(assertUpdateDatabaseEngineContexts([context], ["sqlite"])).rejects.toThrow(
+      await expect(admitEngines([context], engines, ["workboard"])).resolves.toBeUndefined();
+      await expect(admitEngines([context], ["sqlite"])).rejects.toThrow(
         `target does not support the PostgreSQL store at ${file}`,
       );
     } finally {

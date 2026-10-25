@@ -43,7 +43,7 @@ import type {
 } from "./update-command-service-context-types.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
-  GATEWAY_SERVICE_INSPECTION_WARNING,
+  serviceInspectionWarningMessage,
   GatewayServiceUpdateOwnershipError,
   isUpdateServiceManagerAvailable,
   observedSystemdManagerUid,
@@ -180,6 +180,9 @@ type ManagedServiceStopParams = {
   /** Doctor restores this same native instance after its offline repair. */
   retainNativeIdentity?: boolean;
   assertCurrent?: (phase?: "restore") => void;
+  /** Revalidate a parent deadline immediately before the native stop side effect. */
+  assertDeadline?: () => void;
+  waitForCurrent?: () => Promise<void>;
   timeoutMs?: number;
   warn?: (message: string) => void;
 } & (
@@ -208,18 +211,16 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
-  const expected = params.expectedService?.serviceUpdateVerdict;
-  if (expected?.kind === "unavailable") {
-    return unavailableServiceState(expected);
+  if (params.expectedService?.serviceUpdateVerdict?.kind === "unavailable") {
+    return unavailableServiceState(params.expectedService.serviceUpdateVerdict);
   }
   try {
-    if (params.phase === "inspect") {
-      return await stopManagedServiceBeforeMutableUpdate(params);
-    }
-    return await withGatewayServiceOperationLock(
-      params.expectedService?.serviceEnv ?? process.env,
-      (assertNative) => stopManagedServiceBeforeMutableUpdate(params, assertNative),
-    );
+    return params.phase === "inspect"
+      ? await stopManagedServiceBeforeMutableUpdate(params)
+      : await withGatewayServiceOperationLock(
+          params.expectedService?.serviceEnv ?? process.env,
+          (assertNative) => stopManagedServiceBeforeMutableUpdate(params, assertNative),
+        );
   } catch (error) {
     if (
       error instanceof ServiceInspectionError &&
@@ -241,8 +242,7 @@ async function stopManagedServiceBeforeMutableUpdate(
   assertNative?: () => void,
 ): Promise<PreManagedServiceStop> {
   // Retain the original live owner across daemon awaits; history is not authority.
-  const updateRun = params.updateRun;
-  const recordPhase = params.recordPhase;
+  const { updateRun, recordPhase } = params;
   const executorFence = updateRun?.executorFence;
   const assertExecutor = () => {
     if (params.updateRun !== updateRun || updateRun?.executorFence !== executorFence) {
@@ -270,7 +270,7 @@ async function stopManagedServiceBeforeMutableUpdate(
             endedAtMs: Date.now(),
             detail: message,
           },
-          { env: updateRun?.env },
+          updateRun,
         );
       } catch {
         (params.warn ?? defaultRuntime.error)(
@@ -290,8 +290,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       warn,
     });
   };
-  // Only a verified live handoff lease admits a helper that retains Gateway ancestry.
-  // Inspection uses the inherited run ID; a missing run ID is refused.
+  // A helper retaining Gateway ancestry requires a verified live handoff and run ID.
   const resolveAncestryBlock = async (state: GatewayServiceState) => {
     delete inspected.serviceMembershipSourceAbsent;
     const block = gatewayMaintenanceBlock(state, params.root, "stop", () => {
@@ -387,17 +386,20 @@ async function stopManagedServiceBeforeMutableUpdate(
         };
       }
     }
-    return unavailableServiceState({
+    const warning = await serviceInspectionWarningMessage(undefined, serviceEnv);
+    const verdict: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }> = {
       kind: "unavailable",
       message:
         err instanceof ServiceInspectionError && err.reason === "windows-task-inspection-failed"
-          ? `${err.message} ${GATEWAY_SERVICE_INSPECTION_WARNING}`
+          ? `${err.message} ${warning}`
           : err instanceof ServiceInspectionError ||
               err instanceof GatewayServiceUpdateOwnershipError
-            ? `${GATEWAY_SERVICE_INSPECTION_WARNING} ${err.message}`
-            : GATEWAY_SERVICE_INSPECTION_WARNING,
+            ? `${err.message}\n${warning}`
+            : warning,
       ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
-    });
+    };
+    assertGatewayServiceAdmissionUnchanged(params.expectedService, verdict);
+    return unavailableServiceState(verdict);
   }
   assertCurrent();
   const serviceUpdateVerdict = await withCommandProcessScope(() =>
@@ -567,7 +569,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     await assertAncestry(currentState);
     if (process.platform === "linux") {
       const refreshed = await prepareSystemdMaintenance(currentState, true);
-      if (refreshed) {
+      if (refreshed.kind === "refreshed") {
         // Policy refresh preserves the launcher; retain admitted installation drift.
         currentState = await readCurrentService(currentState.env);
       }
@@ -610,6 +612,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       assertCurrent();
     }
     const stop = async () => {
+      await params.waitForCurrent?.();
       assertCurrent();
       if (process.platform === "linux") {
         const beforeStop = await readCurrentService(currentState.env);
@@ -631,11 +634,13 @@ async function stopManagedServiceBeforeMutableUpdate(
         await recordPhase("activating");
         assertCurrent();
       }
+      params.assertDeadline?.();
       stoppedAtMs = Date.now();
       await service.stop({
         env: currentState.env,
         stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
         assertCurrent,
+        beforeEffect: params.assertDeadline,
         warn,
         ...(updateRun
           ? { updateHandoff: { root: params.handoffRoot ?? params.root, runId: updateRun.runId } }
@@ -658,6 +663,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     } else {
       await stop();
     }
+    await params.waitForCurrent?.();
     assertCurrent();
     if (windowsTaskAutoStartRecovery) {
       await abortWindowsTaskUpdateIfInterrupted(windowsTaskAutoStartRecovery);
@@ -700,12 +706,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     }
     throw err;
   }
-  return {
-    ...inspected,
-    stopped: true,
-    stoppedAtMs,
-    windowsTaskAutoStartRecovery,
-  };
+  return { ...inspected, stopped: true, stoppedAtMs, windowsTaskAutoStartRecovery };
 }
 
 export async function mutableUpdateGatewayServiceBlock(params: {

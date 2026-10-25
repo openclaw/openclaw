@@ -31,7 +31,7 @@ export type CodexCatalogNativeThread = Pick<
   | "source"
   | "gitInfo"
   | "status"
->;
+> & { catalogError?: "oversized-thread" };
 
 export type CodexCatalogNativePage = Omit<CodexThreadListResponse, "data"> & {
   data: CodexCatalogNativeThread[];
@@ -50,7 +50,6 @@ export type CodexCatalogHome = {
   usesProcessHomeFallback: boolean;
 };
 
-/** Read-only metadata for one Codex app-server thread. */
 export type CodexSessionCatalogSession = {
   threadId: string;
   /** Opaque connection identity; never exposes the underlying Codex home path. */
@@ -61,6 +60,8 @@ export type CodexSessionCatalogSession = {
   fallbackName?: string;
   cwd?: string;
   status: string;
+  /** The native preview could not fit; identity and continuation were recovered. */
+  catalogError?: "oversized-thread";
   activeFlags?: string[];
   createdAt?: number;
   updatedAt?: number;

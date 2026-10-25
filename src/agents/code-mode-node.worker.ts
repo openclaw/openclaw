@@ -2,7 +2,6 @@ import { setImmediate } from "node:timers/promises";
 import { types } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import { createContext, Script, type Context } from "node:vm";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { observeGcSamples } from "../infra/gc-observer.js";
 import { publishWorkerGcStorm } from "../infra/worker-memory.js";
 import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-server.js";
@@ -22,14 +21,15 @@ import {
   type SourceLocation,
 } from "./code-mode-source-location.js";
 import { CODE_MODE_MODULE_ACCESS_ERROR, prepareSource } from "./code-mode-source.js";
-import type {
-  CodeModeConfig,
-  CodeModeFailurePhase,
-  CodeModeNodeInput,
-  CodeModeWorkerContinuation,
-  CodeModeWorkerThreadResult,
-  PendingBridgeRequest,
-  SettledBridgeRequest,
+import {
+  CODE_MODE_BRIDGE_METHODS,
+  type CodeModeConfig,
+  type CodeModeFailurePhase,
+  type CodeModeNodeInput,
+  type CodeModeWorkerContinuation,
+  type CodeModeWorkerThreadResult,
+  type PendingBridgeRequest,
+  type SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
 import { ToolInputError } from "./tool-input-error.js";
 
@@ -129,24 +129,7 @@ observeGcSamples((samples) => {
   majorCollections = 0;
 });
 
-const bridgeMethods = new Set<string>([
-  "search",
-  "describe",
-  "callValue",
-  "resultSave",
-  "resultLoad",
-  "resultDelete",
-  "nodes",
-  "yield",
-  "namespace",
-  "agentSpawn",
-  "agentWait",
-  "skillsList",
-  "skillsSearch",
-  "skillsRead",
-  "sleep",
-  "swarmNote",
-]);
+const bridgeMethods = new Set<string>(CODE_MODE_BRIDGE_METHODS);
 
 function isBridgeMethod(method: string): method is PendingBridgeRequest["method"] {
   return bridgeMethods.has(method);
@@ -577,17 +560,9 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
   }
 }
 
-serveWorkerTasks(
+serveWorkerTasks<NodeResult, NodeInput>(
   async (input, channel): Promise<NodeResult> => {
-    if (
-      !isRecord(input) ||
-      !isRecord(input.config) ||
-      (input.kind !== "exec" && input.kind !== "resume")
-    ) {
-      return failed("invalid_input", "invalid code mode worker input");
-    }
-    // SAFETY: The executor host supplies normalized start/resume inputs to its private worker.
-    const result = await run(input as NodeInput, channel);
+    const result = await run(input, channel);
     if (cell?.networkContentObserved) {
       result.networkContentObserved = true;
     }

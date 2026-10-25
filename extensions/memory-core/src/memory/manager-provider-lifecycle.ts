@@ -24,8 +24,6 @@ import { MemoryManagerReloadError } from "./lifecycle.js";
 import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import {
-  resolveFallbackCurrentProviderId,
-  resolveMemoryFallbackProviderRequest,
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderLifecycle,
 } from "./manager-provider-state.js";
@@ -112,9 +110,22 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract indexIdentityState: MemoryIndexIdentityState;
   protected abstract syncAdmitted(
     params?: MemorySyncParams,
-    options?: { allowEmbeddingBootstrapFallback?: boolean; queuedSessionOwner?: boolean },
+    options?: {
+      allowEmbeddingBootstrapFallback?: boolean;
+      queuedSessionOwner?: boolean;
+      background?: boolean;
+    },
   ): Promise<void>;
   protected abstract syncPublishedIndexInBackground(params: { reason: string }): Promise<void>;
+
+  protected async syncBackground(params: MemorySyncParams): Promise<void> {
+    if (this.closing || this.closed) {
+      return;
+    }
+    return await this.withManagerOperation(() =>
+      this.syncAdmitted(params, { background: true, queuedSessionOwner: true }),
+    );
+  }
 
   protected markEmbeddingBootstrapFailure(
     err: unknown,
@@ -250,16 +261,8 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     if (this.fallbackFrom || !this.provider) {
       return false;
     }
-    const currentProviderId = resolveFallbackCurrentProviderId({
-      provider: this.provider,
-      lifecycle: this.providerLifecycle,
-    });
-    const fallbackRequest = resolveMemoryFallbackProviderRequest({
-      cfg: this.cfg,
-      settings: this.settings,
-      currentProviderId,
-    });
-    const meta = indexState ? indexState.meta : this.readMeta();
+    const { fallbackRequest } = this.resolveConfiguredFallbackProvider();
+    const meta = indexState ? indexState.meta : this.database.facts.meta;
     if (
       !fallbackRequest ||
       !meta ||
@@ -540,10 +543,36 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     }
   }
 
-  protected readRetrievalIndexState(signal?: AbortSignal): Promise<MemoryRetrievalIndexState> {
-    return runMemoryIndexState(
-      { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
-      signal,
+  protected async publishedRetrievalState(): Promise<MemoryRetrievalIndexState | undefined> {
+    if (this.database.readOnly) {
+      return undefined;
+    }
+    await this.database.refreshFacts();
+    const { meta, hasIndexedChunks, vectorState } = this.database.facts;
+    // Chunkless legacy FTS content is not represented in publication facts.
+    if (!hasIndexedChunks) {
+      return undefined;
+    }
+    return {
+      meta,
+      hasIndexedChunks,
+      hasFtsContent: false,
+      vectorState:
+        this.database.admission?.engine === "postgres" || (meta && meta.provider !== "none")
+          ? vectorState
+          : { state: "empty" },
+    };
+  }
+
+  protected async readRetrievalIndexState(
+    signal?: AbortSignal,
+  ): Promise<MemoryRetrievalIndexState> {
+    return (
+      (await this.publishedRetrievalState()) ??
+      (await runMemoryIndexState(
+        { agentId: this.agentId, databasePath: resolveUserPath(this.settings.store.databasePath) },
+        signal,
+      ))
     );
   }
 
@@ -569,7 +598,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected refreshKeywordFallbackIndexIdentity(indexState?: MemoryRetrievalIndexState) {
-    const meta = indexState ? indexState.meta : this.readMeta();
+    const meta = indexState ? indexState.meta : this.database.facts.meta;
     const state = this.resolveCurrentIndexIdentityState({
       meta,
       provider: meta && meta.provider !== "none" ? { id: meta.provider, model: meta.model } : null,
@@ -599,7 +628,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.indexIdentityDirty =
       state.status === "mismatched" ||
       (state.status === "missing" &&
-        (this.sources.has("memory") || (indexState?.hasIndexedChunks ?? this.hasIndexedChunks())));
+        (this.sources.has("memory") || this.database.facts.hasIndexedChunks));
     return state;
   }
 
@@ -609,10 +638,10 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         this.managerIdleWaiters.add(resolve);
       });
     }
-    // CLI request teardown must not wait after a published search result is ready;
-    // its detached task owns a separate maintenance manager. Persistent managers
-    // still drain maintenance before closing shared resources.
-    while (this.purpose !== "cli" && this.activeBackgroundSearchSyncs.size > 0) {
+    // Search-time maintenance writes through this manager's published connection,
+    // so every manager, including a transient CLI request, drains it before closing.
+    // The search result is already returned; only teardown waits.
+    while (this.activeBackgroundSearchSyncs.size > 0) {
       await Promise.all(Array.from(this.activeBackgroundSearchSyncs));
     }
   }

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/voice-call",
-  "version": "2026.10.4",
+  "version": "2026.10.7",
   "description": "OpenClaw voice-call plugin for LiveKit, Twilio, Telnyx, and Plivo phone calls.",
   "repository": {
     "type": "git",
@@ -10,15 +10,15 @@
   "dependencies": {
     "@livekit/rtc-node": "1.1.0",
     "livekit-server-sdk": "2.19.1",
-    "typebox": "1.3.36",
-    "zod": "4.6.5"
+    "typebox": "1.4.1",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.4"
+    "openclaw": ">=2026.10.7"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -37,10 +37,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.10.4"
+      "pluginApi": ">=2026.10.7"
     },
     "build": {
-      "openclawVersion": "2026.10.4"
+      "openclawVersion": "2026.10.7"
     },
     "release": {
       "publishToClawHub": true,

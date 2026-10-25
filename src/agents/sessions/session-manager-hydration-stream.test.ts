@@ -17,31 +17,43 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  clearOpenClawDatabaseQuarantine,
-  recordOpenClawDatabaseQuarantine,
-} from "../../state/openclaw-quarantine-store.js";
+import { clearOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.test-support.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager, type SessionMessageEntry } from "./session-manager.js";
 
-async function seedTranscript(state: OpenClawTestState) {
-  const target = {
-    agentId: "main",
-    sessionId: "streamed-hydration",
-    sessionKey: "agent:main:streamed-hydration",
-    storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+function makeTarget(state: OpenClawTestState, sessionId: string) {
+  return sessionScope(path.join(state.agentDir("main"), "openclaw-agent.sqlite"), sessionId);
+}
+
+function retainedManager(timestamp: number) {
+  const manager = SessionManager.inMemory("/retained");
+  manager.appendMessage(makeUserMessage("keep the original view", timestamp));
+  return { manager, before: { ...managerView(manager), cwd: "/retained", persisted: false } };
+}
+
+function managerView(manager: SessionManager) {
+  return {
+    entries: manager.getPersistedEntries(),
+    target: manager.getSessionTarget(),
+    cwd: manager.getCwd(),
+    persisted: manager.isPersisted(),
   };
+}
+
+async function seedTranscript(state: OpenClawTestState) {
+  const target = makeTarget(state, "streamed-hydration");
   await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
   const source = SessionManager.open(target, "/stored");
-  source.appendMessage(makeUserMessage("first complete message", 1));
   // Three-byte characters cross the transport's binary frame boundaries.
   const text = "漢".repeat(400_000);
-  source.appendMessage(makeUserMessage(text, 2));
-  source.appendMessage(makeUserMessage(text, 3));
-  source.appendMessage(makeUserMessage("last complete message", 4));
+  ["first complete message", text, text, "last complete message"].forEach((content, index) =>
+    source.appendMessage(makeUserMessage(content, index + 1)),
+  );
   await waitForSessionTranscriptProjection(target);
   return { target, entries: source.getPersistedEntries() };
 }
@@ -50,50 +62,45 @@ function holdFirstChunk() {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const run = historyLane.pool.run.bind(historyLane.pool);
-  let chunks = 0;
-  let splitUtf8 = false;
+  const observed = { chunks: 0, splitUtf8: false };
   const spy = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
     const receive = options.onRequest;
+    if (!receive) {
+      return run(input, options);
+    }
     return run(input, {
       ...options,
-      onRequest: receive
-        ? async (value, context) => {
-            if (
-              !isRecord(value) ||
-              value.kind !== "transcript-hydration-chunk" ||
-              !Array.isArray(value.frames)
-            ) {
-              return receive(value, context);
+      onRequest: async (value, context) => {
+        if (
+          !isRecord(value) ||
+          value.kind !== "transcript-hydration-chunk" ||
+          !Array.isArray(value.frames)
+        ) {
+          return receive(value, context);
+        }
+        observed.chunks++;
+        for (const frame of value.frames) {
+          if (isRecord(frame) && frame.data instanceof Uint8Array) {
+            try {
+              new TextDecoder("utf-8", { fatal: true }).decode(frame.data);
+            } catch {
+              observed.splitUtf8 = true;
             }
-            chunks++;
-            for (const frame of value.frames) {
-              if (isRecord(frame) && frame.data instanceof Uint8Array) {
-                try {
-                  new TextDecoder("utf-8", { fatal: true }).decode(frame.data);
-                } catch {
-                  splitUtf8 = true;
-                }
-              }
-            }
-            const response = await receive(value, context);
-            if (chunks === 1) {
-              entered.resolve();
-              await release.promise;
-            }
-            return response;
           }
-        : undefined,
+        }
+        const response = await receive(value, context);
+        if (observed.chunks === 1) {
+          entered.resolve();
+          await release.promise;
+        }
+        return response;
+      },
     });
   });
   return {
     release: () => release.resolve(),
     restore: () => spy.mockRestore(),
-    get chunks() {
-      return chunks;
-    },
-    get splitUtf8() {
-      return splitUtf8;
-    },
+    observed,
     wait: (pending: Promise<unknown>) =>
       Promise.race([
         entered.promise,
@@ -106,29 +113,19 @@ function holdFirstChunk() {
 
 it("rejects a persisted quarantine through the history worker without retargeting the manager", async () => {
   await withOpenClawTestState({ label: "session-hydration-stream-quarantine" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "quarantined-hydration",
-      sessionKey: "agent:main:quarantined-hydration",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
+    const target = makeTarget(state, "quarantined-hydration");
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     SessionManager.open(target).appendMessage(makeUserMessage("quarantined history", 1));
     await waitForSessionTranscriptProjection(target);
     await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
     const reason = "synthetic persisted hydration quarantine";
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        kind: "agent",
-        path: target.storePath,
-        env: state.env,
-        reason,
-      }),
-    ).toBe(true);
-    const manager = SessionManager.inMemory("/retained");
-    manager.appendMessage(makeUserMessage("keep the original view", 2));
-    const before = manager.getPersistedEntries();
-    const priorTarget = manager.getSessionTarget();
+    seedOpenClawDatabaseQuarantine({
+      kind: "agent",
+      path: target.storePath,
+      env: state.env,
+      reason,
+    });
+    const { manager, before } = retainedManager(2);
     // The closed database makes this a cold read, which runs on the target-discovery lane.
     const dispatch = vi.spyOn(targetDiscoveryLane.pool, "run");
     try {
@@ -143,10 +140,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
         ok: false,
         error: { kind: "read-error" },
       });
-      expect(manager.getPersistedEntries()).toEqual(before);
-      expect(manager.getSessionTarget()).toEqual(priorTarget);
-      expect(manager.getCwd()).toBe("/retained");
-      expect(manager.isPersisted()).toBe(false);
+      expect(managerView(manager)).toEqual(before);
       expect(targetDiscoveryLane.pool.getSnapshot()).toMatchObject({
         activeTasks: 0,
         pendingTasks: 0,
@@ -162,12 +156,8 @@ it.each(["UTF-16le", "UTF-16be"] as const)(
   "hydrates canonical %s transcripts with the same Unicode content as the synchronous reader",
   async (encoding) => {
     await withOpenClawTestState({ label: "session-hydration-stream-encoding" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "encoded-hydration",
-        sessionKey: "agent:main:encoded-hydration",
-        storePath: state.path("utf16-agent.sqlite"),
-      };
+      const target = makeTarget(state, "encoded-hydration");
+      target.storePath = state.path("utf16-agent.sqlite");
       const database = new DatabaseSync(target.storePath);
       try {
         database.exec(`PRAGMA encoding = '${encoding}'`);
@@ -197,12 +187,7 @@ it.each(["UTF-16le", "UTF-16be"] as const)(
 
 it("hydrates events below, on, and above byte-slice boundaries without dropping their successors", async () => {
   await withOpenClawTestState({ label: "session-hydration-stream-boundaries" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "boundary-hydration",
-      sessionKey: "agent:main:boundary-hydration",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
+    const target = makeTarget(state, "boundary-hydration");
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const entries = SessionManager.open(target).getPersistedEntries();
     let parentId: string | null = null;
@@ -249,8 +234,8 @@ it("hydrates one complete UTF-8 snapshot while a writer replaces rows between ch
       gate.release();
       const hydrated = await pending;
       expect(hydrated.getPersistedEntries()).toEqual(entries);
-      expect(gate.chunks).toBeGreaterThan(1);
-      expect(gate.splitUtf8).toBe(true);
+      expect(gate.observed.chunks).toBeGreaterThan(1);
+      expect(gate.observed.splitUtf8).toBe(true);
       expect((await SessionManager.openAsync(target)).getPersistedEntries()).toEqual(
         replacementEntries,
       );
@@ -283,9 +268,7 @@ it.each([
         .run(corrupt, Buffer.byteLength(corrupt), target.sessionId, target.sessionId);
       expect(() => SessionManager.open(target)).toThrow(SyntaxError);
     }
-    const manager = SessionManager.inMemory("/retained");
-    manager.appendMessage(makeUserMessage("keep the original view", 10));
-    const before = manager.getPersistedEntries();
+    const { manager, before } = retainedManager(10);
     const controller = new AbortController();
     const reason = new Error("cancelled streaming hydration");
     const gate = holdFirstChunk();
@@ -312,11 +295,9 @@ it.each([
           pendingTasks: 0,
         });
       } else {
-        expect(gate.chunks).toBeGreaterThan(1);
+        expect(gate.observed.chunks).toBeGreaterThan(1);
       }
-      expect(manager.getPersistedEntries()).toEqual(before);
-      expect(manager.getCwd()).toBe("/retained");
-      expect(manager.isPersisted()).toBe(false);
+      expect(managerView(manager)).toEqual(before);
       if (corrupt === undefined) {
         gate.release();
         await manager.setSessionTargetAsync(target);

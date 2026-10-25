@@ -81,13 +81,9 @@ function timedRun(
 }
 
 async function statusText(now: number, verboseEnabled = true) {
-  return (
-    buildSubagentsStatusLine({
-      context: await controlScope.buildControlledSubagentRunsReadContext("agent:main:main"),
-      verboseEnabled,
-      now,
-    }) ?? ""
-  );
+  const context = await controlScope.buildControlledSubagentRunsReadContext("agent:main:main");
+  using _ = vi.spyOn(Date, "now").mockReturnValueOnce(now);
+  return buildSubagentsStatusLine({ context, verboseEnabled }) ?? "";
 }
 
 async function runCommand(command: string, cfg = baseCommandTestConfig) {
@@ -204,7 +200,7 @@ describe("subagents command snapshots", () => {
     seedSubagentRunForReadTest(parent);
     seedSubagentRunForReadTest(child);
     const prepare = controlScope.buildControlledSubagentRunsReadContext;
-    const snapshot = vi
+    using _ = vi
       .spyOn(controlScope, "buildControlledSubagentRunsReadContext")
       .mockImplementation(async (...args) => {
         const context = await prepare(...args);
@@ -231,16 +227,12 @@ describe("subagents command snapshots", () => {
         });
         return context;
       });
-    try {
-      const text = requireReplyText((await runCommand("/subagents list"))?.reply);
-      expectText(
-        text,
-        ["active (waiting on 1 child)", "paired parent"],
-        ["changed after preparation"],
-      );
-    } finally {
-      snapshot.mockRestore();
-    }
+    const text = requireReplyText((await runCommand("/subagents list"))?.reply);
+    expectText(
+      text,
+      ["active (waiting on 1 child)", "paired parent"],
+      ["changed after preparation"],
+    );
   });
 
   it("captures controlled runs after lazy action loading", async () => {
@@ -263,7 +255,7 @@ describe("subagents command snapshots", () => {
     });
 
     const prepare = controlScope.buildControlledSubagentRunsReadContext;
-    const snapshot = vi
+    using _ = vi
       .spyOn(controlScope, "buildControlledSubagentRunsReadContext")
       .mockImplementationOnce(async (...args) => {
         await releaseSubagentRun(parentRunId);
@@ -281,12 +273,8 @@ describe("subagents command snapshots", () => {
         );
         return prepare(...args);
       });
-    try {
-      const text = requireReplyText((await runCommand("/agents"))?.reply);
-      expectText(text, ["(none)"], ["removed parent", "waiting on 1 child"]);
-    } finally {
-      snapshot.mockRestore();
-    }
+    const text = requireReplyText((await runCommand("/agents"))?.reply);
+    expectText(text, ["(none)"], ["removed parent", "waiting on 1 child"]);
   });
 });
 
@@ -450,7 +438,7 @@ describe("subagents info", () => {
       suspendedReason: "permanent_failure",
       lastError: "requester unavailable\ntry retained result",
     };
-    SubagentLifecycleController.discardTerminalDelivery(run, now, discardReason);
+    SubagentLifecycleController.discardTerminalDelivery(run, now);
     expect(run.delivery.lastError).toBeUndefined();
     const text = await inspectRun(run, undefined, run.runId);
     expectText(text, [

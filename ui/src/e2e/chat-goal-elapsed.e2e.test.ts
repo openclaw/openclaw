@@ -1,6 +1,7 @@
 // Real-browser proof of frozen goal timing on the chat composer.
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { createSessionGoalFixture } from "../../../src/gateway/session-goal.test-support.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -47,18 +48,13 @@ suite.define(() => {
                   kind: "direct",
                   displayName: "Deployment checks",
                   updatedAt: 61_000,
-                  goal: {
-                    schemaVersion: 1,
-                    id: "goal-timing",
-                    objective: "Verify the deployment",
+                  goal: createSessionGoalFixture("goal-timing", "Verify the deployment", {
                     status: "paused",
                     createdAt: 1_000,
                     updatedAt: 61_000,
                     pausedAt: 61_000,
-                    tokenStart: 0,
                     tokensUsed: 100,
-                    continuationTurns: 0,
-                  },
+                  }),
                 },
               ],
             },

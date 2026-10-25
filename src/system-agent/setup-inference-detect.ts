@@ -12,15 +12,10 @@ import {
   resolveConfiguredPrimaryModelForAgent,
   resolveConfiguredSetupModelForAgent,
 } from "../agents/utility-model.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderAuthChoicePlatformSupported } from "../plugins/provider-auth-choice-platform.js";
-import {
-  type ProviderAuthChoiceMetadata,
-  resolveManifestProviderAuthChoices,
-} from "../plugins/provider-auth-choices.js";
+import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import {
@@ -33,7 +28,6 @@ import {
   supportsSetupTextInference,
 } from "./setup-inference-auth-options.js";
 import {
-  type DetectSetupInferenceDeps,
   type SetupInferenceCandidate,
   type SetupInferenceDetection,
   invalidSetupConfigError,
@@ -54,53 +48,6 @@ function recommendSetupInferenceCandidate(
 ): SetupInferenceCandidate[] {
   const recommended = rankSetupInferenceCandidates(candidates)[0];
   return candidates.map((candidate) => ({ ...candidate, recommended: candidate === recommended }));
-}
-
-async function listSavedSetupInferenceCandidates(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  workspace: string;
-  choices: readonly ProviderAuthChoiceMetadata[];
-  deps: DetectSetupInferenceDeps;
-  signal: AbortSignal;
-}): Promise<SetupInferenceCandidate[]> {
-  const { withSetupProviderAuthMethod } = await import("./setup-provider-method.js");
-  const agentDir = resolveAgentDir(params.cfg, params.agentId);
-  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
-  const candidates: SetupInferenceCandidate[] = [];
-  for (const [profileId, credential] of Object.entries(store.profiles)) {
-    params.signal.throwIfAborted();
-    const saved = credential.setup;
-    const choice = findSetupCredentialChoice(params.choices, credential);
-    let modelRef = saved?.modelRef;
-    if (!modelRef && choice) {
-      const loaded = await withSetupProviderAuthMethod({ ...params, choice }, ({ method }) => ({
-        modelRef: method.starterModel,
-      }));
-      params.signal.throwIfAborted();
-      if (!("error" in loaded)) {
-        modelRef = loaded.modelRef;
-      }
-    }
-    if (!modelRef) {
-      continue;
-    }
-    candidates.push({
-      kind: toSavedAuthSetupKind(profileId),
-      ...(choice?.modelTarget ? { modelTarget: choice.modelTarget } : {}),
-      modelRef,
-      brandId: choice?.providerId ?? credential.provider,
-      label: `Saved ${choice?.choiceLabel ?? credential.provider} sign-in`,
-      detail: credential.setup?.replacement
-        ? "Saved but inactive. Test this sign-in again, then choose whether to activate it."
-        : "Verify this saved sign-in to use it. No new sign-in is needed.",
-      recommended: false,
-      credentials: true,
-      ...(choice?.icon ? { icon: choice.icon } : {}),
-      ...(choice?.website ? { website: choice.website } : {}),
-    });
-  }
-  return candidates;
 }
 
 function resolveConfiguredCandidateKind(
@@ -132,7 +79,7 @@ function resolveConfiguredCandidateKind(
   return undefined;
 }
 
-async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agentId?: string) {
+async function prepareSetupInferenceOptions(agentId?: string) {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
   const { snapshot, pluginMetadataSnapshot } = await readConfigFileSnapshotWithPluginMetadata();
   if (snapshot.exists && !snapshot.valid) {
@@ -141,9 +88,7 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
   const targetAgentId = resolveAmbientOwnerAgentId(cfg, agentId);
   const workspace = resolveSetupInferenceWorkspace(snapshot);
-  const allAuthChoices = (
-    deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
-  )({
+  const allAuthChoices = resolveManifestProviderAuthChoices({
     config: cfg,
     workspaceDir: workspace,
     metadataSnapshot: pluginMetadataSnapshot,
@@ -165,7 +110,7 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
     }
   }
   const authChoices = supportedAuthChoices.filter(
-    (choice) => (deps.enablePluginInConfig ?? enablePluginInConfig)(cfg, choice.pluginId).enabled,
+    (choice) => enablePluginInConfig(cfg, choice.pluginId).enabled,
   );
   const disabledAuthChoices = supportedAuthChoices.filter(
     (choice) => !authChoices.includes(choice),
@@ -249,7 +194,6 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
 
 /** Manual setup options use only config and manifests, never machine or credential probes. */
 export async function listManualSetupInferenceOptions(
-  deps: DetectSetupInferenceDeps = {},
   agentId?: string,
 ): Promise<
   Pick<
@@ -263,14 +207,11 @@ export async function listManualSetupInferenceOptions(
     | "utilityModel"
   >
 > {
-  return (await prepareSetupInferenceOptions(deps, agentId)).manual;
+  return (await prepareSetupInferenceOptions(agentId)).manual;
 }
 
-export async function detectSetupInference(
-  deps: DetectSetupInferenceDeps = {},
-  agentId?: string,
-): Promise<SetupInferenceDetection> {
-  const prepared = await prepareSetupInferenceOptions(deps, agentId);
+export async function detectSetupInference(agentId?: string): Promise<SetupInferenceDetection> {
+  const prepared = await prepareSetupInferenceOptions(agentId);
   let partial: SetupInferenceDetection = {
     ...prepared.manual,
     candidates: [],
@@ -283,10 +224,226 @@ export async function detectSetupInference(
   const timeoutMs = 30_000;
   return await raceWithTimeout(
     () =>
-      discoverSetupInference(prepared, deps, controller.signal, (detection) => {
-        partial = detection;
-        deps.onPartial?.(detection);
-      }).catch((error: unknown) => {
+      (async (): Promise<SetupInferenceDetection> => {
+        const {
+          cfg,
+          targetAgentId,
+          authChoices,
+          detectionRequiredProviders,
+          manual,
+          pluginMetadataSnapshot,
+        } = prepared;
+        const signal = controller.signal;
+        const { workspace } = manual;
+        const requiresDetection = (candidate: Pick<SetupInferenceCandidate, "modelRef">) => {
+          const ref = parseProviderModelRef(candidate.modelRef);
+          return ref !== null && detectionRequiredProviders.has(normalizeProviderId(ref.provider));
+        };
+        // Provider services, saved sign-ins, and CLI version probes are independent.
+        // Overlap them so cold detection waits for the slowest probe instead of their sum.
+        const appGuided = (async (): Promise<SetupInferenceCandidate[]> => {
+          const metadataSnapshot = pluginMetadataSnapshot;
+          const discoveryChoices = authChoices.filter(
+            (choice) =>
+              choice.appGuidedDiscovery === true &&
+              supportsSetupTextInference(choice.onboardingScopes),
+          );
+          if (discoveryChoices.length === 0) {
+            return [];
+          }
+          const { probeSetupProviderChoices } =
+            await import("../plugins/provider-setup-availability.js");
+          const discovered = await probeSetupProviderChoices(
+            {
+              config: cfg,
+              workspaceDir: workspace,
+              choices: discoveryChoices,
+              metadataSnapshot,
+              signal,
+            },
+            async (choice, provider, context): Promise<SetupInferenceCandidate | null> => {
+              const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
+              if (!method?.appGuidedSetup) {
+                return null;
+              }
+              try {
+                const candidate = await method.appGuidedSetup.detect({ ...context, signal });
+                signal.throwIfAborted();
+                if (!candidate) {
+                  return null;
+                }
+                const ref = parseProviderModelRef(candidate.modelRef);
+                if (
+                  !ref ||
+                  normalizeProviderId(ref.provider) !== normalizeProviderId(choice.providerId)
+                ) {
+                  setupInferenceLog.warn(
+                    `Ignoring invalid app-guided model ${candidate.modelRef} from ${choice.choiceId}.`,
+                  );
+                  return null;
+                }
+                return Object.assign(
+                  {
+                    kind: toProviderAutoSetupKind(choice.choiceId),
+                    brandId: choice.providerId,
+                    label: choice.choiceLabel,
+                    detail: candidate.detail?.trim() || "available locally",
+                    modelRef: candidate.modelRef,
+                    ...(choice.modelTarget ? { modelTarget: choice.modelTarget } : {}),
+                    recommended: false as const,
+                    credentials: true,
+                  },
+                  choice.icon ? { icon: choice.icon } : {},
+                  choice.website ? { website: choice.website } : {},
+                );
+              } catch (error) {
+                setupInferenceLog.debug(
+                  `App-guided discovery failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
+                );
+                return null;
+              }
+            },
+          );
+          return discovered.filter((candidate) => candidate !== null);
+        })();
+        const initialDetection: SetupInferenceDetection = {
+          ...manual,
+          candidates: [],
+          unavailableCandidates: [],
+          recommendedInstalls: listRecommendedToolInstalls(),
+        };
+        const local = Promise.all([
+          (async (): Promise<SetupInferenceCandidate[]> => {
+            const params = {
+              cfg,
+              agentId: targetAgentId,
+              workspace,
+              choices: authChoices,
+              signal,
+            };
+            const { withSetupProviderAuthMethod } = await import("./setup-provider-method.js");
+            const agentDir = resolveAgentDir(params.cfg, params.agentId);
+            const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
+            const candidates: SetupInferenceCandidate[] = [];
+            for (const [profileId, credential] of Object.entries(store.profiles)) {
+              params.signal.throwIfAborted();
+              const saved = credential.setup;
+              const choice = findSetupCredentialChoice(params.choices, credential);
+              let modelRef = saved?.modelRef;
+              if (!modelRef && choice) {
+                const loaded = await withSetupProviderAuthMethod(
+                  { ...params, choice },
+                  ({ method }) => ({
+                    modelRef: method.starterModel,
+                  }),
+                );
+                params.signal.throwIfAborted();
+                if (!("error" in loaded)) {
+                  modelRef = loaded.modelRef;
+                }
+              }
+              if (!modelRef) {
+                continue;
+              }
+              candidates.push({
+                kind: toSavedAuthSetupKind(profileId),
+                ...(choice?.modelTarget ? { modelTarget: choice.modelTarget } : {}),
+                modelRef,
+                brandId: choice?.providerId ?? credential.provider,
+                label: `Saved ${choice?.choiceLabel ?? credential.provider} sign-in`,
+                detail: credential.setup?.replacement
+                  ? "Saved but inactive. Test this sign-in again, then choose whether to activate it."
+                  : "Verify this saved sign-in to use it. No new sign-in is needed.",
+                recommended: false,
+                credentials: true,
+                ...(choice?.icon ? { icon: choice.icon } : {}),
+                ...(choice?.website ? { website: choice.website } : {}),
+              });
+            }
+            return candidates;
+          })().then((saved) => {
+            signal.throwIfAborted();
+            partial = {
+              ...initialDetection,
+              candidates: recommendSetupInferenceCandidate(
+                saved.filter((candidate) => !requiresDetection(candidate)),
+              ),
+            };
+            return saved;
+          }),
+          (async () => {
+            const { detectInferenceBackends } = await import("../commands/onboard-inference.js");
+            return await detectInferenceBackends({ config: cfg, agentId: targetAgentId });
+          })(),
+        ]);
+        // Wait for local probes, but fail as soon as provider discovery fails.
+        const [savedCandidates, detected] = await Promise.race([
+          local,
+          appGuided.then(() => local),
+        ]);
+        signal.throwIfAborted();
+        const configuredModel = detected.find(
+          (candidate) => candidate.kind === "existing-model",
+        )?.modelRef;
+        const configuredCandidateKind = resolveConfiguredCandidateKind(
+          cfg,
+          configuredModel,
+          targetAgentId,
+        );
+        const raw = detected.filter(
+          (candidate) =>
+            candidate.kind !== "gemini-cli" &&
+            !(
+              candidate.kind === configuredCandidateKind &&
+              configuredModel &&
+              areRuntimeModelRefsEquivalent(candidate.modelRef, configuredModel, { config: cfg })
+            ),
+        );
+        const candidates: SetupInferenceCandidate[] = raw.map((candidate) =>
+          Object.assign(
+            candidate,
+            { recommended: false as const },
+            resolveCandidatePresentation(candidate, authChoices),
+          ),
+        );
+        candidates.push(...savedCandidates);
+        if (!configuredModel && manual.setupModel) {
+          candidates.push({
+            kind: "existing-model",
+            modelTarget: "utility",
+            modelRef: manual.setupModel,
+            label: "Configured setup utility",
+            detail: `${manual.setupModel} — regular agent model still needed`,
+            recommended: false,
+            credentials: true,
+          });
+        }
+        const pendingCandidates = candidates.filter(requiresDetection);
+        const offeredCandidates = candidates.filter((candidate) => !requiresDetection(candidate));
+        partial = {
+          ...initialDetection,
+          candidates: recommendSetupInferenceCandidate(offeredCandidates),
+          ...(configuredModel ? { configuredModel } : {}),
+          setupComplete: Boolean(configuredModel),
+        };
+        const available = await appGuided;
+        offeredCandidates.push(
+          ...pendingCandidates.filter((candidate) =>
+            available.some((discoveredCandidate) =>
+              areRuntimeModelRefsEquivalent(candidate.modelRef, discoveredCandidate.modelRef, {
+                config: cfg,
+              }),
+            ),
+          ),
+          ...available,
+        );
+        return {
+          ...initialDetection,
+          candidates: recommendSetupInferenceCandidate(offeredCandidates),
+          ...(configuredModel ? { configuredModel } : {}),
+          setupComplete: Boolean(configuredModel),
+        };
+      })().catch((error: unknown) => {
         // Probes run concurrently; one failure ends the detection, so stop its siblings.
         controller.abort(error);
         throw toErrorObject(error, "Setup inference discovery failed");
@@ -300,205 +457,4 @@ export async function detectSetupInference(
       return partial;
     },
   );
-}
-
-async function discoverSetupInference(
-  {
-    cfg,
-    targetAgentId,
-    authChoices,
-    detectionRequiredProviders,
-    manual,
-    pluginMetadataSnapshot,
-  }: Awaited<ReturnType<typeof prepareSetupInferenceOptions>>,
-  deps: DetectSetupInferenceDeps,
-  signal: AbortSignal,
-  onPartial: (detection: SetupInferenceDetection) => void,
-): Promise<SetupInferenceDetection> {
-  const { workspace } = manual;
-  const requiresDetection = (candidate: Pick<SetupInferenceCandidate, "modelRef">) => {
-    const ref = parseProviderModelRef(candidate.modelRef);
-    return ref !== null && detectionRequiredProviders.has(normalizeProviderId(ref.provider));
-  };
-  // Provider services, saved sign-ins, and CLI version probes are independent.
-  // Overlap them so cold detection waits for the slowest probe instead of their sum.
-  const appGuided = discoverAppGuidedCandidates({
-    cfg,
-    workspace,
-    authChoices,
-    metadataSnapshot: pluginMetadataSnapshot,
-    deps,
-    signal,
-  });
-  const partial: SetupInferenceDetection = {
-    ...manual,
-    candidates: [],
-    unavailableCandidates: [],
-    recommendedInstalls: listRecommendedToolInstalls(),
-  };
-  const local = Promise.all([
-    listSavedSetupInferenceCandidates({
-      cfg,
-      agentId: targetAgentId,
-      workspace,
-      choices: authChoices,
-      deps,
-      signal,
-    }).then((saved) => {
-      signal.throwIfAborted();
-      onPartial({
-        ...partial,
-        candidates: recommendSetupInferenceCandidate(
-          saved.filter((candidate) => !requiresDetection(candidate)),
-        ),
-      });
-      return saved;
-    }),
-    (async () => {
-      const detect =
-        deps.detectInferenceBackends ??
-        (await import("../commands/onboard-inference.js")).detectInferenceBackends;
-      return await detect({ config: cfg, agentId: targetAgentId });
-    })(),
-  ]);
-  // Wait for local probes, but fail as soon as provider discovery fails.
-  const [savedCandidates, detected] = await Promise.race([local, appGuided.then(() => local)]);
-  signal.throwIfAborted();
-  const configuredModel = detected.find(
-    (candidate) => candidate.kind === "existing-model",
-  )?.modelRef;
-  const configuredCandidateKind = resolveConfiguredCandidateKind(
-    cfg,
-    configuredModel,
-    targetAgentId,
-  );
-  const raw = detected.filter(
-    (candidate) =>
-      candidate.kind !== "gemini-cli" &&
-      !(
-        candidate.kind === configuredCandidateKind &&
-        configuredModel &&
-        areRuntimeModelRefsEquivalent(candidate.modelRef, configuredModel, { config: cfg })
-      ),
-  );
-  const candidates: SetupInferenceCandidate[] = raw.map((candidate) =>
-    Object.assign(
-      candidate,
-      { recommended: false as const },
-      resolveCandidatePresentation(candidate, authChoices),
-    ),
-  );
-  candidates.push(...savedCandidates);
-  if (!configuredModel && manual.setupModel) {
-    candidates.push({
-      kind: "existing-model",
-      modelTarget: "utility",
-      modelRef: manual.setupModel,
-      label: "Configured setup utility",
-      detail: `${manual.setupModel} — regular agent model still needed`,
-      recommended: false,
-      credentials: true,
-    });
-  }
-  const pendingCandidates = candidates.filter(requiresDetection);
-  const offeredCandidates = candidates.filter((candidate) => !requiresDetection(candidate));
-  onPartial({
-    ...partial,
-    candidates: recommendSetupInferenceCandidate(offeredCandidates),
-    ...(configuredModel ? { configuredModel } : {}),
-    setupComplete: Boolean(configuredModel),
-  });
-  const available = await appGuided;
-  offeredCandidates.push(
-    ...pendingCandidates.filter((candidate) =>
-      available.some((discoveredCandidate) =>
-        areRuntimeModelRefsEquivalent(candidate.modelRef, discoveredCandidate.modelRef, {
-          config: cfg,
-        }),
-      ),
-    ),
-    ...available,
-  );
-  return {
-    ...partial,
-    candidates: recommendSetupInferenceCandidate(offeredCandidates),
-    ...(configuredModel ? { configuredModel } : {}),
-    setupComplete: Boolean(configuredModel),
-  };
-}
-
-async function discoverAppGuidedCandidates({
-  cfg,
-  workspace,
-  authChoices,
-  metadataSnapshot,
-  deps,
-  signal,
-}: {
-  cfg: OpenClawConfig;
-  workspace: string;
-  authChoices: readonly ProviderAuthChoiceMetadata[];
-  metadataSnapshot?: PluginMetadataSnapshot;
-  deps: DetectSetupInferenceDeps;
-  signal: AbortSignal;
-}): Promise<SetupInferenceCandidate[]> {
-  const discoveryChoices = authChoices.filter(
-    (choice) =>
-      choice.appGuidedDiscovery === true && supportsSetupTextInference(choice.onboardingScopes),
-  );
-  if (discoveryChoices.length === 0) {
-    return [];
-  }
-  const { probeSetupProviderChoices } = await import("../plugins/provider-setup-availability.js");
-  const discovered = await probeSetupProviderChoices(
-    {
-      config: cfg,
-      workspaceDir: workspace,
-      choices: discoveryChoices,
-      metadataSnapshot,
-      signal,
-      enablePluginInConfig: deps.enablePluginInConfig,
-      resolvePluginProviders: deps.resolvePluginProviders,
-    },
-    async (choice, provider, context): Promise<SetupInferenceCandidate | null> => {
-      const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
-      if (!method?.appGuidedSetup) {
-        return null;
-      }
-      try {
-        const candidate = await method.appGuidedSetup.detect({ ...context, signal });
-        signal.throwIfAborted();
-        if (!candidate) {
-          return null;
-        }
-        const ref = parseProviderModelRef(candidate.modelRef);
-        if (!ref || normalizeProviderId(ref.provider) !== normalizeProviderId(choice.providerId)) {
-          setupInferenceLog.warn(
-            `Ignoring invalid app-guided model ${candidate.modelRef} from ${choice.choiceId}.`,
-          );
-          return null;
-        }
-        return Object.assign(
-          {
-            kind: toProviderAutoSetupKind(choice.choiceId),
-            brandId: choice.providerId,
-            label: choice.choiceLabel,
-            detail: candidate.detail?.trim() || "available locally",
-            modelRef: candidate.modelRef,
-            ...(choice.modelTarget ? { modelTarget: choice.modelTarget } : {}),
-            recommended: false as const,
-            credentials: true,
-          },
-          choice.icon ? { icon: choice.icon } : {},
-          choice.website ? { website: choice.website } : {},
-        );
-      } catch (error) {
-        setupInferenceLog.debug(
-          `App-guided discovery failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
-        );
-        return null;
-      }
-    },
-  );
-  return discovered.filter((candidate) => candidate !== null);
 }

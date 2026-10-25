@@ -11,21 +11,13 @@ import { runUpdateFinalizationDoctorInFreshProcess } from "./update-command-fres
 
 const custody = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.doctorCustody);
 const lifetime = createFixtureLifetime();
-afterEach(async () => {
-  try {
-    await lifetime.cleanup();
-  } finally {
-    vi.restoreAllMocks();
-  }
-});
+afterEach(() => lifetime.cleanup().finally(() => vi.restoreAllMocks()));
 
 it(
   "times out a stuck post-activation Doctor and settles its worker tree without an operator timeout",
-  {
-    timeout: 15_000,
-  },
-  async ({ signal }) => {
-    await lifetime.run(() =>
+  { timeout: 15_000 },
+  ({ signal }) =>
+    lifetime.run(() =>
       withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const entryPath = state.path("doctor.mjs");
         const pidsPath = state.path("doctor-pids.json");
@@ -72,29 +64,28 @@ setInterval(() => {}, 1000);
             expect.objectContaining({ name: "doctor process settlement", exitCode: 1 }),
           );
         } else {
-          const warning = await work;
-          expect(warning).toMatchObject({
+          await expect(work).resolves.toMatchObject({
             reason: "doctor-advisory",
             message: expect.stringContaining("exit 124"),
             guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
           });
-          expect(steps).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                name: "post-plugin doctor",
-                exitCode: 124,
-                advisory: { kind: "recoverable-maintenance", message: expect.any(String) },
-              }),
-              expect.objectContaining({
-                name: "doctor process settlement",
-                exitCode: 0,
-                advisory: {
-                  kind: "recoverable-maintenance",
-                  message: expect.stringContaining("Preserving migrated state"),
-                },
-              }),
-            ]),
-          );
+          for (const step of [
+            {
+              name: "post-plugin doctor",
+              exitCode: 124,
+              advisory: { kind: "recoverable-maintenance", message: expect.any(String) },
+            },
+            {
+              name: "doctor process settlement",
+              exitCode: 0,
+              advisory: {
+                kind: "recoverable-maintenance",
+                message: expect.stringContaining("Preserving migrated state"),
+              },
+            },
+          ]) {
+            expect(steps).toContainEqual(expect.objectContaining(step));
+          }
         }
         const pids: number[] = JSON.parse(fs.readFileSync(pidsPath, "utf8"));
         expect(pids).toHaveLength(2);
@@ -102,6 +93,5 @@ setInterval(() => {}, 1000);
           expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
         }
       }),
-    );
-  },
+    ),
 );

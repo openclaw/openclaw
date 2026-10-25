@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { resolveRestartRecoveryTerminalDeliveryDisposition } from "./restart-recovery-receipt-state.js";
 import { normalizeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 import type { SessionActorAuthority, SessionActorOutcome } from "./session-actor-contract.js";
@@ -23,6 +23,9 @@ export function resolveRestartRecoverySteeringBlockReason(
   entry: SessionEntry | null | undefined,
   sessionId: string,
   sourceTurnId: string,
+  admittedClaim?: Readonly<
+    Pick<SessionEntry, "restartRecoveryDeliveryRunId" | "restartRecoveryDeliverySourceRunId">
+  >,
 ):
   | "terminal-pending"
   | "delivered-terminal"
@@ -41,11 +44,34 @@ export function resolveRestartRecoverySteeringBlockReason(
   if (entry.restartRecoveryDeliveryToolCallId) {
     return "unresolved-terminal-tool";
   }
-  const normalizedSourceTurnId = normalizeOptionalString(sourceTurnId) ?? "";
+  const activeSourceTurnId = normalizeOptionalString(sourceTurnId) ?? "";
+  // The claim's own delivery run, such as a restart resend, continues the claim's source turn.
+  const normalizedSourceTurnId =
+    activeSourceTurnId && activeSourceTurnId === entry.restartRecoveryDeliveryRunId
+      ? (normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ?? activeSourceTurnId)
+      : activeSourceTurnId;
   const disposition = resolveRestartRecoveryTerminalDeliveryDisposition(entry, {
     sessionId,
     sourceTurnId: normalizedSourceTurnId,
   });
+  // A later execution may coexist with an unresolved predecessor. Joining that
+  // exact execution cannot consume or replace the predecessor's delivery claim.
+  // Compare the admission-time tuple so a successor rebind still fails closed.
+  const retainedSource =
+    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ??
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId);
+  if (
+    disposition === "stale" &&
+    entry.sessionId === sessionId &&
+    normalizedSourceTurnId &&
+    retainedSource &&
+    retainedSource !== normalizedSourceTurnId &&
+    admittedClaim &&
+    admittedClaim.restartRecoveryDeliveryRunId === entry.restartRecoveryDeliveryRunId &&
+    admittedClaim.restartRecoveryDeliverySourceRunId === entry.restartRecoveryDeliverySourceRunId
+  ) {
+    return undefined;
+  }
   if (disposition === "not-applicable") {
     // Without a known active source, any retained tombstone could belong to it.
     if (
@@ -125,9 +151,10 @@ function terminalValue<Value>(outcome: SessionActorOutcome<Value>): Value | unde
   if (outcome.kind === "rolled-back" && outcome.reason === "stale-state") {
     return undefined;
   }
-  throw new SqliteWorkerError(
+  throw wrapSqliteWorkerError(
     outcome.error.message,
     outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+    outcome.error,
   );
 }
 

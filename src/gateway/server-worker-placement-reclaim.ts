@@ -7,11 +7,11 @@ import { captureSessionEntryMetadataRead } from "../config/sessions/session-entr
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import {
-  closeSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-  startSessionWorkAdmissionInterruption,
-} from "../sessions/session-lifecycle-admission.js";
+  closeSessionControllerAdmission,
+  runSessionMutation,
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import {
@@ -55,19 +55,16 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         ),
       [{ sessionKey, agentId, preserveQualifiedAddress: true }],
     );
+    const lifetime = new DisposableStack();
     let retained: ReturnType<typeof retainPreparedSessionGenerationFacts> | undefined;
-    let active = true;
     let unregister = () => {};
-    const release = () => {
-      if (!active) {
-        return;
-      }
-      active = false;
+    lifetime.defer(() => {
       retained?.release();
       unregister();
-    };
+    });
+    const release = () => lifetime.dispose();
     const assertActive = () => {
-      if (!active) {
+      if (lifetime.disposed) {
         throw new WorkerDispatchTargetChangedError(
           `Session ${sessionKey} changed before cloud worker stop. Retry.`,
         );
@@ -135,7 +132,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         interruptionStarted = true;
         try {
           assertCurrent();
-          released = startSessionWorkAdmissionInterruption({
+          released = startSessionControllerInterruption({
             reason,
             scope: target.storePath,
             identities: lifecycleIdentities,
@@ -183,7 +180,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         assertCurrent();
         await withTimeout(
           released!,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
           "session work admission drain",
         );
       } catch (error) {
@@ -193,7 +190,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         throw error;
       }
       await params.placements.waitForTurnClaimRelease(sessionId, {
-        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        timeoutMs: SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
       });
       await runExclusiveSessionStoreWrite(target.storePath, async () => {}, { reentrant: true });
     };
@@ -270,7 +267,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     }
     // This lease blocks ingress without a mutex: predecessors must still be able to
     // settle their lifecycle work before Stop enters session cleanup.
-    const release = closeSessionWorkAdmissions({
+    const release = closeSessionControllerAdmission({
       scope: target.storePath,
       identities: lifecycleIdentities,
       reason: createAgentRunDirectAbortError(),
@@ -340,7 +337,8 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     let assertBindingCurrent: (() => void) | undefined;
     let preparedTarget: Awaited<ReturnType<typeof resolveReclaimTarget>> | undefined;
     try {
-      return await runExclusiveSessionLifecycleMutation("placement-reclaim", {
+      return await runSessionMutation({
+        diagnosticLabel: "placement-reclaim",
         scope: target.storePath,
         identities: lifecycleIdentities,
         prepare: async (lifecycle) => {
@@ -421,7 +419,8 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         // fence before provider cleanup or the failed-to-local transition becomes durable.
         authorize?.();
       };
-      return await runExclusiveSessionLifecycleMutation("placement-failed-reclaim", {
+      return await runSessionMutation({
+        diagnosticLabel: "placement-failed-reclaim",
         scope: target.storePath,
         identities: lifecycleIdentities,
         prepare: async (lifecycle) => {

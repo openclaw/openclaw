@@ -17,135 +17,79 @@ export type AttachmentBrowserFixture = {
   webChrome?: boolean;
 };
 
-// These are emulated identity hints, not native-browser/picker certification.
-export const attachmentBrowserFixtures: AttachmentBrowserFixture[] = [
-  {
-    name: "iPhone Safari",
-    userAgent: `${iphone} ${webkit} ${safari}`,
-    platform: "iPhone",
-    touch: 5,
-    single: true,
-  },
-  {
-    name: "iPad desktop Safari",
-    userAgent: `${mac} ${webkit} Version/18.0 Safari/605.1.15`,
-    platform: "MacIntel",
-    touch: 5,
-    single: true,
-  },
-  {
-    name: "Android Chrome",
-    nativeCapture: true,
-    userAgent: `${android} Chrome/153.0.0.0 Mobile Safari/537.36`,
-    platform: "Linux armv8l",
-    touch: 5,
-  },
-  {
-    name: "Android Edge",
-    nativeCapture: true,
-    userAgent: `${android} Chrome/153.0.0.0 Mobile Safari/537.36 EdgA/153.0.0.0`,
-    platform: "Linux armv8l",
-    touch: 5,
-  },
-  {
-    name: "Android Firefox",
-    nativeCapture: true,
-    userAgent: "Mozilla/5.0 (Android 14; Mobile; rv:156.0) Gecko/156.0 Firefox/156.0",
-    platform: "Linux armv8l",
-    touch: 5,
-  },
-  {
-    name: "Android Samsung",
-    nativeCapture: true,
-    userAgent: `${android} SamsungBrowser/29.0 Chrome/136.0.0.0 Mobile Safari/537.36`,
-    platform: "Linux armv8l",
-    touch: 5,
-  },
-  {
-    name: "Android WebView",
-    userAgent: `${android.replace("Pixel 8)", "Pixel 8; wv)")} Version/4.0 Chrome/153.0.0.0 Mobile Safari/537.36`,
-    platform: "Linux armv8l",
-    touch: 5,
-  },
-  {
-    name: "Android unknown app",
-    userAgent: `${android} Chrome/153.0.0.0 Mobile Safari/537.36 UnknownApp/1.0`,
-    platform: "Linux armv8l",
-    touch: 5,
-  },
-  {
-    name: "Android web chrome",
-    userAgent: `${android} Chrome/153.0.0.0 Mobile Safari/537.36`,
-    platform: "Linux armv8l",
-    touch: 5,
-    webChrome: true,
-  },
-  {
-    name: "macOS Safari",
-    userAgent: `${mac} ${webkit} Version/18.0 Safari/605.1.15`,
-    platform: "MacIntel",
-    touch: 0,
-  },
-  {
-    name: "Windows touch Chrome",
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
-    platform: "Win32",
-    touch: 10,
-  },
-  { name: "unknown", userAgent: "UnknownBrowser/1.0", platform: "", touch: 0 },
-  {
-    name: "iOS unknown engine",
-    userAgent: `${iphone} Gecko/156.0 Firefox/156.0`,
-    platform: "iPhone",
-    touch: 5,
-  },
-  {
-    name: "iOS in-app",
-    userAgent: `${iphone} ${webkit} Mobile/15E148`,
-    platform: "iPhone",
-    touch: 5,
-  },
-  {
-    name: "iOS Chrome",
-    userAgent: `${iphone} ${webkit} CriOS/153.0.0.0 Mobile/15E148 Safari/604.1`,
-    platform: "iPhone",
-    touch: 5,
-  },
-  {
-    name: "iOS Firefox",
-    userAgent: `${iphone} ${webkit} FxiOS/156.0 Mobile/15E148 Safari/605.1.15`,
-    platform: "iPhone",
-    touch: 5,
-  },
-  {
-    name: "iOS unknown app",
-    userAgent: `${iphone} ${webkit} ${safari} UnknownApp/1.0`,
-    platform: "iPhone",
-    touch: 5,
-  },
-  {
-    name: "iOS native",
-    userAgent: `${iphone} ${webkit} ${safari}`,
-    platform: "iPhone",
-    touch: 5,
-    embed: "ios",
-  },
-  {
-    name: "Android native",
-    userAgent: `${android} Chrome/153.0.0.0 Mobile Safari/537.36`,
-    platform: "Linux armv8l",
-    touch: 5,
-    embed: "android",
-  },
-  {
-    name: "iOS web chrome",
-    userAgent: `${iphone} ${webkit} ${safari}`,
-    platform: "iPhone",
-    touch: 5,
-    webChrome: true,
-  },
+const iosSafari = `${iphone} ${webkit} ${safari}`;
+const androidChrome = `${android} Chrome/153.0.0.0 Mobile Safari/537.36`;
+const macSafari = `${mac} ${webkit} Version/18.0 Safari/605.1.15`;
+function browser(
+  name: string,
+  userAgent: string,
+  platform: string,
+  options: Partial<AttachmentBrowserFixture> = {},
+): AttachmentBrowserFixture {
+  return { name, userAgent, platform, touch: 5, ...options };
+}
+const iosBrowser = (name: string, ua: string, options: Partial<AttachmentBrowserFixture> = {}) =>
+  browser(name, ua, "iPhone", options);
+const androidBrowser = (
+  name: string,
+  ua: string,
+  options: Partial<AttachmentBrowserFixture> = {},
+) => browser(name, ua, "Linux armv8l", options);
+
+// Emulated identity hints, not native-browser/picker certification.
+const attachmentBrowserFixtures: AttachmentBrowserFixture[] = [
+  iosBrowser("iPhone Safari", iosSafari, { single: true }),
+  browser("iPad desktop Safari", macSafari, "MacIntel", { single: true }),
+  androidBrowser("Android Chrome", androidChrome, { nativeCapture: true }),
+  androidBrowser("Android Edge", `${androidChrome} EdgA/153.0.0.0`, { nativeCapture: true }),
+  androidBrowser(
+    "Android Firefox",
+    "Mozilla/5.0 (Android 14; Mobile; rv:156.0) Gecko/156.0 Firefox/156.0",
+    { nativeCapture: true },
+  ),
+  androidBrowser(
+    "Android Samsung",
+    `${android} SamsungBrowser/29.0 Chrome/136.0.0.0 Mobile Safari/537.36`,
+    { nativeCapture: true },
+  ),
+  androidBrowser(
+    "Android WebView",
+    `${android.replace("Pixel 8)", "Pixel 8; wv)")} Version/4.0 Chrome/153.0.0.0 Mobile Safari/537.36`,
+  ),
+  androidBrowser("Android unknown app", `${androidChrome} UnknownApp/1.0`),
+  androidBrowser("Android web chrome", androidChrome, { webChrome: true }),
+  browser("macOS Safari", macSafari, "MacIntel", { touch: 0 }),
+  browser("unknown", "UnknownBrowser/1.0", "", { touch: 0 }),
+  iosBrowser("iOS unknown engine", `${iphone} Gecko/156.0 Firefox/156.0`),
+  iosBrowser("iOS in-app", `${iphone} ${webkit} Mobile/15E148`),
+  iosBrowser("iOS Chrome", `${iphone} ${webkit} CriOS/153.0.0.0 Mobile/15E148 Safari/604.1`),
+  iosBrowser("iOS native", iosSafari, { embed: "ios" }),
+  androidBrowser("Android native", androidChrome, { embed: "android" }),
+  iosBrowser("iOS web chrome", iosSafari, { webChrome: true }),
 ];
+
+export function attachmentImage(name: string) {
+  return {
+    name,
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  };
+}
+
+export function attachmentBrowser(name: string) {
+  const fixture = attachmentBrowserFixtures.find((candidate) => candidate.name === name);
+  if (!fixture) {
+    throw new Error(`Missing attachment fixture: ${name}`);
+  }
+  return fixture;
+}
+
+export function attachmentOption(page: Page, kind: string) {
+  return page.locator(`.agent-chat__attach-menu-option[data-value="${kind}"]`);
+}
 
 export async function installAttachmentBrowserIdentity(
   page: Page,

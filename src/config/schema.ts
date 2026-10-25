@@ -1,7 +1,4 @@
 import crypto from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { CHANNEL_IDS } from "../channels/ids.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type {
   PluginConfigUiHint,
@@ -9,7 +6,7 @@ import type {
 } from "../plugins/manifest-types.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import { computeBaseConfigSchemaResponse } from "./schema-base.js";
+import { computeBaseConfigSchemaResponse, computeBaseConfigUiHints } from "./schema-base.js";
 import { applySharedChannelFieldHelp } from "./schema.channel-field-help.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 import { applySensitiveHints, applySensitiveUrlHints } from "./schema.hints.js";
@@ -278,27 +275,7 @@ function applyMetadataHints(
     mergeRelativeHints(basePath, channel.configUiHints);
   }
 
-  const channelList = listHeartbeatTargetChannels(channels);
-  const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
-  const help = `Delivery target ("owner", "last", "none", or a channel id).${channelHelp}`;
-  const paths = ["agents.defaults.heartbeat.target", "agents.entries.*.heartbeat.target"];
-  for (const path of paths) {
-    const current = next[path] ?? {};
-    next[path] = {
-      ...current,
-      help: current.help ?? help,
-      placeholder: current.placeholder ?? "owner",
-    };
-  }
   return next;
-}
-
-function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
-  return uniqueStrings(
-    [...CHANNEL_IDS, ...channels.map((channel) => channel.id)]
-      .map(normalizeLowercaseStringOrEmpty)
-      .filter(Boolean),
-  );
 }
 
 /** Mutate a caller-owned schema; cached inputs must be cloned before merging. */
@@ -329,12 +306,12 @@ function mergeExtensionSchemas(
         continue;
       }
       for (const models of modelMaps) {
-        const modelEntry = asSchemaObject(models.additionalProperties);
+        const modelEntry = structuredClone(asSchemaObject(models.additionalProperties));
         models.patternProperties ??= {};
         models.patternProperties[`^${escapeRegExp(provider)}/.+$`] = {
-          ...structuredClone(modelEntry),
+          ...modelEntry,
           properties: {
-            ...structuredClone(modelEntry?.properties),
+            ...modelEntry?.properties,
             params: structuredClone(policy.modelParamsSchema),
           },
         };
@@ -499,6 +476,28 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   return next;
 }
 
+function mergeConfigUiHints(
+  base: ConfigUiHints,
+  plugins: PluginUiMetadata[],
+  channels: ChannelUiMetadata[],
+): ConfigUiHints {
+  const hints = applyMetadataHints(base, plugins, channels);
+  const keys = collectExtensionHintKeys(hints, plugins, channels);
+  return applySensitiveUrlHints(applySensitiveHints(hints, keys), keys);
+}
+
+/** Redaction consumes sensitivity metadata, not JSON schema or presentation tiers. */
+export function buildConfigRedactionHints(params: {
+  plugins: PluginUiMetadata[];
+  channels: ChannelUiMetadata[];
+}): ConfigUiHints {
+  const bundledChannels = getBundledChannelSchemaMetadata();
+  const base = applyMetadataHints(computeBaseConfigUiHints(), [], bundledChannels);
+  const baseHints = applySensitiveHints(base, collectExtensionHintKeys(base, [], bundledChannels));
+  const { plugins, channels } = limitExtensionSchemas(params);
+  return mergeConfigUiHints(baseHints, plugins, channels);
+}
+
 export function buildConfigSchemaCore(params?: {
   plugins?: PluginUiMetadata[];
   channels?: ChannelUiMetadata[];
@@ -520,16 +519,7 @@ export function buildConfigSchemaCore(params?: {
       return cached;
     }
   }
-  const mergedWithoutSensitiveHints = applyMetadataHints(base.uiHints, plugins, channels);
-  const extensionHintKeys = collectExtensionHintKeys(
-    mergedWithoutSensitiveHints,
-    plugins,
-    channels,
-  );
-  const mergedHints = applySensitiveUrlHints(
-    applySensitiveHints(mergedWithoutSensitiveHints, extensionHintKeys),
-    extensionHintKeys,
-  );
+  const mergedHints = mergeConfigUiHints(base.uiHints, plugins, channels);
   const mergedSchema = mergeExtensionSchemas(structuredClone(base.schema), channels, plugins);
   const changedRoots = [
     ...(plugins.length ? ["plugins"] : []),

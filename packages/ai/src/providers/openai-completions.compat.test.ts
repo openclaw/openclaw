@@ -50,19 +50,19 @@ import {
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
-const baseModel: Model<"openai-completions"> = {
-  id: "test-model",
-  name: "Test model",
-  api: "openai-completions",
-  provider: "custom-openai-compatible",
-  baseUrl: "https://proxy.example/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 4_096,
-};
+const baseModel: Model<"openai-completions"> = makeProviderModel(
+  "openai-completions",
+  "custom-openai-compatible",
+  "test-model",
+  {
+    name: "Test model",
+    baseUrl: "https://proxy.example/v1",
+    reasoning: false,
+    maxTokens: 4_096,
+  },
+);
 
 const userMessage = { role: "user", content: "hello", timestamp: 1 } as const;
 const context: Context = { messages: [userMessage] };
@@ -279,7 +279,10 @@ describe("OpenAI-compatible completions compatibility", () => {
     let replayPayload: unknown;
     await streamOpenAICompletions(
       model,
-      { messages: [result] },
+      {
+        messages: [result],
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+      },
       {
         apiKey: "test",
         onPayload(payload) {
@@ -356,6 +359,29 @@ describe("OpenAI-compatible completions compatibility", () => {
       expect(clientOptions.defaultHeaders).toEqual(expectedHeaders);
     },
   );
+
+  it("uses host-normalized provider attribution for session-affinity headers", async () => {
+    configureAiTransportHost({
+      resolveProviderRequestCapabilities: (input) => ({
+        ...resolveTestCapabilities(input),
+        provider: "openrouter",
+      }),
+    });
+
+    await streamOpenAICompletions(
+      createModel({
+        provider: "OPENROUTER",
+        compat: { sendSessionAffinityHeaders: true },
+      }),
+      context,
+      { apiKey: "test", sessionId: "session-123" },
+    ).result();
+
+    expect(mockOpenAI.clientOptions).toHaveLength(1);
+    expect(mockOpenAI.clientOptions[0]).toMatchObject({
+      defaultHeaders: { "x-session-id": "session-123" },
+    });
+  });
 
   it("redacts OpenRouter terminal body and raw metadata from one error projection", async () => {
     const media = "QUJDRA==";

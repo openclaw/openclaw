@@ -1,18 +1,8 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
-import type { CostDailyEntry, UsageSessionEntry } from "./types.ts";
-
-function csvEscape(value: string, neutralizeFormulas = true): string {
-  const safeValue =
-    neutralizeFormulas && /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value)
-      ? `'${value}`
-      : value;
-  if (/[",\r\n]/.test(safeValue)) {
-    return `"${safeValue.replaceAll('"', '""')}"`;
-  }
-  return safeValue;
-}
+import type { SessionsUsageOverview } from "../../../../src/shared/usage-types.js";
+import type { CostDailyEntry, UsageSessionEntry } from "./usage-state-types.ts";
 
 type CsvValue = string | number | undefined | null;
 
@@ -22,7 +12,15 @@ function toCsvRow(values: CsvValue[]): string {
       if (value === undefined || value === null) {
         return "";
       }
-      return csvEscape(String(value), typeof value === "string");
+      const text = String(value);
+      const safeValue =
+        typeof value === "string" && /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(text)
+          ? `'${text}`
+          : text;
+      if (/[",\r\n]/.test(safeValue)) {
+        return `"${safeValue.replaceAll('"', '""')}"`;
+      }
+      return safeValue;
     })
     .join(",");
 }
@@ -83,32 +81,20 @@ const buildDailyCsv = (daily: CostDailyEntry[]): string =>
     totalCost: (day) => usageCsvValue(day.totalCost, day.usageReport),
   });
 
-type QuerySuggestion = {
+const buildQuerySuggestions = (
+  query: string,
+  terms: ReturnType<typeof extractQueryTerms>,
+  options: SessionsUsageOverview["filterOptions"],
+): {
   label: string;
   value: string;
-};
-
-export type UsageFilterOptions = Record<
-  "agent" | "channel" | "provider" | "model" | "tool",
-  string[]
->;
-
-const buildQuerySuggestions = (query: string, options: UsageFilterOptions): QuerySuggestion[] => {
-  const trimmed = query.trim();
-  if (!trimmed) {
+}[] => {
+  if (!query.trim()) {
     return [];
   }
-  const tokens = extractQueryTerms(trimmed).map((term) => term.raw);
-  const lastQueryWord = tokens.at(-1) ?? "";
-  const [rawKey, rawValue] = lastQueryWord.includes(":")
-    ? [
-        lastQueryWord.slice(0, lastQueryWord.indexOf(":")),
-        lastQueryWord.slice(lastQueryWord.indexOf(":") + 1),
-      ]
-    : ["", ""];
-
-  const key = normalizeLowercaseStringOrEmpty(rawKey);
-  const value = normalizeLowercaseStringOrEmpty(rawValue);
+  const lastTerm = terms.at(-1);
+  const key = normalizeLowercaseStringOrEmpty(lastTerm?.key);
+  const value = normalizeLowercaseStringOrEmpty(lastTerm?.value);
 
   if (!key) {
     return [

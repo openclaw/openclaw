@@ -1,14 +1,17 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   applyLocalPackageOverrides,
   captureLocalPackageOverrides,
+  prepareLocalOverrideRuntime,
 } from "./package-local-overrides.js";
 import { useLocalOverrideTestState } from "./package-local-overrides.test-support.js";
 import { writePackageRoot } from "./package-update-steps.test-support.js";
+import * as processEntrypoints from "./runtime-process-url.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -17,9 +20,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 useLocalOverrideTestState();
 afterEach(() => vi.restoreAllMocks());
 
-// Instrument the pinned dependency only inside each disposable child. Both wrappers
-// invoke the real OS primitive, after creating the competing destination. Production
-// uses the public durability API; no installed dependency files are changed.
+// Intercept real OS publication only in disposable children, never the installed dependency.
 function publicationFaultPreload(root: string, marker: string, scenario: string): string {
   const nativeUrl = new URL("native.js", import.meta.resolve("@openclaw/fs-safe/root")).href;
   return `
@@ -59,56 +60,80 @@ __setFsSafeTestHooksForTest({beforePublishDirectorySync:(_method,target)=>{
 `;
 }
 
-describe("local override exclusive publication", () => {
-  it.each(["publish-race", "restore-race", "retained-sync", "published-sync"])(
-    "preserves newer bytes or restores the original after %s",
-    async (scenario) => {
-      await withTestDir({ prefix: "openclaw-override-publication-" }, async (base) => {
-        const requestedRoot = path.join(base, "package");
-        await writePackageRoot(requestedRoot, "1.0.0");
-        const packageRoot = await fs.realpath(requestedRoot);
-        const indexPath = path.join(packageRoot, "dist/index.js");
-        await fs.writeFile(indexPath, "operator override\n");
-        const plan = await captureLocalPackageOverrides({ packageRoot });
-        expect(plan).not.toBeNull();
-        await writePackageRoot(packageRoot, "2.0.0");
-        const marker = path.join(base, "injected");
-        const preload = `data:text/javascript,${encodeURIComponent(publicationFaultPreload(packageRoot, marker, scenario))}`;
-        const actual =
-          await vi.importActual<typeof import("node:child_process")>("node:child_process");
-        vi.mocked(execFile).mockImplementation((file, args, options, callback) => {
-          if (file !== process.execPath || !args?.includes("--eval")) {
-            throw new Error("Unexpected child process in replay publication test");
-          }
-          return actual.execFile(file, ["--import", preload, ...args], options, callback);
-        });
-        const result = await applyLocalPackageOverrides({ packageRoot, plan, reapply: true });
-        const injected = await fs.readFile(marker, "utf8");
-        expect(injected).toBe(
-          scenario === "publish-race"
-            ? "publication"
-            : scenario === "restore-race"
-              ? "restoration"
-              : "sync failure",
-        );
-        expect(result.status).toBe("error");
-        expect(result.applied).toBe(0);
-        await expect(fs.readFile(indexPath, "utf8")).resolves.toBe(
-          scenario.endsWith("race") ? "concurrent destination\n" : "export {};\n",
-        );
-        if (scenario === "restore-race") {
-          const entries = await fs.readdir(path.dirname(indexPath));
-          const previous = entries.find((entry) =>
-            entry.startsWith(".openclaw-override-previous-"),
-          );
-          if (!previous) {
-            throw new Error("Concurrent source was not retained for recovery");
-          }
-          await expect(
-            fs.readFile(path.join(path.dirname(indexPath), previous), "utf8"),
-          ).resolves.toBe("concurrent source\n");
-        }
-      });
-    },
-  );
-});
+it.each([
+  ["publish-race", "publication", "concurrent destination\n"],
+  ["restore-race", "restoration", "concurrent destination\n"],
+  ["retained-sync", "sync failure", "export {};\n"],
+  ["published-sync", "sync failure", "export {};\n"],
+])("preserves newer bytes or restores the original after %s", (scenario, markerText, contents) =>
+  withTestDir({ prefix: "openclaw-override-publication-" }, async (base) => {
+    const requestedRoot = path.join(base, "package");
+    await writePackageRoot(requestedRoot, "1.0.0");
+    const packageRoot = await fs.realpath(requestedRoot);
+    const indexPath = path.join(packageRoot, "dist/index.js");
+    await fs.writeFile(indexPath, "operator override\n");
+    const plan = await captureLocalPackageOverrides({ packageRoot });
+    expect(plan).not.toBeNull();
+    await writePackageRoot(packageRoot, "2.0.0");
+    const marker = path.join(base, "injected");
+    const preload = `data:text/javascript,${encodeURIComponent(publicationFaultPreload(packageRoot, marker, scenario))}`;
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    vi.mocked(execFile).mockImplementation((file, args, options, callback) => {
+      if (file !== process.execPath || !args) {
+        throw new Error("Unexpected child process in replay publication test");
+      }
+      return actual.execFile(file, ["--import", preload, ...args], options, callback);
+    });
+    const result = await applyLocalPackageOverrides({ packageRoot, plan, reapply: true });
+    const injected = await fs.readFile(marker, "utf8");
+    expect(injected).toBe(markerText);
+    expect(result).toMatchObject({ status: "error", applied: 0 });
+    await expect(fs.readFile(indexPath, "utf8")).resolves.toBe(contents);
+    if (scenario === "restore-race") {
+      const entries = await fs.readdir(path.dirname(indexPath));
+      const previous = entries.find((entry) => entry.startsWith(".openclaw-override-previous-"));
+      if (!previous) {
+        throw new Error("Concurrent source was not retained for recovery");
+      }
+      await expect(fs.readFile(path.join(path.dirname(indexPath), previous), "utf8")).resolves.toBe(
+        "concurrent source\n",
+      );
+    }
+  }),
+);
+
+it("publishes with the worker and dependencies captured before its runtime tree moves", () =>
+  withTestDir({ prefix: "openclaw-override-retained-runtime-" }, async (base) => {
+    const packageRoot = path.join(base, "package");
+    await writePackageRoot(packageRoot, "1.0.0");
+    const indexPath = path.join(packageRoot, "dist/index.js");
+    await fs.writeFile(indexPath, "operator override\n");
+    const plan = await captureLocalPackageOverrides({ packageRoot });
+    await writePackageRoot(packageRoot, "2.0.0");
+
+    const requestedRuntimeRoot = path.join(base, "runtime");
+    await fs.mkdir(requestedRuntimeRoot);
+    const runtimeRoot = await fs.realpath(requestedRuntimeRoot);
+    const retainedRoot = path.join(path.dirname(runtimeRoot), "retained-runtime");
+    const worker = path.join(runtimeRoot, "publication.worker.ts");
+    await fs.writeFile(path.join(runtimeRoot, "package.json"), JSON.stringify({ type: "module" }));
+    await fs.copyFile(new URL("./package-local-overrides.worker.ts", import.meta.url), worker);
+    const resolve = processEntrypoints.resolveRuntimeProcessEntrypointUrl;
+    vi.spyOn(processEntrypoints, "resolveRuntimeProcessEntrypointUrl").mockImplementation((name) =>
+      name === "packageLocalOverrides" ? pathToFileURL(worker) : resolve(name),
+    );
+    const runtime = await prepareLocalOverrideRuntime({
+      sourceRoot: runtimeRoot,
+      destinationRoot: retainedRoot,
+    });
+    await fs.rename(runtimeRoot, retainedRoot);
+
+    const result = await applyLocalPackageOverrides({
+      packageRoot,
+      plan,
+      reapply: true,
+      runtime,
+    });
+    expect(result).toMatchObject({ status: "applied", applied: 1 });
+    await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("operator override\n");
+  }));

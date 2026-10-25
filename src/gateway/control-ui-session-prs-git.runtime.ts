@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { unavailableDiffRevision, type DiffReadTiming } from "../infra/diff-read-timing.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { GitCommandTimeoutError, requireGitCommandOutput } from "../infra/git-exec.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
 import { readGitHead, readGitMetadataPrefix, readGitRefs } from "../infra/git-root.js";
 import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
 import type { GitWorkerOperations } from "../infra/git-worker-contract.js";
+import { readCheckoutDiffRevision } from "./control-ui-session-diff-revision.js";
 import {
   gitOutput,
   isAncestor,
@@ -17,16 +20,24 @@ import {
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
 /** Observe only this checkout's refs; snapshot publication does not change PR facts. */
-export async function readCheckoutGitRevision({
-  root,
-  scope,
-  branch,
-  defaultBranch,
-}: GitReadOperations["checkout.revision"]["input"]): Promise<string | null> {
+export async function readCheckoutGitRevision(
+  {
+    root,
+    scope,
+    branch,
+    defaultBranch,
+    summaryOnly = false,
+    paths: diffPaths,
+  }: GitReadOperations["checkout.revision"]["input"],
+  timing?: DiffReadTiming,
+): Promise<string | null> {
   if (!canReadGitFilesystemRefs()) {
-    return null;
+    return unavailableDiffRevision(timing, "no-revision-environment");
   }
   try {
+    if (scope === "diff") {
+      return await readCheckoutDiffRevision(root, diffPaths, summaryOnly, timing);
+    }
     const head = readGitHead(root, { maxDepth: 1 });
     const checkout = readCheckoutHead(root);
     const defaultRef = readDefaultRef(checkout);
@@ -56,9 +67,9 @@ export async function readCheckoutGitRevision({
       );
       if (fs.existsSync(replacements)) {
         paths.push(
-          ...fs
-            .readdirSync(replacements, { recursive: true, encoding: "utf8" })
-            .map((name) => nodePath.join(replacements, name)),
+          ...listDirectoryTreeStrictSync(replacements).map(({ relativePath }) =>
+            nodePath.join(replacements, relativePath),
+          ),
         );
       }
       const packed = nodePath.join(checkout.refsBase, "packed-refs");
@@ -104,8 +115,8 @@ export async function readCheckoutGitRevision({
           : [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
       }),
     ]);
-  } catch {
-    return null;
+  } catch (error) {
+    return unavailableDiffRevision(timing, undefined, error);
   }
 }
 

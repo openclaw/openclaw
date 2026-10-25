@@ -1,19 +1,30 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import {
   CI_MANIFEST_FIXTURE_TARGETS as targets,
   runCiManifestFixture,
 } from "./ci-workflow-manifest.test-support.js";
 
-const uiE2eSelectorSource = `
-export const resolveUiE2ePrTestSelection = (_paths, { forceFull }) => ({
-  mode: forceFull ? "full" : "owners",
-  files: forceFull ? ${JSON.stringify(targets.mocked)} : [${JSON.stringify(targets.mocked[0])}],
-  reasons: {},
-});`;
-
-function uiCoverage(outputs: Record<string, string>) {
+function runUi(eventName: "schedule" | "pull_request", runNode = true) {
+  const result = runCiManifestFixture({
+    bundledPlanner: true,
+    eventName,
+    runNode,
+    changedPaths: eventName === "schedule" ? null : ["src/owner.ts"],
+    selectedTestTargets: ["src/owner.test.ts"],
+    uiE2eSelectorSource: `export const resolveUiE2ePrTestSelection = (_paths, { forceFull }) => ({
+      mode: forceFull ? "full" : "owners",
+      files: forceFull ? ${JSON.stringify(targets.mocked)} : [], reasons: {},
+    });`,
+    scopeEnv: {
+      OPENCLAW_CI_FULL: String(eventName === "pull_request"),
+      OPENCLAW_CI_RUN_UI_TESTS: String(eventName === "schedule"),
+      OPENCLAW_CI_VALIDATION_TIER: eventName === "schedule" ? "main" : "full",
+    },
+  });
+  expect(result.status, result.output).toBe(0);
+  const outputs = result.outputs;
   const output = (name: string) => expectDefined(outputs[name], name);
   const files = (encoded: string) =>
     encoded
@@ -31,73 +42,19 @@ function uiCoverage(outputs: Record<string, string>) {
     real: real.flatMap((row: { test_groups_gzip_base64: string }) =>
       files(row.test_groups_gzip_base64),
     ),
-    unitRows: JSON.parse(output("ui_test_matrix")).include,
-    e2eRows: JSON.parse(output("ui_e2e_matrix")).include,
-    realRows: real.map((row: { shard: number; shard_count: number; run_desktop: boolean }) => ({
-      shard: row.shard,
-      shard_count: row.shard_count,
-      run_desktop: row.run_desktop,
-    })),
     enabled: [outputs.run_ui_tests, outputs.run_ui_e2e, outputs.run_ui_real_gateway],
   };
 }
 
-describe("ci:full UI coverage", () => {
-  it.each([
-    { full: false, uiOwner: false, runNode: true },
-    { full: false, uiOwner: true, runNode: true },
-    { full: true, uiOwner: false, runNode: true },
-    { full: true, uiOwner: true, runNode: true },
-    { full: true, uiOwner: false, runNode: false },
-  ])("selects UI inventories for %j", ({ full, uiOwner, runNode }) => {
-    const manifest = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "pull_request",
-      runNode,
-      changedPaths: [uiOwner ? "ui/src/owner.ts" : "src/owner.ts"],
-      selectedTestTargets: [
-        "src/owner.test.ts",
-        expectDefined(targets.ui[0], "unit fixture"),
-        expectDefined(targets.mocked[0], "E2E fixture"),
-      ],
-      uiE2eSelectorSource,
-      changedPlannerSource: `
-        export const hasUiE2eAffectingChange = () => ${uiOwner};
-        export const createChangedNodeTestShards = () => [];
-      `,
-      scopeEnv: {
-        OPENCLAW_CI_FULL: String(full),
-        OPENCLAW_CI_RUN_UI_TESTS: String(uiOwner),
-      },
-    });
-    expect(manifest.status, manifest.output).toBe(0);
-    const coverage = uiCoverage(manifest.outputs);
-    expect(coverage.unit).toEqual(full || uiOwner ? targets.ui : [targets.ui[0]]);
-    expect(coverage.e2e).toEqual(full ? [...targets.mocked, ...targets.real] : [targets.mocked[0]]);
-    expect(coverage.real).toEqual(full ? targets.real : []);
-    expect(coverage.unitRows).toHaveLength(full || uiOwner ? 3 : 1);
-    expect(coverage.e2eRows).toHaveLength(full ? 9 : uiOwner ? 2 : 1);
-    expect(coverage.realRows).toHaveLength(full ? 2 : 0);
-    expect(coverage.enabled).toEqual(["true", "true", String(full)]);
+it.each([true, false])("ci:full selects all UI tests with runNode=%s", (runNode) => {
+  expect(runUi("pull_request", runNode)).toEqual({
+    unit: targets.ui,
+    e2e: [...targets.mocked, ...targets.real],
+    real: targets.real,
+    enabled: ["true", "true", "true"],
   });
+});
 
-  it("matches scheduled main UI matrices and inventories", () => {
-    const run = (eventName: "schedule" | "pull_request") => {
-      const manifest = runCiManifestFixture({
-        bundledPlanner: true,
-        eventName,
-        changedPaths: eventName === "schedule" ? null : ["src/owner.ts"],
-        selectedTestTargets: ["src/owner.test.ts"],
-        uiE2eSelectorSource,
-        scopeEnv: {
-          OPENCLAW_CI_FULL: String(eventName === "pull_request"),
-          OPENCLAW_CI_RUN_UI_TESTS: String(eventName === "schedule"),
-          OPENCLAW_CI_VALIDATION_TIER: eventName === "schedule" ? "main" : "full",
-        },
-      });
-      expect(manifest.status, manifest.output).toBe(0);
-      return uiCoverage(manifest.outputs);
-    };
-    expect(run("pull_request")).toEqual(run("schedule"));
-  });
+it("ci:full matches scheduled main UI coverage", () => {
+  expect(runUi("pull_request")).toEqual(runUi("schedule"));
 });

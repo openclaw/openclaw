@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
-import type { ChannelsState } from "../../lib/channels/index.ts";
+import type { ChannelCapability } from "../../lib/channels/index.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChannelsProps } from "./view.types.ts";
@@ -21,18 +21,20 @@ export function createChannelsViewProps(
   overrides: ChannelsViewTestOverrides = {},
 ): ChannelsProps {
   const { channels, config, presentation, wizardHost, ...props } = overrides;
-  const channelState: ChannelsState = {
+  const channelState: ChannelCapability["state"] = {
     client: null,
     connected: true,
     channelsLoading: false,
     channelsLoadingProbe: null,
     channelsRefreshSeq: 0,
     channelsSnapshot: snapshot,
+    channelsRead: null,
     channelsError: null,
     channelsLastSuccess: null,
     pairingLoading: false,
     pairingRefreshSeq: 0,
     pairingSnapshot,
+    pairingRead: null,
     pairingError: null,
     pairingLastSuccess: null,
     pairingBusyRequestId: null,
@@ -49,6 +51,7 @@ export function createChannelsViewProps(
     presentation: {
       pluginCatalog: null,
       pluginIconUrls: {},
+      details: { has: () => false, sync: () => {}, reset: () => {}, attach: () => () => {} },
       ...presentation,
     },
     wizardHost: {
@@ -71,8 +74,6 @@ export function createChannelsViewProps(
     canManagePairing: true,
     canAdmin: true,
     showAdvancedSettings: false,
-    nostrProfileFormState: null,
-    nostrProfileAccountId: null,
     selectedChannel: null,
     onShowDetail: () => {},
     onCloseDetail: () => {},
@@ -94,12 +95,6 @@ export function createChannelsViewProps(
     onConfigPatch: () => {},
     onConfigSave: () => {},
     onConfigReload: () => {},
-    onNostrProfileEdit: () => {},
-    onNostrProfileCancel: () => {},
-    onNostrProfileFieldChange: () => {},
-    onNostrProfileSave: () => {},
-    onNostrProfileImport: () => {},
-    onNostrProfileToggleAdvanced: () => {},
     ...props,
   };
 }

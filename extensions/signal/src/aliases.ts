@@ -1,4 +1,3 @@
-// Signal alias helpers keep OpenClaw-side names inside the Signal plugin boundary.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -127,7 +126,7 @@ export function resolveSignalDeliveredConversationKey(params: {
   to: string;
 }): string | null {
   // Delivery already succeeded, so conversation-key recovery is fail-soft.
-  // Approval route revalidation stays fail-closed in approval-reaction-routes.ts.
+  // Approval route revalidation stays fail-closed in approval-reactions.ts.
   try {
     return (
       resolveSignalTarget({

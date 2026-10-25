@@ -11,10 +11,8 @@ import {
 } from "./crabbox-worker-warm-image-checkpoint.js";
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
 import {
-  assertCrabboxWarmImageMigrationReady,
   isCrabboxCaptureRefusalRetained,
   withCrabboxWarmImageGeneration,
-  type CrabboxState,
   type WarmAllocationRecord,
   type WarmStartStatus,
   type openCrabboxWarmImageStore,
@@ -45,20 +43,27 @@ type Store = ReturnType<typeof openCrabboxWarmImageStore>;
 type AllocationOwner = NonNullable<Awaited<ReturnType<Store["lookupLease"]>>>;
 
 export function createCrabboxWarmImageAllocation({
-  state,
+  assertMigrationReady,
   lookupLease,
   selectAllocation,
   openStore,
+  verifyCheckpoint,
   policy,
   assertCurrent,
 }: {
-  state: CrabboxState;
+  assertMigrationReady: () => Promise<void>;
   lookupLease: Store["lookupLease"];
   selectAllocation: (
     context: AllocationContext,
     profile: AllocationContext["profile"] & { class: string },
   ) => Promise<AllocationOwner>;
   openStore: () => Store;
+  verifyCheckpoint: (
+    context: AllocationContext,
+    key: string,
+    checkpointId: string,
+    retireHeld?: boolean,
+  ) => Promise<unknown>;
   policy: CrabboxWarmImagePolicy;
   assertCurrent: (context: CheckpointContext) => void;
 }) {
@@ -87,7 +92,7 @@ export function createCrabboxWarmImageAllocation({
       }
     }
     if (context.profile.warmImage) {
-      await assertCrabboxWarmImageMigrationReady(state);
+      await assertMigrationReady();
       const owner = await selectAllocation(context, context.profile);
       const record = await openStore().lookup(owner.key);
       startStatus =
@@ -121,7 +126,10 @@ export function createCrabboxWarmImageAllocation({
               "--json",
             ],
             context.timeoutMs(),
-          ),
+          ).catch(async (error: unknown) => {
+            await verifyCheckpoint(context, owner.key, checkpointId, true);
+            throw error;
+          }),
           { checkpointId, leaseId: context.id, provider: context.provider, slug: context.slug },
         );
         await openStore().update(owner.key, (current) => {

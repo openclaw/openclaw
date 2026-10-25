@@ -9,7 +9,6 @@ import {
   isNativeWebSearchAllowedByToolPolicy,
 } from "../../agents/codex-native-web-search-core.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
 import { createMinimaxThinkingDisabledWrapper } from "../../llm/providers/stream-wrappers/minimax.js";
 import {
   createSiliconFlowThinkingWrapper,
@@ -21,11 +20,15 @@ import {
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "../../llm/providers/stream-wrappers/openai.js";
-import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
+import {
+  createOpenRouterSystemCacheWrapper,
+  OPENROUTER_RESPONSE_CACHE_TTL_KEYS,
+} from "../../llm/providers/stream-wrappers/proxy.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { SimpleStreamOptions } from "../../llm/types.js";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  createGoogleThinkingPayloadWrapper,
   createThinkingOnlyFinalTextWrapper,
 } from "../../plugin-sdk/provider-stream-shared.js";
 import {
@@ -135,13 +138,12 @@ export function resolvePreparedExtraParams(params: {
   extraParamsOverride?: Record<string, unknown>;
   thinkingLevel?: ProviderThinkLevel;
   agentId?: string;
-  resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
   resolvedTransport?: AgentRuntimeTransport;
   providerRuntimeHandle?: ProviderRuntimePluginHandle;
   auth?: ProviderPrepareExtraParamsContext["auth"];
 }): Record<string, unknown> {
-  const resolvedExtraParams = params.resolvedExtraParams ?? resolveExtraParams(params);
+  const resolvedExtraParams = resolveExtraParams(params);
   const override = stripRequestScopedExtraParams(
     sanitizeExtraParamsOverride(params.extraParamsOverride),
   );
@@ -240,24 +242,22 @@ function applyDefaultOpenAIGptRuntimeParams(
 }
 
 export function resolveAgentTransportOverride(params: {
-  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  settingsManager: Pick<SettingsManager, "getGlobalSettings">;
   effectiveExtraParams: Record<string, unknown> | undefined;
 }): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
-  const projectSettings = params.settingsManager.getProjectSettings();
-  if (Object.hasOwn(globalSettings, "transport") || Object.hasOwn(projectSettings, "transport")) {
+  if (Object.hasOwn(globalSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.effectiveExtraParams?.transport);
 }
 
 export function resolveExplicitSettingsTransport(params: {
-  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  settingsManager: Pick<SettingsManager, "getGlobalSettings">;
   sessionTransport: unknown;
 }): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
-  const projectSettings = params.settingsManager.getProjectSettings();
-  if (!Object.hasOwn(globalSettings, "transport") && !Object.hasOwn(projectSettings, "transport")) {
+  if (!Object.hasOwn(globalSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.sessionTransport);
@@ -278,7 +278,6 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
-  model?: ProviderRuntimeModel,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -294,6 +293,11 @@ function createStreamFnWithExtraParams(
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
+  if (extraParams.promptCacheTtl === "30m" || extraParams.promptCacheTtl === "12h") {
+    streamParams.promptCacheTtl = extraParams.promptCacheTtl;
+  } else if (extraParams.promptCacheTtl !== undefined) {
+    log.warn('ignoring invalid promptCacheTtl param; expected "30m" or "12h"');
+  }
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
@@ -362,14 +366,6 @@ function createStreamFnWithExtraParams(
       candidate?.baseUrl,
     );
 
-  if (log.isEnabled("debug")) {
-    const initialCacheRetention = resolveModelCacheRetention(model);
-    if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
-      const debugParams = { ...streamParams, cacheRetention: initialCacheRetention };
-      log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
-    }
-  }
-
   const underlying = requireBaseStreamFn(baseStreamFn);
   return (callModel, context, options) => {
     const cacheRetention = resolveModelCacheRetention(callModel);
@@ -377,11 +373,13 @@ function createStreamFnWithExtraParams(
       return underlying(callModel, context, options);
     }
     const effectiveCacheRetention = options?.cacheRetention ?? cacheRetention;
+    const promptCacheTtl = options?.promptCacheTtl ?? streamParams.promptCacheTtl;
     return underlying(callModel, context, {
       ...streamParams,
       ...options,
       // Own undefined means no request override; explicit none/short/long still wins.
       ...(effectiveCacheRetention ? { cacheRetention: effectiveCacheRetention } : {}),
+      ...(promptCacheTtl ? { promptCacheTtl } : {}),
     });
   };
 }
@@ -401,12 +399,7 @@ function canonicalizeExtraParamAlias(
 
 const OPENROUTER_RESPONSE_CACHE_PARAM_ALIASES = [
   ["responseCache", "response_cache"],
-  [
-    "responseCacheTtlSeconds",
-    "response_cache_ttl_seconds",
-    "responseCacheTtl",
-    "response_cache_ttl",
-  ],
+  OPENROUTER_RESPONSE_CACHE_TTL_KEYS,
   ["responseCacheClear", "response_cache_clear"],
 ] as const;
 
@@ -435,9 +428,6 @@ function createParallelToolCallsWrapper(
     if (!GPT_PARALLEL_TOOL_CALLS_APIS.has(model.api)) {
       return underlying(model, context, options);
     }
-    log.debug(
-      `applying parallel_tool_calls=${enabled} for ${model.provider ?? "unknown"}/${model.id ?? "unknown"} api=${model.api}`,
-    );
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
       payloadObj.parallel_tool_calls = enabled;
     });
@@ -605,15 +595,9 @@ export function applyExtraParamsToAgent(
       ? stripRequestScopedExtraParams(effectiveExtraParams)
       : effectiveExtraParams;
   const streamParams = override ? { ...baseExtraParams, ...override } : baseExtraParams;
-  const wrappedStreamFn = createStreamFnWithExtraParams(
-    agent.streamFn,
-    streamParams,
-    provider,
-    model,
-  );
+  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, streamParams, provider);
 
   if (wrappedStreamFn) {
-    log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
   }
 
@@ -623,9 +607,6 @@ export function applyExtraParamsToAgent(
       thinkingLevel,
     })
   ) {
-    log.debug(
-      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
-    );
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
   const providerWrapperHandled =
@@ -696,9 +677,7 @@ export function applyExtraParamsToAgent(
   );
   if (typeof rawParallelToolCalls === "boolean") {
     agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
-  } else if (rawParallelToolCalls === null) {
-    log.debug("parallel_tool_calls suppressed by null override, skipping injection");
-  } else if (rawParallelToolCalls !== undefined) {
+  } else if (rawParallelToolCalls != null) {
     const summary =
       typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
     log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);

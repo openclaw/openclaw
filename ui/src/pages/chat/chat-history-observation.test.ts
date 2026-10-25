@@ -17,6 +17,7 @@ import {
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
@@ -145,7 +146,7 @@ async function fixture(primary = initial, observeManaged = true, models: ModelCa
   const makeState = (owner = sessions) => {
     const state = createPageState(
       { ...context, sessions: owner },
-      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { afterCommit: () => () => {} },
       document.createElement("div"),
     );
     state.client = client;
@@ -513,6 +514,9 @@ it.each([false, true])(
     expect(getChatHistoryLoadState(state).phase).toBe("failed");
     const older = h.holdManaged();
     renderCurrent();
+    expect(container.querySelector(".chat-history-error__stage p")?.textContent).toContain(
+      "Temporary history failure",
+    );
     const retry = expectDefined(
       container.querySelector<HTMLButtonElement>(".chat-history-error button"),
       "Retry button",
@@ -528,18 +532,13 @@ it.each([false, true])(
       ...initial,
       updatedAt: 30,
       label: "Current retry descriptor",
-      placement: {
-        state: "active",
-        generation: 1,
-        createdAtMs: 1,
+      placement: createActiveSessionPlacement({
         updatedAtMs: 30,
         stateChangedAtMs: 30,
         environmentId: "worker:retry",
-        activeOwnerEpoch: 1,
-        workerBundleHash: "a".repeat(64),
         workspaceBaseManifestRef: "retry-base",
         remoteWorkspaceDir: "/workspace/synthetic",
-      },
+      }),
     } satisfies GatewaySessionRow;
     expectDefined(h.reads[1], "Retry history request").pending.resolve(history(fresh));
     await vi.waitFor(() => expect(getChatHistoryLoadState(state).phase).toBe("committed"));

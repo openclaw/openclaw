@@ -1,9 +1,12 @@
 import { PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
 import {
   isAnthropicServerToolClearingEnabled,
+  isCompactionReplayCheckpoint,
   resolveCompactionReplayEligibility,
+  stripCompactionReplayCheckpoint,
 } from "@openclaw/ai/transports";
 import type { ModelCompatConfig } from "../../../config/types.models.js";
+import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createOpenAIServiceTierObservationWrapper } from "../../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
@@ -39,7 +42,6 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
-import { wrapStreamFnWithSessionFork } from "../session-fork.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -94,6 +96,7 @@ export async function settleEmbeddedAttemptStream(input: {
   };
   markTimedOutDuringCompaction: () => void;
   getRunAbortDeadlineAtMs: () => number | undefined;
+  onRunAbortDeadlineChanged: (listener: () => void) => () => void;
   runAbortSignal: AbortSignal;
   isProbeSession: boolean;
   onBlockReplyFlush?: (payload: {
@@ -130,6 +133,7 @@ export async function settleEmbeddedAttemptStream(input: {
           const deadlineAtMs = input.getRunAbortDeadlineAtMs();
           return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
         },
+        onDeadlineChanged: input.onRunAbortDeadlineChanged,
         abortSignal: input.runAbortSignal,
       });
       // An aborted run legitimately leaves async tasks unfinished; stamping a
@@ -377,6 +381,7 @@ export async function settleEmbeddedAttemptStream(input: {
 export async function prepareEmbeddedAttemptTransport(input: {
   assertCronRootCurrent?: () => void;
   attempt: EmbeddedRunAttemptParams;
+  contextEngineInfo?: ContextEngineInfo;
   session: AgentSession;
   settingsManager: SettingsManager;
   providerThinkingLevel: ProviderThinkLevel | undefined;
@@ -437,7 +442,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     model: attempt.model,
     resolvedTransport,
   };
-  const effectiveExtraParams =
+  const resolvedExtraParams =
     attempt.runtimePlan?.transport.resolveExtraParams(extraParamsContext) ??
     resolvePreparedExtraParams({
       ...extraParamsContext,
@@ -449,6 +454,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
       agentDir: input.agentDir,
       auth,
     });
+  const ownsCompaction = input.contextEngineInfo?.ownsCompaction === true;
+  const suppressResponsesCompaction =
+    attempt.model.api === "openai-responses" &&
+    (attempt.trigger === "memory" ||
+      (ownsCompaction && resolvedExtraParams.responsesServerCompaction !== true));
+  const effectiveExtraParams = suppressResponsesCompaction
+    ? { ...resolvedExtraParams, responsesServerCompaction: false, responsesCompactEndpoint: false }
+    : resolvedExtraParams;
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
     cfg: attempt.transportConfig ?? attempt.config,
@@ -456,11 +469,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     workspaceDir: input.workspaceDir,
     auth,
   });
-  const sessionFork = {
-    runId: attempt.runId,
-    sessionId: attempt.sessionId,
-    agentId: input.sessionAgentId,
-  };
   const transportApiKey = await resolveEmbeddedAgentApiKey({
     provider: attempt.model.provider,
     resolvedApiKey: attempt.resolvedApiKey,
@@ -472,9 +480,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     wrapApiKey,
   } = selectEmbeddedAgentStream({
     currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn: providerStreamFn
-      ? wrapStreamFnWithSessionFork(providerStreamFn, sessionFork)
-      : undefined,
+    providerStreamFn,
     sessionId: attempt.sessionId,
     promptCacheKey: attempt.promptCacheKey,
     signal: input.abortSignal,
@@ -484,7 +490,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: attempt.authStorage,
     assertCurrent: assertRunCurrent,
-    sessionFork,
   });
   const boundaryStreamFn = wrapStreamFnWithMessageTransform(
     streamFn,
@@ -639,6 +644,19 @@ export async function prepareEmbeddedAttemptTransport(input: {
   // Agent turns carry no credential, and provider wrappers classify auth from
   // options.apiKey (for example Anthropic OAuth identity), so attach it outermost.
   session.agent.streamFn = wrapApiKey(session.agent.streamFn);
+  if (suppressResponsesCompaction) {
+    // Checkpoints already stored by older builds must not replace the engine's selection.
+    session.agent.streamFn = wrapStreamFnWithMessageTransform(session.agent.streamFn, (messages) =>
+      messages.some(
+        (message) =>
+          message.role === "assistant" && isCompactionReplayCheckpoint(message.providerReplay),
+      )
+        ? messages.map((message) =>
+            message.role === "assistant" ? stripCompactionReplayCheckpoint(message) : message,
+          )
+        : messages,
+    );
+  }
   const runtime = attempt.preparedModelRuntime;
   const profileId = attempt.authProfileId;
   const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
@@ -681,10 +699,12 @@ export async function prepareEmbeddedAttemptTransport(input: {
   }
   return {
     serverToolClearingEnabled,
-    compactionReplayEnabled: resolveCompactionReplayEligibility(attempt.model, {
-      extraParams: effectiveExtraParams,
-      apiKey: transportApiKey,
-    }),
+    compactionReplayEnabled:
+      !suppressResponsesCompaction &&
+      resolveCompactionReplayEligibility(attempt.model, {
+        extraParams: effectiveExtraParams,
+        apiKey: transportApiKey,
+      }),
     effectiveAgentTransport,
     effectiveExtraParams,
     effectivePromptCacheRetention,

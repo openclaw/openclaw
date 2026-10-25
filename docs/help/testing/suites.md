@@ -78,14 +78,22 @@ and live tests remain outside this tier. See [Node test lanes](/ci/scope-and-rou
 ### PostgreSQL conformance
 
 `node scripts/test-database-conformance.mjs --engine postgres --connection <dsn>`
-runs the workboard suite and `src/infra/postgres-sync` tests against a disposable
+runs the PostgreSQL infrastructure, state, and integration suites against a disposable
 PostgreSQL database. The runner passes the connection through a Node preload
 and worker environment data to test processes and threads, without a DSN
 environment variable. It redacts the connection from child output.
 
 Arguments after `--` go to the normal test runner. Start with a file or directory
-to replace the default targets; options alone retain both suites. For example,
+to replace the default targets; options alone retain all suites. For example,
 append `-- src/infra/postgres-sync/locks.test.ts --maxWorkers=1` for a smoke test.
+Use `--shard 1/3`, `--shard 2/3`, or `--shard 3/3` for the CI partitions.
+The shared weighted allocator balances the existing target inventory using committed
+`config/postgres-conformance-timings.json` measurements. Refresh those advisory
+weights from per-file case spans in PostgreSQL conformance job logs when costs change;
+new targets remain included with a default weight. Every shard reads the same checkout
+bytes, never a cross-run timing cache. Each retains normal test-runner options after
+`--`; explicit target overrides require omitting `--shard`. Add `--list` to inspect a
+shard's targets without opening a database; `--connection` is unnecessary in that mode.
 
 For a local Homebrew `postgresql@17` cluster, use a temporary directory on a disk
 with enough free space. This subshell stops and removes its cluster on exit:
@@ -112,14 +120,17 @@ the existing Vitest workers can overlap independent recovery and custody cases.
 They retain real one-shot command workers, isolated state, and PostgreSQL namespaces;
 no additional job or service is started.
 
-CI's **PostgreSQL conformance** job uses a fresh `postgres:17` service. It runs
-on scheduled main CI and PRs touching `src/infra/database-engine/**`,
+CI's **PostgreSQL conformance** matrix runs three shards in parallel with a 30-minute
+job budget each. Every shard has a
+fresh PostgreSQL 17 service using the pinned `pgvector/pgvector:pg17` image and
+the `unaccent`, `pg_trgm`, and `vector` extensions. It runs
+on scheduled main CI, manual CI validations, and PRs touching `src/infra/database-engine/**`,
 `src/infra/postgres-sync/**`, `src/infra/sql-connection.ts`,
 `src/infra/sql-query-compiler.ts`, `src/infra/kysely-sync*.ts`,
 `src/infra/sqlite-transaction.ts`, `extensions/workboard/**`,
 `src/config/zod-schema.database.ts`, or `scripts/test-database-conformance*.mjs`.
 Unknown PR paths conservatively select it; older targets without the runner
-omit it. The selected job is required by `openclaw/ci-gate`.
+omit it. All selected shards are required by `openclaw/ci-gate`.
 
 ### Unit / integration (default)
 
@@ -233,6 +244,14 @@ Native dependency policy:
       without retrying the shard, even when the child shuts down with exit code zero. Set
       `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for
       an intentionally silent investigation.
+    - `scripts/run-tsgo.mjs` (`pnpm tsgo*`) type checks with tsrs on
+      Linux and Apple Silicon macOS, and with tsgo on Windows and Intel macOS,
+      where tsrs ships no binary. Set `OPENCLAW_TYPECHECKER=tsgo` to use tsgo
+      anywhere, for example to compare a suspected tsrs false positive; Full
+      Release Validation does this for every release. Declaration emit and
+      `pnpm tsgo:profile` always use tsgo. Ordinary `--pprofDir` requests
+      (including `OPENCLAW_TSGO_PPROF_DIR`) also select tsgo; forcing tsrs
+      for that Go-only flag fails with an actionable message.
     - `scripts/run-tsgo.mjs` leaves tsgo unbounded by default, preserving the
       behavior of existing local workflows. Set `OPENCLAW_TSGO_TIMEOUT_MS` to
       a positive millisecond value to make a wedged compiler fail loudly
@@ -428,7 +447,17 @@ node scripts/run-vitest.mjs --isolated-image "$IMAGE_ID" run \
 
 The adapter requires Linux, an existing rootless Podman installation with its native init helper (normally catatonit), checkout-local `pnpm install --frozen-lockfile` dependencies, and native Node and pnpm executables compatible with the image. Put the native pnpm executable matching `package.json` on `PATH`, or select it through the existing `npm_execpath` environment variable; a Corepack/download shim is not an offline executable. The image must already contain the Chromium revision required by the installed Playwright package under `/ms-playwright`, including its headless shell and system libraries. The runner checks versions and launches Chromium before starting the test command. SELinux-labeled hosts are not supported by this initial adapter: it refuses before creating a container rather than relabeling shared host files or disabling enforcement. Use an already supported isolated runner instead of changing host security policy.
 
-It runs Vitest, Chromium, the provider fixture, and the test Gateway in the same network-none namespace. Podman’s init owns PID 1 so detached test children are reaped after their launchers exit; the Node entrypoint still owns the test invocation and cleanup. Host proxy settings stay unchanged; host credentials, Gateway state, Git metadata, and private scratch are not exposed to the container. There are no published ports or external network access. Missing prerequisites fail with setup guidance instead of installing packages or weakening isolation.
+For WebKit browser tests, the image must also contain the installed Playwright package's WebKit revision and system libraries. Prepare a trusted upstream Playwright image matching that package version before invoking the adapter; image preparation is separate from the offline test run. Select the standalone WebKit config instead of the package config's environment opt-in or `--project` (neither is forwarded by this isolated launcher):
+
+```bash
+node scripts/run-vitest.mjs --isolated-image "$IMAGE_ID" run \
+  --config test/vitest/vitest.ui-browser-webkit.config.ts --configLoader runner \
+  ui/src/components/solid/menu-navigation.browser.test.tsx --maxWorkers=1
+```
+
+If the host pnpm executable auto-selects another version, resolve the already prepared pinned native executable with `pnpm exec node -p process.env.npm_execpath` and set `npm_execpath` to that path for the invocation. The container checks the executable itself, without downloading a replacement.
+
+It runs Vitest, the selected browser, the provider fixture, and the test Gateway in the same network-none namespace. Podman’s init owns PID 1 so detached test children are reaped after their launchers exit; the Node entrypoint still owns the test invocation and cleanup. Host proxy settings stay unchanged; host credentials, Gateway state, Git metadata, and private scratch are not exposed to the container. There are no published ports or external network access. Missing prerequisites fail with setup guidance instead of installing packages or weakening isolation.
 
 Use the ordinary local config, not the CI-only prebuilt config. The adapter uses the standard test selection to prepare `qaRuntime` artifacts inside the container for tests that consume built runtime, including private-QA artifacts when required. Source-only selections do not pay for a runtime build and retain the 8 GiB container memory cap. Runs that prepare built artifacts use a bounded 16 GiB cap to accommodate the compiler heap and native build memory; CPU, network, filesystem, and process limits are unchanged. For the standard Control UI E2E config, it retains the private-QA `ciArtifacts` build before admitting tests; backend readiness alone does not mean the dashboard assets are ready. The host’s live-Gateway artifact admission is unchanged. The isolated source snapshot uses tracked working-tree files, including staged new files; stage a new test before selecting it. Keep source and dependencies unchanged during the invocation, and keep dependency installation separate. The initial interface supports exact tracked test files, a tracked config, and console reporters; it does not export files from the disposable snapshot. This route is not suitable for live-provider tests or tests that must contact services outside their own container.
 

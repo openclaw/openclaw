@@ -21,10 +21,19 @@ function getStateSchemaFacts(database: EngineConnection) {
     : getAdmittedSqliteSchemaFacts(database);
 }
 
+/** PostgreSQL admits the current schema; SQLite may still expose a pre-feature version. */
+export function isStateSchemaVersionAtLeast(database: EngineConnection, version: number): boolean {
+  return (
+    isPostgresSqlConnection(database) ||
+    (getAdmittedSqliteSchemaFacts(database)?.userVersion ?? 0) >= version
+  );
+}
+
 export type StateSchemaVersionFacts = { userVersion: number; contentVersion: number };
 
 const versionKey: SqliteDatabaseAdmissionKey<StateSchemaVersionFacts> = {
   name: "state.schema-version",
+  lifetime: "process",
   schemaDependent: true,
   read(value) {
     if (
@@ -50,9 +59,11 @@ type StateSchemaAdmission<Value> = {
 export function createStateSchemaAdmission<Value>(
   name: string,
   read: SqliteDatabaseAdmissionKey<Value>["read"],
+  lifetime?: "process",
 ) {
   const key: SqliteDatabaseAdmissionKey<StateSchemaAdmission<Value>> = {
     name,
+    lifetime,
     schemaDependent: true,
     read(input) {
       if (
@@ -102,13 +113,16 @@ export function createStateSchemaAdmission<Value>(
   };
 }
 
-const runtimeAdmission = createStateSchemaAdmission("state.runtime-schema", (value) =>
-  typeof value === "object" &&
-  value !== null &&
-  "startupReady" in value &&
-  typeof value.startupReady === "boolean"
-    ? { startupReady: value.startupReady }
-    : undefined,
+const runtimeAdmission = createStateSchemaAdmission(
+  "state.runtime-schema",
+  (value) =>
+    typeof value === "object" &&
+    value !== null &&
+    "startupReady" in value &&
+    typeof value.startupReady === "boolean"
+      ? { startupReady: value.startupReady }
+      : undefined,
+  "process",
 );
 
 type ConnectionVersion = { schema: { admissionId: string }; facts: StateSchemaVersionFacts };

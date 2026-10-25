@@ -120,26 +120,59 @@ function* rowFragments(
 export function memoryPublicationHeader(
   replacement: MemorySourceIndexReplacement,
 ): MemorySourceIndexHeader {
-  const { chunks: _chunks, embeddings: _embeddings, ...fields } = replacement;
-  if (fields.source !== "sessions") {
-    return fields;
-  }
   // Retained rows travel in the bounded transfer, never the header.
-  const { retained: _retained, removedIds, ...header } = fields;
+  const {
+    chunks: _chunks,
+    embeddings: _embeddings,
+    retained: _retained,
+    removedIds,
+    ...header
+  } = replacement;
   return { ...header, delta: removedIds !== undefined };
+}
+
+// A probe prints at most two batches; sources too large for one command keep them with the
+// unread generator so staging resumes the same print instead of repeating it.
+// The manager rebuilds replacement objects, but their prepared chunks and vectors
+// remain unchanged until publication settles.
+type PublicationProbe = {
+  fragments?: MemoryPublicationFragment[];
+  staged?: { head: MemoryPublicationFragment[][]; rest: Generator<MemoryPublicationFragment[]> };
+};
+// Prepared entries outlive their publication within a batch, so settled probes are released.
+const publicationProbes = new WeakMap<MemorySourceIndexReplacement["chunks"], PublicationProbe>();
+
+/** Drop the printed fragments once a publication settles; a late call only reprints. */
+export function releaseMemoryPublication(
+  replacement: MemorySourceIndexReplacement | readonly MemorySourceIndexReplacement[],
+) {
+  for (const item of Array.isArray(replacement) ? replacement : [replacement]) {
+    publicationProbes.delete(item.chunks);
+  }
 }
 
 export function* memoryPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
+  const probe = publicationProbes.get(replacement.chunks);
+  if (!probe?.staged) {
+    yield* printPublicationBatches(replacement);
+    return;
+  }
+  const { head, rest } = probe.staged;
+  probe.staged = undefined;
+  yield* head;
+  yield* rest;
+}
+
+function* printPublicationBatches(
+  replacement: MemorySourceIndexReplacement,
+): Generator<MemoryPublicationFragment[]> {
   function* rows(): Generator<MemorySourceIndexRow> {
-    if (replacement.source === "sessions") {
-      for (const removedId of replacement.removedIds ?? []) {
-        yield { removedId };
-      }
+    for (const removedId of replacement.removedIds ?? []) {
+      yield { removedId };
     }
-    const retained = replacement.source === "sessions" ? (replacement.retained ?? []) : [];
-    for (const chunk of retained) {
+    for (const chunk of replacement.retained ?? []) {
       yield {
         // Retained rows keep their stored text; identity and provenance suffice.
         chunk: { ...row(chunk), text: "" },
@@ -168,12 +201,23 @@ export function* memoryPublicationBatches(
 
 /** Ordinary sources fit one bounded command; larger sources retain chunked transfer. */
 export function memoryPublicationInline(replacement: MemorySourceIndexReplacement) {
-  const batches = memoryPublicationBatches(replacement);
-  const first = batches.next();
-  if (!batches.next().done) {
-    return undefined;
+  let probe = publicationProbes.get(replacement.chunks);
+  if (!probe) {
+    const rest = printPublicationBatches(replacement);
+    const head: MemoryPublicationFragment[][] = [];
+    while (head.length < 2) {
+      const batch = rest.next();
+      if (batch.done) {
+        break;
+      }
+      head.push(batch.value);
+    }
+    probe = head.length < 2 ? { fragments: head[0] ?? [] } : { staged: { head, rest } };
+    publicationProbes.set(replacement.chunks, probe);
   }
-  return { header: memoryPublicationHeader(replacement), fragments: first.value ?? [] };
+  return probe.fragments
+    ? { header: memoryPublicationHeader(replacement), fragments: probe.fragments }
+    : undefined;
 }
 
 /** A group shares one bounded worker request and one native transaction. */

@@ -21,14 +21,16 @@ import {
   hasOpenAICompletionsDeltaContent,
 } from "../providers/openai-completions-tool-calls.js";
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
-import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
+import {
+  appendAssistantMessageDiagnostic,
+  recordSuppressedReasoning,
+} from "../utils/diagnostics.js";
 import {
   createToolArgumentPreviewSchedule,
   parseStreamingJson,
   type ToolArgumentPreviewSchedule,
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { createDsmlRecoverer } from "./openai-completions-dsml.js";
@@ -49,30 +51,19 @@ import {
 import type { RecoveredTextToolCall, TextToolCallRecoveryPart } from "./text-tool-call-recovery.js";
 import { iterateModelStream, throwIfModelStreamAborted } from "./transport-stream-shared.js";
 
-type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
-  // Some compatible providers attach usage per choice instead of per chunk.
-  usage?: ChatCompletionChunk["usage"];
-  // Some compatible providers stream a complete message in place of delta.
-  message?: ChatCompletionChunk["choices"][number]["delta"];
-};
+let reasoningParserModule:
+  | Promise<typeof import("../utils/reasoning-tag-text-partitioner.js")>
+  | undefined;
 
 type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> & {
-  choices: OpenAICompatibleChoice[];
+  choices: (ChatCompletionChunk["choices"][number] & {
+    // Some compatible providers attach usage per choice instead of per chunk.
+    usage?: ChatCompletionChunk["usage"];
+    // Some compatible providers stream a complete message in place of delta.
+    message?: ChatCompletionChunk["choices"][number]["delta"];
+  })[];
   timings?: { prompt_ms?: number; predicted_ms?: number };
 };
-
-type CompletionsStreamOptions = {
-  signal?: AbortSignal;
-  emitReasoning?: boolean;
-  strictReasoningTags?: boolean;
-  sawStreamDONE?: () => boolean;
-} & (
-  | {
-      mode: "direct";
-      beforeContentBlock: (nextType: "text" | "thinking" | "toolCall") => void;
-    }
-  | { mode?: "managed"; beforeContentBlock?: never }
-);
 
 function extractToolCallThoughtSignature(toolCall: unknown): string | undefined {
   const tc = toolCall as Record<string, unknown> | undefined;
@@ -137,18 +128,30 @@ export async function processCompletionsStream(
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: AssistantMessageEvent): void },
-  options?: CompletionsStreamOptions,
+  options?: {
+    signal?: AbortSignal;
+    emitReasoning?: boolean;
+    strictReasoningTags?: boolean;
+    sawStreamDONE?: () => boolean;
+  } & (
+    | {
+        mode: "direct";
+        beforeContentBlock: (nextType: "text" | "thinking" | "toolCall") => void;
+      }
+    | { mode?: "managed"; beforeContentBlock?: never }
+  ),
 ) {
+  const { createReasoningTagTextPartitioner } = await (reasoningParserModule ??=
+    import("../utils/reasoning-tag-text-partitioner.js"));
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const directMode = options?.mode === "direct";
   const emitReasoning = options?.emitReasoning ?? true;
   const openAIModel = model as OpenAIModeModel;
   const compat = getCompat(openAIModel);
   const visibleReasoningDetailTypes = new Set(compat.visibleReasoningDetailTypes);
-  const shouldFilterDeepSeekDsmlText = compat.thinkingFormat === "deepseek";
-  const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
+  const deepSeekTextFilter = compat.emitsDsmlToolCalls ? createDeepSeekTextFilter() : null;
   const deepSeekToolCallRecoverer =
-    !directMode && shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
+    !directMode && compat.emitsDsmlToolCalls ? createDsmlRecoverer() : null;
   const gemmaToolCallRecoverer =
     !directMode && /gemma-?4/i.test(model.id) ? createGemmaToolCallRecoverer() : null;
   const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
@@ -160,6 +163,7 @@ export async function processCompletionsStream(
   const directContent: { block: TextBlock | ThinkingBlock | null } = { block: null };
   let currentTextSource: OpenAICompletionsTextSource | undefined;
   let sawReasoning = false;
+  let suppressedReasoning = false;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
@@ -295,6 +299,7 @@ export async function processCompletionsStream(
       );
     }
   };
+  const recoveredToolCallBlocks = new Set<ToolCall>();
   const appendRecoveredToolCall = (toolCall: RecoveredTextToolCall) => {
     if (currentBlock?.type === "toolCall") {
       currentBlock = null;
@@ -309,6 +314,7 @@ export async function processCompletionsStream(
       arguments: toolCall.arguments,
       partialJson: toolCall.partialJson,
     };
+    recoveredToolCallBlocks.add(block);
     currentBlock = block;
     appendToolCallBlock(block);
     pushStreamEvent({
@@ -475,6 +481,10 @@ export async function processCompletionsStream(
       );
       const reasoningDeltas = reasoningBatch.deltas;
       const hasReasoningThinking = reasoningBatch.hasThinking;
+      if (hasReasoningThinking && !model.reasoning && !emitReasoning && !suppressedReasoning) {
+        suppressedReasoning = true;
+        recordSuppressedReasoning(output);
+      }
       // Share the content/refusal owner to avoid duplicate mirrored refusals.
       const contentDeltas = readOpenAICompletionsContentDeltas(
         choiceDelta.content,
@@ -613,6 +623,12 @@ export async function processCompletionsStream(
   }
   currentBlock = null;
   flushPendingPostToolCallDeltas();
+  // Native calls supersede recovered previews before any toolcall_end authorizes execution.
+  if (sawNativeToolCallDelta && recoveredToolCallBlocks.size > 0) {
+    output.content = output.content.filter(
+      (block) => block.type !== "toolCall" || !recoveredToolCallBlocks.has(block),
+    );
+  }
   // Only an explicit stop or observed SSE terminal may authorize silent tool calls.
   finalizeOpenAICompletionsToolCalls(output, {
     allowSilentToolCallPromotion:
@@ -647,6 +663,12 @@ export async function processCompletionsStream(
       timestamp: Date.now(),
       details: { processingMs: providerProcessingMs },
     });
+  }
+  if (suppressedReasoning) {
+    const error = recordSuppressedReasoning(output);
+    if (error) {
+      throw error;
+    }
   }
 }
 

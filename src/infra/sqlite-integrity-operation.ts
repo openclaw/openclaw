@@ -30,13 +30,14 @@ export async function runSqliteIntegrityOperationInWorker(
           signal,
           undefined,
           step.value.timing,
+          { check: step.value.check, tables: step.value.tables },
         );
       } catch (error) {
         failure = { error };
       }
       // Neither cancellation nor lost custody may resume an index/schema repair.
       beforeResume();
-      if (!failure) {
+      if (!failure && step.value.check !== "quick") {
         recordSqliteDatabaseIntegrity(step.value.database);
       }
       step =

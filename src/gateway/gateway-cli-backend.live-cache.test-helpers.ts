@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -42,19 +43,13 @@ export async function createCliAnnounceBarrier() {
     }
     response = incomingResponse;
   });
-  const port = await new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("CLI announce barrier did not bind a TCP port"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("CLI announce barrier did not bind a TCP port");
+  }
   return {
-    url: `http://127.0.0.1:${port}${requestPath}`,
+    url: `http://127.0.0.1:${address.port}${requestPath}`,
     get calls() {
       return calls;
     },
@@ -64,9 +59,7 @@ export async function createCliAnnounceBarrier() {
     },
     async close() {
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(server.close.bind(server))();
     },
   };
 }
@@ -76,43 +69,23 @@ export type RuntimeBackendEntry = ReturnType<
 >[number];
 
 export async function initializeCacheProbeGitWorkspace(workspaceDir: string): Promise<void> {
-  await execFileAsync("git", ["init", "--quiet", workspaceDir]);
-  await execFileAsync("git", ["-C", workspaceDir, "config", "user.name", "OpenClaw Tests"]);
-  await execFileAsync("git", [
-    "-C",
-    workspaceDir,
-    "config",
-    "user.email",
-    "openclaw-tests@localhost",
-  ]);
-  await execFileAsync("git", ["-C", workspaceDir, "add", "--all"]);
-  await execFileAsync("git", [
-    "-C",
-    workspaceDir,
-    "commit",
-    "--quiet",
-    "-m",
-    "cache probe baseline",
-  ]);
+  for (const args of [
+    ["init", "--quiet", workspaceDir],
+    ["-C", workspaceDir, "config", "user.name", "OpenClaw Tests"],
+    ["-C", workspaceDir, "config", "user.email", "openclaw-tests@localhost"],
+    ["-C", workspaceDir, "add", "--all"],
+    ["-C", workspaceDir, "commit", "--quiet", "-m", "cache probe baseline"],
+  ]) {
+    await execFileAsync("git", args);
+  }
 }
 
-type CliCacheUsage = {
-  input?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-};
+type CliCacheUsage = Partial<Record<"input" | "cacheRead" | "cacheWrite", number>>;
+type CliCacheMeta = Partial<Record<"usage" | "lastCallUsage", CliCacheUsage>>;
 
 export function logCliCacheUsage(turn: string, result: unknown): number {
-  const typedResult =
-    // SAFETY: agent results expose this optional metadata shape; every field stays optional below.
-    result as {
-      meta?: {
-        agentMeta?: {
-          usage?: CliCacheUsage;
-          lastCallUsage?: CliCacheUsage;
-        };
-      };
-    };
+  // SAFETY: agent results expose optional normalized usage metadata.
+  const typedResult = result as { meta?: { agentMeta?: CliCacheMeta } };
   const agentMeta = typedResult.meta?.agentMeta;
   const usage = agentMeta?.lastCallUsage ?? agentMeta?.usage;
   if (!usage) {
@@ -138,22 +111,18 @@ export async function createCliBackendProbePlugin(
   await fs.mkdir(pluginDir, { recursive: true });
   await fs.writeFile(
     path.join(pluginDir, "openclaw.plugin.json"),
-    `${JSON.stringify(
-      {
-        id: CLI_BACKEND_PROBE_PLUGIN_ID,
-        name: "CLI Backend Probe",
-        description: "Live test plugin for CLI completion ordering, continuity, and MCP schemas",
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-        contracts: {
-          tools: [
-            CLI_ANNOUNCE_BARRIER_TOOL_NAME,
-            ...(probes.mcpSchema ? [MCP_SCHEMA_PROBE_TOOL_NAME] : []),
-          ],
-        },
+    JSON.stringify({
+      id: CLI_BACKEND_PROBE_PLUGIN_ID,
+      name: "CLI Backend Probe",
+      description: "Live test plugin for CLI completion ordering, continuity, and MCP schemas",
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+      contracts: {
+        tools: [
+          CLI_ANNOUNCE_BARRIER_TOOL_NAME,
+          ...(probes.mcpSchema ? [MCP_SCHEMA_PROBE_TOOL_NAME] : []),
+        ],
       },
-      null,
-      2,
-    )}\n`,
+    }),
   );
   await fs.writeFile(
     path.join(pluginDir, "index.cjs"),
@@ -161,7 +130,7 @@ export async function createCliBackendProbePlugin(
   id: "${CLI_BACKEND_PROBE_PLUGIN_ID}",
   name: "CLI Backend Probe",
   register(api) {
-    api.registerTool({
+    api.registerTool((ctx) => ctx.sessionKey?.startsWith("agent:dev:cli-announce-") ? {
       name: "${CLI_ANNOUNCE_BARRIER_TOOL_NAME}",
       description: "Wait for the live test controller to release the parent turn after child completion",
       parameters: { type: "object", properties: {}, additionalProperties: false },
@@ -170,7 +139,7 @@ export async function createCliBackendProbePlugin(
         if (!response.ok) throw new Error("CLI announce barrier request failed");
         return { content: [{ type: "text", text: await response.text() }] };
       },
-    });
+    } : null, { name: "${CLI_ANNOUNCE_BARRIER_TOOL_NAME}" });
     const continuity = ${JSON.stringify(probes.continuity ?? null)};
     if (continuity) {
       api.on("before_prompt_build", (event, ctx) => {
@@ -203,8 +172,7 @@ export function prepareClaudeCacheProbeBackend(params: {
   if (!apiKey) {
     throw new Error("Claude CLI cache probe requires an Anthropic API key");
   }
-  // Exercise the same profile-owned secret-input path as an operator-configured key.
-  // The isolated state directory is removed when this live test finishes.
+  // Exercise the profile-owned secret-input path in this test's isolated state.
   saveAuthProfileStore(
     {
       version: 1,
@@ -221,8 +189,7 @@ export function prepareClaudeCacheProbeBackend(params: {
     { syncExternalCli: false },
   );
 
-  // This Vitest gateway uses the minimal startup path, so load the owning bundled plugin
-  // explicitly. The production Gateway loads the same runtime registration at startup.
+  // Minimal test startup needs the production Gateway's owning plugin loaded explicitly.
   const registry = loadOpenClawPlugins({
     cache: false,
     config: params.config,
@@ -239,8 +206,7 @@ export function prepareClaudeCacheProbeBackend(params: {
   }
   return {
     ...registration.backend,
-    // Keep the live harness's installed command and explicit API-key passthrough while
-    // exercising the owning plugin's real prepare/argv hooks.
+    // Keep the installed command/key passthrough, but use the plugin's real prepare/argv hooks.
     config: params.liveBackend.config,
     pluginId: registration.pluginId,
     ...(registration.builtWithOpenClawVersion
@@ -262,124 +228,145 @@ async function waitFor<T>(resolve: () => T | undefined | Promise<T | undefined>)
 
 export async function verifyCliBackendAnnounceOrdering({
   client,
-  announceBarrier,
+  announceBarrier: barrier,
   requestTimeoutMs,
   logStep,
+  minCacheHitRate,
 }: {
   client: GatewayClient;
   announceBarrier: Awaited<ReturnType<typeof createCliAnnounceBarrier>>;
   requestTimeoutMs: number;
   logStep: (step: string, details?: Record<string, unknown>) => void;
+  /** Cache probes require the completion and the next ordinary turn to reuse the parent prefix. */
+  minCacheHitRate?: number;
 }) {
-  const announceNonce = randomBytes(3).toString("hex").toUpperCase();
-  const announceSessionKey = `agent:dev:cli-announce-${announceNonce.toLowerCase()}`;
-  const announceChildToken = `CLI_ANNOUNCE_CHILD_${announceNonce}`;
-  const announceParentToken = `CLI_ANNOUNCE_PARENT_${announceNonce}`;
-  let announceParentObservedAt: number | undefined;
-  const announceRequest = client.request(
+  const nonce = randomBytes(3).toString("hex").toUpperCase();
+  const sessionKey = `agent:dev:cli-announce-${nonce.toLowerCase()}`;
+  const childToken = `CLI_ANNOUNCE_CHILD_${nonce}`;
+  const parentToken = `CLI_ANNOUNCE_PARENT_${nonce}`;
+  let parentObservedAt: number | undefined;
+  const request = client.request(
     "agent",
     {
-      sessionKey: announceSessionKey,
+      sessionKey,
       idempotencyKey: `cli-announce-order-${randomUUID()}`,
       deliver: false,
       timeout: 240,
       message: [
         "Run this exact OpenClaw CLI-backed completion announcement scenario. Use tool calls, not prose.",
-        `Call sessions_spawn exactly once with taskName=cli_announce_${announceNonce.toLowerCase()} and task=${JSON.stringify(`Reply exactly ${announceChildToken} and nothing else.`)}.`,
+        `Call sessions_spawn exactly once with taskName=cli_announce_${nonce.toLowerCase()} and task=${JSON.stringify(`Reply exactly ${childToken} and nothing else.`)}.`,
         `After sessions_spawn returns status=accepted, call ${CLI_ANNOUNCE_BARRIER_TOOL_NAME} exactly once with no arguments.`,
-        `After that tool returns, reply exactly ${announceParentToken}.`,
-        `When the child's completion is delivered in a later turn, include its exact result ${announceChildToken} in your user-facing update.`,
+        `After that tool returns, reply exactly ${parentToken}.`,
+        `When the child's completion is delivered in a later turn, include its exact result ${childToken} in your user-facing update.`,
       ].join("\n"),
     },
     { expectFinal: true, timeoutMs: requestTimeoutMs },
   );
-  let announceError: unknown;
-  void announceRequest.then(
-    () => (announceParentObservedAt = Date.now()),
-    (error: unknown) => (announceError = error),
+  let requestError: unknown;
+  void request.then(
+    () => (parentObservedAt = Date.now()),
+    (error: unknown) => (requestError = error),
   );
 
-  const completedAnnounceChild = await waitFor(() => {
-    if (announceError) {
-      throw new Error("CLI announce parent failed", { cause: announceError });
+  const completedChild = await waitFor(() => {
+    if (requestError) {
+      throw new Error("CLI announce parent failed", { cause: requestError });
     }
-    if (announceBarrier.calls === 0) {
+    if (barrier.calls === 0) {
       return undefined;
     }
-    return listSubagentRunsForRequester(announceSessionKey).find(
+    return listSubagentRunsForRequester(sessionKey).find(
       (run) =>
-        run.taskName === `cli_announce_${announceNonce.toLowerCase()}` &&
-        run.completion?.resultText?.includes(announceChildToken) === true &&
+        run.taskName === `cli_announce_${nonce.toLowerCase()}` &&
+        run.completion?.resultText?.includes(childToken) === true &&
         run.execution.outcome?.status === "ok",
     );
   });
-  expect(announceBarrier.calls).toBe(1);
-  expect(announceParentObservedAt).toBeUndefined();
-  expect(completedAnnounceChild.delivery?.announcedAt).toBeUndefined();
+  expect(barrier.calls).toBe(1);
+  expect(parentObservedAt).toBeUndefined();
+  expect(completedChild.delivery?.announcedAt).toBeUndefined();
   logStep("announce-child:completed-before-parent", {
-    runId: completedAnnounceChild.runId,
-    childEndedAt: completedAnnounceChild.execution.endedAt,
-    delivery: completedAnnounceChild.delivery,
+    runId: completedChild.runId,
+    childEndedAt: completedChild.execution.endedAt,
+    delivery: completedChild.delivery,
   });
-  announceBarrier.release();
-  const announceParent = await announceRequest;
-  announceParentObservedAt ??= Date.now();
-  expect(extractPayloadText(announceParent.result)).toContain(announceParentToken);
+  barrier.release();
+  const parent = await request;
+  parentObservedAt ??= Date.now();
+  expect(extractPayloadText(parent.result)).toContain(parentToken);
 
-  const deliveredAnnounceChild = await waitFor(() =>
-    listSubagentRunsForRequester(announceSessionKey).find(
+  const deliveredChild = await waitFor(() =>
+    listSubagentRunsForRequester(sessionKey).find(
       (run) =>
-        run.runId === completedAnnounceChild.runId &&
+        run.runId === completedChild.runId &&
         run.delivery?.status === "delivered" &&
         typeof run.delivery?.deliveredAt === "number" &&
         typeof run.delivery?.announcedAt === "number",
     ),
   );
-  expect(deliveredAnnounceChild.delivery?.announcedAt).toBeGreaterThanOrEqual(
-    announceParentObservedAt,
-  );
-  expect(deliveredAnnounceChild.delivery?.announcedAt).toBe(
-    deliveredAnnounceChild.delivery?.deliveredAt,
-  );
+  expect(deliveredChild.delivery?.announcedAt).toBeGreaterThanOrEqual(parentObservedAt);
+  expect(deliveredChild.delivery?.announcedAt).toBe(deliveredChild.delivery?.deliveredAt);
   // CLI requesters use an ordered agent handoff, not the embedded steer queue.
   // The committed parent reply must precede the completion in canonical history.
-  const announceEntry = (await loadGatewaySessionEntryReadOnlyAsync(announceSessionKey)).entry;
-  if (!announceEntry?.sessionId) {
+  const entry = (await loadGatewaySessionEntryReadOnlyAsync(sessionKey)).entry;
+  if (!entry?.sessionId) {
     throw new Error("CLI announce probe lost its requester session");
   }
   const sessionTarget = await resolveSessionTranscriptRuntimeTarget({
     agentId: "dev",
-    sessionId: announceEntry.sessionId,
-    sessionKey: announceSessionKey,
+    sessionId: entry.sessionId,
+    sessionKey,
   });
+  let assistantUsage: Array<CliCacheUsage | undefined> = [];
   const { parentReplyIndex, completionReplyIndex } = await waitFor(async () => {
-    const announceHistory = await loadCliSessionHistoryMessages({ sessionTarget });
-    const assistantReplies = announceHistory.flatMap((message) => {
-      const record = message as { role?: unknown; content?: unknown };
-      return record.role === "assistant"
-        ? [extractTextFromChatContent(record.content, { joinWith: "" }) ?? ""]
-        : [];
+    const history = await loadCliSessionHistoryMessages({ sessionTarget });
+    const assistantMessages = history.flatMap((message) => {
+      const record = message as { role?: unknown; content?: unknown; usage?: CliCacheUsage };
+      return record.role === "assistant" ? [record] : [];
     });
-    const observedParentReplyIndex = assistantReplies.findIndex((reply) =>
-      reply.includes(announceParentToken),
+    assistantUsage = assistantMessages.map((record) => record.usage);
+    const replies = assistantMessages.map(
+      (record) => extractTextFromChatContent(record.content, { joinWith: "" }) ?? "",
     );
-    const observedCompletionReplyIndex = assistantReplies.findIndex((reply) =>
-      reply.includes(announceChildToken),
-    );
-    return observedParentReplyIndex >= 0 && observedCompletionReplyIndex >= 0
-      ? {
-          parentReplyIndex: observedParentReplyIndex,
-          completionReplyIndex: observedCompletionReplyIndex,
-        }
+    const parentIndex = replies.findIndex((reply) => reply.includes(parentToken));
+    const completionIndex = replies.findIndex((reply) => reply.includes(childToken));
+    return parentIndex >= 0 && completionIndex >= 0
+      ? { parentReplyIndex: parentIndex, completionReplyIndex: completionIndex }
       : undefined;
   });
   logStep("announce-child:transcript-order", {
-    runId: deliveredAnnounceChild.runId,
-    parentObservedAt: announceParentObservedAt,
-    delivery: deliveredAnnounceChild.delivery,
+    runId: deliveredChild.runId,
+    parentObservedAt,
+    delivery: deliveredChild.delivery,
     parentReplyIndex,
     completionReplyIndex,
   });
   expect(parentReplyIndex).toBeGreaterThanOrEqual(0);
   expect(completionReplyIndex).toBeGreaterThan(parentReplyIndex);
+  if (minCacheHitRate === undefined) {
+    return;
+  }
+  // Ordinary -> verified completion -> ordinary must keep one reusable prefix.
+  logCliCacheUsage("announce-parent", {
+    meta: { agentMeta: { usage: assistantUsage[parentReplyIndex] } },
+  });
+  const completionHitRate = logCliCacheUsage("announce-completion", {
+    meta: { agentMeta: { usage: assistantUsage[completionReplyIndex] } },
+  });
+  const followupToken = `CLI_ANNOUNCE_FOLLOWUP_${nonce}`;
+  const followup = await client.request(
+    "agent",
+    {
+      sessionKey,
+      idempotencyKey: `cli-announce-followup-${randomUUID()}`,
+      deliver: false,
+      timeout: 240,
+      message: `Do not inspect files or run tools. Reply with exactly: ${followupToken}.`,
+    },
+    { expectFinal: true, timeoutMs: requestTimeoutMs },
+  );
+  expect(extractPayloadText(followup.result)).toContain(followupToken);
+  const followupHitRate = logCliCacheUsage("announce-followup", followup.result);
+  expect(completionHitRate).toBeGreaterThanOrEqual(minCacheHitRate);
+  expect(followupHitRate).toBeGreaterThanOrEqual(minCacheHitRate);
 }

@@ -1,4 +1,5 @@
 import type {
+  WorkerInferenceCancelParams,
   WorkerInferenceCancelResult,
   WorkerInferenceErrorReason,
   WorkerInferenceEventFrame,
@@ -35,10 +36,7 @@ export type WorkerInferenceCancelApplicationResult =
   | { ok: true; result: WorkerInferenceCancelResult }
   | { ok: false; reason: WorkerInferenceErrorReason };
 
-export type InferenceTurnIdentity = Pick<
-  WorkerInferenceTurnInput,
-  "sessionId" | "runEpoch" | "runId" | "turnId"
->;
+export type InferenceTurnIdentity = WorkerInferenceCancelParams;
 
 export type ActiveInference = {
   claimKey: string;
@@ -57,6 +55,8 @@ export type ActiveInference = {
   seq: number;
   streamedBytes: number;
   launched: boolean;
+  /** Raw executor lifetime survives its earlier cancellation/terminal acknowledgment. */
+  execution?: Promise<void>;
   settled: boolean;
   abortReason?: WorkerInferenceErrorReason;
   begun?: Promise<Awaited<ReturnType<WorkerInferenceStore["begin"]>> | undefined>;

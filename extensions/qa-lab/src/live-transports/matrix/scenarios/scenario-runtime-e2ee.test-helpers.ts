@@ -1,6 +1,10 @@
 import type { MatrixVerificationBootstrapResult } from "@openclaw/matrix/test-api.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
+function unexpectedMatrixQaCapability(): never {
+  throw new Error("Matrix QA test must provide the capability it exercises");
+}
+
 export function createMatrixQaE2eeTestContext(
   overrides: Partial<MatrixQaScenarioContext> = {},
 ): MatrixQaScenarioContext {
@@ -8,17 +12,25 @@ export function createMatrixQaE2eeTestContext(
     baseUrl: "http://127.0.0.1:9",
     driverAccessToken: "driver-test-token",
     driverUserId: "@driver:matrix-qa.test",
+    gatewayCall: unexpectedMatrixQaCapability,
+    installFaultRule: unexpectedMatrixQaCapability,
+    interruptTransport: unexpectedMatrixQaCapability,
     observedEvents: [],
     observerAccessToken: "observer-test-token",
     observerUserId: "@observer:matrix-qa.test",
     outputDir: "unused-output",
     registrationToken: "registration-test-token",
+    readGatewayAccountStartAt: unexpectedMatrixQaCapability,
+    restartGateway: unexpectedMatrixQaCapability,
+    restartGatewayAfterStateMutation: unexpectedMatrixQaCapability,
+    restartGatewayWithQueuedMessage: unexpectedMatrixQaCapability,
     roomId: "!room:matrix-qa.test",
     sutAccessToken: "sut-test-token",
     sutUserId: "@sut:matrix-qa.test",
-    syncState: {},
+    syncStreams: {},
     timeoutMs: 1_000,
     topology: { defaultRoomId: "!room:matrix-qa.test", defaultRoomKey: "main", rooms: [] },
+    waitGatewayAccountReady: unexpectedMatrixQaCapability,
     ...overrides,
   };
 }

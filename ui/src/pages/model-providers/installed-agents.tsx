@@ -1,5 +1,18 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createDeferred } from "@solidjs/signals";
+import type { JSX } from "@solidjs/web";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  isPending,
+  Loading,
+  onSettled,
+  refresh,
+  Show,
+} from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
@@ -15,6 +28,7 @@ import { createWizardLogin, WizardLogin } from "../../components/wizard-login-co
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
@@ -40,29 +54,70 @@ type InstalledAgent = {
 
 const INSTALLATION_STATUS = {
   installed: { kind: "muted", labelKey: "modelProviders.installedAgents.status.installed" },
-  missing: { kind: "muted", labelKey: "modelProviders.installedAgents.status.missing" },
   unverified: { kind: "warn", labelKey: "modelProviders.installedAgents.status.unverified" },
 } as const;
+
+type InstalledInventory = {
+  agents: InstalledAgent[] | null;
+  failure?: { error: unknown };
+};
 
 type InstalledAgentsOptions = {
   gateway: GatewayPageBinding;
   context: ApplicationContext;
 };
 
+type PresentToggle = (
+  pending: Promise<unknown>,
+  enabled: boolean,
+  isCurrent: () => boolean,
+  retired: Promise<void>,
+) => Promise<void>;
+
 export function createInstalledAgents(options: InstalledAgentsOptions) {
   const context = options.context;
   const gatewayState = projectGateway(context.gateway);
   const config = projectRuntimeConfig(context.runtimeConfig);
   const overlays = projectOwner(context.overlays, (source) => source.snapshot);
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   let installed: InstalledAgent[] | null = null;
-  let listRequest: AbortController | null = null;
   let listClient: GatewayBrowserClient | null | undefined;
   let listEpoch = -1;
-  let loadError: string | null = null;
-  /** Requested enabled state per agent while its config write is unsettled. */
-  const pending = new Map<string, boolean>();
+  let inventory: { value: InstalledInventory | Promise<InstalledInventory> } = {
+    value: { agents: installed },
+  };
+  let finishListRead: ((outcome: InstalledInventory) => void) | undefined;
+  const currentList = () =>
+    listClient !== null &&
+    listClient !== undefined &&
+    options.gateway.isCurrent({ client: listClient, epoch: listEpoch });
+  const listRequest = createPageRequest(notify, {
+    task: (client: GatewayBrowserClient, { signal }) =>
+      client.request<{ agents: InstalledAgent[] }>(INSTALLED_AGENTS_METHOD, {}, { signal }),
+    onComplete: (result) => {
+      if (currentList()) {
+        installed = result.agents;
+      }
+      finishListRead?.({ agents: installed });
+      finishListRead = undefined;
+    },
+    onError: (error) => {
+      finishListRead?.({
+        agents: installed,
+        ...(currentList() ? { failure: { error } } : {}),
+      });
+      finishListRead = undefined;
+    },
+  });
+  // Admission stays synchronous; expected values belong to each row's presentation.
+  const pending = new Set<string>();
+  let presentationLifetime = Promise.withResolvers<void>();
+  let presentationIdentity = {
+    epoch: options.gateway.epoch,
+    agentId: context.settingsAgentSelection.state.selectedId,
+    selectionRevision: context.settingsAgentSelection.intentRevision,
+  };
   const messages = new Map<string, ModelProviderRowMessage>();
   let enablement: {
     client: GatewayBrowserClient;
@@ -79,7 +134,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     onAnswer: (value, includeValue) => {
       const target = enablement;
       if (target && isCurrentEnablement(target)) {
-        void wizard.runner.answer(value, includeValue).then(() => reconcileEnablement(target));
+        void presentEnablementStep(target, wizard.runner.answer(value, includeValue));
       }
     },
     onBackgroundCompletion: async () => {
@@ -95,21 +150,71 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   const projection = projectSource(null, {
     read: () => ({
       agents: installed,
-      error: loadError,
-      loading: listRequest !== null,
+      inventory,
       pending,
       messages,
       enablement,
+      presentationIdentity,
     }),
     subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      publish = listener;
+      return () => (publish = undefined);
     },
     equality: "revision",
   });
+  const presentationScope = createMemo(() => projection.read().presentationIdentity);
+  const wizardPresentation = createMemo(() => {
+    presentationScope();
+    const [saving, setSaving] = createOptimistic(false);
+    return { saving, setSaving };
+  });
+  const presentStep = action(function* (
+    display: ReturnType<typeof wizardPresentation>,
+    target: NonNullable<typeof enablement>,
+    operation: Promise<unknown>,
+    retired: Promise<void>,
+  ) {
+    try {
+      if (isCurrentEnablement(target)) {
+        display.setSaving(true);
+      }
+      yield Promise.race([operation, retired]);
+    } catch (error) {
+      if (isCurrentEnablement(target)) {
+        messages.set(target.agent.id, { kind: "error", text: modelProviderErrorMessage(error) });
+        notify();
+      }
+    }
+  });
+
+  async function presentEnablementStep(
+    target: NonNullable<typeof enablement>,
+    step: Promise<unknown>,
+  ) {
+    const display = wizardPresentation();
+    const retired = presentationLifetime.promise;
+    const operation = step.then(() => reconcileEnablement(target));
+    await Promise.resolve();
+    return presentStep(display, target, operation, retired);
+  }
 
   function synchronize(): void {
     const gateway = options.gateway;
+    const selection = context.settingsAgentSelection;
+    if (
+      presentationIdentity.epoch !== gateway.epoch ||
+      presentationIdentity.agentId !== selection.state.selectedId ||
+      presentationIdentity.selectionRevision !== selection.intentRevision
+    ) {
+      presentationIdentity = {
+        epoch: gateway.epoch,
+        agentId: selection.state.selectedId,
+        selectionRevision: selection.intentRevision,
+      };
+      pending.clear();
+      messages.clear();
+      closeEnablement();
+    }
     if (enablement && !isCurrentEnablement(enablement)) {
       closeEnablement();
     }
@@ -120,10 +225,11 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   }
 
   function cancel(): void {
-    const request = listRequest;
-    listRequest = null;
-    request?.abort();
-    loadError = null;
+    listRequest.cancel();
+    // Retire the display even when the canceled transport never settles.
+    finishListRead?.({ agents: installed });
+    finishListRead = undefined;
+    inventory = { value: { agents: installed } };
   }
 
   async function load(
@@ -137,28 +243,10 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       notify();
       return;
     }
-    const request = new AbortController();
-    listRequest = request;
-    notify();
-    try {
-      const result = await client.request<{ agents: InstalledAgent[] }>(
-        INSTALLED_AGENTS_METHOD,
-        {},
-        { signal: request.signal },
-      );
-      if (listRequest === request && options.gateway.isCurrent({ client, epoch })) {
-        installed = result.agents;
-      }
-    } catch (error) {
-      if (listRequest === request && options.gateway.isCurrent({ client, epoch })) {
-        loadError = modelProviderErrorMessage(error);
-      }
-    } finally {
-      if (listRequest === request) {
-        listRequest = null;
-        notify();
-      }
-    }
+    const completion = Promise.withResolvers<InstalledInventory>();
+    inventory = { value: completion.promise };
+    finishListRead = completion.resolve;
+    await listRequest.run(client);
   }
 
   function subscribe(gateway: ApplicationContext["gateway"]): () => void {
@@ -180,6 +268,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     if (!resetOptions.preserveVisibleData) {
       installed = null;
     }
+    inventory = { value: { agents: installed } };
     notify();
   }
 
@@ -190,6 +279,9 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   }
 
   function available(): boolean {
+    if (!options.gateway.connected && installed !== null) {
+      return true;
+    }
     return canCallGatewayMethod(
       gatewayState.read().snapshot,
       INSTALLED_AGENTS_METHOD,
@@ -216,6 +308,9 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   }
 
   function closeEnablement(): void {
+    // Retirement must precede publication; pending actions park reactive cleanup.
+    presentationLifetime.resolve();
+    presentationLifetime = Promise.withResolvers<void>();
     const target = enablement;
     enablement = null;
     wizard.reset();
@@ -253,7 +348,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     }
   }
 
-  function setEnabled(agent: InstalledAgent, enabled: boolean): boolean {
+  function setEnabled(agent: InstalledAgent, enabled: boolean, present: PresentToggle): boolean {
     const scope = options.gateway.capture();
     const selection = context.settingsAgentSelection;
     const agentId = selection.state.selectedId;
@@ -268,6 +363,12 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     ) {
       return false;
     }
+    const retired = presentationLifetime.promise;
+    const presentAdmitted = async (operation: Promise<unknown>, isCurrent: () => boolean) => {
+      // The owner publishes admission before Solid opens its presentation lane.
+      await Promise.resolve();
+      return present(operation, enabled, isCurrent, retired);
+    };
     if (enabled) {
       const target = {
         ...scope,
@@ -276,32 +377,33 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         agent,
       };
       enablement = target;
-      pending.set(agent.id, true);
+      pending.add(agent.id);
       messages.delete(agent.id);
-      void wizard.runner
-        .startRuntime(
-          {
-            agentId,
-            runtimeId: agent.runtimeId,
-            configPatch: {
-              plugins: { entries: { acpx: { config: { nativeAgents: { [agent.id]: true } } } } },
-            },
+      const step = wizard.runner.startRuntime(
+        {
+          agentId,
+          runtimeId: agent.runtimeId,
+          configPatch: {
+            plugins: { entries: { acpx: { config: { nativeAgents: { [agent.id]: true } } } } },
           },
-          agent.name,
-        )
-        .then(() => reconcileEnablement(target));
+        },
+        agent.name,
+      );
       notify();
+      const operation = presentEnablementStep(target, step);
+      void presentAdmitted(operation, () => isCurrentEnablement(target));
       return true;
     }
     // The post-write read retires any list request started before this mutation.
-    pending.set(agent.id, enabled);
+    pending.add(agent.id);
     const isCurrent = () => options.gateway.isCurrent(scope);
-    void runModelProviderConfigMutation(
+    const isCurrentAgent = () =>
+      selection.state.selectedId === agentId && selection.intentRevision === selectionRevision;
+    const operation = runModelProviderConfigMutation(
       {
         runtimeConfig: context.runtimeConfig,
         isCurrentClient: isCurrent,
-        isCurrentAgent: () =>
-          selection.state.selectedId === agentId && selection.intentRevision === selectionRevision,
+        isCurrentAgent,
         setBusy: (busy) => {
           if (!busy) {
             pending.delete(agent.id);
@@ -329,6 +431,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         void load();
       }
     });
+    void presentAdmitted(operation, () => isCurrent() && isCurrentAgent());
     return true;
   }
 
@@ -339,20 +442,20 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     const view = createMemo(() => {
       const snapshot = projection.read();
       const agent = props.agent;
-      const requested = snapshot.pending.get(agent.id);
       const configObject = currentConfigObject(config.read().state);
       const entries = asRecord(asRecord(configObject?.plugins)?.entries);
       const nativeConfig = asRecord(asRecord(entries?.acpx)?.config);
       const configuredEnabled = asRecord(nativeConfig?.nativeAgents)?.[agent.id];
+      // The admitted wizard retains its enabled intent at human-input checkpoints.
+      const enabling = snapshot.enablement?.agent.id === agent.id && snapshot.pending.has(agent.id);
       const enabled =
-        requested ?? (typeof configuredEnabled === "boolean" ? configuredEnabled : agent.enabled);
+        enabling || (typeof configuredEnabled === "boolean" ? configuredEnabled : agent.enabled);
       const card = getCards().find((entry) => entry.id === agent.runtimeId);
+      // Rows render only for detected apps; missing ones share one line below the list.
       let status: { kind: "ok" | "muted" | "warn" | "danger"; labelKey: string } =
-        INSTALLATION_STATUS[agent.installation];
+        INSTALLATION_STATUS[agent.installation === "unverified" ? "unverified" : "installed"];
       let hint = "";
-      if (agent.installation === "missing") {
-        hint = t("modelProviders.installedAgents.installHint", { name: agent.name });
-      } else if (agent.installation === "unverified") {
+      if (agent.installation === "unverified") {
         hint = t("modelProviders.installedAgents.unverifiedHint");
       } else if (!enabled) {
         hint = t("modelProviders.installedAgents.disabledHint");
@@ -371,7 +474,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       }
       return {
         agent,
-        pending: requested,
+        pending: snapshot.pending.has(agent.id),
         enabled,
         status,
         hint,
@@ -380,6 +483,36 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         message: snapshot.messages.get(agent.id),
       };
     });
+    const presentation = createMemo(() => {
+      presentationScope();
+      const [enabled, setEnabledValue] = createOptimistic(() => view().enabled);
+      const [saving, setSaving] = createOptimistic(false);
+      return { enabled, setEnabledValue, saving, setSaving };
+    });
+    const presentToggle = action(function* (
+      display: ReturnType<typeof presentation>,
+      operation: Promise<unknown>,
+      expected: boolean,
+      isCurrent: () => boolean,
+      retired: Promise<void>,
+    ) {
+      try {
+        if (isCurrent()) {
+          display.setSaving(true);
+          display.setEnabledValue(expected);
+        }
+        yield Promise.race([operation, retired]);
+        if (isCurrent()) {
+          yield refresh(display.enabled);
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          messages.set(props.agent.id, { kind: "error", text: modelProviderErrorMessage(error) });
+          notify();
+        }
+      }
+    });
+    const busy = () => presentation().saving() || view().pending;
     return (
       <div class="model-providers__installed-agent" data-installed-agent={props.agent.id}>
         <SettingsToggleRow
@@ -399,7 +532,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
           ariaLabel={t("modelProviders.installedAgents.toggle", { name: view().agent.name })}
           description={
             <Show
-              when={view().pending === undefined}
+              when={!busy()}
               fallback={<SettingsStatus kind="muted" label={t("modelProviders.saving")} />}
             >
               <SettingsStatus kind={view().status.kind} label={t(view().status.labelKey)} />
@@ -409,9 +542,13 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
               </Show>
             </Show>
           }
-          checked={view().enabled}
-          disabled={view().blocked || view().pending !== undefined}
-          onChange={(checked) => setEnabled(props.agent, checked)}
+          checked={presentation().enabled()}
+          disabled={view().blocked}
+          saving={busy()}
+          onChange={(checked) => {
+            const display = presentation();
+            return setEnabled(props.agent, checked, (...args) => presentToggle(display, ...args));
+          }}
         />
         <Show when={view().message}>
           {(message) => (
@@ -435,75 +572,122 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         available: available(),
         blockedReason: blockedReason(),
       }));
-      const checkLabel = () =>
-        t(
-          view().loading
-            ? "modelProviders.installedAgents.checking"
-            : "modelProviders.installedAgents.check",
+      const InventorySection = (props: { checking: boolean; children?: JSX.Element }) => {
+        const label = () =>
+          t(
+            props.checking
+              ? "modelProviders.installedAgents.checking"
+              : "modelProviders.installedAgents.check",
+          );
+        return (
+          <SettingsSection
+            title={t("modelProviders.installedAgents.title")}
+            description={
+              <>
+                {t("modelProviders.installedAgents.description")}
+                <Show when={view().blockedReason}>
+                  <br />
+                  {view().blockedReason}
+                </Show>
+              </>
+            }
+            actions={
+              <openclaw-tooltip prop:content={label()}>
+                <button
+                  type="button"
+                  class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
+                  aria-label={label()}
+                  disabled={props.checking || view().pending.size > 0}
+                  onClick={() => {
+                    void load();
+                    retryDiscovery();
+                  }}
+                >
+                  <Icon name="refresh" />
+                </button>
+              </openclaw-tooltip>
+            }
+          >
+            {props.children}
+          </SettingsSection>
         );
+      };
+      const InventoryContent = () => {
+        const read = createMemo(() => view().inventory);
+        // Refresh may retain rows, but must not hold scope retirement or live config updates.
+        const displayedInventory = createDeferred(() => read().value);
+        const checking = () => isPending(displayedInventory);
+        const detected = createMemo(() =>
+          (displayedInventory().agents ?? []).filter((agent) => agent.installation !== "missing"),
+        );
+        const missing = createMemo(() =>
+          (displayedInventory().agents ?? []).filter((agent) => agent.installation === "missing"),
+        );
+        const outcome = createMemo(() => {
+          const failure = displayedInventory().failure;
+          if (failure) {
+            throw failure.error;
+          }
+          return null;
+        });
+        return (
+          <InventorySection checking={checking()}>
+            <Errored
+              fallback={(error) => (
+                <Show when={!checking()}>
+                  <div class="settings-row">
+                    <div class="settings-row__text">
+                      <span class="settings-row__desc provider-usage__error" role="alert">
+                        {modelProviderErrorMessage(error())}
+                      </span>
+                    </div>
+                    <div class="settings-row__control">
+                      <button class="btn btn--sm" onClick={() => void load()}>
+                        {t("common.retry")}
+                      </button>
+                    </div>
+                  </div>
+                </Show>
+              )}
+            >
+              {outcome()}
+            </Errored>
+            <Show when={view().agents !== null}>
+              <For
+                each={detected()}
+                keyed={(agent) => agent.id}
+                fallback={
+                  <Show when={missing().length === 0}>
+                    <SettingsEmpty message={t("modelProviders.installedAgents.empty")} />
+                  </Show>
+                }
+              >
+                {(agent) => <AgentRow agent={agent()} />}
+              </For>
+              <Show when={missing().length > 0}>
+                <p class="model-providers__agents-missing" data-installed-agents-missing>
+                  {t("modelProviders.installedAgents.notDetected", {
+                    names: missing()
+                      .map((agent) => agent.name)
+                      .join(", "),
+                  })}
+                </p>
+              </Show>
+            </Show>
+          </InventorySection>
+        );
+      };
       return (
         <Show when={view().available}>
           <div class="model-providers__installed-agents">
-            <SettingsSection
-              title={t("modelProviders.installedAgents.title")}
-              description={
-                <>
-                  {t("modelProviders.installedAgents.description")}
-                  <Show when={view().blockedReason}>
-                    <br />
-                    {view().blockedReason}
-                  </Show>
-                </>
-              }
-              actions={
-                <openclaw-tooltip prop:content={checkLabel()}>
-                  <button
-                    type="button"
-                    class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
-                    aria-label={checkLabel()}
-                    disabled={view().loading || view().pending.size > 0}
-                    onClick={() => {
-                      void load();
-                      retryDiscovery();
-                    }}
-                  >
-                    <Icon name="refresh" />
-                  </button>
-                </openclaw-tooltip>
-              }
-            >
-              <Show when={view().error}>
-                <div class="settings-row">
-                  <div class="settings-row__text">
-                    <span class="settings-row__desc provider-usage-error" role="alert">
-                      {view().error}
-                    </span>
-                  </div>
-                  <div class="settings-row__control">
-                    <button
-                      class="btn btn--sm"
-                      disabled={view().loading}
-                      onClick={() => void load()}
-                    >
-                      {t("common.retry")}
-                    </button>
-                  </div>
-                </div>
-              </Show>
-              <Show when={view().agents !== null}>
-                <For
-                  each={view().agents ?? []}
-                  keyed={(agent) => agent.id}
-                  fallback={<SettingsEmpty message={t("modelProviders.installedAgents.empty")} />}
-                >
-                  {(agent) => <AgentRow agent={agent()} />}
-                </For>
-              </Show>
-            </SettingsSection>
+            <Loading fallback={<InventorySection checking />}>
+              <InventoryContent />
+            </Loading>
           </div>
           <Show when={view().enablement}>
             <WizardLogin
               controller={wizard}
+              busy={wizardPresentation().saving()}
               options={{
                 mode: "prepare",
                 doneMessage: t("modelProviders.installedAgents.enabled", {
@@ -517,16 +701,17 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     };
     return <InstalledAgents />;
   }
-  onCleanup(() => {
-    listeners.clear();
+  onSettled(() => () => {
+    presentationLifetime.resolve();
+    publish = undefined;
     enablement = null;
-    cancel();
     listClient = undefined;
+    cancel();
   });
   return {
     get initialized() {
       const snapshot = projection.read();
-      return !available() || snapshot.agents !== null || snapshot.error !== null;
+      return !available() || snapshot.agents !== null || (currentList() && !listRequest.pending);
     },
     synchronize,
     subscribe,

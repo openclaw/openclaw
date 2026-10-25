@@ -1,6 +1,9 @@
 import {
   createChannelInboundEnvelopeBuilderAsync,
+  filterChannelInboundQuoteContext,
   formatInboundMediaUnavailableText,
+  resolveInboundSupplementalSenderAllowed,
+  type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
@@ -10,7 +13,9 @@ import {
   bindIngressLifecycleToReplyOptions,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/security-runtime";
 import {
   isRecord,
   normalizeOptionalString,
@@ -22,7 +27,6 @@ import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
   createChannelPairingController,
-  deliverFormattedTextWithAttachments,
   logInboundDrop,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -225,6 +229,13 @@ export async function handleNextcloudTalkInbound(params: {
       },
     });
   let access = await resolveAccess();
+  const logAuthorizationChanged = () => {
+    runtime.log?.(
+      isGroup && access.activationAccess.shouldSkip
+        ? `nextcloud-talk: drop room ${roomToken} (no mention)`
+        : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
+    );
+  };
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "nextcloud-talk",
@@ -312,12 +323,16 @@ export async function handleNextcloudTalkInbound(params: {
   access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
 
   if (access.ingress.admission !== "dispatch") {
-    runtime.log?.(
-      isGroup && access.activationAccess.shouldSkip
-        ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-        : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-    );
+    logAuthorizationChanged();
     return;
+  }
+
+  if (message.attachment) {
+    const { isNextcloudTalkOutboundFileEcho } = await import("./outbound-media.js");
+    if (await isNextcloudTalkOutboundFileEcho({ account, message, signal: ingressAbortSignal })) {
+      runtime.log?.("nextcloud-talk: ignored own outbound file share");
+      return;
+    }
   }
 
   let stagedMedia: { path: string; contentType?: string } | undefined;
@@ -345,13 +360,6 @@ export async function handleNextcloudTalkInbound(params: {
         senderId,
       });
     }
-  };
-  const cleanupAndThrowIfIngressAborted = async () => {
-    if (!ingressAbortSignal?.aborted) {
-      return;
-    }
-    await deleteStagedMedia();
-    ingressAbortSignal.throwIfAborted();
   };
   const throwIfIngressAborted = () => ingressAbortSignal?.throwIfAborted();
   const mediaSenderAllowed =
@@ -455,11 +463,7 @@ export async function handleNextcloudTalkInbound(params: {
             access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
             throwIfIngressAborted();
             if (access.ingress.admission !== "dispatch") {
-              runtime.log?.(
-                isGroup && access.activationAccess.shouldSkip
-                  ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-                  : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-              );
+              logAuthorizationChanged();
               return;
             }
             try {
@@ -503,14 +507,10 @@ export async function handleNextcloudTalkInbound(params: {
                   sourceModality = "audio";
                 }
               }
-              if (ingressAbortSignal?.aborted) {
-                await cleanupAndThrowIfIngressAborted();
-              }
+              throwIfIngressAborted();
             } catch (error) {
               await deleteStagedMedia();
-              if (ingressAbortSignal?.aborted) {
-                await cleanupAndThrowIfIngressAborted();
-              }
+              throwIfIngressAborted();
               authorizedMediaUnavailable = true;
               const failure = classifyNextcloudTalkMediaFailure(error);
               logNextcloudTalkMediaNonOutcome({
@@ -530,28 +530,37 @@ export async function handleNextcloudTalkInbound(params: {
       }
     }
 
-    if (performedAsyncMediaWork) {
-      if (ingressAbortSignal?.aborted) {
-        await cleanupAndThrowIfIngressAborted();
-      }
+    const quote = message.quote;
+    let quoteAllowFrom = hasAllowEntries(outerGroupAllowFrom) ? outerGroupAllowFrom : roomAllowFrom;
+    let quoteRoomAllowFrom = roomAllowFrom;
+    const hasQuotePolicyWork = quote !== undefined && isGroup && groupPolicy === "allowlist";
+    if (hasQuotePolicyWork) {
+      const expandQuoteAllowFrom = (entries: string[]) =>
+        expandAllowFromWithAccessGroups({
+          cfg: config,
+          allowFrom: entries,
+          channel: CHANNEL_ID,
+          accountId: account.accountId,
+          senderId: quote.senderId,
+          isSenderAllowed: (id, allow) =>
+            resolveNextcloudTalkAllowlistMatch({ senderId: id, allowFrom: allow }).allowed,
+        });
+      quoteAllowFrom = await expandQuoteAllowFrom(quoteAllowFrom);
+      quoteRoomAllowFrom = await expandQuoteAllowFrom(roomAllowFrom);
+    }
+
+    if (performedAsyncMediaWork || hasQuotePolicyWork) {
+      throwIfIngressAborted();
       access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
-      if (ingressAbortSignal?.aborted) {
-        await cleanupAndThrowIfIngressAborted();
-      }
+      throwIfIngressAborted();
       if (access.ingress.admission !== "dispatch") {
         await deleteStagedMedia();
-        runtime.log?.(
-          isGroup && access.activationAccess.shouldSkip
-            ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-            : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-        );
+        logAuthorizationChanged();
         return;
       }
     }
 
-    if (ingressAbortSignal?.aborted) {
-      await cleanupAndThrowIfIngressAborted();
-    }
+    throwIfIngressAborted();
     const agentBody = authorizedMediaUnavailable
       ? formatInboundMediaUnavailableText({
           body: rawBody,
@@ -568,6 +577,35 @@ export async function handleNextcloudTalkInbound(params: {
 
     const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
     const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
+    const visibleQuote = quote
+      ? filterChannelInboundQuoteContext(
+          resolveChannelContextVisibilityMode({
+            cfg: config,
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+          }),
+          {
+            id: quote.id,
+            body: quote.body,
+            sender: quote.senderName || quote.senderId,
+            senderAllowed: resolveInboundSupplementalSenderAllowed({
+              isGroup,
+              groupPolicy,
+              allowFrom: quoteAllowFrom,
+              isSenderAllowed: (candidateAllowFrom) =>
+                resolveNextcloudTalkAllowlistMatch({
+                  allowFrom: [...candidateAllowFrom],
+                  senderId: quote.senderId,
+                }).allowed &&
+                (!hasAllowEntries(quoteRoomAllowFrom) ||
+                  resolveNextcloudTalkAllowlistMatch({
+                    allowFrom: quoteRoomAllowFrom,
+                    senderId: quote.senderId,
+                  }).allowed),
+            }),
+          },
+        )
+      : undefined;
 
     const ctxPayload = core.channel.inbound.buildContext({
       channelIngress: access,
@@ -604,12 +642,23 @@ export async function handleNextcloudTalkInbound(params: {
       extra: {
         GroupSubject: isGroup ? roomName || roomToken : undefined,
         GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
+        // ReplyChain carries quoted identity without changing the outgoing ReplyToId fallback.
+        ReplyChain:
+          quote && visibleQuote
+            ? [
+                {
+                  messageId: visibleQuote.id,
+                  senderId: quote.senderId,
+                  sender: visibleQuote.sender,
+                  body: visibleQuote.body,
+                  isQuote: true,
+                },
+              ]
+            : undefined,
       },
     });
 
-    if (ingressAbortSignal?.aborted) {
-      await cleanupAndThrowIfIngressAborted();
-    }
+    throwIfIngressAborted();
     const dispatchParams = {
       cfg: config as OpenClawConfig,
       channel: CHANNEL_ID,
@@ -624,19 +673,23 @@ export async function handleNextcloudTalkInbound(params: {
                 ...payload,
                 text: sanitizeAssistantVisibleText(payload.text),
               },
-        deliver: async (payload) => {
-          const visibleReplySent = await deliverFormattedTextWithAttachments({
+        deliverWithProviderMessageSending: async (payload, info) => {
+          const { deliverNextcloudTalkReply } = await import("./reply.js");
+          return await deliverNextcloudTalkReply({
+            cfg: config,
+            accountId: account.accountId,
+            agentId: route.agentId,
+            ctxPayload,
             payload,
-            send: async ({ text, replyToId }) => {
-              await sendMessageNextcloudTalk(roomToken, text, {
-                cfg: config,
-                accountId: account.accountId,
-                replyTo: replyToId,
-              });
-              statusSink?.({ lastOutboundAt: Date.now() });
-            },
+            info,
+            to: roomToken,
+            signal: ingressAbortSignal,
           });
-          return { visibleReplySent };
+        },
+        onDelivered: (_payload, _info, result) => {
+          if (result?.visibleReplySent) {
+            statusSink?.({ lastOutboundAt: Date.now() });
+          }
         },
         onError: (err, info) => {
           runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
@@ -656,7 +709,7 @@ export async function handleNextcloudTalkInbound(params: {
           runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);
         },
       },
-    } satisfies Parameters<typeof core.channel.inbound.dispatch>[0];
+    } satisfies ChannelInboundTurnPlan<"provider_message_sending">;
     // Dispatch owns accepted media even if its downstream processing rejects.
     mediaHandedOff = true;
     await core.channel.inbound.dispatch(dispatchParams);

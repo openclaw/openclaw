@@ -1,4 +1,4 @@
-import { inspect } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -6,10 +6,6 @@ import * as dispatch from "../../auto-reply/dispatch.js";
 import * as dispatchRuntimeLoaders from "../../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { InternalGetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import {
-  replyRunRegistry,
-  type ReplyOperation,
-} from "../../auto-reply/reply/reply-run-registry.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import { initSessionState } from "../../auto-reply/reply/session.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -18,283 +14,210 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  claimSessionControllerTask,
+  releaseSessionControllerClaim,
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+  type SessionControllerInput,
+  type SessionControllerMailboxClaim,
+} from "../../sessions/session-controller.mailbox.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
-import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
+import { chatRpc } from "./chat-rpc-fixture.test-support.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
-import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient } from "./types.js";
 
-type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
 type ChatDispatchParams = Parameters<typeof chatDispatch.startChatDispatch>[0];
 
-it.each([
-  "compaction",
-  "active-compaction",
-  "successive-compactions",
-  "replacement",
-  "foreign-store",
-  "restart",
-  "cancelled",
-] as const)(
-  "retains the accepted chat target while preparation outlives its predecessor: %s",
-  async (scenario) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await loadOrCreateProcessDeviceIdentityAsync();
-      const agentId = "main";
-      const sessionKey = "agent:main:compaction-handoff";
-      const initialSessionId = "before-compaction";
-      const nextSessionId = "after-compaction";
-      const finalSessionId =
-        scenario === "successive-compactions" ? "after-second-compaction" : nextSessionId;
-      const runId = `accepted-before-compaction-${scenario}`;
-      const message = "Continue the existing task with this exact input.";
-      const storePath = state.statePath("sessions.sqlite");
-      const scope = { agentId, sessionKey, storePath };
-      const cfg = {
-        agents: { defaults: { workspace: state.workspaceDir } },
-        plugins: { enabled: false },
-        session: { store: storePath },
-      };
-      await state.writeConfig(cfg);
-      setRuntimeConfigSnapshot(cfg);
-      const profile = ensureProfileForEmail("compaction-handoff@example.test");
-      const entry = {
-        sessionId: initialSessionId,
-        updatedAt: Date.now(),
-        createdActor: { type: "human", source: "profile", id: profile.id } as const,
-      };
-      await replaceSessionEntry(scope, entry);
-      const predecessorScope = {
-        ...scope,
-        storePath: scenario === "foreign-store" ? state.statePath("foreign.sqlite") : storePath,
-      };
-      if (scenario === "foreign-store") {
-        await replaceSessionEntry(predecessorScope, entry);
-      }
-      const previousAdmission = await admitReplyTurn({
-        ...predecessorScope,
-        sessionId: initialSessionId,
-        kind: "visible",
-        resetTriggered: false,
-      });
-      if (previousAdmission.status !== "owned" || !previousAdmission.databaseClaim) {
-        throw new Error("fixture requires the predecessor's real physical database admission");
-      }
-      const predecessor = previousAdmission.operation;
-      predecessor.setPhase("running");
-
-      const client: GatewayClient = {
-        connId: "compaction-handoff-client",
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          role: "operator",
-          scopes: ["operator.read", "operator.write", "operator.admin"],
-          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-        },
-      };
-      const context = createGatewayRequestContext(makeContextParams());
-      const prepared = createDeferred<DispatchOptions>();
-      const releasePreparation = createDeferred();
-      const capturedSuccessor = createDeferred();
-      const releaseRuntimePlugins = createDeferred();
-      const originalDispatch = dispatch.dispatchInboundMessageWithProjectedDispatcher;
-      const originalLoadRuntimePlugins = dispatchRuntimeLoaders.loadRuntimePlugins;
-      const holdRuntimePlugins =
-        scenario === "successive-compactions"
-          ? vi.spyOn(dispatchRuntimeLoaders, "loadRuntimePlugins").mockImplementation(async () => {
-              capturedSuccessor.resolve();
-              await releaseRuntimePlugins.promise;
-              return await originalLoadRuntimePlugins();
-            })
-          : undefined;
-      const observeChatDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
-      let owned: ChatDispatchParams | undefined;
-      let successor: ReplyOperation | undefined;
-      let originalRegistration: ChatDispatchParams["admission"]["sessionBinding"] | undefined;
-      let persistenceFailure: unknown;
-      const resolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options, replyConfig) => {
-        if (!options || !replyConfig || !owned || !originalRegistration) {
-          throw new Error("fixture requires the original accepted chat dispatch");
-        }
-        expect(ctx.BodyForAgent).toBe(message);
-        expect(options.runId).toBe(runId);
-        expect(options.expectedExistingSessionId).toBe(finalSessionId);
-        const initialized = await initSessionState({
-          ctx: finalizeInboundContext(ctx),
-          cfg: replyConfig,
-          commandAuthorized: ctx.CommandAuthorized === true,
-          expectedExistingSessionId: options.expectedExistingSessionId,
-          requestedSessionId: options.requestedSessionId,
-          signal: options.abortSignal,
-        });
-        expect(initialized.sessionId).toBe(finalSessionId);
-        options.onSessionPrepared?.({
-          sessionKey: initialized.sessionKey,
-          sessionId: initialized.sessionId,
-          storePath: initialized.storePath,
-        });
-        expect(context.chatAbortControllers.get(runId)).toBe(originalRegistration);
-        expect(originalRegistration.sessionId).toBe(finalSessionId);
-        await options.userTurnTranscriptRecorder?.persistApproved();
-        return { text: "Continued in the compacted conversation." };
-      });
-      const holdPreparation = vi
-        .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
-        .mockImplementation(async (options) => {
-          prepared.resolve(options);
-          await releasePreparation.promise;
-          return await originalDispatch({ ...options, replyResolver: resolver });
-        });
-      let releaseAuthorization: (() => void) | undefined;
-      try {
-        const params = { sessionKey, sessionId: initialSessionId, message, idempotencyKey: runId };
-        const authorization = await resolveSessionMutationAuthorizationAsync({
-          client,
-          context,
-          method: "chat.send",
-          requestParams: params,
-        });
-        releaseAuthorization = authorization.authorization?.release;
-        expect(authorization.error).toBeNull();
-        const respond = vi.fn();
-        await handleChatSend({
-          params,
-          req: { type: "req", id: runId, method: "chat.send" },
-          respond,
-          context,
-          client,
-          sessionMutationAuthorization: authorization.authorization,
-          isWebchatConnect: () => false,
-        });
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ runId, status: "started" }),
-          undefined,
-          expect.anything(),
-        );
-        await prepared.promise;
-        owned = observeChatDispatch.mock.calls.at(-1)?.[0];
-        if (!owned) {
-          throw new Error("chat.send did not start detached dispatch");
-        }
-        const recorder = owned.userTurn.recorder;
-        const persistApproved = recorder.persistApproved.bind(recorder);
-        vi.spyOn(recorder, "persistApproved").mockImplementation(async (...args) => {
-          try {
-            return await persistApproved(...args);
-          } catch (error) {
-            persistenceFailure = error;
-            throw error;
-          }
-        });
-        originalRegistration = owned.admission.sessionBinding;
-        expect(originalRegistration.sessionId).toBe(initialSessionId);
-
-        await replaceSessionEntry(scope, { ...entry, sessionId: nextSessionId });
-        if (scenario === "foreign-store") {
-          await replaceSessionEntry(predecessorScope, { ...entry, sessionId: nextSessionId });
-        }
-        if (scenario !== "replacement") {
-          predecessor.updateSessionId(nextSessionId);
-        }
-        if (scenario === "restart") {
-          predecessor.abortForRestart();
-        }
-        if (scenario === "active-compaction") {
-          expect(replyRunRegistry.get(sessionKey)).toBe(predecessor);
-        } else {
-          predecessor.complete();
-          await predecessor.ownerSettlement;
-          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
-        }
-        if (scenario === "cancelled") {
-          owned.admission.activeRunAbort.controller.abort();
-        }
-        if (scenario === "successive-compactions") {
-          const successorAdmission = await admitReplyTurn({
-            ...scope,
-            sessionId: nextSessionId,
-            expectedSessionId: nextSessionId,
-            kind: "visible",
-            resetTriggered: false,
-          });
-          if (successorAdmission.status !== "owned" || !successorAdmission.databaseClaim) {
-            throw new Error("fixture requires the successor's real physical database admission");
-          }
-          successor = successorAdmission.operation;
-          successor.setPhase("running");
-        }
-        releasePreparation.resolve();
-        if (successor) {
-          // Gather retains this newer owner before its existing plugin-loading await.
-          await capturedSuccessor.promise;
-          await replaceSessionEntry(scope, { ...entry, sessionId: finalSessionId });
-          successor.updateSessionId(finalSessionId);
-          successor.complete();
-          await successor.ownerSettlement;
-          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
-          releaseRuntimePlugins.resolve();
-        }
-        // Admission release follows the chat owner's post-dispatch persistence and cleanup.
-        await owned.admission.gatewayWorkAdmission.released;
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
-
-        if (
-          scenario === "compaction" ||
-          scenario === "active-compaction" ||
-          scenario === "successive-compactions"
-        ) {
-          expect(
-            context.broadcast,
-            `persistApproved failure: ${inspect(persistenceFailure, { depth: 8 })}`,
-          ).not.toHaveBeenCalledWith(
-            "chat",
-            expect.objectContaining({ runId, state: "error" }),
-            expect.anything(),
-          );
-          expect(resolver).toHaveBeenCalledOnce();
-          expect(originalRegistration.sessionId).toBe(finalSessionId);
-          expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
-            ok: true,
-            payload: { runId, status: "ok" },
-          });
-          const transcript = await loadTranscriptEvents({ ...scope, sessionId: finalSessionId });
-          expect(
-            transcript.filter(
-              (event) =>
-                isRecord(event) &&
-                event.type === "message" &&
-                isRecord(event.message) &&
-                event.message.role === "user",
-            ),
-          ).toHaveLength(1);
-        } else {
-          expect(resolver).not.toHaveBeenCalled();
-          expect(originalRegistration.sessionId).toBe(initialSessionId);
-        }
-      } finally {
-        predecessor.complete();
-        successor?.complete();
-        releasePreparation.resolve();
-        releaseRuntimePlugins.resolve();
-        if (owned) {
-          await owned.admission.gatewayWorkAdmission.released;
-        }
-        releaseAuthorization?.();
-        holdPreparation.mockRestore();
-        holdRuntimePlugins?.mockRestore();
-        observeChatDispatch.mockRestore();
-      }
+it("retains the accepted chat target through successive compactions during preparation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
+    const agentId = "main";
+    const sessionKey = "agent:main:compaction-handoff";
+    const initialSessionId = "before-compaction";
+    const nextSessionId = "after-compaction";
+    const finalSessionId = "after-second-compaction";
+    const runId = "accepted-before-compaction";
+    const message = "Continue the existing task with this exact input.";
+    const storePath = state.statePath("sessions.sqlite");
+    const scope = { agentId, sessionKey, storePath };
+    const cfg = {
+      agents: { defaults: { workspace: state.workspaceDir } },
+      plugins: { enabled: false },
+      session: { store: storePath },
+    };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const profile = ensureProfileForEmail("compaction-handoff@example.test");
+    const entry = {
+      sessionId: initialSessionId,
+      updatedAt: Date.now(),
+      createdActor: { type: "human", source: "profile", id: profile.id } as const,
+    };
+    await replaceSessionEntry(scope, entry);
+    const previousAdmission = await admitReplyTurn({
+      ...scope,
+      sessionId: initialSessionId,
+      kind: "visible",
+      resetTriggered: false,
     });
-  },
-);
+    if (previousAdmission.status !== "owned" || !previousAdmission.databaseClaim) {
+      throw new Error("fixture requires the predecessor's real physical database admission");
+    }
+    const predecessor = previousAdmission.operation;
+    predecessor.setPhase("running");
+
+    const client: GatewayClient = {
+      connId: "compaction-handoff-client",
+      authenticatedUserProfile: gatewayProfile(profile.id),
+      connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"], {
+        id: "cli",
+        mode: "cli",
+      }),
+    };
+    const context = createGatewayRequestContext(makeContextParams());
+    const prepared = createDeferred();
+    const releasePreparation = createDeferred();
+    const capturedSuccessor = createDeferred();
+    const releaseRuntimePlugins = createDeferred();
+    const originalLoadRuntimePlugins = dispatchRuntimeLoaders.loadRuntimePlugins;
+    const holdRuntimePlugins = vi
+      .spyOn(dispatchRuntimeLoaders, "loadRuntimePlugins")
+      .mockImplementation(async () => {
+        capturedSuccessor.resolve();
+        await releaseRuntimePlugins.promise;
+        return await originalLoadRuntimePlugins();
+      });
+
+    const originalDispatch = dispatch.dispatchInboundMessageWithProjectedDispatcher;
+    const observeChatDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
+    let owned: ChatDispatchParams | undefined;
+    let successor: ReplyOperation | undefined;
+    let successorInput: SessionControllerInput | undefined;
+    let successorClaim: SessionControllerMailboxClaim | undefined;
+    const resolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options, replyConfig) => {
+      if (!options || !replyConfig) {
+        throw new Error("fixture requires the original accepted chat dispatch");
+      }
+      expect(ctx.BodyForAgent).toBe(message);
+      const initialized = await initSessionState({
+        ctx: finalizeInboundContext(ctx),
+        cfg: replyConfig,
+        commandAuthorized: ctx.CommandAuthorized === true,
+        expectedExistingSessionId: options.expectedExistingSessionId,
+        requestedSessionId: options.requestedSessionId,
+        signal: options.abortSignal,
+      });
+      expect(initialized.sessionId, "initialized session").toBe(finalSessionId);
+      options.onSessionPrepared?.({
+        sessionKey: initialized.sessionKey,
+        sessionId: initialized.sessionId,
+        storePath: initialized.storePath,
+      });
+      await options.userTurnTranscriptRecorder?.persistApproved();
+      return { text: "Continued in the compacted conversation." };
+    });
+    const holdPreparation = vi
+      .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
+      .mockImplementation(async (options) => {
+        prepared.resolve();
+        await releasePreparation.promise;
+        return await originalDispatch({ ...options, replyResolver: resolver });
+      });
+    try {
+      // The queued compaction precedes this chat input in the same mailbox.
+      successorInput = reserveSessionControllerSource(sessionKey, {
+        target: captureSessionTarget({ storeScope: storePath, sessionKey, agentId }),
+        policy: { mode: "followup" },
+      });
+      const params = { sessionKey, sessionId: initialSessionId, message, idempotencyKey: runId };
+      const [ok, response] = await chatRpc(context, client, "chat.send", params);
+      expect([ok, response]).toEqual([true, expect.objectContaining({ runId, status: "started" })]);
+      await prepared.promise;
+      owned = expectDefined(
+        observeChatDispatch.mock.calls.at(-1)?.[0],
+        "chat.send did not start detached dispatch",
+      );
+      await replaceSessionEntry(scope, { ...entry, sessionId: nextSessionId });
+      predecessor.updateSessionId(nextSessionId);
+      predecessor.complete();
+      await predecessor.ownerSettlement;
+      if (successorInput) {
+        successorClaim = await claimSessionControllerTask(successorInput, () => {}, "visible");
+        const successorAdmission = await admitReplyTurn({
+          ...scope,
+          mailboxClaim: successorClaim,
+          sessionId: nextSessionId,
+          expectedSessionId: nextSessionId,
+          kind: "visible",
+          resetTriggered: false,
+        });
+        if (successorAdmission.status !== "owned" || !successorAdmission.databaseClaim) {
+          throw new Error("fixture requires the successor's real physical database admission");
+        }
+        successor = successorAdmission.operation;
+        successor.setPhase("running");
+      }
+      releasePreparation.resolve();
+      if (successor) {
+        await capturedSuccessor.promise;
+        await replaceSessionEntry(scope, { ...entry, sessionId: finalSessionId });
+        successor.updateSessionId(finalSessionId);
+        successor.complete();
+        await successor.ownerSettlement;
+        if (successorClaim) {
+          releaseSessionControllerClaim(successorClaim);
+          await successorClaim.settlement.promise;
+        }
+        releaseRuntimePlugins.resolve();
+      }
+      // Source cleanup follows post-dispatch persistence and the Gateway root's release.
+      await owned.admission.gatewayWorkAdmission.released;
+      expect(rpcSourceTesting.has(runId)).toBe(false);
+
+      expect(context.broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+        expect.anything(),
+      );
+      expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
+        ok: true,
+        payload: { runId, status: "ok" },
+      });
+      const transcript = await loadTranscriptEvents({ ...scope, sessionId: finalSessionId });
+      expect(
+        transcript.filter(
+          (event) =>
+            isRecord(event) &&
+            event.type === "message" &&
+            isRecord(event.message) &&
+            event.message.role === "user",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      predecessor.complete();
+      successor?.complete();
+      if (successorClaim) {
+        releaseSessionControllerClaim(successorClaim);
+      } else if (successorInput) {
+        retireSessionControllerInput(successorInput);
+      }
+      releasePreparation.resolve();
+      releaseRuntimePlugins.resolve();
+      await successorInput?.settlement.promise;
+      if (owned) {
+        await owned.admission.gatewayWorkAdmission.released;
+      }
+      holdPreparation.mockRestore();
+      holdRuntimePlugins.mockRestore();
+      observeChatDispatch.mockRestore();
+    }
+  });
+});

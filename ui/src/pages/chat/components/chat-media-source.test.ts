@@ -1,18 +1,22 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { ChatMediaSourceOwner } from "./chat-media-source.ts";
 
 function mockMediaState(
   media: HTMLMediaElement,
   state: { currentTime: number; duration: number; paused: boolean; ended?: boolean },
 ) {
   let currentTime = state.currentTime;
+  let rejected = false;
   Object.defineProperties(media, {
     currentTime: {
       configurable: true,
       get: () => currentTime,
       set: (value: number) => {
+        if (rejected) {
+          throw new DOMException("media range unavailable", "InvalidStateError");
+        }
         currentTime = value;
       },
     },
@@ -21,26 +25,27 @@ function mockMediaState(
     ended: { configurable: true, get: () => state.ended === true },
   });
   return {
-    currentTime: () => currentTime,
-    rejectSeek: () => {
-      Object.defineProperty(media, "currentTime", {
-        configurable: true,
-        get: () => currentTime,
-        set: () => {
-          throw new DOMException("media range unavailable", "InvalidStateError");
-        },
-      });
-    },
-    allowSeek: () => {
-      Object.defineProperty(media, "currentTime", {
-        configurable: true,
-        get: () => currentTime,
-        set: (value: number) => {
-          currentTime = value;
-        },
-      });
+    setSeekRejected: (value: boolean) => {
+      rejected = value;
     },
   };
+}
+
+function setup(tag: "audio" | "video" = "audio") {
+  const media = document.createElement(tag);
+  const controller = new ChatMediaSourceOwner();
+  return { media, controller, sync: controller.sync.bind(controller, media) };
+}
+
+const response = (status = 200) => new Response(null, { status });
+
+function playback(currentTime = 0, paused = true, duration = 80, tag: "audio" | "video" = "audio") {
+  const state = { currentTime, paused, duration, ended: false, error: null as MediaError | null };
+  const { media, controller } = setup(tag);
+  const clock = mockMediaState(media, state);
+  const update = (ticket: string, identity = "/tmp/media") =>
+    controller.updateSource(media, `/media?mediaTicket=${ticket}`, identity);
+  return { media, controller, clock, update, state };
 }
 
 afterEach(() => {
@@ -49,48 +54,39 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("ChatMediaSourceController", () => {
+describe("ChatMediaSourceOwner", () => {
   it("normalizes and applies native playback immediately", () => {
-    const media = document.createElement("audio");
-    const controller = new ChatMediaSourceController();
-
-    expect(controller.sync(media, "  /media/native.mp3  ", "  media:native  ", "native")).toBe(
-      null,
-    );
-
-    expect(controller.readiness).toBe("ready");
-    expect(controller.readySource).toBe("/media/native.mp3");
-    expect(controller.currentIdentity).toBe("media:native");
+    const { media, controller, sync } = setup();
+    expect(sync("  /media/native.mp3  ", "  media:native  ", "native")).toBeNull();
+    expect(controller).toMatchObject({ readiness: "ready", readySource: "/media/native.mp3" });
     expect(media.getAttribute("src")).toBe("/media/native.mp3");
   });
 
   it("aborts preparation and starts it again after reconnect", async () => {
     let firstSignal: AbortSignal | undefined;
+    const pending = Promise.withResolvers<Response>();
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockImplementationOnce(
-        async (_source, init) =>
-          await new Promise<Response>((_resolve, reject) => {
-            firstSignal = init?.signal ?? undefined;
-            firstSignal?.addEventListener(
-              "abort",
-              () => reject(new DOMException("disconnected", "AbortError")),
-              { once: true },
-            );
-          }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+      .mockImplementationOnce((_source, init) => {
+        firstSignal = init?.signal ?? undefined;
+        firstSignal?.addEventListener(
+          "abort",
+          () => pending.reject(new DOMException("disconnected", "AbortError")),
+          { once: true },
+        );
+        return pending.promise;
+      })
+      .mockResolvedValueOnce(response());
     vi.stubGlobal("fetch", fetchMock);
-    const media = document.createElement("audio");
-    const controller = new ChatMediaSourceController();
+    const { media, controller, sync } = setup();
     const source = "/media/voice.caf?mediaTicket=ticket";
 
-    const first = controller.sync(media, source, "media:voice", "transcode");
+    const first = sync(source, "media:voice", "transcode");
     controller.cancel();
     expect(firstSignal?.aborted).toBe(true);
     expect(controller.readiness).toBe("idle");
 
-    const second = controller.sync(media, source, "media:voice", "transcode");
+    const second = sync(source, "media:voice", "transcode");
     await Promise.all([first, second]);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -99,59 +95,33 @@ describe("ChatMediaSourceController", () => {
   });
 
   it("suppresses a stale completion after the readiness identity changes", async () => {
-    let resolveOld: ((response: Response) => void) | undefined;
+    const old = Promise.withResolvers<Response>();
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockImplementationOnce(
-        async () =>
-          await new Promise<Response>((resolve) => {
-            resolveOld = resolve;
-          }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+      .mockReturnValueOnce(old.promise)
+      .mockResolvedValueOnce(response());
     vi.stubGlobal("fetch", fetchMock);
-    const media = document.createElement("video");
-    const controller = new ChatMediaSourceController();
+    const { media, sync } = setup("video");
 
-    const oldRequest = controller.sync(
-      media,
-      "/media/old.avi?mediaTicket=old",
-      "media:old",
-      "transcode",
-      "old-token",
-    );
-    const newRequest = controller.sync(
-      media,
-      "/media/new.avi?mediaTicket=new",
-      "media:new",
-      "transcode",
-      "new-token",
-    );
+    const prepare = (id: string) =>
+      sync(`/media/${id}.avi?mediaTicket=${id}`, `media:${id}`, "transcode", `${id}-token`);
+    const oldRequest = prepare("old");
+    const newRequest = prepare("new");
     await newRequest;
-    resolveOld?.(new Response(null, { status: 200 }));
+    old.resolve(response());
     await oldRequest;
 
-    expect(controller.currentIdentity).toBe("media:new");
     expect(media.getAttribute("src")).toContain("mediaTicket=new&playback=1");
   });
 
   it("keeps a usable same-identity source when a refresh is unavailable", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
-    );
-    const media = document.createElement("audio");
-    const controller = new ChatMediaSourceController();
-    void controller.sync(media, "/media/voice.mp3?mediaTicket=old", "media:voice", "native");
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response(500)));
+    const { media, controller, sync } = setup();
+    void sync("/media/voice.mp3?mediaTicket=old", "media:voice", "native");
     expect(controller.handleError(media)).toBe(false);
-    void controller.sync(media, "/media/voice.mp3?mediaTicket=old", "media:voice", "native");
+    void sync("/media/voice.mp3?mediaTicket=old", "media:voice", "native");
 
-    const pending = controller.sync(
-      media,
-      "/media/voice.mp3?mediaTicket=fresh",
-      "media:voice",
-      "transcode",
-    );
+    const pending = sync("/media/voice.mp3?mediaTicket=fresh", "media:voice", "transcode");
     expect(controller.readiness).toBe("ready");
     await pending;
 
@@ -161,56 +131,30 @@ describe("ChatMediaSourceController", () => {
   });
 
   it("reports an unavailable rendition when there is no usable fallback", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
-    );
-    const media = document.createElement("audio");
-    const controller = new ChatMediaSourceController();
-    void controller.sync(media, "/media/voice.caf?mediaTicket=old", "media:voice", "native");
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response(500)));
+    const { media, controller, sync } = setup();
+    void sync("/media/voice.caf?mediaTicket=old", "media:voice", "native");
     expect(controller.handleError(media)).toBe(false);
 
-    await controller.sync(
-      media,
-      "/media/voice.caf?mediaTicket=refresh",
-      "media:voice",
-      "transcode",
-    );
-
-    expect(controller.readiness).toBe("unavailable");
-    expect(controller.readySource).toBe("");
+    await sync("/media/voice.caf?mediaTicket=refresh", "media:voice", "transcode");
+    expect(controller).toMatchObject({ readiness: "unavailable", readySource: "" });
     expect(media.getAttribute("src")).toContain("mediaTicket=old");
   });
 
   it.each([
-    {
-      boundary: "authentication",
-      source: "/media/protected.caf?mediaTicket=refresh",
-      identity: "media:protected",
-      authToken: "principal-b",
-    },
-    {
-      boundary: "source identity",
-      source: "/media/replacement.caf?mediaTicket=refresh",
-      identity: "media:replacement",
-      authToken: "principal-a",
-    },
-  ])("removes the old source when a changed $boundary is unavailable", async (next) => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
-    );
-    const media = document.createElement("video");
-    const controller = new ChatMediaSourceController();
-    void controller.sync(
-      media,
-      "/media/protected.mp4?mediaTicket=old",
-      "media:protected",
-      "native",
-      "principal-a",
-    );
+    ["authentication", "protected", "principal-b"],
+    ["source identity", "replacement", "principal-a"],
+  ])("removes the old source when a changed %s is unavailable", async (_, name, authToken) => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response(500)));
+    const { media, controller, sync } = setup("video");
+    void sync("/media/protected.mp4?mediaTicket=old", "media:protected", "native", "principal-a");
 
-    const pending = controller.sync(media, next.source, next.identity, "transcode", next.authToken);
+    const pending = sync(
+      `/media/${name}.caf?mediaTicket=refresh`,
+      `media:${name}`,
+      "transcode",
+      authToken,
+    );
     expect(media.hasAttribute("src")).toBe(false);
     await pending;
 
@@ -218,60 +162,47 @@ describe("ChatMediaSourceController", () => {
     expect(media.hasAttribute("src")).toBe(false);
   });
 
-  it("queues a refreshed ticket while paused mid-stream and restores it after failure", async () => {
-    const media = document.createElement("audio");
-    const state = { currentTime: 0, duration: 120, paused: true };
-    const clock = mockMediaState(media, state);
-    const play = vi.spyOn(media, "play").mockResolvedValue(undefined);
-    const controller = new ChatMediaSourceController();
-
-    controller.updateSource(media, "/media?mediaTicket=old", "/tmp/audio.mp3");
-    expect(media.getAttribute("src")).toBe("/media?mediaTicket=old");
-
-    media.currentTime = 42;
-    controller.updateSource(media, "/media?mediaTicket=fresh", "/tmp/audio.mp3");
-
-    expect(media.getAttribute("src")).toBe("/media?mediaTicket=old");
-
-    expect(controller.handleError(media)).toBe(true);
-    expect(media.getAttribute("src")).toBe("/media?mediaTicket=fresh");
-    media.currentTime = 0;
-    controller.handleLoadedMetadata(media);
-
-    expect(clock.currentTime()).toBe(42);
-    expect(play).not.toHaveBeenCalled();
-  });
-
-  it("preserves playing state when a failed seek applies the fresh ticket", async () => {
-    const media = document.createElement("video");
-    document.body.append(media);
-    const state = { currentTime: 10, duration: 90, paused: false };
-    const clock = mockMediaState(media, state);
-    const play = vi.spyOn(media, "play").mockResolvedValue(undefined);
-    const controller = new ChatMediaSourceController();
-
-    controller.updateSource(media, "/media?mediaTicket=old", "/tmp/video.mp4");
-    controller.updateSource(media, "/media?mediaTicket=fresh", "/tmp/video.mp4");
-    clock.rejectSeek();
-
-    expect(controller.seek(media, 55)).toBe(true);
-    expect(media.getAttribute("src")).toBe("/media?mediaTicket=fresh");
-    clock.allowSeek();
-    controller.handleLoadedMetadata(media);
-
-    expect(clock.currentTime()).toBe(55);
-    expect(play).toHaveBeenCalledOnce();
-    media.remove();
-  });
+  it.each([
+    ["paused error", 0, true, 120, "audio", 42],
+    ["playing failed seek", 10, false, 90, "video", 55],
+  ] as const)(
+    "restores position and playback after a %s applies a queued ticket",
+    (_, start, paused, duration, tag, target) => {
+      const { media, controller, clock, update } = playback(start, paused, duration, tag);
+      const play = vi.spyOn(media, "play").mockResolvedValue(undefined);
+      if (!paused) {
+        document.body.append(media);
+      }
+      update("old");
+      expect(media.getAttribute("src")).toBe("/media?mediaTicket=old");
+      if (paused) {
+        media.currentTime = target;
+      }
+      update("fresh");
+      expect(media.getAttribute("src")).toBe("/media?mediaTicket=old");
+      if (paused) {
+        expect(controller.handleError(media)).toBe(true);
+      } else {
+        clock.setSeekRejected(true);
+        expect(controller.seek(media, target)).toBe(true);
+        clock.setSeekRejected(false);
+      }
+      expect(media.getAttribute("src")).toBe("/media?mediaTicket=fresh");
+      if (paused) {
+        media.currentTime = 0;
+      }
+      controller.handleLoadedMetadata(media);
+      expect(media.currentTime).toBe(target);
+      expect(play).toHaveBeenCalledTimes(paused ? 0 : 1);
+      media.remove();
+    },
+  );
 
   it("applies a queued ticket once playback is idle at the end", () => {
-    const media = document.createElement("audio");
-    const state = { currentTime: 80, duration: 80, paused: true, ended: false };
-    mockMediaState(media, state);
-    const controller = new ChatMediaSourceController();
+    const { media, controller, update, state } = playback(80);
 
-    controller.updateSource(media, "/media?mediaTicket=old", "/tmp/audio.mp3");
-    controller.updateSource(media, "/media?mediaTicket=fresh", "/tmp/audio.mp3");
+    update("old");
+    update("fresh");
     state.ended = true;
 
     expect(controller.handleEnded(media)).toBe(true);
@@ -279,35 +210,29 @@ describe("ChatMediaSourceController", () => {
   });
 
   it("applies a fresh ticket that arrives after the old source has already failed", () => {
-    const media = document.createElement("audio");
-    const state = { currentTime: 0, duration: 80, paused: true, error: null as MediaError | null };
-    const clock = mockMediaState(media, state);
+    const { media, controller, update, state } = playback();
     Object.defineProperty(media, "error", { configurable: true, get: () => state.error });
-    const controller = new ChatMediaSourceController();
 
-    controller.updateSource(media, "/media?mediaTicket=old", "/tmp/audio.mp3");
+    update("old");
     media.currentTime = 30;
     state.error = { code: 2, message: "ticket expired" } as MediaError;
-    controller.updateSource(media, "/media?mediaTicket=fresh", "/tmp/audio.mp3");
+    update("fresh");
 
     expect(media.getAttribute("src")).toBe("/media?mediaTicket=fresh");
     media.currentTime = 0;
     state.error = null;
     controller.handleLoadedMetadata(media);
-    expect(clock.currentTime()).toBe(30);
+    expect(media.currentTime).toBe(30);
   });
 
   it("replaces a different attachment immediately instead of treating it as a ticket refresh", () => {
-    const media = document.createElement("audio");
-    const state = { currentTime: 20, duration: 80, paused: false };
-    mockMediaState(media, state);
+    const { media, update, state } = playback(20, false);
     const pause = vi.spyOn(media, "pause").mockImplementation(() => {
       state.paused = true;
     });
-    const controller = new ChatMediaSourceController();
 
-    controller.updateSource(media, "/media?mediaTicket=first", "/tmp/first.mp3");
-    controller.updateSource(media, "/media?mediaTicket=second", "/tmp/second.mp3");
+    update("first", "/tmp/first.mp3");
+    update("second", "/tmp/second.mp3");
 
     expect(pause).toHaveBeenCalledOnce();
     expect(media.getAttribute("src")).toBe("/media?mediaTicket=second");

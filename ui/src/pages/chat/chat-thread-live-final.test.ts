@@ -11,9 +11,8 @@ import {
   person,
   queued,
 } from "./chat-thread-fixtures.test-support.ts";
-import { coalesceStreamRuns } from "./chat-thread-grouping.ts";
 import { createProps } from "./chat-thread.test-support.ts";
-import { projectTranscriptIndex } from "./components/chat-transcript-message-index.ts";
+import { coalesceStreamRuns } from "./chat-turn-presentation.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 
 const user = (sendId: string, sender: string, seq: number) =>
@@ -67,18 +66,6 @@ function visibleRows(
         : [],
   );
 }
-function indexItems(
-  items: ReturnType<typeof coalesceAgentRunFrames>,
-  labels: Parameters<typeof projectTranscriptIndex>[2] = { assistantName: "Assistant" },
-) {
-  const chain = {
-    collapsedItems: items,
-    transcriptItems: items,
-    continuations: new Map(),
-    searchActive: false,
-  };
-  return projectTranscriptIndex(chain, new Map(), labels);
-}
 function completed() {
   return rememberLiveTerminalRun(
     simpleMessage("assistant", "The answer being read.", 40),
@@ -88,34 +75,32 @@ function completed() {
 
 describe("live terminal continuity with pending collaborators", () => {
   it.each([
-    { runId: null, localQueue: true },
-    { runId: "active", localQueue: true },
-    { runId: "active", localQueue: false },
-  ])(
-    "keeps the active input before progress through custody with runId=$runId, localQueue=$localQueue",
-    ({ runId, localQueue }) => {
+    [null, true, false],
+    ["active", true, false],
+    ["active", true, true],
+    ["active", false, true],
+    [null, false, true],
+  ] as const)(
+    "keeps startup input before progress (run=%s, local=%s, accepted=%s)",
+    (runId, localQueue, acceptedInput) => {
       const local = queued("active-local", "Current input", 10, "sending", {
         sendRunId: "active",
         sendAttempts: 1,
       });
       const accepted = pendingText(local.text, 20, { id: "active-input", runId: "active" });
-      for (const pendingInputs of [[], [accepted], [accepted, pending]]) {
-        if (!localQueue && pendingInputs.length === 0) {
-          continue;
-        }
-        const rows = build({
-          messages: [],
-          queue: localQueue ? [local] : [],
-          runId,
-          stream: "",
-          pendingInputs,
-        });
-        expect(visibleRows(rows, "reading-indicator")).toEqual([
-          "Current input",
-          "Working",
-          ...(pendingInputs.includes(pending) ? ["Peer follow-up"] : []),
-        ]);
-      }
+      const rows = build({
+        sessionKey: `agent:main:cold-${runId}-${localQueue}`,
+        messages: [],
+        queue: localQueue ? [local] : [],
+        runId,
+        stream: "",
+        pendingInputs: acceptedInput ? [accepted, pending] : [],
+      });
+      expect(visibleRows(rows, "reading-indicator")).toEqual([
+        "Current input",
+        "Working",
+        ...(acceptedInput ? ["Peer follow-up"] : []),
+      ]);
     },
   );
   it.each([false, true])(
@@ -235,70 +220,4 @@ describe("live terminal continuity with pending collaborators", () => {
       );
     },
   );
-  it.each([false, true])(
-    "indexes stream anchors in presentation order (earlier commentary: %s)",
-    (withCommentary) => {
-      const commentary = { ...assistant("Earlier work", 21, "commentary", 3), phase: "commentary" };
-      const latest = {
-        ...assistant("Continuing work", 22, "latest-commentary", 4),
-        phase: "commentary",
-      };
-      const items = project({
-        messages: withCommentary ? [...history, commentary, latest] : history,
-      });
-      const frame = items.find((item) => item.kind === "agent-run-frame");
-      if (frame?.kind !== "agent-run-frame") {
-        throw new Error("Missing active frame");
-      }
-      const stream = frame.parts.find((part) => part.kind === "stream-run");
-      expect(stream).toMatchObject({
-        replyToSender: { id: "reader" },
-        replyToMessage: { message: history[1] },
-      });
-      const key = stream?.parts.find((part) => part.kind === "stream")?.key;
-      expect(key).toBeDefined();
-      const index = indexItems(
-        withCommentary ? [frame] : items,
-        withCommentary
-          ? undefined
-          : { assistantName: "Assistant", userId: "reader", userName: "Reader" },
-      );
-      expect(index.transcriptMessageKeys.get(key!)).toBe(frame.key);
-      if (withCommentary) {
-        const group = frame.parts.find((part) => part.kind === "group");
-        expect(group?.messages[0]?.message).toBe(commentary);
-        expect(index.transcriptMessageKeys.keys().next().value).toBe(group?.messages[0]?.key);
-      }
-    },
-  );
-  it("keeps standalone activity messages addressable for replies and anchors", () => {
-    const message = nativeMessage(
-      "toolResult",
-      "Stored tool result",
-      1,
-      { id: "activity-message", seq: 1 },
-      { toolCallId: "standalone-call" },
-    );
-    const groups = groupsOf(
-      build({
-        messages: [message],
-        pendingInputs: [],
-        ...settled,
-      }),
-    );
-    expect(groups).toHaveLength(1);
-    const items = coalesceAgentRunFrames([
-      { kind: "activity-run", key: "standalone-activity", groups },
-    ]);
-    expect(items[0]?.kind).toBe("activity-run");
-    const index = indexItems(items);
-    expect(index.transcriptMessageKeys.get(groups[0]!.messages[0]!.key)).toBe(
-      "standalone-activity",
-    );
-    expect(index.messageRowKeysById.get("activity-message")).toBe("standalone-activity");
-    expect(index.loadedReplySources.get("activity-message")).toMatchObject({
-      message,
-      messageId: groups[0]!.messages[0]!.key,
-    });
-  });
 });

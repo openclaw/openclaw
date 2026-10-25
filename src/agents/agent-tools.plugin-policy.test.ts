@@ -372,6 +372,7 @@ describe("captured registered plugin tool policy", () => {
     browserRuntime.execute.mockReset();
     browserRuntime.execute.mockImplementation(async () => assertCapturedPolicy("browser"));
     vi.spyOn(profileReader, "prepareUserProfileIdentity").mockImplementation(async (profileId) => ({
+      readCurrentRevision: () => ({ profileId }),
       readCurrentProfile: () => ({ profileId, assignedRole: null }),
       emailBindingIds: [],
       readCurrentFacts: () => ({

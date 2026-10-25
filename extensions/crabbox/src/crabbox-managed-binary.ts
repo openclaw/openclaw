@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { root } from "openclaw/plugin-sdk/file-access-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { runCrabboxProcess } from "./crabbox-process.js";
 import { crabboxExecutionError, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
-export const CRABBOX_MIN_VERSION = "0.77.0";
+export const CRABBOX_MIN_VERSION = "0.79.2";
 export const CRABBOX_NONBLOCKING_CAPTURE_VERSION = "0.79.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
@@ -16,7 +17,12 @@ const VERSION_TIMEOUT_MS = 30_000;
 const DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TOTAL_TIMEOUT_MS = 10 * 60_000;
 
-export type CrabboxBinary = { binary: string; version: string };
+export type CrabboxBinary = {
+  binary: string;
+  version: string;
+  /** Report for consumers of a rejected preferred candidate, including shared acquisition. */
+  rejected?: string;
+};
 
 type CrabboxVersionProbe =
   | { status: "supported"; version: string }
@@ -178,7 +184,7 @@ async function probeInstallation(
   runCommand: CrabboxCommandRunner,
   signal: AbortSignal | undefined,
 ): Promise<CrabboxBinary | undefined> {
-  const stat = await fs.lstat(binary).catch(() => undefined);
+  const stat = await lstatIfExists(binary, "ENOENT");
   if (!stat?.isFile()) {
     return undefined;
   }
@@ -204,91 +210,14 @@ export async function findManagedCrabboxBinary(
 }
 
 async function inspectInstallationDirectory(destination: string) {
-  let stat;
-  try {
-    stat = await fs.lstat(destination);
-  } catch (error) {
-    const { extractErrorCode } = await import("openclaw/plugin-sdk/error-runtime");
-    if (extractErrorCode(error) === "ENOENT") {
-      return undefined;
-    }
-    throw error;
+  const stat = await lstatIfExists(destination, "ENOENT");
+  if (!stat) {
+    return undefined;
   }
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new Error(`Managed Crabbox destination must be a regular directory: ${destination}`);
   }
   return stat;
-}
-
-async function publishInstallation(params: {
-  binary: string;
-  version: string;
-  payload: string;
-  runCommand: CrabboxCommandRunner;
-  signal: AbortSignal;
-}): Promise<CrabboxBinary> {
-  const { binary, payload, runCommand, signal } = params;
-  const destination = path.dirname(binary);
-  const { withFileLock } = await import("openclaw/plugin-sdk/file-lock");
-  signal.throwIfAborted();
-  return withFileLock(
-    `${destination}.publication`,
-    {
-      retries: { retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100 },
-      stale: 120_000,
-      staleRecovery: "remove-if-definitely-stale",
-    },
-    async () => {
-      signal.throwIfAborted();
-      const existing = await inspectInstallationDirectory(destination);
-      const installed = existing ? await probeInstallation(binary, runCommand, signal) : undefined;
-      if (installed) {
-        return installed;
-      }
-      signal.throwIfAborted();
-      let recovery: string | undefined;
-      if (existing) {
-        recovery = `${destination}.recovery-${randomUUID()}`;
-        // Preserve damaged installations, including files we did not create, outside staging cleanup.
-        await fs.rename(destination, recovery);
-      }
-      try {
-        signal.throwIfAborted();
-        // Runtime packs and companion executables must stay beside the CLI.
-        await fs.rename(payload, destination);
-        return { binary, version: params.version };
-      } catch (error) {
-        // Cooperating installers hold the same lock. Retain ambiguous externally changed state.
-        if (recovery) {
-          try {
-            if (!(await inspectInstallationDirectory(destination))) {
-              await fs.rename(recovery, destination);
-              recovery = undefined;
-            }
-          } catch (restoreError) {
-            throw new AggregateError(
-              [error, restoreError],
-              `Crabbox publication failed; previous installation is preserved at ${recovery}`,
-              { cause: restoreError },
-            );
-          }
-        }
-        if (!signal.aborted && (await inspectInstallationDirectory(destination))) {
-          const winner = await probeInstallation(binary, runCommand, signal);
-          if (winner) {
-            return winner;
-          }
-        }
-        if (recovery) {
-          throw new Error(
-            `Crabbox publication failed; previous installation is preserved at ${recovery}`,
-            { cause: error },
-          );
-        }
-        throw error;
-      }
-    },
-  );
 }
 
 async function installManagedBinary(
@@ -298,10 +227,6 @@ async function installManagedBinary(
 ): Promise<CrabboxBinary> {
   const destination = path.dirname(binary);
   await inspectInstallationDirectory(destination);
-  const installed = await probeInstallation(binary, runCommand, signal);
-  if (installed) {
-    return installed;
-  }
   const parent = path.dirname(destination);
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
   const staging = await fs.mkdtemp(path.join(parent, ".install-"));
@@ -353,16 +278,64 @@ async function installManagedBinary(
     if (!staged) {
       throw new Error(`Downloaded Crabbox executable does not satisfy ${CRABBOX_MIN_VERSION}`);
     }
-    return await publishInstallation({
-      binary,
-      version: staged.version,
-      payload,
-      runCommand,
-      signal,
-    });
+    const version = staged.version;
+    async function publishInstallation(): Promise<CrabboxBinary> {
+      const { withFileLock } = await import("openclaw/plugin-sdk/file-lock");
+      signal.throwIfAborted();
+      return withFileLock(
+        `${destination}.publication`,
+        {
+          retries: { retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100 },
+          stale: 120_000,
+          staleRecovery: "remove-if-definitely-stale",
+        },
+        async () => {
+          signal.throwIfAborted();
+          const existing = await inspectInstallationDirectory(destination);
+          const installed = existing
+            ? await probeInstallation(binary, runCommand, signal)
+            : undefined;
+          if (installed) {
+            return installed;
+          }
+          signal.throwIfAborted();
+          const recovery = existing ? `${destination}.recovery-${randomUUID()}` : undefined;
+          if (recovery) {
+            // Preserve damaged installations, including files we did not create, outside staging cleanup.
+            await fs.rename(destination, recovery);
+          }
+          try {
+            signal.throwIfAborted();
+            // Runtime packs and companion executables must stay beside the CLI.
+            await fs.rename(payload, destination);
+            return { binary, version };
+          } catch (error) {
+            if (recovery) {
+              throw new Error(
+                `Crabbox publication failed; previous installation is preserved at ${recovery}`,
+                { cause: error },
+              );
+            }
+            throw error;
+          }
+        },
+      );
+    }
+    return await publishInstallation();
   } finally {
     await fs.rm(staging, { recursive: true, force: true });
   }
+}
+
+function describeRejectedProbe(
+  probe: Exclude<CrabboxVersionProbe, { status: "supported" }>,
+): string {
+  if (probe.status === "outdated") {
+    return `probe status "outdated": version ${probe.version} is older than the required ${CRABBOX_MIN_VERSION}`;
+  }
+  // Probe failures are already redacted; bound the diagnostic retained by consumers.
+  const reason = probe.reason.length > 200 ? `${probe.reason.slice(0, 200)}…` : probe.reason;
+  return `probe status "indeterminate": ${reason}`;
 }
 
 type Acquisition = {
@@ -395,9 +368,13 @@ export async function ensureManagedCrabboxBinary(
   if (preferred.status === "supported") {
     return { binary: candidate, version: preferred.version };
   }
+  const report = (selected: CrabboxBinary): CrabboxBinary => ({
+    ...selected,
+    rejected: `Crabbox configured binary "${candidate}" was not used (${describeRejectedProbe(preferred)}); using managed binary "${selected.binary}" (${selected.version}) instead.`,
+  });
   const cached = await findManagedCrabboxBinary({ env: params.env, runCommand, signal });
   if (cached) {
-    return cached;
+    return report(cached);
   }
   const { toErrorObject } = await import("openclaw/plugin-sdk/error-runtime");
   signal?.throwIfAborted();
@@ -453,7 +430,7 @@ export async function ensureManagedCrabboxBinary(
   try {
     const resolved = await Promise.race([shared.promise, abandoned]);
     signal?.throwIfAborted();
-    return resolved;
+    return report(resolved);
   } catch (error) {
     signal?.throwIfAborted();
     throw error;

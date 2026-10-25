@@ -5,77 +5,49 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import { authorizeGatewayMethod } from "../../../gateway/server-methods/method-authorization.js";
-import { resolveInProcessGatewaySyntheticScopes } from "../../../gateway/server-plugin-in-process-scopes.js";
-import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { resolveInProcessGatewayDispatch } from "../../../gateway/server-plugin-in-process-authority.js";
+import { withOperatorToolGatewayAuthority } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
-import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
-import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 import {
-  deliver,
   registryRead,
   startTurn,
   loadRequester,
   settledChild,
-  publishWakeTransition,
+  requesterSnapshot,
+  useDirectDelivery,
+  withGateway,
+  wakeParams,
   useRequesterSettleDispatchFixture,
   createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
+type RouteCase = {
+  name: string;
+  channel?: string;
+  pause: boolean;
+  external: boolean;
+} & Partial<Record<"narrow" | "reset" | "replaced" | "mixed" | "legacy", boolean>>;
+
+function routeCase(name: string, overrides: Partial<Omit<RouteCase, "name">> = {}): RouteCase {
+  return { name, channel: "webchat", pause: false, external: false, ...overrides };
+}
+
 describe("requester settle routing and session authority", () => {
   useRequesterSettleDispatchFixture();
-  beforeEach(() => {
-    setRuntimeConfigSnapshot({});
-  });
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-  });
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
 
   it.each([
-    { name: "WebChat settle", channel: "webchat", pause: false, external: false },
-    { name: "WebChat pause", channel: "webchat", pause: true, external: false },
-    { name: "explicit external completion", channel: "telegram", pause: false, external: true },
-    { name: "saved-route completion", channel: undefined, pause: false, external: true },
-    {
-      name: "visible failed child",
-      channel: "webchat",
-      pause: false,
-      external: false,
-      narrow: true,
-    },
-    {
-      name: "reset visible requester",
-      channel: "webchat",
-      pause: false,
-      external: false,
-      narrow: true,
-      reset: true,
-    },
-    {
-      name: "replaced visible requester",
-      channel: "webchat",
-      pause: false,
-      external: false,
-      narrow: true,
-      replaced: true,
-    },
-    {
-      name: "mixed visible requester",
-      channel: "webchat",
-      pause: false,
-      external: false,
-      narrow: true,
-      mixed: true,
-    },
-    {
-      name: "legacy visible requester",
-      channel: "webchat",
-      pause: false,
-      external: false,
-      narrow: true,
-      legacy: true,
-    },
+    routeCase("WebChat settle"),
+    routeCase("WebChat pause", { pause: true }),
+    routeCase("explicit external completion", { channel: "telegram", external: true }),
+    routeCase("saved-route completion", { channel: undefined, external: true }),
+    routeCase("visible failed child", { narrow: true }),
+    routeCase("reset visible requester", { narrow: true, reset: true }),
+    routeCase("replaced visible requester", { narrow: true, replaced: true }),
+    routeCase("mixed visible requester", { narrow: true, mixed: true }),
+    routeCase("legacy visible requester", { narrow: true, legacy: true }),
   ])("keeps $name on its owning route despite external session history", async (testCase) => {
     const requesterSessionKey = "agent:main:dashboard:completion-route";
     const requesterIdentity = {
@@ -121,11 +93,9 @@ describe("requester settle routing and session authority", () => {
       });
     }
     registryRead.listSubagentRunsForRequester.mockReturnValue(cohort);
-    loadRequester.mockReturnValue({
-      cfg: {},
-      canonicalKey: requesterSessionKey,
-      agentId: "main",
-      entry: {
+    const requester = requesterSnapshot(
+      {},
+      {
         ...requesterIdentity,
         updatedAt: 1,
         delivery: {
@@ -135,16 +105,10 @@ describe("requester settle routing and session authority", () => {
           origin: { provider: "webchat", to: requesterSessionKey, surface: "webchat" },
         },
       },
-    });
-    setSubagentAnnounceDeliveryDepsForTest({
-      getRuntimeConfig: () => ({}),
-      loadRequesterSessionEntry: loadRequester,
-      getRequesterSessionActivity: () => ({
-        sessionId: requesterIdentity.sessionId,
-        isActive: false,
-      }),
-    });
-    deliver.mockImplementation(sendSubagentAnnounceDirectly);
+      { sessionKey: requesterSessionKey, storePath: "/synthetic/requester-settle.sqlite" },
+    );
+    loadRequester.mockResolvedValue(requester);
+    useDirectDelivery(requester);
     startTurn.mockImplementation(async ({ preflight, io }) => {
       io.emitAcceptance([true, { runId: preflight.request.idempotencyKey, status: "accepted" }]);
       io.emitFinal([
@@ -162,17 +126,8 @@ describe("requester settle routing and session authority", () => {
     });
     const context = createContext();
     const completeBatch = vi.fn();
-    const delivered = await withPluginRuntimeGatewayRequestScope(
-      { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
-      () =>
-        maybeWakeRequesterAfterAllChildrenSettled({
-          requesterSessionKey,
-          requesterOrigin: child.requesterOrigin,
-          isSourceCurrent: () => true,
-          settledEntry: child,
-          transitionBatch: publishWakeTransition,
-          completeBatch,
-        }),
+    const delivered = await withGateway(context, () =>
+      maybeWakeRequesterAfterAllChildrenSettled(wakeParams(child, completeBatch)),
     );
     expect(startTurn).toHaveBeenCalledOnce();
     expect(startTurn.mock.calls[0]![0].preflight.request).toMatchObject({
@@ -187,14 +142,19 @@ describe("requester settle routing and session authority", () => {
     expect(completeBatch).toHaveBeenCalledOnce();
     if (testCase.narrow) {
       const request = startTurn.mock.calls[0]![0].preflight.request;
-      const scopes = resolveInProcessGatewaySyntheticScopes({
-        method: "agent",
-        requestParams: request,
-        operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
-      });
+      const { client } = await withOperatorToolGatewayAuthority(
+        {
+          operatorRoleActor: { kind: "system" },
+          scopes: ["operator.sessions.read", "operator.sessions.write"],
+        },
+        async () =>
+          resolveInProcessGatewayDispatch("agent", request, {
+            forceSyntheticClient: true,
+            resolveGatewayContext: () => context,
+          }),
+      );
       const unbound = testCase.reset || testCase.replaced || testCase.legacy || testCase.mixed;
-      expect(scopes).toEqual(unbound ? [] : ["operator.sessions.write"]);
-      const client = createSyntheticPluginRuntimeClient({ scopes });
+      expect(client.connect.scopes).toEqual(unbound ? [] : ["operator.sessions.write"]);
       const registry = context.getGatewayMethodRegistry!();
       const authorization = authorizeGatewayMethod("agent", client, request, registry, context);
       if (unbound) {

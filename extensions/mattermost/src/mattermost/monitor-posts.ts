@@ -2,9 +2,11 @@ import {
   formatInboundEnvelope,
   formatInboundFromLabel,
   implicitMentionKindWhen,
+  resolveInboundMentionDecision,
   resolveInboundSessionEnvelopeContextAsync,
   toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
   resolveChannelGroups,
@@ -19,13 +21,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { MattermostPostSchema } from "./client.js";
 import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
-import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
 import {
   formatMattermostDirectMessageDropLog,
   resolveMattermostMonitorInboundAccess,
   shouldRetainMattermostSenderHistory,
 } from "./monitor-auth.js";
-import { resolveMattermostPendingHistoryKey } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import {
   matchesMattermostBotMention,
@@ -127,11 +127,9 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       agentId: route.agentId,
       sessionKey,
     });
-    const historyKey = resolveMattermostPendingHistoryKey({
-      kind,
-      sessionKey,
-      threadRootId: effectiveReplyToId,
-    });
+    // Flat DMs dispatch immediately. Opted-in threads have an independent session
+    // and need a recoverable context window just like room threads.
+    const historyKey = kind === "direct" && !effectiveReplyToId ? null : sessionKey;
     const fileIds = uniqueStrings(normalizeTrimmedStringList(post.file_ids ?? []));
     const nativeMedia = fileIds.map(() => ({}));
     const pendingBody = formatMattermostPendingMediaText({ body: rawText, media: nativeMedia });
@@ -320,18 +318,26 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       implicitMentionKinds: implicitMentionKindWhen("bot_thread_participant", threadAlreadyEngaged),
     });
     const botThreadMentionRequired = isBotOwnedThread && requireMentionInBotThreads === true;
-    const mentionDecision = resolveMattermostInboundMentionDecision({
+    const implicitMentions = resolveChannelImplicitMentions({
       cfg,
+      channel: "mattermost",
       accountId: account.accountId,
-      kind,
-      requireMention: botThreadPolicy.requireMention,
-      // Explicit bot-thread requirements stay closed when no mention detector is available.
-      canDetectMention: canDetectMention || oncharEnabled || botThreadMentionRequired,
-      wasMentioned: wasMentioned || oncharTriggered,
-      implicitMentionKinds: botThreadPolicy.implicitMentionKinds,
-      allowTextCommands,
-      hasControlCommand: isControlCommand,
-      commandAuthorized,
+    });
+    const mentionDecision = resolveInboundMentionDecision({
+      facts: {
+        // Explicit bot-thread requirements stay closed when no mention detector is available.
+        canDetectMention: canDetectMention || oncharEnabled || botThreadMentionRequired,
+        wasMentioned: wasMentioned || oncharTriggered,
+        implicitMentionKinds: botThreadPolicy.implicitMentionKinds,
+      },
+      policy: {
+        isGroup: kind !== "direct",
+        requireMention: botThreadPolicy.requireMention,
+        implicitMentions,
+        allowTextCommands,
+        hasControlCommand: isControlCommand,
+        commandAuthorized,
+      },
     });
     const { shouldBypassMention } = mentionDecision;
 

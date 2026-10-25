@@ -7,11 +7,11 @@ import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
-  RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
+  type InternalRealtimeVoiceProviderCapabilities,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   toOpenAICompatibleRealtimeAudioFormat,
@@ -45,6 +45,7 @@ import {
 } from "./realtime-quicksilver-redaction.js";
 import {
   OPENAI_GPT_LIVE_MODELS,
+  OPENAI_GPT_LIVE_MODEL_PREFIX,
   isOpenAIGptLiveSubscriptionModel,
   resolveOpenAIQuicksilverVoiceCapabilities,
 } from "./realtime-quicksilver.js";
@@ -74,9 +75,20 @@ export const OPENAI_REALTIME_MODELS = [
   ...OPENAI_GPT_LIVE_MODELS,
 ] as const;
 export const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities & {
+export const OPENAI_REALTIME_CAPABILITIES: InternalRealtimeVoiceProviderCapabilities & {
   voicesByModel: Record<string, readonly string[]>;
 } = {
+  modelFamilySettings: {
+    family: OPENAI_GPT_LIVE_MODEL_PREFIX,
+    unlistedModelVoices: "active",
+    unsupportedTransports: ["provider-websocket"],
+    gatewayRelayHandlesAgentConsult: true,
+    hint: {
+      titleKey: "talkPage.gptLive.title",
+      descriptionKey: "talkPage.gptLive.hint",
+      readyKey: "talkPage.gptLive.ready",
+    },
+  },
   voicesByModel: Object.fromEntries(
     OPENAI_GPT_LIVE_MODELS.map((model) => [
       model,
@@ -190,6 +202,7 @@ export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
     model: normalizeOptionalString(raw.model),
+    inputTranscriptionModel: normalizeOptionalString(raw.inputTranscriptionModel),
     // Session creation selects the effective model; an earlier family fallback loses overrides.
     voice: normalizeOptionalLowercaseString(raw.speakerVoice ?? raw.voice),
     temperature: asFiniteNumber(raw.temperature),
@@ -210,7 +223,7 @@ export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
 
 export const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =
   "OpenAI Realtime voice requires an OpenAI Platform API key";
-export const OPENAI_REALTIME_API_KEY_REQUIRED = "OpenAI Realtime voice requires an API key";
+const OPENAI_REALTIME_API_KEY_REQUIRED = "OpenAI Realtime voice requires an API key";
 export const OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED =
   "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source";
 const KEYCHAIN_SECRET_REF_RE = /^keychain:([^:]+):([^:]+)$/;
@@ -371,8 +384,10 @@ export function buildOpenAIRealtimeTurnDetectionConfig(params: {
 export function buildOpenAIRealtimeGaSessionPolicy(params: {
   audioFormat?: RealtimeVoiceAudioFormat;
   autoRespondToAudio?: boolean;
+  azure?: boolean;
   instructions?: string;
   interruptResponseOnInputAudio?: boolean;
+  inputTranscriptionModel?: string;
   language?: string;
   model: string;
   noiseReduction: { type: "near_field" } | null;
@@ -396,12 +411,14 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
         format,
         noise_reduction: params.noiseReduction,
         transcription: {
-          model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
+          model:
+            params.inputTranscriptionModel ??
+            (params.azure ? "whisper-1" : OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL),
           ...(params.language ? { language: params.language } : {}),
         },
         turn_detection: buildOpenAIRealtimeTurnDetectionConfig({
           autoRespondToAudio: params.autoRespondToAudio,
-          includeInterruptResponse: true,
+          includeInterruptResponse: !params.azure,
           interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
           prefixPaddingMs: params.prefixPaddingMs,
           silenceDurationMs: params.silenceDurationMs,
@@ -415,6 +432,21 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
     },
     ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
     ...(params.tools ? { tools: params.tools, tool_choice: "auto" } : {}),
+  };
+}
+
+function prepareOpenAIPlatformAuthOptions(
+  params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
+  resolveAgentDir: OpenAIRealtimeHost["resolveAgentDir"],
+): Parameters<OpenAIRealtimeHost["resolveProviderAuthProfileApiKey"]>[0] {
+  return {
+    provider: "openai",
+    cfg: params.cfg,
+    ...(params.cfg && params.agentId
+      ? { agentDir: resolveAgentDir(params.cfg, params.agentId) }
+      : {}),
+    profileTypes: ["api_key"],
+    includeExternalCliAuth: false,
   };
 }
 
@@ -432,15 +464,9 @@ export async function resolveOpenAIRealtimePlatformAuth(
   }
 
   const { resolveProviderAuthProfileApiKey, resolveAgentDir } = runtime;
-  const profileApiKey = await resolveProviderAuthProfileApiKey({
-    provider: "openai",
-    cfg: params.cfg,
-    ...(params.cfg && params.agentId
-      ? { agentDir: resolveAgentDir(params.cfg, params.agentId) }
-      : {}),
-    profileTypes: ["api_key"],
-    includeExternalCliAuth: false,
-  });
+  const profileApiKey = await resolveProviderAuthProfileApiKey(
+    prepareOpenAIPlatformAuthOptions(params, resolveAgentDir),
+  );
   return profileApiKey || resolveOpenAIRealtimeSecretInput(process.env.OPENAI_API_KEY);
 }
 
@@ -504,17 +530,7 @@ export function hasOpenAIRealtimePlatformAuthInput(
   if (hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)) {
     return true;
   }
-  if (
-    isProviderAuthProfileConfigured({
-      provider: "openai",
-      cfg: params.cfg,
-      ...(params.cfg && params.agentId
-        ? { agentDir: resolveAgentDir(params.cfg, params.agentId) }
-        : {}),
-      profileTypes: ["api_key"],
-      includeExternalCliAuth: false,
-    })
-  ) {
+  if (isProviderAuthProfileConfigured(prepareOpenAIPlatformAuthOptions(params, resolveAgentDir))) {
     return true;
   }
   return hasOpenAIRealtimeApiKeyInput(undefined);
@@ -555,15 +571,9 @@ export async function hasOpenAIRealtimePlatformAuthInputAsync(
     return true;
   }
   if (
-    await isProviderAuthProfileConfiguredAsync({
-      provider: "openai",
-      cfg: params.cfg,
-      ...(params.cfg && params.agentId
-        ? { agentDir: resolveAgentDir(params.cfg, params.agentId) }
-        : {}),
-      profileTypes: ["api_key"],
-      includeExternalCliAuth: false,
-    })
+    await isProviderAuthProfileConfiguredAsync(
+      prepareOpenAIPlatformAuthOptions(params, resolveAgentDir),
+    )
   ) {
     return true;
   }

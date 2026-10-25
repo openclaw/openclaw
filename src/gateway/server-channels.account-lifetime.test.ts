@@ -29,6 +29,75 @@ describe("channel account scheduling lifetime", () => {
     resetGatewayWorkAdmission();
   });
 
+  it.each(["accounts", "channels"] as const)(
+    "starts healthy %s independently of pending database preparation",
+    async (scope) => {
+      const preparation = createDeferred();
+      const started: string[] = [];
+      const makePlugin = (id: string, order: number, accountIds: string[]) => {
+        const plugin = createTestPlugin({
+          id,
+          order,
+          listAccountIds: () => accountIds,
+          startAccount: async ({ accountId, abortSignal }) => {
+            started.push(`${id}/${accountId}`);
+            await waitForAbort(abortSignal);
+          },
+        });
+        plugin.config.resolveAccountAsync = async (_cfg, accountId) => {
+          if (accountId !== "ready") {
+            await preparation.promise;
+          }
+          return { enabled: true, configured: true };
+        };
+        return plugin;
+      };
+      const plugins =
+        scope === "accounts"
+          ? [
+              makePlugin("discord", 0, [
+                "pending-1",
+                "pending-2",
+                "pending-3",
+                "pending-4",
+                "ready",
+              ]),
+            ]
+          : [
+              ...Array.from({ length: 4 }, (_, index) =>
+                makePlugin(`pending-${index}`, index, ["pending"]),
+              ),
+              makePlugin("discord", 4, ["ready"]),
+            ];
+      const registry = createTestChannelRegistry(...plugins);
+      const manager = createTestChannelManager({
+        getPluginRegistry: () => registry,
+        startupTrace: { measure: async (_name, run) => await run() },
+      });
+      const starting = manager.startChannels();
+      try {
+        // Startup handoff yields to the event loop; preparation remains unresolved.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(started).toEqual(["discord/ready"]);
+        preparation.resolve();
+        await starting;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(started).toHaveLength(5);
+      } finally {
+        preparation.resolve();
+        await starting;
+        await Promise.all(plugins.map((plugin) => manager.stopChannel(plugin.id)));
+      }
+    },
+  );
+
   it("retains timed-out idle cleanup after the account is disabled", async () => {
     const entered = createDeferred();
     const release = createDeferred();

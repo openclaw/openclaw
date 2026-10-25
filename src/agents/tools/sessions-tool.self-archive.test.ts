@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
@@ -8,7 +9,7 @@ import {
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import * as inProcessGateway from "./in-process-gateway.js";
@@ -17,18 +18,38 @@ import { createSessionsTool } from "./sessions-tool.js";
 import { withSessionToolTestCaller } from "./sessions-tool.test-helpers.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-tool-self-archive-");
+const authority = (profileId: string, scopes = ["operator.write"], signal?: AbortSignal) =>
+  createAdmittedRunOperatorAuthority({ profileId, scopes, signal, assertCurrent: () => {} });
+const patchRequest = (key: string, params: Record<string, unknown>) => ({
+  method: "sessions.patch",
+  params: { key, ...params },
+});
+const archive = (tool: ReturnType<typeof createSessionsTool>, id: string, settings = {}) =>
+  tool.execute(id, { action: "patch", archived: true, ...settings });
+type Admission = Awaited<ReturnType<typeof beginSessionEffect>>;
+async function withAdmission<T>(admission: Admission, run: () => Promise<T>) {
+  try {
+    return await admission.run(run);
+  } finally {
+    admission.release();
+  }
+}
 
-async function createArchiveSession(dir: string, name: string, sessionId = `session-${name}`) {
-  const storePath = path.join(dir, "sessions.json");
+async function createArchiveSession(name: string, sessionId = `session-${name}`) {
+  const storePath = path.join(sessionDirs.make(), "sessions.json");
   const sessionKey = `agent:main:${name}`;
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey, storePath },
-    { sessionId, updatedAt: 1 },
-  );
+  const target = { agentId: "main", sessionKey, storePath };
+  const update = (entry: Parameters<typeof upsertSessionEntryCore>[1], key = sessionKey) =>
+    upsertSessionEntryCore({ ...target, sessionKey: key }, entry);
+  await update({ sessionId, updatedAt: 1 });
   return {
     storePath,
     sessionKey,
     sessionId,
+    update,
+    load: () => loadSessionEntry(target),
+    events: (id = sessionId, key = sessionKey) =>
+      loadTranscriptEvents({ ...target, sessionKey: key, sessionId: id }),
     createTool: (callGateway: AgentToolGatewayRequestCaller) =>
       createSessionsTool({
         agentSessionKey: sessionKey,
@@ -37,15 +58,12 @@ async function createArchiveSession(dir: string, name: string, sessionId = `sess
         callGateway,
       }),
     beginAdmission: (id = sessionId) =>
-      beginSessionWorkAdmission({
+      beginSessionEffect({
         scope: storePath,
         identities: [sessionKey, id],
         assertAllowed: () => {},
       }),
-    archiveRequest: {
-      method: "sessions.patch",
-      params: { key: sessionKey, archived: true, expectedSessionId: sessionId },
-    },
+    archiveRequest: patchRequest(sessionKey, { archived: true, expectedSessionId: sessionId }),
   };
 }
 
@@ -55,28 +73,18 @@ describe("sessions tool self-archive", () => {
     async (scenario) => {
       const replaced = scenario === "replaced";
       const controller = new AbortController();
-      const authority = createAdmittedRunOperatorAuthority({
-        profileId: "archive-requester",
-        scopes: ["operator.write"],
-        signal: controller.signal,
-        assertCurrent: () => {},
-      });
       const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
-      client.internal = { ...client.internal, operatorRunAuthority: authority };
-      const dir = sessionDirs.make();
-      const { storePath, sessionKey, sessionId, createTool, beginAdmission } =
-        await createArchiveSession(dir, "archive-failure");
+      client.internal = {
+        ...client.internal,
+        operatorRunAuthority: authority("archive-requester", undefined, controller.signal),
+      };
+      const { storePath, sessionKey, sessionId, createTool, beginAdmission, update, events } =
+        await createArchiveSession("archive-failure");
       const otherKey = "agent:main:other-session";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: otherKey, storePath },
-        { sessionId: "other-session-id", updatedAt: 1 },
-      );
+      await update({ sessionId: "other-session-id", updatedAt: 1 }, otherKey);
       const callGateway = vi.fn(async () => {
         if (replaced) {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey, storePath },
-            { sessionId: "replacement-session-id", updatedAt: 2 },
-          );
+          await update({ sessionId: "replacement-session-id", updatedAt: 2 });
         }
         if (scenario === "revoked") {
           controller.abort(new Error("archive source revoked"));
@@ -109,11 +117,7 @@ describe("sessions tool self-archive", () => {
                 },
                 withTranscriptWrite: async (run) => await run(),
               },
-              async () =>
-                await createTool(callGateway as never).execute("archive-failure", {
-                  action: "patch",
-                  archived: true,
-                }),
+              async () => await archive(createTool(callGateway as never), "archive-failure"),
             ),
         );
         writerActive = false;
@@ -123,16 +127,11 @@ describe("sessions tool self-archive", () => {
         await Promise.allSettled(pending);
 
         expect(callGateway).toHaveBeenCalledTimes(1);
-        const events = await loadTranscriptEvents({
-          agentId: "main",
-          storePath,
-          sessionKey,
-          sessionId: replaced ? "replacement-session-id" : sessionId,
-        });
+        const recorded = await events(replaced ? "replacement-session-id" : sessionId);
         if (scenario !== "current") {
-          expect(events).toEqual([]);
+          expect(recorded).toEqual([]);
         } else {
-          expect(events).toContainEqual(
+          expect(recorded).toContainEqual(
             expect.objectContaining({
               type: "custom_message",
               customType: "session-archive-failed",
@@ -143,17 +142,10 @@ describe("sessions tool self-archive", () => {
               details: { operation: "archive", outcome: "unconfirmed" },
             }),
           );
-          expect(JSON.stringify(events)).not.toContain("synthetic-private-token");
-          expect(JSON.stringify(events)).not.toContain("/private/session/path");
+          expect(JSON.stringify(recorded)).not.toContain("synthetic-private-token");
+          expect(JSON.stringify(recorded)).not.toContain("/private/session/path");
         }
-        expect(
-          await loadTranscriptEvents({
-            agentId: "main",
-            storePath,
-            sessionKey: otherKey,
-            sessionId: "other-session-id",
-          }),
-        ).toEqual([]);
+        expect(await events("other-session-id", otherKey)).toEqual([]);
       } finally {
         admission.release();
         continuation.mockRestore();
@@ -162,16 +154,13 @@ describe("sessions tool self-archive", () => {
   );
 
   it("returns success before a detached dynamic-tool self-archive commits", async () => {
-    const dir = sessionDirs.make();
-    const { storePath, sessionKey, sessionId, createTool, beginAdmission, archiveRequest } =
-      await createArchiveSession(dir, "detached-self-archive");
+    const { sessionKey, sessionId, createTool, beginAdmission, archiveRequest, update, load } =
+      await createArchiveSession("detached-self-archive");
     const runAbort = new AbortController();
+    const archiveAbort = new Error("archive stopped the active turn");
     const callGateway = vi.fn(async () => {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 2, archivedAt: Date.now() },
-      );
-      runAbort.abort(new Error("archive stopped the active turn"));
+      await update({ sessionId, updatedAt: 2, archivedAt: Date.now() });
+      runAbort.abort(archiveAbort);
       return { ok: true };
     });
     const tool = createTool(callGateway as never);
@@ -179,174 +168,85 @@ describe("sessions tool self-archive", () => {
 
     try {
       const projected = await Promise.race([
-        tool.execute("archive-current", { action: "patch", archived: true }).then((result) => ({
-          success: true as const,
-          result,
-        })),
-        new Promise<{ success: false }>((resolve) => {
-          runAbort.signal.addEventListener("abort", () => resolve({ success: false }), {
+        archive(tool, "archive-current"),
+        new Promise<never>((_resolve, reject) => {
+          runAbort.signal.addEventListener("abort", () => reject(archiveAbort), {
             once: true,
           });
         }),
       ]);
 
-      expect(projected.success).toBe(true);
-      if (projected.success) {
-        expect(projected.result.details).toMatchObject({
-          status: "scheduled",
-          sessionKey,
-        });
-      }
+      expect(projected.details).toMatchObject({ status: "scheduled", sessionKey });
       expect(callGateway).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
-        "archivedAt",
-      );
+      expect(load()).not.toHaveProperty("archivedAt");
     } finally {
       admission.release();
     }
 
     await vi.waitFor(() => {
       expect(callGateway).toHaveBeenCalledExactlyOnceWith(archiveRequest);
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toHaveProperty(
-        "archivedAt",
-      );
+      expect(load()).toHaveProperty("archivedAt");
     });
   });
 
   it("applies other self-patch settings before the deferred archive", async () => {
-    const dir = sessionDirs.make();
-    const { sessionKey, sessionId, createTool, beginAdmission } = await createArchiveSession(
-      dir,
-      "archive-patch",
-    );
+    const { sessionKey, sessionId, createTool, beginAdmission, archiveRequest } =
+      await createArchiveSession("archive-patch");
+    const labelRequest = patchRequest(sessionKey, {
+      label: "Finished research",
+      expectedSessionId: sessionId,
+    });
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createTool(callGateway as never);
     const admission = await beginAdmission();
 
-    try {
-      await admission.run(async () => {
-        const result = await tool.execute("archive-and-label", {
-          action: "patch",
-          label: "Finished research",
-          archived: true,
-        });
-        expect(result.details).toMatchObject({ status: "scheduled", sessionKey });
-        expect(callGateway).toHaveBeenCalledExactlyOnceWith({
-          method: "sessions.patch",
-          params: {
-            key: sessionKey,
-            label: "Finished research",
-            expectedSessionId: sessionId,
-          },
-        });
-      });
-    } finally {
-      admission.release();
-    }
+    await withAdmission(admission, async () => {
+      const result = await archive(tool, "archive-and-label", { label: "Finished research" });
+      expect(result.details).toMatchObject({ status: "scheduled", sessionKey });
+      expect(callGateway).toHaveBeenCalledExactlyOnceWith(labelRequest);
+    });
 
     await vi.waitFor(() => {
-      expect(callGateway.mock.calls).toEqual([
-        [
-          {
-            method: "sessions.patch",
-            params: { key: sessionKey, label: "Finished research", expectedSessionId: sessionId },
-          },
-        ],
-        [
-          {
-            method: "sessions.patch",
-            params: { key: sessionKey, archived: true, expectedSessionId: sessionId },
-          },
-        ],
-      ]);
+      expect(callGateway.mock.calls).toEqual([[labelRequest], [archiveRequest]]);
     });
   });
 
   it("does not apply a deferred archive to a replacement session", async () => {
-    const dir = sessionDirs.make();
-    const { storePath, sessionKey, createTool, beginAdmission } = await createArchiveSession(
-      dir,
+    const { createTool, beginAdmission, update, load } = await createArchiveSession(
       "archive-replacement",
       "session-before-reset",
     );
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createTool(callGateway as never);
     const admission = await beginAdmission();
-    let replacementAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let replacementAdmission: Admission | undefined;
+
+    await withAdmission(admission, async () => {
+      await archive(tool, "archive-before-reset");
+      await update({ sessionId: "session-after-reset", updatedAt: 2 });
+      replacementAdmission = await beginAdmission("session-after-reset");
+    });
 
     try {
-      await admission.run(async () => {
-        await tool.execute("archive-before-reset", { action: "patch", archived: true });
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey, storePath },
-          { sessionId: "session-after-reset", updatedAt: 2 },
-        );
-        replacementAdmission = await beginAdmission("session-after-reset");
-      });
-    } finally {
-      admission.release();
-    }
-
-    try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       expect(callGateway).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-        sessionId: "session-after-reset",
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
-        "archivedAt",
-      );
+      expect(load()).toMatchObject({ sessionId: "session-after-reset" });
+      expect(load()).not.toHaveProperty("archivedAt");
     } finally {
       replacementAdmission?.release();
     }
   });
 
-  it("waits for a competing turn before applying a scheduled archive", async () => {
-    const dir = sessionDirs.make();
+  it.each([
+    { race: false, name: "waits for a competing turn before applying a scheduled archive" },
+    { race: true, name: "retries a scheduled archive when a turn races the gateway mutation" },
+  ])("$name", async ({ race }) => {
     const { sessionKey, createTool, beginAdmission, archiveRequest } = await createArchiveSession(
-      dir,
-      "archive-competing",
+      race ? "archive-retry" : "archive-competing",
     );
-    const callGateway = vi.fn(async () => ({ ok: true }));
-    const tool = createTool(callGateway as never);
-    const currentAdmission = await beginAdmission();
-    const competingAdmission = await beginAdmission();
-
-    try {
-      await currentAdmission.run(async () => {
-        const result = await tool.execute("archive-after-competition", {
-          action: "patch",
-          archived: true,
-        });
-        expect(result.details).toMatchObject({ status: "scheduled", sessionKey });
-      });
-      currentAdmission.release();
-
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(callGateway).not.toHaveBeenCalled();
-    } finally {
-      currentAdmission.release();
-      competingAdmission.release();
-    }
-
-    await vi.waitFor(() => {
-      expect(callGateway).toHaveBeenCalledExactlyOnceWith(archiveRequest);
-    });
-  });
-
-  it("retries a scheduled archive when a turn races the gateway mutation", async () => {
-    const dir = sessionDirs.make();
-    const { sessionKey, createTool, beginAdmission, archiveRequest } = await createArchiveSession(
-      dir,
-      "archive-retry",
-    );
-    let competingAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let competingAdmission: Admission | undefined;
     const callGateway = vi.fn(async () => {
-      if (!competingAdmission) {
+      if (race && !competingAdmission) {
         competingAdmission = await beginAdmission();
         throw Object.assign(new Error("Session did not finish stopping."), { retryable: true });
       }
@@ -354,28 +254,34 @@ describe("sessions tool self-archive", () => {
     });
     const tool = createTool(callGateway as never);
     const currentAdmission = await beginAdmission();
+    if (!race) {
+      competingAdmission = await beginAdmission();
+    }
 
     try {
-      await currentAdmission.run(async () => {
-        const result = await tool.execute("archive-after-race", {
-          action: "patch",
-          archived: true,
-        });
+      await withAdmission(currentAdmission, async () => {
+        const result = await archive(
+          tool,
+          race ? "archive-after-race" : "archive-after-competition",
+        );
         expect(result.details).toMatchObject({ status: "scheduled", sessionKey });
       });
-      currentAdmission.release();
-
-      await vi.waitFor(() => {
-        expect(callGateway).toHaveBeenCalledTimes(1);
-        expect(competingAdmission).toBeDefined();
-      });
+      if (race) {
+        await vi.waitFor(() => {
+          expect(callGateway).toHaveBeenCalledTimes(1);
+          expect(competingAdmission).toBeDefined();
+        });
+      } else {
+        await nextTurn();
+        expect(callGateway).not.toHaveBeenCalled();
+      }
     } finally {
       currentAdmission.release();
       competingAdmission?.release();
     }
 
     await vi.waitFor(() => {
-      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(callGateway).toHaveBeenCalledTimes(race ? 2 : 1);
       expect(callGateway).toHaveBeenLastCalledWith(archiveRequest);
     });
   });
@@ -388,20 +294,18 @@ it.each([false, true])(
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
       senderIsOwner,
-      sessionControlAuthority: createAdmittedRunOperatorAuthority({
-        profileId: "collector-requester",
-        scopes: ["operator.write"],
-        assertCurrent: () => {},
-      }),
+      sessionControlAuthority: authority("collector-requester"),
       stopAllowed: false,
       callGateway,
     });
     expect(tool.parameters).toMatchObject({
-      properties: { action: { enum: expect.not.arrayContaining(["stop"]) } },
+      properties: {
+        action: { enum: expect.not.arrayContaining(["stop"]) },
+        archived: { type: "boolean" },
+      },
     });
     expect(tool.parameters).not.toHaveProperty("properties.runId");
     expect(tool.parameters).not.toHaveProperty("properties.clearQueued");
-    expect(tool.parameters).toMatchObject({ properties: { archived: { type: "boolean" } } });
     await expect(
       tool.execute("collector-stop", {
         action: "stop",
@@ -416,39 +320,36 @@ const sessionKey = "agent:main:main";
 describe("sessions tool ownership", () => {
   it.each(["assignment", "rename", "sandbox"])(
     "explains archive unavailability as current authority context (%s)",
-    (surface) => {
+    async (surface) => {
       const tool = createSessionsTool({
         senderIsOwner: false,
         sandboxSessionRenameOnly: surface === "sandbox",
-        ...(surface === "rename"
-          ? {
-              sessionControlAuthority: createAdmittedRunOperatorAuthority({
-                profileId: "rename-requester",
-                scopes: ["operator.sessions.write"],
-                assertCurrent: () => {},
-              }),
-            }
-          : {}),
+        sessionControlAuthority:
+          surface === "rename"
+            ? authority("rename-requester", ["operator.sessions.write"])
+            : undefined,
       });
+      if (surface === "sandbox") {
+        expect(tool.description).toContain(
+          "Archive and restore are unavailable in this authority context.",
+        );
+        expect(tool.parameters).not.toHaveProperty("properties.archived");
+        return;
+      }
+      // Turn authority does not change the definition; the archive call is refused.
       expect(tool.description).toContain(
-        "Archive and restore are unavailable in this authority context.",
+        "Turns without owner authority are limited when the action runs.",
       );
-      expect(tool.parameters).not.toHaveProperty("properties.archived");
+      await expect(tool.execute("archive", { action: "patch", archived: true })).rejects.toThrow(
+        surface === "rename" ? /current operator write grant/ : /Only assign_owner/,
+      );
     },
   );
 
-  it.each([
-    { senderIsOwner: false, controls: true },
-    { senderIsOwner: false, controls: false },
-  ])("assigns an owner with posture %j", async ({ senderIsOwner, controls }) => {
+  it.each([true, false])("assigns an owner with operator controls: %s", async (controls) => {
     const controller = new AbortController();
-    const authority = controls
-      ? createAdmittedRunOperatorAuthority({
-          profileId: "profile-requester",
-          scopes: ["operator.write"],
-          signal: controller.signal,
-          assertCurrent: () => {},
-        })
+    const runAuthority = controls
+      ? authority("profile-requester", undefined, controller.signal)
       : undefined;
     const actor = controls
       ? { type: "agent", id: "main" }
@@ -464,7 +365,7 @@ describe("sessions tool ownership", () => {
     });
     await withSessionToolTestCaller(async () => {
       const tool = createSessionsTool({
-        senderIsOwner,
+        senderIsOwner: false,
         agentSessionKey: sessionKey,
         config: {},
         callGateway: callGateway as never,
@@ -484,13 +385,11 @@ describe("sessions tool ownership", () => {
         });
         return;
       }
-      expect(tool.parameters).toHaveProperty("properties.action.enum", [
-        "patch",
-        "stop",
-        "assign_owner",
-      ]);
-      expect(tool.parameters).toHaveProperty("properties.user");
-      expect(tool.parameters).not.toHaveProperty("properties.model");
+      // The full definition stays stable; the control gate refuses settings when they run.
+      expect(tool.parameters).toHaveProperty(
+        "properties.action.enum",
+        expect.arrayContaining(["patch", "stop", "assign_owner"]),
+      );
       for (const denied of [
         { action: "group_set", names: [] },
         { action: "patch", archived: true, model: "other" },
@@ -503,44 +402,26 @@ describe("sessions tool ownership", () => {
       controller.abort(new Error("operator source revoked"));
       await expect(tool.execute("retired-assign", args)).rejects.toThrow("operator source revoked");
       expect(callGateway).toHaveBeenCalledOnce();
-    }, authority);
+    }, runAuthority);
   });
 
   it.each([
-    {
-      senderIsOwner: false,
-      admitted: false,
-      action: "assign_owner",
-      target: sessionKey,
-      error: "requires an admitted agent turn",
-    },
-    {
-      senderIsOwner: false,
-      admitted: false,
-      action: "patch",
-      target: sessionKey,
-      error: "Only assign_owner is available to non-owner callers",
-    },
-    ...[
-      {
-        target: "agent:main:dashboard:incognito-private",
-        error: "Session not visible from session tools",
-      },
-      { target: "agent:other:main", error: "Session status visibility is restricted" },
-    ].map(({ target, error }) => ({
-      target,
-      error,
-      senderIsOwner: false,
-      admitted: true,
-      action: "assign_owner",
-    })),
-  ])(
-    "denies $action for $target (admitted: $admitted, owner: $senderIsOwner)",
-    async ({ senderIsOwner, admitted, action, target, error }) => {
+    [false, "assign_owner", sessionKey, "requires an admitted agent turn"],
+    [false, "patch", sessionKey, "Only assign_owner is available to non-owner callers"],
+    [
+      true,
+      "assign_owner",
+      "agent:main:dashboard:incognito-private",
+      "Session not visible from session tools",
+    ],
+    [true, "assign_owner", "agent:other:main", "Session status visibility is restricted"],
+  ] as const)(
+    "non-owner admitted=%s action=%s target=%s rejects: %s",
+    async (admitted, action, target, error) => {
       const callGateway = vi.fn();
       const tool = createSessionsTool({
         agentSessionKey: sessionKey,
-        senderIsOwner,
+        senderIsOwner: false,
         config: admitted ? { tools: { sessions: { visibility: "agent" } } } : {},
         callGateway,
       });
@@ -558,73 +439,40 @@ describe("sessions tool ownership", () => {
   );
 });
 
-describe("sessions tool sidebar settings", () => {
-  it("patches and clears title, icon, group, status, attention, and archive state", async () => {
-    const callGateway = vi.fn(async () => ({ ok: true }));
-    const tool = createSessionsTool({
-      agentSessionKey: "agent:main:main",
-      agentSessionId: "session-main",
-      config: {},
-      callGateway: callGateway as never,
-    });
-
-    await tool.execute("declare", {
-      action: "patch",
-      label: "Waiting on staging",
-      icon: "🦞",
-      group: "P1 issues from beta feedback",
-      statusNote: "Blocked: need the staging password",
-      attention: "key",
-      ttlMinutes: 45,
-      archived: true,
-    });
-    await tool.execute("clear", {
-      action: "patch",
-      label: "",
-      icon: "",
-      group: "",
-      attention: "clear",
-    });
-    await tool.execute("clear-null", { action: "patch", group: null });
-
-    expect(callGateway.mock.calls).toEqual([
-      [
-        {
-          method: "sessions.patch",
-          params: {
-            key: "agent:main:main",
-            label: "Waiting on staging",
-            icon: "🦞",
-            category: "P1 issues from beta feedback",
-            statusNote: "Blocked: need the staging password",
-            attention: "key",
-            ttlMinutes: 45,
-            archived: true,
-            expectedSessionId: "session-main",
-          },
-        },
-      ],
-      [
-        {
-          method: "sessions.patch",
-          params: {
-            key: "agent:main:main",
-            label: null,
-            icon: null,
-            category: null,
-            attention: null,
-          },
-        },
-      ],
-      [
-        {
-          method: "sessions.patch",
-          params: {
-            key: "agent:main:main",
-            category: null,
-          },
-        },
-      ],
-    ]);
+it("patches and clears sidebar title, icon, group, status, attention, and archive state", async () => {
+  const callGateway = vi.fn(async () => ({ ok: true }));
+  const tool = createSessionsTool({
+    agentSessionKey: "agent:main:main",
+    agentSessionId: "session-main",
+    config: {},
+    callGateway: callGateway as never,
   });
+
+  const settings = {
+    label: "Waiting on staging",
+    icon: "🦞",
+    group: "P1 issues from beta feedback",
+    statusNote: "Blocked: need the staging password",
+    attention: "key",
+    ttlMinutes: 45,
+    archived: true,
+  };
+  await tool.execute("declare", { action: "patch", ...settings });
+  await tool.execute("clear", {
+    action: "patch",
+    label: "",
+    icon: "",
+    group: "",
+    attention: "clear",
+  });
+  await tool.execute("clear-null", { action: "patch", group: null });
+
+  const { group, ...unchanged } = settings;
+  expect(callGateway.mock.calls).toEqual(
+    [
+      { ...unchanged, category: group, expectedSessionId: "session-main" },
+      { label: null, icon: null, category: null, attention: null },
+      { category: null },
+    ].map((params) => [patchRequest(sessionKey, params)]),
+  );
 });

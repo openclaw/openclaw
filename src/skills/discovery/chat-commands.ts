@@ -11,6 +11,7 @@ import {
   getAgentWorkspaceAccess,
   isWorkspaceAccessUnavailableError,
 } from "../../agents/workspace-access.js";
+import { listReservedChatSlashCommandNames } from "../../auto-reply/commands-registry.data.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -21,7 +22,6 @@ import { prepareRemoteSkillConnections } from "../runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
-import { listReservedChatSlashCommandNames } from "./chat-command-invocation.js";
 import {
   buildWorkspaceSkillCommandSpecs,
   prepareWorkspaceSkillCommandSpecs,
@@ -77,7 +77,7 @@ function hasRemoteWorkspace(workspaceDir: string): boolean {
   }
 }
 
-/** @deprecated Await prepareSkillCommandsForWorkspace; final compatibility day: 2026-12-31. */
+/** @deprecated Await prepareSkillCommandsForWorkspace; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function listSkillCommandsForWorkspace(
   params: WorkspaceSkillCommandParams,
 ): SkillCommandSpec[] {
@@ -223,7 +223,7 @@ function appendSkillCommands(
   }
 }
 
-/** @deprecated Await prepareSkillCommandsForAgents; final compatibility day: 2026-12-31. */
+/** @deprecated Await prepareSkillCommandsForAgents; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function listSkillCommandsForAgents(params: AgentSkillCommandParams): SkillCommandSpec[] {
   warnPluginSdkDeprecation({
     family: "skill-command-discovery",

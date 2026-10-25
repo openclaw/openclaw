@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -5,7 +6,13 @@ import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionActorHotState } from "./session-actor-contract.js";
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
-import { withActor, type Mutation } from "./session-actor-worker.test-support.js";
+import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
+
+// mock-isolation: Count real receipt encodings separately from residency/transport work.
+vi.mock("node:v8", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:v8")>();
+  return { ...actual, serialize: vi.fn(actual.serialize) };
+});
 
 // mock-isolation: The fixture owns its database lifetime without background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -14,8 +21,35 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 // mock-isolation: The fixture controls archival rather than launching disk-budget maintenance.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
-it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", async () => {
-  await withActor(async (f) => {
+async function append(f: Fixture, eventJson: string, expected?: SessionActorHotState["version"]) {
+  const command: Mutation = {
+    type: "session.actor.appendTranscriptEvent",
+    input: {
+      target: f.target,
+      sessionId: f.scope.sessionId,
+      lifecycleRevision: null,
+      commandId: "append",
+      phaseId: "turn",
+      expected,
+      eventJson,
+    },
+  };
+  await f.prepare(command);
+  vi.mocked(serialize).mockClear();
+  const outcome = f.mutate(command);
+  assert(outcome.kind === "committed", "Expected transcript append commit");
+  return { command, outcome };
+}
+
+function expectRetry(f: Fixture, command: Mutation) {
+  expect(f.mutate(command)).toMatchObject({
+    kind: "committed",
+    receipt: { transcript: { appendedEvents: [] } },
+  });
+}
+
+it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", () =>
+  withActor(async (f) => {
     runSqliteImmediateTransactionSync(f.database.db, () => {
       appendTranscriptEventsInTransaction(f.database, f.scope, [
         {
@@ -36,30 +70,14 @@ it("publishes only newly committed events with exact stored UTF-8 sizes, includi
       modelId: "fixture-🦞",
     };
     const eventJson = JSON.stringify(event, null, 2);
-    const command: Mutation = {
-      type: "session.actor.appendTranscriptEvent",
-      input: {
-        target: f.target,
-        expected: f.read().version,
-        commandId: "model-change",
-        phaseId: "model",
-        sessionId: f.scope.sessionId,
-        lifecycleRevision: null,
-        eventJson,
-      },
-    };
-    await f.prepare(command);
-    const first = f.mutate(command);
-    if (first.kind !== "committed") {
-      throw new Error("Expected transcript append commit");
-    }
+    const { command, outcome: first } = await append(f, eventJson, f.read().version);
     expect(first.receipt.transcript.appendedEvents).toEqual([
       { rawSeq: 1, event, serializedBytes: Buffer.byteLength(eventJson) + 1 },
     ]);
     expect(readTranscriptEventRows(f.database, f.scope.sessionId).at(-1)?.eventJson).toBe(
       eventJson,
     );
-    const retry = f.mutate({
+    expectRetry(f, {
       ...command,
       input: {
         ...command.input,
@@ -67,12 +85,7 @@ it("publishes only newly committed events with exact stored UTF-8 sizes, includi
         commandId: "model-change-retry",
       },
     });
-    expect(retry).toMatchObject({
-      kind: "committed",
-      receipt: { transcript: { appendedEvents: [] } },
-    });
-  });
-});
+  }));
 
 function hot(rawSeq: number, generation = "generation"): SessionActorHotState {
   return {
@@ -149,22 +162,14 @@ it("keeps append receipts independent of retained transcript length", async () =
         timestamp: "2026-01-01T00:00:01Z",
         data: { content: "x".repeat(6 * 1024) },
       };
-      const command: Mutation = {
-        type: "session.actor.appendTranscriptEvent",
-        input: {
-          target: f.target,
-          commandId: "bounded-receipt",
-          phaseId: "turn",
-          sessionId: f.scope.sessionId,
-          lifecycleRevision: null,
-          eventJson: JSON.stringify(event),
-        },
-      };
-      await f.prepare(command);
-      const outcome = f.mutate(command);
-      if (outcome.kind !== "committed") {
-        throw new Error("Expected append commit");
-      }
+      const { command, outcome } = await append(f, JSON.stringify(event));
+      const fullReceiptEncodings = vi
+        .mocked(serialize)
+        .mock.calls.filter(
+          ([value]) =>
+            value?.kind === "committed" && value.receipt?.kind === "session-actor-committed",
+        );
+      expect(fullReceiptEncodings).toHaveLength(1);
       const bytes = serialize(outcome).byteLength;
       receiptBytes.push(bytes);
       expect(bytes).toBeLessThan(16 * 1024);
@@ -187,11 +192,7 @@ it("keeps append receipts independent of retained transcript length", async () =
       expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(
         historyLength + 1,
       );
-      const retry = f.mutate({ ...command, input: { ...command.input, commandId: "retry" } });
-      expect(retry).toMatchObject({
-        kind: "committed",
-        receipt: { transcript: { appendedEvents: [] } },
-      });
+      expectRetry(f, { ...command, input: { ...command.input, commandId: "retry" } });
       expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(
         historyLength + 1,
       );

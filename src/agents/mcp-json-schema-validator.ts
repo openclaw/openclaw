@@ -1,13 +1,20 @@
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import type {
   JsonSchemaType,
   JsonSchemaValidator,
   jsonSchemaValidator,
-} from "@modelcontextprotocol/sdk/validation/types.js";
+} from "@modelcontextprotocol/client";
+import {
+  Ajv,
+  addFormats,
+  AjvJsonSchemaValidator,
+} from "@modelcontextprotocol/client/validators/ajv";
 import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
+import fastUri from "fast-uri";
 import { Compile } from "typebox/compile";
+import { getRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
 import { toErrorObject } from "../infra/errors.js";
 import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
+import { createInterpretedMcpJsonSchemaValidator } from "./mcp-json-schema-validator-interpreted.js";
 
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
 
@@ -28,7 +35,19 @@ function formatTypeBoxErrors(errors: Array<{ instancePath?: string; message?: st
 
 /** MCP SDK validator with draft-2020-12 support for external tool schemas. */
 export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
-  const defaultValidator = new AjvJsonSchemaValidator();
+  // Preserve the legacy draft-07 default and the workspace URI resolver; the SDK bundles its own.
+  const ajv = new Ajv({
+    strict: false,
+    validateFormats: true,
+    validateSchema: false,
+    allErrors: true,
+    uriResolver: fastUri,
+  });
+  addFormats(ajv);
+  if (getRuntimeExecutionProfile() === "embedded-aot") {
+    return createInterpretedMcpJsonSchemaValidator(ajv.formats);
+  }
+  const defaultValidator = new AjvJsonSchemaValidator(ajv);
 
   return {
     getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {

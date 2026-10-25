@@ -4,8 +4,11 @@ import { resolveSessionParentSessionKey } from "../../channels/plugins/session-c
 import { resolveStoredSessionKeyForAgentStore } from "../../gateway/session-store-key.js";
 import { createGatewaySessionLineageReaderAsync } from "../../gateway/session-utils-store-lineage.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { readWithSessionStoreTopology } from "../../sessions/session-row-changes.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../../state/agent-deletion-journal.read.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
+import { captureRuntimeConfig } from "../runtime-source-projection.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
@@ -16,9 +19,10 @@ import {
   type GatewaySessionStoreOptions,
 } from "./combined-store-gateway.js";
 import type { GatewaySessionLineageReader } from "./combined-store-model-sources.js";
-import { storeTargetKey } from "./combined-store-paths.js";
+import { createGatewayRetainedStoreMatcher, storeTargetKey } from "./combined-store-paths.js";
 import type {
   CombinedSessionStoreTopologyResult,
+  GatewaySessionStoreDiscovery,
   PreparedCombinedSessionStore,
 } from "./combined-store.types.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
@@ -36,12 +40,15 @@ import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-r
 import { listConfiguredSessionStoreAgentIds, type SessionStoreTarget } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
-type CombinedReadOptions = Omit<GatewaySessionStoreOptions, "loadEntries" | "onStoreLoaded">;
+type CombinedReadOptions = Omit<GatewaySessionStoreOptions, "loadEntries" | "onStoreLoaded"> & {
+  transcriptSelection?: { sessionKeys: readonly string[]; sessionIds: readonly string[] };
+};
 
 export async function loadCombinedSessionStoreForGatewayCoreAsync(
   cfg: OpenClawConfig,
   opts: CombinedReadOptions = {},
 ): Promise<GatewayCombinedSessionStore> {
+  const config = captureRuntimeConfig(cfg);
   const selected =
     opts.includeIncognito === false
       ? undefined
@@ -54,13 +61,22 @@ export async function loadCombinedSessionStoreForGatewayCoreAsync(
   );
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = { ...opts, ...(opts.discovery && { discovery: { ...opts.discovery, env } }) };
-  const inventory = prepareSessionStoreTargetInventory(
-    cfg,
-    listConfiguredSessionStoreAgentIds(cfg),
-    env,
-    "recovery",
-  );
-  return loadCombinedSessionStore(inventory, options);
+  const read = async () => {
+    const inventory = prepareSessionStoreTargetInventory(
+      config,
+      listConfiguredSessionStoreAgentIds(config),
+      env,
+      "recovery",
+    );
+    const discovery = options.discovery ?? {
+      env,
+      snapshot: (
+        await prepareAgentDatabaseDeletionSnapshotRead({ env }, "runtime-discovery").read()
+      ).snapshot,
+    };
+    return loadCombinedSessionStore(inventory, { ...options, discovery });
+  };
+  return options.discovery ? read() : readWithSessionStoreTopology(read);
 }
 
 /** Capture missing owners' lineage before synchronous display and model projection. */
@@ -68,6 +84,7 @@ export async function prepareCombinedSessionStoreLineage(
   cfg: OpenClawConfig,
   prepared: PreparedCombinedSessionStore,
   readEntries: (target: SessionStoreTarget) => SessionEntrySummary[],
+  discovery?: GatewaySessionStoreDiscovery,
 ): Promise<
   GatewaySessionLineageReader & {
     readIncognitoEntries: (target: SessionStoreTarget) => SessionEntrySummary[];
@@ -79,6 +96,7 @@ export async function prepareCombinedSessionStoreLineage(
       captureMemoryExactSessionReader(target)?.entries(prepared.projection) ?? [],
     ]),
   );
+  const excluded = createGatewayRetainedStoreMatcher(cfg, discovery);
   const owners = new Set(prepared.targets.preparedAgentIds);
   const rows: Array<{ agentId: string; sessionKey: string; entry: SessionEntry }> = [];
   for (const { target, storeTarget } of prepared.reads) {
@@ -92,6 +110,9 @@ export async function prepareCombinedSessionStoreLineage(
     owners.add(rowAgentId);
     for (const row of readEntries(storeTarget)) {
       const agentId = normalizeAgentId(parseAgentSessionKey(row.sessionKey)?.agentId ?? rowAgentId);
+      if (excluded(storeTarget.storePath, agentId)) {
+        continue;
+      }
       owners.add(agentId);
       rows.push({ ...row, agentId });
     }
@@ -118,7 +139,10 @@ export async function prepareCombinedSessionStoreLineage(
         continue;
       }
       const owner = normalizeAgentId(parsed.agentId);
-      if (!owners.has(owner)) {
+      if (
+        !owners.has(owner) &&
+        !excluded(resolveOpenClawAgentSqlitePath({ agentId: owner, env: discovery?.env }), owner)
+      ) {
         parents.set(identity(agentId, parentKey), {
           agentId,
           parentKey,
@@ -188,14 +212,23 @@ async function readCombinedSessionStoreTopology(
   const { config, env } = inventory;
   const discovery = options.discovery ?? {
     env,
-    snapshot: (await prepareAgentDatabaseDeletionSnapshotRead({ env }, "runtime").read()).snapshot,
+    snapshot: (await prepareAgentDatabaseDeletionSnapshotRead({ env }, "runtime-discovery").read())
+      .snapshot,
   };
+  // Discovery leaves deleting stores before their resource owner starts closing readers.
+  const excluded = createGatewayRetainedStoreMatcher(config, discovery);
   const candidates = [
     ...inventory.candidates,
     ...(discovery.snapshot?.registeredAgentDatabases ?? []).flatMap(({ path }) =>
       captureSessionStoreReadCandidates(path),
     ),
-  ];
+  ].filter(
+    (candidate) =>
+      // Existing siblings are captured exactly; family custody would also retain excluded files.
+      candidate.scope !== "sibling-family" &&
+      !excluded(candidate.path) &&
+      !excluded(candidate.physicalPath),
+  );
   return withSessionHistoryWorkerReadCandidates(
     candidates,
     async (owner) => {
@@ -249,19 +282,84 @@ async function loadCombinedSessionStore(
       const rows = await Promise.all(
         prepared.reads.map(async ({ storeTarget }, index) => {
           const source = expectDefined(owners[index], "retained session store");
-          const { entries } = await source.readEntries({
-            ...storeTarget,
-            env: transferEnv,
-            projection: prepared.projection,
-            clone: false,
-          });
+          const { entries } = options.transcriptSelection
+            ? await source.readExactEntries({
+                sessionKeys: options.transcriptSelection.sessionKeys,
+                selection: {
+                  kind: "transcript-aliases",
+                  sessionIds: options.transcriptSelection.sessionIds,
+                },
+                projection: "list",
+                env: transferEnv,
+              })
+            : await source.readEntries({
+                ...storeTarget,
+                env: transferEnv,
+                projection: prepared.projection,
+                clone: false,
+              });
           return [storeTargetKey(storeTarget), entries] as const;
         }),
       );
       const entries = new Map(rows);
+      const selection = options.transcriptSelection;
+      if (selection && prepared.reads.length > 1) {
+        const selectedRows = rows.flatMap(([, selected]) => selected);
+        const sessionKeys = [
+          ...new Set([...selection.sessionKeys, ...selectedRows.map((row) => row.sessionKey)]),
+        ];
+        const sessionIds = [
+          ...new Set([
+            ...selection.sessionIds,
+            ...selectedRows.map(({ entry }) => entry.sessionId.trim()).filter(Boolean),
+          ]),
+        ];
+        // Complete aliases across retained stores; one-store reads finish above.
+        await Promise.all(
+          prepared.reads.map(async ({ storeTarget }, index) => {
+            const result = await expectDefined(
+              owners[index],
+              "retained session store",
+            ).readExactEntries({
+              sessionKeys,
+              selection: { kind: "transcript-aliases", sessionIds },
+              projection: "list",
+              env: transferEnv,
+            });
+            entries.set(storeTargetKey(storeTarget), result.entries);
+          }),
+        );
+        // Newly discovered aliases can collide with a different ID in an earlier store.
+        const aliasKeys = [
+          ...new Set(
+            [...entries.values()].flatMap((selected) => selected.map((row) => row.sessionKey)),
+          ),
+        ];
+        await Promise.all(
+          prepared.reads.map(async ({ storeTarget }, index) => {
+            const result = await expectDefined(
+              owners[index],
+              "retained session store",
+            ).readExactEntries({
+              sessionKeys: aliasKeys,
+              projection: "list",
+              env: transferEnv,
+            });
+            entries.set(storeTargetKey(storeTarget), result.entries);
+          }),
+        );
+      }
       const readEntries = (target: SessionStoreTarget) =>
         expectDefined(entries.get(storeTargetKey(target)), "prepared session entries");
-      const lineage = await prepareCombinedSessionStoreLineage(config, prepared, readEntries);
+      // Visibility consumes stored privacy facts, not display or model lineage.
+      const lineage = selection
+        ? undefined
+        : await prepareCombinedSessionStoreLineage(
+            config,
+            prepared,
+            readEntries,
+            options.discovery,
+          );
       const readOptions = {
         ...options,
         discovery: { env, snapshot: options.discovery?.snapshot },
@@ -271,8 +369,8 @@ async function loadCombinedSessionStore(
         readOptions,
         prepared,
         readEntries,
-        lineage,
-        lineage.readIncognitoEntries,
+        lineage ?? { readStored: () => undefined, readAlias: () => undefined },
+        lineage?.readIncognitoEntries,
       );
     },
   );

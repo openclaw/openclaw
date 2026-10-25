@@ -3,7 +3,7 @@ import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
 export function captureGatewaySessionStoreScope(sessionKey: string, explicitAgentId?: string) {
@@ -18,7 +18,7 @@ export function captureGatewaySessionStoreScope(sessionKey: string, explicitAgen
 }
 
 export const boardStore = new SqliteBoardStore({
-  resolveSession: ({ sessionKey, agentId }) => {
+  resolveSession: async ({ sessionKey, agentId }) => {
     const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
     const assertCurrent = () => {
       const current = captureGatewaySessionStoreScope(sessionKey, agentId);
@@ -34,7 +34,8 @@ export const boardStore = new SqliteBoardStore({
       assertCurrent,
       authorize: assertCurrent,
     });
-    const database = memory ?? resolveSqliteTargetFromSessionStorePath(scope.storePath, scope);
+    const database =
+      memory ?? (await prepareSqliteTargetFromSessionStorePath(scope.storePath, scope));
     return {
       // Shared stores keep logical session keys under their persisted database owner.
       agentId: database.agentId ?? scope.agentId,

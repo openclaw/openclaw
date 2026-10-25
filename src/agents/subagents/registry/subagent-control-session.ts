@@ -8,6 +8,7 @@ import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/sessi
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { logVerbose } from "../../../globals.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
@@ -44,16 +45,8 @@ export function prepareSubagentKillSessionReads(
       return [];
     }
   });
-  const throwFailures = () => {
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Subagent publication readiness failed");
-    }
-  };
   if (publications.length === 0) {
-    throwFailures();
+    throwCollectedErrors(failures, "Subagent publication readiness failed");
     return undefined;
   }
   return Promise.allSettled(publications).then((results) => {
@@ -67,7 +60,7 @@ export function prepareSubagentKillSessionReads(
         failures.push(result.reason);
       }
     }
-    throwFailures();
+    throwCollectedErrors(failures, "Subagent publication readiness failed");
   });
 }
 
@@ -176,7 +169,7 @@ export async function prepareSubagentKillSession(
           env: owner.scope?.env ?? env,
         };
         const lifetime = await prepareSessionGenerationFacts({
-          storePath: generationStorePath,
+          storePath: database.path,
           sessionKey,
           agentId,
           sessionId: entry?.sessionId ?? null,

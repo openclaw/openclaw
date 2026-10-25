@@ -121,7 +121,7 @@ public final class OpenClawChatViewModel {
     var questionRefreshRetryDelaysMs: [Int64] = [1000, 2000, 4000]
     var hasActiveSessionRunWithoutChatSnapshot = false
     var activeSessionRunIDs: [String] = []
-    var liveRunStateByRunID: [String: ChatLiveRunState] = [:]
+    @ObservationIgnored var liveRunStateStorage: [String: ChatLiveRunState] = [:]
     var narration = ChatNarration()
     public internal(set) var progressCard: ProgressCard?
     var progressCardStoreAvailable: Bool?
@@ -160,6 +160,12 @@ public final class OpenClawChatViewModel {
     var runStartupStatus: String? {
         self.runStartup?.runID == self.liveUsageRunID ? self.runStartup?.status : nil
     }
+
+    /// Presentation is paced independently; event consumers always see the newest stream text.
+    private(set) var displayedStreamingAssistantText: String?
+    @ObservationIgnored private(set) var displayedStreamingAssistantTextUntracked: String?
+    @ObservationIgnored var streamPacing = ChatStreamPacing()
+    private(set) var liveTextShape = 0
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
@@ -239,6 +245,7 @@ public final class OpenClawChatViewModel {
     /// Per-message outbox display state; rows without an entry are normal
     /// transcript rows. Observable so bubbles update when flush progresses.
     public internal(set) var outboxStatesByMessageID: [UUID: OpenClawChatOutboxMessageState] = [:]
+    var outboxQueueModesByMessageID: [UUID: OpenClawChatQueueMode] = [:]
     @ObservationIgnored
     var outboxCommandIDsByMessageID: [UUID: String] = [:]
     @ObservationIgnored
@@ -797,6 +804,18 @@ extension OpenClawChatViewModel {
     func updateStreamingAssistantText(_ text: String?) {
         guard self.streamingAssistantText != text else { return }
         self.streamingAssistantText = text
+        self.scheduleStreamingAssistantDisplay(text)
+    }
+
+    func applyStreamingAssistantDisplay(_ text: String?) {
+        guard self.displayedStreamingAssistantText != text else { return }
+        // Compare both projections against current history: a durable row may have suppressed
+        // the previous live words since the last stream update.
+        let previousShape = self.streamingTextShape(self.displayedStreamingAssistantTextUntracked)
+        self.displayedStreamingAssistantText = text
+        self.displayedStreamingAssistantTextUntracked = text
+        guard self.streamingTextShape(text) != previousShape else { return }
+        self.liveTextShape &+= 1
         self.markTimelineChanged()
     }
 
@@ -983,9 +1002,6 @@ extension OpenClawChatViewModel {
             return
         }
         let context = self.beginHistoryRequest()
-        self.logDiagnostic(
-            "chat.ui foreground refresh sessionKey=\(context.session.key) "
-                + "pending=\(self.pendingRunCount)")
         let refresh = await refreshHistoryAfterRun(historyRequest: context)
         guard self.isCurrentSession(context.session) else { return }
         if refresh.applied,

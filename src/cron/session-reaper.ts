@@ -12,12 +12,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readExpiredCronRunEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.lifecycle.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
@@ -253,7 +252,7 @@ export async function sweepCronRunSessions(params: {
       // The shared deletion guard still closes the race between selection and commit.
       if (
         entry.sessionId &&
-        isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, entry.sessionId])
+        isCompetingSessionControllerWorkActive(storePath, [sessionKey, entry.sessionId])
       ) {
         continue;
       }
@@ -266,11 +265,6 @@ export async function sweepCronRunSessions(params: {
       });
     }
     if (removals.length > 0) {
-      // Archive-age cleanup follows the session maintenance retention knob:
-      // the reaper's cron retention decides which rows die, but archived
-      // transcript files are conversation history owned by the archive
-      // retention policy (null = keep until the disk budget evicts).
-      const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
       const result = await applySessionEntryLifecycleMutation({
         agentId: params.agentId,
         env: context.environment,
@@ -291,14 +285,6 @@ export async function sweepCronRunSessions(params: {
             }
           }
         },
-        ...(archiveRetentionMs == null
-          ? {}
-          : {
-              cleanupArchivedTranscripts: {
-                rules: [{ reason: "deleted", olderThanMs: archiveRetentionMs }],
-                nowMs: now,
-              },
-            }),
         captureArtifactCleanupError: true,
       });
       pruned = result.removedEntries;

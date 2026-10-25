@@ -1,26 +1,23 @@
-import { createStore } from "solid-js";
-import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
-import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
+import { createSignal, createStore } from "solid-js";
+import type { ChatGoalDraftMode, HumanMention } from "../../../lib/chat/chat-types.ts";
 import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
 } from "./chat-composer-dom.ts";
-import { createComposerEmojiMenu } from "./chat-composer-emoji.tsx";
-import { createHumanMentionMenu } from "./chat-composer-mention-menu.tsx";
-import { createSkillMenu } from "./chat-composer-skill-menu.tsx";
-import { createSlashMenu } from "./chat-composer-slash-menu.tsx";
+import { createComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
+import { createHumanMentionMenu } from "./chat-composer-mention-menu-state.ts";
+import { createSkillMenu } from "./chat-composer-skill-menu-state.ts";
+import { createSlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
   const [presentation, updatePresentation] = createStore<ChatComposerState["presentation"]>({
+    dictationError: null,
     goalExpandedId: null,
-    activeQuestionKey: null,
-    gatewayQuestionIds: new Set(),
-    asyncQuestionIds: new Set(),
-    questionCollapsed: false,
   });
   return {
+    // Admission survives composer remounts while the same goal mode is pending.
+    goalPending: createSignal<ChatGoalDraftMode | null>(null),
     presentation,
     updatePresentation,
     slashMenu: createSlashMenu(),
@@ -30,22 +27,17 @@ function createChatComposerState(): ChatComposerState {
     editRevision: 0,
     mentionMenu: createHumanMentionMenu(),
     emojiMenu: createComposerEmojiMenu(),
-    composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
-    goalComposer: null,
     questionTakeoverActive: false,
     restoreComposerFocus: false,
     composerInput: null,
     composerTextarea: null,
     microphonePicker: null,
-    capabilityMenuOpen: false,
-    capabilityMenuView: "root",
     textareaRef: null,
     composerInputRef: null,
     dictation: null,
     composerDraftScope: null,
-    dictationError: null,
     dictationSelection: null,
   };
 }
@@ -59,41 +51,6 @@ export function getChatComposerState(paneId: string): ChatComposerState {
     composerStates.set(paneId, state);
   }
   return state;
-}
-
-export function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boolean {
-  return status?.phase === "done" || status?.phase === "interrupted";
-}
-
-export function isCurrentSessionSubmittedProgress(
-  item: ChatQueueItem,
-  sessionKey: string,
-  status: ChatRunUiStatus | null | undefined,
-): boolean {
-  return (
-    item.sessionKey === sessionKey &&
-    !item.pendingRunId &&
-    (item.sendState === "submitting" ||
-      item.sendState === "sending" ||
-      item.sendState === "waiting-model") &&
-    (status == null || item.sendRunId !== status.runId)
-  );
-}
-
-// Shared by the thread, composer, pane activity, and header presentation.
-export function isChatRunWorking(
-  props: Pick<
-    ChatComposerProps,
-    "runActive" | "runStatus" | "queue" | "sessionKey" | "startupStatus"
-  >,
-): boolean {
-  return isSessionRunVisuallyActive(
-    (props.runActive === true && !hasTerminalRunStatus(props.runStatus)) ||
-      props.queue.some((item) =>
-        isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
-      ),
-    props.startupStatus?.phase,
-  );
 }
 
 export function composerDraftKey(
@@ -111,23 +68,8 @@ export function commitComposerDraft(
   if (currentDraft === value && mentions === undefined) {
     return;
   }
-  const previousMentions = props.getMentions?.() ?? props.mentions ?? [];
   getChatComposerState(props.paneId).editRevision += 1;
   props.onDraftChange(value, mentions);
-  const nextMentions = props.getMentions?.() ?? mentions ?? props.mentions ?? [];
-  // Moving a token while typing prose changes its span, not the recipient strip.
-  if (
-    previousMentions.length !== nextMentions.length ||
-    previousMentions.some((previous, index) => {
-      const next = nextMentions[index]!;
-      return (
-        previous.profileId !== next.profileId ||
-        currentDraft.slice(previous.start, previous.end) !== value.slice(next.start, next.end)
-      );
-    })
-  ) {
-    props.onRequestUpdate?.();
-  }
 }
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {

@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { createOpenClawAgentHarness } from "../../harness/builtin-openclaw.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -28,7 +29,7 @@ afterEach(async () => {
 });
 
 describe("settled post-tool turn finalization context", () => {
-  it("keeps detached tool receipts across empty finalization retries without retaining internal user prompts", async () => {
+  it("keeps detached tool receipts and hidden prompts across empty finalization retries", async () => {
     const { guardSessionManager } = await vi.importActual<
       typeof import("../../session-tool-result-guard-wrapper.js")
     >("../../session-tool-result-guard-wrapper.js");
@@ -40,14 +41,13 @@ describe("settled post-tool turn finalization context", () => {
       stopReason: "toolUse",
       content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
     });
-    const toolResult = {
-      role: "toolResult" as const,
-      toolCallId: "call-read",
-      toolName: "read",
-      isError: false,
-      timestamp: 3,
-      content: [{ type: "text" as const, text: "file contents from completed read" }],
-    };
+    const toolResult = makeTextToolResult(
+      "call-read",
+      "read",
+      "file contents from completed read",
+      false,
+      3,
+    );
     const subscription = createSubscriptionMock();
     let toolCompleted = false;
     subscription.getItemLifecycle = () => ({
@@ -131,17 +131,26 @@ describe("settled post-tool turn finalization context", () => {
       for (const messages of finalizerContexts) {
         expect(messages).toContainEqual(expect.objectContaining(toolResult));
       }
-      expect(
-        manager
-          .buildSessionContext()
-          .messages.filter((message) => message.role === "user")
-          .map((message) => message.content),
-      ).toEqual(["hello"]);
+      const userMessages = manager
+        .buildSessionContext()
+        .messages.filter((message) => message.role === "user");
+      expect(userMessages).toHaveLength(3);
+      expect(userMessages[0]?.content).toBe("hello");
+      expect(userMessages[0]).not.toHaveProperty("display", false);
+      for (const message of userMessages.slice(1)) {
+        expect(message).toMatchObject({
+          content: expect.stringContaining("Your turn ended without a final reply."),
+          display: false,
+          provenance: { kind: "internal_system" },
+        });
+      }
       const genuineUser = { role: "user" as const, content: "Read the next file", timestamp: 5 };
       manager.appendMessage(genuineUser);
       expect(manager.buildSessionContext().messages).toContainEqual(
         expect.objectContaining(genuineUser),
       );
+      expect(genuineUser).not.toHaveProperty("display", false);
+      expect(genuineUser).not.toHaveProperty("provenance");
     } finally {
       admission.close();
     }
@@ -164,14 +173,7 @@ describe("settled post-tool turn finalization context", () => {
             timestamp: 2,
             content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
           },
-          {
-            role: "toolResult",
-            toolCallId: "call-read",
-            toolName: "read",
-            isError: false,
-            timestamp: 3,
-            content: [{ type: "text", text: "file contents" }],
-          },
+          makeTextToolResult("call-read", "read", "file contents", false, 3),
         ];
         throw new Error(message);
       },

@@ -179,12 +179,12 @@ function resolveTelegramDispatcherPolicy(params: {
       mode: "explicit-proxy",
       proxyUrl: explicitProxyUrl,
       allowPrivateProxy: true,
-      proxyTls: { ...connect },
+      proxyTls: connect,
     };
   }
   return {
     mode: params.useEnvProxy ? "env-proxy" : "direct",
-    connect: { ...connect },
+    connect,
   };
 }
 
@@ -456,7 +456,7 @@ export function resolveTelegramTransport(
 
   const useEnvProxy = !resolvedExplicitProxyUrl && hasEnvProxy;
   const defaultDispatcherPolicy = resolveTelegramDispatcherPolicy({
-    autoSelectFamily: autoSelectDecision.value,
+    autoSelectFamily: autoSelectDecision,
     dnsResultOrder: dnsDecision.value,
     useEnvProxy,
     forceIpv4: false,
@@ -706,9 +706,6 @@ export function resolveTelegramTransport(
     forceFallback: (reason: string, err?: unknown) =>
       promoteStickyAttempt(stickyAttemptIndex + 1, err ?? new Error("forced fallback"), reason),
     close: async () => {
-      if (closed) {
-        return;
-      }
       closed = true;
       const toDestroy = [...ownedDispatchers];
       ownedDispatchers.clear();

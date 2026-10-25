@@ -1,8 +1,9 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
-import { ComposerDictationSession, formatDictationError } from "./composer-dictation-session.ts";
-import { RealtimeTalkLevelSignal } from "./talk/level.ts";
+import type { ComposerDictationSession } from "./composer-dictation-session.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
@@ -14,16 +15,16 @@ type ComposerDictationFailure = {
   preservesText: boolean;
 };
 
-type ComposerDictationControllerOptions = {
+type ComposerDictationOwnerOptions = {
   client: GatewayBrowserClient | null;
   sessionKey?: string;
+  draftKey?: string;
   connected: boolean;
   enabled: boolean;
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
   onCommit: (text: string, late?: true) => void;
   onError: (message: string, failure: ComposerDictationFailure) => void;
-  onStateChange: () => void;
   onTap?: () => void;
   onDictationUnavailable?: () => void;
 };
@@ -52,23 +53,30 @@ export function insertComposerDictation(
   };
 }
 
-export class ComposerDictationController {
-  readonly inputLevel = new RealtimeTalkLevelSignal();
+// Gesture and session admission must remain synchronous across pointer and media callbacks.
+export class ComposerDictationOwner extends EventTarget {
   private readonly playback = new GatewaySpeechPlayback();
-  private options: ComposerDictationControllerOptions;
   private phase: DictationPhase = "idle";
   private pointerId: number | null = null;
   private pointerTarget: HTMLElement | null = null;
   private pointerBounds: DOMRect | null = null;
+  private pointerListeners: AbortController | null = null;
+  private suppressionListeners: AbortController | null = null;
+  private cancellationListeners: AbortController | null = null;
   private holdTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private captureStart: object | undefined;
   private session: ComposerDictationSession | null = null;
   private suppressedPointerId: number | null = null;
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private pendingCommitSession: ComposerDictationSession | null = null;
   private disposed = false;
 
-  constructor(options: ComposerDictationControllerOptions) {
-    this.options = options;
+  constructor(private options: ComposerDictationOwnerOptions) {
+    super();
+  }
+
+  subscribe(listener: () => void) {
+    return listen(this, "change", listener);
   }
 
   get active(): boolean {
@@ -112,7 +120,14 @@ export class ComposerDictationController {
     return true;
   }
 
-  update(options: ComposerDictationControllerOptions): void {
+  update(options: ComposerDictationOwnerOptions): void {
+    if (
+      this.options.client !== options.client ||
+      this.options.sessionKey !== options.sessionKey ||
+      this.options.draftKey !== options.draftKey
+    ) {
+      this.cancel();
+    }
     this.options = options;
     if (!options.connected) {
       this.pendingCommitSession?.markGatewayDisconnected();
@@ -120,7 +135,7 @@ export class ComposerDictationController {
     if (this.phase === "stopping") {
       return;
     }
-    if ((this.phase !== "idle" && !this.canHold()) || (this.active && !options.connected)) {
+    if (this.phase !== "idle" && !this.canHold()) {
       const keepFinal = this.active && !options.connected;
       const preservesText = keepFinal ? (this.session?.markGatewayDisconnected() ?? false) : false;
       void this.stop({ commit: keepFinal });
@@ -142,7 +157,16 @@ export class ComposerDictationController {
     this.pointerTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     this.pointerBounds = this.pointerTarget?.getBoundingClientRect() ?? null;
     this.pointerTarget?.setPointerCapture?.(event.pointerId);
-    this.pointerTarget?.addEventListener("lostpointercapture", this.handleDocumentPointerCancel);
+    this.pointerListeners = new AbortController();
+    const pointerOptions = { signal: this.pointerListeners.signal };
+    if (this.pointerTarget) {
+      listen(
+        this.pointerTarget,
+        "lostpointercapture",
+        this.handleDocumentPointerCancel,
+        pointerOptions,
+      );
+    }
     this.suppressedPointerId = event.pointerId;
     this.setPhase("pressing");
     // A normal click gets a quiet grace period. Only a sustained press enters
@@ -154,30 +178,27 @@ export class ComposerDictationController {
       this.setPhase("holding");
       this.holdTimer = globalThis.setTimeout(() => void this.start(), HOLD_PROGRESS_MS);
     }, HOLD_ARM_DELAY_MS);
-    document.addEventListener("pointermove", this.handleDocumentPointerMove);
-    document.addEventListener("pointerup", this.handleDocumentPointerUp);
-    document.addEventListener("pointercancel", this.handleDocumentPointerCancel);
-    document.addEventListener("pointerup", this.handleSuppressedPointerRelease);
-    document.addEventListener("pointercancel", this.handleSuppressedPointerRelease);
+    listen(document, "pointermove", this.handleDocumentPointerMove, pointerOptions);
+    listen(document, "pointerup", this.handleDocumentPointerUp, pointerOptions);
+    listen(document, "pointercancel", this.handleDocumentPointerCancel, pointerOptions);
+    this.suppressionListeners?.abort();
+    this.suppressionListeners = new AbortController();
+    const suppressionOptions = { signal: this.suppressionListeners.signal };
+    listen(document, "pointerup", this.handleSuppressedPointerRelease, suppressionOptions);
+    listen(document, "pointercancel", this.handleSuppressedPointerRelease, suppressionOptions);
     return true;
   }
 
   handleClick(event: MouseEvent): void {
     if (this.suppressedPointerId !== null) {
       this.clearClickSuppression();
-      event.preventDefault();
-      return;
-    }
-    if (this.active) {
-      event.preventDefault();
+    } else if (this.active) {
       void this.finishActive();
+    } else if (this.phase === "idle") {
+      this.options.onTap?.();
       return;
     }
-    if (this.phase !== "idle") {
-      event.preventDefault();
-      return;
-    }
-    this.options.onTap?.();
+    event.preventDefault();
   }
 
   handleContextMenu(event: MouseEvent): void {
@@ -188,7 +209,10 @@ export class ComposerDictationController {
 
   dispose(): void {
     this.disposed = true;
-    this.retirePendingCommit();
+    this.cancel();
+  }
+
+  cancel(): void {
     this.clearClickSuppression();
     void this.stop({ commit: false });
   }
@@ -252,10 +276,7 @@ export class ComposerDictationController {
     }
   };
 
-  private readonly handleWindowBlur = (): void => {
-    this.clearClickSuppression();
-    void this.stop({ commit: false });
-  };
+  private readonly handleWindowBlur = (): void => this.cancel();
 
   private canHold(): boolean {
     return (
@@ -283,49 +304,67 @@ export class ComposerDictationController {
     // Crossing the threshold latches dictation. Pointer ownership ends here,
     // while Escape/visibility/blur keep guarding the live capture lifecycle.
     this.clearPointerGesture();
-    this.setPhase("connecting");
-    const session = new ComposerDictationSession(
-      client,
-      {
-        onError: (message, preservesText) => {
-          if (this.session !== session && this.pendingCommitSession !== session) {
-            return;
-          }
-          try {
-            this.options.onError(message, { kind: "interrupted", preservesText });
-          } finally {
-            if (this.session === session) {
-              void this.stop({ commit: true });
-            } else if (this.pendingCommitSession === session) {
-              this.retirePendingCommit();
-            }
-          }
-        },
-        onLevel: (level) => this.inputLevel.set(level),
-        onTranscriptChange: () => this.options.onStateChange(),
-        onReady: () => {
-          if (this.session === session && this.phase === "connecting") {
-            this.setPhase("recording");
-          }
-        },
-      },
-      { sessionKey: this.options.sessionKey },
-    );
     this.retirePendingCommit();
-    this.session = session;
+    const captureStart = {};
+    this.captureStart = captureStart;
+    this.setPhase("connecting");
+    if (this.captureStart !== captureStart) {
+      return;
+    }
+    let formatStartError: (error: unknown) => string = formatUiError;
     try {
+      // Preserve Safari playback activation before the lazy capture module loads.
       this.playback.prepare(client, () => void this.stop({ commit: false }));
-      await session.start();
-    } catch (error) {
-      if (this.session !== session || this.disposed || this.finalizing) {
+      const { ComposerDictationSession, formatDictationError } =
+        await import("./composer-dictation-session.ts");
+      if (
+        this.captureStart !== captureStart ||
+        this.disposed ||
+        !this.connecting ||
+        !this.canHold()
+      ) {
         return;
       }
-      this.options.onError(formatDictationError(error), { kind: "start", preservesText: false });
+      formatStartError = formatDictationError;
+      const session = new ComposerDictationSession(
+        client,
+        {
+          onError: (message, preservesText) => {
+            if (this.session !== session && this.pendingCommitSession !== session) {
+              return;
+            }
+            try {
+              this.options.onError(message, { kind: "interrupted", preservesText });
+            } finally {
+              if (this.session === session) {
+                void this.stop({ commit: true });
+              } else if (this.pendingCommitSession === session) {
+                this.dispatchEvent(new Event("change"));
+              }
+            }
+          },
+          onTranscriptChange: () => this.dispatchEvent(new Event("change")),
+          onReady: () => {
+            if (this.session === session && this.phase === "connecting") {
+              this.setPhase("recording");
+            }
+          },
+        },
+        { sessionKey: this.options.sessionKey },
+      );
+      this.session = session;
+      await session.start();
+    } catch (error) {
+      if (this.captureStart !== captureStart || this.disposed || this.finalizing) {
+        return;
+      }
+      this.options.onError(formatStartError(error), { kind: "start", preservesText: false });
       await this.stop({ commit: false });
     }
   }
 
   private stop(options: { commit: boolean }): Promise<boolean> {
+    this.captureStart = undefined;
     if (!options.commit) {
       this.retirePendingCommit();
     }
@@ -336,32 +375,24 @@ export class ComposerDictationController {
     this.clearPointerGesture();
     const session = this.session;
     if (!session) {
-      this.reset();
+      this.playback.stop();
+      this.setPhase("idle");
       return Promise.resolve(false);
     }
     this.setPhase("stopping");
-    const transcript = options.commit ? session.transcriptSnapshot() : "";
-    const committed = Boolean(options.commit && transcript && wasActive && !this.disposed);
     this.session = null;
-    this.reset();
-    if (committed) {
-      this.playback.stop();
-      this.options.onCommit(transcript);
-    }
+    this.setPhase("idle");
     if (!options.commit) {
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
-    }
-    if (committed) {
-      void session.finish().catch(() => undefined);
-      return Promise.resolve(true);
     }
     // The composer unlocks immediately, while this exact stopped session keeps
     // its final accumulator and voice claim until another voice action supersedes it.
     this.pendingCommitSession = session;
     this.syncCancellationListeners();
     return session
-      .finish(true)
+      .finish()
+      .catch(() => "")
       .then((lateTranscript) => {
         const ownsPendingCommit = this.pendingCommitSession === session;
         if (ownsPendingCommit) {
@@ -369,25 +400,21 @@ export class ComposerDictationController {
           this.playback.stop();
           this.syncCancellationListeners();
         }
-        if (!ownsPendingCommit || !lateTranscript || !wasActive || this.disposed) {
+        if (
+          !ownsPendingCommit ||
+          !lateTranscript ||
+          !wasActive ||
+          this.disposed ||
+          !this.options.enabled ||
+          this.options.realtimeTalkActive
+        ) {
           return false;
         }
         this.options.onCommit(lateTranscript, true);
+        this.dispatchEvent(new Event("change"));
         return true;
       })
-      .catch(() => {
-        if (this.pendingCommitSession === session) {
-          this.pendingCommitSession = null;
-          this.playback.stop();
-          this.syncCancellationListeners();
-        }
-        return false;
-      });
-  }
-
-  private reset(): void {
-    this.inputLevel.set(0);
-    this.setPhase("idle");
+      .catch(() => false);
   }
 
   private retirePendingCommit(): void {
@@ -399,15 +426,11 @@ export class ComposerDictationController {
   }
 
   private clearPointerGesture(): void {
-    if (this.holdTimer !== null) {
-      globalThis.clearTimeout(this.holdTimer);
-      this.holdTimer = null;
-    }
+    globalThis.clearTimeout(this.holdTimer ?? undefined);
+    this.holdTimer = null;
+    this.pointerListeners?.abort();
+    this.pointerListeners = null;
     if (this.pointerId !== null) {
-      this.pointerTarget?.removeEventListener(
-        "lostpointercapture",
-        this.handleDocumentPointerCancel,
-      );
       try {
         this.pointerTarget?.releasePointerCapture?.(this.pointerId);
       } catch {
@@ -417,9 +440,6 @@ export class ComposerDictationController {
     this.pointerId = null;
     this.pointerTarget = null;
     this.pointerBounds = null;
-    document.removeEventListener("pointermove", this.handleDocumentPointerMove);
-    document.removeEventListener("pointerup", this.handleDocumentPointerUp);
-    document.removeEventListener("pointercancel", this.handleDocumentPointerCancel);
   }
 
   private expireClickSuppression(): void {
@@ -430,12 +450,10 @@ export class ComposerDictationController {
   }
 
   private clearClickSuppression(): void {
-    if (this.suppressClickTimer !== null) {
-      globalThis.clearTimeout(this.suppressClickTimer);
-      this.suppressClickTimer = null;
-    }
-    document.removeEventListener("pointerup", this.handleSuppressedPointerRelease);
-    document.removeEventListener("pointercancel", this.handleSuppressedPointerRelease);
+    globalThis.clearTimeout(this.suppressClickTimer ?? undefined);
+    this.suppressClickTimer = null;
+    this.suppressionListeners?.abort();
+    this.suppressionListeners = null;
     this.suppressedPointerId = null;
   }
 
@@ -445,18 +463,22 @@ export class ComposerDictationController {
     }
     this.phase = phase;
     this.syncCancellationListeners();
-    this.options.onStateChange();
+    this.dispatchEvent(new Event("change"));
   }
 
   private syncCancellationListeners(): void {
     if (this.phase !== "idle" || this.pendingCommitSession) {
-      document.addEventListener("keydown", this.handleDocumentKeyDown);
-      document.addEventListener("visibilitychange", this.handleVisibilityChange);
-      window.addEventListener("blur", this.handleWindowBlur);
+      if (this.cancellationListeners) {
+        return;
+      }
+      this.cancellationListeners = new AbortController();
+      const options = { signal: this.cancellationListeners.signal };
+      listen(document, "keydown", this.handleDocumentKeyDown, options);
+      listen(document, "visibilitychange", this.handleVisibilityChange, options);
+      listen(window, "blur", this.handleWindowBlur, options);
     } else {
-      document.removeEventListener("keydown", this.handleDocumentKeyDown);
-      document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-      window.removeEventListener("blur", this.handleWindowBlur);
+      this.cancellationListeners?.abort();
+      this.cancellationListeners = null;
     }
   }
 }

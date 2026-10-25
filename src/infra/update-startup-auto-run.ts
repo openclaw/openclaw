@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 import { VERSION } from "../version.js";
 import { extractErrorCode, formatErrorMessage } from "./errors.js";
 import {
@@ -25,6 +25,7 @@ import {
   startManagedServiceUpdateHandoff,
   transferManagedServiceUpdateHandoff,
 } from "./update-managed-service-handoff.js";
+import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { getUpdateRunAsync as getUpdateRun, listUpdateRunsAsync } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
@@ -103,23 +104,34 @@ export async function runAutoUpdateCommand(
   });
   const handoffFailure = async (error: unknown): Promise<AutoUpdateRunResult> => {
     log.info("automatic update handoff failed", { error: formatErrorMessage(error) });
-    const reason = "managed-service-handoff-failed";
-    const fact = createUpdateErrorFact("managed-service", error);
+    const reason =
+      error instanceof UpdatePreMutationError ? error.reason : "managed-service-handoff-failed";
+    const failureFacts =
+      error instanceof UpdatePreMutationError
+        ? error.failureFacts
+        : [createUpdateErrorFact("managed-service", error)];
+    const detail = failureFacts.map((fact) => fact.message ?? fact.code).join("; ");
     // Cancellation may finish the run; retain its cause before that ownership transition.
     try {
-      await recordUpdateRunStep(params.runId, { step: "requested", status: "failed", reason });
+      await recordUpdateRunStep(params.runId, {
+        step: "requested",
+        status: "failed",
+        reason,
+        detail: `${reason}: ${detail}`,
+        failureFacts,
+      });
     } catch {
       log.info("Update failure state could not be recorded; preserving the original error.");
     }
     await recordUpdateRunDiagnostics(
       params.runId,
-      { failure: { step: "managed-service", detail: fact.message, failureFacts: [fact] } },
+      { failure: { step: "managed-service", detail, failureFacts } },
       (message) => log.info(message),
     );
     const code = extractErrorCode(error);
     const outcome = failure(
       reason,
-      `Automatic update handoff failed${code ? ` (${code})` : ""}. Inspect the Gateway log, then run \`${command}\` from a shell to retry.`,
+      `Automatic update handoff failed${code ? ` (${code})` : ""}: ${reason}: ${detail}. Inspect the Gateway log, then run \`${command}\` from a shell to retry.`,
     );
     outcome.result.steps = [
       {
@@ -128,7 +140,7 @@ export async function runAutoUpdateCommand(
         cwd: "",
         durationMs: 0,
         exitCode: 1,
-        failureFacts: [fact],
+        failureFacts,
       },
     ];
     outcome.result.rollbackOutcome = {
@@ -188,6 +200,9 @@ export async function runAutoUpdateCommand(
       }
     } else {
       // A joined helper owns another run; it cannot complete this campaign's admission.
+      await recordUpdateRunPhase(params.runId, "requested", {
+        origin: { nextAction: started.message },
+      });
       await finishUpdateRun(params.runId, {
         status: "skipped",
         reason: "managed-service-handoff-already-running",

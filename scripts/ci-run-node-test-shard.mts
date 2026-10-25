@@ -20,7 +20,7 @@ import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
 import type { CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -106,10 +106,6 @@ type RunShardOptions = {
   runChild?: typeof runChild;
   scratchDir?: string;
 };
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
 
 function isShardGroupConfig(value: unknown): value is ShardGroupConfig {
   return isRecord(value) && isStringArray(value.configs);

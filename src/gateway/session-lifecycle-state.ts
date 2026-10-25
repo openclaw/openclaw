@@ -16,6 +16,10 @@ import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readAgentRunProviderReview } from "../sessions/provider-review-terminal.js";
+import {
+  AgentDeletionPendingError,
+  retainAgentDeletionTerminalWrite,
+} from "../sessions/session-agent-work-admission.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
@@ -66,6 +70,7 @@ export function deriveGatewaySessionLifecycleProjectionPatch(params: {
 type GatewaySessionLifecycleEventParams = {
   sessionKey: string;
   agentId?: string;
+  clientRunId?: string;
   event: LifecycleEventLike;
   assertCommitAllowed?: () => void;
   expectedWriter?: {
@@ -96,7 +101,36 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
   });
   // Queue waits must not leave an early read rejection unobserved.
   void prepared.catch(() => undefined);
-  return async () => persistPreparedGatewaySessionLifecycleEvent(params, phase, await prepared);
+  return async () => {
+    const sessionEntry = await prepared;
+    try {
+      await persistPreparedGatewaySessionLifecycleEvent(params, phase, sessionEntry);
+    } catch (error) {
+      // Drain settlement transfers the outcome to deletion, not to a successful write.
+      if (
+        phase === "start" ||
+        !(error instanceof AgentDeletionPendingError) ||
+        !retainAgentDeletionTerminalWrite(
+          { agentId: sessionEntry.agentId },
+          {
+            target: sessionEntry.capturedReadSource ?? {
+              agentId: sessionEntry.agentId,
+              path: sessionEntry.storePath,
+            },
+            // The run has drained. Deletion now owns replay of this captured outcome.
+            persist: (assertCommitAllowed) =>
+              persistPreparedGatewaySessionLifecycleEvent(
+                { ...params, assertCommitAllowed },
+                phase,
+                sessionEntry,
+              ),
+          },
+        )
+      ) {
+        throw error;
+      }
+    }
+  };
 }
 
 async function persistPreparedGatewaySessionLifecycleEvent(
@@ -160,11 +194,10 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           ts: params.event.ts,
           sessionId: params.event.sessionId,
           runId: params.event.runId,
-          clientRunId: params.event.clientRunId,
+          clientRunId: params.clientRunId ?? params.event.clientRunId,
           lifecycleGeneration: params.event.lifecycleGeneration,
           mainSessionRestartRecovery: params.event.mainSessionRestartRecovery,
           controlUiVisible: params.event.controlUiVisible,
-          isHeartbeat: params.event.isHeartbeat,
           contextClaimId: params.event.contextClaimId,
           data: params.event.data,
         },

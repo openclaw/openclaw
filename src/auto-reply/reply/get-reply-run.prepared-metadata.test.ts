@@ -3,9 +3,12 @@ import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-m
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
+import { getPluginExecutionFrame } from "../../plugins/plugin-instance-invocation.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { baseParams } from "./get-reply-run.test-support.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import { expectCallCounts } from "./reply-contract.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   acquireRuntime: vi.fn(),
@@ -33,25 +36,22 @@ it("keeps the admitted Gateway generation active through a different reply works
   const config = {};
   const workspaceDir = "/tmp/openclaw-reply-workspace";
   const gatewayWorkspaceDir = "/tmp/openclaw-configured-workspace";
+  const agent = { agentId: "main", agentDir: "/tmp/openclaw-reply-agent" };
+  const model = { provider: "selected", model: "model" };
   const metadataSnapshot = {
     index: { plugins: [] },
-    pluginIds: undefined,
     policyHash: resolveInstalledPluginIndexPolicyHash(config),
     workspaceDir: gatewayWorkspaceDir,
   } as never;
-  const pluginRegistry = { registrations: [] } as never;
   const pluginGeneration = {
     remoteCatalog: null,
-    configuredCatalogEntries: [],
-    inlineProviderModels: [],
     pluginMetadataSnapshot: metadataSnapshot,
-    pluginRegistry,
   };
   const release = vi.fn(async () => {});
   const selectedGeneration = { ...pluginGeneration, pluginRegistry: { selected: true } };
   mocks.prepareContext.mockResolvedValue({
     kind: "ready",
-    params: { cfg: config, provider: "selected", model: "model" },
+    params: { cfg: config, ...model },
     thinkingRuntime: "selected-harness",
     workspaceDir,
   });
@@ -65,37 +65,43 @@ it("keeps the admitted Gateway generation active through a different reply works
     [Symbol.asyncDispose]: release,
     pluginGeneration: selectedGeneration,
   }));
-  const expectSelectedScope = () => {
+  const inSelectedScope = async <T>(result: T) => {
+    expect(getPluginExecutionFrame()?.retentionOwner).toMatchObject({
+      agentId: "main",
+      sessionKey: "fixture-session",
+    });
     expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBe(metadataSnapshot);
     expect(getPluginRuntimeGenerationRegistry()).toBe(selectedGeneration.pluginRegistry);
     expect(getPreparedModelRuntimePluginGeneration()).toBe(selectedGeneration);
+    return result;
   };
-  mocks.prepareAdmission.mockImplementation(async () => {
-    expectSelectedScope();
-    return { kind: "ready" };
-  });
-  mocks.execute.mockImplementation(async () => {
-    expectSelectedScope();
-    return { text: "ok" };
+  mocks.prepareAdmission.mockImplementation(() => inSelectedScope({ kind: "ready" }));
+  mocks.execute.mockImplementation(() => inSelectedScope({ text: "ok" }));
+  const preparedInput = baseParams({
+    cfg: config,
+    sessionCtx: {},
+    ctx: {},
+    agentId: agent.agentId,
+    sessionKey: "fixture-session",
+    workspaceDir,
+    ...model,
   });
 
   const run = bindPreparedReplyDispatchRuntime(
     {
-      agentId: "main",
-      agentDir: "/tmp/openclaw-reply-agent",
+      ...agent,
       workspaceDir: gatewayWorkspaceDir,
       config,
       pluginGeneration,
     } as never,
-    async () => await runPreparedReply({ provider: "selected", model: "model" } as never),
+    () => runPreparedReply(preparedInput),
   );
 
   await expect(run()).resolves.toEqual({ text: "ok" });
   expect(mocks.acquireRuntime).toHaveBeenCalledWith(
     {
       config,
-      agentId: "main",
-      agentDir: "/tmp/openclaw-reply-agent",
+      ...agent,
       allowGatewaySubagentBinding: true,
       workspaceDir,
       runtimePluginSelections: [
@@ -104,10 +110,9 @@ it("keeps the admitted Gateway generation active through a different reply works
     },
     { catalogMode: "static", pluginGeneration },
   );
-  expect(mocks.prepareAdmission).toHaveBeenCalledOnce();
-  expect(mocks.execute).toHaveBeenCalledOnce();
-  expect(release).toHaveBeenCalledOnce();
+  expectCallCounts(1, mocks.prepareAdmission, mocks.execute, release);
   expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
   expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
   expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
+  expect(getPluginExecutionFrame()?.retentionOwner).toBeUndefined();
 });

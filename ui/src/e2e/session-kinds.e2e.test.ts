@@ -1,32 +1,107 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI session kinds" });
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("sorts and groups by displayed kind while preserving pins", async () => {
+  it.each([1440, 390])("keeps the sessions header and actions usable at %i px", async (width) => {
+    await suite.withPage(
+      { viewport: { width, height: 900 }, colorScheme: "dark" },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}sessions`);
+        const header = page.locator(".sessions-hub-header");
+        const title = header.getByRole("heading", { name: "Sessions", level: 1 });
+        await title.waitFor({ state: "visible" });
+        await expect
+          .poll(() =>
+            header.evaluate((element) => {
+              const heading = element.querySelector(".page-title")?.getBoundingClientRect();
+              const tabRow = element
+                .querySelector(".hub-page-header__tabs")
+                ?.getBoundingClientRect();
+              return heading && tabRow
+                ? {
+                    visibleTitle: heading.width > 1 && heading.height > 1,
+                    leftAligned: Math.abs(heading.left - tabRow.left) <= 1,
+                    tabsBelowTitle: tabRow.top >= heading.bottom,
+                  }
+                : null;
+            }),
+          )
+          .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowTitle: true });
+
+        const actions = page.locator(".settings-section__actions");
+        const search = actions.getByRole("button", { name: "Search transcripts" });
+        const refresh = actions.getByRole("button", { name: "Refresh" });
+        const filter = actions.getByRole("button", { name: "Filters", exact: true });
+        const create = actions.getByRole("link", { name: "New session" });
+        const controls = [search, refresh, filter, create];
+        for (const control of controls) {
+          await control.waitFor({ state: "visible" });
+        }
+        expect(await create.getAttribute("href")).toContain("/new");
+        const styles = await Promise.all(
+          controls.map((control) =>
+            control.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                left: element.getBoundingClientRect().left,
+                width: element.getBoundingClientRect().width,
+                height: element.getBoundingClientRect().height,
+                background: style.backgroundColor,
+                tooltip: Boolean(element.closest("openclaw-tooltip")),
+              };
+            }),
+          ),
+        );
+        for (let index = 1; index < styles.length; index++) {
+          expect(styles[index - 1]!.left).toBeLessThan(styles[index]!.left);
+        }
+        expect(styles).toMatchObject(
+          controls.map(() => ({ width: 34, height: 34, tooltip: false })),
+        );
+        expect(
+          styles.slice(0, 3).every(({ background }) => background === "rgba(0, 0, 0, 0)"),
+        ).toBe(true);
+        expect(styles[3]?.background).not.toBe("rgba(0, 0, 0, 0)");
+        expect(await page.locator(".settings-section__heading .settings-count").count()).toBe(0);
+        expect(await page.locator(".sessions-filter-bar").count()).toBe(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          width,
+        );
+        await search.click();
+        const transcriptInput = page.getByRole("searchbox", { name: "Search session transcripts" });
+        await transcriptInput.waitFor();
+        await transcriptInput.press("Escape");
+        await filter.click();
+        const popover = page.locator(".sessions-filter-popover:popover-open");
+        await popover.waitFor();
+        await popover
+          .getByRole("textbox", { name: "Filter by key, agent, label, kind…" })
+          .waitFor();
+        await popover.getByRole("radiogroup", { name: "Session state" }).waitFor();
+        await expect.poll(() => popover.getAttribute("data-phase")).toBe("open");
+        await page.keyboard.press("Escape");
+        await create.click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      },
+    );
+  });
+
+  it("groups by displayed kind while keeping the scan table compact", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const sessions = [
-        { key: "agent:main:alpha", kind: "direct", label: "Alpha conversation", updatedAt: 6 },
-        { key: "agent:main:cron:daily", kind: "direct", label: "Daily check", updatedAt: 5 },
-        { key: "agent:main:beta", kind: "direct", label: "Beta conversation", updatedAt: 4 },
-        { key: "agent:main:room", kind: "group", label: "Project room", updatedAt: 3 },
-        { key: "cron:weekly", kind: "direct", label: "Weekly check", updatedAt: 2 },
-        {
-          key: "agent:main:pinned",
-          kind: "direct",
-          label: "Pinned conversation",
-          updatedAt: 1,
-          pinned: true,
-          pinnedAt: 100,
-        },
+        sessionRow("agent:main:alpha", "Alpha conversation", 6),
+        sessionRow("agent:main:cron:daily", "Daily check", 5),
+        sessionRow("agent:main:beta", "Beta conversation", 4),
+        sessionRow("agent:main:room", "Project room", 3, { kind: "group" }),
+        sessionRow("cron:weekly", "Weekly check", 2),
+        sessionRow("agent:main:pinned", "Pinned conversation", 1, { pinned: true, pinnedAt: 100 }),
       ];
-      const gateway = await installMockGateway(page, {
+      await installMockGateway(page, {
         sessionKey: "unknown",
         methodResponses: {
           "sessions.list": {
@@ -41,54 +116,35 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}sessions`);
       const table = page.locator(".sessions-table");
       await expect.poll(() => table.locator(".session-data-row").count()).toBe(6);
-      const kinds = () => table.locator(".session-data-row .session-kind").allTextContents();
-      const kindHeader = table.locator("th[data-sortable]").filter({ hasText: "Kind" });
-      await kindHeader.getByRole("button").click();
-      await expect.poll(() => kindHeader.getAttribute("aria-sort")).toBe("descending");
-      expect.soft(await kinds()).toEqual(["direct", "group", "direct", "direct", "cron", "cron"]);
-      await kindHeader.getByRole("button").click();
-      await expect.poll(() => kindHeader.getAttribute("aria-sort")).toBe("ascending");
-      const ascending = await kinds();
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "kind-sort.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [table]),
-        );
-      }
-      expect.soft(ascending).toEqual(["direct", "cron", "cron", "direct", "direct", "group"]);
+      expect(await table.locator("thead th").allTextContents()).toEqual([
+        "",
+        "Session",
+        "Updated",
+        "Actions",
+      ]);
+      expect(await table.locator(".session-data-row .session-kind").count()).toBe(0);
 
-      await page.getByRole("button", { name: "Filters", exact: true }).click();
-      await page.locator(".sessions-filter-popover:popover-open").waitFor();
+      const filters = page.getByRole("button", { name: "Filters", exact: true });
+      const popover = page.locator(".sessions-filter-popover");
+      const openFilters = async () => {
+        await filters.click();
+        await page.locator(".sessions-filter-popover:popover-open").waitFor();
+      };
+      await openFilters();
       await page.locator(".session-groupby__select").selectOption("kind");
       await page.keyboard.press("Escape");
-      await page.locator(".sessions-filter-popover").waitFor({ state: "hidden" });
+      await popover.waitFor({ state: "hidden" });
       await table.locator(".session-group-row").first().waitFor();
       const groups = await table.locator(".session-group-row__label").allTextContents();
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "kind-groups.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [table]),
-        );
-        await writeFile(
-          path.join(suite.artifactDir, "kind-proof.json"),
-          JSON.stringify(
-            { ascending, groups, requests: await gateway.getRequests("sessions.list") },
-            null,
-            2,
-          ),
-        );
-      }
       expect.soft(groups).toEqual(["cron", "direct", "group"]);
-      expect.soft(await kinds()).toEqual(["cron", "cron", "direct", "direct", "direct", "group"]);
-      await page.getByRole("button", { name: "Filters", exact: true }).click();
-      await page.locator(".sessions-filter-popover:popover-open").waitFor();
+      await openFilters();
       await page.locator(".session-groupby__select").selectOption("none");
       await expect.poll(() => table.locator(".session-group-row").count()).toBe(0);
       expect(await table.locator(".session-data-row").first().textContent()).toContain(
         "Pinned conversation",
       );
       await page.keyboard.press("Escape");
-      await page.locator(".sessions-filter-popover").waitFor({ state: "hidden" });
+      await popover.waitFor({ state: "hidden" });
       await table
         .locator(".session-data-row")
         .filter({ hasText: "Daily check" })
@@ -99,22 +155,19 @@ suite.define(() => {
       expect(await details.locator(".session-kind").textContent()).toBe("cron");
       expect(
         await details
-          .locator(".session-detail-stat")
-          .filter({ has: page.locator(".session-detail-stat__label", { hasText: "Kind" }) })
+          .locator('.session-detail-stat:has(.session-detail-stat__label:text("Kind"))')
           .locator(".session-detail-stat__value")
           .textContent(),
       ).toBe("cron");
 
-      const search = page.locator(".sessions-toolbar__search input");
+      await openFilters();
+      const search = popover.locator(".sessions-filter-popover__search input");
       await search.fill("Pinned");
-      const filters = page.getByRole("button", { name: "Filters", exact: true });
-      await filters.click();
-      const popover = page.locator(".sessions-filter-popover");
-      await page.locator(".sessions-filter-popover:popover-open").waitFor();
+      expect(await search.inputValue()).toBe("Pinned");
       await expect
-        .poll(() => popover.evaluate((element) => document.activeElement === element))
+        .poll(() => popover.evaluate((element) => element.contains(document.activeElement)))
         .toBe(true);
-      await page.keyboard.press("Escape");
+      await filters.click();
       await popover.waitFor({ state: "hidden" });
       await expect
         .poll(() => filters.evaluate((element) => document.activeElement === element))

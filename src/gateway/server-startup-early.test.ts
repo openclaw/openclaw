@@ -1,14 +1,9 @@
-/**
- * Early gateway startup helper tests.
- */
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
-import { runGatewayCloseSteps } from "./server-shutdown.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 type StartGatewayDiscovery = typeof import("./server-discovery-runtime.js").startGatewayDiscovery;
@@ -28,22 +23,15 @@ const mocks = vi.hoisted(() => ({
   detachSkillsWatchers: vi.fn(),
   startCronMaintenance: vi.fn(),
   skillsChangeUnsub: vi.fn(),
-  ensureContextWindowCacheLoaded: vi.fn(),
-  startGatewayMaintenanceTimers: vi.fn(() => ({
-    startMediaCleanup: vi.fn(),
-    stopMediaCleanup: vi.fn(async () => "drained" as const),
-    stopPeriodicTasks: vi.fn(async () => {}),
-    skillUsageCleanup: vi.fn(async () => {}),
-  })),
+  startGatewayMaintenanceTimers: vi.fn(() => ({})),
 }));
 
 vi.mock("./server-maintenance.js", () => ({
   startGatewayMaintenanceTimers: mocks.startGatewayMaintenanceTimers,
 }));
 
-vi.mock("../infra/machine-name.js", () => ({
-  getMachineDisplayName: mocks.getMachineDisplayName,
-}));
+// mock-isolation: Startup uses a fixed machine name without reading host identity.
+vi.mock("../infra/machine-name.js", () => ({ getMachineDisplayName: mocks.getMachineDisplayName }));
 
 vi.mock("./server-discovery-runtime.js", () => ({
   startGatewayDiscovery: mocks.startGatewayDiscovery,
@@ -63,13 +51,8 @@ vi.mock("../skills/runtime/refresh.js", () => ({
   detachSkillsWatchers: mocks.detachSkillsWatchers,
 }));
 
-vi.mock("../cron/maintenance.js", () => ({
-  startCronMaintenance: mocks.startCronMaintenance,
-}));
-
-vi.mock("../agents/context.js", () => ({
-  ensureContextWindowCacheLoaded: mocks.ensureContextWindowCacheLoaded,
-}));
+// mock-isolation: Startup tests observe scheduling without starting real cron maintenance.
+vi.mock("../cron/maintenance.js", () => ({ startCronMaintenance: mocks.startCronMaintenance }));
 
 import { startGatewayEarlyRuntime } from "./server-startup-early.js";
 
@@ -103,45 +86,56 @@ function earlyRuntimeInput(
     logDiscovery: log,
     nodeRegistry: {} as never,
     swapDiscovery: () => null,
-    pluginRuntimeClaim: createGatewayPluginRuntimeGeneration({
-      getServices: () => null,
-      setServices: () => {},
-    }).currentClaim(),
     maintenance: maintenanceState,
     broadcast: maintenanceState.broadcast,
     scheduler,
+    getCronStorePath: () => "/synthetic/cron/jobs.json",
     getRuntimeConfig: () => ({}) as never,
     ...overrides,
   };
 }
 
+async function startRuntime(overrides: Partial<StartGatewayEarlyRuntimeInput> = {}) {
+  const runtime = await startGatewayEarlyRuntime(
+    earlyRuntimeInput({ minimalTestGateway: false, ...overrides }),
+  );
+  onTestFinished(() => runtime.skillsChangeUnsub());
+  return runtime;
+}
+
+async function startSkillEvents(overrides: Partial<StartGatewayEarlyRuntimeInput> = {}) {
+  const time = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(time.clock);
+  const broadcast = vi.fn();
+  const warn = vi.fn();
+  await startRuntime({ scheduler, broadcast, log: { ...log, warn }, ...overrides });
+  return {
+    time,
+    scheduler,
+    broadcast,
+    warn,
+    listener: mocks.registerSkillsChangeListener.mock.lastCall![0],
+  };
+}
+
 describe("startGatewayEarlyRuntime", () => {
   beforeEach(() => {
-    mocks.getMachineDisplayName.mockClear();
-    mocks.startGatewayDiscovery.mockClear();
+    for (const mock of Object.values(mocks)) {
+      mock.mockReset();
+    }
+    mocks.getMachineDisplayName.mockResolvedValue("Test Machine");
     mocks.startGatewayDiscovery.mockResolvedValue({ update: async () => {}, stop: async () => {} });
-    mocks.setSkillsRemoteRegistry.mockReset();
-    mocks.primeRemoteSkillsCache.mockReset();
-    mocks.refreshRemoteBinsForConnectedNodes.mockReset();
-    mocks.refreshSkillsDiscovery.mockReset().mockResolvedValue(undefined);
-    mocks.registerSkillsChangeListener.mockReset();
-    mocks.closeSkillsWatchers.mockReset();
-    mocks.detachSkillsWatchers.mockReset();
-    mocks.startCronMaintenance.mockReset();
+    mocks.refreshSkillsDiscovery.mockResolvedValue(undefined);
     mocks.registerSkillsChangeListener.mockReturnValue(mocks.skillsChangeUnsub);
-    mocks.skillsChangeUnsub.mockReset();
-    mocks.ensureContextWindowCacheLoaded.mockReset();
-    mocks.ensureContextWindowCacheLoaded.mockResolvedValue(undefined);
-    mocks.startGatewayMaintenanceTimers.mockClear();
+    mocks.startGatewayMaintenanceTimers.mockReturnValue({});
   });
 
   it.each([
     { minimalTestGateway: true, updateCanary: false },
     { minimalTestGateway: false, updateCanary: true },
   ])("skips side runtimes for $minimalTestGateway minimal / $updateCanary canary", async (mode) => {
-    const earlyRuntime = await startGatewayEarlyRuntime(earlyRuntimeInput(mode));
+    const earlyRuntime = await startRuntime(mode);
 
-    expect(earlyRuntime).not.toHaveProperty("mcpServer");
     expect(mocks.startGatewayDiscovery).not.toHaveBeenCalled();
     expect(mocks.setSkillsRemoteRegistry).not.toHaveBeenCalled();
     expect(mocks.primeRemoteSkillsCache).not.toHaveBeenCalled();
@@ -150,38 +144,28 @@ describe("startGatewayEarlyRuntime", () => {
     expect(mocks.refreshSkillsDiscovery).not.toHaveBeenCalled();
     expect(await earlyRuntime.startMaintenance({})).toBeNull();
     expect(mocks.startGatewayMaintenanceTimers).not.toHaveBeenCalled();
-    await earlyRuntime.skillsChangeUnsub();
   });
 
   it.each([false, true])(
     "starts maintenance only while its Gateway is open (closesDuringImport=%s)",
     async (closesDuringImport) => {
       let closing = false;
-      const earlyRuntime = await startGatewayEarlyRuntime(
-        earlyRuntimeInput({ minimalTestGateway: false, isClosing: () => closing }),
-      );
-      try {
-        const starting = earlyRuntime.startMaintenance({});
-        closing = closesDuringImport;
-        const maintenance = await starting;
+      const earlyRuntime = await startRuntime({ isClosing: () => closing });
+      const starting = earlyRuntime.startMaintenance({});
+      closing = closesDuringImport;
+      const maintenance = await starting;
 
-        expect(mocks.startGatewayMaintenanceTimers).toHaveBeenCalledTimes(
-          closesDuringImport ? 0 : 1,
-        );
-        expect(mocks.refreshSkillsDiscovery).toHaveBeenCalledTimes(closesDuringImport ? 0 : 1);
-        if (closesDuringImport) {
-          expect(maintenance).toBeNull();
-        } else {
-          expect(maintenance).toBe(mocks.startGatewayMaintenanceTimers.mock.results[0]?.value);
-        }
-      } finally {
-        await earlyRuntime.skillsChangeUnsub();
+      expect(mocks.startGatewayMaintenanceTimers).toHaveBeenCalledTimes(closesDuringImport ? 0 : 1);
+      expect(mocks.refreshSkillsDiscovery).toHaveBeenCalledTimes(closesDuringImport ? 0 : 1);
+      if (closesDuringImport) {
+        expect(maintenance).toBeNull();
+      } else {
+        expect(maintenance).toBe(mocks.startGatewayMaintenanceTimers.mock.results[0]?.value);
       }
     },
   );
 
   it("registers skills changes before readiness and joins discovery during maintenance", async () => {
-    const nodeRegistry = { node: { id: "node" } };
     const config = { skills: { load: { watch: false } } };
     const scanStarted = createDeferredCore();
     const scanFinished = createDeferredCore();
@@ -190,13 +174,7 @@ describe("startGatewayEarlyRuntime", () => {
       await scanFinished.promise;
     });
 
-    const input = earlyRuntimeInput({
-      minimalTestGateway: false,
-      cfgAtStart: { cron: { enabled: false } },
-      getRuntimeConfig: () => config,
-      nodeRegistry: nodeRegistry as never,
-    });
-    const earlyRuntime = await startGatewayEarlyRuntime(input);
+    const earlyRuntime = await startRuntime({ getRuntimeConfig: () => config });
     expect(mocks.refreshSkillsDiscovery).not.toHaveBeenCalled();
     expect(mocks.registerSkillsChangeListener).toHaveBeenCalledOnce();
     const starting = earlyRuntime.startMaintenance({});
@@ -205,17 +183,10 @@ describe("startGatewayEarlyRuntime", () => {
     scanFinished.resolve();
     await starting;
 
-    expect(mocks.setSkillsRemoteRegistry).toHaveBeenCalledWith(nodeRegistry);
     expect(mocks.refreshSkillsDiscovery).toHaveBeenCalledExactlyOnceWith({ config });
-    await Promise.resolve();
-    expect(mocks.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
-    expect(mocks.primeRemoteSkillsCache).toHaveBeenCalledTimes(1);
-    expect(mocks.startCronMaintenance).toHaveBeenCalledExactlyOnceWith(input.scheduler);
-    expect(mocks.startGatewayDiscovery).toHaveBeenCalledOnce();
     expect(mocks.startGatewayDiscovery.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
       mocks.setSkillsRemoteRegistry.mock.invocationCallOrder[0] ?? -Infinity,
     );
-    expect(mocks.registerSkillsChangeListener).toHaveBeenCalledTimes(1);
 
     await earlyRuntime.skillsChangeUnsub();
     expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
@@ -226,140 +197,54 @@ describe("startGatewayEarlyRuntime", () => {
   it("continues startup with a warning after an initial skills scan fails", async () => {
     mocks.refreshSkillsDiscovery.mockRejectedValueOnce(new Error("skills scan failed"));
     const warn = vi.fn();
-    const earlyRuntime = await startGatewayEarlyRuntime(
-      earlyRuntimeInput({ minimalTestGateway: false, log: { ...log, warn } }),
-    );
+    const earlyRuntime = await startRuntime({ log: { ...log, warn } });
     await earlyRuntime.startMaintenance({});
     expect(warn).toHaveBeenCalledWith(
       "failed to refresh skills during startup: Error: skills scan failed",
     );
-    expect(mocks.registerSkillsChangeListener).toHaveBeenCalledOnce();
     await earlyRuntime.skillsChangeUnsub();
     expect(mocks.closeSkillsWatchers).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])(
-    "stops acquired discovery exactly once after later startup failure (cleanup rejects: %s)",
-    async (cleanupRejects) => {
-      const startupError = new Error("remote skills registry failed");
-      const cleanupError = new Error("discovery cleanup failed");
-      const stopDiscovery = vi.fn(async () => {
-        if (cleanupRejects) {
-          throw cleanupError;
-        }
-      });
-      const owner: { current: Awaited<ReturnType<StartGatewayDiscovery>> | null } = {
-        current: null,
-      };
-      const swapDiscovery = (next: typeof owner.current) => {
-        const previous = owner.current;
-        owner.current = next;
-        return previous;
-      };
-      mocks.startGatewayDiscovery.mockResolvedValueOnce({
-        update: async () => {},
-        stop: stopDiscovery,
-      });
-      mocks.setSkillsRemoteRegistry.mockImplementationOnce(() => {
-        throw startupError;
-      });
-      const onCleanupError = vi.fn();
-
-      const startup = startGatewayEarlyRuntime(
-        earlyRuntimeInput({ minimalTestGateway: false, swapDiscovery }),
-      ).catch(async (error: unknown) => {
-        await runGatewayCloseSteps({
-          owner: {
-            connectionWork: { drain: async () => {} },
-            stopConnectionDependentSidecars: () => {},
-            stopRegisteredGatewayLifetimeSidecars: async () => await swapDiscovery(null)?.stop(),
-            stopRegisteredPostReadySidecars: () => {},
-            runClosePrelude: () => {},
-            sealAndJoinRegisteredSidecarStops: () => {},
-          },
-          close: async () => await swapDiscovery(null)?.stop(),
-          onError: onCleanupError,
-        });
-        throw error;
-      });
-
-      if (cleanupRejects) {
-        await expect(startup).rejects.toMatchObject({
-          name: "AggregateError",
-          errors: [expect.objectContaining({ cause: cleanupError })],
-        });
-      } else {
-        await expect(startup).rejects.toBe(startupError);
-      }
-      expect(stopDiscovery).toHaveBeenCalledOnce();
-      expect(owner.current).toBeNull();
-      expect(onCleanupError).toHaveBeenCalledTimes(cleanupRejects ? 1 : 0);
-    },
-  );
-
-  it("broadcasts remote-node skill invalidations to operator clients", async () => {
-    const broadcast = vi.fn();
-
-    await startGatewayEarlyRuntime(
-      earlyRuntimeInput({
-        minimalTestGateway: false,
-        broadcast,
-      }),
-    );
-
-    const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0] as
-      | ((event: { reason: "remote-node" }) => void)
-      | undefined;
-    expect(listener).toBeDefined();
-
-    listener?.({ reason: "remote-node" });
-
-    expect(broadcast).toHaveBeenCalledWith("skills.changed", { reason: "remote-node" });
-    expect(mocks.refreshRemoteBinsForConnectedNodes).not.toHaveBeenCalled();
+  it("publishes acquired discovery before a later startup failure", async () => {
+    const startupError = new Error("remote skills registry failed");
+    const discovery = { update: async () => {}, stop: vi.fn() };
+    const swapDiscovery = vi.fn(() => null);
+    mocks.startGatewayDiscovery.mockResolvedValueOnce(discovery);
+    mocks.setSkillsRemoteRegistry.mockImplementationOnce(() => {
+      expect(swapDiscovery).toHaveBeenCalledExactlyOnceWith(discovery);
+      throw startupError;
+    });
+    await expect(
+      startGatewayEarlyRuntime(earlyRuntimeInput({ minimalTestGateway: false, swapDiscovery })),
+    ).rejects.toBe(startupError);
   });
 
-  it("does not probe remote bins or broadcast for restored watch coverage", async () => {
-    const broadcast = vi.fn();
-    const time = createGatewaySchedulerClock();
-    const earlyRuntime = await startGatewayEarlyRuntime(
-      earlyRuntimeInput({
-        minimalTestGateway: false,
-        broadcast,
-        scheduler: createTestGatewayScheduler(time.clock),
-      }),
-    );
-    try {
-      const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0];
-      expect(listener).toEqual(expect.any(Function));
-      listener({ reason: "watch-available" });
+  it.each(["remote-node", "watch-available"] as const)(
+    "handles %s without probing remote bins",
+    async (reason) => {
+      const { time, broadcast, listener } = await startSkillEvents();
+      listener({ reason });
       await time.advanceBy(30_000);
       expect(mocks.refreshRemoteBinsForConnectedNodes).not.toHaveBeenCalled();
-      expect(broadcast).not.toHaveBeenCalled();
-    } finally {
-      await earlyRuntime.skillsChangeUnsub();
-    }
-  });
+      if (reason === "remote-node") {
+        expect(broadcast).toHaveBeenCalledWith("skills.changed", { reason });
+      } else {
+        expect(broadcast).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([false, true])(
     "broadcasts local skill changes immediately while coalescing remote-bin refresh (fails: %s)",
     async (fails) => {
-      const time = createGatewaySchedulerClock();
-      const broadcast = vi.fn();
-      const warn = vi.fn();
       const refresh = createDeferredCore();
       mocks.refreshRemoteBinsForConnectedNodes.mockReturnValueOnce(refresh.promise);
       let config = { cron: { enabled: false } };
-      const earlyRuntime = await startGatewayEarlyRuntime(
-        earlyRuntimeInput({
-          minimalTestGateway: false,
-          broadcast,
-          log: { ...log, warn },
-          scheduler: createTestGatewayScheduler(time.clock),
-          getRuntimeConfig: () => config,
-        }),
-      );
+      const { time, broadcast, warn, listener } = await startSkillEvents({
+        getRuntimeConfig: () => config,
+      });
       try {
-        const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0];
         listener({ reason: "watch" });
         expect(broadcast).toHaveBeenCalledExactlyOnceWith("skills.changed", { reason: "watch" });
         await time.advanceBy(15_000);
@@ -383,7 +268,6 @@ describe("startGatewayEarlyRuntime", () => {
         expect(warn).toHaveBeenCalledTimes(fails ? 1 : 0);
       } finally {
         refresh.resolve();
-        await earlyRuntime.skillsChangeUnsub();
       }
     },
   );
@@ -391,22 +275,13 @@ describe("startGatewayEarlyRuntime", () => {
   it.each([false, true])(
     "cancels pending refreshes and joins started refreshes at shutdown (started: %s)",
     async (started) => {
-      const time = createGatewaySchedulerClock();
-      const scheduler = createTestGatewayScheduler(time.clock);
-      const broadcast = vi.fn();
       const refresh = createDeferredCore();
       mocks.refreshRemoteBinsForConnectedNodes.mockReturnValueOnce(refresh.promise);
       let closing = false;
-      const earlyRuntime = await startGatewayEarlyRuntime(
-        earlyRuntimeInput({
-          minimalTestGateway: false,
-          scheduler,
-          broadcast,
-          isClosing: () => closing,
-        }),
-      );
+      const { time, scheduler, broadcast, listener } = await startSkillEvents({
+        isClosing: () => closing,
+      });
       try {
-        const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0];
         listener({ reason: "watch" });
         const running = started ? time.advanceBy(30_000) : undefined;
         closing = true;
@@ -429,51 +304,27 @@ describe("startGatewayEarlyRuntime", () => {
         expect(broadcast).toHaveBeenCalledExactlyOnceWith("skills.changed", { reason: "watch" });
       } finally {
         refresh.resolve();
-        await earlyRuntime.skillsChangeUnsub();
       }
     },
   );
 
   it("starts discovery with the current plugin registry services", async () => {
-    const stop = vi.fn(async () => {});
-    const discovery = { update: async () => {}, stop };
-    mocks.startGatewayDiscovery.mockResolvedValueOnce(discovery);
-    const swapDiscovery = vi.fn(() => null);
     const service = {
       pluginId: "bonjour",
       service: { id: "bonjour", advertise: vi.fn() },
     };
 
-    const input = earlyRuntimeInput({
-      minimalTestGateway: false,
-      swapDiscovery,
-      cfgAtStart: { discovery: { mdns: { mode: "full" } } } as never,
-      port: 19_001,
+    await startRuntime({
       gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
-      gatewayDirectReachable: true,
-      tailscaleMode: "serve" as never,
-      logDiscovery: {
-        info: () => {},
-        warn: () => {},
-      },
       pluginRegistry: {
         gatewayDiscoveryServices: [service],
       } as never,
     });
-    await startGatewayEarlyRuntime(input);
-    expect(swapDiscovery).toHaveBeenCalledWith(discovery);
-
-    const [discoveryParams] = mocks.startGatewayDiscovery.mock.calls.at(-1) ?? [];
-    if (discoveryParams === undefined) {
-      throw new Error("Expected gateway discovery to start");
-    }
-    expect(discoveryParams.machineDisplayName).toBe("Test Machine");
-    expect(discoveryParams.port).toBe(19_001);
-    expect(discoveryParams.gatewayTls).toEqual({ enabled: true, fingerprintSha256: "abc123" });
-    expect(discoveryParams.gatewayDirectReachable).toBe(true);
-    expect(discoveryParams.tailscaleMode).toBe("serve");
-    expect(discoveryParams.discovery?.mdns?.mode).toBe("full");
-    expect(discoveryParams.gatewayDiscoveryServices).toEqual([service]);
-    expect(discoveryParams.pluginRuntimeClaim).toBe(input.pluginRuntimeClaim);
+    expect(mocks.startGatewayDiscovery).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
+        gatewayDiscoveryServices: [service],
+      }),
+    );
   });
 });

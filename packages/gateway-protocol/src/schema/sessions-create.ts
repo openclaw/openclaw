@@ -12,7 +12,7 @@ import {
 } from "./sessions-row.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
-export const SESSION_CREATE_RETRY_WINDOW_MS = 4 * 60_000;
+export { SESSION_CREATE_RETRY_WINDOW_MS } from "../session-limits.js";
 export const SESSION_CREATE_IDEMPOTENCY_RETENTION_MS = 5 * 60_000;
 
 /** Creates or adopts a session with optional model, thinking, fast mode, label, and parent linkage. */
@@ -35,6 +35,7 @@ export const SessionsCreateParamsSchema = closedObject({
         "Prepared presentation title for a newly created session. Unlike label it is not unique and never claims a label; ignored when adopting an existing key.",
     }),
   ),
+  displayNameGenerated: Type.Optional(Type.Boolean()),
   titleSource: Type.Optional(
     Type.String({
       maxLength: 1_000,

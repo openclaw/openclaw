@@ -1,5 +1,6 @@
 // Memory schema operations shared by host maintenance and native publication workers.
 export {
+  memoryStandingIntentSearchSchema,
   memoryTextSearchSchema,
   memoryVectorSearchSchema,
 } from "../../packages/memory-host-sdk/src/host/memory-search-schema.js";

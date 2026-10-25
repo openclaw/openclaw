@@ -6,92 +6,56 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../test-support/message-fixtures.test-support.js";
 import deepseekPlugin from "./index.js";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
 
 type OpenAICompletionsModel = Model<"openai-completions">;
 
-type PayloadCapture = {
-  payload?: Record<string, unknown>;
-};
-
-const emptyUsage = createZeroUsageFixture();
-
-const readToolCall = { type: "toolCall", id: "call_1", name: "read", arguments: {} };
-const readToolResult = {
-  role: "toolResult",
-  toolCallId: "call_1",
-  toolName: "read",
-  content: [{ type: "text", text: "ok" }],
-  isError: false,
-  timestamp: 3,
-};
-const readTool = {
-  name: "read",
-  description: "Read data",
-  parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
-};
-
-function deepSeekV4Model(id: string): OpenAICompletionsModel {
+async function captureThinkingPayload() {
+  const capture: { payload?: Record<string, unknown> } = {};
   const provider = buildDeepSeekProvider();
-  const model = provider.models.find((entry) => entry.id === id);
-  if (!model) {
-    throw new Error(`DeepSeek bundled catalog does not include ${id}`);
-  }
-  return {
-    ...model,
+  const model = {
+    ...expectDefined(
+      provider.models.find((entry) => entry.id === "deepseek-v4-flash"),
+      "DeepSeek V4 catalog model",
+    ),
     provider: "deepseek",
     api: "openai-completions",
     baseUrl: provider.baseUrl,
   } as OpenAICompletionsModel;
-}
-
-function replayAssistantMessage(params: {
-  provider: string;
-  model: string;
-  content: Array<Record<string, unknown>>;
-  stopReason: "stop" | "toolUse";
-}) {
-  return {
-    role: "assistant",
-    api: "openai-completions",
-    provider: params.provider,
-    model: params.model,
-    content: params.content,
-    usage: emptyUsage,
-    stopReason: params.stopReason,
-    timestamp: 2,
-  };
-}
-
-function readToolReplayContext(assistantMessage: ReturnType<typeof replayAssistantMessage>) {
-  return {
-    messages: [{ role: "user", content: "hi", timestamp: 1 }, assistantMessage, readToolResult],
-    tools: [readTool],
+  const context = {
+    messages: [
+      { role: "user", content: "hi", timestamp: 1 },
+      {
+        role: "assistant",
+        api: "openai-completions",
+        provider: "deepseek",
+        model: model.id,
+        content: [
+          {
+            type: "thinking",
+            thinking: "call reasoning",
+            thinkingSignature: "reasoning_content",
+          },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ],
+        usage: createZeroUsageFixture(),
+        stopReason: "toolUse",
+        timestamp: 2,
+      },
+      makeTextToolResult("call_1", "read", "ok", false, 3),
+    ],
+    tools: [
+      {
+        name: "read",
+        description: "Read data",
+        parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
+      },
+    ],
   } as Context;
-}
-
-function deepSeekReasoningToolReplayContext(modelId = "deepseek-v4-flash") {
-  return readToolReplayContext(
-    replayAssistantMessage({
-      provider: "deepseek",
-      model: modelId,
-      content: [
-        {
-          type: "thinking",
-          thinking: "call reasoning",
-          thinkingSignature: "reasoning_content",
-        },
-        readToolCall,
-      ],
-      stopReason: "toolUse",
-    }),
-  );
-}
-
-function createPayloadCapturingStream(capture: PayloadCapture) {
-  return (
+  const streamFn = (
     streamModel: OpenAICompletionsModel,
     streamContext: Context,
     options?: { onPayload?: (payload: unknown, model: unknown) => unknown },
@@ -104,23 +68,8 @@ function createPayloadCapturingStream(capture: PayloadCapture) {
     queueMicrotask(() => stream.end());
     return stream;
   };
-}
-
-function readPayloadMessage(
-  capture: PayloadCapture,
-  index: number,
-): Record<string, unknown> | undefined {
-  return (capture.payload?.messages as Array<Record<string, unknown>> | undefined)?.[index];
-}
-
-async function captureThinkingPayload(
-  model: OpenAICompletionsModel,
-  context: Context,
-  thinkingLevel: Parameters<typeof createDeepSeekV4ThinkingWrapper>[1],
-) {
-  const capture: PayloadCapture = {};
   const wrapped = expectDefined(
-    createDeepSeekV4ThinkingWrapper(createPayloadCapturingStream(capture) as never, thinkingLevel),
+    createDeepSeekV4ThinkingWrapper(streamFn as never, "none" as never),
     "DeepSeek thinking wrapper",
   );
   await wrapped(model, context, {});
@@ -194,48 +143,27 @@ describe("deepseek provider plugin", () => {
   });
 
   it("strips replayed reasoning_content when DeepSeek V4 thinking is disabled", async () => {
-    const capture = await captureThinkingPayload(
-      deepSeekV4Model("deepseek-v4-flash"),
-      deepSeekReasoningToolReplayContext(),
-      "none" as never,
-    );
+    const capture = await captureThinkingPayload();
     expect(capture.payload?.thinking).toMatchObject({ type: "disabled" });
     expect(capture.payload).not.toHaveProperty("reasoning_effort");
-    expect(readPayloadMessage(capture, 1)).not.toHaveProperty("reasoning_content");
+    expect(
+      (capture.payload?.messages as Array<Record<string, unknown>> | undefined)?.[1],
+    ).not.toHaveProperty("reasoning_content");
   });
 
   it("publishes configured DeepSeek models through plugin-owned catalog augmentation", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
+    const model = {
+      id: "deepseek-chat",
+      name: "DeepSeek Chat",
+      input: ["text"],
+      reasoning: false,
+      contextWindow: 65536,
+    };
+    const config = { models: { providers: { deepseek: { models: [model] } } } };
 
-    expect(
-      provider.augmentModelCatalog?.({
-        config: {
-          models: {
-            providers: {
-              deepseek: {
-                models: [
-                  {
-                    id: "deepseek-chat",
-                    name: "DeepSeek Chat",
-                    input: ["text"],
-                    reasoning: false,
-                    contextWindow: 65536,
-                  },
-                ],
-              },
-            },
-          },
-        },
-      } as never),
-    ).toEqual([
-      {
-        provider: "deepseek",
-        id: "deepseek-chat",
-        name: "DeepSeek Chat",
-        input: ["text"],
-        reasoning: false,
-        contextWindow: 65536,
-      },
+    expect(provider.augmentModelCatalog?.({ config } as never)).toEqual([
+      { ...model, provider: "deepseek" },
     ]);
   });
 });

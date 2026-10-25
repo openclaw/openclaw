@@ -16,6 +16,7 @@ import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { SessionCommunicationPolicy } from "../../../packages/gateway-protocol/src/session-communication.js";
+import type { PreemptiveCompactionRoute as SessionContextBudgetStatusRoute } from "../../agents/embedded-agent-runner/run/preemptive-compaction.types.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -24,6 +25,7 @@ import type {
   CronToolsAllowExecTargetRequirement,
 } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import type { PluginJsonValue as SessionPluginJsonValue } from "../../plugins/host-hook-json.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -54,6 +56,24 @@ export type { SessionScope } from "../types.base.js";
 export type SessionChatType = ChatType;
 export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
+
+type SessionGitHubPullRequestSource = {
+  repository: string;
+  repositoryId: number;
+  branch: string;
+  commit: string;
+};
+
+/** Original PR selection for one managed workspace; never a publication receipt or permission grant. */
+export type SessionGitHubPullRequestBinding = {
+  url: string;
+  host: string;
+  number: number;
+  base: SessionGitHubPullRequestSource;
+  head: SessionGitHubPullRequestSource;
+  /** Prepared initial PR head; absence means its first import is incomplete. */
+  preparedHeadCommit?: string;
+};
 
 export type SessionOrigin = {
   label?: string;
@@ -147,6 +167,13 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
   /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
   reseedReceipt?: CliSessionReseedReceipt;
+  /** Last input snapshot supplied to this native session, independent of recovery authority. */
+  transcriptCursor?: {
+    localSessionId: string;
+    entryId: string | null;
+    runId: string;
+    userEntryId?: string;
+  };
 };
 
 type AcpSessionBinding = {
@@ -154,12 +181,6 @@ type AcpSessionBinding = {
   acpAgentId: string;
   agentSessionId: string;
 };
-
-type SessionContextBudgetStatusRoute =
-  | "fits"
-  | "compact_only"
-  | "truncate_tool_results_only"
-  | "compact_then_truncate";
 
 export type SessionContextBudgetStatus = {
   schemaVersion: 1;
@@ -194,13 +215,7 @@ type SessionPluginDebugEntry = {
   lines: string[];
 };
 
-export type SessionPluginJsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | SessionPluginJsonValue[]
-  | { [key: string]: SessionPluginJsonValue };
+export type { SessionPluginJsonValue };
 
 type SessionPluginNextTurnInjection = {
   id: string;
@@ -295,6 +310,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Durable one-shot prompt additions drained before the next agent turn. */
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
+    /** Latest operator client declaration; retained across internal turns and restart. */
+    clientCapabilities?: string[];
     updatedAt: number;
     /** Process-lifetime session whose entry and transcript stay in the in-memory agent database. */
     incognito?: true;
@@ -359,6 +376,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
       repoRoot: string;
       /** Durable skill workspace prepared when this session runs from a managed worktree. */
       canonicalWorkspaceDir?: string;
+      githubPullRequest?: SessionGitHubPullRequestBinding;
     };
     /** Project registry id selected when this logical session node was created. */
     projectId?: string;
@@ -645,6 +663,16 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** One refinement attempt for a generated Dashboard name, scoped to this session. */
+  titleRefinement?: { sessionId: string; generatedName: string; remainingMessages: number };
+  /** Original unbound files, private to this conversation's adopted workspace. */
+  priorWorkspace?: {
+    worktreeId: string;
+    sessionId: string;
+    workspaceDir: string;
+    fileRoot: string;
+    through: { generation: string | null; maxSeq: number | null };
+  };
   /** Personal discovery state, never participation, attribution, or sharing authority. */
   profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
   /** Transcript-wide account provenance; native binding replacement must not replace it. */
@@ -670,7 +698,7 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Original host-admitted operator basis, owned by the exact restart source claim. */
-  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
+  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
   /** Unhanded exec completion obligations; no command arguments or output. */
   pendingExecNotifications?: Record<
     string,
@@ -687,6 +715,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
       > & { toolsAllow?: readonly string[][] };
     }
   >;
+  /** Original requester facts retained by the exact host-admitted restart source claim. */
+  restartRecoveryRequesterSource?: import("../../agents/requester-run-recovery-source.js").RestartRecoveryRequesterSource;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

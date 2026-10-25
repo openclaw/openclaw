@@ -11,6 +11,7 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import { appendTranscriptEventSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import type { CliSessionBinding } from "../config/sessions/types.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { McpLoopbackRequestContext } from "../gateway/mcp-grant-store.js";
 import {
@@ -161,17 +162,13 @@ type PreparedCliRunContextOverrides = {
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
   preparedEnv?: PreparedCliRunContext["preparedBackend"]["env"];
   resolveExecutionArgs?: PreparedCliRunContext["backendResolved"]["resolveExecutionArgs"];
-  toolAvailabilityEnforcement?: PreparedCliRunContext["backendResolved"]["toolAvailabilityEnforcement"];
   config?: PreparedCliRunContext["params"]["config"];
-  mcpConfigHash?: string;
-  mcpResumeHash?: string;
   mcpDeliveryCapture?: boolean;
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
   fastMode?: PreparedCliRunContext["params"]["fastMode"];
   executionMode?: PreparedCliRunContext["params"]["executionMode"];
   cliToolAvailability?: PreparedCliRunContext["params"]["cliToolAvailability"];
-  emitCommentaryText?: boolean;
   workspaceDir?: string;
   systemPrompt?: string;
   timeoutMs?: number;
@@ -252,7 +249,6 @@ export function buildPreparedCliRunContext(
       fastMode: overrides.fastMode,
       executionMode: overrides.executionMode,
       cliToolAvailability: overrides.cliToolAvailability,
-      emitCommentaryText: overrides.emitCommentaryText,
       onSuccessfulAuthBinding: overrides.onSuccessfulAuthBinding,
       timeoutMs: overrides.timeoutMs ?? 1_000,
       runId,
@@ -273,8 +269,7 @@ export function buildPreparedCliRunContext(
             : "openai",
       resolveExecutionArgs: overrides.resolveExecutionArgs,
       toolAvailabilityEnforcement:
-        overrides.toolAvailabilityEnforcement ??
-        (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
+        provider === "google-gemini-cli" ? "prepare-execution" : "execution-args",
       runtimeArtifact: overrides.runtimeArtifact,
     },
     executionTarget: resolveCliExecutionTarget({
@@ -284,8 +279,6 @@ export function buildPreparedCliRunContext(
     preparedBackend: {
       backend,
       env: overrides.preparedEnv ?? {},
-      ...(overrides.mcpConfigHash ? { mcpConfigHash: overrides.mcpConfigHash } : {}),
-      ...(overrides.mcpResumeHash ? { mcpResumeHash: overrides.mcpResumeHash } : {}),
     },
     reusableCliSession: { mode: "none" },
     hadSessionFile: false,
@@ -359,6 +352,23 @@ export async function expectPathMissing(targetPath: string) {
     return;
   }
   throw new Error(`expected ${targetPath} to be missing`);
+}
+
+export function createTestCliSessionBinding(
+  context: PreparedCliRunContext,
+  sessionId: string,
+): CliSessionBinding {
+  return {
+    sessionId,
+    authEpoch: context.authEpoch,
+    authEpochVersion: context.authEpochVersion,
+    extraSystemPromptHash: context.extraSystemPromptHash,
+    messageToolPolicyHash: context.messageToolPolicyHash,
+    promptToolNamesHash: context.promptToolNamesHash,
+    cwdHash: context.cwdHash,
+    mcpConfigHash: context.preparedBackend.mcpConfigHash,
+    mcpResumeHash: context.preparedBackend.mcpResumeHash,
+  };
 }
 
 type PrepareCliRun = (params: RunCliAgentParams) => Promise<PreparedCliRunContext>;
@@ -575,6 +585,29 @@ export function createContextEngineCustodyFixture() {
     async cleanup() {
       await resources.release();
       close();
+    },
+  };
+}
+
+export function createPersistedCompletionHandoff(
+  sourceSessionKey: string,
+  sourceSessionId: string,
+  target: { sessionKey: string; sessionId: string },
+) {
+  return {
+    trustedInternalHandoff: {
+      kind: "subagent-completion" as const,
+      sourceSessionKey,
+      sourceSessionId,
+      targetSessionKey: target.sessionKey,
+      targetSessionId: target.sessionId,
+      provider: "claude-cli",
+      model: "opus",
+    },
+    inputProvenance: {
+      kind: "inter_session" as const,
+      sourceTool: "subagent_announce",
+      sourceSessionKey,
     },
   };
 }

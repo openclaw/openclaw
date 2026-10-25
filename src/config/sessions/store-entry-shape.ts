@@ -22,7 +22,7 @@ function normalizeSessionEntryArchiveReason(
     : undefined;
 }
 
-function normalizeOptionalTimestamp(value: unknown): number | undefined {
+export function normalizeOptionalTimestamp(value: unknown): number | undefined {
   return value === undefined ? undefined : (asNonNegativeFiniteNumber(value) ?? 0);
 }
 
@@ -50,6 +50,18 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
       delete canonicalValue[key];
     }
   };
+  setOptionalField(
+    "clientCapabilities",
+    Array.isArray(canonicalValue.clientCapabilities)
+      ? [
+          ...new Set(
+            canonicalValue.clientCapabilities.filter(
+              (cap): cap is string => typeof cap === "string",
+            ),
+          ),
+        ].toSorted()
+      : undefined,
+  );
   const icon =
     typeof canonicalValue.icon === "string" ? normalizeSessionIconValue(canonicalValue.icon) : null;
   setOptionalField("icon", icon);
@@ -260,7 +272,7 @@ export function normalizeMemoryFlush(value: unknown): SessionEntry["memoryFlush"
   };
 }
 
-function normalizeCount(value: unknown): number | undefined {
+export function normalizeCount(value: unknown): number | undefined {
   const number = asNonNegativeFiniteNumber(value);
   return number === undefined ? undefined : Math.floor(number);
 }

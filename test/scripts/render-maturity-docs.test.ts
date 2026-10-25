@@ -8,39 +8,17 @@ import { format } from "oxfmt";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
-  buildQaOccurrenceEvidenceSummary,
   createQaEvidenceInvocation,
   qaMaturityTaxonomyIdentity,
   qaProfileEvidencePlan,
   readQaMaturityTaxonomySource,
   validateQaEvidenceSummaryJson,
-  type QaEvidenceOccurrence,
 } from "../../extensions/qa-lab/test-api.js";
 import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
-import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
-const tempDirs = createTempDirTracker();
-
-type TaxonomyFixture = {
-  surfaces?: TaxonomySurfaceFixture[];
-};
-
-type TaxonomySurfaceFixture = {
-  id?: string;
-  archived?: boolean;
-  categories?: TaxonomyCategoryFixture[];
-};
-
-type TaxonomyCategoryFixture = {
-  id?: string;
-  name?: string;
-  features?: TaxonomyFeatureFixture[];
-};
-
-type TaxonomyFeatureFixture = {
-  coverageIds?: string[];
-};
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type MaturityScoresFixture = {
   rollups?: {
@@ -51,10 +29,6 @@ type MaturityScoresFixture = {
   };
 };
 
-afterEach(() => {
-  tempDirs.cleanup();
-});
-
 function runCli(...args: string[]) {
   return spawnSync(
     process.execPath,
@@ -64,6 +38,30 @@ function runCli(...args: string[]) {
       encoding: "utf8",
     },
   );
+}
+
+function renderEvidence(outputDir: string, evidenceDir: string, ...args: string[]) {
+  return runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir, ...args);
+}
+
+function evidenceFixture(options: Partial<Parameters<typeof writeQaEvidence>[0]> = {}) {
+  const outputDir = tempDirs.make("openclaw-maturity-output-");
+  const evidenceDir = tempDirs.make("openclaw-maturity-evidence-");
+  writeQaEvidence({
+    dir: evidenceDir,
+    entries: [{ id: "same-label", status: "pass" }],
+    scorecard: allProfileScorecardFixture(),
+    ...options,
+  });
+  const evidencePath = path.join(evidenceDir, "qa-evidence.json");
+  return {
+    outputDir,
+    evidenceDir,
+    evidencePath,
+    get evidence() {
+      return validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
+    },
+  };
 }
 
 function createMaturityInvocation(count: number) {
@@ -84,6 +82,62 @@ function createMaturityInvocation(count: number) {
   });
 }
 
+function missingCounts(total = 0) {
+  return { total, fulfilled: 0, missing: total, fulfillmentPercent: 0 };
+}
+
+function partialCounts(total = 0) {
+  return { ...missingCounts(total), partial: 0 };
+}
+
+function writeYaml(file: string, value: unknown) {
+  fs.writeFileSync(file, stringifyYaml(value));
+}
+
+const fixtureSurface = {
+  id: "tools",
+  name: "Fixture tools",
+  family: "core",
+  level: "experimental",
+};
+const fixtureFeature = { name: "Fixture feature", coverageIds: ["tools.evidence"] };
+const experimentalLevel = { id: "experimental", code: "M1", label: "Experimental" };
+function taxonomyFixture(
+  category: Record<string, unknown>,
+  surface: Record<string, unknown> = {},
+  levels = [experimentalLevel],
+) {
+  return {
+    version: 1,
+    title: "Synthetic maturity fixture",
+    levels,
+    surfaces: [
+      { ...fixtureSurface, ...surface, categories: [{ features: [fixtureFeature], ...category }] },
+    ],
+  };
+}
+
+function writeScores(file: string, scores: object, category: object, authored = scores) {
+  writeYaml(file, {
+    version: 1,
+    process_version: 1,
+    counts: { active_surfaces: 1, category_scores: 1 },
+    rollups: { surface_average: scores, category_average: scores },
+    surfaces: [
+      {
+        id: fixtureSurface.id,
+        name: fixtureSurface.name,
+        level: fixtureSurface.level,
+        scores: authored,
+        categories: [
+          { ...authored, lts: { supported: false, human_override: false }, ...category },
+        ],
+        lts: { supported_categories: 0, total_categories: 1, status: "none" },
+      },
+    ],
+  });
+}
+
 function writeQaEvidence(params: {
   dir: string;
   entries: Array<{ id: string; status: "pass" | "fail" | "blocked" | "skipped" }>;
@@ -96,26 +150,9 @@ function writeQaEvidence(params: {
   const scorecard = params.scorecard ?? {
     filters: { surface: null, category: null },
     run: { evidenceEntryCount: params.entries.length },
-    categories: {
-      total: 0,
-      fulfilled: 0,
-      partial: 0,
-      missing: 0,
-      fulfillmentPercent: 0,
-    },
-    features: {
-      total: 0,
-      fulfilled: 0,
-      partial: 0,
-      missing: 0,
-      fulfillmentPercent: 0,
-    },
-    coverageIds: {
-      total: 0,
-      fulfilled: 0,
-      missing: 0,
-      fulfillmentPercent: 0,
-    },
+    categories: partialCounts(),
+    features: partialCounts(),
+    coverageIds: missingCounts(),
     categoryReports: [],
   };
   fs.mkdirSync(params.dir, { recursive: true });
@@ -166,10 +203,10 @@ function allProfileScorecardFixture(
   evidenceEntryCount = 1,
   taxonomyPath = path.join(repoRoot, "taxonomy.yaml"),
 ) {
-  const taxonomy = parseYaml(fs.readFileSync(taxonomyPath, "utf8")) as TaxonomyFixture;
-  const activeSurfaces = (taxonomy.surfaces ?? []).filter((surface) => !surface.archived);
+  const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
+  const activeSurfaces = taxonomy.surfaces.filter((surface) => !surface.archived);
   const categoryReports = activeSurfaces.flatMap((surface) =>
-    (surface.categories ?? []).map((category) => {
+    surface.categories.map((category) => {
       const coverageIds = [
         ...new Set((category.features ?? []).flatMap((feature) => feature.coverageIds ?? [])),
       ].toSorted();
@@ -179,20 +216,8 @@ function allProfileScorecardFixture(
         surfaceId: surface.id,
         name: category.name,
         status: "missing",
-        features: {
-          total: features.length,
-          fulfilled: 0,
-          partial: 0,
-          missing: features.length,
-          fulfillmentPercent: 0,
-        },
-        coverageIds: {
-          total: coverageIds.length,
-          fulfilled: 0,
-          missing: coverageIds.length,
-          fulfillmentPercent: 0,
-          secondaryOnly: 0,
-        },
+        features: partialCounts(features.length),
+        coverageIds: { ...missingCounts(coverageIds.length), secondaryOnly: 0 },
         missingCoverageIds: coverageIds,
       };
     }),
@@ -205,26 +230,9 @@ function allProfileScorecardFixture(
   return {
     filters: { surface: null, category: null },
     run: { evidenceEntryCount },
-    categories: {
-      total: categoryReports.length,
-      fulfilled: 0,
-      partial: 0,
-      missing: categoryReports.length,
-      fulfillmentPercent: 0,
-    },
-    features: {
-      total: featureCount,
-      fulfilled: 0,
-      partial: 0,
-      missing: featureCount,
-      fulfillmentPercent: 0,
-    },
-    coverageIds: {
-      total: coverageIdCount,
-      fulfilled: 0,
-      missing: coverageIdCount,
-      fulfillmentPercent: 0,
-    },
+    categories: partialCounts(categoryReports.length),
+    features: partialCounts(featureCount),
+    coverageIds: missingCounts(coverageIdCount),
     categoryReports,
   };
 }
@@ -385,7 +393,7 @@ describe("maturity docs renderer CLI", () => {
         }),
       );
       fs.writeFileSync(evidencePath, raw);
-      const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+      const result = renderEvidence(outputDir, evidenceDir);
       expect(result.status, result.stderr).toBe(status === "pass" ? 0 : 1);
       expect(result.stderr).not.toContain("(unresolved)");
       if (status === "pass") {
@@ -400,68 +408,24 @@ describe("maturity docs renderer CLI", () => {
   );
 
   it("renders the effective retry while retaining the original failed observation", () => {
-    const evidenceDir = tempDirs.make("openclaw-maturity-occurrences-");
-    const outputDir = tempDirs.make("openclaw-maturity-occurrence-docs-");
-    writeQaEvidence({
-      dir: evidenceDir,
-      entries: [{ id: "same-label", status: "pass" }],
-      scorecard: allProfileScorecardFixture(),
-    });
-    const evidencePath = path.join(evidenceDir, "qa-evidence.json");
-    const legacy = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
-    const anchor: QaEvidenceOccurrence = {
-      id: "scheduled-instance",
-      parentCell: { scenarioId: "same-label", executionKind: "script", channel: null },
-      scenario: { kind: "instance", resultOccurrenceId: "retry" },
-      retryOf: null,
-      terminalStatus: null,
-      assertions: null,
-      launch: {
-        source: { ref: null, integrity: null },
-        runtime: { id: null, version: null },
-        package: null,
-        protocol: null,
-        accountRef: null,
-        proofClass: null,
-      },
-      receipts: [],
-    };
-    const first: QaEvidenceOccurrence = {
-      ...anchor,
-      id: "first",
-      scenario: { kind: "observation", instanceOccurrenceId: anchor.id },
-      terminalStatus: "fail",
-    };
-    const retry: QaEvidenceOccurrence = {
-      ...first,
-      id: "retry",
-      retryOf: first.id,
-      terminalStatus: "pass",
-    };
-    const entry = legacy.entries[0]!;
-    const evidence = buildQaOccurrenceEvidenceSummary({
-      generatedAt: legacy.generatedAt,
-      profile: legacy.profile,
+    const { outputDir, evidenceDir, evidencePath, evidence: legacy } = evidenceFixture();
+    const invocation = createMaturityInvocation(1);
+    for (const status of ["fail", "pass"] as const) {
+      const attempt = invocation.begin(0);
+      invocation.complete(attempt, {
+        status,
+        entries: legacy.entries.map((entry) => ({ ...entry, result: { status } })),
+      });
+      invocation.select(0, attempt);
+    }
+    const evidence = {
+      ...invocation.snapshot({ generatedAt: legacy.generatedAt, profile: legacy.profile }),
       profilePlan: legacy.profilePlan,
       scorecard: legacy.scorecard,
-      occurrences: [anchor, first, retry],
-      entries: [
-        {
-          ...entry,
-          result: { status: "fail" },
-          effective: false,
-          binding: { occurrenceId: first.id, assertionId: null, receiptId: null },
-        },
-        {
-          ...entry,
-          effective: true,
-          binding: { occurrenceId: retry.id, assertionId: null, receiptId: null },
-        },
-      ],
-    });
+    };
     const raw = JSON.stringify(evidence);
     fs.writeFileSync(evidencePath, raw);
-    const rendered = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    const rendered = renderEvidence(outputDir, evidenceDir);
     expect(rendered.status, rendered.stderr).toBe(0);
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
     const evidenceCard = scorecard.match(
@@ -541,56 +505,20 @@ describe("maturity docs renderer CLI", () => {
         ].map(([source, destination]) => ({ source, destination })),
       }),
     );
-    const surface = { id: "tools", name: "Fixture tools", family: "core", level: "experimental" };
-    fs.writeFileSync(
+    writeYaml(
       taxonomyPath,
-      stringifyYaml({
-        version: 1,
-        title: "Synthetic docs link fixture",
-        levels: [{ id: "experimental", code: "M1", label: "Experimental" }],
-        surfaces: [
-          {
-            ...surface,
-            categories: [
-              {
-                id: "links",
-                name: "Docs links",
-                category_note: "Synthetic fixture for renderer links",
-                features: [{ name: "Fixture feature", coverageIds: ["tools.evidence"] }],
-                docs: links.map(([doc]) => doc),
-              },
-            ],
-          },
-        ],
+      taxonomyFixture({
+        id: "links",
+        name: "Docs links",
+        category_note: "Synthetic fixture for renderer links",
+        docs: links.map(([doc]) => doc),
       }),
     );
     const scores = {
       quality: { score: 0, label: "Experimental" },
       completeness: { score: 0, label: "Experimental" },
     };
-    fs.writeFileSync(
-      scoresPath,
-      stringifyYaml({
-        version: 1,
-        process_version: 1,
-        counts: { active_surfaces: 1, category_scores: 1 },
-        rollups: { surface_average: scores, category_average: scores },
-        surfaces: [
-          {
-            ...surface,
-            scores,
-            categories: [
-              {
-                name: "Docs links",
-                ...scores,
-                lts: { supported: false, human_override: false },
-              },
-            ],
-            lts: { supported_categories: 0, total_categories: 1, status: "none" },
-          },
-        ],
-      }),
-    );
+    writeScores(scoresPath, scores, { name: "Docs links" });
     writeQaEvidence({
       dir: evidenceDir,
       entries: [{ id: "synthetic-docs-links", status: "skipped" }],
@@ -638,12 +566,35 @@ describe("maturity docs renderer CLI", () => {
   });
 
   it("checks maturity inputs without requiring QA evidence artifacts", () => {
-    const result = runCli("--check");
+    const result = runCli(
+      "--check",
+      "--",
+      "--taxonomy",
+      "missing.yaml",
+      "--taxonomy",
+      "taxonomy.yaml",
+      "--check",
+    );
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("maturity docs inputs are valid in docs");
     expect(result.stdout).toContain("evidence-backed freshness check skipped");
+  });
+
+  it.each([
+    { args: ["--taxonomy", ""], message: "--taxonomy requires a value" },
+    {
+      args: ["--taxonomy=taxonomy.yaml"],
+      message: "Unknown maturity docs option: --taxonomy=taxonomy.yaml",
+    },
+    { args: ["taxonomy.yaml"], message: "Unknown maturity docs option: taxonomy.yaml" },
+  ])("preserves the split-option CLI grammar for $args", ({ args, message }) => {
+    const result = runCli(...args);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim()).toBe(message);
+    expect(result.stdout).toBe("");
   });
 
   it("rejects mismatched historical identity before mutating strict output", () => {
@@ -663,10 +614,8 @@ describe("maturity docs renderer CLI", () => {
     evidence.profilePlan.taxonomyIdentity.sha256 = "0".repeat(64);
     fs.writeFileSync(file, JSON.stringify(evidence));
 
-    const result = runCli(
-      "--output-dir",
+    const result = renderEvidence(
       outputDir,
-      "--evidence-dir",
       evidenceDir,
       "--static-assets-dir",
       staticAssetsDir,
@@ -706,14 +655,7 @@ describe("maturity docs renderer CLI", () => {
       }
     }
     fs.writeFileSync(scoresPath, stringifyYaml(scores));
-    const result = runCli(
-      "--output-dir",
-      outputDir,
-      "--evidence-dir",
-      evidenceDir,
-      "--scores",
-      scoresPath,
-    );
+    const result = renderEvidence(outputDir, evidenceDir, "--scores", scoresPath);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("semantic taxonomy identity is missing");
@@ -752,14 +694,7 @@ describe("maturity docs renderer CLI", () => {
       "A changed capability contract";
     const taxonomyPath = path.join(outputDir, "taxonomy.yaml");
     fs.writeFileSync(taxonomyPath, stringifyYaml(taxonomy));
-    const result = runCli(
-      "--output-dir",
-      outputDir,
-      "--evidence-dir",
-      evidenceDir,
-      "--taxonomy",
-      taxonomyPath,
-    );
+    const result = renderEvidence(outputDir, evidenceDir, "--taxonomy", taxonomyPath);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("semantic taxonomy identity is mismatched");
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
@@ -798,12 +733,41 @@ describe("maturity docs renderer CLI", () => {
       category.coverageIds.fulfillmentPercent = 100;
     }
     fs.writeFileSync(file, JSON.stringify(stale));
-    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    const result = renderEvidence(outputDir, evidenceDir);
     expect(result.status).toBe(0);
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
     expect(scorecard).toContain("Coverage Experimental - 0%");
     expect(scorecard).toContain("Historical evidence: taxonomy identity mismatch");
     expect(scorecard).toContain("Readiness by area");
+    expect(scorecard).toContain("## QA scorecard gaps");
+    expect(scorecard).toContain("Profile: release. Taxonomy: current.");
+    expect(scorecard).not.toContain("Profile: all. Taxonomy: current.");
+  });
+
+  it("uses the same all-before-release selection for gap reporting without changing scores", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-gap-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-gap-evidence-");
+    for (const profile of ["all", "release"]) {
+      writeQaEvidence({
+        dir: path.join(evidenceDir, profile),
+        profile,
+        generatedAt:
+          profile === "release" ? "2099-01-01T00:00:00.000Z" : "2026-10-01T00:00:00.000Z",
+        entries: [{ id: "pass", status: "pass" }],
+        scorecard: allProfileScorecardFixture(),
+      });
+    }
+    const result = renderEvidence(outputDir, evidenceDir);
+    expect(result.status).toBe(0);
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
+    expect(scorecard).toContain("Profile: all. Taxonomy: current.");
+    expect(scorecard).not.toContain("Profile: release. Taxonomy: current.");
+    expect(scorecard).toContain("UNKNOWN");
+    expect(scorecard).toContain("Coverage Experimental - 0%");
+    expect(scorecard).toContain(
+      `<span className="maturity-summary-value">${expectedMaturityScorePercent()}%</span>`,
+    );
+    expect(result.stderr).not.toContain("UNKNOWN");
   });
 
   it("renders passing evidence with unique section jump targets", () => {
@@ -817,7 +781,7 @@ describe("maturity docs renderer CLI", () => {
       ],
     });
 
-    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    const result = renderEvidence(outputDir, evidenceDir);
 
     expect(result.status).toBe(0);
     const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
@@ -832,60 +796,31 @@ describe("maturity docs renderer CLI", () => {
       /<div className="maturity-category-docs">[^\n]*\[[^\n]+\]\([^)]+\)[^\n]*<\/div>/,
     );
     const taxonomyDocument = parseDocsDocument(taxonomy);
-    for (const id of ["imessage", "imessage-and-bluebubbles"]) {
-      expect(
-        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-        id,
-      ).toHaveLength(1);
-    }
-    for (const id of ["control-ui", "gateway-web-app"]) {
-      expect(
-        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-        id,
-      ).toHaveLength(1);
-    }
-    for (const id of ["windows-app-node", "native-windows-companion-app"]) {
-      expect(
-        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-        id,
-      ).toHaveLength(1);
-    }
-    for (const [current, legacy] of [
-      [
-        "community-channel-cohort",
-        "mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat",
-      ],
-      [
-        "regional-channel-cohort",
-        "feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels",
-      ],
+    for (const id of [
+      "imessage",
+      "imessage-and-bluebubbles",
+      "control-ui",
+      "gateway-web-app",
+      "windows-app-node",
+      "native-windows-companion-app",
+      "community-channel-cohort",
+      "mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat",
+      "regional-channel-cohort",
+      "feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels",
+      "chromeos-raspberry-pi-and-small-linux-devices",
+      "raspberry-pi-and-small-linux-devices",
+      "automation-and-durable-work",
+      "automation-cron-hooks-tasks-polling",
     ]) {
-      for (const id of [current, legacy]) {
-        expect(
-          taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-          id,
-        ).toHaveLength(1);
-      }
+      expect(
+        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
+        id,
+      ).toHaveLength(1);
     }
     expect(taxonomy).toContain(
       "**Current catalog members:** [Buzz](/channels/buzz), [ClickClack](/channels/clickclack)",
     );
     expect(taxonomy).toContain("[WeChat](/channels/wechat), [WeCom](/channels/wecom)");
-    for (const id of [
-      "chromeos-raspberry-pi-and-small-linux-devices",
-      "raspberry-pi-and-small-linux-devices",
-    ]) {
-      expect(
-        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-        id,
-      ).toHaveLength(1);
-    }
-    for (const id of ["automation-and-durable-work", "automation-cron-hooks-tasks-polling"]) {
-      expect(
-        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-        id,
-      ).toHaveLength(1);
-    }
     for (const [markdown, id] of [
       [scorecard, "surface-explorer"],
       [taxonomy, "product-areas"],
@@ -928,62 +863,22 @@ describe("maturity docs renderer CLI", () => {
         decision: record(79),
       },
     };
-    fs.writeFileSync(
+    writeYaml(
       taxonomyPath,
-      stringifyYaml({
-        version: 1,
-        title: "Synthetic decision fixture",
-        levels: [
-          { id: "experimental", code: "M1", label: "Experimental" },
-          { id: "stable", code: "M4", label: "Stable" },
-        ],
-        surfaces: [
-          {
-            id: "tools",
-            name: "Fixture tools",
-            family: "core",
-            level: "experimental",
-            level_decision: record("stable"),
-            categories: [
-              {
-                id: "review",
-                name: "Review",
-                category_note: "Synthetic review",
-                features: [{ name: "Fixture feature", coverageIds: ["tools.evidence"] }],
-              },
-            ],
-          },
-        ],
-      }),
+      taxonomyFixture(
+        { id: "review", name: "Review", category_note: "Synthetic review" },
+        { level_decision: record("stable") },
+        [experimentalLevel, { id: "stable", code: "M4", label: "Stable" }],
+      ),
     );
-    fs.writeFileSync(
+    writeScores(
       scoresPath,
-      stringifyYaml({
-        version: 1,
-        process_version: 1,
-        counts: { active_surfaces: 1, category_scores: 1 },
-        rollups: { surface_average: bundle, category_average: bundle },
-        surfaces: [
-          {
-            id: "tools",
-            name: "Fixture tools",
-            level: "experimental",
-            scores: authored,
-            categories: [
-              {
-                name: "Review",
-                ...authored,
-                lts: {
-                  supported: false,
-                  human_override: false,
-                  decision: record(true),
-                },
-              },
-            ],
-            lts: { supported_categories: 0, total_categories: 1, status: "none" },
-          },
-        ],
-      }),
+      bundle,
+      {
+        name: "Review",
+        lts: { supported: false, human_override: false, decision: record(true) },
+      },
+      authored,
     );
     writeQaEvidence({
       dir: evidenceDir,

@@ -4,11 +4,8 @@ import { emptyReply, mock, queueTask, source, tempDirs } from "./openclaw-state-
 import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
-import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { expect, it, vi } from "vitest";
 import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
-import { createWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
-import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -59,14 +56,11 @@ it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as 
         await new Promise<void>((resolve) => {
           signal.addEventListener("abort", () => resolve(), { once: true });
         });
-      } else {
-        await consumed.promise;
       }
+      await consumed.promise;
     });
-    const task = createRetainedOperation<OpenClawStateReadReply>(() => {});
-    const released = createRetainedOperation<void>(() => {});
-    released.resolve(undefined);
-    mock.runTask.mockReturnValueOnce({ ...task.operation, release: () => released.operation });
+    const task = createDeferredCore<OpenClawStateReadReply>();
+    mock.runTask.mockReturnValueOnce({ result: task.promise, close: async () => {} });
     const transport = captureOpenClawStateReadSource().createTransport(
       { type: "backup.runs" },
       undefined,
@@ -104,17 +98,22 @@ it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as 
         expect(() => authority.assertCurrent()).not.toThrow();
       }
       const closing = transport.startClose();
-      closing.service();
-      expect(closing.read()).toEqual({ status: "pending" });
+      const settled = vi.fn();
+      void closing.then(settled, settled);
+      // Let native close settle; an accepted consumer still owns its pending callback.
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).not.toHaveBeenCalled();
       if (finish === "consumer-error") {
         consumed.reject(failure);
-      } else if (finish !== "worker-failure") {
+      } else {
         consumed.resolve();
       }
       await responseAssertion;
-      await closing.result;
+      await closing;
       if (finish === "worker-failure") {
-        await expect(reading.result).resolves.toEqual({ error: failure });
+        await expect(reading).resolves.toEqual({ error: failure });
         expect(controller.signal.aborted).toBe(false);
       }
       expect(onChunkAsync).toHaveBeenCalledOnce();
@@ -123,7 +122,7 @@ it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as 
       controller.abort(failure);
       consumed.resolve();
       task.resolve(emptyReply);
-      await Promise.allSettled([responseAssertion, reading.result, transport.startClose().result]);
+      await Promise.allSettled([responseAssertion, reading, transport.startClose()]);
     }
   },
 );
@@ -219,10 +218,10 @@ it("lets an active reader's host callback finish a nested read before the parent
   const transport = captureOpenClawStateReadSource().createTransport(
     { type: "backup.runs" },
     () => {
-      nested = nestedTransport.startRead(location, authority).result;
+      nested = nestedTransport.startRead(location, authority);
     },
   );
-  const parent = transport.startRead(location, authority).result;
+  const parent = transport.startRead(location, authority);
   try {
     const submitted = await firstTask.submitted;
     await firstTask.captured;
@@ -242,7 +241,7 @@ it("lets an active reader's host callback finish a nested read before the parent
     firstTask.result.resolve(emptyReply);
     nestedTask.result.resolve(emptyReply);
     await Promise.allSettled([parent, nested]);
-    await Promise.all([transport.startClose().result, nestedTransport.startClose().result]);
+    await Promise.all([transport.startClose(), nestedTransport.startClose()]);
   }
 });
 
@@ -457,7 +456,6 @@ function captureCase<T extends OpenClawStateReadCommand>(
 
 const selector = "租户🦞".repeat(512);
 const selectorBytes = Buffer.byteLength(selector);
-const historyInput = { reason: selector, includeRunId: selector, active: true, limit: 100 };
 const reconciliationInput = {
   runIds: ["更新🦞".repeat(512), "修复🦞".repeat(512)],
   explicit: true,
@@ -465,170 +463,57 @@ const reconciliationInput = {
   legacyOnly: true,
   repairHistorySinceMs: 0,
 };
+const inspectionInput = {
+  runId: "运行🦞",
+  now: 0,
+  executionOffset: 0,
+  executionLimit: 0,
+  decisionLimit: 0,
+  decisionCursor: "游标🦞",
+};
 const captures = [
-  ...(
-    [
-      "githubPublication.sharedObservation",
-      "onboardingRecommendations.read",
-      "workspace.snapshot",
-      "pluginBlob.lookup",
-      "pluginBlob.entries",
-      "sandboxRegistry.get",
-      "sandboxRegistry.runtimeIds",
-      "updateRuns.get",
-    ] as const
-  ).map((type) => {
-    const command =
-      type === "githubPublication.sharedObservation"
-        ? {
-            type,
-            input: {
-              session: {
-                agentId: selector,
-                sessionKey: selector,
-                sessionId: selector,
-                lifecycleRevision: selector,
-              },
-              selector: { requestId: selector },
-              entry: {
-                repositoryWorkspaceId: selector,
-                lifecycleRevision: selector,
-                worktree: { id: selector, branch: selector, repoRoot: selector },
-              },
-            },
-          }
-        : type === "updateRuns.get"
-          ? { type, runId: selector }
-          : type === "onboardingRecommendations.read"
-            ? { type, configKey: selector }
-            : type === "pluginBlob.lookup"
-              ? { type, input: { pluginId: selector, namespace: selector, key: selector } }
-              : type === "pluginBlob.entries"
-                ? { type, input: { pluginId: selector, namespace: selector } }
-                : type === "workspace.snapshot"
-                  ? { type, workspaceDir: selector }
-                  : type === "sandboxRegistry.get"
-                    ? { type, containerName: selector }
-                    : { type, backendId: selector, scopeKey: selector };
-    const returned: OpenClawStateReadReply =
-      type === "githubPublication.sharedObservation"
-        ? { ok: true, type, sourceAdmitted: true, row: undefined }
-        : type === "updateRuns.get"
-          ? { ok: true, type, sourceAdmitted: true, run: undefined }
-          : type === "onboardingRecommendations.read"
-            ? { ok: true, type, sourceAdmitted: true, record: null }
-            : type === "pluginBlob.lookup"
-              ? { ok: true, type, sourceAdmitted: true, value: undefined }
-              : type === "pluginBlob.entries"
-                ? { ok: true, type, sourceAdmitted: true, value: [] }
-                : type === "sandboxRegistry.get"
-                  ? { ok: true, type, sourceAdmitted: true, entry: null }
-                  : type === "sandboxRegistry.runtimeIds"
-                    ? { ok: true, type, sourceAdmitted: true, runtimeIds: [] }
-                    : {
-                        ok: true,
-                        type,
-                        sourceAdmitted: true,
-                        snapshot: {
-                          identity: createWorkspaceStateIdentity(selector),
-                          setup: { version: 1 },
-                          setupExists: false,
-                        },
-                      };
-    const selectorCount =
-      type === "githubPublication.sharedObservation"
-        ? 10
-        : type === "pluginBlob.lookup"
-          ? 3
-          : type === "pluginBlob.entries" || type === "sandboxRegistry.runtimeIds"
-            ? 2
-            : 1;
-
-    return captureCase(command, returned, selectorBytes * selectorCount, () => {
-      if (command.type === "githubPublication.sharedObservation") {
-        Object.assign(command.input.session, {
-          agentId: "changed",
-          sessionKey: "changed",
-          sessionId: "changed",
-          lifecycleRevision: "changed",
-        });
-        command.input.selector.requestId = "changed";
-        command.input.entry.repositoryWorkspaceId = "changed";
-        command.input.entry.lifecycleRevision = "changed";
-        Object.assign(command.input.entry.worktree, {
-          id: "changed",
-          branch: "changed",
-          repoRoot: "changed",
-        });
-      } else if (command.type === "updateRuns.get") {
-        command.runId = "different run after admission";
-      } else if (command.type === "onboardingRecommendations.read") {
-        command.configKey = "different key after admission";
-      } else if (command.type === "pluginBlob.lookup" || command.type === "pluginBlob.entries") {
-        command.input.pluginId = "different plugin after admission";
-        command.input.namespace = "different namespace after admission";
-        if (command.type === "pluginBlob.lookup") {
-          command.input.key = "different key after admission";
-        }
-      } else if (command.type === "sandboxRegistry.get") {
-        command.containerName = "different container after admission";
-      } else if (command.type === "sandboxRegistry.runtimeIds") {
-        command.backendId = "different backend after admission";
-        command.scopeKey = "different scope after admission";
-      } else {
-        command.workspaceDir = "different workspace after admission";
-      }
-    });
-  }),
   captureCase(
     {
-      type: "updateRuns.list",
-      input: historyInput,
+      type: "githubPublications.sharedObservation",
+      input: {
+        session: {
+          agentId: selector,
+          sessionKey: selector,
+          sessionId: selector,
+          lifecycleRevision: selector,
+        },
+        selector: { requestId: selector },
+        entry: {
+          repositoryWorkspaceId: selector,
+          lifecycleRevision: selector,
+          worktree: { id: selector, branch: selector, repoRoot: selector },
+        },
+      },
     },
-    { ok: true, type: "updateRuns.list", sourceAdmitted: true, runs: [] },
-    selectorBytes * 2 + 9,
+    {
+      ok: true,
+      type: "githubPublications.sharedObservation",
+      sourceAdmitted: true,
+      row: undefined,
+    },
+    selectorBytes * 10,
     ({ input }) => {
-      input.reason = "changed";
-      input.includeRunId = "changed";
-      input.active = false;
-      input.limit = 1;
+      Object.assign(input.session, {
+        agentId: "changed",
+        sessionKey: "changed",
+        sessionId: "changed",
+        lifecycleRevision: "changed",
+      });
+      input.selector.requestId = "changed";
+      input.entry.repositoryWorkspaceId = "changed";
+      input.entry.lifecycleRevision = "changed";
+      Object.assign(input.entry.worktree, {
+        id: "changed",
+        branch: "changed",
+        repoRoot: "changed",
+      });
     },
   ),
-  ...(["descendants", "maintenance"] as const).map((kind) => {
-    const input = {
-      sessionKeys: ["父会话🦞".repeat(256)],
-      liveTopology: [
-        { childSessionKey: "子会话🦞".repeat(256), requesterSessionKey: "请求者🦞".repeat(256) },
-      ],
-    };
-    return captureCase(
-      { type: "subagents.runs", scope: kind === "descendants" ? { kind, ...input } : { kind } },
-      kind === "maintenance"
-        ? {
-            ok: true,
-            type: "subagents.runs",
-            sourceAdmitted: true,
-            projection: "maintenance",
-            runs: new Map(),
-          }
-        : { ok: true, type: "subagents.runs", sourceAdmitted: true, runs: new Map() },
-      kind === "descendants"
-        ? Buffer.byteLength(input.sessionKeys[0]!) +
-            Buffer.byteLength(input.liveTopology[0]!.childSessionKey) +
-            Buffer.byteLength(input.liveTopology[0]!.requesterSessionKey)
-        : 0,
-      () => {
-        input.sessionKeys[0] = "changed";
-        input.sessionKeys.push("added after admission");
-        input.liveTopology[0]!.childSessionKey = "changed child";
-        input.liveTopology[0]!.requesterSessionKey = "changed requester";
-        input.liveTopology.push({
-          childSessionKey: "added child",
-          requesterSessionKey: "added requester",
-        });
-      },
-    );
-  }),
   captureCase(
     {
       type: "updateRuns.reconciliationCandidates",
@@ -646,62 +531,24 @@ const captures = [
     },
   ),
   captureCase(
-    {
-      type: "skills.library.manifests",
-      input: [{ skillId: "技能🦞".repeat(512), revision: "版本🦞".repeat(512) }],
-    },
-    { ok: true, type: "skills.library.manifests", sourceAdmitted: true, value: [] },
-    selectorBytes * 2,
+    { type: "audit.run.inspect", input: inspectionInput },
+    emptyReply,
+    Buffer.byteLength("运行🦞") + Buffer.byteLength("游标🦞") + 32,
     ({ input }) => {
-      input[0]!.skillId = "changed";
-      input[0]!.revision = "changed";
-      input.push({ skillId: "extra", revision: "extra" });
+      input.now = 999;
+      input.decisionCursor = "changed before read";
+      input.decisionLimit = 99;
+      input.runId = "changed run";
+      input.executionOffset = 99;
+      input.executionLimit = 99;
     },
-  ),
-  ...(
-    [
-      {
-        input: {
-          runId: "运行🦞",
-          now: 0,
-          executionOffset: 0,
-          executionLimit: 0,
-          decisionLimit: 0,
-          decisionCursor: "游标🦞",
-        },
-        numericBytes: 32,
+    {
+      prepared: true,
+      queued: () => {
+        inspectionInput.now = 1234;
+        inspectionInput.decisionCursor = "changed while queued";
       },
-      { input: { runId: "运行🦞", now: 0 }, numericBytes: 8 },
-      { input: { executionId: "执行🦞", now: 0 }, numericBytes: 8 },
-    ] satisfies Array<{ input: ExecutionIdentityInspectionQuery; numericBytes: number }>
-  ).map(
-    ({ input, numericBytes }: { input: ExecutionIdentityInspectionQuery; numericBytes: number }) =>
-      captureCase(
-        { type: "audit.run.inspect", input },
-        emptyReply,
-        Buffer.byteLength("executionId" in input ? input.executionId : input.runId) +
-          Buffer.byteLength(input.decisionCursor ?? "") +
-          numericBytes,
-        () => {
-          input.now = 999;
-          input.decisionCursor = "changed before read";
-          input.decisionLimit = 99;
-          if ("executionId" in input) {
-            input.executionId = "changed execution";
-          } else {
-            input.runId = "changed run";
-            input.executionOffset = 99;
-            input.executionLimit = 99;
-          }
-        },
-        {
-          prepared: true,
-          queued: () => {
-            input.now = 1234;
-            input.decisionCursor = "changed while queued";
-          },
-        },
-      ),
+    },
   ),
 ];
 
@@ -727,10 +574,10 @@ it.each(captures)(
     const baselineTask = queueTask(dispatch.promise);
     const task = queueTask(dispatch.promise);
     const baseline = baselineTransport
-      ? baselineTransport.startRead(location, authority).result
+      ? baselineTransport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, { type: "backup.runs" });
     const result = transport
-      ? transport.startRead(location, authority).result
+      ? transport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, fixture.command);
     try {
       const [baselineOptions, submitted] = await Promise.all([
@@ -768,107 +615,87 @@ it.each(captures)(
       baselineTask.result.resolve(emptyReply);
       task.result.resolve(fixture.reply);
       await Promise.allSettled([baseline, result]);
-      await Promise.all([baselineTransport?.startClose().result, transport?.startClose().result]);
+      await Promise.all([baselineTransport?.startClose(), transport?.startClose()]);
     }
   },
 );
 
-it.each(["mcpOAuth.statuses", "userPreferences.values", "acpSessions.metadata"] as const)(
-  "captures and charges the full %s batch before queued dispatch",
-  async (type) => {
-    const { options } = source();
-    const context = captureOpenClawStateWorkerContext(options);
-    const keys = ["principal-根🦞", "second-principal"];
-    const expected = [...keys];
-    const entry = {
-      lifecycleRevision: "revision-根🦞",
-      sessionId: "session-根🦞",
-      sessionStartedAt: 0,
-    };
-    const metadata = { keys, entry };
-    const entries: AcpSessionReadInput[] = [metadata, { keys: ["entry-without-optionals"] }];
-    const expectedEntries: AcpSessionReadInput[] = [
-      { ...metadata, keys: [...keys], entry: { ...entry } },
-      { keys: ["entry-without-optionals"] },
-    ];
-    const dispatch = createDeferredCore();
-    const baselineTask = queueTask(dispatch.promise);
-    const task = queueTask(dispatch.promise);
-    const baseline = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
-    const key = "notification-根🦞";
-    const transport = captureOpenClawStateReadSource().createTransport(
-      type === "mcpOAuth.statuses"
-        ? { type, input: keys }
-        : type === "userPreferences.values"
-          ? { type, profileIds: keys, key }
-          : { type, entries },
+it("captures and charges the full acpSessions.metadata batch before queued dispatch", async () => {
+  const { options } = source();
+  const context = captureOpenClawStateWorkerContext(options);
+  const keys = ["principal-根🦞", "second-principal"];
+  const entry = {
+    lifecycleRevision: "revision-根🦞",
+    sessionId: "session-根🦞",
+    sessionStartedAt: 0,
+  };
+  const metadata = { keys, entry };
+  const entries: AcpSessionReadInput[] = [metadata, { keys: ["entry-without-optionals"] }];
+  const expectedEntries: AcpSessionReadInput[] = [
+    { ...metadata, keys: [...keys], entry: { ...entry } },
+    { keys: ["entry-without-optionals"] },
+  ];
+  const dispatch = createDeferredCore();
+  const baselineTask = queueTask(dispatch.promise);
+  const task = queueTask(dispatch.promise);
+  const baseline = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
+  const transport = captureOpenClawStateReadSource().createTransport({
+    type: "acpSessions.metadata",
+    entries,
+  });
+  const controller = new AbortController();
+  const authority = {
+    signal: controller.signal,
+    assertCurrent: context.admission.assertCurrent,
+  };
+  const location = { context, location: options.path, checkFreshAdmission: true };
+  const baselineRead = baseline.startRead(location, authority);
+  const read = transport.startRead(location, authority);
+  try {
+    const [baselineOptions, batchOptions] = await Promise.all([
+      baselineTask.submitted,
+      task.submitted,
+    ]);
+    const additionalBytes =
+      Buffer.byteLength("acpSessions.metadata") -
+      Buffer.byteLength("backup.runs") +
+      expectedEntries.reduce(
+        (bytes, input) =>
+          bytes +
+          input.keys.reduce((total, sessionKey) => total + Buffer.byteLength(sessionKey), 0) +
+          Buffer.byteLength(input.entry?.lifecycleRevision ?? "") +
+          Buffer.byteLength(input.entry?.sessionId ?? "") +
+          (input.entry?.sessionStartedAt === undefined ? 0 : 8),
+        0,
+      );
+    expect(batchOptions.inputBytes).toBeGreaterThanOrEqual(
+      Number(baselineOptions.inputBytes) + additionalBytes,
     );
-    const controller = new AbortController();
-    const authority = {
-      signal: controller.signal,
-      assertCurrent: context.admission.assertCurrent,
-    };
-    const location = { context, location: options.path, checkFreshAdmission: true };
-    const baselineRead = baseline.startRead(location, authority).result;
-    const read = transport.startRead(location, authority).result;
-    try {
-      const [baselineOptions, batchOptions] = await Promise.all([
-        baselineTask.submitted,
-        task.submitted,
-      ]);
-      const additionalBytes =
-        Buffer.byteLength(type) -
-        Buffer.byteLength("backup.runs") +
-        (type === "acpSessions.metadata"
-          ? expectedEntries.reduce(
-              (bytes, input) =>
-                bytes +
-                input.keys.reduce((total, sessionKey) => total + Buffer.byteLength(sessionKey), 0) +
-                Buffer.byteLength(input.entry?.lifecycleRevision ?? "") +
-                Buffer.byteLength(input.entry?.sessionId ?? "") +
-                (input.entry?.sessionStartedAt === undefined ? 0 : 8),
-              0,
-            )
-          : expected.reduce((bytes, profileId) => bytes + Buffer.byteLength(profileId), 0)) +
-        (type === "userPreferences.values" ? Buffer.byteLength(key) : 0);
-      expect(batchOptions.inputBytes).toBeGreaterThanOrEqual(
-        Number(baselineOptions.inputBytes) + additionalBytes,
-      );
-      keys[0] = "changed-principal";
-      keys.push("added-after-admission");
-      entry.lifecycleRevision = "changed-revision";
-      entry.sessionId = "changed-session";
-      entry.sessionStartedAt = 99;
-      entries.push({ keys: ["added-entry-after-admission"] });
-      dispatch.resolve();
-      await baselineTask.captured;
-      baselineTask.result.resolve(emptyReply);
-      expect((await task.captured).command).toEqual(
-        type === "mcpOAuth.statuses"
-          ? { type, input: expected }
-          : type === "userPreferences.values"
-            ? { type, profileIds: expected, key }
-            : { type, entries: expectedEntries },
-      );
-      task.result.resolve(
-        type === "mcpOAuth.statuses"
-          ? {
-              ok: true,
-              type,
-              sourceAdmitted: true,
-              value: expected.map(() => ({ state: "unauthenticated" })),
-            }
-          : type === "userPreferences.values"
-            ? { ok: true, type, sourceAdmitted: true, values: new Map() }
-            : { ok: true, type, sourceAdmitted: true, rows: expectedEntries.map(() => null) },
-      );
-      await Promise.all([baselineRead, read]);
-    } finally {
-      dispatch.resolve();
-      baselineTask.result.resolve(emptyReply);
-      task.result.resolve(emptyReply);
-      await Promise.allSettled([baselineRead, read]);
-      await Promise.all([baseline.startClose().result, transport.startClose().result]);
-    }
-  },
-);
+    keys[0] = "changed-principal";
+    keys.push("added-after-admission");
+    entry.lifecycleRevision = "changed-revision";
+    entry.sessionId = "changed-session";
+    entry.sessionStartedAt = 99;
+    entries.push({ keys: ["added-entry-after-admission"] });
+    dispatch.resolve();
+    await baselineTask.captured;
+    baselineTask.result.resolve(emptyReply);
+    expect((await task.captured).command).toEqual({
+      type: "acpSessions.metadata",
+      entries: expectedEntries,
+    });
+    task.result.resolve({
+      ok: true,
+      type: "acpSessions.metadata",
+      sourceAdmitted: true,
+      rows: expectedEntries.map(() => null),
+    });
+    await Promise.all([baselineRead, read]);
+  } finally {
+    dispatch.resolve();
+    baselineTask.result.resolve(emptyReply);
+    task.result.resolve(emptyReply);
+    await Promise.allSettled([baselineRead, read]);
+    await Promise.all([baseline.startClose(), transport.startClose()]);
+  }
+});

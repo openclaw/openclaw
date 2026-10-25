@@ -1,6 +1,6 @@
 import type { SessionAdmissionTransition } from "../../../config/sessions/session-admission-transition.types.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import {
-  runWithoutOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
   type SessionTranscriptWriterFence,
 } from "../../../config/sessions/transcript-write-context.js";
@@ -73,6 +73,14 @@ export async function createEmbeddedRunSessionPromptState(input: {
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
   let basePromptOverride: string | undefined;
   let continuation: EmbeddedRunAttemptParams["continuation"];
+  const releaseContinuation = () => {
+    if (continuation) {
+      // Harness parameter copies may retain the envelope after its run-owned payload expires.
+      continuation.messages = [];
+      continuation.prompt = "";
+      continuation = undefined;
+    }
+  };
   let compactionContinuationInstruction: string | undefined;
   const activePrompt: ActivePrompt = {
     get override() {
@@ -146,6 +154,10 @@ export async function createEmbeddedRunSessionPromptState(input: {
   const onUserMessagePersisted: NonNullable<
     RunEmbeddedAgentParamsWithSessionFile["onUserMessagePersisted"]
   > = (message) => {
+    // A persisted internal prompt replays its compaction instruction from history.
+    if (activePrompt.internal) {
+      clearCompactionContinuation();
+    }
     const messageMetadata = message as {
       __openclaw?: { beforeAgentRunBlocked?: unknown };
     };
@@ -177,6 +189,17 @@ export async function createEmbeddedRunSessionPromptState(input: {
       });
     recorder.markRuntimePersistencePending(observedPersistence);
   };
+  // Only a persisted operator turn with an idempotency key is replayed in place;
+  // anything else would append a second copy of the original request.
+  const canReplayCurrentUserTurn = () => {
+    const recorder = params.userTurnTranscriptRecorder;
+    return (
+      !activePrompt.internal &&
+      activePrompt.persisted &&
+      recorder?.hasPersisted() === true &&
+      Boolean((recorder.getPersistedMessage?.() ?? recorder.message)?.idempotencyKey)
+    );
+  };
   const waitForCurrentUserMessagePersistence = async () => {
     if (params.userTurnTranscriptRecorder?.hasRuntimePersistencePending() === true) {
       await params.userTurnTranscriptRecorder.waitForRuntimePersistence();
@@ -184,7 +207,13 @@ export async function createEmbeddedRunSessionPromptState(input: {
   };
 
   return {
-    [Symbol.asyncDispose]: async () => await initialOwner?.close(),
+    [Symbol.asyncDispose]: async () => {
+      try {
+        await initialOwner?.close();
+      } finally {
+        releaseContinuation();
+      }
+    },
     get sessionId() {
       return activeSessionId;
     },
@@ -227,7 +256,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
               run,
             )
           : runWithoutOwnedSessionTranscriptWrites(run);
-      return initialOwner ? initialOwner.run(withContext) : withContext();
+      return initialOwner && !initialWriter?.committedFence
+        ? initialOwner.run(withContext)
+        : withContext();
     },
     recordOutputLimitNotice: async (toolCallId: string | undefined) => {
       const note: CustomMessage = {
@@ -302,16 +333,25 @@ export async function createEmbeddedRunSessionPromptState(input: {
     continueFromCurrentTranscript: (options?: {
       includeToolFailureInstruction?: boolean;
       messages?: NonNullable<EmbeddedRunAttemptParams["continuation"]>["messages"];
+      replayCurrentUserTurn?: boolean;
     }) => {
       // Raw model runs load no transcript history; the original prompt is their only task context.
       if (params.modelRun === true || params.promptMode === "none") {
         return;
       }
       if (options?.messages) {
+        const messages = [...(continuation?.messages ?? []), ...options.messages];
+        releaseContinuation();
         continuation = {
           prompt: params.prompt,
-          messages: [...(continuation?.messages ?? []), ...options.messages],
+          messages,
         };
+      }
+      // A request rejected before any output left the transcript unchanged. Replaying
+      // the persisted keyed user turn resends that exact request; a hidden prompt
+      // would add a user turn and shift the prompt prefix on every retry.
+      if (options?.replayCurrentUserTurn && canReplayCurrentUserTurn()) {
+        return;
       }
       const prompt = options?.includeToolFailureInstruction
         ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`

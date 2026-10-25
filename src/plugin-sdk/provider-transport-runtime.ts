@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for provider transport helpers and stream primitives.
- */
 export { buildGuardedModelFetch } from "../agents/provider-transport-fetch.js";
 export { buildOpenAICompletionsParams } from "../agents/openai-transport-stream.js";
 export { buildAssistantMessage } from "../agents/stream-message-shared.js";
@@ -25,6 +22,8 @@ export {
 export {
   buildGoogleGenerationConfig,
   buildGoogleSimpleThinking,
+} from "@openclaw/ai/internal/google";
+export {
   coerceTransportToolCallArguments,
   consumeGoogleGenerateContentStream,
   convertGoogleTools,

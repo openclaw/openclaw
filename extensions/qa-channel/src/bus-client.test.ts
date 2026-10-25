@@ -1,8 +1,12 @@
 import http, { createServer, type Server } from "node:http";
 import type { Socket } from "node:net";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { getQaBusState, pollQaBus, resolveQaTargetThread, sendQaBusMessage } from "./bus-client.js";
 
 const guardedFetchCalls = vi.hoisted(
@@ -50,19 +54,9 @@ async function listenLoopbackServer(server: Server) {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server failed to bind");
-  }
+  const port = await listenOnLoopback(server);
   return {
-    port: address.port,
+    port,
     stop: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -74,10 +68,7 @@ async function listenLoopbackServer(server: Server) {
 }
 
 function createOversizedJsonServer(pathname: string): { server: Server; closed: Promise<number> } {
-  let resolveClosed: (sentBytes: number) => void = () => {};
-  const closed = new Promise<number>((resolve) => {
-    resolveClosed = resolve;
-  });
+  const { promise: closed, resolve: resolveClosed } = Promise.withResolvers<number>();
   const server = createServer((req, res) => {
     if (req.url !== pathname) {
       res.writeHead(404, { "content-type": "application/json; charset=utf-8" });
@@ -135,22 +126,6 @@ function createOversizedJsonServer(pathname: string): { server: Server; closed: 
   return { server, closed };
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 describe("qa-bus client", () => {
   const stops: Array<() => Promise<void>> = [];
 
@@ -161,6 +136,123 @@ describe("qa-bus client", () => {
       guardedFetchCalls.length = 0;
       vi.restoreAllMocks();
     }
+  });
+
+  it.for(["current", "aborted", "revoked", "refresh-failed"] as const)(
+    "fences the native request after dispatch bookkeeping: %s",
+    async (state, { signal }) => {
+      let accepted = 0;
+      const server = await startJsonServer(() => {
+        accepted++;
+        return { body: JSON.stringify({ message: { id: "current-message" } }) };
+      });
+      stops.push(server.stop);
+      const request = vi.spyOn(http, "request");
+      const refreshing = createDeferred<void>();
+      const release = createDeferred<void>();
+      const abort = new AbortController();
+      const refusal = new Error(`QA handoff ${state}`);
+      let current = true;
+      const assertDirectAdapterHandoff = vi.fn(() => {
+        if (!current) {
+          throw refusal;
+        }
+      });
+      const onPlatformSendDispatch = vi.fn(async () => {
+        refreshing.resolve();
+        await release.promise;
+        if (state === "refresh-failed") {
+          throw refusal;
+        }
+      });
+      const sending = sendQaBusMessage({
+        baseUrl: server.baseUrl,
+        accountId: "acct-a",
+        to: "dm:alice",
+        text: "handoff",
+        signal: abort.signal,
+        assertDirectAdapterHandoff,
+        onPlatformSendDispatch,
+      });
+      const settled = sending.then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            refreshing.promise,
+            sending,
+            "send bypassed dispatch bookkeeping",
+          ),
+          signal,
+        );
+        expect(request).not.toHaveBeenCalled();
+        expect(accepted).toBe(0);
+        if (state === "aborted") {
+          abort.abort(refusal);
+        } else if (state === "revoked") {
+          current = false;
+        }
+        release.resolve();
+        const outcome = await withinTest(settled, signal);
+        expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+        expect(request).toHaveBeenCalledTimes(state === "current" ? 1 : 0);
+        expect(accepted).toBe(state === "current" ? 1 : 0);
+        if (state === "current") {
+          expect(outcome).toEqual({
+            status: "fulfilled",
+            value: { message: { id: "current-message" } },
+          });
+          const finalFence = assertDirectAdapterHandoff.mock.invocationCallOrder.at(-1)!;
+          expect(onPlatformSendDispatch.mock.invocationCallOrder[0]).toBeLessThan(finalFence);
+          expect(finalFence).toBeLessThan(request.mock.invocationCallOrder[0]!);
+        } else {
+          expect(outcome).toMatchObject({
+            status: "rejected",
+            error: expect.any(PlatformMessageNotDispatchedError),
+          });
+          expect(
+            outcome.status === "rejected" &&
+              outcome.error instanceof PlatformMessageNotDispatchedError &&
+              outcome.error.cause,
+          ).toBe(refusal);
+          if (state === "revoked") {
+            expect(assertDirectAdapterHandoff.mock.invocationCallOrder.at(-1)!).toBeGreaterThan(
+              onPlatformSendDispatch.mock.invocationCallOrder[0]!,
+            );
+          }
+        }
+      } finally {
+        release.resolve();
+        abort.abort();
+        await settled;
+      }
+    },
+  );
+
+  it("does not classify a lost response after request acceptance as not dispatched", async () => {
+    let accepted = 0;
+    const server = createServer((req) => {
+      accepted++;
+      req.destroy();
+    });
+    const { port, stop } = await listenLoopbackServer(server);
+    stops.push(stop);
+    const request = vi.spyOn(http, "request");
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    await expect(
+      sendQaBusMessage({
+        baseUrl: `http://127.0.0.1:${port}`,
+        accountId: "acct-a",
+        to: "dm:alice",
+        text: "accepted request",
+        onPlatformSendDispatch,
+      }),
+    ).rejects.not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledOnce();
+    expect(accepted).toBe(1);
   });
 
   it.each([false, true])(
@@ -295,7 +387,7 @@ describe("qa-bus client", () => {
     abort.abort();
 
     try {
-      await withTimeout(request, 500, "poll abort did not settle");
+      await withTimeout(request, 500, { message: "poll abort did not settle" });
       throw new Error("expected poll abort to reject");
     } catch (error) {
       expect(error).toBeInstanceOf(Error);
@@ -328,16 +420,13 @@ describe("qa-bus client", () => {
   });
 
   it("bounds message responses that stall after headers", async () => {
-    let markBodyStarted: () => void = () => {};
-    const bodyStarted = new Promise<void>((resolve) => {
-      markBodyStarted = resolve;
-    });
+    const { promise: bodyStarted, resolve: markBodyStarted } = Promise.withResolvers<void>();
     const server = createServer((_req, res) => {
       res.writeHead(200, {
         "content-type": "application/json; charset=utf-8",
         "content-length": "128",
       });
-      res.write('{"message":', markBodyStarted);
+      res.write('{"message":', () => markBodyStarted());
     });
     const { port, stop } = await listenLoopbackServer(server);
     stops.push(stop);
@@ -351,10 +440,10 @@ describe("qa-bus client", () => {
       text: "hello",
     });
     const rejection = expect(
-      withTimeout(request, 1_000, "stalled response body did not settle"),
+      withTimeout(request, 1_000, { message: "stalled response body did not settle" }),
     ).rejects.toMatchObject({ name: "AbortError", cause: { name: "TimeoutError" } });
 
-    await withTimeout(bodyStarted, 500, "server did not start the response body");
+    await withTimeout(bodyStarted, 500, { message: "server did not start the response body" });
     timeout.abort(new DOMException("qa-bus request timed out", "TimeoutError"));
     await rejection;
     expect(timeoutSpy).toHaveBeenCalledTimes(1);

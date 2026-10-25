@@ -17,15 +17,13 @@ const mocks = await vi.hoisted(async () => {
 });
 
 // mock-isolation: Telemetry fixtures capture config mutations without reading or writing operator state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  loadConfig: mocks.getRuntimeConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-    async () =>
-      mocks.getRuntimeConfig(...args),
-  transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "getRuntimeConfig"),
+    transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
+  };
+});
 vi.mock("../infra/telemetry.js", () => ({
   buildTelemetryPayload: mocks.buildTelemetryPayload,
   buildTelemetryUserAgent: mocks.buildTelemetryUserAgent,
@@ -35,6 +33,14 @@ vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
 
 const config: OpenClawConfig = {
   telemetry: { enabled: true, consentedAt: "2026-08-23T00:00:00.000Z" },
+};
+const endpoint = "https://telemetry.openclaw.ai/api/latest-version";
+const userAgent = "openclaw/2026.8.2 (darwin; node/26.0.1; arm64; gateway)";
+const enabledStatus = {
+  enabled: true,
+  reason: "enabled" as const,
+  endpoint,
+  lastPingAt: Date.parse("2026-08-22T12:00:00.000Z"),
 };
 const payload = {
   schema: 1,
@@ -77,15 +83,8 @@ describe("telemetry cli", () => {
     mocks.defaultRuntime.writeJson.mockImplementation(() => {});
     mocks.getRuntimeConfig.mockReturnValue(config);
     mocks.buildTelemetryPayload.mockResolvedValue(payload);
-    mocks.buildTelemetryUserAgent.mockReturnValue(
-      "openclaw/2026.8.2 (darwin; node/26.0.1; arm64; gateway)",
-    );
-    mocks.resolveTelemetryStatus.mockResolvedValue({
-      enabled: true,
-      reason: "enabled",
-      endpoint: "https://telemetry.openclaw.ai/api/latest-version",
-      lastPingAt: Date.parse("2026-08-22T12:00:00.000Z"),
-    });
+    mocks.buildTelemetryUserAgent.mockReturnValue(userAgent);
+    mocks.resolveTelemetryStatus.mockResolvedValue(enabledStatus);
   });
 
   it("prints exactly the canonical payload when feature statistics are enabled", async () => {
@@ -122,12 +121,7 @@ describe("telemetry cli", () => {
     expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
 
-    telemetryStatus.resolve({
-      enabled: true,
-      reason: "enabled",
-      endpoint: "https://telemetry.openclaw.ai/api/latest-version",
-      lastPingAt: Date.parse("2026-08-22T12:00:00.000Z"),
-    });
+    telemetryStatus.resolve(enabledStatus);
     await payloadRequested.promise;
     expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
@@ -139,11 +133,11 @@ describe("telemetry cli", () => {
       {
         featureStatsEnabled: true,
         reason: "enabled",
-        endpoint: "https://telemetry.openclaw.ai/api/latest-version",
+        endpoint,
         lastPingAt: "2026-08-22T12:00:00.000Z",
         request: {
           method: "POST",
-          userAgent: "openclaw/2026.8.2 (darwin; node/26.0.1; arm64; gateway)",
+          userAgent,
           payload,
         },
       },
@@ -160,8 +154,6 @@ describe("telemetry cli", () => {
       method: null,
     },
   ])("reports the same request in JSON and text for $reason", async ({ reason, label, method }) => {
-    const endpoint = "https://telemetry.openclaw.ai/api/latest-version";
-    const userAgent = "openclaw/2026.8.2 (darwin; node/26.0.1; arm64; gateway)";
     mocks.resolveTelemetryStatus.mockResolvedValue({
       enabled: false,
       reason,
@@ -225,23 +217,33 @@ describe("telemetry cli", () => {
     },
   );
 
-  it("prints parent help with a successful exit when no subcommand is given", async () => {
+  it.each([
+    { name: "parent help", args: [], mustThrow: false },
+    { name: "implicit help", args: ["help"], mustThrow: true },
+  ])("prints $name without reading or changing telemetry", async ({ args, mustThrow }) => {
     const previousExitCode = process.exitCode;
     process.exitCode = undefined;
     const { program, stdout, stderr } = createTelemetryProgram();
-
     try {
       let exitCode: number;
+      let threw = false;
       try {
-        await program.parseAsync(["telemetry"], { from: "user" });
+        await program.parseAsync(["telemetry", ...args], { from: "user" });
         exitCode = process.exitCode ?? 0;
       } catch (error) {
-        if (!(error instanceof CommanderError) || error.code !== "commander.help") {
+        if (mustThrow) {
+          expect(error).toMatchObject({ exitCode: 0 });
+          exitCode = 0;
+        } else if (error instanceof CommanderError && error.code === "commander.help") {
+          exitCode = error.exitCode;
+        } else {
           throw error;
         }
-        exitCode = error.exitCode;
+        threw = true;
       }
-
+      if (mustThrow) {
+        expect(threw).toBe(true);
+      }
       expect(exitCode).toEqual(0);
       expect(stdout.join("")).toContain("Usage: openclaw telemetry [options] [command]");
       expect(stdout.join("")).toContain("Inspect and manage anonymous usage telemetry");
@@ -252,24 +254,4 @@ describe("telemetry cli", () => {
       process.exitCode = previousExitCode;
     }
   });
-
-  it.each([{ name: "implicit help", args: ["help"], usage: "telemetry [options] [command]" }])(
-    "preserves $name without reading or changing telemetry",
-    async ({ args, usage }) => {
-      const previousExitCode = process.exitCode;
-      process.exitCode = undefined;
-      const { program, stdout, stderr } = createTelemetryProgram();
-      try {
-        await expect(
-          program.parseAsync(["telemetry", ...args], { from: "user" }),
-        ).rejects.toMatchObject({ exitCode: 0 });
-        expect(stdout.join("")).toContain(`Usage: openclaw ${usage}`);
-        expect(stderr).toEqual([]);
-        expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-        expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
-      } finally {
-        process.exitCode = previousExitCode;
-      }
-    },
-  );
 });

@@ -19,20 +19,17 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import * as allocation from "./allocation.js";
+import { git } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
 import { listGitWorktrees } from "./git.js";
+import * as registryRead from "./registry-read.js";
+import * as registry from "./registry.js";
+import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
-    encoding: "utf8",
-  });
-  return stdout.trim();
-}
 
 describe("ManagedWorktreeService canonical paths", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
@@ -277,7 +274,6 @@ describe("configured managed worktree root", () => {
   let repo: string;
   let stateDir: string;
   let worktreeRoot: string | undefined;
-  let now: number;
   let service: ManagedWorktreeService;
 
   beforeEach(async () => {
@@ -285,10 +281,8 @@ describe("configured managed worktree root", () => {
     repo = await initializeRepository(root);
     stateDir = path.join(root, "state");
     worktreeRoot = undefined;
-    now = Date.now();
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      now: () => now,
       getConfig: () => ({ worktreeRoot }),
     });
   });
@@ -356,7 +350,10 @@ describe("configured managed worktree root", () => {
     );
     await fs.mkdir(path.dirname(unrelated), { recursive: true });
     await fs.writeFile(unrelated, "unrelated data\n");
-    now = Math.max(restored.lastActiveAt, successor.lastActiveAt) + IDLE_GC_MS + 1;
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    for (const record of [restored, successor]) {
+      await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    }
 
     const result = await service.gc();
     expect(result.removed.toSorted()).toEqual([original.id, successor.id].toSorted());
@@ -473,23 +470,52 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
     expect(created.name).toBe("release-planning-3");
   });
 
-  it("reuses concurrent inferred names for the same owner", async () => {
+  it("reuses concurrent inferred names for the same owner", async ({ signal }) => {
     const owner = {
       repoRoot: repo,
       baseRef: "HEAD",
       ownerKind: "session" as const,
       ownerId: "agent:main:session-1",
     };
-    const created = await Promise.all([
-      service.create({ ...owner, suggestedName: "first-session-title" }),
-      service.create({ ...owner, suggestedName: "second-session-title" }),
-    ]);
+    const publishing = createDeferred();
+    const release = createDeferred();
+    const insert = registry.insertRegistryWorktree;
+    const publication = vi
+      .spyOn(registry, "insertRegistryWorktree")
+      .mockImplementationOnce(async (...args) => {
+        publishing.resolve();
+        await release.promise;
+        return await insert(...args);
+      });
+    const readOwner = registryRead.readLiveRegistryWorktreeByOwner;
+    const lookup = vi.spyOn(registryRead, "readLiveRegistryWorktreeByOwner");
+    const first = service.create({ ...owner, suggestedName: "first-session-title" });
+    const creations = [first];
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(publishing.promise, first, "creation never reached publication"),
+        signal,
+      );
+      lookup.mockImplementationOnce(async (...args) => {
+        const record = await readOwner(...args);
+        release.resolve();
+        await first;
+        return record;
+      });
+      creations.push(service.create({ ...owner, suggestedName: "second-session-title" }));
+      const created = await withinTest(Promise.all(creations), signal);
 
-    expect(created[0]?.id).toBe(created[1]?.id);
-    expect(created[0]?.name).toMatch(/^(?:first|second)-session-title$/);
-    expect(
-      (await service.list()).filter((record) => record.ownerId === owner.ownerId),
-    ).toHaveLength(1);
+      expect(created[0]?.id).toBe(created[1]?.id);
+      expect(created[0]?.name).toMatch(/^(?:first|second)-session-title$/);
+      expect(
+        (await service.list()).filter((record) => record.ownerId === owner.ownerId),
+      ).toHaveLength(1);
+    } finally {
+      lookup.mockRestore();
+      publication.mockRestore();
+      release.resolve();
+      await Promise.allSettled(creations);
+    }
   });
 
   it.each([
@@ -605,15 +631,16 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
   });
 
   it("preserves unreadable checkout metadata without blocking later cleanup", async () => {
-    let now = Date.now();
-    service = new ManagedWorktreeService({ env, now: () => now });
+    service = new ManagedWorktreeService({ env });
     const expired = await service.create({
       repoRoot: repo,
       name: "expired-snapshot",
       baseRef: "HEAD",
     });
     await service.remove({ id: expired.id, reason: "retention" });
-    now += SNAPSHOT_RETENTION_MS + 1;
+    await updateRegistryWorktree(env, expired.id, {
+      removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+    });
 
     const fingerprint = path.join(stateDir, "worktrees", "fingerprint");
     const target = path.join(fingerprint, "a-broken-checkout");

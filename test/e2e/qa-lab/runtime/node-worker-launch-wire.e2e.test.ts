@@ -46,7 +46,9 @@ const TEST_TIMEOUT_MS = PROOF_TIMEOUT_MS + 60_000;
 const CONTROL_PROBE_MAX_MS = 4_000;
 const CONTROL_PROBE_P95_MS = 1_000;
 const FINALIZATION_LOAD_CONCURRENCY = 12;
-const FINALIZATION_LOAD_WAVES = 3;
+// One full-capacity wave covers readiness sampling and a fresh connection during
+// finalization; repeated waves add no distinct assertion before the restart audit.
+const FINALIZATION_LOAD_WAVES = 1;
 const MIN_CONTROL_PROBE_SAMPLES = 12;
 const WORKSPACE_INVENTORY_FILES = 4_096;
 
@@ -99,6 +101,7 @@ describe("node worker launch wire", () => {
       let resolveWaveFinalizationStarted: ((startedAt: number) => void) | undefined;
       let workerAuditBeforeRestart: string | undefined;
       let cleanupStartedAfterMs: number | undefined;
+      const baselineStatusObserved = createDeferred();
       const pendingCleanupOwners = new Set<string>();
       const loadTerminals = new Map<string, (payload: Record<string, unknown>) => void>();
       let phase = "provider startup";
@@ -145,7 +148,14 @@ describe("node worker launch wire", () => {
         context,
         async ({ signal, createTempDir }) => {
           const root = createTempDir("openclaw-node-worker-launch-wire-");
-          provider = await startMidturnProvider();
+          provider = await startMidturnProvider({
+            beforeBaselineReply: async () => {
+              if (launchId) {
+                // Keep the launched turn running through reconnect until status crosses the wire.
+                await baselineStatusObserved.promise;
+              }
+            },
+          });
           markPhase("workspace publication");
           const published = (publishedResource = await createPublishedWireWorkspace(root));
           const settlement = createWireWorkspaceSettlementWaiter();
@@ -162,8 +172,14 @@ describe("node worker launch wire", () => {
             role: "operator",
             identity: null,
             onEvent: (event) => {
-              settlement.onEvent(event);
               const payload = event.payload;
+              if (event.event === "sessions.changed" && isRecord(payload)) {
+                // An older snapshot cannot prove this turn's workspace has settled.
+                settlement.onEvent({
+                  event: event.event,
+                  payload: { sessionKey: payload.sessionKey },
+                });
+              }
               if (
                 event.event === "chat" &&
                 isRecord(payload) &&
@@ -186,6 +202,9 @@ describe("node worker launch wire", () => {
             capacity: FINALIZATION_LOAD_CONCURRENCY,
             bundlePrewarm: true,
             onInvoke: (frame) => {
+              if (frame.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND) {
+                baselineStatusObserved.resolve();
+              }
               if (frame.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND && frame.paramsJSON) {
                 const workspaceCommand = JSON.parse(frame.paramsJSON) as {
                   transfer?: { direction?: unknown };
@@ -269,6 +288,9 @@ describe("node worker launch wire", () => {
             throw new Error("active worker placement did not expose a remote workspace directory");
           }
           const baseManifestRef = placement?.workspaceBaseManifestRef;
+          if (typeof baseManifestRef !== "string" || !baseManifestRef) {
+            throw new Error("Baseline workspace has no dispatched manifest reference");
+          }
           await expect(
             fs.readFile(path.join(remoteWorkspaceDir, "gateway-push.txt"), "utf8"),
           ).resolves.toBe("dirty gateway workspace\n");
@@ -309,7 +331,7 @@ describe("node worker launch wire", () => {
               `node worker turn failed: ${JSON.stringify(completed)}\n${gateway.logs().slice(-12_000)}`,
             );
           }
-          await settlement.wait(operator, SESSION_KEY, signal);
+          await settlement.wait(operator, SESSION_KEY, signal, baseManifestRef);
           markPhase("baseline node invocations");
           await workerNode.waitForInvokes();
           expect(workerNode.invokeErrors).toEqual([]);
@@ -355,7 +377,7 @@ describe("node worker launch wire", () => {
             session?: {
               execCwd?: string;
               spawnedCwd?: string;
-              placement?: Record<string, unknown>;
+              placement?: { workspaceBaseManifestRef?: string };
             };
           };
           expect(described.session?.placement).toMatchObject({
@@ -363,6 +385,10 @@ describe("node worker launch wire", () => {
             remoteWorkspaceDir,
           });
           expect(described.session?.placement?.workspaceBaseManifestRef).not.toBe(baseManifestRef);
+          const permissionBaseManifestRef = described.session?.placement?.workspaceBaseManifestRef;
+          if (!permissionBaseManifestRef) {
+            throw new Error("Baseline workspace has no accepted manifest reference");
+          }
           const reconciledLocalDir = described.session?.execCwd ?? described.session?.spawnedCwd;
           expect(reconciledLocalDir).toBeTruthy();
           await expect(
@@ -422,7 +448,8 @@ describe("node worker launch wire", () => {
               }),
             ).slice(0, 8_000),
           ).toMatchObject({ status: "ok" });
-          await settlement.wait(operator, SESSION_KEY, signal);
+          // The reply can arrive before this turn reserves its workspace result.
+          await settlement.wait(operator, SESSION_KEY, signal, permissionBaseManifestRef);
           await workerNode.waitForInvokes();
           expect(workerNode.invokeErrors).toEqual([]);
 
@@ -436,8 +463,9 @@ describe("node worker launch wire", () => {
             fs.access(path.join(remoteWorkspaceDir, "worker-exec-escaped.txt")),
           ).rejects.toMatchObject({ code: "ENOENT" });
           expect(provider.outsideWriteOutput).toMatch(/escape|outside|containment|workspace/iu);
-          expect(provider.execOutput).toMatch(
-            /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+          // This redirection is refused by the shared approval binding before review.
+          expect(provider.execOutput.split("\n", 1)[0]).toBe(
+            "Exec denied (SYSTEM_RUN_DENIED: approval cannot safely bind this command): printf WORKER_EXEC_ESCAPED > worker-exec-escaped.txt",
           );
 
           const permissionHistory = await operator.request<{ messages?: unknown[] }>(
@@ -481,6 +509,7 @@ describe("node worker launch wire", () => {
               }
             },
           });
+          expect(legacyWorkerNode.identity.deviceId).not.toBe(workerNode.identity.deviceId);
           markPhase("legacy workspace dispatch");
           const legacySessionKey = `${SESSION_KEY}-legacy-node`;
           await operator.request("sessions.create", {
@@ -717,6 +746,7 @@ describe("node worker launch wire", () => {
           markPhase("fixture cleanup");
         },
         async () => {
+          baselineStatusObserved.resolve();
           cleanupStartedAfterMs = Math.round(performance.now() - testStartedAt);
           markPhase("fixture cleanup start");
           const cleanups = {

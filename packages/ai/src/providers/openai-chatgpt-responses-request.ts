@@ -72,7 +72,10 @@ export function buildRequestBody(
 
   if (context.tools) {
     // Explicit false prevents the backend from normalizing optional properties into required ones.
-    const tools = convertResponsesToolPayload(context.tools, { strict: false });
+    const tools = convertResponsesToolPayload(context.tools, {
+      strict: false,
+      mutableParameters: Boolean(options?.onPayload),
+    });
     if (tools.length > 0) {
       body.tools = tools;
       body.tool_choice = "auto";
@@ -87,7 +90,9 @@ export function buildRequestBody(
   if (effort !== undefined) {
     body.reasoning = {
       effort,
-      ...(effort === "none" ? {} : { summary: options?.reasoningSummary ?? "auto" }),
+      ...(effort === "none"
+        ? {}
+        : { summary: options?.reasoningSummary === undefined ? "auto" : options.reasoningSummary }),
     };
   }
 

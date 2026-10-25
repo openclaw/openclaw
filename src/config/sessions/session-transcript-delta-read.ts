@@ -76,7 +76,7 @@ export async function withSessionTranscriptDeltaReader<T>(
     }
   };
   try {
-    return await withSessionTranscriptReadSource(
+    const result = await withSessionTranscriptReadSource(
       scope,
       async (source) => {
         const reader = source.preparedReads ?? source.owner;
@@ -133,6 +133,8 @@ export async function withSessionTranscriptDeltaReader<T>(
       },
       signal,
     );
+    assertActive();
+    return result;
   } finally {
     active = false;
   }

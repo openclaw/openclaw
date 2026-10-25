@@ -366,6 +366,15 @@ export function resolveCrabboxPreparedIdleTimeoutMs(profile: WorkerProfile): num
   return parsed.warmImage === false || parsed.target !== "linux" ? undefined : parsed.idleTimeoutMs;
 }
 
+// Setup belongs to the configured target's interpreter, not the requested OS.
+// POSIX-to-POSIX portability remains the profile author's responsibility.
+export function isCrabboxSetupTargetCompatible(
+  profile: CrabboxProfile,
+  target: CrabboxOperatingSystem,
+): boolean {
+  return !profile.setup || (profile.target === "windows/normal") === (target === "windows/normal");
+}
+
 type CrabboxProvisionProfile = CrabboxProfile &
   ({ warmImage: false } | { warmImage: true; class: string });
 
@@ -391,6 +400,12 @@ export function resolveCrabboxProvisionProfile(
       ? configured.target
       : parseCrabboxOperatingSystem(requestedOsValue),
   );
+  if (!isCrabboxSetupTargetCompatible(configured, resolved.target)) {
+    const shell = resolved.target === "windows/normal" ? "PowerShell" : "POSIX";
+    throw new WorkerProviderError(
+      `Crabbox profile setup for ${configured.target} cannot run on ${resolved.target}; select a profile with settings.target=${resolved.target} and a compatible ${shell} setup command`,
+    );
+  }
   let provisionProfile: CrabboxProvisionProfile;
   if (!resolved.warmImage) {
     provisionProfile = { ...resolved, warmImage: false };

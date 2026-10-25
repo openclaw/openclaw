@@ -1,6 +1,9 @@
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pickerClass } from "./select-picker.ts";
-import type { PickerParams, PickerOption } from "./select-picker.ts";
+import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { Picker, type PickerParams, type PickerOption } from "./select-picker.ts";
 import overlayStyles from "./solid/overlay.css?inline";
 
 const options: PickerOption[] = [
@@ -13,7 +16,10 @@ const options: PickerOption[] = [
   })),
 ];
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => {
+  cleanupSolid();
+  document.body.replaceChildren();
+});
 
 async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
   const params: PickerParams<PickerOption> = {
@@ -26,19 +32,33 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
   };
   const container = document.createElement("div");
   document.body.append(container);
-  const picker = document.createElement("openclaw-select-picker");
-  picker.style.cssText = "width:100%;min-width:min(138px,100%)";
+  const mountTarget = document.createElement("div");
+  container.append(mountTarget);
+  let setParams!: (next: PickerParams<PickerOption>) => void;
+  mountSolid(
+    () => {
+      const [current, setCurrent] = createSignal({ ...params });
+      setParams = setCurrent;
+      return Picker({
+        get params() {
+          return current();
+        },
+      });
+    },
+    { container: mountTarget },
+  );
+  const picker = container.querySelector("openclaw-select-picker")!;
   const next = document.createElement("button");
   next.id = "next";
   next.textContent = "Next";
-  container.append(picker, next);
+  container.append(next);
   const update = async (patch: Partial<PickerParams<PickerOption>>) => {
     Object.assign(params, patch);
-    picker.className = pickerClass(params);
-    picker.params = { ...params };
+    setParams({ ...params });
+    flush();
     await picker.updateComplete;
   };
-  await update({});
+  await picker.updateComplete;
   const trigger = picker.querySelector<HTMLButtonElement>("button")!;
   const open = async () => {
     trigger.click();
@@ -69,17 +89,14 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 
 describe("Picker", () => {
   it("keeps closed choices unmounted across catalog refreshes and shows current choices on open", async () => {
-    const p = await mount({ searchable: false });
+    const groupBy = vi.fn(() => undefined);
+    const p = await mount({ searchable: false, groupBy });
     const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
     expect(p.rows()).toHaveLength(0);
+    expect(groupBy).not.toHaveBeenCalled();
     const mutations: MutationRecord[] = [];
     const observer = new MutationObserver((records) => mutations.push(...records));
-    observer.observe(menu, {
-      attributes: true,
-      childList: true,
-      characterData: true,
-      subtree: true,
-    });
+    observer.observe(menu, allMutationObserverOptions());
     try {
       await p.update({
         options: [{ value: "updated", label: "Updated choice" }],
@@ -87,14 +104,17 @@ describe("Picker", () => {
       });
       mutations.push(...observer.takeRecords());
       expect(mutations).toHaveLength(0);
+      expect(groupBy).not.toHaveBeenCalled();
       expect(p.trigger.getAttribute("aria-label")).toBe("Model: Updated choice");
       await p.key("ArrowDown");
       expect(p.rows().map((row) => row.textContent?.trim())).toEqual(["Updated choice"]);
       expect(document.activeElement).toBe(p.picker.querySelector(".picker-select__options"));
       await p.key("Escape");
       expect(p.rows()).toHaveLength(0);
+      groupBy.mockClear();
       await p.update({ options, value: "fixture/anchor" });
       expect(p.rows()).toHaveLength(0);
+      expect(groupBy).not.toHaveBeenCalled();
       await p.open();
       expect(p.rows()).toHaveLength(options.length);
       expect(p.params.onChange).not.toHaveBeenCalled();
@@ -124,12 +144,12 @@ describe("Picker", () => {
         searchable: "always",
       });
       p.container.style.cssText = "position:fixed;right:12px;top:calc(100vh - 50px);width:240px";
+      await page.elementLocator(p.trigger).click();
       expect(
         p.picker
           .querySelector<HTMLElement>(".picker-select__menu")!
           .style.getPropertyValue("position-anchor"),
       ).toBe(p.trigger.style.getPropertyValue("anchor-name"));
-      await page.elementLocator(p.trigger).click();
       const row = p.picker.querySelector<HTMLElement>('[role="option"][data-value=""]')!;
       const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
       const bounds = menu.getBoundingClientRect();
@@ -187,18 +207,16 @@ describe("Picker", () => {
         groupBy: grouped ? () => ({ id: "models", label: "Models" }) : undefined,
       });
       await p.open();
+      await waitForSolid(() =>
+        expect(p.picker.querySelector("[data-active]")?.getAttribute("data-value")).toBe("atlas-0"),
+      );
       const retained = p.rows().find((row) => row.dataset.value === "atlas-3")!;
       const mutations: MutationRecord[] = [];
       const observer = new MutationObserver((records) => mutations.push(...records));
       if (!grouped) {
         observer.observe(p.picker.querySelector(".picker-select__options")!, { childList: true });
       }
-      observer.observe(retained, {
-        attributes: true,
-        childList: true,
-        characterData: true,
-        subtree: true,
-      });
+      observer.observe(retained, allMutationObserverOptions());
       try {
         await p.search("atlas");
         mutations.push(...observer.takeRecords());
@@ -255,7 +273,7 @@ describe("Picker", () => {
     await p.open();
     await p.key("z");
     await p.key("Enter");
-    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("beta");
+    await waitForSolid(() => expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("beta"));
   });
 
   it.each([
@@ -297,7 +315,7 @@ describe("Picker", () => {
     expect(p.trigger.getAttribute("aria-expanded")).toBe("true");
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.key("Enter");
-    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("alpha");
+    await waitForSolid(() => expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("alpha"));
   });
 
   it("uses spaces and backspace for compact-menu typeahead without an early commit", async () => {
@@ -314,7 +332,7 @@ describe("Picker", () => {
     }
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.key("Enter");
-    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("dog");
+    await waitForSolid(() => expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("dog"));
   });
 
   it("filters label and exact reference substrings without changing the selected value", async () => {
@@ -348,7 +366,9 @@ describe("Picker", () => {
     await p.search("aurora");
     await p.key("ArrowDown");
     await p.key("Enter");
-    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large");
+    await waitForSolid(() =>
+      expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large"),
+    );
     expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
@@ -405,7 +425,7 @@ describe("Picker", () => {
     expect(p.trigger.textContent).toContain("retired/model");
     await p.key("a");
     await p.key("Enter");
-    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("");
+    await waitForSolid(() => expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith(""));
   });
 
   it("does not write on outside dismissal, disables an open picker, and closes on disconnect", async () => {
@@ -425,6 +445,24 @@ describe("Picker", () => {
     p.container.append(p.picker);
     await p.picker.updateComplete;
     expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("cancels an armed submenu hover timer when its owner unmounts", async () => {
+    const p = await mount({ variant: "submenu" });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      expect(vi.getTimerCount()).toBe(0);
+      p.trigger.parentElement!.dispatchEvent(
+        new PointerEvent("pointerenter", { pointerType: "mouse" }),
+      );
+      expect(vi.getTimerCount()).toBe(1);
+      expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
+      cleanupSolid();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      cleanupSolid();
+      vi.useRealTimers();
+    }
   });
 
   it("retains label styles, tooltips, and open effects", async () => {

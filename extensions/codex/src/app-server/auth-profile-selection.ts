@@ -5,7 +5,7 @@ import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 
 type ProfileAuth = Pick<
   PluginRuntime["modelAuth"],
-  "ensureAuthProfileStore" | "ensureAuthProfileStoreAsync" | "resolveAuthProfileOrder"
+  "ensureAuthProfileStoreAsync" | "resolveAuthProfileOrder"
 >;
 type AuthProfileOrderConfig = Parameters<ProfileAuth["resolveAuthProfileOrder"]>[0]["cfg"];
 export const CODEX_APP_SERVER_AUTH_PROVIDER = "openai";
@@ -19,7 +19,6 @@ export type CodexAppServerAuthProfileLookup = {
 };
 
 export function createCodexAuthProfileSelection({
-  ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 }: ProfileAuth) {
@@ -51,17 +50,25 @@ export function createCodexAuthProfileSelection({
     return resolveCodexAppServerAuthProfileId({ ...params, store });
   }
 
-  /** Current account selection for a synchronous external-effect guard only. */
-  function resolveCodexAppServerAuthProfileIdAtEffect(
+  /** Retain current selection authority through the guarded external effect. */
+  async function withCodexAppServerAuthProfileIdAtEffect<T>(
     params: CodexAppServerAuthProfileLookup,
-  ): string | undefined {
+    consume: (reader: { read(): Promise<string | undefined>; assertCurrent(): void }) => Promise<T>,
+  ): Promise<T> {
     const requested = params.authProfileId?.trim();
     if (requested) {
-      return requested;
+      return consume({ read: async () => requested, assertCurrent() {} });
     }
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-    const store = params.authProfileStore ?? ensureAuthProfileStore(agentDir, storeOptions(params));
-    return resolveCodexAppServerAuthProfileId({ ...params, store });
+    const { withAuthProfileStoreAtEffect } =
+      await import("openclaw/plugin-sdk/provider-auth-runtime");
+    return withAuthProfileStoreAtEffect(agentDir, storeOptions(params), (reader) =>
+      consume({
+        read: async () =>
+          resolveCodexAppServerAuthProfileId({ ...params, store: await reader.read() }),
+        assertCurrent: () => reader.assertCurrent(),
+      }),
+    );
   }
 
   function storeOptions(params: CodexAppServerAuthProfileLookup) {
@@ -85,7 +92,7 @@ export function createCodexAuthProfileSelection({
   return {
     resolveCodexAppServerAuthProfileId,
     resolveCodexAppServerAuthProfileIdForAgent,
-    resolveCodexAppServerAuthProfileIdAtEffect,
+    withCodexAppServerAuthProfileIdAtEffect,
     resolveCodexAppServerAuthProfileStore,
   };
 }

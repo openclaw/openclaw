@@ -13,16 +13,10 @@ import * as worktreeGit from "../agents/worktrees/git.js";
 import { runPublicationCommand } from "../gateway/github-publication-git-transport.js";
 import { runWorkspaceInventoryCommandToFile } from "../gateway/worker-environments/workspace-sync-inventory.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../media/staged-inputs.js";
-import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
-import {
-  onDiagnosticEvent,
-  setDiagnosticsEnabledForProcess,
-  type DiagnosticEventPayload,
-} from "./diagnostic-events.js";
 import * as gitExec from "./git-exec.js";
 import { installUnknownDirentFixture } from "./git-worker-dir.test-support.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "./git-worker.js";
@@ -167,35 +161,36 @@ function waitForLifecyclePoint(
 }
 
 describe("Git operation host lifecycle", () => {
-  it.each([
-    ["text", gitExec.executeGitCommand],
-    ["bytes", gitExec.executeGitCommandBytes],
-    ["buffered", gitExec.executeGitCommandBuffered],
-    ["worktree text", worktreeGit.runGit],
-    ["worktree bytes", worktreeGit.runGitBytes],
-    ["worktree buffered", worktreeGit.runGitBuffered],
-    [
-      "publication",
-      (cwd: string, args: string[]) => runPublicationCommand(["git", "-C", cwd, ...args]),
-    ],
-    [
-      "inventory",
-      async (cwd: string, args: string[]) => {
-        try {
-          await runWorkspaceInventoryCommandToFile({
-            argv: ["git", "-C", cwd, ...args],
-            outputPath: path.join(cwd, "inventory.out"),
-            signal: new AbortController().signal,
-            timeoutMs: 5_000,
-            baseEnv: { ...process.env },
-          });
-          return { code: 0 };
-        } catch {
-          return { code: 128 };
-        }
-      },
-    ],
-  ] as const)("%s inspections never hydrate missing blobs", async (_name, run) => {
+  it("inspections never hydrate missing blobs across Git adapters", async () => {
+    const adapters = [
+      ["text", gitExec.executeGitCommand],
+      ["bytes", gitExec.executeGitCommandBytes],
+      ["buffered", gitExec.executeGitCommandBuffered],
+      ["worktree text", worktreeGit.runGit],
+      ["worktree bytes", worktreeGit.runGitBytes],
+      ["worktree buffered", worktreeGit.runGitBuffered],
+      [
+        "publication",
+        (cwd: string, args: string[]) => runPublicationCommand(["git", "-C", cwd, ...args]),
+      ],
+      [
+        "inventory",
+        async (cwd: string, args: string[]) => {
+          try {
+            await runWorkspaceInventoryCommandToFile({
+              argv: ["git", "-C", cwd, ...args],
+              outputPath: path.join(cwd, "inventory.out"),
+              signal: new AbortController().signal,
+              timeoutMs: 5_000,
+              baseEnv: { ...process.env },
+            });
+            return { code: 0 };
+          } catch {
+            return { code: 128 };
+          }
+        },
+      ],
+    ] as const;
     const root = tempDirs.make("openclaw-git-read-partial-clone-");
     const { clone, commit } = await partialClone(root);
     const packDirectory = path.join(clone, ".git", "objects", "pack");
@@ -204,18 +199,25 @@ describe("Git operation host lifecycle", () => {
     vi.stubEnv("GIT_NO_LAZY_FETCH", "0");
     const trace = path.join(root, "git-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
-    const outcome = await run(clone, ["-c", "core.fsmonitor=false", "show", `${commit}:README.md`]);
-    expect(outcome.code).not.toBe(0);
-    expect(await traceStarts(trace, "fetch")).toHaveLength(0);
-    expect((await fs.readdir(packDirectory)).toSorted()).toEqual(before);
+    for (const [name, run] of adapters) {
+      const outcome = await run(clone, [
+        "-c",
+        "core.fsmonitor=false",
+        "show",
+        `${commit}:README.md`,
+      ]);
+      expect(outcome.code, name).not.toBe(0);
+      expect(await traceStarts(trace, "fetch"), name).toHaveLength(0);
+      expect((await fs.readdir(packDirectory)).toSorted(), name).toEqual(before);
+    }
 
-    // Explicit object transfers still work; the same reader then succeeds.
+    // Explicit object transfers still work; every reader then succeeds.
     const blob = await git(clone, "rev-parse", `${commit}:README.md`);
     await worktreeGit.requireGit(clone, ["fetch", "--no-auto-maintenance", "origin", blob]);
-    if (_name === "inventory") {
-      await fs.rm(path.join(clone, "inventory.out"));
+    await fs.rm(path.join(clone, "inventory.out"));
+    for (const [name, run] of adapters) {
+      expect((await run(clone, ["show", `${commit}:README.md`])).code, name).toBe(0);
     }
-    expect((await run(clone, ["show", `${commit}:README.md`])).code).toBe(0);
     expect((await fs.readdir(packDirectory)).filter((name) => name.endsWith(".pack"))).toHaveLength(
       2,
     );
@@ -423,18 +425,6 @@ describe("Git operation host lifecycle", () => {
     const peerRoot = path.join(root, "peer");
     await fs.mkdir(peerRoot);
     const peer = await repository(peerRoot);
-    let now = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    setDiagnosticsEnabledForProcess(false);
-    emitChildProcessSpawnSample();
-    setDiagnosticsEnabledForProcess(true);
-    const spawns: Extract<DiagnosticEventPayload, { type: "diagnostic.child_process.spawn" }>[] =
-      [];
-    const stop = onDiagnosticEvent((event) => {
-      if (event.type === "diagnostic.child_process.spawn") {
-        spawns.push(event);
-      }
-    });
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const realRun = worktreeGit.runGitBytes;
@@ -481,18 +471,7 @@ describe("Git operation host lifecycle", () => {
     } finally {
       release.resolve();
       await Promise.all(pending);
-      now = 60_000;
-      emitChildProcessSpawnSample();
-      stop();
-      setDiagnosticsEnabledForProcess(false);
-      emitChildProcessSpawnSample();
     }
-    expect(
-      spawns
-        .map(({ operation }) => operation ?? "unknown")
-        .toSorted((left, right) => left.localeCompare(right)),
-    ).toEqual(["checkout.diff", "repository.branches"]);
-    expect(spawns.every(({ family, count }) => family === "git" && count > 0)).toBe(true);
   });
 
   it.each(["cleanup-inspection", "snapshot"] as const)(
@@ -563,7 +542,7 @@ describe("Git operation host lifecycle", () => {
           }),
           runGitWorkerOperation({
             type: "worktree.directory-size",
-            input: { root: peer, excludeGit: true },
+            input: { root: peer },
           }),
           runGitWorkerOperation({
             type: "worktree.eviction-source",

@@ -1,4 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
 import { createMemorySessionActorOwner } from "../config/sessions/session-actor-memory.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
@@ -7,10 +11,13 @@ import {
   captureSessionEntrySourceAssertion,
 } from "../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveApprovalRequestChannelAccountId } from "../infra/approval-request-account-binding.js";
+import * as checkoutDiff from "../sessions/session-diff.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
+import { loadSessionDiff } from "./server-methods/sessions-diff.js";
 import { withSessionFileRoot } from "./server-methods/sessions-files.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -30,6 +37,8 @@ const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const sessionKey = "agent:main:dashboard:incognito-effects";
 const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   for (const owner of owners.splice(0)) {
     owner.close();
   }
@@ -52,31 +61,23 @@ async function fixture() {
     throw new Error("Memory actor has no storage capability");
   }
   const store = actor.storage;
-  expect(
-    await store.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: {
-            sessionId: "private-effects",
-            updatedAt: 1,
-            lifecycleRevision: "original",
-            spawnedCwd: "/synthetic/workspace",
-          },
-        },
-      },
-      authority,
-    ),
-  ).toMatchObject({ kind: "committed" });
-  const binding = { actor, authority, agentId: owner.agentId, path: owner.path };
-  const patch = async (value: Partial<SessionEntry>) => {
-    expect(
-      await store.mutate(
-        { type: "session.entry.patch", input: { operation: { kind: "fields", patch: value } } },
-        authority,
-      ),
-    ).toMatchObject({ kind: "committed" });
+  const mutate = async (operation: Parameters<typeof store.mutate>[0]) => {
+    expect(await store.mutate(operation, authority)).toMatchObject({ kind: "committed" });
   };
+  await mutate({
+    type: "session.entry.create",
+    input: {
+      entry: {
+        sessionId: "private-effects",
+        updatedAt: 1,
+        lifecycleRevision: "original",
+        spawnedCwd: "/synthetic/workspace",
+      },
+    },
+  });
+  const binding = { actor, authority, agentId: owner.agentId, path: owner.path };
+  const patch = (value: Partial<SessionEntry>) =>
+    mutate({ type: "session.entry.patch", input: { operation: { kind: "fields", patch: value } } });
   return { owner, actor, binding, patch };
 }
 
@@ -158,4 +159,22 @@ it("revokes a retained PR publication source when its session actor closes", asy
   expect(() => assertCurrent()).not.toThrow();
   owner.closeSession(sessionKey);
   expect(() => assertCurrent()).toThrow();
+});
+
+it("revokes a host diff when runtime configuration removes its read-only sandbox mount", async () => {
+  const { binding } = await fixture();
+  const cfg: OpenClawConfig = {
+    agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } },
+  };
+  setRuntimeConfigSnapshot(cfg);
+  const read = vi.spyOn(checkoutDiff, "loadCheckoutDiff").mockImplementationOnce(async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "none" } } },
+    });
+    return { sessionKey, files: [], additions: 0, deletions: 0 };
+  });
+  await expect(
+    runWithSessionActorStorage(binding, () => loadSessionDiff({ sessionKey })),
+  ).rejects.toThrow("Session workspace changed during file access");
+  expect(read).toHaveBeenCalledOnce();
 });

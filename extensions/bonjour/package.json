@@ -1,8 +1,9 @@
 {
   "name": "@openclaw/bonjour",
-  "version": "2026.10.4",
+  "version": "2026.10.7",
   "description": "OpenClaw Bonjour/mDNS gateway discovery",
   "type": "module",
+  "bundleDependencies": ["@homebridge/ciao"],
   "dependencies": {
     "@homebridge/ciao": "1.3.12"
   },

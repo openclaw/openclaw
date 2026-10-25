@@ -1,11 +1,19 @@
-import type { AnyMessageContent, WAMessage } from "baileys";
+import type { WAMessage } from "baileys";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { checkInboundAccessControl } from "./access-control.js";
+import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";
+import { logWhatsAppVerbose, whatsappInboundLog } from "../auto-reply/loggers.js";
+import { resolveWhatsAppInboundPolicy, resolveWhatsAppIngressAccess } from "../inbound-policy.js";
+import { buildWhatsAppInboundAdmission } from "./admission.js";
 import { isRecentOutboundMessage } from "./dedupe.js";
 import { hasInboundUserContent } from "./extract.js";
 import type { WhatsAppGroupMetadataCacheOwner } from "./group-metadata-cache.js";
 import { isJidGroup } from "./runtime-api.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
+
+const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
 
 export type WhatsAppNormalizedInboundMessage = NonNullable<
   Awaited<ReturnType<ReturnType<typeof createWhatsAppInboundMessageNormalizer>["normalize"]>>
@@ -21,6 +29,16 @@ export function createWhatsAppInboundMessageNormalizer(options: {
   parseTimestampSeconds: (value: unknown) => number | undefined;
 }) {
   const { socketSession, groupMetadata } = options;
+  const denialLogs = createDedupeCache({ ttlMs: 60_000, maxSize: 32 });
+  const logAccessDenial = (reasonCode: string) => {
+    // Key only by bounded policy reasons; repeated denials must not refresh the
+    // window indefinitely or retain sender identifiers and message content.
+    if (denialLogs.peek(reasonCode)) {
+      return;
+    }
+    denialLogs.check(reasonCode);
+    whatsappInboundLog.info(`Inbound message blocked (reason=${reasonCode})`);
+  };
   const shouldSkipRecentOutboundEcho = (msg: WAMessage): boolean => {
     const id = msg.key?.id ?? undefined;
     const remoteJid = msg.key?.remoteJid;
@@ -80,28 +98,117 @@ export function createWhatsAppInboundMessageNormalizer(options: {
     const messageTimestampSeconds = options.parseTimestampSeconds(msg.messageTimestamp);
     const messageTimestampMs =
       messageTimestampSeconds !== undefined ? messageTimestampSeconds * 1000 : undefined;
-    const access = await checkInboundAccessControl({
-      cfg: options.loadConfig?.() ?? options.cfg,
+    const cfg = options.loadConfig?.() ?? options.cfg;
+    const selfE164 = socketSession.self.e164 ?? null;
+    const isFromMe = Boolean(msg.key?.fromMe);
+    const connectedAtMs = socketSession.connectedAtMs;
+    const policy = resolveWhatsAppInboundPolicy({
+      cfg,
       accountId: options.accountId,
-      from,
-      selfE164: socketSession.self.e164 ?? null,
-      senderE164,
-      senderJid: participantJid,
-      group,
-      pushName: msg.pushName ?? undefined,
-      isFromMe: Boolean(msg.key?.fromMe),
-      messageTimestampMs,
-      connectedAtMs: socketSession.connectedAtMs,
-      verbose: options.verbose,
-      sock: {
-        sendMessage: (jid: string, content: AnyMessageContent) =>
-          socketSession.sendTrackedMessage(jid, content),
-      },
-      remoteJid,
+      selfE164,
     });
-    if (!access.allowed) {
+    const suppressPairingReply =
+      messageTimestampMs !== undefined &&
+      messageTimestampMs < connectedAtMs - PAIRING_REPLY_HISTORY_GRACE_MS;
+
+    warnMissingProviderGroupPolicyFallbackOnce({
+      providerMissingFallbackApplied: policy.providerMissingFallbackApplied,
+      providerKey: "whatsapp",
+      accountId: policy.account.accountId,
+      log: (message) => logWhatsAppVerbose(options.verbose, message),
+    });
+    const conversationId = group ? remoteJid : from;
+    const accessSenderId = group ? senderE164 : from;
+    const admissionSenderId = group ? (senderE164 ?? participantJid ?? from) : from;
+    const resolveChannelIngress = async (
+      contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
+    ) =>
+      await resolveWhatsAppIngressAccess({
+        cfg,
+        policy,
+        isGroup: group,
+        conversationId,
+        senderId: accessSenderId,
+        contextBinding,
+      });
+    const ingressAccess = await resolveChannelIngress();
+    const { senderAccess } = ingressAccess;
+    if (group && senderAccess.decision !== "allow") {
+      logAccessDenial(senderAccess.reasonCode);
       return null;
     }
+
+    if (!group) {
+      if (isFromMe && (policy.account.selfChatMode === false || !policy.isSamePhone(from))) {
+        logWhatsAppVerbose(
+          options.verbose,
+          "Skipping outbound DM (fromMe); no pairing reply needed.",
+        );
+        return null;
+      }
+      if (senderAccess.decision === "block" && senderAccess.reasonCode === "dm_policy_disabled") {
+        logAccessDenial(senderAccess.reasonCode);
+        return null;
+      }
+      if (senderAccess.decision === "pairing" && !policy.isSamePhone(from)) {
+        const candidate = from;
+        if (suppressPairingReply) {
+          logWhatsAppVerbose(
+            options.verbose,
+            `Skipping pairing reply for historical DM from ${candidate}.`,
+          );
+        } else {
+          await createChannelPairingChallengeIssuer({
+            channel: "whatsapp",
+            accountId: policy.account.accountId,
+            upsertPairingRequest: async ({ id: pairingId, meta }) =>
+              await upsertChannelPairingRequest({
+                channel: "whatsapp",
+                id: pairingId,
+                accountId: policy.account.accountId,
+                meta,
+              }),
+          })({
+            senderId: candidate,
+            senderIdLine: `Your WhatsApp phone number: ${candidate}`,
+            meta: { name: (msg.pushName ?? "").trim() || undefined },
+            onCreated: () => {
+              logWhatsAppVerbose(
+                options.verbose,
+                `whatsapp pairing request sender=${candidate} name=${msg.pushName ?? "unknown"}`,
+              );
+            },
+            sendPairingReply: async (text) => {
+              await socketSession.sendTrackedMessage(remoteJid, { text });
+            },
+            onReplyError: (err) => {
+              logWhatsAppVerbose(
+                options.verbose,
+                `whatsapp pairing reply failed for ${candidate}: ${String(err)}`,
+              );
+            },
+          });
+        }
+        return null;
+      }
+      if (senderAccess.decision !== "allow") {
+        logAccessDenial(senderAccess.reasonCode);
+        return null;
+      }
+    }
+
+    const access = {
+      isSelfChat: policy.isSelfChat,
+      admission: buildWhatsAppInboundAdmission({
+        policy,
+        access: ingressAccess,
+        channelIngress: ingressAccess,
+        resolveChannelIngress,
+        isGroup: group,
+        conversationId,
+        senderId: admissionSenderId,
+      }),
+    };
 
     return {
       id,

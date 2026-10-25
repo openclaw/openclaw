@@ -16,7 +16,6 @@ import {
   type ExecAllowlistEntry,
   type ExecAsk,
   type AllowAlwaysPersistenceDecision,
-  type ExecCommandSegment,
   type ExecSecurity,
   type SystemRunApprovalPlan,
   countObsoleteGeneratedExecApprovalRules,
@@ -119,105 +118,13 @@ function extractPreparedNodeShellPayload(argv: readonly string[]): string | null
   return null;
 }
 
-function hasNodeAllowAlwaysCommandApproval(params: {
-  allowlist: readonly ExecAllowlistEntry[];
-  commandText: string;
-  segments: readonly ExecCommandSegment[];
-  cwd?: string;
-  env: NodeJS.ProcessEnv;
-  platform?: string | null;
-  strictInlineEval?: boolean;
-  nodeCoverage?: NodeAllowAlwaysCoverage;
-}): boolean {
-  const normalizedCommand = params.commandText.trim();
-  if (!normalizedCommand || params.segments.length === 0) {
-    return false;
-  }
-  if (
-    !hasNodeCommandAllowAlwaysMarker({
-      allowlist: params.allowlist,
-      commandText: normalizedCommand,
-    })
-  ) {
-    return false;
-  }
-  const matchingEntries = new Set<string>();
-  for (const entry of params.allowlist) {
-    if (entry.source !== "allow-always") {
-      continue;
-    }
-    matchingEntries.add(`${entry.pattern}\x00${entry.argPattern ?? ""}`);
-  }
-  const coverage =
-    params.nodeCoverage ??
-    resolveAllowAlwaysPatternCoverage({
-      segments: [...params.segments],
-      cwd: params.cwd,
-      env: params.env,
-      platform: params.platform,
-      strictInlineEval: params.strictInlineEval,
-    });
-  const expectedPatterns = coverage.patterns.map(
-    (pattern) => `${pattern.pattern}\x00${pattern.argPattern ?? ""}`,
-  );
-  if (!coverage.complete || expectedPatterns.length === 0) {
-    return false;
-  }
-  return expectedPatterns.every((pattern) => matchingEntries.has(pattern));
-}
-
-function formatNodeRunToolResult(params: {
-  raw: unknown;
-  startedAt: number;
-  cwd: string | undefined;
-  nodeId: string;
-  warnings?: string[];
-}): AgentToolResult<ExecToolDetails> {
-  const payloadObj = asNullableRecord(asNullableRecord(params.raw)?.payload) ?? {};
-  const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
-  const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
-  const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
-  const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
-  const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
-  const timedOut = payloadObj.timedOut === true;
-  // Failure must be visible in the text the model reads, matching the
-  // local/gateway host rendering — output alone reads as success.
-  const outcomeNote = timedOut
-    ? appendExecTimeoutRetryGuidance("Command timed out.", "overall-timeout")
-    : !success && exitCode !== null && exitCode !== 0
-      ? `(Command exited with code ${exitCode})`
-      : "";
-  const output = [stdout, stderr, errorText, outcomeNote].filter(Boolean).join("\n");
-  return {
-    // Tool details are UI metadata; the model needs the execution target in content.
-    content: [
-      {
-        type: "text",
-        text: `Node: ${params.nodeId}\n${renderExecUpdateText({
-          tailText: output,
-          warnings: params.warnings ?? [],
-        })}`,
-      },
-    ],
-    details: {
-      status: success ? "completed" : "failed",
-      exitCode,
-      durationMs: Date.now() - params.startedAt,
-      aggregated: output,
-      nodeId: params.nodeId,
-      ...(timedOut ? { timedOut: true } : {}),
-      cwd: params.cwd,
-    } satisfies ExecToolDetails,
-  };
-}
-
 export async function resolveNodeExecutionTarget(
   params: ExecuteNodeHostCommandParams,
 ): Promise<NodeExecutionTarget> {
   const nodes = await listNodes({});
   if (nodes.length === 0) {
     throw new Error(
-      "exec host=node requires a paired node (none available). This requires a companion app or node host.",
+      "exec host=node requires a paired node (none available). This lasts until the operator pairs a companion app or node host, so retrying will not help. Run the command on another exec host if the task allows it, or tell the user a node must be paired.",
     );
   }
   // Canonicalize boundNode and requestedNode (which may be display names, IPs,
@@ -255,7 +162,7 @@ export async function resolveNodeExecutionTarget(
       nameResolveFailed: (reason, eligibleIds) =>
         `${reason} (eligible connected system.run node ids: ${eligibleIds})`,
       noneEligible: () =>
-        "exec host=node requires a connected node that supports system.run (none available). Start or reconnect the companion app or node host.",
+        "exec host=node requires a connected node that supports system.run (none available). This lasts until a node reconnects, so retrying will not help. Run the command on another exec host if the task allows it, or tell the user to start or reconnect the companion app or node host.",
       multipleEligible: (eligible) =>
         `exec host=node requires a node when multiple executable nodes are connected: ${eligible
           .map((node) => (node.displayName ? `${node.nodeId} (${node.displayName})` : node.nodeId))
@@ -361,13 +268,43 @@ export async function dispatchNodeSystemRun(params: {
       warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],
     });
   }
-  return formatNodeRunToolResult({
-    raw: result.raw,
-    startedAt,
-    cwd: params.request.workdir,
-    nodeId: params.target.nodeId,
-    warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],
-  });
+  const warnings = [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])];
+  const payloadObj = asNullableRecord(asNullableRecord(result.raw)?.payload) ?? {};
+  const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
+  const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
+  const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
+  const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
+  const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
+  const timedOut = payloadObj.timedOut === true;
+  // Failure must be visible in the text the model reads, matching the
+  // local/gateway host rendering — output alone reads as success.
+  const outcomeNote = timedOut
+    ? appendExecTimeoutRetryGuidance("Command timed out.", "overall-timeout")
+    : !success && exitCode !== null && exitCode !== 0
+      ? `(Command exited with code ${exitCode})`
+      : "";
+  const output = [stdout, stderr, errorText, outcomeNote].filter(Boolean).join("\n");
+  return {
+    // Tool details are UI metadata; the model needs the execution target in content.
+    content: [
+      {
+        type: "text",
+        text: `Node: ${params.target.nodeId}\n${renderExecUpdateText({
+          tailText: output,
+          warnings,
+        })}`,
+      },
+    ],
+    details: {
+      status: success ? "completed" : "failed",
+      exitCode,
+      durationMs: Date.now() - startedAt,
+      aggregated: output,
+      nodeId: params.target.nodeId,
+      ...(timedOut ? { timedOut: true } : {}),
+      cwd: params.request.workdir,
+    } satisfies ExecToolDetails,
+  };
 }
 
 export async function prepareNodeSystemRun(params: {
@@ -535,23 +472,46 @@ export async function analyzeNodeApprovalRequirement(params: {
         const allowlistEvals = await Promise.all(
           bindingCommandEvals.map(async (entry) => {
             const allowlistEval = await evaluateCommand(entry.command, entry.cwd, allowlist);
+            const exactDurableApprovalSatisfied = hasExactCommandDurableExecApproval({
+              allowlist,
+              commandText: entry.command,
+            });
+            let nodeCommandDurableApprovalSatisfied = false;
+            const normalizedCommand = params.prepared.rawCommand.trim();
+            if (
+              normalizedCommand &&
+              entry.allowlistEval.segments.length > 0 &&
+              hasNodeCommandAllowAlwaysMarker({ allowlist, commandText: normalizedCommand })
+            ) {
+              const matchingEntries = new Set<string>();
+              for (const rule of allowlist) {
+                if (rule.source !== "allow-always") {
+                  continue;
+                }
+                matchingEntries.add(`${rule.pattern}\x00${rule.argPattern ?? ""}`);
+              }
+              const coverage =
+                params.prepared.allowAlwaysCoverage ??
+                resolveAllowAlwaysPatternCoverage({
+                  segments: [...entry.allowlistEval.segments],
+                  cwd: entry.cwd,
+                  env: analysisEnv,
+                  platform: params.target.platform,
+                  strictInlineEval: params.request.strictInlineEval,
+                });
+              const expectedPatterns = coverage.patterns.map(
+                (pattern) => `${pattern.pattern}\x00${pattern.argPattern ?? ""}`,
+              );
+              nodeCommandDurableApprovalSatisfied =
+                coverage.complete &&
+                expectedPatterns.length > 0 &&
+                expectedPatterns.every((pattern) => matchingEntries.has(pattern));
+            }
             return {
               allowlistEligible:
                 !preparedShellPayload || entry.command.trim() === preparedShellPayload.trim(),
-              exactDurableApprovalSatisfied: hasExactCommandDurableExecApproval({
-                allowlist,
-                commandText: entry.command,
-              }),
-              nodeCommandDurableApprovalSatisfied: hasNodeAllowAlwaysCommandApproval({
-                allowlist,
-                commandText: params.prepared.rawCommand,
-                segments: entry.allowlistEval.segments,
-                cwd: entry.cwd,
-                env: analysisEnv,
-                platform: params.target.platform,
-                strictInlineEval: params.request.strictInlineEval,
-                nodeCoverage: params.prepared.allowAlwaysCoverage,
-              }),
+              exactDurableApprovalSatisfied,
+              nodeCommandDurableApprovalSatisfied,
               allowlistEval,
               durableApprovalSatisfied: hasDurableExecApproval({
                 analysisOk: allowlistEval.analysisOk,

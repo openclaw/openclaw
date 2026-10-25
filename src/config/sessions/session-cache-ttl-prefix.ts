@@ -6,10 +6,15 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   getActiveTranscriptKysely,
+  readSnapshotEventRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import { collectCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix-values.js";
-import { transcriptEventJsonSql, transcriptEventModelNavigationSql } from "./transcript-payload.js";
+import {
+  readTranscriptPayload,
+  transcriptEventModelNavigationSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 /** Projection dependencies are metadata, separate from the byte-bounded model history. */
@@ -24,7 +29,7 @@ export function readCacheTtlProjectionPrefix(
   }
   const entryType =
     /* kysely-allow-raw: exact-row identities carry the parsed kind; legacy rows retain native navigation. */
-    sql`coalesce(identity.event_type, event.navigation_last_type)`;
+    sql`coalesce(identity.event_type, ${transcriptPredicateSql(projection.database.db, "navigation_last_type", "event")})`;
   const db = getActiveTranscriptKysely(projection.database);
   const indexed = db
     .selectFrom("transcript_event_identities")
@@ -56,6 +61,7 @@ export function readCacheTtlProjectionPrefix(
       .crossJoin("transcript_events as event")
       .whereRef("event.session_id", "=", "active.session_id")
       .whereRef("event.seq", "=", "active.event_seq")
+      .select("event.seq")
       .select((eb) =>
         eb
           .case()
@@ -64,11 +70,15 @@ export function readCacheTtlProjectionPrefix(
           .then(
             transcriptEventModelNavigationSql(projection.database.db, "event", sql.lit("reset")),
           )
-          .else(transcriptEventJsonSql(projection.database.db, "event"))
+          .else(null)
           .end()
-          .as("event_json"),
+          .as("reset_json"),
       )
-      .select("event.navigation_valid")
+      .select(
+        transcriptPredicateSql(projection.database.db, "navigation_valid", "event").as(
+          "navigation_valid",
+        ),
+      )
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("active.active_position", "<", anchor.activePosition)
       .$call((query) =>
@@ -83,11 +93,23 @@ export function readCacheTtlProjectionPrefix(
           .then(false)
           .else(
             eb.or([
-              eb("event.navigation_valid", "=", 0),
+              eb(
+                transcriptPredicateSql(projection.database.db, "navigation_valid", "event"),
+                "=",
+                0,
+              ),
               eb(entryType, "=", "reset"),
               eb.and([
                 eb(entryType, "=", "custom"),
-                eb("event.navigation_last_custom_type", "=", "openclaw.cache-ttl"),
+                eb(
+                  transcriptPredicateSql(
+                    projection.database.db,
+                    "navigation_last_custom_type",
+                    "event",
+                  ),
+                  "=",
+                  "openclaw.cache-ttl",
+                ),
               ]),
             ]),
           )
@@ -100,7 +122,11 @@ export function readCacheTtlProjectionPrefix(
     (function* () {
       for (const row of rows) {
         assertTranscriptNavigationValid(row.navigation_valid);
-        yield JSON.parse(row.event_json) as unknown;
+        // Sorting checkpoint payloads decompresses obsolete history before the first yield.
+        // Fetch only consumed payloads through the owner of this same projection snapshot.
+        const eventJson =
+          row.reset_json ?? readTranscriptPayload(readSnapshotEventRows(projection, [row.seq])[0]!);
+        yield JSON.parse(eventJson) as unknown;
       }
     })(),
   );

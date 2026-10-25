@@ -118,7 +118,7 @@ export function prepareDeletedAgentSessionCheck(params: {
   params.assertCurrent?.();
   return readAcpSessionMetaForEntries({
     cfg: params.cfg,
-    entries: [...keys].map((sessionKey) => ({
+    entries: Array.from(keys, (sessionKey) => ({
       sessionKey,
       agentId:
         parseAgentSessionKey(sessionKey)?.agentId ??
@@ -135,7 +135,6 @@ export function prepareDeletedAgentSessionCheck(params: {
 export function loadIncognitoGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env"> & {
-    includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   },
   cfg: OpenClawConfig = getRuntimeConfig(),
@@ -152,7 +151,6 @@ export function loadIncognitoGatewaySessionEntryReadOnly(
     projection: opts?.projection,
     env: opts?.env,
     targetDiscoveryCache: opts?.targetDiscoveryCache,
-    includeStoreChildEntries: opts?.includeStoreChildEntries,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
@@ -243,7 +241,6 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   cfg: OpenClawConfig;
   target: QualifiedSessionEntryAccessTarget;
   logicalStorePath: string;
-  env?: NodeJS.ProcessEnv;
   includeMembership: boolean;
   transcript?: import("../config/sessions/session-entry-read.types.js").SessionExactEntriesWorkerRequest["transcript"];
   includeLifecycle?: boolean;

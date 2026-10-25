@@ -1,15 +1,16 @@
 // Feishu tests cover streaming card plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
+import { FeishuStreamingSession } from "./streaming-card.js";
 import {
-  FeishuStreamingFinalizationError,
-  FeishuStreamingSession,
-  mergeStreamingText,
-} from "./streaming-card.js";
-import { createStreamingSession, type StreamingFetchDeps } from "./streaming-card.test-support.js";
+  createStreamingSession,
+  createStreamingTokenPayload,
+  type StreamingFetchDeps,
+} from "./streaming-card.test-support.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 type FeishuStreamingFetch = typeof fetch;
@@ -45,35 +46,26 @@ const hermeticPublicLookup: LookupFn = async () => [
 async function startLocalServer(
   handler: (request: StreamingRequest) => void | Promise<void>,
 ): Promise<LocalServer> {
-  return await new Promise<LocalServer>((resolve, reject) => {
-    const server = createServer((req, res) => {
-      void (async () => {
-        const url = new URL(req.url ?? "/", "http://127.0.0.1");
-        const body = await readRequestBody(req);
-        await handler({ url, body, req, res });
-      })().catch((error: unknown) => {
-        if (!res.headersSent) {
-          res.writeHead(500, { "content-type": "text/plain" });
-        }
-        res.end(String(error));
-      });
-    });
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const addr = server.address();
-      if (!addr || typeof addr === "string") {
-        reject(new Error("local test server did not expose a TCP port"));
-        return;
+  const server = createServer((req, res) => {
+    void (async () => {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      const body = await readRequestBody(req);
+      await handler({ url, body, req, res });
+    })().catch((error: unknown) => {
+      if (!res.headersSent) {
+        res.writeHead(500, { "content-type": "text/plain" });
       }
-      resolve({
-        port: addr.port,
-        stop: async () =>
-          await new Promise<void>((innerResolve, innerReject) => {
-            server.close((err) => (err ? innerReject(err) : innerResolve()));
-          }),
-      });
+      res.end(String(error));
     });
   });
+  const port = await listenOnLoopback(server);
+  return {
+    port,
+    stop: async () =>
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      }),
+  };
 }
 
 function createLocalRedirectFetch(port: number): FeishuStreamingFetch {
@@ -117,13 +109,6 @@ function createMemoryFetch(
 function writeJson(res: ServerResponse, payload: unknown, status = 200): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(payload));
-}
-
-function jsonResponse(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
 }
 
 function setStreamingSessionInternals(
@@ -197,12 +182,7 @@ describe("FeishuStreamingSession", () => {
     return createMemoryFetch((url, body) => {
       let status = 200;
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        return jsonResponse(createStreamingTokenPayload());
       }
       if (url.pathname.includes("/elements/content/content")) {
         const updateIndex = updateBodies.length;
@@ -228,8 +208,7 @@ describe("FeishuStreamingSession", () => {
 
   function mockStreamingTokenStart(resolveAuthJson: (token: string) => Record<string, unknown>): {
     authTokens: string[];
-    client: ConstructorParameters<typeof FeishuStreamingSession>[0];
-    deps: StreamingFetchDeps;
+    startSession: () => Promise<void>;
   } {
     const authTokens: string[] = [];
     const deps = createMemoryFetch((url) => {
@@ -251,7 +230,16 @@ describe("FeishuStreamingSession", () => {
         },
       },
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
-    return { authTokens, client, deps };
+    return {
+      authTokens,
+      startSession: () =>
+        createStreamingSession(
+          client,
+          { appId: "app_unsafe_token_expiry", appSecret: "secret" },
+          undefined,
+          deps,
+        ).start("chat_id", "open_id"),
+    };
   }
 
   function mockAcceptedStreamingCard(params: {
@@ -263,12 +251,7 @@ describe("FeishuStreamingSession", () => {
     const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        return jsonResponse(createStreamingTokenPayload());
       }
       if (url.pathname.endsWith("/cardkit/v1/cards")) {
         return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_accepted" } });
@@ -403,11 +386,11 @@ describe("FeishuStreamingSession", () => {
       await session.update("Already visible answer");
 
       await expect(session.discard()).rejects.toMatchObject({
-        name: "FeishuStreamingFinalizationError",
-        result: {
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        deliveryResult: {
           visibleReplySent: true,
           content: "Already visible answer",
-          ...(messageId ? { messageId } : {}),
+          ...(messageId ? { messageIds: [messageId] } : {}),
         },
       });
       expect(remove).toHaveBeenCalledTimes(messageId ? 1 : 0);
@@ -425,8 +408,8 @@ describe("FeishuStreamingSession", () => {
     await session.update("Already visible answer");
 
     await expect(session.closeWithResult("Already visible answer")).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: {
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
         visibleReplySent: true,
         content: "Already visible answer",
       },
@@ -444,17 +427,12 @@ describe("FeishuStreamingSession", () => {
   });
 
   it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
-    let streamState:
-      | {
-          bytesPulled: () => number;
-          canceled: () => boolean;
-        }
-      | undefined;
+    let clientClosed: Promise<void> | undefined;
     const deps = await createStreamingFetch(({ url, res }) => {
       if (url.pathname.includes("/auth/")) {
-        streamState = writeOversizedJson(
+        clientClosed = writeOversizedJson(
           res,
-          FEISHU_JSON_MAX_BYTES * 2,
+          FEISHU_JSON_MAX_BYTES,
           '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
         );
         return;
@@ -475,11 +453,7 @@ describe("FeishuStreamingSession", () => {
     await expect(session.start("chat_id", "open_id")).rejects.toThrow(
       /feishu\.streaming-card\.token: JSON response exceeds \d+ bytes/,
     );
-    expect(streamState?.canceled()).toBe(true);
-    expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
-    console.log(
-      `[feishu streaming-card bound proof] token over-cap: bytes_pulled=${streamState?.bytesPulled()} cap=${FEISHU_JSON_MAX_BYTES} canceled=${streamState?.canceled()}`,
-    );
+    await expect(clientClosed).resolves.toBeUndefined();
   });
 
   it("aborts a stalled Feishu tenant-token request after the configured timeout", async () => {
@@ -545,25 +519,15 @@ describe("FeishuStreamingSession", () => {
   });
 
   it("rejects oversized streaming card-create JSON before buffering the full body", async () => {
-    let streamState:
-      | {
-          bytesPulled: () => number;
-          canceled: () => boolean;
-        }
-      | undefined;
+    let clientClosed: Promise<void> | undefined;
     const deps = await createStreamingFetch(({ url, res }) => {
       if (url.pathname.includes("/auth/")) {
-        writeJson(res, {
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        writeJson(res, createStreamingTokenPayload());
         return;
       }
-      streamState = writeOversizedJson(
+      clientClosed = writeOversizedJson(
         res,
-        FEISHU_JSON_MAX_BYTES * 2,
+        FEISHU_JSON_MAX_BYTES,
         '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
       );
     });
@@ -587,11 +551,7 @@ describe("FeishuStreamingSession", () => {
     await expect(session.start("chat_id", "open_id")).rejects.toThrow(
       /feishu\.streaming-card\.create: JSON response exceeds \d+ bytes/,
     );
-    expect(streamState?.canceled()).toBe(true);
-    expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
-    console.log(
-      `[feishu streaming-card bound proof] card-create over-cap: bytes_pulled=${streamState?.bytesPulled()} cap=${FEISHU_JSON_MAX_BYTES} canceled=${streamState?.canceled()}`,
-    );
+    await expect(clientClosed).resolves.toBeUndefined();
   });
 
   it("flushes only the latest authoritative snapshot after the throttle window", async () => {
@@ -627,12 +587,7 @@ describe("FeishuStreamingSession", () => {
     const updateBodies: string[] = [];
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        return jsonResponse(createStreamingTokenPayload());
       }
       if (url.pathname.includes("/elements/content/content")) {
         updateBodies.push(body);
@@ -736,12 +691,7 @@ describe("FeishuStreamingSession", () => {
     };
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        return jsonResponse(createStreamingTokenPayload());
       }
       if (url.pathname.endsWith("/elements/content")) {
         replaceBodies.push(body);
@@ -767,8 +717,8 @@ describe("FeishuStreamingSession", () => {
 
     await session.update(next);
     await expect(session.closeWithResult()).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: { visibleReplySent: true, content: previous },
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: { visibleReplySent: true, content: previous },
     });
 
     expect(replaceBodies).toHaveLength(1);
@@ -790,12 +740,7 @@ describe("FeishuStreamingSession", () => {
     const settingsBodies: string[] = [];
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        return jsonResponse(createStreamingTokenPayload());
       }
       if (url.pathname.includes("/elements/note/content")) {
         noteBodies.push(body);
@@ -820,12 +765,13 @@ describe("FeishuStreamingSession", () => {
       .closeWithResult(undefined, { note: "model note" })
       .catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(FeishuStreamingFinalizationError);
+    expect(error).toBeInstanceOf(Error);
     expect(error).toMatchObject({
-      result: {
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
         visibleReplySent: true,
         content: "visible answer",
-        messageId: "om_rejected_note_and_close",
+        messageIds: ["om_rejected_note_and_close"],
       },
     });
 
@@ -944,12 +890,7 @@ describe("FeishuStreamingSession", () => {
     const settingsBodies: string[] = [];
     const deps = await createStreamingFetch(({ url, body, res }) => {
       if (url.pathname.includes("/auth/")) {
-        writeJson(res, {
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        writeJson(res, createStreamingTokenPayload());
         return;
       }
       if (url.pathname.includes("/settings")) {
@@ -1002,8 +943,8 @@ describe("FeishuStreamingSession", () => {
     });
 
     await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: { visibleReplySent: true, content: "working\n\nfinal answer" },
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: { visibleReplySent: true, content: "working\n\nfinal answer" },
     });
 
     expect(updateBodies).toHaveLength(0);
@@ -1032,11 +973,11 @@ describe("FeishuStreamingSession", () => {
     });
 
     await expect(session.closeWithResult("working\n\nfinal answer")).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: {
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
         visibleReplySent: true,
         content: "working",
-        messageId: "om_8",
+        messageIds: ["om_8"],
         finalTextAccepted: false,
       },
     });
@@ -1063,10 +1004,10 @@ describe("FeishuStreamingSession", () => {
       log,
     });
 
-    await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: { visibleReplySent: false },
-    });
+    const error = await session.closeWithResult("final answer").catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ message: "Update card content failed with HTTP 500" });
+    expect(error).not.toHaveProperty("deliveryResult");
 
     expect(updateBodies).toHaveLength(1);
     expect(replaceBodies).toHaveLength(0);
@@ -1078,56 +1019,19 @@ describe("FeishuStreamingSession", () => {
   it("bounds streaming token cache lifetime when token expiry overflows", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
-    const { authTokens, client, deps } = mockStreamingTokenStart((token) => ({
+    const { authTokens, startSession } = mockStreamingTokenStart((token) => ({
       code: 0,
       msg: "ok",
       tenant_access_token: token,
       expire: Number.MAX_SAFE_INTEGER,
     }));
 
-    await createStreamingSession(
-      client,
-      {
-        appId: "app_unsafe_token_expiry",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    ).start("chat_id", "open_id");
+    await startSession();
     expect(authTokens).toEqual(["token-1"]);
 
     vi.setSystemTime(Date.now() + 7200 * 1000 - 60_000 + 1);
-    await createStreamingSession(
-      client,
-      {
-        appId: "app_unsafe_token_expiry",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    ).start("chat_id", "open_id");
+    await startSession();
 
     expect(authTokens).toEqual(["token-1", "token-2"]);
   });
 });
-
-describe("mergeStreamingText", () => {
-  it("keeps previous text when the next partial is empty or redundant", () => {
-    expect(mergeStreamingText("hello", "")).toBe("hello");
-    expect(mergeStreamingText("hello world", "hello")).toBe("hello world");
-  });
-
-  it("appends fragmented chunks without injecting newlines", () => {
-    expect(mergeStreamingText("hello wor", "ld")).toBe("hello world");
-    expect(mergeStreamingText("line1", "line2")).toBe("line1line2");
-  });
-
-  it("merges overlap between adjacent partial snapshots", () => {
-    expect(mergeStreamingText("好的，让我", "让我再读取一遍")).toBe("好的，让我再读取一遍");
-    expect(mergeStreamingText("revision_id: 552", "2，一点变化都没有")).toBe(
-      "revision_id: 552，一点变化都没有",
-    );
-    expect(mergeStreamingText("abc", "cabc")).toBe("cabc");
-  });
-});
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -60,12 +60,6 @@ type TelemetryStatusReason =
   | "never-asked"
   | "update-disabled";
 
-type TelemetryUpdateOptions = {
-  surface: TelemetrySurface;
-  fetchImpl?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-  nowMs?: number;
-};
-
 const TelemetryResponseSchema = z.object({
   version: z.string().trim().min(1),
   note: z.string().optional(),
@@ -141,8 +135,8 @@ function resolveTelemetryEndpoint(): string {
   return process.env.OPENCLAW_TELEMETRY_ENDPOINT?.trim() || DEFAULT_TELEMETRY_ENDPOINT;
 }
 
-export function buildTelemetryUserAgent(surface: TelemetrySurface): string {
-  return `openclaw/${VERSION} (${process.platform}; node/${process.versions.node}; ${process.arch}; ${surface})`;
+export function buildTelemetryUserAgent(): string {
+  return `openclaw/${VERSION} (${process.platform}; node/${process.versions.node}; ${process.arch}; gateway)`;
 }
 
 function readTelemetryState(context: TelemetryStorage): Promise<TelemetryState> {
@@ -279,7 +273,6 @@ async function prepareTelemetryPayload(
 
 export async function checkTelemetryUpdate(
   getConfig: () => OpenClawConfig,
-  options: TelemetryUpdateOptions,
 ): Promise<TelemetryUpdate | null> {
   const config = getConfig();
   if (isUpdateCheckDisabled(config)) {
@@ -292,7 +285,7 @@ export async function checkTelemetryUpdate(
   const endpoint = resolveTelemetryEndpoint();
   const context = captureTelemetryStorage();
   const pendingKey = JSON.stringify([endpoint, context.databasePath]);
-  const nowMs = options.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const stateDirectory = process.env.OPENCLAW_STATE_DIR;
   const check = async (): Promise<TelemetryUpdate | null> => {
     let state = await readTelemetryState(context);
@@ -311,8 +304,8 @@ export async function checkTelemetryUpdate(
       (state.lastPingAt !== undefined &&
         nowMs >= state.lastPingAt &&
         nowMs - state.lastPingAt < TELEMETRY_CHECK_INTERVAL_MS) ||
-      (!options.fetchImpl &&
-        (process.env.VITEST !== undefined || process.env.NODE_ENV === "test")) ||
+      process.env.VITEST !== undefined ||
+      process.env.NODE_ENV === "test" ||
       (lastFailedAttempt?.endpoint === endpoint &&
         lastFailedAttempt.stateDirectory === stateDirectory &&
         nowMs >= lastFailedAttempt.at &&
@@ -324,7 +317,7 @@ export async function checkTelemetryUpdate(
     try {
       const featureStatsEnabled = config.telemetry?.enabled === true && !isDoNotTrackEnabled();
       const headers: Record<string, string> = {
-        "User-Agent": buildTelemetryUserAgent(options.surface),
+        "User-Agent": buildTelemetryUserAgent(),
       };
       const init: RequestInit = {
         method: featureStatsEnabled ? "POST" : "GET",
@@ -333,7 +326,7 @@ export async function checkTelemetryUpdate(
       if (featureStatsEnabled) {
         headers["Content-Type"] = "application/json";
         init.body = JSON.stringify(
-          await prepareTelemetryPayload(config, { surface: options.surface }, context),
+          await prepareTelemetryPayload(config, { surface: "gateway" }, context),
         );
       }
       const currentConfig = getConfig();
@@ -349,7 +342,7 @@ export async function checkTelemetryUpdate(
         delete init.body;
       }
       init.signal = AbortSignal.timeout(TELEMETRY_TIMEOUT_MS);
-      const response = await (options.fetchImpl ?? fetch)(endpoint, init);
+      const response = await fetch(endpoint, init);
       if (response.status === 200) {
         const parsed = TelemetryResponseSchema.parse(
           await readProviderJsonResponse(response, "Telemetry update response"),
@@ -377,11 +370,9 @@ export async function checkTelemetryUpdate(
     return cached;
   };
 
-  const pendingCheck = check().finally(() => {
-    if (inFlightUpdate === pendingCheck) {
-      inFlightUpdate = undefined;
-    }
+  // Concurrent callers share one check, including its cached result.
+  inFlightUpdate = check().finally(() => {
+    inFlightUpdate = undefined;
   });
-  inFlightUpdate = pendingCheck;
-  return pendingCheck;
+  return inFlightUpdate;
 }

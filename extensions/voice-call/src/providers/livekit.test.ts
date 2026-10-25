@@ -30,6 +30,7 @@ import {
   createBridge,
   makeRealtimeProvider,
 } from "../webhook/realtime-handler.lifecycle.test-helpers.js";
+import { StreamDisconnectGrace } from "../webhook/stream-disconnect-grace.js";
 import { LiveKitProvider, type LiveKitDependencies } from "./livekit.js";
 
 // mock-isolation: The offline manager/identity fixture must not open the host SQLite broker.
@@ -173,7 +174,7 @@ async function harness(
       },
     }),
     config.serve.path,
-    { connect() {}, disconnect() {}, retire() {} },
+    new StreamDisconnectGrace(() => {}),
   );
   provider.bind(manager, handler);
   const receive = async (event: WebhookEvent) => {

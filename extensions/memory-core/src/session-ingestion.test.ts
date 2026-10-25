@@ -13,6 +13,14 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
+function messageRecord(id: string, content: string, timestamp = "2026-04-05T18:00:00.000Z") {
+  return { type: "message", id, timestamp, message: { role: "user", content, timestamp } };
+}
+
+function recordLine(...args: Parameters<typeof messageRecord>) {
+  return JSON.stringify(messageRecord(...args)) + "\n";
+}
+
 describe("session ingestion", () => {
   it.each(["unknown"] as const)("excludes %s sessions from memory ingestion", (sessionKind) => {
     expect(
@@ -56,17 +64,7 @@ describe("session ingestion", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
     tempDirs.push(dir);
     const archiveFile = path.join(dir, "archive.jsonl");
-    const record = (content: string) =>
-      `${JSON.stringify({
-        type: "message",
-        id: "message-1",
-        timestamp: "2026-04-05T18:00:00.000Z",
-        message: {
-          role: "user",
-          content,
-          timestamp: "2026-04-05T18:00:00.000Z",
-        },
-      })}\n`;
+    const record = (content: string) => recordLine("message-1", content);
     const firstRaw = record("Alpha durable note.");
     const secondRaw = record("Bravo durable note.");
     expect(Buffer.byteLength(secondRaw)).toBe(Buffer.byteLength(firstRaw));
@@ -107,21 +105,10 @@ describe("session ingestion", () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
       tempDirs.push(dir);
       const archiveFile = path.join(dir, "archive.jsonl");
-      const record = (id: string, content: string, timestamp: string) =>
-        `${JSON.stringify({
-          type: "message",
-          id,
-          timestamp,
-          message: {
-            role: "user",
-            content,
-            timestamp,
-          },
-        })}\n`;
       await fs.writeFile(
         archiveFile,
-        record("message-1", "Alpha durable note.", "2026-04-06T06:59:59.000Z") +
-          record("message-2", "Bravo durable note.", "2026-04-06T07:00:00.000Z"),
+        recordLine("message-1", "Alpha durable note.", "2026-04-06T06:59:59.000Z") +
+          recordLine("message-2", "Bravo durable note.", "2026-04-06T07:00:00.000Z"),
       );
       const source = foreignSessionIngestionSource("main", archiveFile);
       const classifiedDays: string[] = [];
@@ -161,7 +148,7 @@ describe("session ingestion", () => {
 
       await fs.appendFile(
         archiveFile,
-        record("message-3", "Charlie durable note.", "2026-04-06T07:30:00.000Z"),
+        recordLine("message-3", "Charlie durable note.", "2026-04-06T07:30:00.000Z"),
       );
       classifiedDays.length = 0;
       const second = await scanSessionIngestionSource({
@@ -188,14 +175,8 @@ describe("session ingestion", () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
       tempDirs.push(dir);
       const archiveFile = path.join(dir, "archive.jsonl");
-      const record = (id: string, content: string) => ({
-        type: "message",
-        id,
-        timestamp: "2026-04-05T18:00:00.000Z",
-        message: { role: "user", content, timestamp: "2026-04-05T18:00:00.000Z" },
-      });
-      const firstRecord = record("message-1", "Alpha durable note.");
-      const original = [firstRecord, record("message-2", "Bravo durable note.")];
+      const firstRecord = messageRecord("message-1", "Alpha durable note.");
+      const original = [firstRecord, messageRecord("message-2", "Bravo durable note.")];
       const writeRecords = (records: unknown[]) =>
         fs.writeFile(archiveFile, `${records.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
       await writeRecords(original);
@@ -209,7 +190,7 @@ describe("session ingestion", () => {
       if (!first.fileState) {
         throw new Error("expected initial transcript checkpoint");
       }
-      let current: unknown[] = [...original, record("message-3", "Charlie durable note.")];
+      let current: unknown[] = [...original, messageRecord("message-3", "Charlie durable note.")];
       if (change === "text") {
         current[0] = {
           ...firstRecord,

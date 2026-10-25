@@ -8,11 +8,13 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import {
   formatAgentDatabaseCorruptionRepairHint,
   formatAgentDatabaseOwnershipRepairHint,
 } from "../infra/state-migrations.agent-owner-guidance.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -58,6 +60,30 @@ const refusalsByState = new Map<
   }
 >();
 
+// Attempts outlive native worker generations; failures use the existing admission refusal.
+const startupFtsRepairs = new Map<string, { statePath: string; message?: string }>();
+
+export function recordAgentDatabaseStartupFtsRepair(
+  key: string,
+  statePath: string,
+  message?: string,
+): void {
+  if (message === undefined && startupFtsRepairs.has(key)) {
+    throw new Error("Startup FTS repair was already attempted. Run openclaw doctor --fix.");
+  }
+  startupFtsRepairs.set(key, { statePath, message });
+  if (message) {
+    createSubsystemLogger("state/agent-db").warn(message);
+  }
+}
+
+export function listAgentDatabaseStartupFtsRepairs(): string[] {
+  const key = stateKey({});
+  return [...startupFtsRepairs.values()].flatMap((entry) =>
+    entry.statePath === key && entry.message ? [entry.message] : [],
+  );
+}
+
 const preparation = new AsyncLocalStorage<{
   refusal: AgentDatabaseAdmissionRefusal;
   key: string;
@@ -77,16 +103,24 @@ export function createAgentDatabaseInspectionRefusal(params: {
     resolveUpdateRehearsalRoot(process.env) &&
     params.reason.includes("creating its private snapshot:") &&
     /(?:code=(?:ENOSPC|EDQUOT)\b|errcode=13\b)/u.test(params.reason);
+  const serializationFailure = collectNestedErrorCandidates(params.cause).some(
+    (error) => error instanceof Error && error.name === "DataCloneError",
+  );
+  const locked = !params.pending && isSqliteLockError(params.cause);
   const refusal: AgentDatabaseAdmissionRefusal = {
     agentId: params.agentId,
     paths: params.paths,
     code: params.pending ? "agent-database-inspection-pending" : "agent-database-inspection-failed",
-    reason: params.reason,
-    repairHint: candidateSnapshotCapacity
-      ? "Free space in the reported snapshot cache, then retry the update. This candidate snapshot failure does not require repairing the serving database."
-      : params.pending
-        ? 'Sessions remain unavailable until background inspection and preparation finish. If they cannot complete, stop the Gateway, run "openclaw doctor --fix", and restart.'
-        : `Sessions remain unavailable. ${formatAgentDatabaseCorruptionRepairHint(params.agentId, params.cause) ?? 'Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.'}`,
+    reason: locked ? "database locked by another process" : params.reason,
+    repairHint: locked
+      ? "Close other processes accessing this database, then restart the Gateway to retry admission. Lock contention does not require database repair."
+      : candidateSnapshotCapacity
+        ? "Free space in the reported snapshot cache, then retry the update. This candidate snapshot failure does not require repairing the serving database."
+        : serializationFailure
+          ? "A worker request could not be serialized. Update OpenClaw and restart the Gateway; repeating database migration will not repair this request."
+          : params.pending
+            ? 'Sessions remain unavailable until background inspection and preparation finish. If they cannot complete, stop the Gateway, run "openclaw doctor --fix", and restart.'
+            : `Sessions remain unavailable. ${formatAgentDatabaseCorruptionRepairHint(params.agentId, params.cause) ?? 'Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.'}`,
   };
   refusalCauses.set(refusal, params.cause);
   return refusal;

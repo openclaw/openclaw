@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import nodePath from "node:path";
@@ -12,7 +12,6 @@ import {
   DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   resolveDefaultVitestNoOutputTimeoutMs,
   resolveRunVitestSpawnEnv,
-  resolveVitestNodeArgs,
 } from "../../scripts/lib/vitest-process-env.mts";
 import * as testRuntime from "../../scripts/lib/vitest-test-runtime.mts";
 import {
@@ -34,12 +33,11 @@ import {
 import { parseTestProjectsArgs } from "../../scripts/test-projects.test-support.mts";
 import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
+import { captureWatchdog, childTermination } from "./run-vitest.test-support.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -49,6 +47,9 @@ const e2eConfig = "test/vitest/vitest.e2e.config.ts";
 const gatewayConfig = "test/vitest/vitest.gateway-server.config.ts";
 const uiFile = "ui/src/pages/chat/chat-send.test.ts";
 const browserFile = "ui/src/components/markdown-mermaid.runtime.browser.test.ts";
+const dockerFile = "test/scripts/docker-build-helper.test.ts";
+const browserGlob = "ui/src/**/*.browser.test.ts";
+const markdownNodeFile = "ui/src/components/markdown.progress.node.test.ts";
 const agentDir = "src/agents/embedded-agent-runner/run";
 const modulesDir = "/runner/openclaw-pnpm-node-modules";
 const baseEnv = { PATH: "/usr/bin" };
@@ -58,6 +59,136 @@ const watchdogEnv = (timeout: number) => ({
   OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: String(timeout),
 });
+const compileCacheEnv = {
+  ...baseEnv,
+  CI: "true",
+  NODE_COMPILE_CACHE: "/tmp/node-compile",
+  NODE_COMPILE_CACHE_PORTABLE: "1",
+};
+const floorEnv = { ...baseEnv, OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000" };
+const directArgs = (config: string, ...args: string[]) => ["run", "--config", config, ...args];
+const nativeCLI = (args: string[]) => parseCLI(["vitest", ...args]);
+const mixedDirs = ["extensions/canvas", "src/node-host"];
+
+function readyLine(child: ChildProcess, accept: (line: string) => void) {
+  const message = "fixture closed before reporting readiness";
+  const lines = createInterface({ input: child.stdout! });
+  const ready = new Promise<void>((resolve, reject) => {
+    lines.once("line", (line) => {
+      try {
+        accept(line);
+        resolve();
+      } catch (error) {
+        reject(new Error(message, { cause: error }));
+      }
+    });
+    lines.once("close", () => reject(new Error(message)));
+  });
+  return { lines, ready };
+}
+
+function descendantFixture(report: string, exitCode?: number | null) {
+  return `const { spawn } = require("node:child_process");
+${typeof exitCode === "number" ? `process.once("SIGTERM", () => process.exit(${exitCode}));` : ""}
+const descendant = spawn(process.execPath, ["-e",
+  "setInterval(() => {}, 1000); process.send(process.pid);",
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+descendant.once("message", (pid) => {
+  descendant.disconnect();
+  process.stdout.write(${report} + "\\n");
+});
+descendant.unref();
+setInterval(() => {}, 1000);`;
+}
+
+async function proveRuntimeCache(native: boolean) {
+  const files = ["./test/scripts/run-vitest.test.ts"];
+  const directory = tempDirs.make("oc-runtime-cache-");
+  const env = Object.freeze({
+    OPENCLAW_BUN_PATH: process.execPath,
+    NODE_COMPILE_CACHE: nodePath.join(directory, "node-cache"),
+    NODE_COMPILE_CACHE_PORTABLE: "1",
+    NODE_DISABLE_COMPILE_CACHE: "0",
+    TMPDIR: directory,
+    TMP: directory,
+    TEMP: directory,
+    ...(native ? {} : { OPENCLAW_VITEST_RUNTIME: "bun" }),
+  });
+  const parentCacheDisabled = process.env.NODE_DISABLE_COMPILE_CACHE;
+  const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+  const operands = [
+    "scripts/lib/vitest-worker-bootstrap.mts",
+    "/compiled/generation",
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "--testNamePattern",
+    "--no-maglev",
+  ];
+  const flags = ["--no-maglev", "--no-concurrent-sparkplug"];
+  const expectedCommand = native
+    ? testRuntime.resolveNativeBunTestCommand(files, undefined, env)
+    : testRuntime.resolveVitestTestCommand([...flags, ...operands], env);
+  expect(expectedCommand).toEqual({
+    command: process.execPath,
+    envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1", PATH: nodePath.dirname(process.execPath) },
+    args: native
+      ? [
+          "test",
+          "--no-env-file",
+          "--tsconfig-override",
+          nodePath.join(repoRoot, "tsconfig.json"),
+          "--preload",
+          nodePath.join(repoRoot, "test/setup.env.ts"),
+          "--timeout",
+          "120000",
+          ...files,
+        ]
+      : ["--tsconfig-override", nodePath.join(repoRoot, "tsconfig.json"), ...operands],
+  });
+  const probe = {
+    command: resolveTestNodeExecPath(),
+    args: [
+      "-e",
+      [
+        'const assert = require("node:assert/strict");',
+        'assert.equal(process.env.NODE_DISABLE_COMPILE_CACHE, "1");',
+        `assert.equal(process.env.NODE_COMPILE_CACHE, ${JSON.stringify(env.NODE_COMPILE_CACHE)});`,
+        'assert.equal(process.env.NODE_COMPILE_CACHE_PORTABLE, "1");',
+        "process.exitCode = 7;",
+      ].join("\n"),
+    ],
+  };
+  const resolveCommand = testRuntime.resolveVitestTestCommand;
+  // Keep the real runtime policy on the Vitest route; replace only its executable.
+  const command = native
+    ? vi
+        .spyOn(testRuntime, "resolveNativeBunTestCommand")
+        .mockReturnValue({ ...expectedCommand, ...probe })
+    : vi
+        .spyOn(testRuntime, "resolveVitestTestCommand")
+        .mockImplementation((...args) => ({ ...resolveCommand(...args), ...probe }));
+  const exitCode = process.exitCode;
+  try {
+    if (native) {
+      await runVitest(vi.fn(), ["--native-bun", ...files], env);
+      expect(command).toHaveBeenCalledWith(files, undefined, expect.objectContaining(env));
+      expect(process.exitCode).toBe(7);
+    } else {
+      const watched = spawnWatchedVitestProcess({
+        pnpmArgs: ["exec", "node", ...flags, ...operands],
+        spawnParams: { ...resolveVitestSpawnParams(env), stdio: ["ignore", "pipe", "pipe"] },
+        env,
+        homeMode: "hermetic",
+      });
+      expect((await watched.completion).code).toBe(7);
+    }
+    expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("0");
+    expect(process.env.NODE_DISABLE_COMPILE_CACHE).toBe(parentCacheDisabled);
+  } finally {
+    process.exitCode = exitCode;
+    command.mockRestore();
+  }
+}
 
 describe("scripts/run-vitest", () => {
   it("pins fixture scheduling independently of ambient CI and preserves explicit overrides", () => {
@@ -73,99 +204,15 @@ describe("scripts/run-vitest", () => {
       CI: "1",
       GITHUB_ACTIONS: "true",
     });
-    expect(inherited.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE).toBe("1");
-    expect(inherited.CI).toBe("1");
-    expect(inherited.GITHUB_ACTIONS).toBe("true");
+    expect(inherited).toMatchObject({
+      OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1",
+      CI: "1",
+      GITHUB_ACTIONS: "true",
+    });
   });
 
-  it("reports an actionable error when Vitest cannot be resolved", () => {
-    const error = new Error("Cannot find module 'vitest/package.json'");
-    (error as NodeJS.ErrnoException).code = "MODULE_NOT_FOUND";
-
-    expect(() =>
-      resolveVitestCliEntry({
-        baseDir: "/repo",
-        fsImpl: { existsSync: () => false },
-        requireResolve: () => {
-          throw error;
-        },
-      }),
-    ).toThrow(
-      [
-        "[vitest] node_modules is missing; Vitest cannot be resolved.",
-        "Install dependencies before running scripts/run-vitest.mjs:",
-        "  pnpm install --frozen-lockfile",
-        "For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.",
-      ].join("\n"),
-    );
-  });
-
-  it.each(["bun"] as const)(
-    "selects the %s test runtime without changing the compiled bootstrap or test operands",
-    async (runtime) => {
-      const directory = tempDirs.make("oc-test-runtime-cache-");
-      const env = Object.freeze({
-        OPENCLAW_VITEST_RUNTIME: runtime,
-        OPENCLAW_BUN_PATH: process.execPath,
-        NODE_COMPILE_CACHE: nodePath.join(directory, "node-cache"),
-        NODE_COMPILE_CACHE_PORTABLE: "1",
-        NODE_DISABLE_COMPILE_CACHE: "0",
-        TMPDIR: directory,
-        TMP: directory,
-        TEMP: directory,
-      });
-      const parentCacheDisabled = process.env.NODE_DISABLE_COMPILE_CACHE;
-      const operands = [
-        "scripts/lib/vitest-worker-bootstrap.mts",
-        "/compiled/generation",
-        "node_modules/vitest/vitest.mjs",
-        "run",
-        "--testNamePattern",
-        "--no-maglev",
-      ];
-      const flags = ["--no-maglev", "--no-concurrent-sparkplug"];
-      expect(testRuntime.resolveVitestTestCommand([...flags, ...operands], env)).toEqual({
-        command: process.execPath,
-        envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1", PATH: nodePath.dirname(process.execPath) },
-        args: [
-          "--tsconfig-override",
-          fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
-          ...operands,
-        ],
-      });
-      const resolveCommand = testRuntime.resolveVitestTestCommand;
-      // Keep the real runtime policy while an inert child observes the delivered environment.
-      const command = vi
-        .spyOn(testRuntime, "resolveVitestTestCommand")
-        .mockImplementation((...args) => ({
-          ...resolveCommand(...args),
-          command: resolveTestNodeExecPath(),
-          args: [
-            "-e",
-            [
-              'const assert = require("node:assert/strict");',
-              'assert.equal(process.env.NODE_DISABLE_COMPILE_CACHE, "1");',
-              `assert.equal(process.env.NODE_COMPILE_CACHE, ${JSON.stringify(env.NODE_COMPILE_CACHE)});`,
-              'assert.equal(process.env.NODE_COMPILE_CACHE_PORTABLE, "1");',
-              "process.exitCode = 7;",
-            ].join("\n"),
-          ],
-        }));
-      try {
-        const watched = spawnWatchedVitestProcess({
-          pnpmArgs: ["exec", "node", ...flags, ...operands],
-          spawnParams: { ...resolveVitestSpawnParams(env), stdio: ["ignore", "pipe", "pipe"] },
-          env,
-          homeMode: "hermetic",
-        });
-        expect((await watched.completion).code).toBe(7);
-        expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("0");
-        expect(process.env.NODE_DISABLE_COMPILE_CACHE).toBe(parentCacheDisabled);
-      } finally {
-        command.mockRestore();
-      }
-    },
-  );
+  it("selects Bun without changing the compiled bootstrap or test operands", () =>
+    proveRuntimeCache(false));
 
   it("rejects an unsupported test runtime before launching a child", () => {
     expect(() =>
@@ -177,24 +224,14 @@ describe("scripts/run-vitest", () => {
     ).toThrow("Invalid OPENCLAW_VITEST_RUNTIME: deno; expected node or bun");
   });
 
-  it("keeps native preparation tools on Node when tests select Bun", () => {
-    const args = ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"];
-    expect(testRuntime.resolveVitestTestCommand(args, { OPENCLAW_VITEST_RUNTIME: "bun" })).toEqual({
-      command: process.execPath,
-      args,
-    });
-  });
-
-  it.each(
-    [
-      ["test/scripts/run-vitest.test.ts"],
-      ["./../outside.test.ts"],
-      ["./test/scripts/missing-native-bun-file.test.ts"],
-    ].map((files) => ({ files })),
-  )("rejects unbounded native Bun operands $files before launching", async ({ files }) => {
+  it.each([
+    "test/scripts/run-vitest.test.ts",
+    "./../outside.test.ts",
+    "./test/scripts/missing-native-bun-file.test.ts",
+  ])("rejects unbounded native Bun operand %s before launching", async (operand) => {
     const command = vi.spyOn(testRuntime, "resolveNativeBunTestCommand");
     try {
-      await expect(runVitest(vi.fn(), ["--native-bun", ...files], {})).rejects.toThrow(
+      await expect(runVitest(vi.fn(), ["--native-bun", operand], {})).rejects.toThrow(
         /Native Bun test/u,
       );
       expect(command).not.toHaveBeenCalled();
@@ -224,79 +261,12 @@ describe("scripts/run-vitest", () => {
     }
   });
 
-  posixIt(
-    "runs the native Bun entrypoint with bounded arguments and preserves failure",
-    async () => {
-      const files = ["./test/scripts/run-vitest.test.ts"];
-      const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
-      const directory = tempDirs.make("oc-native-bun-cache-");
-      const env = Object.freeze({
-        OPENCLAW_BUN_PATH: process.execPath,
-        NODE_COMPILE_CACHE: nodePath.join(directory, "node-cache"),
-        NODE_COMPILE_CACHE_PORTABLE: "1",
-        NODE_DISABLE_COMPILE_CACHE: "0",
-        TMPDIR: directory,
-        TMP: directory,
-        TEMP: directory,
-      });
-      const parentCacheDisabled = process.env.NODE_DISABLE_COMPILE_CACHE;
-      const expectedCommand = testRuntime.resolveNativeBunTestCommand(files, undefined, env);
-      expect(expectedCommand).toEqual({
-        command: process.execPath,
-        envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1", PATH: nodePath.dirname(process.execPath) },
-        args: [
-          "test",
-          "--no-env-file",
-          "--tsconfig-override",
-          nodePath.join(repoRoot, "tsconfig.json"),
-          "--preload",
-          nodePath.join(repoRoot, "test/setup.env.ts"),
-          "--timeout",
-          "120000",
-          ...files,
-        ],
-      });
-      const command = vi.spyOn(testRuntime, "resolveNativeBunTestCommand").mockReturnValue({
-        ...expectedCommand,
-        command: resolveTestNodeExecPath(),
-        args: [
-          "-e",
-          [
-            'const assert = require("node:assert/strict");',
-            'assert.equal(process.env.NODE_DISABLE_COMPILE_CACHE, "1");',
-            `assert.equal(process.env.NODE_COMPILE_CACHE, ${JSON.stringify(env.NODE_COMPILE_CACHE)});`,
-            'assert.equal(process.env.NODE_COMPILE_CACHE_PORTABLE, "1");',
-            "process.exitCode = 7;",
-          ].join("\n"),
-        ],
-      });
-      const exitCode = process.exitCode;
-      try {
-        await runVitest(vi.fn(), ["--native-bun", ...files], env);
-        expect(command).toHaveBeenCalledWith(files, undefined, expect.objectContaining(env));
-        expect(process.exitCode).toBe(7);
-        expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("0");
-        expect(process.env.NODE_DISABLE_COMPILE_CACHE).toBe(parentCacheDisabled);
-      } finally {
-        process.exitCode = exitCode;
-        command.mockRestore();
-      }
-    },
+  posixIt("runs native Bun with bounded arguments and preserves failure", () =>
+    proveRuntimeCache(true),
   );
 
   posixIt("joins native Bun descendants when its CI parent disconnects", async ({ signal }) => {
-    const fixture = [
-      'const { spawn } = require("node:child_process");',
-      'const descendant = spawn(process.execPath, ["-e",',
-      '  "setInterval(() => {}, 1000); process.send(process.pid);",',
-      '], { stdio: ["ignore", "ignore", "ignore", "ipc"] });',
-      'descendant.once("message", (pid) => {',
-      "  descendant.disconnect();",
-      '  process.stdout.write(JSON.stringify({ child: process.pid, descendant: pid }) + "\\n");',
-      "});",
-      "descendant.unref();",
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
+    const fixture = descendantFixture("JSON.stringify({ child: process.pid, descendant: pid })");
     const runtimeUrl = new URL("../../scripts/lib/vitest-test-runtime.mts", import.meta.url).href;
     const replacement = `data:text/javascript,${encodeURIComponent(
       `export function resolveNativeBunTestCommand() {
@@ -335,33 +305,19 @@ describe("scripts/run-vitest", () => {
     });
     // Explicit IPC disconnect can omit Node's aggregate close notification.
     // Observe termination and drain both pipes independently instead.
-    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-      (resolve, reject) => {
-        child.once("exit", (code, exitSignal) => resolve({ code, signal: exitSignal }));
-        child.once("error", reject);
-      },
-    );
+    const exited = childTermination(child, "exit");
     const joined = Promise.all([exited, finished(child.stdout!), finished(child.stderr!)]).then(
       ([result]) => result,
     );
-    const lines = createInterface({ input: child.stdout! });
     let nativePid = 0;
     let descendantPid = 0;
-    const ready = new Promise<void>((resolve, reject) => {
-      lines.once("line", (line) => {
-        try {
-          const pids = JSON.parse(line);
-          nativePid = pids.child;
-          descendantPid = pids.descendant;
-          expect(isProcessAlive(nativePid)).toBe(true);
-          expect(isProcessAlive(descendantPid)).toBe(true);
-          child.disconnect();
-          resolve();
-        } catch (error) {
-          reject(new Error("Failed to verify native Bun child readiness", { cause: error }));
-        }
-      });
-      lines.once("close", () => reject(new Error("native child closed before readiness")));
+    const { lines, ready } = readyLine(child, (line) => {
+      const pids = JSON.parse(line);
+      nativePid = pids.child;
+      descendantPid = pids.descendant;
+      expect(isProcessAlive(nativePid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
+      child.disconnect();
     });
     try {
       const [, result] = await withinTest(
@@ -372,10 +328,11 @@ describe("scripts/run-vitest", () => {
         signal,
       );
       expect(result, stderr).toEqual({ code: null, signal: "SIGTERM" });
-      expect(child.stdout!.readableEnded).toBe(true);
-      expect(child.stderr!.readableEnded).toBe(true);
-      expect(isProcessGroupStopped(child.pid!)).toBe(true);
-      expect(isProcessGroupStopped(nativePid)).toBe(true);
+      expect([child.stdout, child.stderr]).toMatchObject([
+        { readableEnded: true },
+        { readableEnded: true },
+      ]);
+      expect([child.pid!, nativePid].map(isProcessGroupStopped)).toEqual([true, true]);
     } finally {
       lines.close();
       forceKillVitestProcessGroup(child);
@@ -386,10 +343,8 @@ describe("scripts/run-vitest", () => {
     }
   });
 
-  it.each(["mjs"])(
-    "resolves dependencies before native parsing at the %s entrypoint",
-    (extension) => {
-      const preload = `import {registerHooks} from 'node:module';
+  it("resolves dependencies before native parsing at the mjs entrypoint", () => {
+    const preload = `import {registerHooks} from 'node:module';
 registerHooks({resolve(specifier, context, nextResolve) {
   if (specifier === 'vitest/package.json' || specifier === 'vitest/node') {
     console.error('dependency request: ' + specifier);
@@ -399,36 +354,33 @@ registerHooks({resolve(specifier, context, nextResolve) {
   }
   return nextResolve(specifier, context);
 }});`;
-      const importUrl = `data:text/javascript,${encodeURIComponent(preload)}`;
-      // The JS shim creates another Node process; inject at the inherited dependency
-      // boundary, and retain a bounded empty selection even if injection regresses.
-      const result = spawnSync(
-        process.versions.bun ? "node" : process.execPath,
-        [
-          nodePath.resolve(`scripts/run-vitest.${extension}`),
-          "run",
-          "--config",
-          toolingConfig,
-          file,
-          "--testNamePattern=^dependency-order-no-test$",
-        ],
-        {
-          encoding: "utf8",
-          env: testRunnerFixtureEnv({
-            NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${JSON.stringify(importUrl)}`]
-              .filter(Boolean)
-              .join(" "),
-          }),
-        },
-      );
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain(
-        "Install dependencies before running scripts/run-vitest.mjs:",
-      );
-      expect(result.stderr).toContain("dependency request: vitest/package.json");
-      expect(result.stderr).not.toContain("dependency request: vitest/node");
-    },
-  );
+    const importUrl = `data:text/javascript,${encodeURIComponent(preload)}`;
+    // The JS shim creates another Node process; inject at the inherited dependency
+    // boundary, and retain a bounded empty selection even if injection regresses.
+    const result = spawnSync(
+      process.versions.bun ? "node" : process.execPath,
+      [
+        nodePath.resolve("scripts/run-vitest.mjs"),
+        "run",
+        "--config",
+        toolingConfig,
+        file,
+        "--testNamePattern=^dependency-order-no-test$",
+      ],
+      {
+        encoding: "utf8",
+        env: testRunnerFixtureEnv({
+          NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${JSON.stringify(importUrl)}`]
+            .filter(Boolean)
+            .join(" "),
+        }),
+      },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("Install dependencies before running scripts/run-vitest.mjs:");
+    expect(result.stderr).toContain("dependency request: vitest/package.json");
+    expect(result.stderr).not.toContain("dependency request: vitest/node");
+  });
 
   it.each(["PNPM_CONFIG_MODULES_DIR", "npm_config_modules_dir"])(
     "links hydrated modules from %s before resolving Vitest",
@@ -458,100 +410,58 @@ registerHooks({resolve(specifier, context, nextResolve) {
     },
   );
 
-  it("isolates mixed directories while respecting explicit isolation", () => {
-    const dirs = ["extensions/canvas", "src/node-host"];
-    expect(resolveImplicitVitestArgs(dirs)).toEqual([...dirs, "--isolate"]);
-    expect(resolveImplicitVitestArgs(dirs.slice(1))).toEqual(dirs.slice(1));
-    expect(resolveImplicitVitestArgs([...dirs, "--no-isolate"])).toEqual([...dirs, "--no-isolate"]);
-    expect(resolveImplicitVitestArgs([...dirs, "--", "--no-isolate"])).toEqual([
-      ...dirs,
-      "--isolate",
-      "--",
-      "--no-isolate",
-    ]);
+  it.each<[string[], string[]?]>([
+    [mixedDirs, [...mixedDirs, "--isolate"]],
+    [mixedDirs.slice(1)],
+    [[...mixedDirs, "--no-isolate"]],
+    [
+      [...mixedDirs, "--", "--no-isolate"],
+      [...mixedDirs, "--isolate", "--", "--no-isolate"],
+    ],
+    [["run", file], directArgs(toolingConfig, file)],
+    [["run", dockerFile], directArgs("test/vitest/vitest.tooling-docker.config.ts", dockerFile)],
+    [["run", browserFile], directArgs("test/vitest/vitest.ui-browser.config.ts", browserFile)],
+    [["run", browserGlob]],
+    [["run", markdownNodeFile]],
+  ])("routes implicit selection %j", (argv, expected = argv) => {
+    expect(resolveImplicitVitestArgs(argv)).toEqual(expected);
   });
 
-  it("inserts bounded Gateway targets before the native separator", () => {
-    const argv = ["run", "--config", gatewayConfig, "--reporter=verbose"];
+  it("replaces broad Gateway filters while retaining options and the native separator", () => {
+    const argv = directArgs(gatewayConfig, "--reporter=verbose", "--testNamePattern", "server");
     const targets = ["src/gateway/server-a.test.ts", "src/gateway/server-b.test.ts"];
     expect(
-      resolveBoundedVitestInvocations([...argv, "--", "-x"], {
+      resolveBoundedVitestInvocations([...argv, "server", "--", "-x"], {
         env: {},
         gatewayServerTargetChunks: targets.map((target) => [target]),
       }),
     ).toEqual(targets.map((target) => argv.concat(target, "--", "-x")));
   });
 
-  it("keeps every Gateway server file in one bounded native invocation", () => {
-    const argv = ["--config", "/repo/" + gatewayConfig];
-    const invocations = resolveBoundedVitestInvocations(argv, { env: { CI: "1" } });
-    const targets = invocations.map((args) => args.slice(argv.length));
-
-    expect(targets.every((files) => files.length > 0 && files.length <= 50)).toBe(true);
-    expect(targets.flat()).toEqual(
-      listGitTrackedFiles({ pathspecs: "src/gateway" })
-        ?.filter(isGatewayServerTestFile)
-        .toSorted((a, b) => a.localeCompare(b)),
-    );
-  });
-
   it("bounds the complete E2E selection without multiplying configured workers", () => {
-    const argv = ["run", "--config", e2eConfig, "--maxWorkers", "2"];
-    expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([
-      [...argv, "--shard=1/4"],
-      [...argv, "--shard=2/4"],
-      [...argv, "--shard=3/4"],
-      [...argv, "--shard=4/4"],
-    ]);
+    const argv = directArgs(e2eConfig, "--maxWorkers", "2");
+    expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual(
+      [1, 2, 3, 4].map((index) => argv.concat(`--shard=${index}/4`)),
+    );
   });
 
-  it.each([["doctor"], ["--testNamePattern", "doctor"]])(
-    "preserves explicit E2E execution options %j",
-    (...options) => {
-      const argv = ["run", "--config", e2eConfig, ...options];
-      expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([argv]);
-    },
-  );
+  it.each([
+    { argv: directArgs(e2eConfig, "doctor") },
+    { argv: directArgs(e2eConfig, "--testNamePattern", "doctor") },
+    { argv: ["watch", "--config", gatewayConfig] },
+  ])("keeps explicitly bounded or watched selection %j", ({ argv }) => {
+    expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([argv]);
+  });
 
-  it.each([["watch", "--config", gatewayConfig]])(
-    "keeps direct Gateway selection %j",
-    (...argv) => {
-      expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual([argv]);
-    },
-  );
-
-  it.each([["--exclude=", file]])(
-    "keeps option operands out of implicit routing: %j",
-    (...options) => {
-      const argv = ["run", ...options];
-      const native = parseCLI(["vitest", ...argv]);
-      expect(native.filter).toEqual([]);
-      expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
-      expect(parseCLI(["vitest", ...resolveImplicitVitestArgs(argv)])).toEqual(native);
-    },
-  );
-
-  it("routes a positional UI test independently of excluded tooling files", () => {
-    const argv = ["list", uiFile, "--exclude", file, "--passWithNoTests=false"];
-    const native = parseCLI(["vitest", ...argv]);
-
-    expect(native.filter).toEqual([uiFile]);
-    expect(native.options.exclude).toEqual([file]);
-    expect(native.options.passWithNoTests).toBe(false);
+  it.each([
+    [["run", "--exclude=", file], []],
+    [
+      ["list", uiFile, "--exclude", file, "--passWithNoTests=false"],
+      ["--config", "test/vitest/vitest.ui.config.ts"],
+    ],
+  ])("routes positionals independently of excluded files: %j", (argv, config) => {
     expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
-    expect(parseCLI(["vitest", ...resolveImplicitVitestArgs(argv)])).toEqual(
-      parseCLI(["vitest", "--config", "test/vitest/vitest.ui.config.ts", ...argv]),
-    );
-  });
-
-  it.each<[string, string | null]>([
-    [file, toolingConfig],
-    ["test/scripts/docker-build-helper.test.ts", "test/vitest/vitest.tooling-docker.config.ts"],
-  ])("routes the explicit tooling target %s", (target, config) => {
-    const argv = ["run", target];
-    expect(resolveImplicitVitestArgs(argv)).toEqual(
-      config ? ["run", "--config", config, target] : argv,
-    );
+    expect(nativeCLI(resolveImplicitVitestArgs(argv))).toEqual(nativeCLI([...config, ...argv]));
   });
 
   it.each([
@@ -559,10 +469,10 @@ registerHooks({resolve(specifier, context, nextResolve) {
     ["--passWithNoTests=false", "--pass-with-no-tests=true"],
     ["--", "--passWithNoTests=true", "-x"],
   ])("enforces direct empty-file policy for %j", async (...flags) => {
-    const argv = ["run", "--config", toolingConfig, file, ...flags];
+    const argv = directArgs(toolingConfig, file, ...flags);
     const original = [...argv];
-    const native = parseCLI(["vitest", ...argv]);
-    expect(parseCLI(["vitest", ...(await resolveExplicitTestFileNoPassArgs(argv))])).toEqual({
+    const native = nativeCLI(argv);
+    expect(nativeCLI(await resolveExplicitTestFileNoPassArgs(argv))).toEqual({
       ...native,
       options: { ...native.options, passWithNoTests: false },
     });
@@ -574,27 +484,25 @@ registerHooks({resolve(specifier, context, nextResolve) {
     expect(await resolveExplicitTestFileNoPassArgs(argv)).toBe(argv);
   });
 
-  it.each([["--passWithNoTests", "--passWithNoTests"]])(
-    "round-trips native option ownership through delegation: %j",
-    (...flags) => {
-      const parse = (args: string[]) => {
-        try {
-          return parseCLI(["vitest", "run", ...args]);
-        } catch (error) {
-          return String(error);
-        }
-      };
-      for (const argv of [
-        [...flags, file],
-        [file, ...flags],
-      ]) {
-        const delegated = resolveTestProjectsDelegationArgs(argv);
-        expect(delegated).not.toBeNull();
-        const { forwardedArgs } = parseTestProjectsArgs(delegated!);
-        expect(parse(forwardedArgs)).toEqual(parse(argv));
+  it("round-trips repeated native options through delegation", () => {
+    const flags = ["--passWithNoTests", "--passWithNoTests"];
+    const parse = (args: string[]) => {
+      try {
+        return nativeCLI(["run", ...args]);
+      } catch (error) {
+        return String(error);
       }
-    },
-  );
+    };
+    for (const argv of [
+      [...flags, file],
+      [file, ...flags],
+    ]) {
+      const delegated = resolveTestProjectsDelegationArgs(argv);
+      expect(delegated).not.toBeNull();
+      const { forwardedArgs } = parseTestProjectsArgs(delegated!);
+      expect(parse(forwardedArgs)).toEqual(parse(argv));
+    }
+  });
 
   it.each<[string[], string[] | null]>([
     [
@@ -629,188 +537,85 @@ registerHooks({resolve(specifier, context, nextResolve) {
     }
   });
 
-  it.each([
-    [[browserFile], "test/vitest/vitest.ui-browser.config.ts"],
-    [["ui/src/**/*.browser.test.ts"], null],
-    [["ui/src/components/markdown.progress.node.test.ts"], null],
-  ])("preserves browser ownership for implicit targets %j", (targets, config) => {
-    expect(resolveImplicitVitestArgs(["run", ...targets])).toEqual(
-      config ? ["run", "--config", config, ...targets] : ["run", ...targets],
+  it.each<[string[], NodeJS.ProcessEnv, number | null]>([
+    [["run", "-t", "watch"], baseEnv, 120000],
+    [["--watch=false"], baseEnv, 120000],
+    [["src/foo.test.ts"], { ...baseEnv, CI: "true" }, 120000],
+    [["run"], { ...baseEnv, OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0" }, null],
+    [["run", "--config", "test/vitest/vitest.extension-codex.config.ts"], floorEnv, 2400000],
+    [["run", "--config", "test/vitest/vitest.unit.config.ts"], floorEnv, 300000],
+    [["run"], compileCacheEnv, 120000],
+    [["--watch"], compileCacheEnv, null],
+    [["src/foo.test.ts"], baseEnv, null],
+    [["--config", toolingConfig, "-t", "watch"], baseEnv, null],
+  ])("resolves watchdog policy for %j with %j to %s ms", (argv, env, timeout) => {
+    expect(resolveRunVitestSpawnEnv(env, argv)).toEqual(
+      timeout === null ? env : { ...env, ...watchdogEnv(timeout) },
     );
   });
 
-  it("keeps Sparkplug synchronous when Maglev is enabled", () => {
-    expect(resolveVitestNodeArgs({ OPENCLAW_VITEST_ENABLE_MAGLEV: "1" })).toStrictEqual([
-      "--no-concurrent-sparkplug",
-    ]);
-  });
-
-  it("defaults non-watch runs to the stall watchdog", () => {
-    for (const argv of [
-      ["run", "-t", "watch"],
-      ["--watch", "false"],
-      ["--watch=false"],
-      ["--no-watch"],
-    ]) {
-      expect(resolveRunVitestSpawnEnv(baseEnv, argv)).toEqual(watchdogEnv(120000));
-    }
-    expect(resolveRunVitestSpawnEnv({ ...baseEnv, CI: "true" }, ["src/foo.test.ts"])).toEqual({
-      ...watchdogEnv(120000),
-      CI: "true",
-    });
-    const disabled = { ...baseEnv, OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0" };
-    expect(resolveRunVitestSpawnEnv(disabled, ["run"])).toEqual(disabled);
-  });
-
-  it("honors measured config silence floors over smaller env timeouts", () => {
-    const env = { ...baseEnv, OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000" };
-    expect(
-      resolveRunVitestSpawnEnv(env, [
-        "run",
-        "--config",
-        "test/vitest/vitest.extension-codex.config.ts",
-      ]),
-    ).toEqual(watchdogEnv(2400000));
-    expect(
-      resolveRunVitestSpawnEnv(env, ["run", "--config", "test/vitest/vitest.unit.config.ts"]),
-    ).toEqual(watchdogEnv(300000));
-  });
-
-  it("preserves inherited Node compile caches in test children", () => {
-    const env = {
-      ...baseEnv,
-      CI: "true",
-      NODE_COMPILE_CACHE: "/tmp/node-compile",
-      NODE_COMPILE_CACHE_PORTABLE: "1",
-    };
-    for (const argv of [["run"], ["run", "--coverage=false"]]) {
-      expect(resolveRunVitestSpawnEnv(env, argv)).toEqual({ ...watchdogEnv(120000), ...env });
-    }
-    expect(resolveRunVitestSpawnEnv(env, ["--watch"])).toEqual(env);
-    expect(resolveVitestSpawnParams(env, "linux").env).toEqual({ ...env, ...PINNED_LOCALE });
-  });
-
-  describe("native config option ownership", () => {
-    it.each([{ name: "inline short", args: [`-c=${e2eConfig}`] }])(
-      "uses the native $name config for its watchdog",
-      ({ args }) => {
-        const argv = ["run", ...args];
-        expect(parseCLI(["vitest", ...argv]).options.config).toBe(e2eConfig);
-        expect(resolveDefaultVitestNoOutputTimeoutMs(argv)).toBe(
-          DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
-        );
-      },
+  it("uses the native inline short config for its watchdog", () => {
+    const argv = ["run", `-c=${e2eConfig}`];
+    expect(nativeCLI(argv).options.config).toBe(e2eConfig);
+    expect(resolveDefaultVitestNoOutputTimeoutMs(argv)).toBe(
+      DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
     );
   });
 
-  it("leaves interactive runs without a default watchdog", () => {
-    for (const argv of [["src/foo.test.ts"], ["--config", toolingConfig, "-t", "watch"]]) {
-      expect(resolveRunVitestSpawnEnv(baseEnv, argv)).toEqual(baseEnv);
-    }
-  });
-
-  posixIt.for([
-    { timeout: false, exitCode: 0, expectedCode: 0, nativeBun: false },
-    { timeout: true, exitCode: 1, expectedCode: 2, nativeBun: false },
-    { timeout: true, exitCode: null, expectedCode: null, nativeBun: false },
-    { timeout: true, exitCode: 0, expectedCode: 2, nativeBun: true },
-  ])(
-    "settles descendants (timeout=$timeout, child=$exitCode, native=$nativeBun)",
-    async (row, context) => {
+  posixIt(
+    "isolates native Bun home and joins descendants before reporting timeout",
+    async (context) => {
       const watchedEnv = {
         OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "5000",
-        ...(row.nativeBun ? { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_USE_REAL_HOME: "1" } : {}),
+        OPENCLAW_LIVE_TEST: "1",
+        OPENCLAW_LIVE_USE_REAL_HOME: "1",
       };
       let noOutputTimedOut = false;
-      // Only watchdog timers are fake; child I/O, diagnostics, and group joins stay real.
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const { clock } = setTimeout as typeof setTimeout & { clock: { tick(ms: number): void } };
-      let watched: ReturnType<typeof spawnWatchedVitestProcess>;
       const fixtureArgs = [
         "-e",
-        [
-          'const { spawn } = require("node:child_process");',
-          row.exitCode === null
-            ? ""
-            : `process.once("SIGTERM", () => process.exit(${row.exitCode}));`,
-          'const descendant = spawn(process.execPath, ["-e",',
-          '  "setInterval(() => {}, 1000); process.send(process.pid);",',
-          '], { stdio: ["ignore", "ignore", "ignore", "ipc"] });',
-          'descendant.once("message", (pid) => {',
-          "  descendant.disconnect();",
-          row.nativeBun
-            ? '  process.stdout.write(JSON.stringify({ pid, home: process.env.HOME, tmp: process.env.TMPDIR, live: process.env.OPENCLAW_LIVE_TEST, realHome: process.env.OPENCLAW_LIVE_USE_REAL_HOME }) + "\\n");'
-            : "  process.stdout.write(`${pid}\\n`);",
-          "});",
-          "descendant.unref();",
-          "setInterval(() => {}, 1000);",
-        ].join("\n"),
+        descendantFixture(
+          "JSON.stringify({ pid, home: process.env.HOME, tmp: process.env.TMPDIR, live: process.env.OPENCLAW_LIVE_TEST, realHome: process.env.OPENCLAW_LIVE_USE_REAL_HOME })",
+          0,
+        ),
       ];
-      const nativeCommand = row.nativeBun
-        ? vi.spyOn(testRuntime, "resolveNativeBunTestCommand").mockReturnValue({
-            command: process.execPath,
-            args: fixtureArgs,
-          })
-        : undefined;
-      try {
-        watched = spawnWatchedVitestProcess({
-          ...(row.nativeBun
-            ? { nativeBunFiles: ["./test/scripts/run-vitest.test.ts"] }
-            : { pnpmArgs: ["exec", "node", ...fixtureArgs] }),
-          spawnParams: {
-            detached: true,
+      const nativeCommand = vi.spyOn(testRuntime, "resolveNativeBunTestCommand").mockReturnValue({
+        command: process.execPath,
+        args: fixtureArgs,
+      });
+      const { handle: watched, clock } = captureWatchdog(() => {
+        try {
+          return spawnWatchedVitestProcess({
+            nativeBunFiles: ["./test/scripts/run-vitest.test.ts"],
+            spawnParams: {
+              detached: true,
+              env: watchedEnv,
+              stdio: ["ignore", "pipe", "pipe"],
+            },
             env: watchedEnv,
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-          env: watchedEnv,
-          onNoOutputTimeout: () => {
-            noOutputTimedOut = true;
-          },
-        });
-      } finally {
-        vi.useRealTimers();
-        nativeCommand?.mockRestore();
-      }
-      const rawExit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-        (resolve, reject) => {
-          watched.child.once("close", (code, closeSignal) =>
-            resolve({ code, signal: closeSignal }),
-          );
-          watched.child.once("error", reject);
-        },
-      );
+            onNoOutputTimeout: () => {
+              noOutputTimedOut = true;
+            },
+          });
+        } finally {
+          nativeCommand.mockRestore();
+        }
+      });
+      const rawExit = childTermination(watched.child);
       let descendantPid = 0;
       let nativeTempRoot: string | undefined;
-      const lines = createInterface({ input: watched.child.stdout! });
-      const ready = new Promise<void>((resolve, reject) => {
-        lines.once("line", (line) => {
-          try {
-            // The descendant acknowledges its running loop on the watched pipe. Check
-            // and signal in this notification, before a delayed poll can outlive it.
-            if (row.nativeBun) {
-              const state = JSON.parse(line);
-              descendantPid = state.pid;
-              nativeTempRoot = state.tmp;
-              expect(state.home).toBe(nodePath.join(state.tmp, "home"));
-              expect(fs.existsSync(state.home)).toBe(true);
-              expect(state.live).toBeUndefined();
-              expect(state.realHome).toBeUndefined();
-            } else {
-              descendantPid = Number(line);
-            }
-            expect(Number.isInteger(descendantPid) && descendantPid > 0).toBe(true);
-            expect(isProcessAlive(descendantPid)).toBe(true);
-            if (row.timeout) {
-              clock.tick(Number(watchedEnv.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS));
-            } else {
-              process.kill(watched.child.pid!, "SIGTERM");
-            }
-            resolve();
-          } catch (error) {
-            reject(error instanceof Error ? error : new Error(String(error)));
-          }
-        });
-        lines.once("close", () => reject(new Error("fixture closed before reporting readiness")));
+      const { lines, ready } = readyLine(watched.child, (line) => {
+        // The descendant acknowledges its running loop on the watched pipe. Check
+        // and signal in this notification, before a delayed poll can outlive it.
+        const state = JSON.parse(line);
+        descendantPid = state.pid;
+        nativeTempRoot = state.tmp;
+        expect(state.home).toBe(nodePath.join(state.tmp, "home"));
+        expect(fs.existsSync(state.home)).toBe(true);
+        expect(state.live).toBeUndefined();
+        expect(state.realHome).toBeUndefined();
+        expect(Number.isInteger(descendantPid) && descendantPid > 0).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+        clock.tick(Number(watchedEnv.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS));
       });
 
       try {
@@ -830,12 +635,11 @@ registerHooks({resolve(specifier, context, nextResolve) {
           context.signal,
         );
 
-        const signal = row.exitCode === null ? "SIGTERM" : null;
         expect(snapshot).toEqual({
           groupStopped: true,
-          noOutputTimedOut: row.timeout,
-          raw: { code: row.exitCode, signal },
-          result: { code: row.expectedCode, signal, groupJoined: true },
+          noOutputTimedOut: true,
+          raw: { code: 0, signal: null },
+          result: { code: 2, signal: null, groupJoined: true },
         });
         if (nativeTempRoot) {
           expect(fs.existsSync(nativeTempRoot)).toBe(false);
@@ -881,27 +685,25 @@ registerHooks({resolve(specifier, context, nextResolve) {
     expect(shouldSuppressVitestStderrLine("real failure output\n")).toBe(false);
   });
 
-  it.each([{ ansi: true, origin: "fixture.test.ts" }])(
-    "extracts unhandled errors (ANSI=$ansi, origin=$origin)",
-    ({ ansi, origin }) => {
-      const detector = createVitestUnhandledErrorDetector();
-      const output = [
-        "⎯⎯ Unhandled Errors ⎯⎯",
-        "Vitest caught 1 unhandled error during the test run.",
-        "⎯⎯ Unhandled Rejection ⎯⎯",
-        "TypeError: request failed",
-        ...(origin ? ['This error originated in "' + origin + '" test file.'] : []),
-      ]
-        .map((line) => (ansi ? "\u001b[31m" + line + "\u001b[0m" : line))
-        .join("\n");
-      detector.observe(output);
-      expect(detector.finish()).toEqual({
-        count: 1,
-        errorFirstLine: "TypeError: request failed",
-        origin,
-      });
-    },
-  );
+  it("extracts ANSI-colored unhandled errors and their origin", () => {
+    const origin = "fixture.test.ts";
+    const detector = createVitestUnhandledErrorDetector();
+    const output = [
+      "⎯⎯ Unhandled Errors ⎯⎯",
+      "Vitest caught 1 unhandled error during the test run.",
+      "⎯⎯ Unhandled Rejection ⎯⎯",
+      "TypeError: request failed",
+      'This error originated in "' + origin + '" test file.',
+    ]
+      .map((line) => "\u001b[31m" + line + "\u001b[0m")
+      .join("\n");
+    detector.observe(output);
+    expect(detector.finish()).toEqual({
+      count: 1,
+      errorFirstLine: "TypeError: request failed",
+      origin,
+    });
+  });
 
   it("adds workflow annotations only under GitHub Actions", () => {
     const result = { count: 2, origin: "fixture.test.ts", errorFirstLine: "TypeError: failed" };

@@ -4,6 +4,7 @@ import { expect } from "vitest";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readDeferredPluginMigrations,
@@ -18,6 +19,20 @@ import {
 } from "../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+
+export function addDeferredPluginSessions(storePath: string, count: number) {
+  const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
+  for (let index = 2; index < count; index++) {
+    const sessionId = `legacy-volume-${index}`;
+    const sessionFile = `${sessionId}.jsonl`;
+    entries[`agent:main:volume-${index}`] = { sessionId, sessionFile, updatedAt: 20 };
+    fs.writeFileSync(
+      path.join(path.dirname(storePath), sessionFile),
+      `${JSON.stringify({ type: "session", version: 3, id: sessionId })}\n`,
+    );
+  }
+  fs.writeFileSync(storePath, JSON.stringify(entries));
+}
 
 export async function seedStaleDeferredPluginSessionImport(state: OpenClawTestState) {
   const fixture = await seedDeferredPluginSessionSource(state, "default", "brave");
@@ -40,21 +55,21 @@ export async function seedStaleDeferredPluginSessionImport(state: OpenClawTestSt
     allAgents: true,
     mode: "import",
   });
-  let foreignReport = "";
-  runOpenClawStateWriteTransaction(
+  const foreignReport = runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const kind = "deferred-plugin-session-import";
       const row = db
-        .prepare(
-          "SELECT report_json FROM migration_sources WHERE migration_kind = 'deferred-plugin-session-import'",
-        )
-        .get()!;
-      foreignReport = JSON.stringify({
+        .prepare("SELECT report_json FROM migration_sources WHERE migration_kind = ?")
+        .get(kind)!;
+      const report = JSON.stringify({
         ...JSON.parse(String(row.report_json)),
         databaseIdentity: "123:456",
       });
-      db.prepare(
-        "UPDATE migration_sources SET report_json = ? WHERE migration_kind = 'deferred-plugin-session-import'",
-      ).run(foreignReport);
+      db.prepare("UPDATE migration_sources SET report_json = ? WHERE migration_kind = ?").run(
+        report,
+        kind,
+      );
+      return report;
     },
     { env: state.env },
   );
@@ -134,20 +149,11 @@ export async function seedDeferredPluginSessionSource(
         : state.statePath("sessions");
   fs.mkdirSync(sessionsDir, { recursive: true });
   const storePath = path.join(sessionsDir, "sessions.json");
-  const records = Object.fromEntries(
-    ["kept", "deleted", ...(missingTranscript ? ["missing"] : [])].map((name) => {
-      const sessionId = `legacy-${name}`;
-      const transcript = path.join(sessionsDir, `${sessionId}.jsonl`);
-      if (name === "missing") {
-        return [
-          `agent:main:${name}`,
-          {
-            sessionId,
-            ...(missingTranscript === "declared" ? { sessionFile: path.basename(transcript) } : {}),
-            updatedAt: 20,
-          },
-        ];
-      }
+  const records: Record<string, SessionEntry> = {};
+  for (const name of ["kept", "deleted", ...(missingTranscript ? ["missing"] : [])]) {
+    const sessionId = `legacy-${name}`;
+    const transcript = path.join(sessionsDir, `${sessionId}.jsonl`);
+    if (name !== "missing") {
       fs.writeFileSync(
         transcript,
         [
@@ -172,12 +178,15 @@ export async function seedDeferredPluginSessionSource(
           pluginAppPolicyContext: { fingerprint: "policy-1", apps: {}, pluginAppIds: {} },
         }),
       );
-      return [
-        `agent:main:${name}`,
-        { sessionId, sessionFile: path.basename(transcript), updatedAt: 20 },
-      ];
-    }),
-  );
+    }
+    records[`agent:main:${name}`] = {
+      sessionId,
+      updatedAt: 20,
+      ...(name !== "missing" || missingTranscript === "declared"
+        ? { sessionFile: path.basename(transcript) }
+        : {}),
+    };
+  }
   fs.writeFileSync(storePath, JSON.stringify(records));
   const cfg: OpenClawConfig = {
     agents: { entries: { main: {} } },

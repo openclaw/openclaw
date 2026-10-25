@@ -35,7 +35,14 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: mocks.entrypoint,
 }));
 vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
-vi.mock("./progress.js", () => ({ printResult: mocks.print }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.print,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.print(...args.slice(0, 3)),
+}));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   resolveUpdateRoot: mocks.root,
@@ -78,41 +85,46 @@ const sealedRegistryUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoint
 const failureOutputUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.failureOutput);
 const sourceFixture = leaseFixtureUrl.pathname.endsWith(".ts");
 
-type Lane = LeaseScenario["lane"];
+export type Lane = LeaseScenario["lane"] | "candidate-runtime";
 export let state: OpenClawTestState;
 export let entrypoint: string;
 
 export function installUpdateLeaseHarness(): void {
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    mocks.publication.mockReset().mockImplementation(async (params, publish) => {
-      params.assertCurrent();
-      return await publish(async () => params.assertCurrent());
-    });
-    state = await createOpenClawTestState({
-      label: "update-lease",
-      env: {
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
-        OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: undefined,
-        OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH: undefined,
-        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: undefined,
-        OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: undefined,
-        OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: undefined,
-        OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
-        OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: undefined,
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART: undefined,
-        OPENCLAW_UPDATE_RUN_ID: undefined,
-      },
-    });
-    // Config-write custody is stored outside the profile; isolate both process owners.
-    const control = state.path("control");
-    await fs.mkdir(control, { mode: 0o700 });
-    vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-    await state.writeConfig({ plugins: { enabled: false }, update: { channel: "stable" } });
-    await state.writeText("events.jsonl", "");
-    entrypoint = await state.writeText(
-      "entry.mjs",
-      `
+  beforeEach(() => setupUpdateLeaseHarness());
+  afterEach(cleanupUpdateLeaseHarness);
+}
+
+export async function setupUpdateLeaseHarness(beforeState?: () => void): Promise<void> {
+  vi.clearAllMocks();
+  mocks.publication.mockReset().mockImplementation(async (params, publish) => {
+    params.assertCurrent();
+    return await publish(async () => params.assertCurrent());
+  });
+  beforeState?.();
+  state = await createOpenClawTestState({
+    label: "update-lease",
+    env: {
+      OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
+      OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: undefined,
+      OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH: undefined,
+      OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: undefined,
+      OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: undefined,
+      OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: undefined,
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
+      OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: undefined,
+      OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART: undefined,
+      OPENCLAW_UPDATE_RUN_ID: undefined,
+    },
+  });
+  // Config-write custody is stored outside the profile; isolate both process owners.
+  const control = state.path("control");
+  await fs.mkdir(control, { mode: 0o700 });
+  vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+  await state.writeConfig({ plugins: { enabled: false }, update: { channel: "stable" } });
+  await state.writeText("events.jsonl", "");
+  entrypoint = await state.writeText(
+    "entry.mjs",
+    `
       import * as json5 from ${JSON.stringify(import.meta.resolve("json5"))};
       ${
         sourceFixture
@@ -136,21 +148,20 @@ export function installUpdateLeaseHarness(): void {
         ${sourceFixture ? "await loader.unregister();" : ""}
       }
     `,
-    );
-    mocks.entrypoint.mockResolvedValue(entrypoint);
-    mocks.root.mockResolvedValue(state.root);
-    mocks.plugins.mockReset().mockResolvedValue(pluginResult);
-    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-  });
+  );
+  mocks.entrypoint.mockResolvedValue(entrypoint);
+  mocks.root.mockResolvedValue(state.root);
+  mocks.plugins.mockReset().mockResolvedValue(pluginResult);
+  vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+  vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+  vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+}
 
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    await state.cleanup();
-  });
+export async function cleanupUpdateLeaseHarness(): Promise<void> {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  await state.cleanup();
 }
 
 export async function writeScenario(
@@ -163,14 +174,23 @@ export async function writeScenario(
     state.path("package.json"),
     JSON.stringify({ version: lane === "fresh-process" ? VERSION : "1.0.0" }),
   );
-  await state.writeJson("scenario.json", { pluginUpdate: pluginResult, ...scenario, lane });
+  await state.writeJson("scenario.json", {
+    pluginUpdate: pluginResult,
+    ...scenario,
+    // Both inline paths retain fresh Doctor, but must never invoke the fixture's post-core role.
+    lane: lane === "candidate-runtime" ? "current-process" : lane,
+  });
   if (lane === "resume") {
     vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", state.path("post-core-result.json"));
     await fs.writeFile(state.path("handoff.json"), JSON.stringify({ completionOwner: "parent" }));
   }
 }
 
-export async function invoke(lane: Lane, recoveryRunIds: readonly string[] = []): Promise<void> {
+export async function invoke(
+  lane: Lane,
+  recoveryRunIds: readonly string[] = [],
+  startedAt = Date.now(),
+): Promise<void> {
   if (lane === "resume") {
     return resumePostCoreUpdate({
       root: state.root,
@@ -190,32 +210,37 @@ export async function invoke(lane: Lane, recoveryRunIds: readonly string[] = [])
       recoveryRunIds,
     );
   }
-  await finishUpdate({
-    mutationStarted: true,
-    result: {
-      status: "ok",
-      mode: "npm",
+  await finishUpdate(
+    {
+      mutationStarted: true,
+      result: {
+        status: "ok",
+        mode: "npm",
+        root: state.root,
+        before: {
+          version: lane === "fresh-process" || lane === "candidate-runtime" ? "0.9.0" : "2.0.0",
+        },
+        after: { version: lane === "fresh-process" ? VERSION : "1.0.0" },
+        steps: [],
+        durationMs: 1,
+      },
       root: state.root,
-      before: { version: lane === "fresh-process" ? "0.9.0" : "2.0.0" },
-      after: { version: lane === "fresh-process" ? VERSION : "1.0.0" },
-      steps: [],
-      durationMs: 1,
+      installKindChanged: false,
+      configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
+      requestedChannel: null,
+      storedChannel: "stable",
+      channel: "stable",
+      downgradeRisk: lane !== "fresh-process" && lane !== "candidate-runtime",
+      shouldRestart: false,
+      opts: { json: true, yes: true },
+      ownedManagedUpdateEnv: { ...process.env },
+      controlPlaneUpdateSentinelMeta: null,
+      preUpdatePluginInstallRecords: { stale: { source: "path", sourcePath: state.path("stale") } },
+      startedAt,
+      updateStepTimeoutMs: 15_000,
     },
-    root: state.root,
-    installKindChanged: false,
-    configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
-    requestedChannel: null,
-    storedChannel: "stable",
-    channel: "stable",
-    downgradeRisk: lane !== "fresh-process",
-    shouldRestart: false,
-    opts: { json: true, yes: true },
-    ownedManagedUpdateEnv: { ...process.env },
-    controlPlaneUpdateSentinelMeta: null,
-    preUpdatePluginInstallRecords: { stale: { source: "path", sourcePath: state.path("stale") } },
-    startedAt: Date.now(),
-    updateStepTimeoutMs: 15_000,
-  });
+    { candidateRuntime: lane === "candidate-runtime" },
+  );
 }
 
 export async function events(): Promise<string[]> {

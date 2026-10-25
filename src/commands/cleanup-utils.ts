@@ -19,6 +19,7 @@ import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-pa
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { movePathToTrash } from "../infra/fs-safe.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
+import { pathEntryExists as pathExists } from "../infra/path-existence.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -169,18 +170,6 @@ export async function removePath(
   opts?: RemovalOptions,
 ): Promise<RemovalResult> {
   return removePathPreserving(target, [], runtime, opts);
-}
-
-async function pathExists(target: string): Promise<boolean> {
-  try {
-    await fs.lstat(target);
-    return true;
-  } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
 }
 
 async function existingPaths(paths: readonly string[]): Promise<string[]> {

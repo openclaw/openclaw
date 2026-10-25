@@ -31,8 +31,9 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { resolveSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
@@ -181,7 +182,8 @@ async function appendPreparedSessionTranscriptTurn(
       }
       return !append.workerPreparation || (!append.predicate && !repeated);
     });
-  const inputActor = !nativeReservation && (await getSessionInputActor(resolved));
+  const inputActor =
+    !nativeReservation && (await getSessionInputActor(resolved, options.resolveRuntimeTarget));
   if (
     !nativeReservation &&
     independentPreparation &&
@@ -211,6 +213,26 @@ async function appendPreparedSessionTranscriptTurn(
   }
   if (memory || inputActor) {
     throw new Error("Actor transcript turns require preparation outside the transaction");
+  }
+  if (options.resolveRuntimeTarget) {
+    const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(
+      { ...scope, ...resolved, storePath: resolved.path },
+      options.config,
+      { keyFormat: options.keyFormat },
+    );
+    const result = await appendPreparedSessionTranscriptTurn(
+      { ...scope, ...runtimeTarget },
+      {
+        ...options,
+        resolveRuntimeTarget: undefined,
+        selectedSessionId: runtimeTarget.selectedSessionId,
+        selectedLifecycleRevision: runtimeTarget.selectedLifecycleRevision,
+        sessionFile: runtimeTarget.sessionKey,
+      },
+      assertOwnedWrite,
+      nativeReservation,
+    );
+    return { ...result, runtimeTarget };
   }
   if (options.ownerSource?.checks.length) {
     throw new Error(
@@ -408,7 +430,6 @@ async function appendPreparedSessionTranscriptTurn(
           result = committed.result;
           if (
             !stageSqliteTransactionState(transactionDb.db, {
-              stage: () => undefined,
               commit: () => {
                 try {
                   completion = completeSessionTranscriptCommit(
@@ -421,7 +442,6 @@ async function appendPreparedSessionTranscriptTurn(
                   failures.push(error);
                 }
               },
-              rollback: () => undefined,
             })
           ) {
             throw new Error("Transcript completion requires managed commit settlement");
@@ -437,7 +457,6 @@ async function appendPreparedSessionTranscriptTurn(
             const entry = result.sessionEntry;
             if (
               !stageSqliteTransactionState(transactionDb.db, {
-                stage: () => undefined,
                 commit: () => {
                   try {
                     options.onCommittedSource?.(source, entry);
@@ -445,7 +464,6 @@ async function appendPreparedSessionTranscriptTurn(
                     failures.push(error);
                   }
                 },
-                rollback: () => undefined,
               })
             ) {
               throw new Error("Transcript source publication requires managed commit settlement");

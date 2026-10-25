@@ -10,10 +10,7 @@ import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type {
   OpenClawConfig,
-  SlackReactionNotificationMode,
   SlackSlashCommandConfig,
-  SessionScope,
-  DmPolicy,
   GroupPolicy,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
@@ -23,10 +20,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  normalizeStringEntries,
-  normalizeStringEntriesLower,
-} from "openclaw/plugin-sdk/string-normalization-runtime";
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatSlackError } from "../errors.js";
 import { buildSlackChannelIdCandidates } from "../group-policy.js";
@@ -42,7 +36,10 @@ import type { SlackEventScope } from "./event-scope.js";
 import { readLruMapEntry, writeLruMapEntry } from "./lru-map-cache.js";
 import { saveRemoteMedia } from "./media.runtime.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
-import { createSlackRuntimeContextReader } from "./runtime-policy.js";
+import {
+  createSlackRuntimeContextReader,
+  type resolveSlackMonitorPolicy,
+} from "./runtime-policy.js";
 import { isGovSlackClient } from "./slack-client-kind.js";
 import {
   type SlackSuggestedPromptsInput,
@@ -139,7 +136,7 @@ const SLACK_AVATAR_SSRF_POLICY = {
 const SLACK_CHANNEL_DENIAL_WARNING_TTL_MS = 5 * 60_000;
 const SLACK_CHANNEL_DENIAL_WARNING_MAX_ENTRIES = 1024;
 
-export type CreateSlackMonitorContextParams = {
+export type CreateSlackMonitorContextParams = ReturnType<typeof resolveSlackMonitorPolicy> & {
   cfg: OpenClawConfig;
   accountId: string;
   botToken: string;
@@ -155,29 +152,7 @@ export type CreateSlackMonitorContextParams = {
   apiAppId: string;
   installationIdentity?: SlackInstallationIdentity;
 
-  historyLimit: number;
-  dmHistoryLimit?: number;
-  sessionScope: SessionScope;
-  mainKey: string;
-
-  dmEnabled: boolean;
-  dmPolicy: DmPolicy;
-  allowFrom: Array<string | number> | undefined;
-  allowNameMatching: boolean;
-  groupDmEnabled: boolean;
-  groupDmChannels: Array<string | number> | undefined;
-  defaultRequireMention?: boolean;
-  channelsConfig?: SlackChannelConfigEntries;
-  groupPolicy: GroupPolicy;
-  useAccessGroups: boolean;
-  reactionMode: SlackReactionNotificationMode;
-  reactionAllowlist: Array<string | number>;
-  replyToMode: "off" | "first" | "all" | "batched";
-  threadHistoryScope: "thread" | "channel";
-  threadInheritParent: boolean;
   slashCommand: Required<SlackSlashCommandConfig>;
-  textLimit: number;
-  typingReaction: string;
   mediaMaxBytes: number;
 };
 
@@ -205,11 +180,6 @@ function createSlackMonitorContextFields(
     warn: (action, error) =>
       logger.warn({ error: formatSlackError(error) }, `Slack Agent View state failed to ${action}`),
   });
-
-  const allowFrom = normalizeStringEntries(params.allowFrom);
-  const groupDmChannels = normalizeStringEntries(params.groupDmChannels);
-  const defaultRequireMention = params.defaultRequireMention ?? true;
-  const channelsConfigKeys = Object.keys(params.channelsConfig ?? {});
 
   const scopedKey = (key: string, eventScope?: SlackEventScope) =>
     eventScope ? `${params.accountId}:${eventScope.teamId}:${key}` : key;
@@ -556,20 +526,12 @@ function createSlackMonitorContextFields(
   const channelRuntime = params.channelRuntime as PluginRuntime["channel"] | undefined;
   const fields = {
     ...params,
-    channelRuntime: params.channelRuntime,
-    botId: params.botId,
-    channelsConfig: params.channelsConfig,
     buildContext: channelRuntime?.inbound.buildContext,
     dispatchReplyFromConfig: channelRuntime?.reply?.dispatchReplyFromConfig,
     installationIdentity: params.installationIdentity ?? {
       kind: "degraded",
       reason: "auth_test_failed",
     },
-    dmHistoryLimit: Math.max(0, params.dmHistoryLimit ?? 0),
-    allowFrom,
-    groupDmChannels,
-    defaultRequireMention,
-    channelsConfigKeys,
     logger,
     shouldDropMismatchedSlackEvent,
     resolveSlackSystemEventRoute,

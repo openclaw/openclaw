@@ -1,113 +1,82 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "../../commands/doctor-auth-legacy-paths.js";
 import { AuthStorage } from "../../plugin-sdk/agent-sessions.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import * as agentDb from "../../state/openclaw-agent-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withEnv } from "../../test-utils/env.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { withPreparedAuthStorePathForDisplay, resolveAuthStorePathForDisplay } from "./paths.js";
 import * as sqliteRead from "./sqlite-read.js";
 import { closeAuthProfileReadPool } from "./sqlite.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-describe("auth profile path helpers (direct-import coverage attribution)", () => {
-  let stateDir = "";
-
-  beforeEach(() => {
-    stateDir = tempDirs.make("openclaw-path-direct-");
-  });
-
-  it("honors OPENCLAW_AGENT_DIR in both no-argument auth path implementations", () => {
-    const relocatedAgentDir = path.join(stateDir, "relocated-main-agent");
-    withEnv({ OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: relocatedAgentDir }, () => {
-      expect(path.dirname(resolveAuthStorePath())).toBe(relocatedAgentDir);
-      expect(resolveAuthStorePathForDisplay()).toBe(
-        path.join(relocatedAgentDir, "openclaw-agent.sqlite"),
-      );
-    });
-  });
-
-  it("falls back to the shared owner for an agent dir that has no local store", () => {
-    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
-      // A tilde-rooted dir resolveUserPath cannot expand still must not be reported as the owner:
-      // without a local store the loader reads the shared database, so display must name that.
-      const resolved = resolveAuthStorePathForDisplay("~fake-openclaw-no-expand");
+it.each([
+  ["shared", false],
+  ["missing", false],
+  ["missing-row", false],
+  ["empty", true],
+  ["present", true],
+  ["unreadable", true],
+  ["relocated", false],
+  ["tilde", false],
+] as const)("prepares the canonical display source without host SQL (%s)", async (mode, local) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "display";
+    const agentDir = mode === "tilde" ? "~fake-openclaw-no-expand" : state.agentDir(agentId);
+    const env = { ...state.env, ...(mode === "relocated" ? { OPENCLAW_AGENT_DIR: agentDir } : {}) };
+    if (mode === "relocated") {
+      withEnv({ OPENCLAW_AGENT_DIR: agentDir }, () => {
+        expect(path.dirname(resolveAuthStorePath())).toBe(agentDir);
+        expect(resolveAuthStorePathForDisplay()).toBe(path.join(agentDir, "openclaw-agent.sqlite"));
+      });
+    } else if (mode === "tilde") {
+      const resolved = resolveAuthStorePathForDisplay(agentDir);
       expect(resolved).toBe(resolveSharedAuthStorePath());
       expect(resolved.startsWith("~")).toBe(false);
-    });
+    }
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    if (mode === "missing-row") {
+      agentDb.openOpenClawAgentDatabase({ agentId, env: state.env });
+    } else if (local) {
+      const profiles =
+        mode === "empty"
+          ? {}
+          : {
+              "fixture:display": createApiKeyCredential("fixture", "synthetic-display"),
+            };
+      await state.writeAuthProfiles({ version: 1, profiles }, agentId);
+    }
+    await agentDb.closeOpenClawAgentDatabasesAsync(state.stateDir);
+    closeAuthProfileReadPool();
+    if (mode === "unreadable") {
+      fs.writeFileSync(databasePath, "not a SQLite database");
+    }
+    const sql = observeMainThreadSql();
+    sql.calibrate();
+    try {
+      const source = mode === "shared" || mode === "relocated" ? undefined : agentDir;
+      const displayPath = await AuthStorage.resolvePathForDisplayAsync(source, env);
+      expect(displayPath).toBe(local ? databasePath : resolveSharedAuthStorePath(env));
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    if (mode === "missing") {
+      expect(fs.existsSync(databasePath)).toBe(false);
+    }
   });
 });
-
-it.each(["shared", "missing", "missing-row", "empty", "present", "unreadable"] as const)(
-  "prepares the canonical display source without host SQL (%s)",
-  async (mode) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const agentId = "display";
-      const agentDir = state.agentDir(agentId);
-      const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
-      if (mode === "missing-row") {
-        openOpenClawAgentDatabase({ agentId, env: state.env });
-      } else if (mode !== "shared" && mode !== "missing") {
-        await state.writeAuthProfiles(
-          {
-            version: 1,
-            profiles:
-              mode === "empty"
-                ? {}
-                : {
-                    "fixture:display": {
-                      type: "api_key",
-                      provider: "fixture",
-                      key: "synthetic-display",
-                    },
-                  },
-          },
-          agentId,
-        );
-      }
-      await closeOpenClawAgentDatabasesAsync(state.stateDir);
-      closeAuthProfileReadPool();
-      if (mode === "unreadable") {
-        fs.writeFileSync(databasePath, "not a SQLite database");
-      }
-      const sql = observeMainThreadSql();
-      sql.calibrate();
-      let displayPath: string;
-      try {
-        displayPath = await AuthStorage.resolvePathForDisplayAsync(
-          mode === "shared" ? undefined : agentDir,
-          state.env,
-        );
-        sql.expectIdle();
-      } finally {
-        sql.restore();
-      }
-      expect(displayPath).toBe(
-        mode === "shared" || mode === "missing" || mode === "missing-row"
-          ? resolveSharedAuthStorePath(state.env)
-          : databasePath,
-      );
-      if (mode === "missing") {
-        expect(fs.existsSync(databasePath)).toBe(false);
-      }
-    });
-  },
-);
 
 it("does not invoke a withdrawn model build after its display worker read", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await state.writeAuthProfiles({ version: 1, profiles: {} });
-    await closeOpenClawAgentDatabasesAsync(state.stateDir);
+    await agentDb.closeOpenClawAgentDatabasesAsync(state.stateDir);
     closeAuthProfileReadPool();
     const entered = createDeferredCore();
     const resume = createDeferredCore();
@@ -141,29 +110,16 @@ it("does not invoke a withdrawn model build after its display worker read", asyn
       },
       consume,
     );
-    const result = reading.then(
-      (value) => ({ ok: true as const, value }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
+    const rejected = expect(reading).rejects.toBe(withdrawn);
     try {
-      await Promise.race([
-        entered.promise,
-        result.then(() => {
-          throw new Error("Display preparation settled before its worker read gate");
-        }),
-      ]);
+      await awaitGateBeforeSettlement(entered.promise, rejected, "Read gate bypassed");
       current = false;
       resume.resolve();
-      const outcome = await result;
-      expect(outcome.ok).toBe(false);
+      await rejected;
       expect(consume).not.toHaveBeenCalled();
-      if (outcome.ok) {
-        throw new Error("Withdrawn source produced a display path");
-      }
-      expect(outcome.error).toBe(withdrawn);
     } finally {
       resume.resolve();
-      await result;
+      await reading.catch(() => {});
       held.mockRestore();
     }
   });

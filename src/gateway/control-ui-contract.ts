@@ -116,7 +116,30 @@ export type ControlUiSessionBranch = {
   createUrl?: string;
 };
 
+/** A PR durably published by this task or an accessible descendant. */
+export type ControlUiSessionTaskPullRequest = {
+  url: string;
+  owner: string;
+  repo: string;
+  number: number;
+  branch: string;
+  title?: string;
+  sourceSessionKey: string;
+  sourceAgentId: string;
+  /** Verified GitHub metadata; absent on a cold lookup failure. */
+  pullRequest?: ControlUiSessionPullRequest;
+};
+
 export type ControlUiSessionPullRequests = {
+  /** The current bound PR could not be verified; discard previously displayed facts. */
+  discardPrevious?: true;
+  /** Branch facts were not refreshed; empty fields do not invalidate retained UI facts. */
+  branchRead?: false;
+  taskPullRequests?: ControlUiSessionTaskPullRequest[];
+  /** Total distinct publications, independent of the bounded preview. */
+  taskPullRequestCount?: number;
+  /** Total distinct task and current-branch PRs; absent when branch membership is unknown. */
+  pullRequestCount?: number;
   pullRequests: ControlUiSessionPullRequest[];
   /** GitHub remote identity, independent of whether a PR or branch row exists. */
   repository?: { owner: string; repo: string };

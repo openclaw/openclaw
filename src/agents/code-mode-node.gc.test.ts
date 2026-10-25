@@ -1,12 +1,14 @@
 import { channel } from "node:diagnostics_channel";
 import { EventEmitter, once } from "node:events";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { MessageChannel, type Worker } from "node:worker_threads";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GcSample } from "../infra/gc-observer.js";
 import { receiveWorkerMemoryPort, trackNativeWorkerForCpu } from "../infra/worker-cpu.js";
 import { serveWorkerMemorySamples } from "../infra/worker-memory.js";
-import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
 import { codeModeGcAttribution } from "../logging/code-mode-diagnostic.js";
 import { codeModeNodeInitialization, prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
 import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
@@ -19,13 +21,12 @@ const fixture = vi.hoisted(() => ({
     | undefined,
   warn: vi.fn(),
   capture: vi.fn(),
-  write: vi.fn(),
   tracing: vi.fn(),
 }));
 // mock-isolation: Native capture has its own protocol proof; drive worker/host admission here.
-vi.mock("../logging/diagnostic-worker-gc-profile.js", () => ({
+vi.mock("../logging/diagnostic-worker-gc-profile.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/diagnostic-worker-gc-profile.js")>()),
   captureWorkerGcProfiles: fixture.capture,
-  writeWorkerGcProfiles: fixture.write,
 }));
 vi.mock("node:trace_events", () => ({ getEnabledCategories: fixture.tracing }));
 // The memory-port consumer runs on the Gateway main thread; Vitest runs in a worker.
@@ -35,6 +36,8 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 }));
 // mock-isolation: Drive exact GC windows without starting a native observer.
 vi.mock("../infra/gc-observer.js", () => ({
+  getOldGenerationAfterGcBytes: () => undefined,
+  flushGcSamples: () => {},
   observeGcSamples: (observe: (samples: GcSample[]) => void) => {
     fixture.observe = observe;
     return () => {};
@@ -51,20 +54,24 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: fixture.warn }),
 }));
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
+
 it("warns through the memory port with parked-cell attribution, bounded cadence, and idle reset", async () => {
-  const capture = createDeferred<{
-    status: "complete";
-    result: { heap: string; cpu: string };
-  }>();
+  const profiles = { heap: "sanitized-heap", cpu: "sanitized-cpu" };
+  const stateDir = tempDirs.make("code-mode-gc-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const capture = createDeferred<{ status: "complete"; result: typeof profiles }>();
   fixture.capture.mockReturnValue(capture.promise);
-  fixture.write.mockResolvedValue(["synthetic.heapprofile.json", "synthetic.cpuprofile.json"]);
   const now = vi.spyOn(performance, "now").mockReturnValue(0);
   const retirements: unknown[] = [];
   const onRetirement = (workerId: unknown) => retirements.push(workerId);
   const storm = channel("openclaw.code-mode.gc-storm");
   storm.subscribe(onRetirement);
-  const previousUnhandled = process.listeners("unhandledRejection");
-  const previousHandled = process.listeners("rejectionHandled");
+  const rejectionEvents = ["unhandledRejection", "rejectionHandled"] as const;
+  const listenerSnapshots = rejectionEvents.map(
+    (event) => [event, process.listeners(event)] as const,
+  );
   const worker = Object.assign(new EventEmitter(), {
     threadId: 123,
     cpuUsage: async () => ({ user: 0, system: 0 }),
@@ -73,15 +80,18 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
   trackNativeWorkerForCpu(worker, new URL("./code-mode-node.worker.ts", import.meta.url));
   const parent = new MessageChannel();
   const attached = once(parent.port1, "message");
-  const close = serveWorkerMemorySamples(parent.port2);
+  const { close } = serveWorkerMemorySamples(parent.port2);
   const [message] = await attached;
+  let gcMessages = 0;
+  message.port.on("message", (record: Record<string, unknown>) => {
+    // Descriptor updates share this port; only GC envelopes belong to its cadence contract.
+    if ("gcStorm" in record || "retireWorkerId" in record) {
+      gcMessages++;
+    }
+  });
   const initial = once(message.port, "message");
   receiveWorkerMemoryPort(worker, message);
   await initial;
-  const previousUnmeasured =
-    getWorkerMessageMetrics().find(
-      (row) => row.kind === "memory" && row.direction === "from_worker",
-    )?.unmeasuredMessages ?? 0;
   const config = {
     timeoutMs: 5_000,
     memoryLimitBytes: 64 * 1024 * 1024,
@@ -182,25 +192,24 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     expect(retirements).toEqual([gcAttribution.workerId, gcAttribution.workerId]);
     expect(fixture.warn).toHaveBeenCalledTimes(2);
     expect(fixture.capture).toHaveBeenCalledTimes(1);
-    expect(getWorkerMessageMetrics()).toContainEqual(
-      expect.objectContaining({
-        kind: "memory",
-        direction: "from_worker",
-        unmeasuredMessages: previousUnmeasured + 4,
-      }),
-    );
-    capture.resolve({
-      status: "complete",
-      result: { heap: "sanitized-heap", cpu: "sanitized-cpu" },
-    });
+    expect(gcMessages).toBe(4);
+    capture.resolve({ status: "complete", result: profiles });
     await vi.waitFor(() => expect(fixture.warn).toHaveBeenCalledTimes(3));
     expect(fixture.warn.mock.calls[2]![1]).toMatchObject({
       ...gcAttribution,
       captureStatus: "complete",
-      profileFiles: ["synthetic.heapprofile.json", "synthetic.cpuprofile.json"],
+      profileFiles: [
+        expect.stringMatching(/\.heapprofile\.json$/),
+        expect.stringMatching(/\.cpuprofile\.json$/),
+      ],
     });
     expect(JSON.stringify(fixture.warn.mock.calls)).not.toContain("sanitized-heap");
-    expect(fixture.write).toHaveBeenCalledWith({ heap: "sanitized-heap", cpu: "sanitized-cpu" });
+    const files = fixture.warn.mock.calls[2]![1].profileFiles;
+    expect(
+      await Promise.all(
+        files.map((file: string) => fs.readFile(path.join(stateDir, "diagnostics", file), "utf8")),
+      ),
+    ).toEqual([profiles.heap, profiles.cpu]);
     // The hourly admission resets even with no active cell; process tracing refuses capture.
     await collect(3_600_001, 0);
     fixture.tracing.mockReturnValue("v8");
@@ -220,14 +229,11 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     parent.port1.close();
     parent.port2.close();
     worker.emit("exit");
-    for (const listener of process.listeners("unhandledRejection")) {
-      if (!previousUnhandled.includes(listener)) {
-        process.removeListener("unhandledRejection", listener);
-      }
-    }
-    for (const listener of process.listeners("rejectionHandled")) {
-      if (!previousHandled.includes(listener)) {
-        process.removeListener("rejectionHandled", listener);
+    for (const [event, previous] of listenerSnapshots) {
+      for (const listener of process.listeners(event)) {
+        if (!previous.includes(listener)) {
+          process.removeListener(event, listener);
+        }
       }
     }
     now.mockRestore();

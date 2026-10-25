@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ConfigSnapshotReadMeasure } from "../../../config/io.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../../../infra/state-migrations.media-persistence-targets.js";
@@ -10,13 +11,17 @@ import type {
 } from "../../../infra/state-migrations.types.js";
 import type { PluginCache } from "../../../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import type { AutomaticHeartbeatRepairAdmission } from "../../doctor-automatic-heartbeat-repair.js";
 import type { CronCodexRuntimePolicyTarget } from "../cron/store-migration.js";
 
 export type DoctorConfigPreflightOptions = {
   /** The full Doctor flow admits retired sources before entering maintenance. */
   retiredStateAdmitted?: boolean;
   stateSchemaPreparation?: LegacyStateMigrationStepReceipt;
+  /** Scoped updater normalization after maintenance and verified database backup admission. */
+  automaticHeartbeatRepair?: AutomaticHeartbeatRepairAdmission;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  integrityCheck?: "quick" | "full";
   migrateState?: boolean;
   /** Select Doctor normalization without enabling repair-only migrations. */
   invocationPurpose?: LegacyStateMigrationInvocationPurpose;
@@ -44,12 +49,51 @@ export type DoctorConfigPreflightResult = {
   rosterMigrationOwnerId?: string;
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   modelBillingRouteMigrationSource?: OpenClawConfig;
+  heartbeatMigrationSource?: OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   cronCodexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
   stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
+  /** Config whose pre-session state migrations completed without unresolved work. */
+  preflightLegacyStateConfig?: OpenClawConfig;
 };
+
+/** Keep migrated selectors with Doctor's model-policy owner until billing facts are captured. */
+export async function retainHeartbeatMigrationInput(
+  config: OpenClawConfig,
+  source: OpenClawConfig | undefined,
+): Promise<OpenClawConfig> {
+  const candidate = structuredClone(config);
+  if (source?.agents?.defaults?.heartbeat && candidate.agents) {
+    candidate.agents.defaults ??= {};
+    candidate.agents.defaults.heartbeat = structuredClone(source.agents.defaults.heartbeat);
+  }
+  for (const [agentId, entry] of Object.entries(candidate.agents?.entries ?? {})) {
+    const heartbeat = source?.agents?.entries?.[agentId]?.heartbeat;
+    if (heartbeat) {
+      entry.heartbeat = structuredClone(heartbeat);
+    }
+  }
+  if (source) {
+    const { resolveLegacyHeartbeatAgents } = await import("../../doctor-heartbeat-legacy.js");
+    const { resolveHeartbeatAutomationModel } = await import("../../doctor-heartbeat-model.js");
+    for (const { agentId, heartbeat } of resolveLegacyHeartbeatAgents(candidate)) {
+      const entry = candidate.agents?.entries?.[agentId];
+      const fallback = resolveHeartbeatAutomationModel(candidate, agentId).fallback;
+      if (entry && heartbeat) {
+        const { agentId: _agentId, ...perAgentHeartbeat } = heartbeat;
+        // Materialize every inherited owner before changing any selector's billing provenance.
+        entry.heartbeat = {
+          ...perAgentHeartbeat,
+          ...(fallback ? { model: fallback.defaultModel } : {}),
+        };
+      }
+    }
+  }
+  copyConfigResolutionFactsThroughRewrite(config, candidate);
+  return candidate;
+}
 
 /** Preserve migration provenance before repairs, then prepare the post-write health handoff. */
 export function prepareDoctorConfigMigrationResult(
@@ -64,23 +108,26 @@ export function prepareDoctorConfigMigrationResult(
     snapshot.sourceConfig;
   return async (params: {
     cfg: OpenClawConfig;
+    modelBillingRouteConfig?: OpenClawConfig;
     shouldWriteConfig: boolean;
     metadataSnapshot?: PluginMetadataSnapshot;
     pluginInventoryChanged?: boolean;
     runWithCurrentPluginMetadata: <T>(config: OpenClawConfig, run: () => T) => T;
   }) => {
     let modelBillingRouteWarnings: string[] = [];
+    // Heartbeat model intent moves to jobs before retired config fields disappear.
+    const billingRouteConfig = params.modelBillingRouteConfig ?? params.cfg;
     if (
       (params.shouldWriteConfig || preflight.modelBillingRouteMigrationSource) &&
-      (!isDeepStrictEqual(billingRouteSource.agents, params.cfg.agents) ||
-        !isDeepStrictEqual(billingRouteSource.models, params.cfg.models))
+      (!isDeepStrictEqual(billingRouteSource.agents, billingRouteConfig.agents) ||
+        !isDeepStrictEqual(billingRouteSource.models, billingRouteConfig.models))
     ) {
       const { collectModelBillingRouteMigrationWarnings } =
         await import("./model-billing-route-migration.js");
       modelBillingRouteWarnings = params.runWithCurrentPluginMetadata(params.cfg, () =>
         collectModelBillingRouteMigrationWarnings({
           before: billingRouteSource,
-          after: params.cfg,
+          after: billingRouteConfig,
           metadataSnapshot: params.metadataSnapshot,
         }),
       );
@@ -124,6 +171,11 @@ export function prepareDoctorConfigMigrationResult(
       ...(receipts ? { stateMigrationStepReceipts: receipts } : {}),
       ...(postSession ? { postSessionPluginMigration: postSession } : {}),
       ...(planBound ? { postSessionPluginMigrationPlanBound: true } : {}),
+      ...(!params.shouldWriteConfig &&
+      !params.pluginInventoryChanged &&
+      isDeepStrictEqual(preflight.preflightLegacyStateConfig, params.cfg)
+        ? { preflightLegacyStateConfig: preflight.preflightLegacyStateConfig }
+        : {}),
     };
   };
 }

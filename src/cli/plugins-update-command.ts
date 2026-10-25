@@ -79,7 +79,7 @@ const DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING =
   "--dangerously-force-unsafe-install is deprecated and no longer affects plugin updates because built-in install-time dangerous-code scanning has been removed. Configure security.installPolicy for operator-owned install decisions.";
 
 function logPluginUpdateOutcomes(
-  outcomes: readonly Pick<PluginUpdateOutcome, "status" | "message" | "channelFallback" | "code">[],
+  outcomes: readonly Pick<PluginUpdateOutcome, "status" | "message" | "code">[],
 ): 0 | 1 {
   let exitCode: 0 | 1 = 0;
   for (const outcome of outcomes) {
@@ -93,9 +93,6 @@ function logPluginUpdateOutcomes(
       defaultRuntime.log(theme.warn(outcome.message));
     } else {
       defaultRuntime.log(outcome.message);
-    }
-    if (outcome.channelFallback) {
-      defaultRuntime.log(theme.warn(outcome.channelFallback.message));
     }
   }
   return exitCode;
@@ -134,14 +131,21 @@ function mayMutatePluginInstallRecord(
   return Boolean(record?.marketplaceSource && record.marketplacePlugin);
 }
 
-function pluginConfigReferencesId(config: OpenClawConfig, pluginId: string) {
+function pluginConfigReferencesId(
+  config: OpenClawConfig,
+  pluginId: string,
+  record?: PluginInstallRecord,
+) {
   const plugins = config.plugins;
   return (
     plugins?.allow?.includes(pluginId) ||
     plugins?.deny?.includes(pluginId) ||
     Object.hasOwn(plugins?.entries ?? {}, pluginId) ||
     plugins?.slots?.memory === pluginId ||
-    plugins?.slots?.contextEngine === pluginId
+    plugins?.slots?.contextEngine === pluginId ||
+    Object.values(record?.contextEngineIdsByPlugin ?? {}).some((ids) =>
+      ids.includes(plugins?.slots?.contextEngine ?? ""),
+    )
   );
 }
 
@@ -416,7 +420,11 @@ async function runPluginUpdateCommandUnlocked(
           specOverride: pluginSelection.specOverrides?.[pluginId],
         }) &&
         (pluginReferencesMayBeUnresolved ||
-          pluginConfigReferencesId(mutationSnapshot.snapshot.sourceConfig, pluginId))
+          pluginConfigReferencesId(
+            mutationSnapshot.snapshot.sourceConfig,
+            pluginId,
+            pluginInstallRecords[pluginId],
+          ))
       );
     });
     const pluginLoadPathMayMutate = packageUpdateIds.some((pluginId) =>

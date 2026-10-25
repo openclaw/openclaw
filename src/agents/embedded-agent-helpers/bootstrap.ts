@@ -8,8 +8,8 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
+import { DEFAULT_BOOTSTRAP_MAX_CHARS } from "./bootstrap-limits.js";
 import type { EmbeddedContextFile } from "./context-file.js";
-export { sanitizeGoogleAssistantFirstOrdering as sanitizeGoogleTurnOrdering } from "../../shared/google-turn-ordering.js";
 
 type ContentBlockWithSignature = {
   thought_signature?: unknown;
@@ -84,7 +84,6 @@ export function stripThoughtSignatures<T>(
   }) as T;
 }
 
-const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
 // USER.md stays directive-sized so profile guidance cannot crowd out project
 // rules or durable facts from the shared bootstrap budget.
@@ -122,11 +121,6 @@ const MAX_TRIMMED_BOOTSTRAP_ENTRIES = 256;
 const warnedBootstrapTruncations = new Set<string>();
 
 type PolicyDigestCandidate = { text: string; highPriority: boolean };
-
-type PolicyDigest = {
-  text: string;
-  omittedLines: number;
-};
 
 function resolveBootstrapCharLimit(
   cfg: OpenClawConfig | undefined,
@@ -175,10 +169,7 @@ function normalizePolicyDigestLine(line: string): string {
   return `${truncateUtf16Safe(normalized, AGENTS_POLICY_DIGEST_MAX_LINE_CHARS - 1)}…`;
 }
 
-function buildAgentsPolicyDigest(
-  candidates: readonly PolicyDigestCandidate[],
-  budget: number,
-): PolicyDigest {
+function buildAgentsPolicyDigest(candidates: readonly PolicyDigestCandidate[], budget: number) {
   if (budget <= 0) {
     return { text: "", omittedLines: 0 };
   }

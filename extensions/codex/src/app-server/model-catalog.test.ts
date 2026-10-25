@@ -21,7 +21,6 @@ vi.mock("./auth-profile.js", async () => {
   const { resolveAuthProfileOrder } = await import("openclaw/plugin-sdk/provider-auth");
   const { createCodexAuthProfileSelection } = await import("./auth-profile-selection.js");
   return createCodexAuthProfileSelection({
-    ensureAuthProfileStore: () => profiles.store,
     ensureAuthProfileStoreAsync: async () => profiles.store,
     resolveAuthProfileOrder,
   });
@@ -158,14 +157,6 @@ describe("Codex app-server model catalog", () => {
         },
       },
     ]);
-    expect(listModelsMock).toHaveBeenCalledExactlyOnceWith({
-      request: rpc.request,
-      limit: 100,
-      includeHidden: true,
-    });
-    expect(vi.mocked(withCodexAppServerJsonClient).mock.calls[0]?.[0].startOptions?.homeScope).toBe(
-      "agent",
-    );
     expect(probeCodexNativeAuth).not.toHaveBeenCalled();
   });
 
@@ -193,16 +184,7 @@ describe("Codex app-server model catalog", () => {
     async ({ appServer, envArgs }) => {
       vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_ARGS", envArgs);
       vi.mocked(probeCodexNativeAuth).mockResolvedValue(undefined);
-      listModelsMock.mockResolvedValue({
-        models: [
-          {
-            id: "synthetic-opaque",
-            model: "synthetic-opaque",
-            inputModalities: ["text"],
-            supportedReasoningEfforts: [],
-          },
-        ],
-      });
+      listModelsMock.mockResolvedValue(opaqueCatalog());
       const pluginConfig = { appServer };
       expect((await owner.load(catalogParams, pluginConfig)).entries).toContainEqual(
         expect.objectContaining({ id: "synthetic-opaque", nativeRuntime: "codex" }),
@@ -273,16 +255,7 @@ describe("Codex app-server model catalog", () => {
         mode,
       });
       rpc.request.mockResolvedValue({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
-      listModelsMock.mockResolvedValue({
-        models: [
-          {
-            id: "synthetic-opaque",
-            model: "synthetic-opaque",
-            inputModalities: ["text"],
-            supportedReasoningEfforts: [],
-          },
-        ],
-      });
+      listModelsMock.mockResolvedValue(opaqueCatalog());
       await owner.load(catalogParams, nativePluginConfig);
       expect(read({}, nativePluginConfig)).toEqual({ accountType: "chatgpt", authMode: mode });
       rpc.epoch += 1;

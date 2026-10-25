@@ -72,6 +72,43 @@ retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
+### Runtime execution profile
+
+`getRuntimeExecutionProfile()` from `openclaw/plugin-sdk/runtime-env` returns
+`dynamic-execution` for Node/Bun installations and JIT/bytecode standalone hosts,
+or `embedded-aot` for an AOT standalone. The artifact owns this process-stable
+fact; it is not a user setting or an authorization grant.
+
+AOT hosts allow fetched CJS/TypeScript plugins, Node Code Mode, and QA expressions.
+The code supplied after compilation runs interpreted while plugins share the
+host's compiled SDK. Use `noteRuntimeDynamicExecution("plugins")` (or
+`"code-mode"` / `"qa"`) to emit the owner's one-time performance notice. Runtime
+and setup loading already report fetched plugin execution; do not log another
+warning per plugin or call.
+
+At an execution boundary, propagate
+`annotateRuntimeExecutionError(error, "Your feature name")`. It preserves ordinary
+errors and adds actionable guidance to actual code-generation restrictions or
+unavailable AOT modules. An AOT profile alone is never a reason to reject code.
+A strict code-generation ban still prevents disk/VM loading; use a build without
+that flag. A missing late module must be installed through the disk loader or
+included in a rebuilt artifact.
+
+Keep fixed programs as normal source functions, runtime schemas in codegen-free
+validators, and syntax checks in parsers. Declare worker/child entries and runtime
+dependencies; CJS/TS loading does not qualify every transitive host API or worker.
+Metadata discovery still does not execute plugin code. See
+[Runtime execution profiles](/concepts/runtime-profiles).
+
+### Process and network utilities
+
+`runInDetachedAsyncContext` from `openclaw/plugin-sdk/concurrency-runtime` starts
+work in the host's context-free async root. Use it at an independently admitted
+service request boundary when a long-lived listener can retain its startup
+caller's settled work scope or binding lease. Keep the service's lifetime,
+request authentication, and current source authority checks explicit; detaching
+does not grant authority or make an expired caller capability usable again.
+
 For libraries that accept a Node HTTP agent, use `createNodeProxyAgent` from
 `openclaw/plugin-sdk/fetch-runtime`. With `mode: "env"`, supply `targetUrl` for
 a fixed destination, or omit it when the library selects destinations itself
@@ -147,6 +184,38 @@ for the terminal's exit before releasing its backend resources.
 
 Sandbox command adapters retain the sandbox owner's per-stream output bound,
 `SANDBOX_COMMAND_MAX_BUFFER_BYTES`, from `openclaw/plugin-sdk/sandbox`.
+
+Bundled plugin worker and child entries use
+`createPluginRuntimeProcessEntrypoint(name, import.meta.url)` from
+`openclaw/plugin-sdk/process-runtime`, then `resolveRuntimeWorkerUrl(entry)`.
+The host's runtime-process manifest owns these cataloged targets, including their
+source and installed package paths; package `openclaw.build.workerEntries`
+metadata must agree with that manifest. Keep each worker in an explicit entry
+module rather than starting its host module again or passing source with
+`eval: true`.
+
+`resolvePackageRuntimeProcessEntrypointUrl(name, packageRoot)` resolves a declared
+host entry inside a selected OpenClaw package. It prefers its built entry,
+including an entry embedded in a standalone executable, and falls back to the
+source entry in a checkout. A package missing both entries is rejected. Pass the
+result to `resolveRuntimeWorkerArgv` to retain the host's Node/Bun loader policy.
+Managed MCP bridges use this owner for their stdio entrypoints.
+
+Dependency-owned child programs use
+`resolveRuntimeDependencyEntrypointUrl(name, import.meta.url)` from the same
+subpath. The host manifest owns their package specifiers; resolution retains the
+calling package's dependency tree and npm's standalone sidecar. These disk
+programs retain their external-runtime contract; declaring one does not embed
+its dependency graph into the standalone executable. Resolution selects the
+program without changing the selected runtime's execution capabilities. Copied
+plugin program assets use `resolvePluginRuntimeProcessAssetUrl(name, packageRoot)`
+and keep their package `staticAssets` declaration aligned with the runtime
+manifest. Exact embedded module membership takes precedence over loose disk
+candidates.
+
+Third-party plugins retain the explicit descriptor contract of
+`resolveRuntimeWorkerUrl`; loading new plugin code is a separate runtime boundary
+from declaring entries embedded in a standalone executable.
 
 `WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` retains workers and
 unconsumed inputs when termination fails. Retry `close()` on that same pool;
@@ -420,16 +489,25 @@ the optional `includeTrusted` list further restricts only events marked trusted
 by the dispatcher. Omitting it preserves existing behavior, and an empty list
 accepts only untrusted events that pass `include`/`exclude`. Event payload fields
 cannot override the dispatcher's trust metadata. Accepted plain event payloads
-share one frozen snapshot across listeners in a dispatch. Payloads with mutable
-opaque values (such as Maps or Dates) and private listener data retain individual
-copies. Listener mutations remain isolated from other listeners and producers;
-filtering does not change diagnostic collection or queue behavior.
+share one frozen snapshot across listeners in a dispatch. Plain private listener
+data also shares a frozen snapshot among interested trusted listeners, with
+listener-specific host attribution in a frozen shallow copy. Payloads with mutable
+opaque values (such as Maps or Dates) retain individual copies. Absent private data
+uses a shared frozen empty payload, including for
+OTel listeners without host-plugin attribution. Listener mutations remain isolated
+from other listeners and producers; filtering does not change diagnostic collection
+or queue behavior.
 
 ## Darwin process inspection
 
 Use `openclaw/plugin-sdk/process-runtime` for macOS process observations.
+This is a breaking Plugin SDK change: `DarwinProcess.uid` is replaced by
+`owner: "same" | "different" | "unknown"`. Replace comparisons such as
+`row.uid === process.getuid()` with `row.owner === "same"`; unknown ownership
+does not authorize cleanup.
 Core cleanup and plugins share this owner. `readDarwinProcessSnapshot(deadline, pids?)`
-returns PID, parent PID, process group, state, effective UID, and an opaque `startedAt`
+returns PID, parent PID, process group, state, ownership (`same`, `different`, or
+`unknown` relative to the observer), and an opaque `startedAt`
 identity. Omitting `pids` requests all start identities and can fail for other users.
 Prefer `readDarwinProcessTree(deadline, roots)` for containment: it reads complete
 process topology, then start identities only for the roots, their descendants,
@@ -440,10 +518,11 @@ command fingerprint when authorizing cleanup of a retained PID.
 `readDarwinProcessCommandLine(pid, deadline)` returns joined arguments and never reads
 process environment values. Deadlines use `performance.now()` milliseconds.
 
-Bun uses in-process libproc for identities and the pinned proc-safe native argument
-reader, so neither operation executes `ps`. Node has no Bun FFI and the pinned
-proc-safe package has no Darwin census API; Node retains deadline-bounded `ps`
-inspection. There is no fallback from failed native inspection to `ps` under Bun.
+Node and Bun use the pinned proc-safe native census and argument reader, so neither
+operation executes `ps`, including inside macOS Seatbelt sandboxes. Unreadable
+topology fails the census; unrelated unreadable birth identities do not prevent
+inspection of a selected tree. There is no fallback from failed native inspection to `ps`.
 A missing PID is omitted, while `DarwinProcessInspectionError.reason` distinguishes
-`permission`, `deadline`, and `unavailable`. Callers must not treat these errors as
+`permission`, `deadline`, and `unavailable`; its `code` is respectively `EPERM`,
+`ETIMEDOUT`, or `EIO`. Callers must not treat these errors as
 proof that a process or integration is absent.

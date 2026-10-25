@@ -92,6 +92,7 @@ interface CopilotToolBridgeInput {
 
 interface CopilotToolBridge {
   cleanup?: () => void;
+  settle?: () => Promise<void>;
   codeModeEngaged?: boolean;
   promptToolPolicy: {
     requireExplicitMessageTarget?: boolean;
@@ -171,9 +172,6 @@ export async function createCopilotToolBridge(
   );
 
   const hostCapabilities = attemptParams.hostCapabilities;
-  if (!hostCapabilities) {
-    throw new Error("Copilot attempt tools require host-bound capabilities.");
-  }
   const bindingCwd = toolOptions.cwd ?? toolOptions.workspaceDir;
   const bindingOptions = bindingCwd ? { cwd: bindingCwd } : undefined;
   const createToolSurfaceAsync = hostCapabilities.createToolSurfaceAsync;
@@ -199,9 +197,6 @@ export async function createCopilotToolBridge(
     newlyConstructedTools.length > 0
       ? hostCapabilities.bindToolSurface(newlyConstructedTools, bindingOptions)
       : newlyConstructedTools;
-  if (boundNewlyConstructedTools.length !== newlyConstructedTools.length) {
-    throw new Error("Copilot host capability changed the tool surface length.");
-  }
   const newlyBoundTools = new Map<AnyAgentTool, AnyAgentTool>();
   for (let index = 0; index < newlyConstructedTools.length; index += 1) {
     newlyBoundTools.set(newlyConstructedTools[index]!, boundNewlyConstructedTools[index]!);
@@ -221,7 +216,11 @@ export async function createCopilotToolBridge(
   const runInAttemptContext = AsyncLocalStorage.snapshot();
   let sequentialBarrier = Promise.resolve();
   const pendingCalls = new Set<Promise<void>>();
+  let acceptingCalls = true;
   const scheduleToolExecution: ScheduleToolExecution = (executionMode, execute) => {
+    if (!acceptingCalls) {
+      return Promise.reject(new Error("[copilot-tool-bridge] attempt is closing"));
+    }
     // SDK handlers arrive independently. An exclusive call waits for earlier
     // work across the attempt and blocks later calls, regardless of tool name.
     const ready = executionMode === "sequential" ? Promise.all(pendingCalls) : sequentialBarrier;
@@ -242,6 +241,10 @@ export async function createCopilotToolBridge(
   );
   return {
     cleanup: toolSurfaceRuntime.cleanup,
+    settle: async () => {
+      acceptingCalls = false;
+      await Promise.all(pendingCalls);
+    },
     // Report the resolved auto mode, which only the tool-surface owner knows.
     codeModeEngaged: toolSurfaceRuntime.codeModeControlsEnabled,
     promptToolPolicy: {
@@ -356,8 +359,6 @@ async function buildOpenClawCodingToolsOptions(
       a.requireExplicitMessageTarget ?? isSubagentSessionKey(liveSessionKey),
     disableMessageTool: a.disableMessageTool,
     forceMessageTool: a.forceMessageTool,
-    enableHeartbeatTool: a.enableHeartbeatTool,
-    forceHeartbeatTool: a.forceHeartbeatTool,
     authProfileStore: a.toolAuthProfileStore ?? a.authProfileStore,
     computerContextEpoch: input.computerContextEpoch,
     onToolOutcome: a.onToolOutcome,
@@ -381,16 +382,6 @@ function convertOpenClawToolToSdkTool(
   input: CopilotToolBridgeInput,
   scheduleToolExecution: ScheduleToolExecution,
 ): SdkTool {
-  if (typeof sourceTool.name !== "string" || sourceTool.name.trim().length === 0) {
-    throw new Error("[copilot-tool-bridge] tool name must be a non-empty string");
-  }
-
-  if (typeof sourceTool.execute !== "function") {
-    throw new Error(
-      `[copilot-tool-bridge] tool '${sourceTool.name}' must define an execute function`,
-    );
-  }
-
   const ownerKey = getPluginToolSideEffectOwnerKey(sourceTool);
   const ownerMutation = ownerKey ? { ownerKey } : undefined;
   const notifyToolResult = (result: unknown, isError: boolean) => {
@@ -646,9 +637,6 @@ export function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams):
 function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {
   const counts = new Map<string, number>();
   for (const sourceTool of sourceTools) {
-    if (typeof sourceTool.name !== "string" || sourceTool.name.length === 0) {
-      continue;
-    }
     counts.set(sourceTool.name, (counts.get(sourceTool.name) ?? 0) + 1);
   }
   return [...counts.entries()]

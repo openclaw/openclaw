@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { readResponseWithLimit } from "../../src/infra/http-response-body.js";
 import type { ManagedRun } from "../../src/process/supervisor/types.js";
 import type { CodeModeMatrixCellResult, RunCellParams } from "../code-mode-model-matrix.ts";
+import { createBuildSmokeEnv } from "./build-smoke-env.mts";
 import { createGatewayMatrixConfig } from "./code-mode-matrix-config.ts";
 import {
   createGatewayMatrixFixture,
@@ -31,6 +32,7 @@ import {
   type MatrixPerformanceTask,
 } from "./code-mode-matrix-performance-fixtures.ts";
 import type { MatrixPerformanceFixture } from "./code-mode-matrix-performance-types.ts";
+import { createGatewayMatrixProcessSupervisor } from "./code-mode-matrix-process-owner.ts";
 import {
   classifyCodeModeMatrixProviderFailure,
   matrixProviderEnv,
@@ -1436,9 +1438,7 @@ export async function runGatewayMatrixCell(
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
     SystemRoot: process.env.SystemRoot,
-    HOME: path.join(root, "home"),
-    USERPROFILE: path.join(root, "home"),
-    OPENCLAW_HOME: path.join(root, "home"),
+    ...createBuildSmokeEnv(path.join(root, "home"), {}),
     TMPDIR: path.join(root, "tmp"),
     TEMP: path.join(root, "tmp"),
     TMP: path.join(root, "tmp"),
@@ -1457,9 +1457,10 @@ export async function runGatewayMatrixCell(
     NO_COLOR: "1",
   };
   const startedAt = Date.now();
-  const { createProcessSupervisor } = await import("../../src/process/supervisor/supervisor.js");
+  const supervisor = await createGatewayMatrixProcessSupervisor(
+    params.runtime.processOwnerBootstrap,
+  );
   const { runCommandWithTimeout } = await import("../../src/process/exec.js");
-  const supervisor = createProcessSupervisor();
   const scopeKey = `code-mode-matrix:${randomUUID()}`;
   const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   let child: ManagedRun | undefined;

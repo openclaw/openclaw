@@ -4,13 +4,16 @@ import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { CoreConfig, MatrixConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import {
-  createMatrixHandlerTestHarness,
-  createMatrixTextMessageEvent,
+  createMatrixHandlerTestHarness as createHarness,
+  createMatrixTextMessageEvent as textMessage,
 } from "./handler.test-helpers.js";
 import type { MatrixRawEvent } from "./types.js";
 
 const roomId = "!room:example.org";
 const botUserId = "@bot:example.org";
+const rootBody = "Discussion started by the bot";
+const strict = { requireMentionInBotThreads: true } satisfies MatrixConfig;
+const relaxed = { requireMentionInBotThreads: false } satisfies MatrixConfig;
 
 describe("Matrix bot-owned thread mention policy", () => {
   beforeEach(() => installMatrixMonitorTestRuntime());
@@ -19,17 +22,13 @@ describe("Matrix bot-owned thread mention policy", () => {
     expect(MatrixConfigSchema.parse(matrix)).toEqual(matrix);
     const cfg: CoreConfig = { channels: { matrix } };
     const accountConfig = resolveMatrixAccountConfig({ cfg, accountId: "work" });
-    const root = createMatrixTextMessageEvent({
-      eventId: "$root",
-      sender: botUserId,
-      body: "Discussion started by the bot",
-    });
+    const root = textMessage({ eventId: "$root", sender: botUserId, body: rootBody });
     const getEvent = vi.fn(async () => root);
     const dispatch = vi.fn(async () => ({
       queuedFinal: false,
       counts: { final: 0, block: 0, tool: 0 },
     }));
-    const harness = createMatrixHandlerTestHarness({
+    const harness = createHarness({
       cfg,
       accountId: "work",
       accountConfig,
@@ -44,10 +43,10 @@ describe("Matrix bot-owned thread mention policy", () => {
       root,
       getEvent,
       dispatch,
-      receive: (overrides: Partial<Parameters<typeof createMatrixTextMessageEvent>[0]> = {}) =>
+      receive: (overrides: Partial<Parameters<typeof textMessage>[0]> = {}) =>
         harness.handler(
           roomId,
-          createMatrixTextMessageEvent({
+          textMessage({
             eventId: "$followup",
             body: "Continue the discussion",
             relatesTo: { rel_type: "m.thread", event_id: "$root" },
@@ -57,43 +56,24 @@ describe("Matrix bot-owned thread mention policy", () => {
     };
   }
 
-  it.each<{ scope: string; config: MatrixConfig }>([
-    {
-      scope: "account",
-      config: {
-        requireMentionInBotThreads: true,
-        accounts: { work: { requireMentionInBotThreads: false } },
-      },
-    },
-    {
-      scope: "exact group",
-      config: {
-        groups: {
-          "*": { requireMentionInBotThreads: true },
-          [roomId]: { requireMentionInBotThreads: false },
-        },
-      },
-    },
-  ])("accepts unmentioned bot-thread replies with $scope configuration", async ({ config }) => {
+  it.each<[string, MatrixConfig]>([
+    ["account", { ...strict, accounts: { work: relaxed } }],
+    ["exact group", { groups: { "*": strict, [roomId]: relaxed } }],
+  ])("accepts unmentioned bot-thread replies with %s configuration", async (_scope, config) => {
     const f = setup(config);
-
     await f.receive();
-
     expect(f.dispatch).toHaveBeenCalledOnce();
-    expect(f.recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          BodyForAgent: "Continue the discussion",
-          ThreadStarterBody: expect.stringContaining("Discussion started by the bot"),
-        }),
-      }),
-    );
+    expect(vi.mocked(f.recordInboundSession).mock.calls[0]?.[0]).toMatchObject({
+      ctx: {
+        BodyForAgent: "Continue the discussion",
+        ThreadStarterBody: expect.stringContaining(rootBody),
+      },
+    });
     expect(f.getEvent).toHaveBeenCalledTimes(1);
   });
 
   it("retains mention gating when bot-thread policy explicitly requires it", async () => {
-    const f = setup({ requireMentionInBotThreads: true, rooms: { [roomId]: { autoReply: true } } });
-
+    const f = setup({ ...strict, rooms: { [roomId]: { autoReply: true } } });
     await f.receive();
     expect(f.dispatch).not.toHaveBeenCalled();
 
@@ -105,48 +85,29 @@ describe("Matrix bot-owned thread mention policy", () => {
     expect(f.dispatch).toHaveBeenCalledOnce();
   });
 
-  it.each<{ kind: string; patch: Partial<MatrixRawEvent> | null }>([
-    { kind: "another author's root", patch: { sender: "@other:example.org" } },
-    { kind: "another event id", patch: { event_id: "$other" } },
-    { kind: "another room", patch: { room_id: "!other:example.org" } },
-    { kind: "an unreadable root", patch: null },
-  ])("retains mention gating for $kind", async ({ patch }) => {
-    const f = setup({ requireMentionInBotThreads: false });
+  it.each<[string, Partial<MatrixRawEvent> | null, number]>([
+    ["another author's root", { sender: "@other:example.org" }, 0],
+    ["another event id", { event_id: "$other" }, 0],
+    ["another room", { room_id: "!other:example.org" }, 0],
+    ["an unreadable root", null, 0],
+    ["a redacted bot-authored root", { content: {}, unsigned: { redacted_because: {} } }, 1],
+  ])("applies bot-thread ownership gating to %s", async (_kind, patch, dispatches) => {
+    const f = setup(relaxed);
     if (patch) {
       f.getEvent.mockResolvedValue({ ...f.root, ...patch });
     } else {
       f.getEvent.mockRejectedValue(new Error("M_FORBIDDEN"));
     }
-
     await f.receive();
-
-    expect(f.dispatch).not.toHaveBeenCalled();
+    expect(f.dispatch).toHaveBeenCalledTimes(dispatches);
   });
 
-  it("accepts a bot-authored root whose content was redacted", async () => {
-    const f = setup({ requireMentionInBotThreads: false });
-    f.getEvent.mockResolvedValue({
-      ...f.root,
-      content: {},
-      unsigned: { redacted_because: {} },
-    });
-
+  it.each<[string, MatrixConfig]>([
+    ["disabled rooms", { groupPolicy: "disabled" }],
+    ["room sender allowlists", { rooms: { [roomId]: { users: ["@trusted:example.org"] } } }],
+  ])("preserves %s inside bot threads", async (_restriction, config) => {
+    const f = setup({ ...config, ...relaxed });
     await f.receive();
-
-    expect(f.dispatch).toHaveBeenCalledOnce();
-  });
-
-  it.each<{ restriction: string; config: MatrixConfig }>([
-    { restriction: "disabled rooms", config: { groupPolicy: "disabled" } },
-    {
-      restriction: "room sender allowlists",
-      config: { rooms: { [roomId]: { users: ["@trusted:example.org"] } } },
-    },
-  ])("preserves $restriction inside bot threads", async ({ config }) => {
-    const f = setup({ ...config, requireMentionInBotThreads: false });
-
-    await f.receive();
-
     expect(f.dispatch).not.toHaveBeenCalled();
     expect(f.getEvent).not.toHaveBeenCalled();
   });

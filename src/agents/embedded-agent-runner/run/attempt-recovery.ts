@@ -181,6 +181,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     !isCompactionReplayCheckpoint(recoveryAssistant.providerReplay) &&
     recoveryAssistant.content.length === 0 &&
     !isContextOverflow(recoveryAssistant, runtime.contextTokenBudget) &&
+    !attempt.lastToolError &&
     !hasAttemptTerminalState(attempt) &&
     !hasComposedVisibleAnswerAfterSettledTools(attempt);
   const emptyLengthNeedsContinuation =
@@ -461,9 +462,11 @@ export async function recoverEmbeddedRunAttempt(input: {
           data: {
             phase: "retrying",
             message:
-              reason === "rate_limit" || reason === "output_limit"
-                ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
-                : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
+              reason === "rate_limit"
+                ? `Waiting for rate limit… ${Math.ceil(delayMs / 1_000)}s (attempt ${retryAttempt + 1}/${maxRetries + 1}).`
+                : reason === "output_limit"
+                  ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
+                  : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
             retryAttempt,
             maxRetries,
             delayMs,
@@ -504,10 +507,23 @@ export async function recoverEmbeddedRunAttempt(input: {
       );
       runInput.laneController.throwIfAborted();
     }
+    // A provider rejection that streamed nothing changed no transcript state after
+    // settled tools, so the same user turn can be resent instead of continued.
+    // Native harness threads take every prompt as a new turn and keep continuing.
+    const rejectedWithoutOutput =
+      !runtime.pluginHarnessOwnsTransport &&
+      !promptError &&
+      !outputLimitFailure &&
+      attemptAssistant?.stopReason === "error" &&
+      attemptAssistant.content.length === 0 &&
+      (currentAttemptReplaySafe || settledEvidence.allToolsProvenSettled) &&
+      attempt.itemLifecycle.activeCount === 0 &&
+      toolsAllowContinuation;
     sessionPromptState.markOwnedTranscriptRetry();
     sessionPromptState.continueFromCurrentTranscript({
       includeToolFailureInstruction: Boolean(attempt.lastToolError),
       messages: attempt.messagesSnapshot,
+      ...(rejectedWithoutOutput ? { replayCurrentUserTurn: true } : {}),
     });
     recordRecoveryDecision("accepted", "transient_retry");
     return retry({

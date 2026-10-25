@@ -86,7 +86,7 @@ describe("selected bundled install config recovery", () => {
         issues: [{ path: `channels.${pluginId}`, message: `unknown channel id: ${pluginId}` }],
       });
 
-      const selectsBundle = !sourceCheckout || raw === pluginId;
+      const selectsBundle = raw === pluginId;
       const allowsRecovery = selectsBundle && allowInvalidConfigRecovery;
       const assertAdmission = async (request: PluginInstallRequestContext | null) => {
         expect(request).not.toBeNull();
@@ -114,7 +114,6 @@ describe("selected bundled install config recovery", () => {
             resolvePluginInstallPreactionRequest({
               actionCommand,
               commandPath: ["plugins", "install"],
-              argv,
             }),
           );
         })
@@ -131,7 +130,12 @@ describe("selected bundled install config recovery", () => {
           expect(preflight.sourcePlan?.request).toEqual(
             selectsBundle
               ? { source: "bundled", pluginId, spec: raw }
-              : { source: "npm", spec: raw, mode: "install" },
+              : {
+                  source: "clawhub",
+                  packageName: "@fixture/recovery",
+                  version: raw.endsWith("@1.2.3") ? "1.2.3" : undefined,
+                  mode: "install",
+                },
           );
           await assertAdmission(preflight.request);
         });

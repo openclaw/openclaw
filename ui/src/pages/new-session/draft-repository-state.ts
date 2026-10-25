@@ -1,3 +1,7 @@
+import {
+  GatewayProtocolRequestError,
+  readMissingScopeError,
+} from "@openclaw/gateway-client/browser";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   AgentSummary,
@@ -34,6 +38,8 @@ type DraftRepositoryCallbacks = {
   ) => ((consume: () => void) => void | Promise<void>) | undefined;
 };
 
+export type DraftRepositoryRead<T> = Readonly<{ completed: Promise<T> }>;
+
 type ResolvedRepository = Exclude<DraftRepositoryState, { kind: "checking" }>;
 
 function initialRepositoryState(snapshot: DraftRepositorySnapshot): DraftRepositoryState {
@@ -64,6 +70,17 @@ export class DraftRepositoryStateOwner {
   private requestToken = 0;
   private checkoutScope: { project: ProjectRecord; agentId: string } | undefined;
   private checkoutOptions: ProjectsCheckoutOptionsResult | "loading" | "error" | undefined;
+
+  private checkoutReadValue: DraftRepositoryRead<ProjectsCheckoutOptionsResult> | undefined;
+  private repositoryReadValue: DraftRepositoryRead<WorktreesBranchesResult> | undefined;
+
+  get checkoutRead() {
+    return this.checkoutReadValue;
+  }
+
+  get repositoryRead() {
+    return this.repositoryReadValue;
+  }
 
   private selectionRevision = 0;
   private preferredWorktreeRestore = false;
@@ -206,6 +223,8 @@ export class DraftRepositoryStateOwner {
     this.repositoryValue = { kind: "idle" };
     this.checkoutScope = undefined;
     this.checkoutOptions = undefined;
+    this.checkoutReadValue = undefined;
+    this.repositoryReadValue = undefined;
   }
 
   selectWorktree(value: boolean, clearName = true) {
@@ -346,12 +365,15 @@ export class DraftRepositoryStateOwner {
         ? { project: snapshot.selectedProject, agentId: snapshot.agentId }
         : undefined;
     this.checkoutOptions = this.checkoutScope ? "loading" : undefined;
+    this.checkoutReadValue = undefined;
+    this.repositoryReadValue = undefined;
     if (this.checkoutScope && snapshot.gateway?.phase === "connected" && snapshot.gateway.client) {
-      void snapshot.gateway.client
-        .request<ProjectsCheckoutOptionsResult>("projects.checkoutOptions", {
-          projectId: this.checkoutScope.project.id,
-          agentId: this.checkoutScope.agentId,
-        })
+      const completed = snapshot.gateway.client.request<ProjectsCheckoutOptionsResult>(
+        "projects.checkoutOptions",
+        { projectId: this.checkoutScope.project.id, agentId: this.checkoutScope.agentId },
+      );
+      this.checkoutReadValue = { completed };
+      void completed
         .then((options) => {
           if (requestId !== this.requestToken || !this.matchesProjectCheckout()) {
             return;
@@ -377,11 +399,12 @@ export class DraftRepositoryStateOwner {
     }
     const { repoRoot } = discovery;
     this.repositoryValue = discovery;
-    void client
-      .request<WorktreesBranchesResult>("worktrees.branches", {
-        repoRoot,
-        includeRepositoryStatus: true,
-      })
+    const completed = client.request<WorktreesBranchesResult>("worktrees.branches", {
+      repoRoot,
+      includeRepositoryStatus: true,
+    });
+    this.repositoryReadValue = { completed };
+    void completed
       .then((result) => {
         if (requestId !== this.requestToken) {
           return;
@@ -399,11 +422,21 @@ export class DraftRepositoryStateOwner {
             : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot },
         );
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (requestId !== this.requestToken) {
           return;
         }
-        this.adoptResolvedRepository({ kind: "unavailable", repoRoot });
+        const missing = readMissingScopeError(error);
+        this.adoptResolvedRepository(
+          missing ||
+            (error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN")
+            ? {
+                kind: "forbidden",
+                repoRoot,
+                ...(missing ? { missingScope: missing.missingScope } : {}),
+              }
+            : { kind: "unavailable", repoRoot },
+        );
       });
   }
 

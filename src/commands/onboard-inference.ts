@@ -1,4 +1,3 @@
-// Inference backend detection shared by onboarding bootstrap and OpenClaw setup.
 import os from "node:os";
 import path from "node:path";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
@@ -41,34 +40,16 @@ export {
  * presence are detection evidence; explicit setup verifies the selected login.
  */
 
-type DetectInferenceBackendsDeps = {
-  probeLocalCommand?: typeof probeLocalCommand;
-  hasCodexCliAuthFile?: () => boolean;
-  readGeminiCliCredentials?: () => { type: string } | null;
-};
-
-type DetectInferenceBackendsOptions = {
-  config?: OpenClawConfig;
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  deps?: DetectInferenceBackendsDeps;
-};
-
 // ChatGPT.app is the current desktop owner; keep Codex stable/beta as fallbacks.
 const CODEX_MACOS_APP_NAMES = ["ChatGPT.app", "Codex.app", "Codex Beta.app"] as const;
 const CODEX_MACOS_APP_PROBE_TIMEOUT_MS = 3_000;
 
-async function probeCodexCommand(params: {
-  probe: typeof probeLocalCommand;
-  env: NodeJS.ProcessEnv;
-  platform: NodeJS.Platform;
-}): Promise<LocalCommandProbe> {
-  const pathProbe = await params.probe("codex");
-  if (pathProbe.found || pathProbe.failure === "error" || params.platform !== "darwin") {
+async function probeCodexCommand(): Promise<LocalCommandProbe> {
+  const pathProbe = await probeLocalCommand("codex");
+  if (pathProbe.found || pathProbe.failure === "error" || process.platform !== "darwin") {
     return pathProbe;
   }
-  const home = params.env.HOME?.trim() || os.homedir();
+  const home = process.env.HOME?.trim() || os.homedir();
   const appExecutables = new Set(
     CODEX_MACOS_APP_NAMES.flatMap((appName) => [
       path.join("/Applications", appName, "Contents", "Resources", "codex"),
@@ -79,7 +60,7 @@ async function probeCodexCommand(params: {
     // ChatGPT.app's signed Codex binary can spend most of the generic 1.5s
     // probe budget in macOS cold-start validation. Keep the broader probe
     // contract tight while giving known desktop-app binaries enough headroom.
-    const appProbe = await params.probe(executable, ["--version"], {
+    const appProbe = await probeLocalCommand(executable, ["--version"], {
       timeoutMs: CODEX_MACOS_APP_PROBE_TIMEOUT_MS,
     });
     if (appProbe.found || appProbe.failure === "error") {
@@ -94,24 +75,11 @@ async function probeCodexCommand(params: {
  * Native CLI discovery stays passive; environment credentials precede unverified CLIs.
  */
 export async function detectInferenceBackends(
-  options: DetectInferenceBackendsOptions = {},
+  options: {
+    config?: OpenClawConfig;
+    agentId?: string;
+  } = {},
 ): Promise<InferenceBackendCandidate[]> {
-  const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
-  const probe = options.deps?.probeLocalCommand ?? probeLocalCommand;
-  const hasCodexLogin =
-    options.deps?.hasCodexCliAuthFile ??
-    (() => {
-      const home = resolveOsHomeDir(env, env === process.env ? os.homedir : () => "");
-      if (!home && !env.CODEX_HOME?.trim()) {
-        return false;
-      }
-      return hasCodexCliAuthFile(resolveCodexCliHomePath(undefined, env));
-    });
-  const readGemini =
-    options.deps?.readGeminiCliCredentials ??
-    (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
-
   const candidates: InferenceBackendCandidate[] = [];
   const defaultAgentId = options.config
     ? options.agentId?.trim() || tryResolveLegacyCompatibilityAgentId(options.config)
@@ -144,12 +112,12 @@ export async function detectInferenceBackends(
       credentials: true,
     });
   }
-  const envCandidates = detectAmbientInferenceBackends(env);
+  const envCandidates = detectAmbientInferenceBackends();
 
   const [claudeProbe, codexProbe, geminiProbe] = await Promise.all([
-    probe("claude"),
-    probeCodexCommand({ probe, env, platform }),
-    probe("gemini"),
+    probeLocalCommand("claude"),
+    probeCodexCommand(),
+    probeLocalCommand("gemini"),
   ]);
   if (codexProbe.failure === "error" || codexProbe.timedOut) {
     throw new Error(
@@ -167,7 +135,8 @@ export async function detectInferenceBackends(
   }
   let storedCodexCredentials: boolean;
   try {
-    storedCodexCredentials = hasCodexLogin();
+    const home = resolveOsHomeDir(process.env) || process.env.CODEX_HOME?.trim();
+    storedCodexCredentials = Boolean(home) && hasCodexCliAuthFile(resolveCodexCliHomePath());
   } catch (error) {
     throw new Error(
       `Codex sign-in detection failed: ${formatErrorMessage(error)}. Check access to the Codex home, then retry setup.`,
@@ -194,7 +163,8 @@ export async function detectInferenceBackends(
     // oauth_creds.json is only a legacy migration source. Its absence cannot
     // distinguish logout from a modern login, and probing the secure store can
     // prompt the user, so only readable legacy credentials are conclusive.
-    const credentials = readGemini() !== null ? true : undefined;
+    const credentials =
+      readGeminiCliCredentialsCached({ ttlMs: 60_000 }) !== null ? true : undefined;
     cliCandidates.push({
       kind: "gemini-cli",
       modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,

@@ -1,6 +1,6 @@
 import { err, ok } from "@openclaw/normalization-core/result";
 import { requestSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import type {
@@ -171,6 +171,8 @@ export function executePluginStateCommand(
   hasRetainedDatabase: boolean,
 ): PluginStateWriteOperations[keyof PluginStateWriteOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
+  // Initial grants may wait for the host, so request them before taking the writer.
+  // Commit grants still recheck session authority inside the transaction.
   const admit = (stage: "transaction" | "commit") =>
     requestSessionEntriesCurrentAdmission(command.input?.sessionEntryCurrentSources, {
       stage,
@@ -198,8 +200,19 @@ export function executePluginStateCommand(
         const result = withPluginStateDatabaseReadOnly(
           "lookup",
           (store) => {
+            const shortcut = command.input.ifEmpty;
+            if (shortcut) {
+              const probe = executePluginStateOperation(
+                store,
+                command.input,
+                (_command, tx) => tx.entries(shortcut.store).length === 0,
+              );
+              if (probe.value) {
+                return { ...probe, value: shortcut.value, emptyShortcut: true as const };
+              }
+            }
             const run = () => executePluginStateOperation(store, command.input, handler);
-            return store.db.isTransaction ? run() : runSqliteDeferredTransactionSync(store.db, run);
+            return store.db.isTransaction ? run() : runSqliteReadSnapshotSync(store.db, run);
           },
           options,
         );
@@ -209,17 +222,16 @@ export function executePluginStateCommand(
         return ok(result);
       }
       const database = openDatabase();
+      admit("transaction");
       return ok(
         runOpenClawStateWriteTransaction(
           (store) => {
-            admit("transaction");
             const result = withPluginStateWorkerReceipt(
               store.db,
               () => executePluginStateOperation(store, command.input, handler),
-              (completed): PluginStateOperationCommit => ({
+              (): PluginStateOperationCommit => ({
                 pluginStateOperation: {
                   receiptId: command.input.receiptId,
-                  validUntil: completed.validUntil,
                 },
               }),
             );
@@ -268,9 +280,9 @@ export function executePluginStateCommand(
   try {
     if (command.type === "pluginState.replaceEntry") {
       // Replacing an approval first revokes its predecessor, even if registration fails.
+      admit("transaction");
       runOpenClawStateWriteTransaction(
         (store) => {
-          admit("transaction");
           withPluginStateWorkerReceipt(store.db, () =>
             deletePluginStateEntry(store.db, command.input),
           );
@@ -279,10 +291,10 @@ export function executePluginStateCommand(
         { ...options, database },
       );
     }
+    admit("transaction");
     return ok(
       runOpenClawStateWriteTransaction(
         (store) => {
-          admit("transaction");
           const result = withPluginStateWorkerReceipt(store.db, () => {
             switch (command.type) {
               case "pluginState.appendJournal":

@@ -9,7 +9,10 @@ import {
   type Page,
 } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, vi } from "vitest";
-import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../../src/process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -108,6 +111,17 @@ type HeldModuleContext = {
   closing: boolean;
   pages: Map<Page, Array<{ close: () => Promise<void>; installed: ReturnType<Page["route"]> }>>;
 };
+
+const waitForGatewayWorkToSettle = () =>
+  vi.waitFor(
+    () =>
+      expect(
+        getActiveGatewayRootWorkCount(),
+        `Unsettled Gateway roots: ${getActiveGatewayRootWorkHolders().join(", ")}`,
+      ).toBe(0),
+    { interval: 100, timeout: 15_000 },
+  );
+
 const heldModuleContexts = new WeakMap<BrowserContext, HeldModuleContext>();
 
 function getHeldModuleContext(context: BrowserContext): HeldModuleContext {
@@ -130,6 +144,7 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
   void request.promise.catch(() => {});
   const release = () => gate.resolve();
   const callbacks = new Set<Promise<void>>();
+  const failures: unknown[] = [];
   let requests = 0;
   const installed = page.route(module, (route) => {
     if (held.closing) {
@@ -140,7 +155,8 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
       const closingAtStart = held.closing;
       let phase = "fetch";
       try {
-        const response = await route.fetch();
+        // A reset while fetching a local asset is transport noise; HTTP failures still surface.
+        const response = await route.fetch({ maxRetries: 1 });
         expect(response.status()).toBe(200);
         request.resolve(route.request().url());
         phase = "held";
@@ -166,22 +182,39 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
         } catch {
           // Preserve the route failure if diagnostics cannot be written.
         }
+        try {
+          await route.abort("failed");
+        } catch (abortError) {
+          throw new AggregateError(
+            [error, abortError],
+            "Held module fetch failed and its route could not be aborted",
+            { cause: abortError },
+          );
+        }
         throw error;
       }
     })();
-    callbacks.add(callback);
-    const completed = () => callbacks.delete(callback);
-    void callback.then(completed, completed);
-    return callback;
+    const owned: Promise<void> = callback.then(
+      () => {
+        callbacks.delete(owned);
+      },
+      (error: unknown) => {
+        callbacks.delete(owned);
+        failures.push(error);
+      },
+    );
+    callbacks.add(owned);
+    return owned;
   });
   // Register before awaiting installation so teardown also owns a pending route().
   const registrations = held.pages.get(page) ?? [];
   registrations.push({
-    close: () => {
+    close: async () => {
       release();
       request.reject(new Error("Browser context cleanup canceled the held module request"));
       // unrouteAll(wait) can auto-continue a sibling before its held fetch completes.
-      return settleControlUiCleanup([...callbacks]);
+      await settleControlUiCleanup([...callbacks]);
+      throwControlUiCleanupErrors(failures);
     },
     installed,
   });
@@ -358,12 +391,6 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           () => context.close(),
         );
         held.pages.clear();
-        // Requests outlive sockets; pending handlers must release their admission
-        // roots before fixture cleanup. waitFor also works in afterAll.
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
-          interval: 100,
-          timeout: 15_000,
-        });
         openBrowserContexts.delete(context);
       });
       contextClosures.set(context, closing);
@@ -486,6 +513,10 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               closeOpenBrowserContexts(owner),
               Promise.resolve().then(scenario.close),
             ]);
+            // Requests can outlive sockets and settle only when their Gateway closes.
+            if (scenario.close) {
+              await waitForGatewayWorkToSettle();
+            }
             // A close can settle after the cleanup deadline retired this fork.
             assertControlUiForkActive();
             await scenario.release?.();
@@ -610,6 +641,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               () => browser?.close(),
               () => resources?.close?.(),
               () => server?.close(),
+              waitForGatewayWorkToSettle,
             ]) {
               try {
                 await close();

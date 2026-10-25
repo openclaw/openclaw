@@ -13,6 +13,7 @@ import {
 } from "../../agents/sessions/session-manager-message-admission.worker.js";
 import { readSessionManagerReload } from "../../agents/sessions/session-manager-reload.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { isUserMessage } from "../../sessions/user-turn-transcript.message.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
@@ -23,15 +24,21 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type { SessionActorAppend, SessionActorAppendCommitted } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
+import { writableSessionActorMap } from "./session-actor-transaction.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import type {
   InitialSessionEntryCommit,
   SessionMetadataOperations,
 } from "./session-manager-write-contract.js";
+import { applySessionMessageRewrite } from "./session-message-rewrite.worker.js";
+import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
+import { transcriptSerializedBytes } from "./transcript-payload.js";
 
 /** Prepared SessionManager appends share the actor's transaction and its live admission. */
 export function applySessionActorAppend(
@@ -51,7 +58,7 @@ export function applySessionActorAppend(
         ? readDatabasePathIdentitySync(requestedPath).canonicalPath === database.path
         : requestedPath === database.path;
     if (
-      resolved.agentId !== database.agentId ||
+      (resolved.databaseAgentId ?? resolved.agentId) !== database.agentId ||
       resolved.sessionKey !== state.hot.target.sessionKey ||
       !sameDatabase
     ) {
@@ -126,8 +133,37 @@ export function applySessionActorAppend(
     }
     return { ...bound, ...initialEntry?.fence };
   };
-  const metadata = (input: SessionMetadataOperations["session.metadata.append"]["input"]) => {
-    const scoped = { ...input, scope: scopeForAppend(input.scope) };
+  let modelPromptProjection: SessionActorAppendCommitted["modelPromptProjection"];
+  const finalizeProjection = (snapshot: SessionActorAppendCommitted["value"]["snapshot"]) => {
+    if (!modelPromptProjection) {
+      return;
+    }
+    if (!snapshot.ok) {
+      throw new SessionTranscriptWriterClaimReboundError(snapshot.error);
+    }
+    // A fresh carrier publishes the rewrite's watermark in the same transaction.
+    // A duplicate carrier leaves the changed prompt as the only mutation.
+    if (
+      !modelPromptProjection.result.unchanged &&
+      snapshot.value.after.updatedAt === modelPromptProjection.before.updatedAt
+    ) {
+      touchTranscriptMutationInTransaction(database, append.input.scope.sessionId);
+      snapshot.value.after = { ...state.hot.transcript.version };
+    }
+    snapshot.value.before = modelPromptProjection.before;
+  };
+  const metadata = (
+    input: SessionMetadataOperations["session.metadata.append"]["input"],
+    scope = scopeForAppend(input.scope),
+    persistActorMutation = true,
+  ) => {
+    const scoped = {
+      ...input,
+      scope,
+      ...(modelPromptProjection
+        ? { options: { ...input.options, expectedMutationAt: undefined } }
+        : {}),
+    };
     const result = runWithCliHistoryWriter(
       input.cliWriter
         ? {
@@ -139,13 +175,20 @@ export function applySessionActorAppend(
         : undefined,
       () =>
         runWithMetadataMessageAdmission(messageContext, input.message, (authorize, beforeFresh) => {
-          const value = applySessionMetadataAppendInTransaction(database, scoped, beforeFresh);
+          const value = applySessionMetadataAppendInTransaction(
+            database,
+            scoped,
+            beforeFresh,
+            undefined,
+            persistActorMutation,
+          );
           authorize("commit");
           value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
           return value;
         }),
     );
     const value = result.value;
+    finalizeProjection(value.snapshot);
     if (input.view && sessionMetadataAppendNeedsReload(input, value)) {
       try {
         value.reload = {
@@ -174,15 +217,72 @@ export function applySessionActorAppend(
     if (decodeMetadataAppendEvent(append.header).type !== "session") {
       throw new Error("Session actor header must be a session event");
     }
-    header = metadata(append.header);
+    // The required thinking append publishes the whole initialization transaction.
+    header = metadata(
+      append.header,
+      undefined,
+      !(append.kind === "metadata" && append.input.initialModel),
+    );
     if (!header.snapshot.ok) {
       throw new Error("Session actor header was refused");
     }
   }
-  if (append.kind === "metadata") {
-    return { kind: "metadata", value: metadata(append.input), initialEntry, header };
+  const appendScope = scopeForAppend(append.input.scope);
+  if (append.modelPromptProjection) {
+    const before = { ...state.hot.transcript.version };
+    if (
+      append.kind === "metadata" &&
+      append.input.options.expectedMutationAt !== undefined &&
+      append.input.options.expectedMutationAt !== before.updatedAt
+    ) {
+      throw new SqliteTranscriptMutationConflictError(append.input.scope.sessionId);
+    }
+    const { anchor, text } = append.modelPromptProjection;
+    modelPromptProjection = applySessionMessageRewrite(
+      {
+        scope: resolveSqliteTranscriptScope(appendScope),
+        target: { kind: "anchor", anchor, active: "sequence" },
+        modelPromptProjection: text,
+      },
+      context,
+      (opened, candidate, current) => {
+        const result = candidate.result;
+        if (!result || !current || !isUserMessage(result.message)) {
+          throw new Error("Model prompt projection lost its canonical user turn");
+        }
+        const event = { ...current.event, message: result.message };
+        const row = {
+          rawSeq: current.seq,
+          event,
+          serializedBytes: transcriptSerializedBytes(
+            opened.db,
+            result.unchanged ? current.eventJson : JSON.stringify(event),
+          ),
+        };
+        state.transcript.payloads = writableSessionActorMap(state.transcript.payloads);
+        state.transcript.payloads.set(row.rawSeq, row);
+        state.hot.transcript.version.generation = result.generation;
+        state.hot.transcript.watermark.generation = result.generation;
+        return {
+          result: { ...result, message: result.message },
+          before,
+          after: { ...state.hot.transcript.version },
+          rows: [row],
+        };
+      },
+      { touchMutation: false },
+    );
   }
-  const input = { ...append.input, scope: scopeForAppend(append.input.scope) };
+  if (append.kind === "metadata") {
+    return {
+      kind: "metadata",
+      value: metadata(append.input, appendScope),
+      initialEntry,
+      header,
+      modelPromptProjection,
+    };
+  }
+  const input = { ...append.input, scope: appendScope };
   const result = runWithCliHistoryWriter(
     input.cliWriter
       ? {
@@ -200,5 +300,6 @@ export function applySessionActorAppend(
         return value;
       }),
   );
-  return { kind: "message", value: result.value, initialEntry, header };
+  finalizeProjection(result.value.snapshot);
+  return { kind: "message", value: result.value, initialEntry, header, modelPromptProjection };
 }

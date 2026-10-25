@@ -6,7 +6,6 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createToolCallOccurrenceQueue } from "../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { inspectManagedProcessGroup } from "../scripts/lib/managed-child-process.mts";
 import { isLiveTestEnabled, logLiveProgress } from "../src/agents/live-test-helpers.js";
 import { createExternalGates } from "../src/agents/subagents/announce/subagent-external-gate.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
@@ -23,6 +22,7 @@ import {
 } from "../src/config/sessions/session-accessor.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
+import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { redactSecrets } from "../src/logging/redact.js";
 import {
   extractAssistantPhaseText,
@@ -295,7 +295,6 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
               modelPolicy: { allow: [modelRef] },
               models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
               thinkingDefault: "low",
-              heartbeat: { every: "0m" },
               skipBootstrap: true,
               skills: [],
               timeoutSeconds: 600,
@@ -331,14 +330,18 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           agentId: "main",
           env: instance.env,
         });
+        const deviceIdentity = loadOrCreateDeviceIdentity({
+          path: instance.state.path("restart-operator-device", "client", "credentials.sqlite"),
+        });
         const connect = () =>
           acquireGatewayTestClient(
             {
               url: instance.url,
               token: instance.gatewayToken,
-              deviceIdentity: null,
-              clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-              mode: GATEWAY_CLIENT_MODES.BACKEND,
+              deviceIdentity,
+              // Ephemeral backend clients have no durable operator profile to restore.
+              clientName: GATEWAY_CLIENT_NAMES.TUI,
+              mode: GATEWAY_CLIENT_MODES.UI,
               scopes: ["operator.admin", "operator.read", "operator.write"],
               requestTimeoutMs: WAIT_MS,
             },
@@ -355,15 +358,8 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
           if (!processOwner?.pid) {
             throw new Error("Owned subagent Gateway process is unavailable");
           }
-          process.kill(-processOwner.pid, "SIGKILL");
-          await vi.waitFor(
-            () =>
-              expect(
-                inspectManagedProcessGroup(processOwner, { errorPolicy: "indeterminate" }),
-              ).toBe("dead"),
-            { timeout: 10_000 },
-          );
-          await instance.stopGateway();
+          // Crash the command only; retain descendant custody through recovery.
+          await instance.crashGateway();
           return processOwner.pid;
         };
         const onlyChildFor = (parent: string) => {
@@ -724,7 +720,9 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
             });
             return settled!;
           },
-          { timeout: 30_000 },
+          // This is the third unclean boot within the crash-loop window, so the
+          // breaker pauses restart settlement until that window drains.
+          { timeout: 360_000, interval: 1_000 },
         );
         const orphanProviderDispatches = workerRequests(
           provider.requests,

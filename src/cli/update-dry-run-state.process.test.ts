@@ -392,7 +392,7 @@ setLoggerOverride({ file: ${JSON.stringify(path.join(logs, "openclaw.log"))} });
     });
     expect(externalPlan.steps.slice(0, 4).map((step) => step.id)).toEqual([
       "state-schema",
-      "plugin-install-index",
+      "retired-core-state",
       "config-machine-state",
       "agent-migration-targets",
     ]);

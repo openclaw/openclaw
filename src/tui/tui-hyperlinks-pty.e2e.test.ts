@@ -8,33 +8,25 @@ import {
 
 function linkedText(output: string) {
   let target = "";
-  const spans: Array<{ target: string; text: string }> = [];
+  const spans = new Map<string, string[]>();
   for (const segment of iterateAnsiSegments(output)) {
-    if (segment.kind === "ansi") {
-      if (segment.value.startsWith("\x1b]8;;")) {
-        const terminatorLength = segment.value.endsWith("\x1b\\") ? 2 : 1;
-        target = segment.value.slice(5, -terminatorLength);
-      }
-    } else if (target) {
-      spans.push({ target, text: segment.value });
+    if (segment.kind === "ansi" && segment.value.startsWith("\x1b]8;;")) {
+      target = segment.value.slice(5, segment.value.endsWith("\x1b\\") ? -2 : -1);
+    } else if (segment.kind !== "ansi" && target) {
+      spans.set(target, [...(spans.get(target) ?? []), segment.value]);
     }
   }
   return spans;
 }
 
 it.for([
-  { label: "VS Code", termProgram: "vscode", cols: 100, labelPath: "label" },
-  {
-    label: "wrapped VS Code",
-    termProgram: "vscode",
-    cols: 36,
-    labelPath: "label/with/a/long/path",
-  },
-  { label: "unidentified terminal", termProgram: "", cols: 36, labelPath: "label" },
-])(
-  "preserves authored link targets in $label",
+  ["VS Code", "vscode", 100, "label"],
+  ["wrapped VS Code", "vscode", 36, "label/with/a/long/path"],
+  ["unidentified terminal", "", 36, "label"],
+] as const)(
+  "preserves authored link targets in %s",
   { timeout: 30_000 },
-  async ({ label, termProgram, cols, labelPath }, { signal }) => {
+  async ([, termProgram, cols, labelPath], { signal }) => {
     const target = "https://example.test/actual-destination";
     const plainTarget = "https://example.test/documentation";
     const visibleUrl = `https://example.test/${labelPath}`;
@@ -64,45 +56,25 @@ it.for([
       );
       await fixture.run.waitForOutput("PTY_RESPONSE:", 20_000);
       const raw = fixture.run.output();
-      const response = raw.slice(raw.lastIndexOf("PTY_RESPONSE:"));
-      const links = linkedText(response);
-      console.log(
-        `[behavior-evidence] ${JSON.stringify({
-          label,
-          columns: cols,
-          links,
-          terminal: "real PTY",
-        })}`,
-      );
+      const links = linkedText(raw.slice(raw.lastIndexOf("PTY_RESPONSE:")));
       if (termProgram) {
-        expect(links.filter((span) => span.target === visibleUrl)).toEqual([]);
+        expect(links.has(visibleUrl)).toBe(false);
         if (visibleUrl.length > cols) {
-          expect(links.filter((span) => span.target === target).length).toBeGreaterThan(1);
+          expect(links.get(target)?.length).toBeGreaterThan(1);
         }
-        expect(
-          links
-            .filter((span) => span.target === target)
-            .map((span) => span.text)
-            .join(""),
-        ).toContain(visibleUrl);
-        expect(
-          links
-            .filter((span) => span.target === plainTarget)
-            .map((span) => span.text)
-            .join(""),
-        ).toContain("Documentation");
+        expect(links.get(target)?.join("")).toContain(visibleUrl);
+        expect(links.get(plainTarget)?.join("")).toContain("Documentation");
       } else {
-        expect(links.some((span) => span.target === target)).toBe(true);
-        expect(links.some((span) => span.target === plainTarget)).toBe(true);
+        expect(links.has(target)).toBe(true);
+        expect(links.has(plainTarget)).toBe(true);
       }
-      const rows = await waitForSynchronizedFrameRows(
+      await waitForSynchronizedFrameRows(
         fixture.run,
         (frame) =>
           frame.some((row) => row.includes("PTY_RESPONSE:")) &&
           frame.some((row) => row.includes("idle")),
         20_000,
       );
-      console.log(`[terminal-frame] ${JSON.stringify({ label, columns: cols, rows })}`);
       await fixture.run.write("/exit\r", { delay: false });
       expect((await fixture.run.waitForExit()).exitCode).toBe(0);
     } finally {

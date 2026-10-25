@@ -1,7 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { z } from "zod";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import type { GatewayClientRequestOptions } from "../gateway/client.js";
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
@@ -23,73 +21,10 @@ type NodeHostWorkerInput =
   | NodeHostWorkerGatewayResponse
   | { type: "stop" };
 
-const connectionSchema = z.object({
-  url: z.url(),
-  protocol: z.number().int().positive(),
-  capabilities: z.array(z.string()),
-  tlsFingerprint: z.string().optional(),
-  cloudflareAccess: z.object({ clientId: z.string(), clientSecret: z.string() }).optional(),
-});
-
 export function parseNodeHostWorkerInput(line: string): NodeHostWorkerInput | null {
   try {
-    const parsed = asRecord(JSON.parse(line));
-    const type = typeof parsed?.type === "string" ? parsed.type : "";
-    if (type === "stop") {
-      return { type };
-    }
-    const generation = parsed?.generation;
-    if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 0) {
-      return null;
-    }
-    if (type === "gateway-connection") {
-      const connection =
-        parsed?.connection === null ? null : connectionSchema.parse(parsed?.connection);
-      return { type, generation, connection };
-    }
-    if (type === "runner-inventory-refresh") {
-      return { type, generation };
-    }
-    if (type === "invoke") {
-      const request = asRecord(parsed?.request);
-      if (
-        request &&
-        typeof request.id === "string" &&
-        typeof request.nodeId === "string" &&
-        typeof request.command === "string"
-      ) {
-        return { type, generation, request: request as NodeInvokeRequestPayload };
-      }
-      return null;
-    }
-    if (type === "gateway-response") {
-      const id = typeof parsed?.id === "string" ? parsed.id : "";
-      if (!id) {
-        return null;
-      }
-      return parsed?.ok === true
-        ? { type, generation, id, ok: true, result: parsed.result }
-        : {
-            type,
-            generation,
-            id,
-            ok: false,
-            error: z.object({ code: z.string(), message: z.string() }).parse(parsed?.error),
-          };
-    }
-    if (type === "invoke-input") {
-      const invokeId = typeof parsed?.invokeId === "string" ? parsed.invokeId : "";
-      const seq = typeof parsed?.seq === "number" ? parsed.seq : -1;
-      const payloadJSON = typeof parsed?.payloadJSON === "string" ? parsed.payloadJSON : null;
-      return invokeId && Number.isInteger(seq) && seq >= 0 && payloadJSON !== null
-        ? { type, generation, invokeId, seq, payloadJSON }
-        : null;
-    }
-    if (type === "invoke-cancel") {
-      const invokeId = typeof parsed?.invokeId === "string" ? parsed.invokeId : "";
-      return invokeId ? { type, generation, invokeId } : null;
-    }
-    return null;
+    // The app-owned stdin pipe carries typed frames from this same runtime build.
+    return JSON.parse(line) as NodeHostWorkerInput;
   } catch {
     return null;
   }

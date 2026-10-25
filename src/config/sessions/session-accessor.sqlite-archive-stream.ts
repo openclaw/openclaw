@@ -16,7 +16,34 @@ export async function* readTranscriptArchiveRecords(
   let hasContent = false;
   for await (const chunk of source) {
     let start = 0;
+    let nextQuote = -1;
+    let nextEscape = -1;
+    let nextNewline = -1;
     for (let index = 0; index < chunk.byteLength; index += 1) {
+      if (quoted && !escaped) {
+        // Ordinary string bytes cannot change framing. Search for only the next
+        // delimiter, escape, or invalid raw newline. Retain each search result so
+        // dense delimiters cannot repeatedly scan the rest of the chunk.
+        if (nextQuote < index) {
+          const found = chunk.indexOf(34, index);
+          nextQuote = found < 0 ? chunk.byteLength : found;
+        }
+        if (nextEscape < index) {
+          const found = chunk.indexOf(92, index);
+          nextEscape = found < 0 ? chunk.byteLength : found;
+        }
+        if (nextNewline < index) {
+          const found = chunk.indexOf(10, index);
+          nextNewline = found < 0 ? chunk.byteLength : found;
+        }
+        index = Math.min(nextQuote, nextEscape, nextNewline);
+        if (maxRecordBytes !== undefined && bytes + index - start > maxRecordBytes) {
+          throw new Error(TASK_ARCHIVE_RECORD_CAPACITY_ERROR);
+        }
+        if (index === chunk.byteLength) {
+          break;
+        }
+      }
       const byte = chunk[index];
       if (byte === 10 && (depth <= 0 || quoted)) {
         fragments.push(chunk.subarray(start, index));

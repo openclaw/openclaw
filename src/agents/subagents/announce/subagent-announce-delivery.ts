@@ -29,16 +29,11 @@ import {
   resolveAcpPromptBody,
   type AgentInternalEvent,
 } from "../../internal-events.js";
-import {
-  RUNTIME_EVENT_USER_PROMPT,
-  projectRuntimeContextFragments,
-} from "../../internal-runtime-context.js";
+import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import { admitCorrelatedSubagentSessionDelivery } from "../completion/subagent-completion-delivery.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
-import { maybeSteerSubagentAnnounce } from "./subagent-announce-active-wake.js";
 import {
   resolveSubagentAnnounceTimeoutMs,
-  runAnnounceDeliveryWithRetry,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
@@ -47,14 +42,11 @@ import {
   loadSessionEntryByKey,
   withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import {
-  sendSubagentAnnounceDirectly,
-  type SubagentAnnounceDirectParams,
-} from "./subagent-announce-direct-delivery.js";
-import {
-  runSubagentAnnounceDispatch,
   sourceOwnerChangedResult,
   type SubagentAnnounceDeliveryResult,
+  type SubagentAnnounceDirectParams,
 } from "./subagent-announce-dispatch.js";
 import {
   resolveCompletionDeliveryOrigins,
@@ -64,12 +56,7 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 const log = createSubsystemLogger("agents/subagent-announce");
 
-export {
-  loadRequesterSessionEntry,
-  loadSessionEntryByKey,
-  resolveSubagentAnnounceTimeoutMs,
-  runAnnounceDeliveryWithRetry,
-};
+export { loadRequesterSessionEntry, loadSessionEntryByKey, resolveSubagentAnnounceTimeoutMs };
 
 export function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boolean {
   return getSubagentDepthFromSessionStore(sessionKey) >= 1 || isCronSessionKey(sessionKey);
@@ -89,63 +76,9 @@ function collectExpectedMediaFromInternalEvents(events: AgentInternalEvent[] | u
   };
 }
 
-function createCompletionUserTurnTranscriptRecorderFactory(params: {
-  directIdempotencyKey: string;
-  requesterAgentId?: string;
-  sourceSessionKey?: string;
-  sourceTool?: string;
-  targetRequesterSessionKey: string;
-  transcriptMessage: string;
-}): (sessionId: string) => UserTurnTranscriptRecorder {
-  const provenance: InputProvenance = {
-    kind: "inter_session",
-    ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-    sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
-    sourceTool: params.sourceTool ?? "subagent_announce",
-  };
-  const recorders = new Map<string, UserTurnTranscriptRecorder>();
-  return (sessionId) => {
-    const existing = recorders.get(sessionId);
-    if (existing) {
-      return existing;
-    }
-    // Retries targeting one session share a recorder. A successor session gets
-    // its own target guard while the logical idempotency key remains stable.
-    const recorder = createUserTurnTranscriptRecorder({
-      input: {
-        text: params.transcriptMessage,
-        idempotencyKey: `${params.directIdempotencyKey}:active-wake`,
-        provenance,
-      },
-      target: async () => {
-        const loaded = await loadRequesterSessionEntry(
-          params.targetRequesterSessionKey,
-          params.requesterAgentId,
-        );
-        if (!loaded.entry || loaded.entry.sessionId?.trim() !== sessionId || !loaded.agentId) {
-          return undefined;
-        }
-        return {
-          sessionId,
-          expectedSessionId: sessionId,
-          sessionKey: loaded.canonicalKey,
-          sessionEntry: loaded.entry,
-          ...(loaded.storePath ? { storePath: loaded.storePath } : {}),
-          agentId: loaded.agentId,
-          config: loaded.cfg,
-        };
-      },
-      errorContext: "active requester completion transcript",
-    });
-    recorders.set(sessionId, recorder);
-    return recorder;
-  };
-}
-
 export async function deliverSubagentAnnouncement(
   params: Omit<SubagentAnnounceDirectParams, "createUserTurnTranscriptRecorder"> & {
     sourceRunId?: string;
-    requireDirectDelivery?: boolean;
     preparedRequester?: { binding: SessionDeliveryRequesterBinding; entry: SessionEntry };
   },
 ): Promise<SubagentAnnounceDeliveryResult> {
@@ -297,67 +230,75 @@ async function deliverSubagentAnnouncementBound(
   }
 
   const runtimeContextFragments = buildAgentInternalEventContext(params.internalEvents);
-  const createCompletionUserTurnTranscriptRecorder = params.expectsCompletionMessage
-    ? createCompletionUserTurnTranscriptRecorderFactory({
-        ...params,
-        transcriptMessage: runtimeContextFragments.length
-          ? RUNTIME_EVENT_USER_PROMPT
-          : params.triggerMessage,
-      })
-    : undefined;
-
-  let directError: unknown;
-  const delivery = await runSubagentAnnounceDispatch({
-    expectsCompletionMessage: params.expectsCompletionMessage,
-    requireDirectDelivery: params.requireDirectDelivery || params.completionTarget === "parent",
-    signal: params.signal,
-    steer: async () => {
-      if (sourceOwnerChanged()) {
-        return { status: "source_owner_changed" };
-      }
-      return await maybeSteerSubagentAnnounce({
-        deliveryTimeoutMs: resolveSubagentAnnounceTimeoutMs(getSubagentAnnounceRuntimeConfig()),
-        requesterSessionKey: params.requesterSessionKey,
-        requesterAgentId: params.requesterAgentId,
-        steerMessage: runtimeContextFragments.length
-          ? RUNTIME_EVENT_USER_PROMPT
-          : params.triggerMessage,
-        ...(runtimeContextFragments.length
-          ? {
-              currentInboundContext: {
-                text: projectRuntimeContextFragments(runtimeContextFragments),
-                fragments: runtimeContextFragments,
-              },
-            }
-          : {}),
-        createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
-        signal: params.signal,
-        isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
-        isSourceSessionAdmissionAllowed: params.isSourceSessionAdmissionAllowed,
-      });
-    },
-    direct: async () => {
-      if (sourceOwnerChanged()) {
-        return sourceOwnerChangedResult();
-      }
-      return await sendSubagentAnnounceDirectly({
-        ...params,
-        createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
-        onDeliveryError: (error) => {
-          directError = error;
-          params.onDeliveryError?.(error);
+  let createCompletionUserTurnTranscriptRecorder:
+    | ((sessionId: string) => UserTurnTranscriptRecorder)
+    | undefined;
+  if (params.expectsCompletionMessage) {
+    const directIdempotencyKey = params.directIdempotencyKey;
+    const requesterAgentId = params.requesterAgentId;
+    const sourceSessionKey = params.sourceSessionKey;
+    const sourceTool = params.sourceTool;
+    const targetRequesterSessionKey = params.targetRequesterSessionKey;
+    const transcriptMessage = runtimeContextFragments.length
+      ? RUNTIME_EVENT_USER_PROMPT
+      : params.triggerMessage;
+    const provenance: InputProvenance = {
+      kind: "inter_session",
+      ...(sourceSessionKey ? { sourceSessionKey } : {}),
+      sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
+      sourceTool: sourceTool ?? "subagent_announce",
+    };
+    // The recorder guards the exact requester session the completion steers into.
+    createCompletionUserTurnTranscriptRecorder = (sessionId) =>
+      createUserTurnTranscriptRecorder({
+        input: {
+          text: transcriptMessage,
+          idempotencyKey: `${directIdempotencyKey}:active-wake`,
+          provenance,
         },
+        target: async () => {
+          const loaded = await loadRequesterSessionEntry(
+            targetRequesterSessionKey,
+            requesterAgentId,
+          );
+          if (!loaded.entry || loaded.entry.sessionId?.trim() !== sessionId || !loaded.agentId) {
+            return undefined;
+          }
+          return {
+            sessionId,
+            expectedSessionId: sessionId,
+            sessionKey: loaded.canonicalKey,
+            sessionEntry: loaded.entry,
+            ...(loaded.storePath ? { storePath: loaded.storePath } : {}),
+            agentId: loaded.agentId,
+            config: loaded.cfg,
+          };
+        },
+        errorContext: "active requester completion transcript",
       });
+  }
+  if (sourceOwnerChanged()) {
+    return sourceOwnerChangedResult();
+  }
+  if (params.signal?.aborted) {
+    return { delivered: false, path: "none", phases: [] };
+  }
+  let directError: unknown;
+  const delivery = await sendSubagentAnnounceDirectly({
+    ...params,
+    createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
+    onDeliveryError: (error) => {
+      directError = error;
+      params.onDeliveryError?.(error);
     },
   });
   const failedDirect =
-    params.expectsCompletionMessage ||
-    params.sourceTool === "subagent_announce" ||
-    params.sourceTool === "subagent_settle"
-      ? delivery.phases?.find(
-          (phase) =>
-            phase.phase === "direct-primary" && !phase.delivered && phase.path === "direct",
-        )
+    (params.expectsCompletionMessage ||
+      params.sourceTool === "subagent_announce" ||
+      params.sourceTool === "subagent_settle") &&
+    !delivery.delivered &&
+    delivery.path === "direct"
+      ? delivery
       : undefined;
   if (failedDirect?.error) {
     const source = params.sourceRunId
@@ -369,8 +310,21 @@ async function deliverSubagentAnnouncementBound(
       requesterSessionKey: params.targetRequesterSessionKey,
       sourceTool: params.sourceTool,
       directIdempotencyKey: params.directIdempotencyKey,
-      recoveredViaSteered: delivery.delivered,
     });
   }
-  return delivery;
+  return {
+    ...delivery,
+    // Phase names describe the dispatch stage, even when direct delivery steers internally.
+    phases: [
+      {
+        phase: "direct-primary",
+        delivered: delivery.delivered,
+        path: delivery.path,
+        deliveredAt: delivery.deliveredAt,
+        enqueuedAt: delivery.enqueuedAt,
+        ...(delivery.reason ? { reason: delivery.reason } : {}),
+        error: delivery.error,
+      },
+    ],
+  };
 }

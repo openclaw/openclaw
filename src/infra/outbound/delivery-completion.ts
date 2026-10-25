@@ -41,11 +41,11 @@ import {
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
-import { SqliteWorkerError } from "../sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../sqlite-worker-contract.js";
 import {
   countPhysicalOutboundSends,
+  type OutboundDeliveryBatch as DeliveryEvidenceBatch,
   type OutboundDeliveryResult,
-  type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import {
   captureDeliveryPlacementEvidence,
@@ -53,12 +53,6 @@ import {
 } from "./delivery-placement-evidence.js";
 import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
-
-type DeliveryEvidenceBatch = {
-  results: readonly OutboundDeliveryResult[];
-  payloadCount: number;
-  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
-};
 
 /** In-process locator captured before delivery preparation; never queue payload data. */
 export type ConversationDeliveryTarget = Pick<
@@ -266,9 +260,10 @@ export async function settlePendingFinalDelivery(
       if (outcome.kind === "rolled-back" && (refused || outcome.reason === "stale-state")) {
         return;
       }
-      throw new SqliteWorkerError(
+      throw wrapSqliteWorkerError(
         outcome.error.message,
         outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+        outcome.error,
       );
     }
     if (!("state" in outcome.value)) {

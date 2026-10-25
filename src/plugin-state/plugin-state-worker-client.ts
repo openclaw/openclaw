@@ -21,6 +21,7 @@ import {
   observationFromCachedPluginState,
   preparePluginStateEntriesCacheRead,
   preparePluginStateObservationCacheRead,
+  prepareRuntimeHealthClearCache,
   readPluginStateEntriesCache,
   readPluginStateObservationCache,
 } from "./plugin-state-observation-cache.js";
@@ -36,8 +37,10 @@ import {
   beginPluginStatePublication,
   recordPluginStateReadDependency,
   withPluginStatePublication,
+  type PluginStatePublicationScope,
 } from "./plugin-state-publication.js";
 import { wrapPluginStateError } from "./plugin-state-store.database.js";
+import { isRetainedPluginStateNamespace } from "./plugin-state-store.kernel.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 import {
   pluginStateWorkerOperations,
@@ -75,6 +78,42 @@ type PluginStateCommand = {
     input: PluginStateWorkerOperations[Key]["input"];
   };
 }[keyof PluginStateWorkerOperations];
+
+function publicationScope(command: PluginStateCommand): PluginStatePublicationScope | undefined {
+  switch (command.type) {
+    case "pluginState.register":
+    case "pluginState.registerIfAbsent":
+    case "pluginState.replaceEntry":
+    case "pluginState.compareUpdate": {
+      const { pluginId, namespace, key, overflowPolicy } = command.input;
+      // These policies cannot evict another live key; readers already filter expiry.
+      return {
+        pluginId,
+        namespace,
+        ...(overflowPolicy === "reject-new" || isRetainedPluginStateNamespace(namespace)
+          ? { key }
+          : {}),
+      };
+    }
+    case "pluginState.observe":
+    case "pluginState.consume":
+    case "pluginState.delete":
+    case "pluginState.deleteIfEqual":
+    case "pluginState.compareDelete": {
+      const { pluginId, namespace, key } = command.input;
+      return { pluginId, namespace, key };
+    }
+    case "pluginState.replace":
+    case "pluginState.clear":
+    case "pluginState.clearRuntimeHealth": {
+      const { pluginId, namespace } = command.input;
+      return { pluginId, namespace };
+    }
+    default:
+      // Compound operations retain database-wide denial without an exact write scope.
+      return undefined;
+  }
+}
 
 function prepareCommandOrder(
   coordinationKey: string,
@@ -115,6 +154,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     existingOnly?: { missing: () => PluginStateWorkerRequests[Key]["output"] };
     readDependency?: ReadDependency;
     onCommitted?: (facts: unknown) => void;
+    preparedEmptyShortcut?: boolean;
   } = {},
 ): Promise<PluginStateWorkerRequests[Key]["output"]> {
   const { assertCurrent, isObservation, existingOnly, onCommitted } = checks;
@@ -140,6 +180,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
   let publication: ReturnType<typeof beginPluginStatePublication> | undefined;
   let installObservation: ReturnType<typeof preparePluginStateObservationCacheRead> | undefined;
   let installEntries: ReturnType<typeof preparePluginStateEntriesCacheRead> | undefined;
+  let healthClearCache: ReturnType<typeof prepareRuntimeHealthClearCache> | undefined;
   try {
     const context =
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
@@ -153,6 +194,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     }
     // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
     const typedCommand = command as PluginStateCommand;
+    const writeScope = publicationScope(typedCommand);
     order = prepareCommandOrder(context.admission.coordinationKey, typedCommand);
     if (
       order?.finish ||
@@ -162,22 +204,40 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       publication = beginPluginStatePublication(
         () => context.admission.identity.key,
         context.assertPublicationCurrent ?? context.admission.assertCurrent,
+        writeScope,
       );
     }
     if (order?.ready) {
       await order.ready;
       assertAdmission?.();
     }
+    // PostgreSQL operations keep probing so external commits remain visible.
+    const emptyShortcut =
+      typedCommand.type === "pluginState.executeOperation" &&
+      context.databaseEngineSelection?.effectiveEngines.state === "sqlite"
+        ? typedCommand.input.ifEmpty
+        : undefined;
+    const emptyScope =
+      typedCommand.type === "pluginState.executeOperation" && emptyShortcut
+        ? typedCommand.input.stores[emptyShortcut.store]
+        : undefined;
     if (
       !currentEntries &&
       (typedCommand.type === "pluginState.observe" ||
         typedCommand.type === "pluginState.lookup" ||
         typedCommand.type === "pluginState.lookupMany" ||
-        typedCommand.type === "pluginState.entries")
+        typedCommand.type === "pluginState.entries" ||
+        typedCommand.type === "pluginState.clearRuntimeHealth" ||
+        (typedCommand.type === "pluginState.executeOperation" && emptyScope))
     ) {
       const identity = context.admission.identity.key;
+      if (typedCommand.type === "pluginState.clearRuntimeHealth") {
+        healthClearCache = prepareRuntimeHealthClearCache(identity, typedCommand.input);
+      }
       const keys =
-        typedCommand.type === "pluginState.entries"
+        typedCommand.type === "pluginState.entries" ||
+        typedCommand.type === "pluginState.clearRuntimeHealth" ||
+        typedCommand.type === "pluginState.executeOperation"
           ? []
           : typedCommand.type === "pluginState.lookupMany"
             ? typedCommand.input.keys
@@ -185,13 +245,20 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       const cachedEntries =
         typedCommand.type === "pluginState.entries"
           ? readPluginStateEntriesCache(identity, typedCommand.input)
-          : undefined;
-      const cached = keys.map((key) =>
-        readPluginStateObservationCache(identity, { ...typedCommand.input, key }),
-      );
+          : emptyScope && checks.preparedEmptyShortcut
+            ? readPluginStateEntriesCache(identity, emptyScope)
+            : undefined;
+      const cached =
+        typedCommand.type === "pluginState.executeOperation"
+          ? []
+          : keys.map((key) =>
+              readPluginStateObservationCache(identity, { ...typedCommand.input, key }),
+            );
       if (
         cached.every((entry) => entry !== undefined) &&
-        (typedCommand.type !== "pluginState.entries" || cachedEntries !== undefined)
+        (typedCommand.type !== "pluginState.entries" || cachedEntries !== undefined) &&
+        (!emptyScope || cachedEntries?.length === 0) &&
+        (typedCommand.type !== "pluginState.clearRuntimeHealth" || healthClearCache?.cleared)
       ) {
         const terminalFailure =
           openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(databasePath);
@@ -204,6 +271,18 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         assertAdmission?.();
         // Quarantine revokes these admitted facts; the worker owns refusal and recovery.
         if (hasSqliteDatabaseSchemaAdmissionForIdentity(context.admission.identity)) {
+          if (emptyShortcut) {
+            return {
+              value: structuredClone(emptyShortcut.value),
+              validUntil: undefined,
+              emptyShortcut: true,
+              // SAFETY: Only a prepared read-only operation can reuse an empty namespace.
+            } as PluginStateWorkerRequests[Key]["output"];
+          }
+          if (typedCommand.type === "pluginState.clearRuntimeHealth") {
+            // SAFETY: Only a successfully acknowledged clear has this void result.
+            return undefined as PluginStateWorkerRequests[Key]["output"];
+          }
           if (typedCommand.type === "pluginState.entries") {
             // SAFETY: Only the entries command reaches this namespace result branch.
             return cachedEntries as PluginStateWorkerRequests[Key]["output"];
@@ -253,6 +332,8 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         installObservation = preparePluginStateObservationCacheRead(identity, typedCommand.input);
       } else if (typedCommand.type === "pluginState.entries") {
         installEntries = preparePluginStateEntriesCacheRead(identity, typedCommand.input);
+      } else if (emptyScope) {
+        installEntries = preparePluginStateEntriesCacheRead(identity, emptyScope);
       }
     }
     if (isPluginStateReadCommand(typedCommand)) {
@@ -309,6 +390,14 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       if (!result.ok) {
         throw restorePluginStateWorkerFailure(result.error);
       }
+      healthClearCache?.complete();
+      if (
+        typedCommand.type === "pluginState.executeOperation" &&
+        // SAFETY: The command discriminant fixes the worker result's operation envelope.
+        (result.value as PluginStateOperationResult).emptyShortcut
+      ) {
+        installEntries?.([]);
+      }
       if (command.type === "pluginState.observe") {
         const observation =
           // SAFETY: The command discriminant fixes this worker result's private row envelope.
@@ -358,7 +447,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     const result = await runOpenClawStateWorkerOperation(context, operation, {
       signal,
       assertCurrent: assertAdmission,
-      createAdmission: withPluginStatePublication(baseAdmission, context, onCommitted),
+      createAdmission: withPluginStatePublication(baseAdmission, context, onCommitted, writeScope),
       existingOnly: existingOnly !== undefined,
     });
     if (result === undefined && existingOnly) {
@@ -389,6 +478,7 @@ export function executePluginStateOperationInWorker(
   params: Input<"pluginState.executeOperation">,
   options: {
     missing?: () => PluginStateOperationResult;
+    preparedEmptyShortcut?: boolean;
     onCommitted: (facts: PluginStateOperationCommit["pluginStateOperation"]) => void;
   },
 ): Promise<PluginStateOperationResult> {
@@ -405,6 +495,7 @@ export function executePluginStateOperationInWorker(
       : undefined,
     {
       assertCurrent,
+      preparedEmptyShortcut: options.preparedEmptyShortcut,
       onCommitted(facts) {
         // SAFETY: This admission belongs to the host-minted plugin state command and receipt shape.
         options.onCommitted((facts as PluginStateOperationCommit).pluginStateOperation);

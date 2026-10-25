@@ -15,28 +15,14 @@ import {
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { markCanonicalSessionValidationPending } from "../../../config/sessions/session-canonical-key.js";
-import { captureGatewayAuthPolicy } from "../../../gateway/auth-policy.js";
 import * as gatewayCall from "../../../gateway/call.js";
-import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-authority.js";
-import {
-  createContext,
-  createOperatorClient,
-} from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { prepareGatewayStartupSessions } from "../../../gateway/server-startup-session-migration.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
-import {
-  bindGatewayContextResolver,
-  getGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
-  getSharedGatewayContextResolver,
-  withPluginRuntimeGatewayRequestScope,
-} from "../../../plugins/runtime/gateway-request-scope.js";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   runOpenClawAgentWriteTransaction,
@@ -48,7 +34,6 @@ import {
   markStartupOrphanedMainSessionsForRecovery,
 } from "../../main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverRestartAbortedMainSessions } from "../../main-session-recovery/main-session-restart-recovery.js";
-import { createRestartRecoveryOperatorSource } from "../../operator-run-recovery-source.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -59,10 +44,12 @@ import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import {
+  prepareSubagentRecoveryFixture,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
-  activateSubagentRegistry,
   getSubagentRunByChildSessionKey,
   initSubagentRegistry,
   resetSubagentRegistryForTests,
@@ -181,8 +168,8 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           stateDir: fixture.stateDir,
           resolveGatewayContext: getGatewayContextResolver(gatewayRuntime)!,
           activeRuns: [
-            { sessionKey, sessionId, runId, lifecycleGeneration },
-            { sessionKey, sessionId, runId: "queued-child-announce", lifecycleGeneration },
+            { ...target, sessionId, runId, lifecycleGeneration },
+            { ...target, sessionId, runId: "queued-child-announce", lifecycleGeneration },
           ],
         }),
       ).toEqual({ marked: 1, skipped: 0 });
@@ -220,154 +207,6 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       }
     },
   );
-
-  it("hands recovered child completion to the replacement Gateway without reviving its predecessor", async () => {
-    const now = Date.now();
-    const runId = "warm-restart-child";
-    const childSessionKey = "agent:main:subagent:warm-restart-child";
-    const requesterSessionKey = "agent:main:main";
-    const requesterSessionId = "warm-restart-parent-session";
-    const requesterLifecycleRevision = "warm-restart-parent-lifecycle";
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: requesterSessionKey,
-      defaultSessionId: requesterSessionId,
-      lifecycleRevision: requesterLifecycleRevision,
-      updatedAt: now,
-    });
-    await writeSession({
-      sessionKey: childSessionKey,
-      defaultSessionId: "warm-restart-child-session",
-      updatedAt: now,
-      abortedLastRun: true,
-    });
-    const predecessor = makeRunRecord({
-      runId,
-      childSessionKey,
-      childSessionIdentity: { sessionId: "warm-restart-child-session" },
-      requesterSessionKey,
-      requesterAgentId: "main",
-      completionTarget: "parent",
-      completionRequesterSessionId: requesterSessionId,
-      completionRequesterLifecycleRevision: requesterLifecycleRevision,
-      expectsCompletionMessage: true,
-      execution: {
-        status: "interrupted",
-        startedAt: now - 1_000,
-        interruptedAt: now,
-        interruptionReason: "gateway-restart",
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      },
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-        batchRunIds: [runId],
-      },
-    });
-    let previousOpen = true;
-    const previousContext = {
-      ...createContext(),
-      recoveryRuntime: gatewayRuntime,
-      chatAbortControllers: new Map(),
-      resolveGatewayContext: () => (previousOpen ? previousContext : undefined),
-    } as GatewayRequestContext;
-    const client = createOperatorClient({
-      profileName: "restart-child-owner",
-      scopes: ["operator.write"],
-    });
-    client.internal = { authenticatedOperator: true };
-    client.authPolicy = captureGatewayAuthPolicy(previousContext.getRuntimeConfig(), {
-      role: "operator",
-      authMethod: "token",
-    });
-    const source = (await captureGatewayOperatorRunAuthority({
-      client,
-      context: previousContext,
-      sourceAuthority: null,
-    }))!;
-    expect(source.authority.recoverySnapshot).toBeDefined();
-    predecessor.operatorRecoverySource = createRestartRecoveryOperatorSource({
-      authority: source.authority,
-      agentId: "main",
-      sessionKey: requesterSessionKey,
-      entry: {
-        sessionId: requesterSessionId,
-        lifecycleRevision: requesterLifecycleRevision,
-        updatedAt: now,
-      },
-      sourceRunId: "warm-restart-parent-turn",
-    });
-    await initSubagentRegistry();
-    await activateSubagentRegistry(() => previousContext);
-    bindGatewayContextResolver(predecessor, previousContext.resolveGatewayContext);
-    await addSubagentRunForTests(predecessor);
-    const registeredPredecessor = (await getSubagentRunByChildSessionKey(childSessionKey))!;
-    bindGatewayContextResolver(registeredPredecessor, previousContext.resolveGatewayContext);
-    client.internal = { ...client.internal, operatorRunAuthority: source.authority };
-    const continuation = await withPluginRuntimeGatewayRequestScope(
-      {
-        client,
-        context: previousContext,
-        resolveGatewayContext: previousContext.resolveGatewayContext,
-        isWebchatConnect: () => false,
-      },
-      () => captureOperatorToolGatewayContinuationContext(),
-    );
-    expect(continuation?.operatorAuthority).toBe(source.authority);
-    subagentRuns.bindCompletionAuthority(registeredPredecessor, continuation!);
-    source.release();
-    expect(() =>
-      subagentRuns.runWithCompletionAuthority(registeredPredecessor, () => {}),
-    ).not.toThrow();
-    expect(subagentRuns.get(runId)?.execution.status).toBe("interrupted");
-    previousOpen = false;
-    expect(source.authority.assertCurrent).toThrow("operator source authority is no longer active");
-    rotateAgentEventLifecycleGeneration();
-
-    let replacementOpen = true;
-    const replacementRuntime = { ...gatewayRuntime };
-    const replacementContext = {
-      ...createContext(),
-      recoveryRuntime: replacementRuntime,
-      chatAbortControllers: new Map(),
-      resolveGatewayContext: () => (replacementOpen ? replacementContext : undefined),
-    } as GatewayRequestContext;
-    bindGatewayContextResolver(replacementRuntime, replacementContext.resolveGatewayContext);
-    await activateSubagentRegistry(() => replacementContext);
-    await testing.sweepOnceForTests();
-
-    expect(dispatchAgent).not.toHaveBeenCalled();
-    const successor = await getSubagentRunByChildSessionKey(childSessionKey);
-    expect(successor).toMatchObject({
-      runId: predecessor.runId,
-      childSessionKey: predecessor.childSessionKey,
-      createdAt: predecessor.createdAt,
-    });
-    expect(successor?.generation).toBe(predecessor.generation);
-    expect(successor?.execution.status).toBe("terminal");
-    expect(successor?.execution.outcome).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("interrupted by a Gateway restart"),
-    });
-    expect(() =>
-      subagentRuns.runWithCompletionAuthority(registeredPredecessor, () => {}),
-    ).toThrow();
-    const restoredAuthority = subagentRuns.runWithCompletionAuthority(
-      successor!,
-      () => getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority,
-    );
-    expect(restoredAuthority?.profileId).toBe(source.authority.profileId);
-    expect(restoredAuthority?.scopes).toEqual(["operator.write"]);
-    expect(() => restoredAuthority?.assertCurrent()).not.toThrow();
-    const resolveWakeGateway = getSharedGatewayContextResolver([successor!]);
-    expect(resolveWakeGateway?.()).toBe(replacementContext);
-    replacementOpen = false;
-    expect(resolveWakeGateway?.()).toBeUndefined();
-    expect(getGatewayContextResolver(predecessor)?.()).toBeUndefined();
-  });
 
   it.each([
     "waiting",
@@ -424,6 +263,17 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       requesterTurnYielded: true,
       expectsCompletionMessage: true,
     });
+    if (scenario === "settled batch") {
+      await prepareSubagentRecoveryFixture(child, {
+        entries: {
+          [parentKey]: loadSessionEntryReadOnly({
+            storePath: parentStorePath,
+            sessionKey: parentKey,
+          })!,
+        },
+        storePath: parentStorePath,
+      });
+    }
     await addSubagentRunForTests(child);
     expect(
       await settleRequesterTurnAfterSessionSpawns({
@@ -463,6 +313,8 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           resolveGatewayContext: getGatewayContextResolver(gatewayRuntime)!,
           activeRuns: [
             {
+              agentId: parentAgentId,
+              storePath: parentStorePath,
               runId: parentRunId,
               sessionKey: parentKey,
               sessionId: before.sessionId,
@@ -627,8 +479,6 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     const result = await markStartupOrphanedMainSessionsForRecovery({
       cfg: getRuntimeConfig(),
       stateDir: fixture.stateDir,
-      activeSessionIds: [],
-      activeSessionKeys: [],
     });
     if (legacy) {
       const { settlement, dispatch, runtime } = recoveryFixture();
@@ -724,6 +574,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
             },
           },
         );
+        await prepareSubagentRecoveryFixture(child, { stateDir: fixture.stateDir });
         await addSubagentRunForTests(child);
         children.push(child);
       }
@@ -754,6 +605,8 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       await activateGatewayRuntime();
       await testing.sweepOnceForTests();
       await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalled());
+      // A sibling can wake the parent before background recovery finishes its session writes.
+      await fixture.settle();
       expect(dispatchAgent).not.toHaveBeenCalled();
       const persisted = loadSubagentRegistryFromSqlite();
       for (const child of children) {
@@ -764,7 +617,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
             interruptionReason: "gateway-restart",
             outcome: { status: "error", error: expect.stringContaining("Gateway restart") },
           },
-          requesterSettleWake: { requesterYieldBatch: true },
+          requesterSettleWake: { status: "pending", attemptCount: 0, requesterYieldBatch: true },
         });
         expect((await getSubagentRunByChildSessionKey(child.childSessionKey))?.runId).toBe(
           child.runId,

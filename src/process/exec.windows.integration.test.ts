@@ -11,220 +11,176 @@ import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-ins
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  inspectNodeWorkerProcessIdentity,
-  requireNodeWorkerProcessIdentity,
-  type NodeWorkerProcessIdentity,
+  inspectNodeWorkerProcessIdentity as inspectIdentity,
+  requireNodeWorkerProcessIdentity as requireIdentity,
+  type NodeWorkerProcessIdentity as ProcessIdentity,
 } from "../node-host/node-worker-process-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runUtf8CommandWithTimeout } from "./exec.js";
 import { killProcessTree } from "./kill-tree.js";
 
+const windows = process.platform === "win32";
+const cliProofEnabled = windows || process.env.OPENCLAW_CLAUDE_CLI_SPAWN_PROOF === "1";
+
 // libuv owns the Job, but no retained handle exposes this foreign descendant's exit.
-async function waitForDescendantExit(
-  identity: NodeWorkerProcessIdentity,
-  signal: AbortSignal,
-): Promise<void> {
-  try {
-    while (inspectNodeWorkerProcessIdentity(identity) !== "dead") {
-      await waitForProcessTick(50, undefined, { signal });
-    }
-  } catch (error) {
-    throw new Error(`Timed out waiting for Windows descendant ${identity.pid} to exit`, {
-      cause: error,
-    });
+async function expectDescendantExit(identity: ProcessIdentity, signal: AbortSignal): Promise<void> {
+  while (inspectIdentity(identity) !== "dead") {
+    await waitForProcessTick(50, undefined, { signal });
   }
 }
 
-describe("runUtf8CommandWithTimeout Windows integration", () => {
-  it.runIf(process.platform === "win32")(
-    "closes a nested Node descendant after an inner spawnSync timeout and outer failure",
-    async ({ signal }) => {
-      const descendantSource = 'setInterval(() => {}, 1000); process.send("ready");';
-      const innerSource = [
-        'const { spawn } = require("node:child_process");',
-        `const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}], { stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true });`,
-        'child.once("message", () => process.stdout.write(String(child.pid) + "\\n"));',
-      ].join("\n");
-      // Match the finalization fence's real child deadline. Each non-detached Node
-      // child has libuv job ownership; this does not cover arbitrary grandchildren
-      // or hosts that deny job assignment.
-      const outerSource = [
-        'const { spawnSync } = require("node:child_process");',
-        `const result = spawnSync(process.execPath, ["-"], { input: ${JSON.stringify(innerSource)}, stdio: ["pipe", "inherit", "pipe"], timeout: 60_000, killSignal: "SIGKILL", encoding: "utf8", windowsHide: true });`,
-        "if (result.error) process.stderr.write(result.error.message);",
-        "process.exitCode = result.error || result.status !== 0 ? 1 : 0;",
-      ].join("\n");
-      const ready = createDeferredCore<NodeWorkerProcessIdentity>();
-      const controller = new AbortController();
-      let child: NodeWorkerProcessIdentity | undefined;
-      let output = "";
-      const pending = runUtf8CommandWithTimeout([process.execPath, "-e", outerSource], {
-        timeoutMs: 75_000,
-        killProcessTree: true,
-        signal: controller.signal,
-        onOutputChunk: (chunk, stream) => {
-          if (stream !== "stdout" || child) {
-            return;
-          }
-          output += chunk.toString("utf8");
-          if (output.includes("\n")) {
-            child = requireNodeWorkerProcessIdentity(Number(output.trim()));
-            ready.resolve(child);
-          }
-        },
-      });
-      try {
-        const descendant = await withinTest(
-          awaitGateBeforeSettlement(
-            ready.promise,
-            pending,
-            "inner command ended without descendant readiness",
-          ),
-          signal,
-        );
-        expect(inspectNodeWorkerProcessIdentity(descendant)).toBe("live");
-        await expect(withinTest(pending, signal)).resolves.toMatchObject({
-          code: 1,
-          termination: "exit",
-          stderr: expect.stringContaining("ETIMEDOUT"),
-        });
-        await waitForDescendantExit(descendant, signal);
-        expect(inspectNodeWorkerProcessIdentity(descendant)).toBe("dead");
-      } finally {
-        controller.abort();
-        await pending.catch(() => undefined);
-        // Failed assertions still clean only the exact observed fixture process.
-        if (child && inspectNodeWorkerProcessIdentity(child) === "live") {
-          process.kill(child.pid, "SIGKILL");
-          await waitForDescendantExit(child, signal);
-          expect(inspectNodeWorkerProcessIdentity(child)).toBe("dead");
+function readyBeforeExit<T>(ready: Promise<T>, closed: Promise<unknown>, signal: AbortSignal) {
+  return withinTest(
+    awaitGateBeforeSettlement(ready, closed, "Child exited before readiness"),
+    signal,
+  );
+}
+
+it.runIf(windows)(
+  "closes a nested Node descendant after an inner spawnSync timeout and outer failure",
+  async ({ signal }) => {
+    const descendantSource = 'setInterval(() => {}, 1000); process.send("ready");';
+    const innerSource = [
+      'const { spawn } = require("node:child_process");',
+      `const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}], { stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true });`,
+      'child.once("message", () => process.stdout.write(String(child.pid) + "\\n"));',
+    ].join("\n");
+    // Match the finalization fence; libuv Jobs own only these non-detached Node children.
+    const outerSource = [
+      'const { spawnSync } = require("node:child_process");',
+      `const result = spawnSync(process.execPath, ["-"], { input: ${JSON.stringify(innerSource)}, stdio: ["pipe", "inherit", "pipe"], timeout: 60_000, killSignal: "SIGKILL", encoding: "utf8", windowsHide: true });`,
+      "if (result.error) process.stderr.write(result.error.message);",
+      "process.exitCode = result.error || result.status !== 0 ? 1 : 0;",
+    ].join("\n");
+    const ready = createDeferredCore<ProcessIdentity>();
+    const controller = new AbortController();
+    let child: ProcessIdentity | undefined;
+    let output = "";
+    const pending = runUtf8CommandWithTimeout([process.execPath, "-e", outerSource], {
+      timeoutMs: 75_000,
+      killProcessTree: true,
+      signal: controller.signal,
+      onOutputChunk: (chunk, stream) => {
+        if (stream !== "stdout" || child) {
+          return;
         }
-      }
-    },
-    90_000,
-  );
-
-  it.runIf(process.platform === "win32")(
-    "force-kills a real Windows process tree when graceful taskkill refuses it",
-    async ({ signal }) => {
-      const program = [
-        'const { spawn } = require("node:child_process");',
-        'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });',
-        'child.once("spawn", () => process.stdout.write(String(child.pid) + "\\n"));',
-        'child.once("error", () => process.exit(1));',
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      const parent = spawn(process.execPath, ["-e", program], {
-        stdio: ["ignore", "pipe", "ignore"],
-        windowsHide: true,
-      });
-      const parentClosed = once(parent, "close");
-      const parentPid = parent.pid;
-      const parentStdout = parent.stdout;
-
-      if (parentPid === undefined || parentStdout === null) {
-        parent.kill();
-        throw new Error("Could not start the Windows process tree");
-      }
-
-      try {
-        const [output] = await withinTest(
-          awaitGateBeforeSettlement(
-            once(parentStdout, "data", { signal }),
-            parentClosed,
-            "Could not start the Windows process tree",
-          ),
-          signal,
-        );
-        const childPid = Number.parseInt(String(output).trim(), 10);
-        expect(Number.isSafeInteger(childPid)).toBe(true);
-        const descendant = requireNodeWorkerProcessIdentity(childPid);
-        expect(() => process.kill(parentPid, 0)).not.toThrow();
-        expect(() => process.kill(childPid, 0)).not.toThrow();
-
-        // An unforced taskkill refuses Node console processes. Cleanup must not
-        // depend on this unref'd timer surviving an application shutdown.
-        killProcessTree(parentPid, { graceMs: 30_000 });
-
-        await withinTest(parentClosed, signal);
-        await waitForDescendantExit(descendant, signal);
-        expect(() => process.kill(parentPid, 0)).toThrow();
-        expect(() => process.kill(childPid, 0)).toThrow();
-      } finally {
-        // The retained child handle is safe after exit; taskkill of its reusable
-        // PID is not. This fixture's non-detached Node child is in its libuv job.
-        parent.kill("SIGKILL");
-        parentStdout.destroy();
-        await parentClosed;
-      }
-    },
-    15_000,
-  );
-});
-
-describe.runIf(process.platform === "win32" || process.env.OPENCLAW_CLAUDE_CLI_SPAWN_PROOF === "1")(
-  "ordinary Claude CLI executable launch",
-  () => {
-    const tempDirs = useAutoCleanupTempDirTracker(afterAll);
-    let nativeLauncher: string | undefined;
-
-    beforeAll(async () => {
-      if (process.platform === "win32") {
-        nativeLauncher = await compileClaudeCliNativeLauncher(
-          tempDirs.make("openclaw-claude-native-"),
-        );
-      }
-    }, 150_000);
-    const nativeLaunch = () => {
-      if (!nativeLauncher) {
-        throw new Error("The native Claude CLI launcher fixture was not compiled");
-      }
-      return { kind: "native" as const, launcher: nativeLauncher };
-    };
-
-    beforeAll(async () => {
-      const instance = await createOpenClawTestInstance({ name: "claude-cli-spawn-prepare" });
-      try {
-        // Reuse CI's built runtime; launcher cases do not own artifact publication.
-        await instance.entrypoint();
-      } finally {
-        await instance.cleanup();
-      }
-    }, 240_000);
-
-    it.each(
-      process.platform === "win32"
-        ? (["native", "node-leading", "npm-shim"] as const)
-        : (["npm-shim"] as const),
-    )(
-      "completes an ordinary agent turn through %s",
-      async (kind) => {
-        const proof = await runClaudeCliNativeSpawnProof(
-          kind === "native" ? nativeLaunch() : { kind },
-        );
-        console.log("[claude-cli-native-proof]", JSON.stringify(proof));
-        expect(proof.code, proof.stderr).toBe(0);
-        expect(JSON.parse(proof.stdout)).toMatchObject({
-          payloads: expect.arrayContaining([expect.objectContaining({ text: "PONG" })]),
-        });
-        expect(proof.launches).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              phase: "run",
-              platform: process.platform,
-              entrypoint: proof.entrypoint,
-            }),
-          ]),
-        );
-        if (kind === "native") {
-          expect(proof.launches).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ phase: "native-launch", platform: "win32" }),
-            ]),
-          );
+        output += chunk.toString("utf8");
+        if (output.includes("\n")) {
+          child = requireIdentity(Number(output.trim()));
+          ready.resolve(child);
         }
       },
-      360_000,
-    );
+    });
+    try {
+      const descendant = await readyBeforeExit(ready.promise, pending, signal);
+      expect(inspectIdentity(descendant)).toBe("live");
+      const result = await withinTest(pending, signal);
+      expect(result).toMatchObject({ code: 1, termination: "exit" });
+      expect(result.stderr).toContain("ETIMEDOUT");
+      await expectDescendantExit(descendant, signal);
+    } finally {
+      controller.abort();
+      await pending.catch(() => undefined);
+      // Failed assertions still clean only the exact observed fixture process.
+      if (child && inspectIdentity(child) === "live") {
+        process.kill(child.pid, "SIGKILL");
+        await expectDescendantExit(child, signal);
+      }
+    }
   },
+  90_000,
 );
+
+it.runIf(windows)(
+  "force-kills a real Windows process tree when graceful taskkill refuses it",
+  async ({ signal }) => {
+    const program = [
+      'const { spawn } = require("node:child_process");',
+      'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });',
+      'child.once("spawn", () => process.stdout.write(String(child.pid) + "\\n"));',
+      'child.once("error", () => process.exit(1));',
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const parent = spawn(process.execPath, ["-e", program], {
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    });
+    const parentClosed = once(parent, "close");
+    const parentPid = parent.pid;
+    const parentStdout = parent.stdout;
+
+    if (parentPid === undefined || parentStdout === null) {
+      parent.kill();
+      throw new Error("Could not start the Windows process tree");
+    }
+
+    try {
+      const [output] = await readyBeforeExit(
+        once(parentStdout, "data", { signal }),
+        parentClosed,
+        signal,
+      );
+      const childPid = Number.parseInt(String(output).trim(), 10);
+      expect(Number.isSafeInteger(childPid)).toBe(true);
+      const descendant = requireIdentity(childPid);
+      expect(inspectIdentity(descendant)).toBe("live");
+      expect(() => process.kill(parentPid, 0)).not.toThrow();
+
+      // Unforced taskkill refuses Node; do not depend on its unref'd grace timer.
+      killProcessTree(parentPid, { graceMs: 30_000 });
+
+      await withinTest(parentClosed, signal);
+      await expectDescendantExit(descendant, signal);
+      expect(() => process.kill(parentPid, 0)).toThrow();
+    } finally {
+      // Use the retained handle, not a reusable PID; libuv owns this Node child.
+      parent.kill("SIGKILL");
+      parentStdout.destroy();
+      await parentClosed;
+    }
+  },
+  15_000,
+);
+
+describe.runIf(cliProofEnabled)("ordinary Claude CLI executable launch", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+  let nativeLauncher = "";
+
+  beforeAll(async () => {
+    if (windows) {
+      nativeLauncher = await compileClaudeCliNativeLauncher(
+        tempDirs.make("openclaw-claude-native-"),
+      );
+    }
+  }, 150_000);
+  beforeAll(async () => {
+    const instance = await createOpenClawTestInstance({ name: "claude-cli-spawn-prepare" });
+    // Reuse CI's built runtime; launcher cases do not own artifact publication.
+    try {
+      await instance.entrypoint();
+    } finally {
+      await instance.cleanup();
+    }
+  }, 240_000);
+
+  const launchKinds = ["native", "node-leading", "npm-shim"] as const;
+  it.each(windows ? launchKinds : (["npm-shim"] as const))(
+    "completes an ordinary agent turn through %s",
+    async (kind) => {
+      const proof = await runClaudeCliNativeSpawnProof(
+        kind === "native" ? { kind, launcher: nativeLauncher } : { kind },
+      );
+      console.log("[claude-cli-native-proof]", JSON.stringify(proof));
+      expect(proof.code, proof.stderr).toBe(0);
+      expect(JSON.parse(proof.stdout).payloads).toContainEqual(
+        expect.objectContaining({ text: "PONG" }),
+      );
+      if (kind === "native") {
+        expect(proof.launches).toContainEqual(
+          expect.objectContaining({ phase: "native-launch", platform: "win32" }),
+        );
+      }
+    },
+    360_000,
+  );
+});

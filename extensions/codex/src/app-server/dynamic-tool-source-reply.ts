@@ -4,7 +4,10 @@
  * one, and whether either ends the Codex turn.
  */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { captureToolAuthoredSourceReply } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  captureToolAuthoredSourceReply,
+  resolveMessageToolSourceReplyFinal,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
@@ -29,8 +32,6 @@ export type CodexToolResultSourceReply = {
   toolConfirmed: boolean;
   /** Final (`true`) or progress (`false`) for a confirmed message-tool reply. */
   final: boolean | undefined;
-  /** Whether this tool result ends the Codex turn. */
-  terminate: true | undefined;
 };
 
 /**
@@ -52,6 +53,7 @@ export function resolveCodexToolResultSourceReply(params: {
   result: AgentToolResult<unknown>;
   deliveredSourceReply: boolean;
   executedArgs: Record<string, unknown>;
+  finalByDefault?: boolean;
   runId: string | undefined;
   response: CodexDynamicToolRuntimeResponse;
 }): CodexToolResultSourceReply {
@@ -61,7 +63,9 @@ export function resolveCodexToolResultSourceReply(params: {
     !params.resultIsError &&
     (params.rawResult.terminate === true || params.result.terminate === true);
   const confirmed = messageTool && (toolConfirmed || params.deliveredSourceReply);
-  const final = confirmed ? params.executedArgs.final !== false : undefined;
+  const final = confirmed
+    ? resolveMessageToolSourceReplyFinal(params.executedArgs, params.finalByDefault)
+    : undefined;
   // Middleware and extensions may withdraw or rewrite the reply, so read the
   // effective result, never the raw tool output.
   const payload =
@@ -99,5 +103,5 @@ export function resolveCodexToolResultSourceReply(params: {
       toolAuthoredForTurnId: params.call.turnId,
     };
   }
-  return { toolConfirmed, final, terminate };
+  return { toolConfirmed, final };
 }

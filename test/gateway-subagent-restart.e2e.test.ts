@@ -1,4 +1,4 @@
-// Managed process replacement proves recovery of a child whose requester already finished.
+// Managed process replacement proves requester settlement after the child session was replaced.
 import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
@@ -11,7 +11,14 @@ import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-res
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { extractAssistantPhaseText } from "../src/shared/chat-message-content.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import {
+  connectRestartClient,
+  restartProviderServer,
+  restartToolNames,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
@@ -204,16 +211,12 @@ async function startProvider(signal: AbortSignal) {
   };
 }
 
-it.skipIf(process.platform === "win32").for([
-  { outcome: "complete", replaceChild: false },
-  { outcome: "reset", replaceChild: false },
-  { outcome: "complete", replaceChild: true },
-  { outcome: "reset", replaceChild: true },
-  { outcome: "cancel", replaceChild: true },
-] as const)(
-  "keeps quiet-child restart continuation under parent authority: $outcome (child replaced: $replaceChild)",
+it
+  .skipIf(process.platform === "win32")
+  .for([{ outcome: "complete" }, { outcome: "reset" }, { outcome: "cancel" }] as const)(
+  "keeps replaced-child restart settlement under parent authority: $outcome",
   { timeout: 180_000 },
-  async ({ outcome, replaceChild }, { signal }) => {
+  async ({ outcome }, { signal }) => {
     const provider = await startProvider(signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl, "gpt-5.4");
     const instance = await createOpenClawTestInstance({
@@ -288,10 +291,16 @@ it.skipIf(process.platform === "win32").for([
           url: instance.url,
           token: instance.gatewayToken,
           clientName: "gateway-client",
-          mode: "backend",
+          // Recovery needs the original profiled operator; backend probes are unprofiled.
+          mode: "test",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("proof-device.sqlite"),
+            path: instance.state.statePath(
+              "proof-identities",
+              "requester",
+              "client",
+              "credentials.sqlite",
+            ),
           }),
           onEvent: ({ event, payload }) => {
             if (
@@ -416,6 +425,8 @@ it.skipIf(process.platform === "win32").for([
               slots: { memory: "none" },
             },
             models: {
+              // Keep this synthetic restart fixture independent of remote catalog adoption.
+              catalogRefresh: { enabled: false },
               mode: "replace",
               providers: {
                 [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
@@ -432,7 +443,6 @@ it.skipIf(process.platform === "win32").for([
                     params: { transport: "sse", openaiWsWarmup: false },
                   },
                 },
-                heartbeat: { every: "0m" },
                 skipBootstrap: true,
                 skills: [],
                 timeoutSeconds: 120,
@@ -488,19 +498,43 @@ it.skipIf(process.platform === "win32").for([
               if (!entry) {
                 throw new Error("Child registry row is missing");
               }
+              expect(entry.operatorRecoverySource).toMatchObject({
+                sessionKey: PARENT_KEY,
+                sourceRunId: originalRunId,
+              });
               return entry;
             },
             { timeout: 30_000 },
           );
           observations.childKey = child.key;
           observations.beforeShutdown = persistedChild({ runId: childRunId });
+          const parentSession = persisted(PARENT_KEY);
+          const parentSessionId = parentSession?.sessionId;
+          expect(observations.beforeShutdown).toMatchObject({
+            operatorRecoverySource: {
+              version: 1,
+              agentId: "main",
+              sessionKey: PARENT_KEY,
+              sessionId: parentSessionId,
+              lifecycleRevision: parentSession?.lifecycleRevision,
+              sourceRunId: originalRunId,
+              snapshot: {
+                profileId: expect.any(String),
+                scopes: expect.arrayContaining([
+                  "operator.admin",
+                  "operator.read",
+                  "operator.write",
+                ]),
+                localOperator: true,
+              },
+            },
+          });
           expect(
             JSON.stringify(await client.request("chat.history", { sessionKey: PARENT_KEY })),
           ).toContain(PARENT_FINAL);
           observeRecovery = true;
-          const parentSessionId = persisted(PARENT_KEY)?.sessionId;
           const recoveryStartedAt = Date.now();
-          await restart(replaceChild);
+          await restart(true);
           phase = "waiting-for-continuation";
           await client!.request("sessions.subscribe", { agentId: "main" });
           const checkpoint = await withinTest(
@@ -518,18 +552,16 @@ it.skipIf(process.platform === "win32").for([
             status: "dispatching",
           });
           expect(provider.calls.filter((call) => call.kind === "recovery")).toHaveLength(0);
-          if (replaceChild) {
-            expect(checkpoint.prompt).toContain("original session incarnation changed");
-            expect(persisted(child.key)).toEqual(replacementChild);
-            expect(persistedChild({ runId: childRunId })?.execution).toMatchObject({
-              status: "terminal",
-              suppressSessionEffects: true,
-              outcome: {
-                status: "error",
-                error: expect.stringContaining("original session incarnation changed"),
-              },
-            });
-          }
+          expect(checkpoint.prompt).toContain("original session incarnation changed");
+          expect(persisted(child.key)).toEqual(replacementChild);
+          expect(persistedChild({ runId: childRunId })?.execution).toMatchObject({
+            status: "terminal",
+            suppressSessionEffects: true,
+            outcome: {
+              status: "error",
+              error: expect.stringContaining("original session incarnation changed"),
+            },
+          });
           let dispatchesAtRevocation: number | undefined;
           let requestsAtRevocation: number | undefined;
           if (outcome === "complete") {
@@ -541,12 +573,6 @@ it.skipIf(process.platform === "win32").for([
               () => {
                 expect(persisted(PARENT_KEY)).toMatchObject({ status: "done" });
                 const settled = persistedChild({ runId: childRunId });
-                if (!replaceChild) {
-                  expect(settled).toMatchObject({
-                    expectsCompletionMessage: false,
-                    cleanup: "keep",
-                  });
-                }
                 expect(settled?.requesterSettleWake).toBeUndefined();
               },
               { timeout: 30_000 },
@@ -585,16 +611,6 @@ it.skipIf(process.platform === "win32").for([
               { timeout: 30_000 },
             );
           }
-          if (outcome === "complete" && !replaceChild) {
-            const history = await client!.request<{ messages: unknown[] }>("chat.history", {
-              sessionKey: child.key,
-            });
-            expect(JSON.stringify(history.messages)).toContain(CHILD_TASK);
-            expect(persisted(child.key)).toMatchObject({
-              sessionId: child.sessionId,
-              status: "interrupted",
-            });
-          }
           // Restart only after the durable handoff settles; it must stay consumed on the next boot.
           const recoveryPasses = () =>
             (instance.logs().match(/startup trace: sidecars.subagent-recovery /g) ?? []).length;
@@ -621,9 +637,7 @@ it.skipIf(process.platform === "win32").for([
             signal,
           );
           expect(persistedChild({ runId: childRunId })?.requesterSettleWake).toBeUndefined();
-          if (replaceChild) {
-            expect(persisted(child.key)).toEqual(replacementChild);
-          }
+          expect(persisted(child.key)).toEqual(replacementChild);
           if (outcome === "complete") {
             expect(persisted(PARENT_KEY)).toMatchObject({ status: "done" });
           }
@@ -644,7 +658,6 @@ it.skipIf(process.platform === "win32").for([
               proof: "quiet-subagent-managed-restart",
               recoveryMs,
               outcome,
-              replaceChild,
               recoveryDispatches,
               originalParentDispatches: 2,
               ...(dispatchesAtRevocation === undefined
@@ -682,6 +695,389 @@ it.skipIf(process.platform === "win32").for([
       },
       () => instance.cleanup(),
       () => provider.close(),
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32").for([
+  { parentAgentId: "main", parentKey: "agent:main:main", followup: false },
+  {
+    parentAgentId: "requester",
+    parentKey: "agent:requester:x:group:restart-fixture",
+    followup: true,
+  },
+])(
+  "resumes a drain-interrupted dashboard child once for $parentKey (follow-up: $followup)",
+  { timeout: 240_000 },
+  async ({ parentAgentId, parentKey, followup }, { signal }) => {
+    const parentRequest = "DASHBOARD_RESTART_PARENT: start a visible child, then finish.";
+    const childTask = "DASHBOARD_RESTART_CHILD: finish the retained assignment.";
+    const childFinal = "DASHBOARD_CHILD_COMPLETED";
+    const peerRequest = "DASHBOARD_PEER_SEND: continue the retained child.";
+    const peerKey = `agent:${parentAgentId}:dashboard:restart-peer`;
+    let childKey = "";
+    let peerCalls = 0;
+    const parentFinal = "DASHBOARD_PARENT_RECEIVED_RESULT";
+    const failed = createDeferred<never>();
+    void failed.promise.catch(() => {});
+    const initialChild = createDeferred();
+    const resumedChild = createDeferred<ServerResponse>();
+    let parentCalls = 0;
+    let childCalls = 0;
+    const resumedCall = followup ? 4 : 3;
+    const reservation = await reserveTestPortListener({
+      port: 64_872,
+      offsets: [0, 1, 2, 3],
+      signal,
+      createListener: () =>
+        restartProviderServer(failed, async (_request, response, body) => {
+          const input = JSON.stringify(body.input);
+          const text = (value: string) =>
+            writeOpenAiResponsesText(response, {
+              text: value,
+              messageId: `msg_dashboard_${parentCalls}_${childCalls}`,
+              responseId: `resp_dashboard_${parentCalls}_${childCalls}`,
+            });
+          if (restartToolNames(body).length === 0) {
+            const title = "Synthetic dashboard restart";
+            if (body.stream === false) {
+              response.writeHead(200, { "content-type": "application/json" }).end(
+                JSON.stringify({
+                  id: "resp_dashboard_title",
+                  object: "response",
+                  status: "completed",
+                  output: [
+                    {
+                      type: "message",
+                      id: "msg_dashboard_title",
+                      role: "assistant",
+                      status: "completed",
+                      content: [{ type: "output_text", text: title, annotations: [] }],
+                    },
+                  ],
+                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+                }),
+              );
+            } else {
+              text(title);
+            }
+          } else if (input.includes(peerRequest) && !input.includes(childTask)) {
+            peerCalls += 1;
+            if (peerCalls === 1) {
+              writeRestartToolCall(
+                response,
+                "peer_send",
+                "sessions_send",
+                {
+                  sessionKey: childKey,
+                  message: "DASHBOARD_CONTINUE: inspect retained work and finish.",
+                  mode: "followup",
+                  timeoutSeconds: 0,
+                  watch: false,
+                },
+                peerCalls,
+              );
+            } else {
+              expect(input).not.toContain('"status":"forbidden"');
+              text("DASHBOARD_PEER_ACKNOWLEDGED");
+            }
+          } else if (input.includes(parentRequest)) {
+            parentCalls += 1;
+            if (parentCalls === 1) {
+              writeRestartToolCall(
+                response,
+                "dashboard_spawn",
+                "sessions_spawn",
+                {
+                  task: childTask,
+                  agentId: "main",
+                  taskName: "dashboard_restart_child",
+                  visible: true,
+                  context: "isolated",
+                },
+                parentCalls,
+              );
+            } else {
+              expect(input, "The visible child must be accepted before restart").toContain(
+                "childSessionKey",
+              );
+              if (parentCalls > 2) {
+                expect(input).toContain(childFinal);
+              }
+              text(parentCalls === 2 ? "DASHBOARD_CHILD_STARTED" : parentFinal);
+            }
+          } else {
+            expect(input).toContain(childTask);
+            childCalls += 1;
+            expect(childCalls).toBeLessThanOrEqual(resumedCall + 1);
+            if (childCalls === 1) {
+              writeRestartToolCall(
+                response,
+                "dashboard_checkpoint",
+                "subagents",
+                { action: "list" },
+                childCalls,
+              );
+            } else if (followup && childCalls === 2) {
+              text(childFinal);
+            } else if (childCalls === resumedCall - 1) {
+              initialChild.resolve();
+            } else if (childCalls === resumedCall) {
+              resumedChild.resolve(response);
+            } else {
+              // A resumed agent must be able to inspect retained work before finishing.
+              const output = asRecord(
+                (Array.isArray(body.input) ? body.input : []).find(
+                  (item) =>
+                    isRecord(item) &&
+                    item.type === "function_call_output" &&
+                    item.call_id === `call_dashboard_recovered_history_${resumedCall}`,
+                ),
+              );
+              expect(output.output).toBeTypeOf("string");
+              const history = asRecord(JSON.parse(String(output.output)));
+              expect(history).toMatchObject({ messages: expect.any(Array) });
+              expect(history.error).toBeUndefined();
+              expect(JSON.stringify(history.messages)).toContain("call_dashboard_checkpoint_1");
+              text(childFinal);
+            }
+            // After recording a checkpoint, hold the next transport through the drain,
+            // then hold the resumed transport until the parent is proven still waiting.
+          }
+        }),
+    });
+    const model = buildMockOpenAiResponsesProvider(
+      `http://127.0.0.1:${reservation.claim.port}/v1`,
+      "gpt-5.4",
+    );
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-dashboard-child-restart",
+      port: reservation.claim.port + 2,
+      signal,
+      startTimeoutMs: 120_000,
+      stopTimeoutMs: 10_000,
+      gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
+      env: {
+        OPENAI_API_KEY: undefined,
+        OPENAI_BASE_URL: undefined,
+        OPENAI_API_BASE: undefined,
+        OPENCLAW_SKIP_PROVIDERS: undefined,
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+      },
+    });
+    let client: GatewayClient | undefined;
+    const connect = () => connectRestartClient(instance, { mode: "test" }, signal, 60_000);
+    const wait = <T>(promise: Promise<T>) =>
+      withinTest(Promise.race([promise, failed.promise]), signal);
+    const restart = async () => {
+      const process = instance.child;
+      expect(process?.pid).toBeDefined();
+      await client?.stopAndWait();
+      client = undefined;
+      const closed = once(process!, "close");
+      expect(
+        writeGatewayRestartIntentSync({
+          env: instance.env,
+          targetPid: process!.pid!,
+          intent: { reason: "gateway.restart", force: true, waitMs: 100 },
+        }),
+      ).toBe(true);
+      expect(process!.kill("SIGTERM")).toBe(true);
+      expect(await wait(closed), instance.logs()).toEqual([0, null]);
+      await instance.startGateway();
+      client = await connect();
+    };
+    await runQaGatewayFixture(
+      async () => {
+        await instance.state.writeConfig({
+          update: { checkOnStart: false },
+          browser: { enabled: false },
+          plugins: { enabled: false },
+          models: {
+            catalogRefresh: { enabled: false },
+            mode: "replace",
+            providers: {
+              [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
+            },
+          },
+          agents: {
+            ownership: "explicit",
+            defaults: {
+              systemAgent: { agentId: "main" },
+              subagents: { maxSpawnDepth: 2 },
+              workspace: instance.state.workspaceDir,
+              model: { primary: model.modelRef },
+              modelPolicy: { allow: [model.modelRef] },
+              models: {
+                [model.modelRef]: {
+                  agentRuntime: { id: "openclaw" },
+                  params: { transport: "sse", openaiWsWarmup: false },
+                },
+              },
+              skipBootstrap: true,
+              skills: [],
+              timeoutSeconds: 180,
+            },
+            entries: {
+              main: {},
+              requester: { subagents: { allowAgents: ["main"] } },
+            },
+          },
+          tools: {
+            sessions: { visibility: "all" },
+            agentToAgent: { enabled: true },
+            allow: ["read", "sessions_spawn", "sessions_send", "sessions_history", "subagents"],
+            codeMode: { enabled: false },
+            toolSearch: false,
+          },
+          gateway: {
+            mode: "local",
+            controlUi: { enabled: false },
+            bind: "loopback",
+            port: instance.port,
+            auth: { mode: "token", token: instance.gatewayToken },
+          },
+        });
+        await instance.startGateway();
+        client = await connect();
+        await client.request("sessions.create", { key: parentKey, agentId: parentAgentId });
+        const accepted = await client.request<{ runId: string }>(
+          "chat.send",
+          { sessionKey: parentKey, message: parentRequest, idempotencyKey: "dashboard-original" },
+          { expectFinal: false },
+        );
+        if (!followup) {
+          await wait(initialChild.promise);
+        }
+        expect(
+          await client.request("agent.wait", { runId: accepted.runId, timeoutMs: 60_000 }),
+        ).toMatchObject({ status: "ok" });
+        const rows = await client.request<SessionsListResult>("sessions.list", { agentId: "main" });
+        const child = rows.sessions.find((row) => row.spawnedBy === parentKey);
+        expect(child, instance.logs()).toBeDefined();
+        if (!child) {
+          throw new Error("Visible spawn did not publish its dashboard child");
+        }
+        if (followup) {
+          await wait(
+            vi.waitFor(
+              async () => {
+                const settled = await client!.request<SessionsListResult>("sessions.list", {});
+                for (const key of [parentKey, child.key]) {
+                  expect(settled.sessions.find((row) => row.key === key)).toMatchObject({
+                    status: "done",
+                    hasActiveRun: false,
+                  });
+                }
+                expect(parentCalls).toBe(3);
+              },
+              { timeout: 60_000 },
+            ),
+          );
+          // Peer follow-ups keep the original child task historical.
+          childKey = child.key;
+          await client.request("sessions.create", { key: peerKey, agentId: parentAgentId });
+          const peerRun = await client.request<{ runId: string }>(
+            "chat.send",
+            {
+              sessionKey: peerKey,
+              message: peerRequest,
+              idempotencyKey: "dashboard-peer-followup",
+            },
+            { expectFinal: false },
+          );
+          await wait(initialChild.promise);
+          expect(
+            await client.request("agent.wait", { runId: peerRun.runId, timeoutMs: 60_000 }),
+          ).toMatchObject({ status: "ok" });
+        }
+        const beforeRestart = await client.request<SessionsListResult>("sessions.list", {
+          agentId: "main",
+        });
+        expect(beforeRestart.sessions.find((row) => row.key === child.key)).toMatchObject({
+          status: "running",
+          hasActiveRun: true,
+          ...(followup ? { subagentRunState: "historical" } : {}),
+        });
+        expect(parentCalls).toBe(followup ? 3 : 2);
+        await restart();
+        await wait(
+          vi.waitFor(
+            async () => {
+              const state = await client!.request<SessionsListResult>("sessions.list", {
+                agentId: "main",
+              });
+              expect(state.sessions.find((row) => row.key === child.key)).toMatchObject({
+                status: "running",
+                hasActiveRun: true,
+              });
+            },
+            { timeout: 60_000 },
+          ),
+        );
+        const resumedResponse = await wait(resumedChild.promise);
+        expect(parentCalls, instance.logs()).toBe(followup ? 3 : 2);
+        expect(childCalls).toBe(resumedCall);
+        const running = await client!.request<SessionsListResult>("sessions.list", {
+          agentId: "main",
+        });
+        expect(running.sessions.find((row) => row.key === child.key)).toMatchObject({
+          status: "running",
+          hasActiveRun: true,
+        });
+        writeRestartToolCall(
+          resumedResponse,
+          "dashboard_recovered_history",
+          "sessions_history",
+          { sessionKey: child.key, limit: 20 },
+          childCalls,
+        );
+        const assertCompleted = async () => {
+          const sessions = await client!.request<SessionsListResult>("sessions.list", {});
+          for (const key of [parentKey, child.key]) {
+            expect(
+              sessions.sessions.find((row) => row.key === key),
+              instance.logs(),
+            ).toMatchObject({
+              status: "done",
+              hasActiveRun: false,
+            });
+          }
+          const history = await client!.request<{ messages: unknown[] }>("chat.history", {
+            sessionKey: parentKey,
+          });
+          expect(
+            history.messages.map(extractAssistantPhaseText).filter((text) => text === parentFinal),
+          ).toHaveLength(1);
+          expect({ parentCalls, childCalls }).toEqual({
+            parentCalls: 3,
+            childCalls: resumedCall + 1,
+          });
+        };
+        await wait(vi.waitFor(assertCompleted, { timeout: 60_000 }));
+        const recoveryPasses = () =>
+          (instance.logs().match(/startup trace: sidecars.subagent-recovery /g) ?? []).length;
+        const completedPasses = recoveryPasses();
+        await restart();
+        await vi.waitFor(() => expect(recoveryPasses()).toBeGreaterThan(completedPasses), {
+          timeout: 60_000,
+        });
+        await wait(vi.waitFor(assertCompleted, { timeout: 60_000 }));
+      },
+      async () => {
+        if (signal.aborted) {
+          console.error(instance.logs().replaceAll(instance.gatewayToken, "[fixture token]"));
+        }
+        await client?.stopAndWait();
+      },
+      () => instance.cleanup(),
+      async () => {
+        reservation.listener.closeAllConnections();
+        await reservation.releaseListener();
+        await reservation.claim.release();
+      },
     );
   },
 );

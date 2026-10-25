@@ -1,4 +1,4 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
@@ -17,6 +17,7 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
+import { respondError } from "../server-methods/response.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import type { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { prepareDeletedAgentSessionCheck } from "../session-utils.js";
@@ -76,13 +77,10 @@ export function respondDeletedAgentSession(params: {
     if (agentId === null) {
       return false;
     }
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Agent "${agentId}" no longer exists in configuration`,
-      ),
+    respondError(
+      params.respond,
+      ErrorCodes.INVALID_REQUEST,
+      `Agent "${agentId}" no longer exists in configuration`,
     );
     return true;
   };
@@ -124,7 +122,7 @@ export function respondUnavailableAgentSession(params: {
     if (!sessionError) {
       return false;
     }
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, sessionError));
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, sessionError);
     return true;
   };
   return deleted instanceof Promise

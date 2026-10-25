@@ -6,53 +6,14 @@ import {
   stringEnum,
 } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
-import { BROWSER_TAB_BOUND_ACTIONS } from "./browser-tool-binding.js";
+import {
+  BROWSER_TAB_BOUND_ACTIONS,
+  BROWSER_TOOL_ACTIONS,
+  BROWSER_TOOL_ACTION_FACTS,
+} from "./browser-tool-action-facts.js";
+import { BROWSER_ACT_KIND_FACTS, BROWSER_MODEL_ACT_KINDS } from "./browser/act-kinds.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
 import type { BrowserProfileCapabilities } from "./browser/profile-capabilities.js";
-
-const BROWSER_ACT_KINDS = [
-  "batch",
-  "click",
-  "clickCoords",
-  "type",
-  "press",
-  "hover",
-  "scrollIntoView",
-  "drag",
-  "select",
-  "fill",
-  "resize",
-  "wait",
-  "evaluate",
-  "close",
-] as const;
-
-const BROWSER_TOOL_ACTIONS = [
-  "doctor",
-  "status",
-  "start",
-  "stop",
-  "profiles",
-  "importprofile",
-  "tabs",
-  "open",
-  "focus",
-  "close",
-  "snapshot",
-  "screenshot",
-  "navigate",
-  "console",
-  "requests",
-  "errors",
-  "text",
-  "emulate",
-  "pdf",
-  "download",
-  "waitfordownload",
-  "upload",
-  "dialog",
-  "act",
-] as const;
 
 const BROWSER_TARGETS = ["sandbox", "host", "node"] as const;
 
@@ -69,7 +30,7 @@ const TAB_REFERENCE_DESCRIPTION = "Prefer suggestedTargetId/tabId/label; raw CDP
 // The discriminator (kind) determines which properties are relevant; runtime validates.
 export type BrowserToolCapabilities = {
   actions: readonly (typeof BROWSER_TOOL_ACTIONS)[number][];
-  actKinds: readonly (typeof BROWSER_ACT_KINDS)[number][];
+  actKinds: readonly (typeof BROWSER_MODEL_ACT_KINDS)[number][];
   tabBound: boolean;
   supportsNativeSnapshots?: boolean;
 };
@@ -81,51 +42,23 @@ export function resolveBrowserToolCapabilities(params?: {
     BrowserProfileCapabilities,
     "supportsBatchActions" | "supportsDownloads" | "supportsPdf"
   > &
-    Partial<
-      Pick<
-        BrowserProfileCapabilities,
-        | "supportsRequests"
-        | "supportsErrors"
-        | "supportsPageText"
-        | "supportsEmulation"
-        | "supportsScreenshots"
-        | "supportsVisualActions"
-        | "supportsUploads"
-        | "supportsDialogs"
-        | "supportsConsole"
-        | "supportsNativeSnapshots"
-      >
-    >;
+    Partial<BrowserProfileCapabilities>;
 }): BrowserToolCapabilities {
   const evaluateEnabled = params?.evaluateEnabled !== false;
   const profileCapabilities = params?.profileCapabilities;
   const actions = params?.tabBound ? BROWSER_TAB_BOUND_ACTIONS : BROWSER_TOOL_ACTIONS;
   return {
-    actions: actions.filter(
-      (action) =>
-        (profileCapabilities?.supportsPdf !== false || action !== "pdf") &&
-        (profileCapabilities?.supportsRequests !== false || action !== "requests") &&
-        (profileCapabilities?.supportsErrors !== false || action !== "errors") &&
-        (profileCapabilities?.supportsPageText !== false || action !== "text") &&
-        (profileCapabilities?.supportsEmulation !== false || action !== "emulate") &&
-        (profileCapabilities?.supportsScreenshots !== false || action !== "screenshot") &&
-        (profileCapabilities?.supportsUploads !== false || action !== "upload") &&
-        (profileCapabilities?.supportsDialogs !== false || action !== "dialog") &&
-        (profileCapabilities?.supportsConsole !== false || action !== "console") &&
-        (profileCapabilities?.supportsDownloads !== false ||
-          (action !== "download" && action !== "waitfordownload")),
-    ),
-    actKinds: BROWSER_ACT_KINDS.filter(
-      (kind) =>
+    actions: actions.filter((action) => {
+      const capability = BROWSER_TOOL_ACTION_FACTS[action].capability;
+      return !capability || profileCapabilities?.[capability] !== false;
+    }),
+    actKinds: BROWSER_MODEL_ACT_KINDS.filter((kind) => {
+      const capability = BROWSER_ACT_KIND_FACTS[kind].capability;
+      return (
         (evaluateEnabled || kind !== "evaluate") &&
-        (profileCapabilities?.supportsBatchActions !== false || kind !== "batch") &&
-        (profileCapabilities?.supportsVisualActions !== false ||
-          (kind !== "clickCoords" &&
-            kind !== "drag" &&
-            kind !== "resize" &&
-            kind !== "hover" &&
-            kind !== "scrollIntoView")),
-    ),
+        (!capability || profileCapabilities?.[capability] !== false)
+      );
+    }),
     tabBound: params?.tabBound === true,
     supportsNativeSnapshots: profileCapabilities?.supportsNativeSnapshots !== false,
   };
@@ -183,6 +116,12 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
     ...(capabilities.actKinds.includes("evaluate") ? { fn: Type.Optional(Type.String()) } : {}),
   };
 }
+
+// Legacy input repair accepts the full contract, even when this run hides a capability.
+export const BROWSER_ACT_REQUEST_KEYS = [
+  "kind",
+  ...Object.keys(createBrowserActProperties(resolveBrowserToolCapabilities())),
+];
 
 // IMPORTANT: OpenAI function tool schemas must have a top-level `type: "object"`.
 // A root-level `Type.Union([...])` compiles to `{ anyOf: [...] }` (no `type`),
@@ -248,9 +187,7 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
         }
       : {}),
     urls: Type.Optional(Type.Boolean()),
-    ...(capabilities.actions.some((action) =>
-      ["screenshot", "pdf", "download", "waitfordownload"].includes(action),
-    )
+    ...(capabilities.actions.some((action) => BROWSER_TOOL_ACTION_FACTS[action].path)
       ? { path: Type.Optional(Type.String()) }
       : {}),
     level: Type.Optional(Type.String()),

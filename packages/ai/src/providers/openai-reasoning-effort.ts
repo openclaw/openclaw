@@ -59,6 +59,23 @@ export function isOpenAIGpt56Model(model: OpenAIReasoningModel): boolean {
   return /^gpt-5\.6(?:-|$)/u.test(id) || /^gpt-5\.6(?:\s|\(|-|$)/u.test(name);
 }
 
+/** Apply the native Chat Completions tool contract after callers qualify the endpoint and model ID. */
+export function applyOpenAICompletionsToolReasoning(
+  payload: Record<string, unknown>,
+  model: { id: string; name?: string },
+): void {
+  if (!Array.isArray(payload.tools) || payload.tools.length === 0) {
+    return;
+  }
+  // Native Chat Completions rejects tools with enabled GPT-5.6 reasoning,
+  // and rejects the effort field entirely for GPT-5.4 Mini and GPT-5.5 tools.
+  if (isOpenAIGpt56Model(model)) {
+    payload.reasoning_effort = "none";
+  } else if (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) {
+    delete payload.reasoning_effort;
+  }
+}
+
 /** Return whether a model has a known GPT-6 reasoning and sampling contract. */
 export function isOpenAIGpt6Model(model: OpenAIReasoningModel): boolean {
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
@@ -71,20 +88,6 @@ export function normalizeOpenAIReasoningEffort(effort: string): string {
   const folded = trimmed.toLowerCase();
   // Only fold canonical names; provider-native values can be case-sensitive.
   return CANONICAL_REASONING_EFFORTS.has(folded) ? folded : trimmed;
-}
-
-function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[] | undefined {
-  if (!compat || typeof compat !== "object") {
-    return undefined;
-  }
-  if ((compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false) {
-    return [];
-  }
-  const raw = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
-  if (!Array.isArray(raw)) {
-    return undefined;
-  }
-  return normalizeUniqueTrimmedStringList(raw);
 }
 
 function isDisabledReasoningEffort(effort: string): boolean {
@@ -102,9 +105,15 @@ export function resolveOpenAISupportedReasoningEfforts(
 export function resolveOpenAIModelReasoningEfforts(
   model: OpenAIReasoningModel,
 ): readonly OpenAIApiReasoningEffort[] | undefined {
-  const compatEfforts = readCompatReasoningEfforts(model.compat);
-  if (compatEfforts) {
-    return compatEfforts;
+  const compat = model.compat;
+  if (compat && typeof compat === "object") {
+    if ((compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false) {
+      return [];
+    }
+    const raw = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
+    if (Array.isArray(raw)) {
+      return normalizeUniqueTrimmedStringList(raw);
+    }
   }
 
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);

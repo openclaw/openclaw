@@ -41,14 +41,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: none;
 }
 
-.shell--mobile-nav.shell--connection-status {
-  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
-  grid-template-areas:
-    "topbar"
-    "connection"
-    "content";
-}
-
 .shell--mobile-nav .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed .shell-nav {
   position: fixed;
@@ -149,9 +141,13 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   gap: 10px;
 }
 
-.shell--mobile-nav .topnav-shell__content {
-  display: flex;
-  justify-content: center;
+.mobile-connection-status {
+  min-width: 0;
+  height: 18px;
+}
+
+:is(.topbar-nav-toggle, .chat-pane__nav-toggle) .gateway-status-dot {
+  inset: 8px 8px auto auto;
 }
 
 .shell--mobile-nav .topbar-brand {
@@ -327,6 +323,8 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .chat-thread {
+    --chat-thread-padding-top: 0px;
+
     margin-top: 0;
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
        on the scroll container floats macOS overlay scrollbars off the edge. */
@@ -443,10 +441,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 }
 
-/* nth-child is 1-based and includes the checkbox column (col 1). The optional
-   Group column in category mode shifts later indexes; grouping is a desktop
-   workflow, so the hide rules target the default 7-column roster. */
-
 @media (max-width: 900px) {
   .data-table.sessions-table {
     min-width: 640px;
@@ -458,7 +452,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 }
 
-/* ≤768px: hide Tokens (col 6); tighten padding; stack pagination */
+/* ≤768px: tighten padding and stack pagination */
 @media (max-width: 768px) {
   .session-menu__panel {
     --menu-item-height: 40px;
@@ -471,11 +465,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .data-table.sessions-table {
     min-width: 500px;
-  }
-
-  .sessions-table th:nth-child(6),
-  .sessions-table td:nth-child(6) {
-    display: none;
   }
 
   .data-table th,
@@ -532,35 +521,16 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 }
 
-/* ≤560px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
+/* ≤560px: keep the scoped columns available through horizontal scrolling. */
 @media (max-width: 560px) {
   .data-table.sessions-table {
     min-width: 320px;
-  }
-
-  .sessions-table th:nth-child(3),
-  .sessions-table td:nth-child(3),
-  .sessions-table th:nth-child(5),
-  .sessions-table td:nth-child(5) {
-    display: none;
   }
 
   .data-table.sessions-table .data-table-key-col {
     width: 106px;
     min-width: 106px;
     max-width: 106px;
-  }
-
-  /* The 106px key column has no room for the kind avatar; run state stays
-     visible through the status column, which this breakpoint keeps. */
-  .sessions-table .session-avatar {
-    display: none;
-  }
-
-  .sessions-table .session-status-col {
-    width: 76px;
-    min-width: 76px;
-    max-width: 76px;
   }
 
   .data-table th,

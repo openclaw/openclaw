@@ -21,6 +21,7 @@ import {
   createBridge,
   makeRealtimeProvider,
 } from "../webhook/realtime-handler.lifecycle.test-helpers.js";
+import { StreamDisconnectGrace } from "../webhook/stream-disconnect-grace.js";
 import { connectLiveKitAudio } from "./livekit-audio.js";
 import { LiveKitProvider, type LiveKitDependencies } from "./livekit.js";
 
@@ -203,7 +204,7 @@ async function fixture(
       },
     }),
     config.serve.path,
-    { connect() {}, disconnect() {}, retire() {} },
+    new StreamDisconnectGrace(() => {}),
   );
   provider.bind(manager, handler);
   if (options.shutdownDuringAdmission === "before-bridge") {

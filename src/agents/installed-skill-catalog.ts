@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
@@ -183,8 +184,6 @@ export async function searchInstalledSkills(
         );
         index = await build;
       }
-      assertCatalogCurrent(skills, signal);
-      assertBodyReadable(canReadInstructions);
     }
   }
   // Tool-intent expansions (web, cron, etc.) do not belong to skill matching.
@@ -197,7 +196,6 @@ export async function searchInstalledSkills(
     scores.set(skills[value]!, score * 2);
   }
   if (includeBodies && index) {
-    assertBodyReadable(canReadInstructions);
     for (const { value, score } of scoreLexical(index.bodies, terms)) {
       const skill = index.skills[value]!;
       scores.set(skill, (scores.get(skill) ?? 0) + score);
@@ -221,7 +219,7 @@ export async function searchInstalledSkills(
   for (const { value } of ranked.slice(0, limit)) {
     const result = {
       name: value.name,
-      description: value.description.slice(0, MAX_DESCRIPTION_CHARS),
+      description: truncateUtf16Safe(value.description, MAX_DESCRIPTION_CHARS),
       location: value.location,
     };
     chars += JSON.stringify(result).length;

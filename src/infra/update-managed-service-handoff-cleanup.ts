@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { ManagedHandoffRepairFacts } from "./update-managed-service-handoff-database.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
 
@@ -80,6 +80,7 @@ export async function inspectManagedHandoffRepairFacts(
   previous: ManagedHandoffLease,
   discovered: DiscoveredRepairFacts,
   retained?: ManagedHandoffRepairFacts,
+  familyExited = false,
 ): Promise<ManagedHandoffRepairFacts> {
   const facts = {
     runIds: [...new Set([...(retained?.runIds ?? []), ...discovered.runIds])],
@@ -87,7 +88,7 @@ export async function inspectManagedHandoffRepairFacts(
     timeoutMs: Math.max(retained?.timeoutMs ?? 0, discovered.timeoutMs ?? 0) || null,
   };
   const grace = Math.max(45 * 60_000, facts.timeoutMs ?? 0);
-  if (Date.now() - previous.updatedAt < grace) {
+  if (!familyExited && Date.now() - previous.updatedAt < grace) {
     throw new Error(
       `Handoff was last recorded at ${new Date(previous.updatedAt).toISOString()}; its recovery grace ends at ${new Date(previous.updatedAt + grace).toISOString()}. Retry openclaw update repair then.`,
     );
@@ -99,6 +100,7 @@ export async function inspectManagedHandoffRepairFacts(
       artifactPaths: facts.artifactPaths,
       windowsUserSid: discovered.windowsUserSid,
       drivers: [previous.helper, previous.executor, ...(discovered.drivers ?? [])],
+      familyExited,
     });
     const pids = [...new Set([...census.matchingPids, ...census.unverifiedPids])];
     if (pids.length || census.error) {
@@ -171,11 +173,7 @@ export async function readManagedHandoffRepairFacts(
       }
     }
     const timeouts = [value.recoveryTimeoutMs, value.parentExitTimeoutMs];
-    const argv =
-      Array.isArray(value.commandArgv) &&
-      value.commandArgv.every((arg): arg is string => typeof arg === "string")
-        ? value.commandArgv
-        : [];
+    const argv = isStringArray(value.commandArgv) ? value.commandArgv : [];
     for (const [index, arg] of argv.entries()) {
       const seconds = arg === "--timeout" ? argv[index + 1] : arg.match(/^--timeout=(.*)$/u)?.[1];
       timeouts.push(positiveSecondsToSafeMilliseconds(seconds?.trim()));

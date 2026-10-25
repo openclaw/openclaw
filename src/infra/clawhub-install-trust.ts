@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { resolveClawHubBaseUrl, type ClawHubFetch } from "./clawhub-client.js";
+import { resolveClawHubBaseUrl } from "./clawhub-client.js";
 import { encodeClawHubPackagePath, formatClawHubReleaseLabel } from "./clawhub-display.js";
 import { normalizeClawHubSha256Hex } from "./clawhub-integrity.js";
 import {
@@ -143,27 +143,6 @@ export function assessClawHubTrust(
   return hasRiskReasons ? "review-required" : "review-recommended";
 }
 
-function buildClawHubTrustInstallRecordFields(params: {
-  trust: ClawHubPackageSecurityTrust;
-  disposition: ClawHubTrustDisposition;
-  checkedAt: string;
-}): ClawHubTrustInstallRecordFields {
-  const scanStatus = normalizeClawHubTrustToken(params.trust.scanStatus);
-  const moderationState = normalizeClawHubTrustToken(params.trust.moderationState);
-  const reasons = params.trust.reasons
-    .map((reason) => normalizeOptionalString(reason))
-    .filter((reason): reason is string => Boolean(reason));
-  return {
-    clawhubTrustDisposition: params.disposition,
-    ...(scanStatus ? { clawhubTrustScanStatus: scanStatus } : {}),
-    ...(moderationState ? { clawhubTrustModerationState: moderationState } : {}),
-    ...(reasons.length > 0 ? { clawhubTrustReasons: reasons } : {}),
-    ...(params.trust.pending ? { clawhubTrustPending: true } : {}),
-    ...(params.trust.stale ? { clawhubTrustStale: true } : {}),
-    clawhubTrustCheckedAt: params.checkedAt,
-  };
-}
-
 function resolveClawHubSubjectUrl(params: {
   baseUrl?: string;
   subject: ClawHubTrustSubject;
@@ -178,24 +157,6 @@ function resolveClawHubSubjectUrl(params: {
         ? "claws"
         : "plugins";
   return `${resolveClawHubBaseUrl(params.baseUrl)}/${pathRoot}/${encodeClawHubPackagePath(params.subject.packageName)}`;
-}
-
-function resolveClawHubSecurityAuditUrl(params: {
-  baseUrl?: string;
-  subject: ClawHubTrustSubject;
-  version: string;
-  links?: {
-    subject?: string;
-    security?: string;
-  };
-}): string {
-  const subjectUrl =
-    (params.subject.kind === "skill" && normalizeOptionalString(params.links?.subject)) ||
-    resolveClawHubSubjectUrl(params);
-  return (
-    normalizeOptionalString(params.links?.security) ??
-    `${subjectUrl}/security-audit?version=${encodeURIComponent(params.version)}`
-  );
 }
 
 function wrapClawHubAuditLine(value: string, width: number): string[] {
@@ -232,37 +193,6 @@ function renderClawHubAuditBox(lines: string[]): string {
     );
   });
   return [top, ...body, `╰${"─".repeat(borderWidth)}╯`].join("\n");
-}
-
-function formatClawHubSecurityAudit(params: {
-  baseUrl?: string;
-  subject: ClawHubTrustSubject;
-  version: string;
-  overview: string;
-  disposition: ClawHubTrustDisposition;
-  links?: {
-    subject?: string;
-    security?: string;
-  };
-}): string {
-  const securityAuditUrl = resolveClawHubSecurityAuditUrl(params);
-  const releaseLabel = formatClawHubSubjectReleaseLabel(params.subject, params.version);
-  const outcome =
-    params.disposition === "blocked"
-      ? theme.error("Blocked")
-      : params.disposition === "clean"
-        ? theme.success("Safe")
-        : theme.warn("Review");
-  return renderClawHubAuditBox([
-    releaseLabel,
-    "",
-    `Outcome: ${outcome}`,
-    "",
-    "Overview:",
-    ...params.overview.split("\n").map((line) => sanitizeTerminalText(line)),
-    "",
-    `Details: ${sanitizeTerminalText(securityAuditUrl)}`,
-  ]);
 }
 
 function formatClawHubSubjectPackageName(subject: ClawHubTrustSubject): string {
@@ -507,7 +437,6 @@ async function fetchClawHubSubjectSecurity(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubFetchedSubjectSecurity> {
   if (params.subject.kind === "plugin" || params.subject.kind === "claw") {
     const security = await fetchClawHubPackageSecurity({
@@ -516,7 +445,6 @@ async function fetchClawHubSubjectSecurity(params: {
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
     });
     return {
       security,
@@ -558,7 +486,6 @@ export async function checkClawHubPackageTrust(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
   logger?: ClawHubInstallLogger;
   mode?: "install" | "update";
   confirmOnUpdate?: boolean;
@@ -575,7 +502,6 @@ export async function checkClawHubPackageTrust(params: {
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
     });
     const identityFailure = validateClawHubSecurityIdentity({
       security: fetchedSecurity.security,
@@ -608,14 +534,33 @@ export async function checkClawHubPackageTrust(params: {
       : assessedDisposition;
   const checkedAt = new Date().toISOString();
 
-  const terminalAudit = formatClawHubSecurityAudit({
-    baseUrl: params.baseUrl,
-    subject: params.subject,
-    version: params.version,
-    overview: security.overview,
-    disposition,
-    links: warningLinks,
-  });
+  const auditBaseUrl = params.baseUrl;
+  const auditSubject = params.subject;
+  const auditVersion = params.version;
+  const overview = security.overview;
+  const subjectUrl =
+    (auditSubject.kind === "skill" && normalizeOptionalString(warningLinks?.subject)) ||
+    resolveClawHubSubjectUrl({ baseUrl: auditBaseUrl, subject: auditSubject });
+  const securityAuditUrl =
+    normalizeOptionalString(warningLinks?.security) ??
+    `${subjectUrl}/security-audit?version=${encodeURIComponent(auditVersion)}`;
+  const auditReleaseLabel = formatClawHubSubjectReleaseLabel(auditSubject, auditVersion);
+  const outcome =
+    disposition === "blocked"
+      ? theme.error("Blocked")
+      : disposition === "clean"
+        ? theme.success("Safe")
+        : theme.warn("Review");
+  const terminalAudit = renderClawHubAuditBox([
+    auditReleaseLabel,
+    "",
+    `Outcome: ${outcome}`,
+    "",
+    "Overview:",
+    ...overview.split("\n").map((line) => sanitizeTerminalText(line)),
+    "",
+    `Details: ${sanitizeTerminalText(securityAuditUrl)}`,
+  ]);
   const audit = stripAnsi(terminalAudit);
   if (disposition === "clean") {
     params.logger?.info?.(terminalAudit);
@@ -644,13 +589,23 @@ export async function checkClawHubPackageTrust(params: {
       version: params.version,
     };
   }
+  const trust = security.trust;
+  const scanStatus = normalizeClawHubTrustToken(trust.scanStatus);
+  const moderationState = normalizeClawHubTrustToken(trust.moderationState);
+  const reasons = trust.reasons
+    .map((reason) => normalizeOptionalString(reason))
+    .filter((reason): reason is string => Boolean(reason));
   return {
     ok: true,
-    trustInstallRecordFields: buildClawHubTrustInstallRecordFields({
-      trust: security.trust,
-      disposition,
-      checkedAt,
-    }),
+    trustInstallRecordFields: {
+      clawhubTrustDisposition: disposition,
+      ...(scanStatus ? { clawhubTrustScanStatus: scanStatus } : {}),
+      ...(moderationState ? { clawhubTrustModerationState: moderationState } : {}),
+      ...(reasons.length > 0 ? { clawhubTrustReasons: reasons } : {}),
+      ...(trust.pending ? { clawhubTrustPending: true } : {}),
+      ...(trust.stale ? { clawhubTrustStale: true } : {}),
+      clawhubTrustCheckedAt: checkedAt,
+    },
     ...(disposition === "clean" ? {} : { warning: audit }),
   };
 }

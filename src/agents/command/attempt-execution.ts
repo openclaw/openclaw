@@ -15,6 +15,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { resolveUserPath } from "../../utils.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
@@ -39,12 +40,11 @@ import {
 } from "../cli-session.js";
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
-import { resolveDelegationCapability } from "../delegation-capability.js";
+import { isFallbackAttempt, resolveDelegationCapability } from "../delegation-capability.js";
 import { withAdmittedCliCandidate } from "../embedded-agent-runner/run-entry-cli.js";
 import { resolveRunEntryCliRuntime } from "../embedded-agent-runner/run-entry-runtime.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
-import { resolveWebchatPromptCacheKey } from "../embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { buildAgentInternalEventContext as buildEventContext } from "../internal-events.js";
@@ -53,7 +53,6 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
 import { isCliProvider } from "../model-selection.js";
-import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import { resolveCommandReplyExpectation } from "../reply-completion.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -66,6 +65,7 @@ import { withPreparedSessionCapabilityRead } from "../subagents/spawn/subagent-s
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
+  createCommandSuccessfulAuthProfileCallback,
   resolveCommandAuthProfileSelection,
   resolveHarnessAuthProfileSelection,
 } from "./attempt-auth-selection.js";
@@ -78,6 +78,8 @@ import {
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
+import { assertSandboxedDelegatedChildNotCli } from "./attempt-sandbox-cli-admission.js";
+import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -208,6 +210,18 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(params.sessionEntry),
       });
+  // Sandboxed delegated children never dispatch to host-executed CLI backends;
+  // spawn admission checks once the child model is resolved, and this run-seam
+  // guard owns the invariant for fallback candidates and post-spawn runtime
+  // overrides (the CLI runs on the host while the session is reported sandboxed).
+  assertSandboxedDelegatedChildNotCli({
+    useCliExecution: isCliExecutionProvider,
+    cliExecutionProvider,
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    sessionAgentId: params.sessionAgentId,
+    sessionEntry: params.sessionEntry,
+  });
   const { completionRetainsRequesterTools, runtimeToolsAllow, disableTools } =
     resolveCompletionToolPolicy({
       run: params,
@@ -228,25 +242,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         ? ["structured_output"]
         : undefined,
   });
-  const toolContext = {
-    messageChannel: params.messageChannel,
-    messageProvider: params.opts.messageProvider ?? params.messageChannel,
-    agentAccountId: params.runContext.accountId,
-    groupId: params.runContext.groupId,
-    groupChannel: params.runContext.groupChannel,
-    groupSpace: params.runContext.groupSpace,
-    spawnedBy: params.spawnedBy,
-    currentChannelId: params.runContext.currentChannelId,
-    chatId: params.runContext.chatId,
-    channelContext: params.runContext.channelContext,
-    currentThreadTs: params.runContext.currentThreadTs,
-    currentInboundAudio: params.runContext.currentInboundAudio,
-    replyToMode: params.runContext.replyToMode,
-    senderId: params.runContext.senderId,
-    senderIsOwner: params.opts.senderIsOwner,
-    scheduledToolPolicy: params.opts.scheduledToolPolicy,
-    pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
-  };
+  const toolContext = buildCommandAttemptToolContext(params);
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
       !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
@@ -310,15 +306,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     allowCliAuthProfileForwarding && !cliAuthNeedsSessionBinding
       ? await resolveCliExecutionAuthProfileId(buildCliAuthContext())
       : runtimeAuthPlan.forwardedAuthProfileId;
-  const embeddedAgentProvider = resolveOpenAIRuntimeProvider({
-    provider: params.providerOverride,
-    harnessRuntime: agentHarnessPolicy.runtime,
-    agentHarnessId: requestedAgentHarnessId,
-    authProfileProvider: runtimeAuthPlan.authProfileProviderForAuth,
-    authProfileId,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
     sessionRuntimeOverride ??
@@ -333,16 +320,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,
-      // Internal continuations keep the affinity of the persisted webchat conversation.
-      promptCacheKey:
-        params.sessionEntry?.delivery?.kind === "internal" && params.sessionKey
-          ? resolveWebchatPromptCacheKey({
-              agentId: params.sessionAgentId,
-              provider: params.providerOverride,
-              model: params.modelOverride,
-              sessionKey: params.sessionKey,
-            })
-          : undefined,
       chatType: params.sessionEntry?.chatType,
       contextWindow: params.sessionEntry?.contextWindow,
       agentId: params.sessionAgentId,
@@ -368,7 +345,9 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       lane: params.opts.lane,
       swarmExecutionLane: params.opts.swarmExecutionLane,
       extraSystemPrompt: params.opts.extraSystemPrompt,
+      extraSystemPromptTurnContext: params.opts.extraSystemPromptTurnContext,
       inputProvenance: params.opts.inputProvenance,
+      privateCompletion: params.opts.privateCompletion,
       skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
       sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
       taskSuggestionDeliveryMode: params.opts.taskSuggestionDeliveryMode,
@@ -606,7 +585,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             // inputs match the tool state this invocation actually runs with.
             ...buildCliMcpDelegationCapabilityBinding(
               resolveDelegationCapability({
-                fallbackActive: params.isFallbackRetry,
+                fallbackActive: isFallbackAttempt(params),
                 inputProvenance: params.opts.inputProvenance,
                 disableTools,
                 toolsAllow: runtimeToolsAllow,
@@ -720,7 +699,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     clientTools: params.opts.clientTools,
     toolBindings: params.opts.toolBindings,
-    provider: embeddedAgentProvider,
+    provider: params.providerOverride,
     requestedRouteResolution: "resolved",
     resolvedModelSelection: params.resolvedModelSelection,
     modelThinkingCapability: params.modelThinkingCapability,
@@ -757,26 +736,20 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     onAgentEvent: params.onAgentEvent,
+    onAttemptStart: params.onAttemptStart,
+    onAttemptTerminalReplaced: params.onAttemptTerminalReplaced,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     onDeferredLifecycleOwner: params.deferredLifecycle?.adopt,
     onDeferredLifecycleAbort: params.deferredLifecycle?.abort,
     onRetryWait: params.deferredLifecycle?.beginRetryWait,
     assistantErrorTranscript: params.assistantErrorTranscript,
     authProfileFailurePolicy: params.authProfileFailurePolicy,
-    onUserMessagePersisted: params.onUserMessagePersisted,
     onCompactionAccounting: params.onCompactionAccounting,
     onCompactionRequestBudget: params.onCompactionRequestBudget,
-    onSuccessfulAuthProfile: params.onSuccessfulAuthProfile
-      ? (successfulProfileId) =>
-          params.onSuccessfulAuthProfile?.({
-            authProfileId: successfulProfileId,
-            authProfileIdSource: successfulProfileId
-              ? successfulProfileId === authProfileId
-                ? harnessAuthSelection.authProfileIdSource
-                : "auto"
-              : undefined,
-          })
-      : undefined,
+    onSuccessfulAuthProfile: createCommandSuccessfulAuthProfileCallback(params, {
+      authProfileId,
+      authProfileIdSource: harnessAuthSelection.authProfileIdSource,
+    }),
     onExecutionStarted: async (info) => {
       await params.opts.onExecutionStarted?.();
       if (info?.lifecycleGeneration) {
@@ -785,6 +758,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     },
     onSessionIdChanged: params.opts.onSessionIdChanged,
   };
+  embeddedRunParams.joinObservation = captureReplyMessageJoinObservation({
+    run: { ...embeddedRunParams, sessionFile: params.sessionFile },
+    sessionEntry: params.sessionEntry,
+  });
   setChannelSourceTurnId(embeddedRunParams, readChannelSourceTurnId(params.runContext));
   setChannelSourceTurnSameThreadRequired(
     embeddedRunParams,

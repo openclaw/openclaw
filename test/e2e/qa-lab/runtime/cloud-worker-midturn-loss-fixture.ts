@@ -238,7 +238,9 @@ async function readRequestBody(request: AsyncIterable<unknown>): Promise<string>
   return Buffer.concat(chunks).toString("utf8");
 }
 
-export async function startMidturnProvider() {
+export async function startMidturnProvider(
+  options: { beforeBaselineReply?: () => Promise<void> } = {},
+) {
   let midturnRequestCount = 0;
   let contextRequest = "";
   const partialStarted = createDeferred();
@@ -294,14 +296,9 @@ export async function startMidturnProvider() {
           return;
         }
         execOutput = deniedExecOutput;
-        const visibleDenial = [
-          /workspace/iu,
-          /approval_required/iu,
-          /run this command locally/iu,
-          /interactive approval/iu,
-          /administrator/iu,
-          /clear the session permission mode/iu,
-        ].every((pattern) => pattern.test(execOutput));
+        const visibleDenial =
+          execOutput.split("\n", 1)[0] ===
+          "Exec denied (SYSTEM_RUN_DENIED: approval cannot safely bind this command): printf WORKER_EXEC_ESCAPED > worker-exec-escaped.txt";
         const outsideRejected = /escape|outside|containment|workspace/iu.test(outsideWriteOutput);
         writeCompletedAssistant(
           response,
@@ -372,6 +369,9 @@ export async function startMidturnProvider() {
           response.end("data: [DONE]\n\n");
         }
         return;
+      }
+      if (raw.includes(BASELINE_PROMPT)) {
+        await options.beforeBaselineReply?.();
       }
       writeCompletedAssistant(response, BASELINE_REPLY, "msg_cloud_midturn_baseline");
     })().catch((error: unknown) => {

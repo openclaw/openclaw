@@ -11,7 +11,6 @@ import type {
 } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { TempHomeEnv } from "../../test-utils/temp-home.js";
-import { VERSION } from "../../version.js";
 import type { updateFinalizeCommand as UpdateFinalizeCommand } from "./update-command-finalize.js";
 import type { updateCommand as UpdateCommand } from "./update-command.js";
 
@@ -34,21 +33,19 @@ export const recoveryVerificationStep = (
   exitCode: failureFacts ? 1 : 0,
   ...(failureFacts ? { failureFacts } : {}),
 });
-export const recoveryVersionMismatch = {
-  check: "versionMatch",
-  code: "version-mismatch",
-  message: `Expected Gateway version ${VERSION}; observed 1.0.0.`,
-};
-export function registerForegroundFailureRecoveryTests({
-  setupUpdatedRootRefresh,
-  spawn,
-  updateCommand,
-  defaultRuntime,
-  ExitError,
-  spawnCall,
-  lastWriteJsonCall,
-  updateNpmInstalledPlugins,
-}: {
+export const recoveryObservationStep = (cwd = process.cwd()) => ({
+  name: "gateway recovery observation",
+  command: "gateway verification",
+  cwd,
+  durationMs: expect.any(Number),
+  exitCode: 0,
+  diagnostics: [
+    expect.stringMatching(
+      /^(?:No recovery needed; .+ No service was stopped or started\.|Gateway readiness was not checked: no Gateway service or listener was present before maintenance\.)$/,
+    ),
+  ],
+});
+export function registerForegroundFailureRecoveryTests(deps: {
   setupUpdatedRootRefresh: () => { root: string };
   spawn: Mock;
   updateCommand: typeof UpdateCommand;
@@ -67,11 +64,9 @@ export function registerForegroundFailureRecoveryTests({
   ])(
     "preserves foreground failure $exitCode without granting handoff $handoff authority",
     async ({ exitCode, handoff, expectedExit }) => {
-      const { root } = setupUpdatedRootRefresh();
-      spawn.mockImplementationOnce(() => {
-        const child = new EventEmitter() as EventEmitter & {
-          once: EventEmitter["once"];
-        };
+      const { root } = deps.setupUpdatedRootRefresh();
+      deps.spawn.mockImplementationOnce(() => {
+        const child = new EventEmitter();
         queueMicrotask(() => {
           child.emit("exit", exitCode, null);
           child.emit("close", exitCode, null);
@@ -80,23 +75,19 @@ export function registerForegroundFailureRecoveryTests({
       });
 
       await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, async () => {
-        await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(
-          new ExitError(expectedExit),
+        await expect(deps.updateCommand({ yes: true, json: true })).rejects.toEqual(
+          new deps.ExitError(expectedExit),
         );
       });
 
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(spawnCall()?.[2]?.env?.OPENCLAW_UPDATE_RUN_HANDOFF).toBe(handoff);
-      expect(lastWriteJsonCall()).toMatchObject({
+      expect(deps.defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(deps.spawnCall()?.[2]?.env?.OPENCLAW_UPDATE_RUN_HANDOFF).toBe(handoff);
+      const result = deps.lastWriteJsonCall() as UpdateRunResult | undefined;
+      expect(result?.verification).toEqual({});
+      expect(result).toMatchObject({
         status: "error",
         reason: "post-core-update-failed",
         recovery: { serviceRestartSafe: false },
-        verification: {
-          runningVersion: VERSION,
-          versionMatch: true,
-          readyz: true,
-          settled: true,
-        },
         steps: [
           expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
           {
@@ -111,23 +102,15 @@ export function registerForegroundFailureRecoveryTests({
               { check: "update", code: "update-failed" },
             ],
           },
-          recoveryVerificationStep(undefined, root),
+          recoveryObservationStep(root),
         ],
       });
-      expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+      expect(deps.updateNpmInstalledPlugins).not.toHaveBeenCalled();
     },
   );
 }
 
-export function registerFailureSelectorTests({
-  updateCommand,
-  updateFinalizeCommand,
-  updateGitCheckout,
-  readConfigFileSnapshot,
-  profileStateDir,
-  runUpdateFailureTriage,
-  expectSelectorTriageFailure,
-}: {
+export function registerFailureSelectorTests(deps: {
   updateCommand: typeof UpdateCommand;
   updateFinalizeCommand: typeof UpdateFinalizeCommand;
   updateGitCheckout: typeof import("../../infra/update-runner-git.js").updateGitCheckout;
@@ -137,32 +120,32 @@ export function registerFailureSelectorTests({
   expectSelectorTriageFailure: typeof import("../update-cli-invocation.test-support.js").expectSelectorTriageFailure;
 }) {
   it.each([
-    { name: "update", run: updateCommand },
-    { name: "repair", run: updateFinalizeCommand },
+    { name: "update", run: deps.updateCommand },
+    { name: "repair", run: deps.updateFinalizeCommand },
   ])(
     "$name pins relative installation selectors before failed-update triage",
     async ({ name, run }) => {
       const failure = new Error(name === "update" ? "Git update failed" : "Config snapshot failed");
       if (name === "update") {
         // Target selection reads config before an admitted update installs failure triage.
-        vi.mocked(updateGitCheckout).mockRejectedValueOnce(failure);
+        vi.mocked(deps.updateGitCheckout).mockRejectedValueOnce(failure);
       } else {
-        vi.mocked(readConfigFileSnapshot).mockRejectedValueOnce(failure);
+        vi.mocked(deps.readConfigFileSnapshot).mockRejectedValueOnce(failure);
       }
       const cwd = process.cwd();
       const selectors = {
-        OPENCLAW_STATE_DIR: path.relative(cwd, profileStateDir()),
-        OPENCLAW_CONFIG_PATH: path.relative(cwd, path.join(profileStateDir(), "custom.json")),
+        OPENCLAW_STATE_DIR: path.relative(cwd, deps.profileStateDir()),
+        OPENCLAW_CONFIG_PATH: path.relative(cwd, path.join(deps.profileStateDir(), "custom.json")),
         OPENCLAW_WORKSPACE_DIR: "relative-workspace",
       };
       await withEnvAsync(selectors, async () => {
         const error = await run({ yes: true, json: true, restart: false }).catch(
           (caught: unknown) => caught,
         );
-        expect(runUpdateFailureTriage).toHaveBeenCalledOnce();
-        const triageCall = vi.mocked(runUpdateFailureTriage).mock.calls[0]?.[0];
+        expect(deps.runUpdateFailureTriage).toHaveBeenCalledOnce();
+        const triageCall = vi.mocked(deps.runUpdateFailureTriage).mock.calls[0]?.[0];
         if (name === "update") {
-          expectSelectorTriageFailure(error, triageCall?.failure, failure, true);
+          deps.expectSelectorTriageFailure(error, triageCall?.failure, failure, true);
         } else {
           expect(error).toBe(failure);
           const failedStep = {
@@ -218,54 +201,51 @@ export function registerFailureSelectorTests({
 }
 
 export function reportUpdateCliHomeCleanupFailure(temporary: TempHomeEnv | undefined): void {
+  const home = temporary?.home;
+  if (!home) {
+    return;
+  }
   // Preserve a bounded fixture inventory before outer teardown removes it.
   try {
-    const home = temporary?.home;
-    if (home) {
-      const inspect = (name: string) => {
-        try {
-          const stat = fsSync.lstatSync(path.join(home, name));
-          return {
-            name,
-            type: stat.isSymbolicLink() ? "symlink" : stat.isDirectory() ? "directory" : "file",
-            mode: (stat.mode & 0o7777).toString(8),
-            size: stat.size,
-            mtimeMs: stat.mtimeMs,
-            ctimeMs: stat.ctimeMs,
-          };
-        } catch (readError) {
-          return { name, error: String(readError) };
-        }
-      };
-      const root = inspect(".");
-      const entries: ReturnType<typeof inspect>[] = [];
-      let truncated = false;
-      if (root.type === "directory") {
-        const directory = fsSync.opendirSync(home);
-        try {
-          for (let index = 0; index <= 32; index++) {
-            const entry = directory.readSync();
-            if (!entry) {
-              break;
-            }
-            if (index === 32) {
-              truncated = true;
-              break;
-            }
-            entries.push(inspect(entry.name));
-          }
-        } finally {
-          directory.closeSync();
-        }
+    const inspect = (name: string) => {
+      try {
+        const stat = fsSync.lstatSync(path.join(home, name));
+        return {
+          name,
+          type: stat.isSymbolicLink() ? "symlink" : stat.isDirectory() ? "directory" : "file",
+          mode: (stat.mode & 0o7777).toString(8),
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          ctimeMs: stat.ctimeMs,
+        };
+      } catch (readError) {
+        return { name, error: String(readError) };
       }
-      console.error("Update CLI HOME cleanup failed", {
-        home,
-        capturedAt: Date.now(),
-        root,
-        entries,
-        truncated,
-      });
+    };
+    const root = inspect(".");
+    const entries: ReturnType<typeof inspect>[] = [];
+    let truncated = false;
+    if (root.type === "directory") {
+      const directory = fsSync.opendirSync(home);
+      try {
+        for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+          if (entries.length === 32) {
+            truncated = true;
+            break;
+          }
+          entries.push(inspect(entry.name));
+        }
+      } finally {
+        directory.closeSync();
+      }
     }
+    console.error("Update CLI HOME cleanup failed", {
+      home,
+      capturedAt: Date.now(),
+      root,
+      entries,
+      truncated,
+    });
   } catch {
     // Diagnostics cannot replace the original cleanup failure.
   }

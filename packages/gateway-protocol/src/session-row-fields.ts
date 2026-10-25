@@ -31,6 +31,7 @@ export const SESSION_DASHBOARD_ROW_FIELDS: ReadonlySet<string> = new Set([
   "titlePending",
   "derivedTitle",
   "lastMessagePreview",
+  "lastAssistantMessage",
   "accountId",
   "updatedAt",
   "snapshotAt",

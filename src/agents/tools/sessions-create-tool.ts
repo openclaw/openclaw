@@ -7,6 +7,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { gateAgentToolExecution } from "../agent-tool-availability.js";
 import {
   jsonResult,
   readToolStringParam,
@@ -35,7 +36,7 @@ async function createSessionFromTool(
 ) {
   const caller = getGatewayToolCallerIdentity();
   const assertCallerCurrent = captureGatewayToolCallerAssertion("sessions.create");
-  const selection = resolveGatewayToolOperatorSelection();
+  const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
   const authority = selection.operatorAuthority;
   if (
     !caller?.operationalRunInstance ||
@@ -114,6 +115,8 @@ async function createSessionFromTool(
     agentToolCaller: {
       agentId: caller.agentId,
       sessionKey: caller.sessionKey,
+      executionIdentityToken: caller.executionIdentityToken,
+      requesterOrigin: selection.requesterOrigin,
       assertCurrent: composeSessionSourceAssertion(
         [selection.assertCurrent, assertCallerCurrent],
         (assertSource) => {
@@ -138,11 +141,8 @@ export function createSessionsCreateTool(
   opts: {
     sessionControlAuthority?: AdmittedRunOperatorAuthority;
   } = {},
-): AnyAgentTool | null {
-  if (!hasSessionWriteAuthority(opts.sessionControlAuthority)) {
-    return null;
-  }
-  return {
+): AnyAgentTool {
+  const tool: AnyAgentTool = {
     label: "New session",
     name: "sessions_create",
     description:
@@ -160,4 +160,11 @@ export function createSessionsCreateTool(
       );
     },
   };
+  // Turn authority gates execution, never the session's catalog definition.
+  return hasSessionWriteAuthority(opts.sessionControlAuthority)
+    ? tool
+    : gateAgentToolExecution(
+        tool,
+        "sessions_create requires current session write authority. Ask the user to request the new session from an authorized client.",
+      );
 }

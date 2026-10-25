@@ -76,19 +76,14 @@ export function writeConfigMachineState(
   );
 }
 
-/** Write an owner-held value on its existing admitted transaction connection. */
+/** Write an already-normalized key on the caller's admitted connection. */
 export function writeConfigMachineStateInDatabase(
   database: EngineConnection,
-  key: string,
+  stateKey: string,
   value: unknown,
 ): number {
   const now = Date.now();
-  upsertConfigMachineState(
-    database,
-    normalizeConfigMachineStateKey(key),
-    serializeStateValue(value),
-    now,
-  );
+  upsertConfigMachineState(database, stateKey, serializeStateValue(value), now);
   return now;
 }
 

@@ -1,5 +1,4 @@
 import { listMappedModelThinkingLevels } from "@openclaw/model-catalog-core/model-catalog-types";
-// Thinking/reasoning level catalog helpers for auto-reply model controls.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeOptionalLowercaseString,

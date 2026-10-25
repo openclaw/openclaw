@@ -1,0 +1,40 @@
+name: PostgreSQL conformance
+description: Run the database conformance suite against a pinned pgvector image.
+inputs:
+  image:
+    description: Digest-pinned pgvector image.
+    required: true
+  shard:
+    description: Optional conformance shard (for example 1/3); empty runs the full suite.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Start PostgreSQL service
+      shell: bash
+      env:
+        POSTGRES_IMAGE: ${{ inputs.image }}
+      run: |
+        docker run --detach --name openclaw-postgres --publish 127.0.0.1:5432:5432 \
+          --shm-size=1g --user postgres "$POSTGRES_IMAGE" bash -ec \
+          'initdb -A trust -U postgres -D /tmp/openclaw-pg >/dev/null;
+           echo "host all all all trust" >> /tmp/openclaw-pg/pg_hba.conf;
+           exec postgres -D /tmp/openclaw-pg -h 0.0.0.0 -c max_locks_per_transaction=512'
+        timeout 60s docker exec openclaw-postgres bash -c 'until pg_isready -U postgres; do sleep 1; done'
+        docker exec openclaw-postgres psql -U postgres -v ON_ERROR_STOP=1 -c \
+          'CREATE EXTENSION unaccent WITH SCHEMA public; CREATE EXTENSION pg_trgm WITH SCHEMA public; CREATE EXTENSION vector WITH SCHEMA public;'
+    - name: Run PostgreSQL conformance
+      shell: bash
+      env:
+        CONFORMANCE_SHARD: ${{ inputs.shard }}
+      run: |
+        args=()
+        if [[ -n "$CONFORMANCE_SHARD" ]]; then
+          args+=(--shard "$CONFORMANCE_SHARD")
+        fi
+        node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres "${args[@]}"
+    - name: Stop PostgreSQL service
+      if: always()
+      shell: bash
+      run: docker rm --force openclaw-postgres

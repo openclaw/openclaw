@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
@@ -11,35 +10,37 @@ import {
   classifyOpenClawAgentDatabaseReadError,
   isOpenClawAgentDatabaseReadOpenFailure,
 } from "../../state/openclaw-agent-db-read-error.js";
+import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import {
   captureMemoryExactSessionReader,
   assertMemoryExactReadSource,
 } from "./session-accessor.memory-exact-read.js";
-import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
+import type {
+  ExactSessionEntry,
+  SessionAccessScope,
+  SessionTranscriptReadScope,
+} from "./session-accessor.sqlite-contract.js";
 import {
   readSessionEntryByIdInDatabase,
+  readSessionKeyBySessionIdInDatabase,
   readExactSessionEntryRow,
-  readSessionEntryRow,
-  readQualifiedSessionEntryRow,
+  readSessionEntrySelectionInDatabase,
 } from "./session-accessor.sqlite-entry-read.js";
 import {
   resolveSqliteScope,
+  resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
-  type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
-import type { SessionEntryReadScope } from "./session-accessor.types.js";
+import type { SessionEntryListScope, SessionEntryReadScope } from "./session-accessor.types.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
-  readWithCanonicalSessionAdmission,
   readWithCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
@@ -50,6 +51,55 @@ import type {
   SessionEntryReadSource,
 } from "./session-entry-read-source.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+
+/** Loads one session entry from the additive SQLite session store. */
+export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
+  return resolveSessionEntry(scope).existing;
+}
+
+/** Loads one session entry without opening its agent database writable. */
+export function loadSessionEntryReadOnly(scope: SessionEntryReadScope): SessionEntry | undefined {
+  return resolveSessionEntry(scope, { readOnly: true, projection: scope.projection }).existing;
+}
+
+/** Reuse one reader during synchronous entry work; each read keeps its current admission. */
+export function withSessionEntryReadOnlyScope<T>(
+  scope: Pick<SessionEntryListScope, "agentId" | "defaultAgentId" | "env" | "storePath">,
+  operation: () => T,
+): T {
+  if (getSessionActorStorageBinding(scope)) {
+    return operation();
+  }
+  const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey: "" }));
+  const reader = new OpenClawAgentDatabaseReadOnlyScope();
+  try {
+    return reader.run(
+      { agentId: options.agentId, path: resolveOpenClawAgentSqlitePath(options) },
+      operation,
+    );
+  } finally {
+    reader.close();
+  }
+}
+
+/** Resolves the persisted session key for a SQLite transcript session id. */
+export function resolveSessionKeyBySessionId(
+  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
+): string | undefined {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return memory.actor.storage!.readCurrent(
+      { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
+      memory.authority,
+    )?.sessionKey;
+  }
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionKeyBySessionIdInDatabase(database, resolved.sessionId),
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : undefined;
+}
 
 type ResolvedSqliteSessionEntry = {
   existing: SessionEntry | undefined;
@@ -144,13 +194,16 @@ export function resolveSessionEntry(
           const entry = options.readFacts(database, resolved.sessionKey, projection);
           selected = entry ? { entry, row: { session_key: resolved.sessionKey } } : undefined;
         } else {
-          selected =
-            options.keyFormat === "agent-qualified"
-              ? readQualifiedSessionEntryRow(database, resolved.agentId, resolved.sessionKey, {
-                  allowCanonicalMove: options.allowCanonicalMove,
-                  projection,
-                })
-              : readSessionEntryRow(database, resolved.sessionKey, projection);
+          selected = readSessionEntrySelectionInDatabase(
+            database,
+            resolved.agentId,
+            resolved.sessionKey,
+            {
+              keyFormat: options.keyFormat,
+              allowCanonicalMove: options.allowCanonicalMove,
+              projection,
+            },
+          );
         }
       } catch (error) {
         if (!options.onReadError) {
@@ -405,133 +458,4 @@ export function loadExactSessionEntryFromStoreReadOnly(
     readOnly: true,
     sessionKeys: [scope.sessionKey],
   })[0];
-}
-
-/** Read requested keys through synchronous store/projection groups. */
-export type ExactSessionEntryBatchScope = Omit<
-  SessionEntryReadScope,
-  "sessionKey" | "projection"
-> & {
-  projection?: SessionEntryReadScope["projection"] | "delivery";
-  sessionKeys: readonly string[];
-  onReadSource?: (source: SessionEntryReadSource) => void;
-};
-
-export function loadExactSessionEntryCandidatesReadOnlyBatch(
-  scopes: readonly ExactSessionEntryBatchScope[],
-): Array<Result<ExactSessionEntry[], unknown>> {
-  const results: Array<Result<ExactSessionEntry[], unknown> | undefined> = [];
-  const targetCache: SessionSqliteTargetResolutionCache = new Map();
-  const groups = new Map<
-    string,
-    {
-      options: OpenClawAgentDatabaseOptions;
-      projection: ExactSessionEntryBatchScope["projection"];
-      clone: boolean;
-      requests: Array<{ index: number; sessionKeys: string[] }>;
-    }
-  >();
-  for (const [index, scope] of scopes.entries()) {
-    const sessionKeys = scope.sessionKeys.map((key) => key.trim()).filter(Boolean);
-    const [sessionKey] = sessionKeys;
-    if (!sessionKey) {
-      results[index] = ok([]);
-      continue;
-    }
-    try {
-      const memory = captureMemoryExactSessionReader({ ...scope, sessionKey });
-      if (memory) {
-        results[index] = ok(
-          sessionKeys.flatMap((key) => {
-            const entry = memory.read(
-              key,
-              scope.projection === "delivery" ? "list" : scope.projection,
-            );
-            if (!entry) {
-              return [];
-            }
-            if (scope.projection !== "delivery") {
-              return [{ sessionKey: key, entry }];
-            }
-            const { sessionId, updatedAt, delivery, groupId } = entry;
-            return [{ sessionKey: key, entry: { sessionId, updatedAt, delivery, groupId } }];
-          }),
-        );
-        if (memory.source) {
-          scope.onReadSource?.(memory.source);
-        }
-        continue;
-      }
-      const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey }, targetCache));
-      const groupKey = [
-        options.agentId,
-        resolveOpenClawAgentSqlitePath(options),
-        scope.projection ?? "full",
-        scope.clone !== false,
-      ].join("\u0000");
-      const group = groups.get(groupKey) ?? {
-        options,
-        projection: scope.projection,
-        clone: scope.clone !== false,
-        requests: [],
-      };
-      group.requests.push({ index, sessionKeys });
-      groups.set(groupKey, group);
-    } catch (error) {
-      results[index] = err(error);
-    }
-  }
-  for (const group of groups.values()) {
-    try {
-      const read = withOpenClawAgentDatabaseReadOnly(
-        (database) =>
-          readWithCanonicalSessionAdmission(database, () => {
-            try {
-              // Admission failures affect this store; an invalid requested row must not
-              // suppress healthy logical targets after a warm handle was validated.
-              assertCanonicalSqliteSessionKeysCurrent(database);
-              const source = { agentId: database.agentId, path: database.path };
-              const grouped = readExactSessionEntryCandidatesInDatabase(
-                database,
-                group.requests.map((request) => request.sessionKeys),
-                group.projection,
-                { clone: group.clone },
-              );
-              for (const [ordinal, request] of group.requests.entries()) {
-                const result = grouped[ordinal]!;
-                results[request.index] = result;
-                if (result.ok) {
-                  scopes[request.index]!.onReadSource?.(source);
-                }
-              }
-            } catch (error) {
-              if (sqlitePrimaryResultCode(error) === 1) {
-                // Preserve failed-snapshot schema facts before the admission owner rolls back.
-                throw new SessionEntryDataReadError(error, database.db);
-              }
-              throw error;
-            }
-          }),
-        group.options,
-      );
-      if (!read.found) {
-        if (read.reason !== "database-missing") {
-          throw new SessionMetadataUnavailableError(read.reason);
-        }
-        for (const { index } of group.requests) {
-          results[index] = ok([]);
-        }
-      }
-    } catch (error) {
-      let readError = error;
-      if (error instanceof SessionEntryDataReadError) {
-        error.assertSettled();
-        readError = error.readError;
-      }
-      for (const { index } of group.requests) {
-        results[index] = err(readError);
-      }
-    }
-  }
-  return scopes.map((_, index) => expectDefined(results[index], "exact session batch read result"));
 }

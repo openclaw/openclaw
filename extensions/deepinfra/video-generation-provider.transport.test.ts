@@ -1,7 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { connect, type AddressInfo } from "node:net";
+import { connect } from "node:net";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { withEnvAsync, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { buildDeepInfraVideoGenerationProvider } from "./video-generation-provider.js";
 import { WEBM_VIDEO } from "./video-generation.test-support.js";
 
@@ -36,14 +38,6 @@ afterAll(() => {
   vi.resetModules();
 });
 
-async function readRequestBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 function createDeepInfraHandler(requests: CapturedRequest[], buffer = WEBM_VIDEO) {
   return (request: IncomingMessage, response: ServerResponse) => {
     void (async () => {
@@ -51,7 +45,7 @@ function createDeepInfraHandler(requests: CapturedRequest[], buffer = WEBM_VIDEO
         method: request.method,
         url: request.url,
         headers: request.headers,
-        body: await readRequestBody(request),
+        body: (await consumeBuffer(request)).toString("utf8"),
       });
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
@@ -104,33 +98,15 @@ async function startConnectProxy(upstreamBaseUrl: string): Promise<{
     clientSocket.on("error", () => upstreamSocket.destroy());
     upstreamSocket.on("error", () => clientSocket.destroy());
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address() as AddressInfo | null;
-  if (!address) {
-    throw new Error("CONNECT proxy did not bind to a TCP port");
-  }
+  const port = await listenOnLoopback(server);
   return {
     connectTargets,
-    proxyUrl: `http://127.0.0.1:${address.port}`,
+    proxyUrl: `http://127.0.0.1:${port}`,
     stop: async () => {
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
+      await server[Symbol.asyncDispose]();
     },
   };
 }

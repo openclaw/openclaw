@@ -95,4 +95,30 @@ describe("executeAgentTurn: CLI delegation grants", () => {
     expect(result.kind).toBe("success");
     expect(resolveMockedCliGrantCapability()).toBe("report_only");
   });
+
+  it("restricts a sticky rate-limit fallback CLI completion grant that runs first", async () => {
+    state.isCliProviderMock.mockImplementation((provider) => provider === "codex-cli");
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run(
+        "codex-cli",
+        "gpt-5.4",
+        fallbackAttemptOptions(params, "rate_limit"),
+      ),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValue({ payloads: [{ text: "done" }], meta: {} });
+    const followupRun = createFollowupRun();
+    followupRun.run.inputProvenance = {
+      kind: "inter_session",
+      sourceTool: "subagent_announce",
+    };
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(result.kind).toBe("success");
+    expect(resolveMockedCliGrantCapability()).toBe("report_only");
+  });
 });

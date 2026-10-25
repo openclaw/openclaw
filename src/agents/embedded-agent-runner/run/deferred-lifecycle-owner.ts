@@ -5,6 +5,9 @@ import {
   createDiagnosticEmbeddedRunOwner,
   type DiagnosticEmbeddedRunOwner,
 } from "../../../logging/diagnostic-run-activity.js";
+import type { ReplyOperation } from "../../../sessions/session-controller.contracts.js";
+import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.lifecycle.js";
+import { assertSessionControllerOperation } from "../../../sessions/session-controller.state.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -12,7 +15,7 @@ import {
 } from "../../run-termination.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentQueueHandle } from "../run-state.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../runs.js";
+import { detachActiveEmbeddedRun, attachActiveEmbeddedRun } from "../runs.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
 
 type DeferredTrajectoryRecorder = {
@@ -25,6 +28,7 @@ export type DeferredEmbeddedRunLifecycleOwner = {
   beginRetryWait: (
     deadlineAtMs: number,
     signal: AbortSignal,
+    wait?: { rateLimitStopMessage?: string },
   ) => ((completed?: boolean) => void) | undefined;
   complete: () => Promise<void>;
   discard: () => void | Promise<void>;
@@ -70,7 +74,7 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
         })
       : Promise.resolve();
   return {
-    beginRetryWait: (deadlineAtMs, signal) => {
+    beginRetryWait: (deadlineAtMs, signal, wait) => {
       if (!pending) {
         return undefined;
       }
@@ -80,6 +84,7 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
       const close = beginDiagnosticRetryWait({
         owner: params.diagnosticOwner,
         deadlineAtMs,
+        rateLimitStopMessage: wait?.rateLimitStopMessage,
         signal,
         assertCurrent: () => {
           if (!params.isCurrent()) {
@@ -137,12 +142,14 @@ export type DeferredEmbeddedRunLifecycleManager = {
   beginRetryWait: (
     deadlineAtMs: number,
     signal?: AbortSignal,
+    wait?: { rateLimitStopMessage?: string },
   ) => ((completed?: boolean) => void) | undefined;
   handoffToCli: () => DiagnosticEmbeddedRunOwner;
   complete: () => Promise<void>;
 };
 
 export function createDeferredEmbeddedRunLifecycleManager(params: {
+  replyOperation?: ReplyOperation;
   runId: string;
   agentId?: string;
   sessionId: string;
@@ -152,6 +159,12 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
 }): DeferredEmbeddedRunLifecycleManager {
   // Recovery projections time the whole logical turn, not the current runtime attempt.
   const startedAtMs = Date.now();
+  const ambient = getCurrentSessionControllerOwner();
+  const operation =
+    params.replyOperation ??
+    (ambient && ambient.key === params.sessionKey && ambient.hasOwnedSessionId(params.sessionId)
+      ? ambient
+      : undefined);
   const controller = new AbortController();
   const signal = params.abortSignal
     ? AbortSignal.any([params.abortSignal, controller.signal])
@@ -180,17 +193,41 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
     );
   };
   let cliOwner: EmbeddedAgentQueueHandle | undefined;
+  let cliAttachment: ReturnType<typeof attachActiveEmbeddedRun>;
+  const clearCliOwner = () => {
+    if (cliOwner) {
+      detachActiveEmbeddedRun(
+        params.sessionId,
+        cliOwner,
+        params.sessionKey,
+        params.sessionFile,
+        undefined,
+        cliAttachment,
+      );
+    }
+  };
   return {
     signal,
     abort,
     adopt: replaceOwner,
-    beginRetryWait: (deadlineAtMs, retrySignal) =>
+    beginRetryWait: (deadlineAtMs, retrySignal, wait) =>
       current?.beginRetryWait(
         deadlineAtMs,
         retrySignal ? AbortSignal.any([signal, retrySignal]) : signal,
+        wait,
       ),
     handoffToCli: () => {
-      const diagnosticOwner = createDiagnosticEmbeddedRunOwner(params);
+      const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
+        ...params,
+        watchdogAttempt: operation
+          ? operation.watchdog.attachAttempt({
+              assertCurrent: () => {
+                signal.throwIfAborted();
+                assertSessionControllerOperation(operation);
+              },
+            })
+          : undefined,
+      });
       // Each handoff gets a fresh owner; retained callbacks from a prior CLI
       // attempt must not publish progress after replacement or lifecycle rotation.
       cliOwner = {
@@ -210,12 +247,13 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
         cancel: abort,
         abort,
       };
-      setActiveEmbeddedRun(
+      cliAttachment = attachActiveEmbeddedRun(
         params.sessionId,
         cliOwner,
         params.sessionKey,
         params.sessionFile,
         params.agentId,
+        operation,
       );
       replaceOwner();
       return diagnosticOwner;
@@ -227,7 +265,7 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
         await Promise.all([...discarded, owner?.complete()]);
       } finally {
         if (cliOwner) {
-          clearActiveEmbeddedRun(params.sessionId, cliOwner, params.sessionKey, params.sessionFile);
+          clearCliOwner();
         }
       }
     },

@@ -57,9 +57,10 @@ function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
     !commandName ||
     commandName === "new" ||
     commandName === "reset" ||
-    // Dashboard creates an agent prompt with exact skill selections. The full
-    // reply pipeline must consume that command once, without re-resolving its text.
-    commandName === "dashboard"
+    // Prompt-producing commands must be consumed once by the full reply pipeline;
+    // their resulting text is not another command or directive invocation.
+    commandName === "dashboard" ||
+    commandName === "followup"
   ) {
     return false;
   }
@@ -100,13 +101,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return { handled: false };
   }
 
-  const sessionState = await initFastReplySessionState({
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    commandAuthorized: params.commandAuthorized,
-    workspaceDir: params.workspaceDir,
-  });
+  const sessionState = await initFastReplySessionState(params);
   if (params.commandAuthorized) {
     const creatingSession = sessionState.initialSessionEntry === undefined;
     const initializationEntry = sessionState.initialSessionEntry ?? sessionState.sessionEntry;
@@ -374,7 +369,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     }),
     triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,
-    hasResolvedHeartbeatModelOverride: false,
   });
   if (directiveResult.kind === "reply") {
     // The canonical directive owner already finalizes typing for every terminal reply.

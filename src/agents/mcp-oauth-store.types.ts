@@ -1,8 +1,8 @@
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
+  OAuthDiscoveryState,
   OAuthClientInformationMixed,
   OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+} from "@modelcontextprotocol/client";
 
 type McpOAuthAuthorizationChallenge = {
   resourceMetadataUrl?: string;
@@ -17,6 +17,8 @@ export type McpOAuthStore = {
   credentialState?: "uninitialized" | "cleared";
   clientInformation?: OAuthClientInformationMixed;
   tokens?: OAuthTokens;
+  /** A possibly consumed rotating grant cannot be replayed after owner exit. */
+  refreshClaim?: string;
   tokenExpiresAt?: number;
   tokensAuthorizationServerUrl?: string;
   codeVerifier?: string;
@@ -33,7 +35,10 @@ export type McpOAuthMutation =
       tokens: OAuthTokens;
       tokenExpiresAt: number | undefined;
       replaceAuthorization?: boolean;
+      refreshClaim?: string;
     }
+  | { kind: "beginRefresh"; claim: string; refreshToken: string }
+  | { kind: "restoreRefresh"; claim: string }
   | { kind: "ensureAuthorization" }
   | {
       kind: "authorizationRedirect";

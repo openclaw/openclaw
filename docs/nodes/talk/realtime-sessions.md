@@ -67,7 +67,7 @@ For Talk TTS playback, after setting `talk.provider` and the matching `talk.prov
 
 Status and list are read-only. Setting a voice requires the message-channel owner or a Gateway client with `operator.admin`. Configuration, provider lookup, unknown-voice, and permission failures are returned visibly in chat. A masked API-key value in `/voice status` describes config only; it does not verify credential availability.
 
-Client-owned realtime Talk normally forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. GPT-Live WebRTC sessions delegate on a Gateway-owned sideband, and the Gateway binds each delegation to the browser or Gateway-relay Talk session that owns it. Backend WebSocket bridges use the normal relay consult path. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`; this includes GPT-Live delegations. Accepted steering queues into the active embedded run; rejected steering returns a reason such as `no_active_run`, `not_streaming`, or `compacting`. A newer GPT-Live spoken task also supersedes the running delegation.
+Client-owned realtime Talk normally forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. GPT-Live WebRTC sessions delegate on a Gateway-owned sideband, and the Gateway binds each delegation to the browser or Gateway-relay Talk session that owns it. Backend WebSocket bridges use the normal relay consult path. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`; this includes GPT-Live delegations. Accepted steering enters the active session turn; rejected steering returns a reason such as `no_active_run` or `injection_unavailable`. A newer GPT-Live spoken task also supersedes the running delegation.
 
 Thin audio clients can request `gateway-control-v1` in
 `talk.client.create.capabilities`. OpenAI GA Realtime requires a Platform API
@@ -97,7 +97,10 @@ weather” still start tasks while idle. Genuine new tasks retain the native
 delegation replacement behavior.
 
 These calls disable provider-generated delegation acknowledgments at creation.
-OpenClaw sends one neutral receipt when it launches a real task; status and
+OpenClaw asks the voice model for one brief, naturally worded launch acknowledgment
+in the caller's language. Wording should fit the request and avoid repeating recent
+acknowledgments; variation is not guaranteed. It must remain provisional, without
+claiming acceptance or completion, guessing an answer, or promising one. Status and
 cancellation requests wait for the host result instead, without waiting for final
 speech transcription. A full control queue produces a spoken refusal; retry after
 the pending controls finish. A task receipt is not confirmation that a model or
@@ -204,12 +207,49 @@ If OpenAI cannot transcribe an utterance, browser Talk shows the provider's erro
 without ending the call or inventing a transcript. You can speak again; audio
 responses continue independently of input transcription.
 
+Set `talk.realtime.providers.openai.inputTranscriptionModel` in `openclaw.json`
+to choose the input-transcription model separately from the Realtime
+conversation model. For Azure, use the Azure deployment name for this setting:
+
+```json5
+{
+  talk: {
+    realtime: {
+      providers: {
+        openai: {
+          azureEndpoint: "https://<resource>.openai.azure.com",
+          azureDeployment: "<realtime-deployment>",
+          apiKey: "<azure-resource-key>",
+          inputTranscriptionModel: "<transcription-deployment>",
+        },
+      },
+    },
+  },
+}
+```
+
+This value configures transcription only; it does not change the Realtime
+conversation model. For Azure, the bridge sends a GA Realtime `session.update`
+with `type: "realtime"`, audio input transcription and turn detection, and the
+configured realtime deployment in the WebSocket URL. Azure input transcription
+uses the `inputTranscriptionModel` deployment when set, or `whisper-1` when
+unset. The transcription deployment must be available on the Azure resource.
+Azure authentication uses the resource key in the `api-key` header; it does not
+use an OpenAI Platform key. An explicit `azureApiVersion` keeps the preview URL
+and preview session protocol, including its existing endpoint path; omit it to use GA.
+For GA, the endpoint may be the resource root or end in `/openai` or `/openai/v1`.
+The setting is also available
+under the Voice Call plugin provider config at
+`plugins.entries.voice-call.config.realtime.providers.openai.inputTranscriptionModel`.
+
 Browser Gateway-relay Talk tolerates slow audio acknowledgments while keeping
 at most three seconds of microphone audio in flight. Excess frames are dropped
 with a notice asking you to repeat the last part. A successful acknowledgment
 renews the relay's liveness window; if pending audio receives no acknowledgment
 for 30 seconds, Talk ends with a connection error and guidance to restart it.
 Explicit Gateway errors or a lost connection still end the call immediately.
+iOS and macOS Gateway-relay Talk use the same three-second input budget and
+30-second acknowledgment limit; iOS shows the same repeat-the-last-part notice.
 
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore

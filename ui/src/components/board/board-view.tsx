@@ -1,13 +1,15 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Errored, For, onSettled, Show } from "solid-js";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
+import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
-  BOARD_GRID_COLUMNS,
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
   boardWidgetGridItems,
   FINE_POINTER_QUERY,
   layout,
 } from "../../lib/board/grid.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board.css";
@@ -19,8 +21,10 @@ import {
   type BoardViewMethods,
   type BoardViewElement,
 } from "./board-view-state.ts";
-import type { BoardWidgetCellMethods } from "./board-widget-cell-options.ts";
-import { BoardWidgetCell, type BoardWidgetCellProps } from "./board-widget-cell.ts";
+import type { BoardWidgetCellMethods, BoardWidgetCellProps } from "./board-widget-cell-options.ts";
+import { BoardWidgetCell } from "./board-widget-cell.solid.tsx";
+
+registerEnglishCatalog(registerBoardDocumentEnglish);
 
 export type { BoardViewProps } from "./board-view-state.ts";
 
@@ -179,12 +183,12 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     // Hybrid devices move the chrome in/out of flow when pointer capability changes.
     const pointer =
       typeof window.matchMedia === "function" ? window.matchMedia(FINE_POINTER_QUERY) : null;
-    pointer?.addEventListener("change", invalidateLayout);
-    return () => pointer?.removeEventListener("change", invalidateLayout);
-  });
-  onCleanup(() => {
-    disposed = true;
-    views.delete(host);
+    const stop = pointer ? listen(pointer, "change", invalidateLayout) : undefined;
+    return () => {
+      disposed = true;
+      views.delete(host);
+      stop?.();
+    };
   });
 
   return (
@@ -209,7 +213,6 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
         aria-label={t("board.label")}
         aria-busy={view().loading ? "true" : "false"}
         inert={view().loading}
-        onOpenclaw-board-widget-presentation={owner.reconcileInitialPresentation}
       >
         <BoardTabs
           tabs={view().tabs}
@@ -254,10 +257,16 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
             </div>
           </Show>
         </Show>
-        <Show when={view().state.actionError}>
-          <div class="board-view__error" role="alert">
-            {view().state.actionError}
-          </div>
+        <Show when={view().state.mutationFailure} keyed>
+          <Errored
+            fallback={() => (
+              <div class="board-view__error" role="alert">
+                {t("board.actionFailed")}
+              </div>
+            )}
+          >
+            {owner.mutationFailure()}
+          </Errored>
         </Show>
         <div class="board-announcer" aria-live="polite" aria-atomic="true">
           <Show when={view().state.announcementRevision || undefined} keyed>

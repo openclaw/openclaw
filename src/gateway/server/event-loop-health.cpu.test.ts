@@ -1,4 +1,5 @@
 import { cpus } from "node:os";
+import { performance } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTrackedWorkerCpuSources } from "../../infra/worker-cpu.js";
@@ -34,11 +35,25 @@ function hostCpu(user: number, idle: number) {
 beforeEach(() => {
   vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: undefined } });
   now = 10_000;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  vi.spyOn(process, "cpuUsage").mockImplementation((previous) => ({
+    user: now * 2_000 - (previous?.user ?? 0),
+    system: 0,
+  }));
+  vi.spyOn(performance, "eventLoopUtilization").mockImplementation(() => ({
+    idle: now,
+    active: 0,
+    utilization: 0.05,
+  }));
   clock = createGatewaySchedulerClock(now);
   revision = 0;
   workers = [{ cpuUsage: workerUsage }];
   workerUsage.mockReset().mockImplementation(async () => ({ user: now * 500, system: 0 }));
-  vi.mocked(getTrackedWorkerCpuSources).mockImplementation(() => ({ workers, revision }));
+  vi.mocked(getTrackedWorkerCpuSources).mockImplementation(() => ({
+    workers,
+    revision,
+    currentRevision: () => revision,
+  }));
   mainThreadUsage.mockReset().mockImplementation(() => ({ user: now * 250, system: 0 }));
   vi.spyOn(process, "threadCpuUsage").mockImplementation(mainThreadUsage);
   vi.mocked(cpus)
@@ -56,9 +71,6 @@ afterEach(() => {
 async function createMonitor() {
   const monitor = createGatewayEventLoopHealthMonitor({
     scheduler: createTestGatewayScheduler(clock.clock),
-    now: () => now,
-    cpuUsage: (previous) => ({ user: now * 2_000 - (previous?.user ?? 0), system: 0 }),
-    eventLoopUtilization: () => ({ idle: now, active: 0, utilization: 0.05 }),
   });
   monitors.push(monitor);
   await setImmediate();
@@ -104,7 +116,7 @@ describe("CPU breakdown sampling", () => {
       throw new Error("unsupported");
     });
     vi.mocked(cpus).mockReturnValue([]);
-    workerUsage.mockRejectedValue(new Error("worker exited"));
+    workerUsage.mockResolvedValue(undefined);
     const monitor = await createMonitor();
     await sample();
     expect(monitor.snapshot()).toMatchObject({ cpuCoreRatio: 2, cpuBreakdown: {} });
@@ -167,7 +179,7 @@ describe("CPU breakdown sampling", () => {
     expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBe(0);
   });
 
-  it.each(["timeout", "reset", "stop"] as const)(
+  it.each(["timeout", "reset", "stop", "worker churn"] as const)(
     "fences pending worker replies after %s without delaying process samples",
     async (action) => {
       const monitor = await createMonitor();
@@ -180,12 +192,14 @@ describe("CPU breakdown sampling", () => {
       if (action === "timeout") {
         now += 101;
         await clock.advanceTo(now);
+      } else if (action === "worker churn") {
+        revision++;
       } else {
         monitor[action]();
       }
       slow.resolve({ user: now * 500, system: 0 });
       await setImmediate();
-      if (action === "timeout") {
+      if (action === "timeout" || action === "worker churn") {
         expect(monitor.snapshot()).toBe(health);
         await sample();
         expect(monitor.snapshot()?.cpuBreakdown?.workerCoreRatio).toBeUndefined();

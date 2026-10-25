@@ -1,5 +1,4 @@
-import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import {
   SessionPlacementMoveSchema,
   SessionPlacementSchema,
@@ -10,6 +9,7 @@ import {
   validateSessionsReclaimParams,
   validateSessionsReclaimResult,
 } from "../index.js";
+import { schemaValidation, validation, withOverrides } from "./protocol-validation.test-support.js";
 
 const placementStates = [
   "local",
@@ -24,371 +24,213 @@ const placementStates = [
   "failed",
 ] as const;
 
-const basePlacement = {
-  generation: 4,
-  createdAtMs: 100,
-  updatedAtMs: 200,
-  stateChangedAtMs: 150,
-};
+const basePlacement = { generation: 4, createdAtMs: 100, updatedAtMs: 200, stateChangedAtMs: 150 };
 const workerBundleHash = "a".repeat(64);
-const environmentFields = {
-  environmentId: "environment-1",
-  workerBundleHash,
-};
+const environmentFields = { environmentId: "environment-1", workerBundleHash };
 const workspaceFields = {
   workspaceBaseManifestRef: "manifest-1",
   remoteWorkspaceDir: "/workspace/session-1",
 };
-const workerOwnedFields = {
-  ...environmentFields,
-  ...workspaceFields,
-  activeOwnerEpoch: 7,
-};
+const workerOwnedFields = { ...environmentFields, ...workspaceFields, activeOwnerEpoch: 7 };
+const key = "agent:main:dispatch";
+const expected = { generation: 4, environmentId: "environment-1", ownerEpoch: 7 };
+const moveRequest = { key, expected };
+const move = withOverrides(moveRequest);
+const gateway = { kind: "gateway" };
+const device = (deviceId = "device-1") => ({ kind: "device", deviceId });
+const profile = (overrides: object = {}) => ({
+  kind: "profile",
+  profileId: "development",
+  ...overrides,
+});
+const placement = schemaValidation(SessionPlacementSchema);
+const progress = schemaValidation(SessionPlacementMoveSchema);
+const dispatch = validation(validateSessionsDispatchParams);
+const reclaim = validation(validateSessionsReclaimParams);
+const reclaimed = validation(validateSessionsReclaimResult);
+const moved = validation(validateSessionsMoveResult);
+const moving = validation(validateSessionsMoveParams);
+const retryProgress = (retry: { target: unknown }) => ({
+  target: retry.target,
+  updatedAtMs: 1,
+  error: "move interrupted",
+  retry,
+});
 
 describe("session dispatch protocol schemas", () => {
   it("accepts an explicit target, automatic device selection, or configured-default lookup", () => {
-    expect(
-      validateSessionsDispatchParams({
-        key: "agent:main:dispatch",
-        agentId: "main",
-        profileId: "development",
-        machineClass: "beast",
-        os: "windows/wsl2",
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsDispatchParams({
-        key: "agent:main:dispatch",
-        deviceId: "device-1",
-      }),
-    ).toBe(true);
-    expect(validateSessionsDispatchParams({ key: "agent:main:dispatch", autoDevice: true })).toBe(
-      true,
+    const request = (target: Record<string, unknown>) => ({ key, ...target });
+    dispatch.accepts(
+      ...[
+        { agentId: "main", profileId: "development", machineClass: "beast", os: "windows/wsl2" },
+        { deviceId: "device-1" },
+        { autoDevice: true },
+        {},
+        { profileId: "development", os: "x".repeat(64) },
+      ].map(request),
     );
-    expect(validateSessionsDispatchParams({ key: "agent:main:dispatch" })).toBe(true);
-    expect(
-      validateSessionsDispatchParams({
-        key: "agent:main:dispatch",
-        profileId: "development",
-        os: "x".repeat(64),
-      }),
-    ).toBe(true);
-    for (const invalidOsTarget of [
-      { os: "windows/wsl2" },
-      { deviceId: "device-1", os: "windows/wsl2" },
-      { autoDevice: true, os: "windows/wsl2" },
-      { profileId: "development", os: "" },
-      { profileId: "development", os: "x".repeat(65) },
-    ]) {
-      expect(
-        validateSessionsDispatchParams({ key: "agent:main:dispatch", ...invalidOsTarget }),
-      ).toBe(false);
-    }
-    expect(
-      validateSessionsDispatchParams({ key: "agent:main:dispatch", machineClass: "beast" }),
-    ).toBe(false);
-    expect(
-      validateSessionsDispatchParams({
-        key: "agent:main:dispatch",
-        profileId: "development",
-        deviceId: "device-1",
-      }),
-    ).toBe(false);
-    expect(
-      validateSessionsDispatchParams({
-        key: "agent:main:dispatch",
-        deviceId: "device-1",
-        machineClass: "beast",
-      }),
-    ).toBe(false);
-    for (const invalidAutomaticTarget of [
-      { autoDevice: false },
-      { autoDevice: true, profileId: "development" },
-      { autoDevice: true, deviceId: "device-1" },
-      { autoDevice: true, machineClass: "beast" },
-    ]) {
-      expect(
-        validateSessionsDispatchParams({
-          key: "agent:main:dispatch",
-          ...invalidAutomaticTarget,
-        }),
-      ).toBe(false);
-    }
-    expect(
-      validateSessionsDispatchParams({
-        key: "agent:main:dispatch",
-        profileId: "development",
-        machineClass: "",
-      }),
-    ).toBe(false);
-    expect(
-      validateSessionsDispatchParams({
-        key: "agent:main:dispatch",
-        profileId: "development",
-        machineClass: "x".repeat(129),
-      }),
-    ).toBe(false);
-    expect(
-      validateSessionsDispatchParams({
-        key: "agent:main:dispatch",
-        profileId: "development",
-        task: "run remotely",
-      }),
-    ).toBe(false);
+    dispatch.rejects(
+      ...[
+        { os: "windows/wsl2" },
+        { deviceId: "device-1", os: "windows/wsl2" },
+        { autoDevice: true, os: "windows/wsl2" },
+        { profileId: "development", os: "" },
+        { profileId: "development", os: "x".repeat(65) },
+        { machineClass: "beast" },
+        { profileId: "development", deviceId: "device-1" },
+        { deviceId: "device-1", machineClass: "beast" },
+        { autoDevice: false },
+        { autoDevice: true, profileId: "development" },
+        { autoDevice: true, deviceId: "device-1" },
+        { autoDevice: true, machineClass: "beast" },
+        { profileId: "development", machineClass: "" },
+        { profileId: "development", machineClass: "x".repeat(129) },
+        { profileId: "development", task: "run remotely" },
+      ].map(request),
+    );
   });
 
   it("accepts a session selector and exact failed generation for Gateway recovery", () => {
-    expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", agentId: "main" })).toBe(
-      true,
+    reclaim.accepts({ key, agentId: "main" }, { key, recoverToGateway: { expectedGeneration: 3 } });
+    reclaim.rejects(
+      { key, profileId: "dev" },
+      ...[{}, { expectedGeneration: -1 }, { expectedGeneration: 0.5 }].map((recoverToGateway) => ({
+        key,
+        recoverToGateway,
+      })),
     );
-    expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", profileId: "dev" })).toBe(
-      false,
-    );
-    expect(
-      validateSessionsReclaimParams({
-        key: "agent:main:dispatch",
-        recoverToGateway: { expectedGeneration: 3 },
-      }),
-    ).toBe(true);
-    for (const recoverToGateway of [{}, { expectedGeneration: -1 }, { expectedGeneration: 0.5 }]) {
-      expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", recoverToGateway })).toBe(
-        false,
-      );
-    }
   });
 
   it("accepts exactly the reclaim owner's terminal outcomes", () => {
-    const result = {
+    const result = (value: unknown) => ({
       ok: true,
-      key: "agent:main:dispatch",
+      key,
       sessionId: "session-dispatch",
-    };
-
-    expect(
-      validateSessionsReclaimResult({
-        ...result,
-        placement: { state: "local", ...basePlacement },
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsReclaimResult({
-        ...result,
-        placement: { state: "reclaimed", ...basePlacement },
-      }),
-    ).toBe(true);
-    for (const placement of [
-      { state: "requested", ...basePlacement },
-      { state: "active", ...basePlacement, ...workerOwnedFields },
-    ]) {
-      expect(validateSessionsReclaimResult({ ...result, placement })).toBe(false);
-    }
+      placement: value,
+    });
+    reclaimed.accepts(
+      ...["local", "reclaimed"].map((state) => result({ state, ...basePlacement })),
+    );
+    reclaimed.rejects(
+      ...[
+        { state: "requested", ...basePlacement },
+        { state: "active", ...basePlacement, ...workerOwnedFields },
+      ].map(result),
+    );
   });
 
   it("keeps placement states closed", () => {
-    for (const state of placementStates) {
-      expect(Value.Check(SessionPlacementStateSchema, state)).toBe(true);
-    }
-    expect(Value.Check(SessionPlacementStateSchema, "unknown")).toBe(false);
+    const states = schemaValidation(SessionPlacementStateSchema);
+    states.accepts(...placementStates);
+    states.rejects("unknown");
   });
 
   it("requires workspace identity while starting", () => {
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "starting",
-        ...basePlacement,
-        ...environmentFields,
-        ...workspaceFields,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "starting",
-        ...basePlacement,
-        ...environmentFields,
-        remoteWorkspaceDir: "/workspace/session-1",
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state: "starting",
-        ...basePlacement,
-        ...environmentFields,
-        ...workspaceFields,
-        lastTranscriptAckCursor: 0,
-      }),
-    ).toBe(false);
+    const starting = {
+      state: "starting",
+      ...basePlacement,
+      ...environmentFields,
+      ...workspaceFields,
+    };
+    placement.accepts(starting);
+    const { workspaceBaseManifestRef: _manifest, ...missingManifest } = starting;
+    placement.rejects(missingManifest, { ...starting, lastTranscriptAckCursor: 0 });
   });
 
   it.each(["active"] as const)("requires complete worker ownership for %s placement", (state) => {
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state,
-        ...basePlacement,
-        ...workerOwnedFields,
-        lastTranscriptAckCursor: 2,
-        lastLiveEventAckCursor: 9,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionPlacementSchema, {
-        state,
-        ...basePlacement,
-        environmentId: "environment-1",
-        activeOwnerEpoch: 7,
-        workerBundleHash,
-      }),
-    ).toBe(false);
+    placement.accepts({
+      state,
+      ...basePlacement,
+      ...workerOwnedFields,
+      lastTranscriptAckCursor: 2,
+      lastLiveEventAckCursor: 9,
+    });
+    placement.rejects({
+      state,
+      ...basePlacement,
+      environmentId: "environment-1",
+      activeOwnerEpoch: 7,
+      workerBundleHash,
+    });
   });
 
   it("accepts explicit abandonment only for a Gateway target", () => {
-    const request = {
-      key: "agent:main:dispatch",
-      expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
-      abandonSource: true,
-    };
-    expect(validateSessionsMoveParams({ ...request, target: { kind: "gateway" } })).toBe(true);
-    expect(
-      validateSessionsMoveParams({
-        ...request,
-        target: { kind: "device", deviceId: "device-1" },
-      }),
-    ).toBe(false);
-    expect(
-      validateSessionsMoveParams({
-        ...request,
-        target: { kind: "profile", profileId: "development" },
-      }),
-    ).toBe(false);
-    expect(
-      validateSessionsMoveParams({ ...request, abandonSource: false, target: { kind: "gateway" } }),
-    ).toBe(false);
+    const request = (target: object, abandonSource = true) => move({ target, abandonSource });
+    moving.accepts(request(gateway));
+    moving.rejects(request(device()), request(profile()), request(gateway, false));
   });
 
   it("bounds move source and target identifiers", () => {
     const accepted = "x".repeat(256);
     const rejected = "x".repeat(257);
-    expect(
-      validateSessionsMoveParams({
-        key: "agent:main:dispatch",
-        expected: { generation: 4, environmentId: accepted, ownerEpoch: 7 },
-        target: {
-          kind: "profile",
-          profileId: accepted,
-          machineClass: "x".repeat(128),
-          os: "x".repeat(64),
-        },
+    moving.accepts(
+      move({
+        expected: { ...expected, environmentId: accepted },
+        target: profile({ profileId: accepted, machineClass: "x".repeat(128), os: "x".repeat(64) }),
       }),
-    ).toBe(true);
+    );
     for (const machineClass of ["", "x".repeat(129)]) {
-      expect(
-        validateSessionsMoveParams({
-          key: "agent:main:dispatch",
-          expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
-          target: { kind: "profile", profileId: "development", machineClass },
-        }),
-      ).toBe(false);
+      moving.rejects(move({ target: profile({ machineClass }) }));
     }
     for (const os of ["", "x".repeat(65)]) {
-      expect(
-        validateSessionsMoveParams({
-          key: "agent:main:dispatch",
-          expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
-          target: { kind: "profile", profileId: "development", os },
-        }),
-      ).toBe(false);
+      moving.rejects(move({ target: profile({ os }) }));
     }
     for (const value of [rejected, " leading", "trailing "]) {
-      expect(
-        validateSessionsMoveParams({
-          key: "agent:main:dispatch",
-          expected: { generation: 4, environmentId: value, ownerEpoch: 7 },
-          target: { kind: "gateway" },
+      moving.rejects(
+        move({
+          expected: { ...expected, environmentId: value },
+          target: gateway,
         }),
-      ).toBe(false);
-      expect(
-        validateSessionsMoveParams({
-          key: "agent:main:dispatch",
-          expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
-          target: { kind: "device", deviceId: value },
-        }),
-      ).toBe(false);
+        move({ target: device(value) }),
+      );
     }
   });
 
-  it.each([{ generation: 4, environmentId: "environment-1", ownerEpoch: 0 }])(
-    "rejects an inexact move source %#",
-    (expected) => {
-      expect(
-        validateSessionsMoveParams({
-          key: "agent:main:dispatch",
-          expected,
-          target: { kind: "gateway" },
-        }),
-      ).toBe(false);
-    },
-  );
+  it("rejects an inexact move source", () => {
+    moving.rejects(
+      move({
+        expected: { ...expected, ownerEpoch: 0 },
+        target: gateway,
+      }),
+    );
+  });
 
   it("projects bounded durable move progress without operation authority", () => {
-    expect(
-      Value.Check(SessionPlacementMoveSchema, {
-        target: { kind: "gateway" },
-        updatedAtMs: 1,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionPlacementMoveSchema, {
-        target: { kind: "device", deviceId: "device-1" },
+    progress.accepts(
+      { target: gateway, updatedAtMs: 1 },
+      {
+        target: device(),
         updatedAtMs: 2,
         error: "device worker is offline",
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionPlacementMoveSchema, {
-        target: { kind: "gateway" },
-        updatedAtMs: 1,
-        operationId: "move:v1:secret",
-      }),
-    ).toBe(false);
+      },
+    );
+    progress.rejects({
+      target: gateway,
+      updatedAtMs: 1,
+      operationId: "move:v1:secret",
+    });
   });
 
   it("validates projected retries with the same source and target constraints as Move requests", () => {
-    const expected = { generation: 4, environmentId: "environment-1", ownerEpoch: 7 };
     const retries = [
-      { expected, target: { kind: "gateway" } },
-      { expected, target: { kind: "gateway" }, abandonSource: true },
-      { expected, target: { kind: "device", deviceId: "device-1" } },
-      {
-        expected,
-        target: { kind: "profile", profileId: "team", os: "linux", machineClass: "tiny" },
-      },
+      { expected, target: gateway },
+      { expected, target: gateway, abandonSource: true },
+      { expected, target: device() },
+      { expected, target: profile({ profileId: "team", os: "linux", machineClass: "tiny" }) },
     ];
     for (const retry of retries) {
-      expect(
-        Value.Check(SessionPlacementMoveSchema, {
-          target: retry.target,
-          updatedAtMs: 1,
-          error: "move interrupted",
-          retry,
-        }),
-      ).toBe(true);
-      expect(validateSessionsMoveParams({ key: "agent:main:dispatch", ...retry })).toBe(true);
+      progress.accepts(retryProgress(retry));
+      moving.accepts({ key, ...retry });
     }
     for (const retry of [
-      { expected: { ...expected, generation: -1 }, target: { kind: "gateway" } },
-      { expected: { ...expected, environmentId: "x".repeat(257) }, target: { kind: "gateway" } },
-      { expected, target: { kind: "gateway" }, abandonSource: false },
-      { expected, target: { kind: "device", deviceId: "device-1" }, abandonSource: true },
-      { expected, target: { kind: "profile", profileId: "team" }, abandonSource: true },
-      { expected, target: { kind: "gateway" }, operationId: "move:v1:opaque" },
+      { expected: { ...expected, generation: -1 }, target: gateway },
+      { expected: { ...expected, environmentId: "x".repeat(257) }, target: gateway },
+      { expected, target: gateway, abandonSource: false },
+      { expected, target: device(), abandonSource: true },
+      { expected, target: profile({ profileId: "team" }), abandonSource: true },
+      { expected, target: gateway, operationId: "move:v1:opaque" },
     ]) {
-      expect(
-        Value.Check(SessionPlacementMoveSchema, {
-          target: retry.target,
-          updatedAtMs: 1,
-          error: "move interrupted",
-          retry,
-        }),
-      ).toBe(false);
+      progress.rejects(retryProgress(retry));
     }
   });
 
@@ -399,24 +241,15 @@ describe("session dispatch protocol schemas", () => {
       sessionId: "session-dispatch",
       placement: { state: "active", generation: 5 },
     };
-    expect(validateSessionsMoveResult(result)).toBe(true);
-    for (const state of ["requested", "reclaimed"] as const) {
-      expect(
-        validateSessionsMoveResult({
-          ...result,
-          placement: { state, generation: result.placement.generation },
-        }),
-      ).toBe(false);
-    }
-    expect(
-      validateSessionsMoveResult({
+    moved.accepts(result);
+    moved.rejects(
+      { ...result, placement: { state: "requested", generation: 5 } },
+      { ...result, placement: { state: "reclaimed", generation: 5 } },
+      {
         ...result,
-        placement: {
-          ...result.placement,
-          remoteWorkspaceDir: "/workspace/session-dispatch",
-        },
-      }),
-    ).toBe(false);
-    expect(validateSessionsMoveResult({ ...result, providerSettings: {} })).toBe(false);
+        placement: { ...result.placement, remoteWorkspaceDir: "/workspace/session-dispatch" },
+      },
+      { ...result, providerSettings: {} },
+    );
   });
 });

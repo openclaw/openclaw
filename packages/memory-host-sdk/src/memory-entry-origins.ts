@@ -36,7 +36,7 @@ export const ensureMemoryEntryOriginsSchema = createSqliteSchemaEnsurer(
     origin_class TEXT NOT NULL CHECK (origin_class IN ('owner', 'agent', 'untrusted', 'system')),
     observed_at INTEGER NOT NULL,
     PRIMARY KEY (entry_key, agent_id, session_id)
-  ) STRICT`,
+  ) STRICT, WITHOUT ROWID`,
   { tables: ["memory_entry_origins"] },
 );
 

@@ -26,6 +26,13 @@ Related: [Browser tool](/tools/browser)
   `openclaw browser status --json` also works when the selected child command does not
   define its own `--json`.
 
+With `--json`, local action-input, state, and viewport validation refusals write one JSON error document to
+stdout (`ok: false`, `error.type: "cli_error"`) and exit with status 1. Without
+`--json`, the diagnostic remains on stderr.
+
+Malformed request timeouts and Gateway request rejections also use this JSON
+failure envelope, including navigation, resize, and cookie requests.
+
 The CLI reserves 10 additional seconds beyond the request timeout for node and
 Gateway transport, allowing browser timeout diagnostics to reach the caller.
 
@@ -116,6 +123,8 @@ openclaw browser delete-profile --name work
 Use a specific profile with `--browser-profile <name>` on any subcommand, for example `openclaw browser --browser-profile work tabs`.
 
 On macOS, `system-profiles` lists real Chrome, Brave, Edge, or Chromium profiles available on the host. `import-profile` decrypts their cookies after one macOS Keychain/Touch ID consent prompt and injects them into a fresh OpenClaw-managed profile. It imports cookies only. Local storage and IndexedDB are unchanged. Some Google sessions use device-bound session credentials (DBSC) and can still require re-authentication after import.
+
+Newer macOS versions can also ask whether the Gateway's Node process may access the browser's data. Until someone answers that prompt on the Gateway host, system-profile discovery and import time out while the rest of the Gateway keeps running.
 
 When the macOS app uses a local Gateway, it can offer this import once and make the isolated imported profile the default for agent browsing. Import always requires an explicit click. Successful import or dismissal suppresses later automatic prompts, and **Settings → General → Browser login** remains available for re-import.
 
@@ -338,6 +347,8 @@ openclaw browser dialog --dismiss --dialog-id d1
 Managed Chrome profiles save ordinary click-triggered downloads into the OpenClaw downloads directory (`/tmp/openclaw/downloads` by default, or the configured temp root). Use `waitfordownload` or `download` when the agent needs to wait for a specific file and return its path. Those explicit waiters own the next download. Uploads accept files from the OpenClaw temp uploads root and OpenClaw-managed inbound media, including `media://inbound/<id>` and sandbox-relative `media/inbound/<id>` references. Nested media refs, traversal, and arbitrary local paths are rejected.
 
 For remote browser nodes, OpenClaw stages private copies and normalizes filenames for portability, including Windows device names and trailing dots or spaces. File bytes remain unchanged.
+
+Explicit download paths and `trace stop --out` preserve filename whitespace where the filesystem supports it. Quote these paths, for example `openclaw browser download <ref> " report.pdf "`. Output paths must stay inside their managed download or trace directory.
 
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
 

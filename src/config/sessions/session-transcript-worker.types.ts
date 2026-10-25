@@ -30,6 +30,10 @@ import type {
   CombinedSessionStoreTopologyRequest,
   CombinedSessionStoreTopologyResult,
 } from "./combined-store.types.js";
+import type {
+  ConversationBindingsWorkerInput,
+  ConversationBindingSnapshot,
+} from "./conversation-binding-facts.types.js";
 import type { ConversationDeliveryRecord } from "./conversation-delivery-store.types.js";
 import type {
   ConversationRowsWorkerInput,
@@ -287,7 +291,6 @@ export type SessionHistoryWorkerInput =
       kind: "prewarm";
       database: { agentId: string; path: string };
       env: NodeJS.ProcessEnv;
-      history: boolean;
     }
   | SessionHistoricalEvictionCandidatesWorkerInput
   | SessionArchivedEvictionCandidatesWorkerInput
@@ -325,6 +328,7 @@ export type SessionHistoryWorkerInput =
   | HarnessCompletionSourceWorker.Input
   | SessionGoalOperationReceiptWorkerInput
   | ConversationRowsWorkerInput
+  | ConversationBindingsWorkerInput
   | ConversationDeliveryWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
@@ -397,6 +401,10 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     };
     "cli-process-history": ChatHistoryDisplayResult;
     "conversation-rows": { kind: "conversation-rows"; rows: ConversationRecord[] };
+    "conversation-bindings": {
+      kind: "conversation-bindings";
+      snapshot: ConversationBindingSnapshot;
+    };
     "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
     prewarm: { kind: "prewarm" };
     "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
@@ -554,11 +562,13 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readMessagePresence: CancellableSessionHistoryReader<"transcript-message-presence", "present">;
     readAnchors: CancellableSessionHistoryReader<"transcript-anchors", "facts">;
     readConversations: SessionHistoryReader<"conversation-rows", "rows">;
-    prewarm: (input: { env: NodeJS.ProcessEnv; history: boolean }) => Promise<void>;
+    readConversationBindings: SessionHistoryReader<"conversation-bindings", "snapshot">;
+    prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
     readPendingArchives: CancellableSessionHistoryReader<"session-pending-archives", "pending">;
     readLifecycleArtifactPlan: CancellableSessionHistoryReader<"lifecycle-artifact-plan">;
     findTranscriptEvent: (
       request: SessionTranscriptMatchWorkerInput["request"],
+      signal?: AbortSignal,
     ) => Promise<SessionTranscriptWorkerValues["transcript-match"]["result"]>;
     readHistoricalEvictionCandidates: (
       input: Omit<SessionHistoricalEvictionCandidatesWorkerInput, "kind" | "database">,

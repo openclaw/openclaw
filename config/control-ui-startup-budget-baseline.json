@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 374285,
-  "reason": "Restored the original startup budget after the Solid shell and overlay primitives landed; main measured 342,363 B gzip at the restore.",
-  "updatedAt": "2026-10-12"
+  "startupJsGzipBytes": 270085,
+  "reason": "Consolidated asset delivery on main 39ceca404cec preserves the shared plugin-inline-view contract. Same-host production builds reduce startup from 273896 to 270085 B gzip and from seven to five JS requests, retaining one startup CSS request. Ratchet to the measured integrated head.",
+  "updatedAt": "2026-10-25"
 }

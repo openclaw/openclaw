@@ -10,10 +10,7 @@ import {
 } from "./tooltip.test-support.ts";
 
 const view = vi.hoisted(() => {
-  let resolve!: () => void;
-  const ready = new Promise<void>((done) => {
-    resolve = done;
-  });
+  const { promise: ready, resolve } = Promise.withResolvers<void>();
   return { ready, resolve, started: vi.fn() };
 });
 
@@ -72,4 +69,20 @@ it("loads on reveal, keeps cold content hidden, and never replays canceled or su
   expect(tooltipSurface(current.tooltip)?.querySelector(".tooltip-content")?.textContent).toBe(
     "Current details",
   );
+  const visibleEscape = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  current.trigger.dispatchEvent(visibleEscape);
+  await settleTooltip(current.tooltip);
+  expect(visibleEscape.defaultPrevented).toBe(true);
+  expect(current.tooltip.hasAttribute("open")).toBe(false);
+  const closedEscape = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  current.trigger.dispatchEvent(closedEscape);
+  expect(closedEscape.defaultPrevented).toBe(false);
 });

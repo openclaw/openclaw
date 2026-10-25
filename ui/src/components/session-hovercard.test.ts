@@ -370,6 +370,92 @@ describe("session hovercard", () => {
     },
   );
 
+  it("shows task publications without claiming unknown GitHub state or hiding branch actions", () => {
+    const branch = {
+      owner: "example",
+      repo: "project",
+      branch: "coordination",
+      createUrl: "https://github.com/example/project/pull/new/coordination",
+    };
+    const task = {
+      owner: "example",
+      repo: "project",
+      branch: "fix/child",
+      url: "https://github.com/example/project/pull/417",
+      number: 417,
+      title: "Child publication",
+      sourceSessionKey: "agent:main:child",
+      sourceAgentId: "main",
+    };
+    const container = renderCard({
+      pullRequests: snapshot({ branch, taskPullRequests: [task], taskPullRequestCount: 1 }),
+    });
+    const link = container.querySelector<HTMLAnchorElement>(".session-hovercard__pr-row");
+    expect(link?.href).toBe(task.url);
+    expect(link?.dataset.state).toBeUndefined();
+    expect(link?.textContent).toContain("Status unavailable");
+    expect(link?.textContent).toContain("Task branch: fix/child");
+    expect(
+      container.querySelector<HTMLAnchorElement>(".session-hovercard__branch-action")?.href,
+    ).toBe(branch.createUrl);
+    renderCard(
+      {
+        pullRequests: snapshot({
+          taskPullRequests: [task],
+          taskPullRequestCount: 30,
+          pullRequestCount: 31,
+          pullRequests: [
+            {
+              ...task,
+              number: 418,
+              url: "https://github.com/example/project/pull/418",
+              state: "open",
+            },
+          ],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelector(".session-hovercard__pr-count")?.textContent).toBe("31");
+    expect(container.querySelector(".session-hovercard__more")?.textContent).toContain("29 more");
+    // The branch PR can also belong to receipts outside the bounded task preview.
+    renderCard(
+      {
+        pullRequests: snapshot({
+          taskPullRequests: [task],
+          taskPullRequestCount: 30,
+          pullRequestCount: 30,
+          pullRequests: [
+            {
+              ...task,
+              number: 418,
+              url: "https://github.com/example/project/pull/418",
+              state: "open",
+            },
+          ],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelector(".session-hovercard__pr-count")?.textContent).toBe("30");
+    expect(container.querySelectorAll(".session-hovercard__pr-row")).toHaveLength(2);
+    expect(container.querySelector(".session-hovercard__more")?.textContent).toContain("28 more");
+    const known = { ...task, state: "merged" as const };
+    renderCard(
+      {
+        pullRequests: snapshot({
+          pullRequests: [known],
+          taskPullRequests: [{ ...task, pullRequest: known }],
+        }),
+      },
+      container,
+    );
+    expect(container.querySelectorAll(".session-hovercard__pr-row")).toHaveLength(1);
+    expect(container.querySelector(".session-hovercard__pr-row")?.getAttribute("data-state")).toBe(
+      "merged",
+    );
+  });
+
   it("shows all supplied PRs with active work first, identities, and checks", () => {
     const container = renderCard({
       pullRequests: snapshot({
@@ -547,7 +633,8 @@ describe("session hovercard", () => {
       expect(container.querySelector(".session-hovercard__files")).toBeNull();
       expect(createLink?.textContent).toBe("Create PR");
       expect(createLink?.href).toBe(branch.createUrl);
-      expect(createLink?.title).toBe("Create a pull request for feature");
+      expect(createLink?.getAttribute("aria-label")).toBe("Create PR for feature");
+      expect(createLink?.title).toBe("Create PR for feature");
     } else {
       expect(createLink).toBeNull();
       expect(container.querySelector(".session-hovercard__branch-label")?.textContent).toBe(
@@ -569,7 +656,7 @@ describe("session hovercard", () => {
   });
 
   it.each(["active", "markdown-only", "completed"])(
-    "keeps Agent Notepad separate from %s plan metadata",
+    "keeps Task progress separate from %s plan metadata",
     (mode) => {
       const card = progressCard();
       const container = renderCard({
@@ -591,7 +678,7 @@ describe("session hovercard", () => {
       const notepad = container.querySelector(".session-hovercard__notepad");
       expect(notepad).not.toBeNull();
       expect(notepad?.querySelector(".session-hovercard__notepad-title")?.textContent).toBe(
-        "Agent Notepad",
+        "Task progress",
       );
       expect(notepad?.querySelector("strong")?.textContent).toBe("Release");
       expect(container.querySelector(".session-progress-card")).toBeNull();
@@ -622,7 +709,7 @@ describe("session hovercard", () => {
     expect(plan?.querySelector("polyline")).not.toBeNull();
   });
 
-  it("pins a labeled markdown progress bar above the Agent Notepad copy", () => {
+  it("pins a labeled markdown progress bar above the Task progress copy", () => {
     const container = renderCard({
       row: row(),
       progressCard: {

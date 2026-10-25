@@ -39,6 +39,7 @@ import {
   isMatrixPerformanceTask,
   type MatrixPerformanceTask,
 } from "./lib/code-mode-matrix-performance-fixtures.ts";
+import { prepareGatewayMatrixProcessOwner } from "./lib/code-mode-matrix-process-owner.ts";
 import {
   classifyCodeModeMatrixProviderFailure,
   matrixProviderEnv,
@@ -1051,7 +1052,11 @@ async function prepareRuntimeEntrypoint(repoRoot: string, runtimeRoot: string) {
   const nodeModules = path.join(repoRoot, "node_modules");
   const physicalNodeModules = await fs.realpath(nodeModules);
   if (physicalNodeModules === path.resolve(nodeModules)) {
-    return { args: [entrypoint], cwd: repoRoot };
+    return {
+      args: [entrypoint],
+      cwd: repoRoot,
+      processOwnerBootstrap: await prepareGatewayMatrixProcessOwner(repoRoot, runtimeRoot),
+    };
   }
 
   const overlayDist = path.join(runtimeRoot, "dist");
@@ -1090,6 +1095,7 @@ async function prepareRuntimeEntrypoint(repoRoot: string, runtimeRoot: string) {
   return {
     args: [path.join(runtimeRoot, "dist", "entry.js")],
     cwd: runtimeRoot,
+    processOwnerBootstrap: await prepareGatewayMatrixProcessOwner(runtimeRoot, runtimeRoot),
   };
 }
 
@@ -1366,9 +1372,10 @@ function summarizeResults(results: CodeModeMatrixCellResult[]) {
       p50WallMs: summarizeMetric(group.map((result) => result.elapsedMs)).p50 ?? 0,
       metrics: {
         assistantTurns: summarizeMetric(group.map((result) => result.assistantTurns)),
-        outerToolCalls: summarizeMetric(
-          group.map((result) => result.toolSummary?.calls ?? result.gateway?.outerCalls),
-        ),
+        // Embedded tool summaries include nested terminals; only Gateway traces
+        // observe outer calls. Keep scopes separate rather than filling gaps.
+        toolCalls: summarizeMetric(group.map((result) => result.toolSummary?.calls)),
+        outerToolCalls: summarizeMetric(group.map((result) => result.gateway?.outerCalls)),
         bridgeSearchCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.search)),
         bridgeDescribeCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.describe)),
         bridgeToolCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.call)),

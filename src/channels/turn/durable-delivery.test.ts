@@ -1,28 +1,21 @@
-// Durable delivery tests cover persisted channel turn delivery attempts and recovery.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  resolveOutboundDurableFinalDeliverySupport: vi.fn(),
-  sendDurableMessageBatch: vi.fn(),
-  sendStructuredDurableMessageBatch: vi.fn(),
+  support: vi.fn(),
+  send: vi.fn(),
+  sendPrepared: vi.fn(),
 }));
 
-vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/outbound/deliver.js")>();
-  return {
-    ...actual,
-    resolveOutboundDurableFinalDeliverySupport: mocks.resolveOutboundDurableFinalDeliverySupport,
-  };
-});
+vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/outbound/deliver.js")>()),
+  resolveOutboundDurableFinalDeliverySupport: mocks.support,
+}));
 
-vi.mock("../message/send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../message/send.js")>();
-  return {
-    ...actual,
-    sendDurableMessageBatchCore: mocks.sendDurableMessageBatch,
-    sendStructuredDurableMessageBatchCore: mocks.sendStructuredDurableMessageBatch,
-  };
-});
+vi.mock("../message/send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../message/send.js")>()),
+  sendDurableMessageBatchCore: mocks.send,
+  sendStructuredDurableMessageBatchCore: mocks.sendPrepared,
+}));
 
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
@@ -41,71 +34,48 @@ import {
   deliverInboundReplyWithMessageSendContextCore,
   deliverStructuredInboundReplyWithMessageSendContextCore,
   throwIfDurableInboundReplyDeliveryFailed,
+  type DurableInboundReplyDeliveryParams,
 } from "./durable-delivery.js";
 
-type SendDurableMessageBatchRequest = {
-  cfg?: unknown;
-  channel?: string;
-  to?: string;
-  threadId?: string | number | null;
-  durability?: string;
-  requireUnknownSendReconciliation?: boolean;
-  gatewayClientScopes?: readonly string[];
-  runId?: string;
-  executionIdentityToken?: unknown;
+const context: FinalizedMsgContext = {
+  CommandAuthorized: true,
+  CommandTurn: { kind: "normal", source: "message", authorized: false },
+  OriginatingTo: "chat-1",
 };
 
-type DeliverySupportRequest = {
-  requirements?: Record<string, boolean>;
-};
-
-function ctxPayload(overrides: Partial<FinalizedMsgContext>): FinalizedMsgContext {
+function request(
+  overrides: Partial<DurableInboundReplyDeliveryParams> = {},
+): DurableInboundReplyDeliveryParams {
   return {
-    CommandAuthorized: true,
-    CommandTurn: {
-      kind: "normal" as const,
-      source: "message" as const,
-      authorized: false as const,
-    },
+    cfg: {},
+    channel: "telegram",
+    agentId: "main",
+    info: { kind: "final" },
+    payload: { text: "final" },
+    ctxPayload: { ...context },
     ...overrides,
   };
 }
+const deliver = (overrides: Partial<DurableInboundReplyDeliveryParams> = {}) =>
+  deliverInboundReplyWithMessageSendContextCore(request(overrides));
 
-function latestSendDurableMessageBatchRequest(): SendDurableMessageBatchRequest {
-  const calls = mocks.sendDurableMessageBatch.mock.calls;
-  const request = calls[calls.length - 1]?.[0];
-  if (!request || typeof request !== "object") {
-    throw new Error("expected sendDurableMessageBatch request");
-  }
-  return request as SendDurableMessageBatchRequest;
-}
-
-function latestDeliverySupportRequest(): DeliverySupportRequest {
-  const calls = mocks.resolveOutboundDurableFinalDeliverySupport.mock.calls;
-  const request = calls[calls.length - 1]?.[0];
-  if (!request || typeof request !== "object") {
-    throw new Error("expected delivery support request");
-  }
-  return request as DeliverySupportRequest;
+const receipt = {
+  primaryPlatformMessageId: "m1",
+  platformMessageIds: ["m1"],
+  parts: [{ platformMessageId: "m1", kind: "text", index: 0 }],
+  sentAt: 1,
+};
+function expectOnlyCall(mock: Mock, fields: object) {
+  expect(mock).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(fields));
 }
 
 describe("durable inbound reply delivery", () => {
   beforeEach(() => {
-    mocks.resolveOutboundDurableFinalDeliverySupport.mockReset();
-    mocks.sendDurableMessageBatch.mockReset();
-    mocks.sendStructuredDurableMessageBatch.mockReset();
-    mocks.resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
-    const result = {
-      status: "sent",
-      receipt: {
-        primaryPlatformMessageId: "m1",
-        platformMessageIds: ["m1"],
-        parts: [{ platformMessageId: "m1", kind: "text", index: 0 }],
-        sentAt: 1,
-      },
-    };
-    mocks.sendDurableMessageBatch.mockResolvedValue(result);
-    mocks.sendStructuredDurableMessageBatch.mockResolvedValue(result);
+    Object.values(mocks).forEach((mock) => mock.mockReset());
+    mocks.support.mockResolvedValue({ ok: true });
+    const result = { status: "sent", receipt };
+    mocks.send.mockResolvedValue(result);
+    mocks.sendPrepared.mockResolvedValue(result);
   });
 
   it.each([
@@ -147,136 +117,72 @@ describe("durable inbound reply delivery", () => {
       throw new Error("Expected a sendable reply plan");
     }
     await deliverStructuredInboundReplyWithMessageSendContextCore({
-      cfg: {},
-      channel: "telegram",
-      agentId: "main",
-      info: { kind: "final" },
+      ...request(),
       plan,
       replyToMode: mode,
-      ctxPayload: ctxPayload({ OriginatingTo: "chat-1", ReplyToId: "ambient-target" }),
+      ctxPayload: { ...context, ReplyToId: "ambient-target" },
     });
-    expect(mocks.sendStructuredDurableMessageBatch).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ replyToId: mode === "first" ? null : "hook-target" }),
-    );
+    expectOnlyCall(mocks.sendPrepared, {
+      replyToId: mode === "first" ? null : "hook-target",
+    });
   });
 
-  it("preserves explicit null thread targets instead of falling back to context thread", async () => {
-    await deliverInboundReplyWithMessageSendContextCore({
-      cfg: {},
-      channel: "telegram",
-      agentId: "main",
-      info: { kind: "final" },
-      payload: { text: "plain reply" },
-      threadId: null,
-      ctxPayload: ctxPayload({
-        OriginatingTo: "chat-1",
-        MessageThreadId: "context-thread",
-      }),
-    });
-
-    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
-    const request = latestSendDurableMessageBatchRequest();
-    expect(request.cfg).toEqual({});
-    expect(request.channel).toBe("telegram");
-    expect(request.to).toBe("chat-1");
-    expect(request.threadId).toBeNull();
-    expect(request.durability).toBe("best_effort");
-    expect(request.gatewayClientScopes).toEqual([]);
-    expect(mocks.sendStructuredDurableMessageBatch).not.toHaveBeenCalled();
-  });
-
-  it("carries prepared directive literals and explicit fields through the durable sender", async () => {
-    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-prepared");
-    const [entry] = createStructuredOutboundPayloadPlan([
-      {
-        text: "[[reply_to:literal]] [[audio_as_voice]]",
-        mediaUrl: "https://example.invalid/audio.ogg",
-        replyToId: "source-message",
-      },
-    ]);
-    if (!entry) {
-      throw new Error("expected a sendable prepared plan");
-    }
-    const plan = { ...entry, sourceIndex: 3 };
-    const result = await deliverStructuredInboundReplyWithMessageSendContextCore({
-      cfg: {},
-      channel: "telegram",
-      agentId: "main",
-      info: { kind: "final" },
-      plan,
-      threadId: null,
-      executionIdentityToken,
-      ctxPayload: ctxPayload({ OriginatingTo: "chat-1", MessageThreadId: "context-thread" }),
-    });
-
-    expect(result.status).toBe("handled_visible");
-    expect(mocks.sendDurableMessageBatch).not.toHaveBeenCalled();
-    expect(mocks.sendStructuredDurableMessageBatch).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        plan: [plan],
+  it.each([false, true])(
+    "preserves null threads and run identity (prepared=%s)",
+    async (prepared) => {
+      const runId = prepared ? "run-prepared" : "run-exact";
+      const executionIdentityToken = createExecutionIdentityAdmissionToken(runId);
+      const [entry] = createStructuredOutboundPayloadPlan([
+        {
+          text: "[[reply_to:literal]] [[audio_as_voice]]",
+          mediaUrl: "https://example.invalid/audio.ogg",
+          replyToId: "source-message",
+        },
+      ]);
+      if (!entry) {
+        throw new Error("expected a sendable prepared plan");
+      }
+      const plan = { ...entry, sourceIndex: 3 };
+      const params = request({
+        threadId: null,
+        executionIdentityToken,
+        ctxPayload: { ...context, MessageThreadId: "context-thread" },
+      });
+      const result = await (prepared
+        ? deliverStructuredInboundReplyWithMessageSendContextCore({ ...params, plan })
+        : deliverInboundReplyWithMessageSendContextCore(params));
+      expect(result.status).toBe("handled_visible");
+      const send = prepared ? mocks.sendPrepared : mocks.send;
+      const unused = prepared ? mocks.send : mocks.sendPrepared;
+      expect(unused).not.toHaveBeenCalled();
+      expectOnlyCall(send, {
+        ...(prepared
+          ? { plan: [plan], replyToId: "source-message" }
+          : { cfg: {}, gatewayClientScopes: [] }),
         channel: "telegram",
         to: "chat-1",
         threadId: null,
-        replyToId: "source-message",
         durability: "best_effort",
-        runId: "run-prepared",
+        runId,
         executionIdentityToken,
-      }),
-    );
-  });
-
-  it("does not require unknown-send reconciliation for the default best-effort final path", async () => {
-    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-exact");
-    await deliverInboundReplyWithMessageSendContextCore({
-      cfg: {},
-      channel: "telegram",
-      agentId: "main",
-      info: { kind: "final" },
-      payload: { text: "final" },
-      executionIdentityToken,
-      ctxPayload: ctxPayload({
-        OriginatingTo: "chat-1",
-      }),
-    });
-
-    expect(mocks.resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledTimes(1);
-    expect(latestDeliverySupportRequest().requirements).toEqual({
-      text: true,
-      messageSendingHooks: true,
-    });
-    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
-    expect(latestSendDurableMessageBatchRequest().durability).toBe("best_effort");
-    expect(latestSendDurableMessageBatchRequest()).toMatchObject({
-      runId: "run-exact",
-      executionIdentityToken,
-    });
-    expect(latestSendDurableMessageBatchRequest().requireUnknownSendReconciliation).toBeUndefined();
-  });
+      });
+      if (!prepared) {
+        expectOnlyCall(mocks.support, {
+          requirements: { text: true, messageSendingHooks: true },
+        });
+        expect(send.mock.calls[0]?.[0].requireUnknownSendReconciliation).toBeUndefined();
+      }
+    },
+  );
 
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {
-    await deliverInboundReplyWithMessageSendContextCore({
-      cfg: {},
-      channel: "telegram",
-      agentId: "main",
-      info: { kind: "final" },
-      payload: { text: "final" },
-      requiredCapabilities: {
-        text: true,
-        reconcileUnknownSend: true,
-      },
-      ctxPayload: ctxPayload({
-        OriginatingTo: "chat-1",
-      }),
+    const requirements = { text: true, reconcileUnknownSend: true };
+    await deliver({ requiredCapabilities: requirements });
+    expectOnlyCall(mocks.support, { requirements });
+    expectOnlyCall(mocks.send, {
+      durability: "required",
+      requireUnknownSendReconciliation: true,
     });
-
-    expect(mocks.resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledTimes(1);
-    expect(latestDeliverySupportRequest().requirements).toEqual({
-      text: true,
-      reconcileUnknownSend: true,
-    });
-    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
-    expect(latestSendDurableMessageBatchRequest().durability).toBe("required");
-    expect(latestSendDurableMessageBatchRequest().requireUnknownSendReconciliation).toBe(true);
   });
 
   it.each([
@@ -286,21 +192,10 @@ describe("durable inbound reply delivery", () => {
       retryable: false,
     }),
   ])("reports durable partial send failures as failed delivery (%s)", async (error) => {
-    mocks.sendDurableMessageBatch.mockResolvedValueOnce({
+    mocks.send.mockResolvedValueOnce({
       status: "partial_failed",
-      results: [
-        {
-          channel: "telegram",
-          messageId: "m1",
-          meta: { visibleText: "formatted accepted prefix" },
-        },
-      ],
-      receipt: {
-        primaryPlatformMessageId: "m1",
-        platformMessageIds: ["m1"],
-        parts: [{ platformMessageId: "m1", kind: "text", index: 0 }],
-        sentAt: 1,
-      },
+      results: [{ channel: "telegram", messageId: "m1", meta: { visibleText: "accepted prefix" } }],
+      receipt,
       error,
       sentBeforeError: true,
       deliveryIntent: {
@@ -310,31 +205,20 @@ describe("durable inbound reply delivery", () => {
         queuePolicy: "best_effort",
       },
     });
-
-    const result = await deliverInboundReplyWithMessageSendContextCore({
-      cfg: {},
-      channel: "telegram",
-      agentId: "main",
-      info: { kind: "final" },
-      payload: { text: "final" },
-      replyToId: "source-1",
-      threadId: "thread-1",
-      ctxPayload: ctxPayload({
-        OriginatingTo: "chat-1",
-      }),
-    });
-
+    const result = await deliver({ replyToId: "source-1", threadId: "thread-1" });
     expect(result).toMatchObject({
       status: "failed",
       sentBeforeError: true,
       error: {
         code: "CHANNEL_PARTIAL_DELIVERY",
         cause: error,
+        sentBeforeError: true,
+        visibleReplySent: true,
         deliveryResult: {
           messageIds: ["m1"],
           receipt: expect.objectContaining({ primaryPlatformMessageId: "m1" }),
           visibleReplySent: true,
-          content: "formatted accepted prefix",
+          content: "accepted prefix",
           replyToId: "source-1",
           threadId: "thread-1",
           deliveryIntent: {
@@ -367,17 +251,8 @@ describe("durable inbound reply delivery", () => {
   ])(
     "keeps a $label failure non-visible and preserves its retry contract",
     async ({ error, sentBeforeError }) => {
-      mocks.sendDurableMessageBatch.mockResolvedValueOnce({ status: "failed", error });
-
-      const result = await deliverInboundReplyWithMessageSendContextCore({
-        cfg: {},
-        channel: "telegram",
-        agentId: "main",
-        info: { kind: "final" },
-        payload: { text: "final" },
-        ctxPayload: ctxPayload({ OriginatingTo: "chat-1" }),
-      });
-
+      mocks.send.mockResolvedValueOnce({ status: "failed", error });
+      const result = await deliver();
       expect(result).toEqual({
         status: "failed",
         error,

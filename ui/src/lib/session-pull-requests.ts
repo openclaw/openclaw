@@ -10,6 +10,7 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
 } from "../../../src/gateway/control-ui-contract.js";
+import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "./gateway-methods.ts";
@@ -92,6 +93,7 @@ export function sessionPullRequestsForGateway(
   >();
   let orderedWatchedKeys: string[] | undefined;
   let orderedRequestedKeys: string[] = [];
+  let orderedPassiveKeys: string[] = [];
   const loadTokens = new WeakMap<object, object>();
   const snapshots = new Map<string, ControlUiSessionPullRequestSnapshot>();
   const listeners = new Set<() => void>();
@@ -107,6 +109,9 @@ export function sessionPullRequestsForGateway(
 
   const canReadPullRequests = () =>
     canCallGatewayMethod(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "operator.read");
+  const canReadAllPullRequests = () =>
+    operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? []);
+  let broadRead = canReadAllPullRequests();
 
   const notify = () => Array.from(listeners).forEach((listener) => listener());
 
@@ -149,6 +154,9 @@ export function sessionPullRequestsForGateway(
     }
     const keys = new Map<string, number>();
     for (const watched of watchedByOwner.values()) {
+      if (watched.passive && !canReadAllPullRequests()) {
+        continue;
+      }
       for (const key of watched.keys) {
         const priority = watched.passive ? 0 : watched.foreground ? 2 : 1;
         keys.set(key, Math.max(keys.get(key) ?? 0, priority));
@@ -162,10 +170,11 @@ export function sessionPullRequestsForGateway(
       .slice(0, CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS);
     orderedWatchedKeys = ordered.map(([key]) => key);
     orderedRequestedKeys = ordered.filter(([, priority]) => priority > 0).map(([key]) => key);
+    orderedPassiveKeys = ordered.filter(([, priority]) => priority === 0).map(([key]) => key);
     return orderedWatchedKeys;
   };
 
-  // Passive row decoration retains snapshots without asking the Gateway to poll Git.
+  // Passive rows request only durable receipts; active viewers also poll Git/GitHub.
   const requestedKeys = () => {
     watchedKeys();
     return orderedRequestedKeys;
@@ -174,6 +183,7 @@ export function sessionPullRequestsForGateway(
   const pruneUnwatched = () => {
     const watched = new Set(watchedKeys());
     const requested = new Set(requestedKeys());
+    let removed = false;
     for (const [key, timer] of automaticRefreshTimers) {
       if (!requested.has(key)) {
         clearTimeout(timer);
@@ -193,7 +203,11 @@ export function sessionPullRequestsForGateway(
     for (const key of snapshots.keys()) {
       if (!watched.has(key)) {
         snapshots.delete(key);
+        removed = true;
       }
+    }
+    if (removed) {
+      notify();
     }
   };
 
@@ -217,11 +231,15 @@ export function sessionPullRequestsForGateway(
 
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
     const changed = connection.transition(snapshot);
-    if (changed) {
+    const nextBroadRead = canReadAllPullRequests();
+    const readScopeChanged = broadRead !== nextBroadRead;
+    broadRead = nextBroadRead;
+    if (changed || readScopeChanged) {
+      orderedWatchedKeys = undefined;
       retireConnection();
     }
-    if (changed || snapshot.hello !== lifecycle.requestHello) {
-      retry.reset();
+    if (changed || readScopeChanged || snapshot.hello !== lifecycle.requestHello) {
+      lifecycle.resetRetry();
       lifecycle.schedule();
     }
   };
@@ -255,6 +273,17 @@ export function sessionPullRequestsForGateway(
     if (event.event === "sessions.changed") {
       const changed = readSessionChangedEvent(event.payload);
       const reason = asNullableRecord(event.payload)?.reason;
+      if (
+        !changed &&
+        ["delete", "sharing", "profile-identity"].includes(String(reason)) &&
+        !operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? [])
+      ) {
+        clearSnapshotsAndWaiters();
+        for (const key of watchedKeys()) {
+          refresh(key);
+        }
+        return;
+      }
       if (!changed || !STRUCTURAL_SESSION_REASONS.has(reason)) {
         return;
       }
@@ -299,8 +328,11 @@ export function sessionPullRequestsForGateway(
       let next = snapshot;
       if (
         current &&
+        !snapshot.discardPrevious &&
         canRetainCurrent &&
-        (snapshot.status === "rate-limited" || snapshot.status === "unavailable") &&
+        (snapshot.branchRead === false ||
+          snapshot.status === "rate-limited" ||
+          snapshot.status === "unavailable") &&
         snapshot.pullRequests.length === 0
       ) {
         next = {
@@ -308,6 +340,18 @@ export function sessionPullRequestsForGateway(
           pullRequests: current.pullRequests,
           branch: snapshot.branch ?? current.branch,
           repository: snapshot.repository ?? current.repository,
+        };
+      }
+      if (snapshot.branchRead === false && current?.taskPullRequests) {
+        const retained = new Map(
+          current.taskPullRequests.map((task) => [task.url, task.pullRequest]),
+        );
+        next = {
+          ...next,
+          // Membership is authoritative even when passive reads omit GitHub metadata.
+          taskPullRequests: snapshot.taskPullRequests?.map((task) =>
+            Object.assign({}, task, { pullRequest: task.pullRequest ?? retained.get(task.url) }),
+          ),
         };
       }
       snapshots.set(sessionKey, next);
@@ -324,9 +368,7 @@ export function sessionPullRequestsForGateway(
     onSnapshot: handleGatewaySnapshot,
     onEvent: handleGatewayEvent,
     onAttach: () => {
-      if (connection.transition(gateway.snapshot)) {
-        retireConnection();
-      }
+      handleGatewaySnapshot(gateway.snapshot);
       lifecycle.clearRequest();
     },
     onDetach: () => {
@@ -338,7 +380,6 @@ export function sessionPullRequestsForGateway(
       automaticRefreshTimers.clear();
     },
   });
-  const { retry } = lifecycle;
 
   function sync() {
     const snapshot = gateway.snapshot;
@@ -353,11 +394,12 @@ export function sessionPullRequestsForGateway(
       return;
     }
     const desiredKeys = requestedKeys();
-    const sessionKeys =
-      typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : desiredKeys;
-    const signature = JSON.stringify(sessionKeys.toSorted());
+    const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    const sessionKeys = hidden ? [] : desiredKeys;
+    const passiveSessionKeys = hidden ? [] : orderedPassiveKeys;
+    const signature = JSON.stringify([sessionKeys.toSorted(), passiveSessionKeys.toSorted()]);
     // Capability changes do not clear a subscription already sent on this connection.
-    if (sessionKeys.length === 0 && !subscriptionMayExist) {
+    if (sessionKeys.length === 0 && passiveSessionKeys.length === 0 && !subscriptionMayExist) {
       if (!isActive()) {
         lifecycle.detach();
       }
@@ -386,21 +428,25 @@ export function sessionPullRequestsForGateway(
     for (const key of refreshSessionKeys) {
       pendingRefreshKeys.delete(key);
     }
-    subscriptionMayExist ||= sessionKeys.length > 0;
+    subscriptionMayExist ||= sessionKeys.length > 0 || passiveSessionKeys.length > 0;
     lifecycle.send(
       client,
       SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-      { sessionKeys, ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}) },
+      {
+        sessionKeys,
+        ...(passiveSessionKeys.length > 0 ? { passiveSessionKeys } : {}),
+        ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}),
+      },
       signature,
       {
         onSuccess: () => {
-          subscriptionMayExist = sessionKeys.length > 0;
+          subscriptionMayExist = sessionKeys.length > 0 || passiveSessionKeys.length > 0;
         },
         onError: () => {
           for (const key of refreshSessionKeys) {
             pendingRefreshKeys.add(key);
           }
-          retry.schedule(() => {
+          lifecycle.scheduleRetry(() => {
             if (lifecycle.attached && isActive()) {
               lifecycle.schedule();
             }
@@ -450,7 +496,7 @@ export function sessionPullRequestsForGateway(
       });
     }
     orderedWatchedKeys = undefined;
-    retry.reset();
+    lifecycle.resetRetry();
     pruneUnwatched();
     if (isActive()) {
       if (!wasActive) {
@@ -477,7 +523,7 @@ export function sessionPullRequestsForGateway(
       );
     } else {
       pendingRefreshKeys.add(key);
-      retry.reset();
+      lifecycle.resetRetry();
       lifecycle.schedule();
     }
     return true;

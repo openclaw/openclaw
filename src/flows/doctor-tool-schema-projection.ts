@@ -14,45 +14,6 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { DoctorToolSchemaFrame } from "./doctor-tool-schema-frames.js";
 import type { HealthFinding } from "./health-checks.js";
 
-function toolSchemaDiagnosticToFinding(params: {
-  agentId: string;
-  tools: readonly AnyAgentTool[];
-  diagnostic: RuntimeToolSchemaDiagnostic;
-  rawToolsByName?: ReadonlyMap<string, AnyAgentTool>;
-}): HealthFinding {
-  let tool: AnyAgentTool | undefined;
-  try {
-    tool = params.tools[params.diagnostic.toolIndex];
-  } catch {
-    tool = undefined;
-  }
-  const rawTool = params.rawToolsByName?.get(params.diagnostic.toolName);
-  const pluginId =
-    (tool ? getPluginToolMeta(tool)?.pluginId : undefined) ??
-    (rawTool ? getPluginToolMeta(rawTool)?.pluginId : undefined);
-  const owner = pluginId ? ` from plugin ${pluginId}` : "";
-  const agent = `Agent ${params.agentId} `;
-  const path =
-    pluginId === "bundle-mcp"
-      ? "mcp.servers"
-      : pluginId
-        ? `plugins.entries.${pluginId}`
-        : `tools.${params.diagnostic.toolName}`;
-  const fixHint =
-    pluginId === "bundle-mcp"
-      ? "Disable or update the offending MCP server/tool so its parameters are a JSON object schema, then rerun doctor."
-      : "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.";
-  return {
-    checkId: "core/doctor/runtime-tool-schemas",
-    severity: "error",
-    message: `${agent}tool ${params.diagnostic.toolName}${owner} has an unsupported input schema for runtime projection.`,
-    path,
-    target: params.diagnostic.toolName,
-    requirement: params.diagnostic.violations.join(", "),
-    fixHint,
-  };
-}
-
 export function collectNormalizedToolSchemaFindings(params: {
   agentId: string;
   tools: AnyAgentTool[];
@@ -70,9 +31,40 @@ export function collectNormalizedToolSchemaFindings(params: {
     diagnostics: readonly RuntimeToolSchemaDiagnostic[],
     rawToolsByName?: ReadonlyMap<string, AnyAgentTool>,
   ) =>
-    diagnostics.map((diagnostic) =>
-      toolSchemaDiagnosticToFinding({ agentId: params.agentId, tools, diagnostic, rawToolsByName }),
-    );
+    diagnostics.map((diagnostic): HealthFinding => {
+      const agentId = params.agentId;
+      let tool: AnyAgentTool | undefined;
+      try {
+        tool = tools[diagnostic.toolIndex];
+      } catch {
+        tool = undefined;
+      }
+      const rawTool = rawToolsByName?.get(diagnostic.toolName);
+      const pluginId =
+        (tool ? getPluginToolMeta(tool)?.pluginId : undefined) ??
+        (rawTool ? getPluginToolMeta(rawTool)?.pluginId : undefined);
+      const owner = pluginId ? ` from plugin ${pluginId}` : "";
+      const agent = `Agent ${agentId} `;
+      const path =
+        pluginId === "bundle-mcp"
+          ? "mcp.servers"
+          : pluginId
+            ? `plugins.entries.${pluginId}`
+            : `tools.${diagnostic.toolName}`;
+      const fixHint =
+        pluginId === "bundle-mcp"
+          ? "Disable or update the offending MCP server/tool so its parameters are a JSON object schema, then rerun doctor."
+          : "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.";
+      return {
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "error",
+        message: `${agent}tool ${diagnostic.toolName}${owner} has an unsupported input schema for runtime projection.`,
+        path,
+        target: diagnostic.toolName,
+        requirement: diagnostic.violations.join(", "),
+        fixHint,
+      };
+    });
 
   let normalizedTools: AnyAgentTool[];
   try {

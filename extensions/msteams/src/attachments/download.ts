@@ -1,3 +1,4 @@
+import { lookup } from "node:dns/promises";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed } from "openclaw/plugin-sdk/ssrf-policy";
@@ -26,7 +27,6 @@ import {
   isRedirectStatus,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
-  type MSTeamsAttachmentResolveFn,
   normalizeContentType,
   resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
@@ -146,34 +146,6 @@ function canonicalizeInlineBase64Payload(value: string): string | undefined {
   return cleaned.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(cleaned) ? cleaned : undefined;
 }
 
-function decodeInlineDataImage(
-  src: string,
-  maxBytes: number,
-  totalBytes: number,
-): { data: Buffer; contentType: string; estimatedBytes: number } | null {
-  const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(src);
-  if (!match) {
-    return null;
-  }
-  const contentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
-  const isBase64 = Boolean(match[2]);
-  if (!isBase64) {
-    return null;
-  }
-  const payload = match[3] ?? "";
-  const canonicalPayload = canonicalizeInlineBase64Payload(payload);
-  if (!canonicalPayload) {
-    return null;
-  }
-
-  // Validation above guarantees whitespace-free base64 for this allocation-free size check.
-  const estimatedBytes = Buffer.byteLength(canonicalPayload, "base64");
-  if (estimatedBytes <= 0 || estimatedBytes > maxBytes || totalBytes + estimatedBytes > maxBytes) {
-    return null;
-  }
-  return { data: Buffer.from(canonicalPayload, "base64"), contentType, estimatedBytes };
-}
-
 async function resolveInlineDataImageMime(inline: {
   data: Buffer;
   contentType?: string;
@@ -189,20 +161,17 @@ async function resolveInlineDataImageMime(inline: {
 async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
-  fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: MSTeamsAttachmentResolveFn;
   policy: MSTeamsAttachmentFetchPolicy;
   deadline?: MSTeamsRequestDeadline;
   bearerToken?: string;
 }): Promise<Response> {
-  const fetchAttempt = (fetchFn: typeof fetch | undefined, requestInit?: RequestInit) =>
+  const fetchAttempt = (requestInit?: RequestInit) =>
     safeFetchWithPolicy({
       url: params.url,
       policy: params.policy,
-      fetchFn,
+      resolveFn: lookup,
       requestInit,
-      resolveFn: params.resolveFn,
       timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
     });
   if (params.bearerToken !== undefined) {
@@ -213,9 +182,9 @@ async function fetchWithAuthFallback(params: {
       authAllowHosts: params.policy.authAllowHosts,
       bearerToken: params.bearerToken,
     });
-    return fetchAttempt(params.fetchFn, { ...params.requestInit, headers });
+    return fetchAttempt({ ...params.requestInit, headers });
   }
-  const firstAttempt = await fetchAttempt(params.fetchFn, params.requestInit);
+  const firstAttempt = await fetchAttempt(params.requestInit);
   if (firstAttempt.ok) {
     return firstAttempt;
   }
@@ -231,7 +200,6 @@ async function fetchWithAuthFallback(params: {
   }
   let fallbackAttempt = firstAttempt;
   const scopes = scopeCandidatesForUrl(params.url);
-  const fetchFn = params.fetchFn ?? fetch;
   for (const scope of scopes) {
     try {
       const token = await withMSTeamsRequestDeadline({
@@ -241,7 +209,7 @@ async function fetchWithAuthFallback(params: {
       });
       const authHeaders = new Headers(params.requestInit?.headers);
       authHeaders.set("Authorization", `Bearer ${token}`);
-      const authAttempt = await fetchAttempt(fetchFn, {
+      const authAttempt = await fetchAttempt({
         ...params.requestInit,
         headers: authHeaders,
       });
@@ -265,11 +233,7 @@ export async function downloadMSTeamsAttachments(params: {
   tokenProvider?: MSTeamsAccessTokenProvider;
   allowHosts?: string[];
   authAllowHosts?: string[];
-  fetchFn?: typeof fetch;
-  resolveFn?: MSTeamsAttachmentResolveFn;
   deadline?: MSTeamsRequestDeadline;
-  /** When true, embeds original filename in stored path for later extraction. */
-  preserveFilenames?: boolean;
   logger?: MSTeamsAttachmentDownloadLogger;
   /** Already-acquired Graph token for reference attachments from a Graph message. */
   graphReferenceToken?: string;
@@ -336,10 +300,35 @@ export async function downloadMSTeamsAttachments(params: {
       return undefined;
     }
     if (candidate.kind === "data") {
-      const decoded = decodeInlineDataImage(candidate.src, maxInlineBytes, totalInlineBytes);
-      if (!decoded) {
+      const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(candidate.src);
+      if (!match) {
         return undefined;
       }
+      const declaredContentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
+      const isBase64 = Boolean(match[2]);
+      if (!isBase64) {
+        return undefined;
+      }
+      const payload = match[3] ?? "";
+      const canonicalPayload = canonicalizeInlineBase64Payload(payload);
+      if (!canonicalPayload) {
+        return undefined;
+      }
+
+      // Validation above guarantees whitespace-free base64 for this allocation-free size check.
+      const estimatedBytes = Buffer.byteLength(canonicalPayload, "base64");
+      if (
+        estimatedBytes <= 0 ||
+        estimatedBytes > maxInlineBytes ||
+        totalInlineBytes + estimatedBytes > maxInlineBytes
+      ) {
+        return undefined;
+      }
+      const decoded = {
+        data: Buffer.from(canonicalPayload, "base64"),
+        contentType: declaredContentType,
+        estimatedBytes,
+      };
       // Accepted bytes still consume the message budget when MIME detection or saving fails.
       totalInlineBytes += decoded.estimatedBytes;
       try {
@@ -371,16 +360,13 @@ export async function downloadMSTeamsAttachments(params: {
         maxBytes: params.maxBytes,
         contentTypeHint: candidate.contentTypeHint,
         kind: candidate.graphReference ? undefined : candidate.mediaKind,
-        preserveFilenames: params.preserveFilenames,
         // `fetchImpl` below owns Teams auth fallback and enforces the
         // attachment fetch policy through `safeFetchWithPolicy`.
         fetchImpl: (input, init) =>
           fetchWithAuthFallback({
             url: resolveRequestUrl(input),
             tokenProvider: params.tokenProvider,
-            fetchFn: params.fetchFn,
             requestInit: init,
-            resolveFn: params.resolveFn,
             policy,
             deadline: params.deadline,
             bearerToken: candidate.graphReference ? params.graphReferenceToken : undefined,

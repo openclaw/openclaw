@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOpenClawCodingTools } from "../agent-tools.js";
+import { expectOwnerGated } from "../agent-tools.turn-authority.test-support.js";
 import "../test-helpers/fast-coding-tools.js";
 import type { AnyAgentTool } from "./common.js";
 
@@ -63,9 +64,10 @@ describe("assembled Gateway update capability", () => {
     (profile) => {
       const tools = createTools({ tools: { profile } });
 
-      expect(gatewayActions(tools)).toEqual(["update.run"]);
+      expect(gatewayActions(tools)).toEqual(["update.run", "restart", "update.cleanup"]);
       expect(Object.keys(gatewayParameters(tools).properties).toSorted()).toEqual([
         "action",
+        "dryRun",
         "note",
       ]);
     },
@@ -78,6 +80,8 @@ describe("assembled Gateway update capability", () => {
         "config.get",
         "config.schema.lookup",
         "update.run",
+        "restart",
+        "update.cleanup",
       ]);
     },
   );
@@ -96,6 +100,8 @@ describe("assembled Gateway update capability", () => {
     ({ alsoAllow }) => {
       expect(gatewayActions(createTools({ tools: { profile: "coding", alsoAllow } }))).toEqual([
         "update.run",
+        "restart",
+        "update.cleanup",
       ]);
     },
   );
@@ -180,9 +186,11 @@ describe("assembled Gateway update capability", () => {
       name: "runtime allowlist",
       options: { runtimeToolAllowlist: ["session_status"], inheritRuntimeToolAllowlist: true },
     },
-  ])("preserves the $name boundary", ({ options }) => {
-    expect(
-      createTools({ tools: { profile: "coding" } }, options).map((tool) => tool.name),
-    ).not.toContain("gateway");
+  ])("preserves the $name boundary", async ({ options }) => {
+    const tools = createTools({ tools: { profile: "coding" } }, options);
+    // A non-owner turn keeps the stable definition and is gated when it calls the tool.
+    const nonOwner = "senderIsOwner" in options && options.senderIsOwner === false;
+    expect(tools.some((tool) => tool.name === "gateway")).toBe(nonOwner);
+    await expectOwnerGated(tools, "gateway");
   });
 });

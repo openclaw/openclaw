@@ -2,69 +2,63 @@ import { describe, expect, it } from "vitest";
 import type { CodexDynamicToolFunctionSpec, JsonObject } from "./protocol.js";
 import {
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   fingerprintCodexThreadConfig,
+  fingerprintRestrictedThreadConfig,
   fingerprintUserMcpServersConfigPatch,
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
 
-describe("codexDynamicToolsFingerprint", () => {
-  const createMessageTool = (description: string, channelDescription: string) =>
-    ({
+it("preserves legacy JSON bytes, including literal prototype keys and escaped descriptions", () => {
+  const tools = [
+    {
       type: "function",
       name: "message",
-      description,
       inputSchema: {
         type: "object",
+        required: ["text", "__proto__"],
         properties: {
-          channel: {
-            type: "string",
-            description: channelDescription,
-          },
+          text: { type: "string", description: 'Line one\n"Line two"' },
+          ["__proto__"]: { type: "string" },
         },
       },
-    }) satisfies CodexDynamicToolFunctionSpec;
+      description: "Send a message.",
+    },
+  ];
+  expect(codexLegacyDynamicToolsFingerprint(tools)).toBe(
+    '[{"description":"Send a message.","inputSchema":{"properties":{"__proto__":{"type":"string"},"text":{"description":"Line one\\n\\\"Line two\\\"","type":"string"}},"required":["text","__proto__"],"type":"object"},"name":"message","type":"function"}]',
+  );
+  expect(codexLegacyDynamicToolsFingerprint([])).toBe("[]");
+});
 
-  it("remains stable when tools and schema properties are reordered", () => {
-    const message = createMessageTool("Send a message.", "Current channel.");
-    const reorderedMessage: CodexDynamicToolFunctionSpec = {
-      name: message.name,
-      type: message.type,
-      inputSchema: {
-        properties: {
-          channel: {
-            description: "Current channel.",
-            type: "string",
-          },
-        },
-        type: "object",
-      },
-      description: message.description,
-    };
-    const search: CodexDynamicToolFunctionSpec = {
-      type: "function",
-      name: "search",
-      description: "Search the current conversation.",
-      inputSchema: { type: "object", properties: {} },
-    };
+it("keeps tool fingerprints stable when tools and schema properties are reordered", () => {
+  const message: CodexDynamicToolFunctionSpec = {
+    type: "function",
+    name: "message",
+    description: "Send a message.",
+    inputSchema: {
+      type: "object",
+      properties: { channel: { type: "string", description: "Current channel." } },
+    },
+  };
+  const reorderedMessage: CodexDynamicToolFunctionSpec = {
+    name: message.name,
+    type: message.type,
+    inputSchema: {
+      properties: { channel: { description: "Current channel.", type: "string" } },
+      type: "object",
+    },
+    description: message.description,
+  };
+  const search = { ...message, name: "search" };
 
-    expect(codexDynamicToolsFingerprint([message, search])).toBe(
-      codexDynamicToolsFingerprint([search, reorderedMessage]),
-    );
-  });
+  expect(codexDynamicToolsFingerprint([message, search])).toBe(
+    codexDynamicToolsFingerprint([search, reorderedMessage]),
+  );
 });
 
 describe("fingerprintCodexThreadConfig", () => {
-  const request = {
-    model: "gpt-5.6-sol",
-    modelProvider: "openai",
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
-    personality: "none",
-    serviceTier: "fast",
-    developerInstructions: "Keep the current conversation private.",
-    config: { features: { hooks: true, plugins: false } },
-  };
+  const request = { model: "gpt-5.6-sol", modelProvider: "openai" };
 
   it.each<{ setting: string; patch: JsonObject }>([
     { setting: "requested model provider", patch: { requestedModelProvider: "custom" } },
@@ -93,46 +87,72 @@ describe("fingerprintCodexThreadConfig", () => {
   });
 });
 
-describe("fingerprintUserMcpServersConfigPatch", () => {
-  it.each(["header"])("retains literal __proto__ %s keys during redaction", (scope) => {
-    const config = (value: string): JsonObject => ({
-      mcp_servers: {
-        [scope === "server" ? "__proto__" : "calendar"]: {
-          url: "https://example.test/mcp",
-          http_headers: {
-            Authorization: scope === "server" ? value : "synthetic-access-token",
-            ...(scope === "header" ? { ["__proto__"]: value } : {}),
-          },
-        },
+describe.each(["ordinary", "restricted"] as const)("%s proxied thread fingerprint", (kind) => {
+  function fingerprint(
+    port: number,
+    upstream = "https://api.example.com/v1",
+    auth = "personal",
+    hooks = true,
+  ) {
+    const route = {
+      baseUrl: `http://127.0.0.1:${port}/private-route`,
+      configurationIdentity: upstream,
+    };
+    const request = {
+      config: {
+        openai_base_url: route.baseUrl,
+        model_providers: { custom: { base_url: route.baseUrl } },
+        "model_providers.custom": { base_url: route.baseUrl },
+        "model_providers.custom.base_url": route.baseUrl,
+        features: { hooks },
       },
-    });
-    const first = fingerprintUserMcpServersConfigPatch(config("synthetic-first"));
-    const second = fingerprintUserMcpServersConfigPatch(config("synthetic-second"));
+    };
+    const inference = {
+      inferenceRoute: route,
+      inferenceProviderRoutes: new Map([["custom", route]]),
+    };
+    return kind === "ordinary"
+      ? fingerprintCodexThreadConfig(request, auth, "tools", undefined, inference)
+      : fingerprintRestrictedThreadConfig(request, auth, "tools", {}, false, undefined, inference);
+  }
 
-    expect(first).not.toBe(second);
-    expect(first).toMatch(/^sha256:[a-f0-9]{64}$/);
-    expect(first).not.toContain("synthetic");
-    expect(second).not.toContain("synthetic");
+  it("keeps identity across proxy restarts", () => {
+    expect(fingerprint(41001)).toBe(fingerprint(41002));
+  });
+
+  it("retains upstream, auth profile, and other configuration identity", () => {
+    const original = fingerprint(41001);
+    expect(fingerprint(41002, "https://other.example.com/v1")).not.toBe(original);
+    expect(fingerprint(41002, undefined, "work")).not.toBe(original);
+    expect(fingerprint(41002, undefined, undefined, false)).not.toBe(original);
   });
 });
 
-describe("readActiveCodexTurnIdsFromResume", () => {
-  it("uses the bounded initial turns page when Codex returns one", () => {
-    expect(
-      readActiveCodexTurnIdsFromResume({
-        thread: { turns: [{ id: "stale", status: "inProgress" }] },
-        initialTurnsPage: {
-          data: [{ id: "current", status: "inProgress" }],
+it("retains literal __proto__ MCP header keys during redaction", () => {
+  const config = (value: string): JsonObject => ({
+    mcp_servers: {
+      calendar: {
+        http_headers: {
+          Authorization: "synthetic-access-token",
+          ["__proto__"]: value,
         },
-      }),
-    ).toEqual(["current"]);
+      },
+    },
   });
+  const first = fingerprintUserMcpServersConfigPatch(config("synthetic-first"));
+  const second = fingerprintUserMcpServersConfigPatch(config("synthetic-second"));
 
-  it("falls back to legacy resume turns when no page is returned", () => {
-    expect(
-      readActiveCodexTurnIdsFromResume({
-        thread: { turns: [{ id: "legacy", status: "inProgress" }] },
-      }),
-    ).toEqual(["legacy"]);
-  });
+  expect(first).not.toBe(second);
+  expect(first).toMatch(/^sha256:[a-f0-9]{64}$/);
+  expect(first).not.toContain("synthetic");
+  expect(second).not.toContain("synthetic");
+});
+
+it.each([true, false])("reads active turn IDs with an initial page: %s", (hasPage) => {
+  expect(
+    readActiveCodexTurnIdsFromResume({
+      thread: { turns: [{ id: "legacy", status: "inProgress" }] },
+      ...(hasPage && { initialTurnsPage: { data: [{ id: "current", status: "inProgress" }] } }),
+    }),
+  ).toEqual([hasPage ? "current" : "legacy"]);
 });

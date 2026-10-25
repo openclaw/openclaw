@@ -5,17 +5,15 @@ import {
 } from "../../app/control-ui-auth.ts";
 import type { PluginDiscoveryDetailResult, PluginListResult } from "../../lib/plugins/index.ts";
 import type { createPluginDiscovery } from "./plugin-discovery.ts";
-import { PluginIconController, pluginIconFetchContext } from "./plugin-icon-controller.ts";
+import { PluginIconOwner, pluginIconFetchContext } from "./plugin-icon-owner.ts";
 
-type PluginsPageIconsHost = {
+export function createPluginsPageIcons(host: {
   getContext: () => ApplicationContext;
   isConnected: () => boolean;
   onInstalledUrlsChange: (urls: Record<string, string>) => void;
   onCatalogUrlsChange: (urls: Record<string, string>) => void;
   onChange?: () => void;
-};
-
-export function createPluginsPageIcons(host: PluginsPageIconsHost) {
+}) {
   let authCandidates: string[] = [];
   const tiles = new Set<() => string>();
   const shared = {
@@ -23,11 +21,11 @@ export function createPluginsPageIcons(host: PluginsPageIconsHost) {
     isConnected: host.isConnected,
     onLoadingChange: host.onChange,
   };
-  const installed = new PluginIconController({
+  const installed = new PluginIconOwner({
     ...shared,
     onUrlsChange: host.onInstalledUrlsChange,
   });
-  const catalog = new PluginIconController({
+  const catalog = new PluginIconOwner({
     kind: "catalog",
     ...shared,
     onUrlsChange: host.onCatalogUrlsChange,

@@ -39,6 +39,7 @@ import {
   formatRuntimeStatus,
   projectDaemonServiceForJson,
   resolveDaemonInstallBlockMessage,
+  resolveDaemonServiceInstallGuidance,
   resolveRuntimeStatusColor,
   safeDaemonEnv,
 } from "./shared.js";
@@ -47,30 +48,6 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
-import { printDaemonStatusVersions } from "./status.print.version.js";
-
-function formatConnectionLine(
-  connection: NonNullable<DaemonStatus["connections"]>["established"][number],
-) {
-  const pid = connection.pid ? `pid=${connection.pid}` : "pid=?";
-  const ppid = connection.ppid ? ` ppid=${connection.ppid}` : "";
-  const direction = ` ${connection.direction}`;
-  const command = connection.command ? ` ${connection.command}` : "";
-  const address = connection.address ? ` ${connection.address}` : "";
-  const commandLine = connection.commandLine
-    ? ` cmd=${shortenHomePath(connection.commandLine)}`
-    : "";
-  return `${pid}${ppid}${direction}${command}${address}${commandLine}`;
-}
-
-function formatProbeEventLoop(
-  eventLoop: NonNullable<NonNullable<DaemonStatus["rpc"]>["eventLoop"]>,
-) {
-  const state = eventLoop.degraded ? "degraded" : "ok";
-  return `${state} max=${Math.round(eventLoop.delayMaxMs)}ms p99=${Math.round(
-    eventLoop.delayP99Ms,
-  )}ms util=${eventLoop.utilization} cpu=${eventLoop.cpuCoreRatio}`;
-}
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
@@ -151,6 +128,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   printInfo("Host desktop:", formatHostDesktopStatus(status.hostDesktop));
   spacer();
 
+  if (service.configAudit?.definitionDriftError) {
+    printWarning(
+      `Service definition inspection incomplete: ${sanitizeTerminalText(service.configAudit.definitionDriftError)}`,
+    );
+  }
   if (service.configAudit?.issues.length) {
     printWarning("Service config looks out of date or non-standard.");
     for (const issue of service.configAudit.issues) {
@@ -166,7 +148,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         (runtimeNeedsAttention
           ? `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively to resolve the runtime findings before reinstalling. Reinstalling alone may select the same runtime.`
           : `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively for guided checks, or reinstall with "${reinstallCommand}".`));
-    printWarning(recommendation);
+    if (service.configAudit.issues.some((issue) => issue.repair !== "host")) {
+      printWarning(recommendation);
+    }
   }
 
   if (status.config) {
@@ -245,7 +229,56 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  printDaemonStatusVersions(status, { label, infoText, warnText });
+  const gatewayVersion = status.rpc?.server?.version?.trim() || status.gateway?.version?.trim();
+  const cliVersionLine = status.cli
+    ? status.cli.entrypoint
+      ? `${status.cli.version} (${shortenHomePath(status.cli.entrypoint)})`
+      : status.cli.version
+    : null;
+  // The installed service is readable without a Gateway handshake, so its facts stay
+  // available for the failed-probe path below.
+  const serviceInstallVersion = status.service.layout?.packageVersion?.trim();
+  const serviceInstallLine = serviceInstallVersion
+    ? status.service.layout?.packageRoot
+      ? `${serviceInstallVersion} (${shortenHomePath(status.service.layout.packageRoot)})`
+      : serviceInstallVersion
+    : null;
+  if (gatewayVersion || serviceInstallLine) {
+    if (cliVersionLine) {
+      printInfo("CLI version:", cliVersionLine);
+    }
+    if (gatewayVersion) {
+      printInfo("Gateway version:", gatewayVersion);
+      if (status.cli?.version && status.cli.version !== gatewayVersion) {
+        printWarning(
+          `Warning: this OpenClaw command is version ${status.cli.version}, but the running Gateway is version ${gatewayVersion}.`,
+        );
+        printWarning(
+          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`; if this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+        );
+      }
+    } else if (serviceInstallLine) {
+      // No Gateway version came back (failed or skipped probe). Report the install the
+      // service points at so a stale service behind a bare connect error stays visible.
+      printInfo("Gateway service version:", serviceInstallLine);
+      defaultRuntime.log(infoText("The Gateway did not report its own version."));
+      if (
+        status.service.targetRole !== "diagnostic-only" &&
+        status.cli?.version &&
+        serviceInstallVersion &&
+        status.cli.version !== serviceInstallVersion
+      ) {
+        printWarning(
+          `Warning: this OpenClaw command is version ${status.cli.version}, but the installed Gateway service is version ${serviceInstallVersion}.`,
+        );
+        const guidance = resolveDaemonServiceInstallGuidance(status.service.targetRole);
+        if (guidance) {
+          printWarning(guidance);
+        }
+      }
+    }
+    spacer();
+  }
 
   const runtimeLine = formatRuntimeStatus(
     service.inspectionReason ? { ...service.runtime, detail: undefined } : service.runtime,
@@ -311,9 +344,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         `${label(probeLabel)} ${rpc.timedOut ? warnText(timeoutStatus) : errorText("failed")}`,
       );
       if (rpc.timedOut && rpc.eventLoop) {
-        defaultRuntime.error(
-          `${label("Gateway event loop:")} ${warnText(formatProbeEventLoop(rpc.eventLoop))}`,
-        );
+        const eventLoop = rpc.eventLoop;
+        const state = eventLoop.degraded ? "degraded" : "ok";
+        const eventLoopLine = `${state} max=${Math.round(eventLoop.delayMaxMs)}ms p99=${Math.round(
+          eventLoop.delayP99Ms,
+        )}ms util=${eventLoop.utilization} cpu=${eventLoop.cpuCoreRatio}`;
+        defaultRuntime.error(`${label("Gateway event loop:")} ${warnText(eventLoopLine)}`);
       }
       if (rpc.url) {
         defaultRuntime.error(`${label("Check target:")} ${rpc.url}`);
@@ -356,7 +392,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (status.connections?.established.length) {
     printInfo("Established clients:", String(status.connections.established.length));
     for (const connection of status.connections.established.slice(0, 8)) {
-      defaultRuntime.log(`  ${infoText(formatConnectionLine(connection))}`);
+      const pid = connection.pid ? `pid=${connection.pid}` : "pid=?";
+      const ppid = connection.ppid ? ` ppid=${connection.ppid}` : "";
+      const direction = ` ${connection.direction}`;
+      const command = connection.command ? ` ${connection.command}` : "";
+      const address = connection.address ? ` ${connection.address}` : "";
+      const commandLine = connection.commandLine
+        ? ` cmd=${shortenHomePath(connection.commandLine)}`
+        : "";
+      const connectionLine = `${pid}${ppid}${direction}${command}${address}${commandLine}`;
+      defaultRuntime.log(`  ${infoText(connectionLine)}`);
     }
     if (status.connections.established.length > 8) {
       defaultRuntime.log(
@@ -671,4 +716,5 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   defaultRuntime.log(`${label("Troubles:")} run ${formatCliCommand("openclaw status")}`);
   defaultRuntime.log(`${label("Troubleshooting:")} https://docs.openclaw.ai/troubleshooting`);
+  defaultRuntime.log(`${label("Support:")} https://community.openclaw.ai/`);
 }

@@ -23,6 +23,7 @@ import {
   createConfiguredBindingRoute,
 } from "./bot-native-command-dispatch.test-support.js";
 import { recordTelegramUpdateReceivedAt } from "./bot-processing-outcome.js";
+import { makeTelegramConfig } from "./bot.config.test-support.js";
 import {
   makeCallbackRetryContext,
   makePrivateTextContext,
@@ -272,12 +273,9 @@ function makeGenericCallbackContext(params: { id: string; updateId?: number }) {
 }
 
 async function expectBlockedContentExcluded(params: { edited: boolean }) {
-  loadConfig.mockReturnValue({
-    messages: { inbound: { debounceMs: 0 } },
-    channels: {
-      telegram: { dmPolicy: "allowlist", allowFrom: ["123456789"] },
-    },
-  });
+  loadConfig.mockReturnValue(
+    makeTelegramConfig({ dmPolicy: "allowlist", allowFrom: ["123456789"] }),
+  );
   const chat = { id: 1234, type: "private" };
   await createTelegramBot({ token: "tok" });
   const blocked = makePrivateTextContext({
@@ -1126,7 +1124,7 @@ describe("createTelegramBot", () => {
         { kind: "completed" },
       ]);
       expect(commitSpy).toHaveBeenCalledTimes(2);
-      queuedLifecycle?.onSettled?.();
+      await queuedLifecycle?.onSettled?.();
     } finally {
       commitSpy.mockRestore();
       setTimeoutSpy.mockRestore();
@@ -1161,7 +1159,7 @@ describe("createTelegramBot", () => {
           throw queuedAbortSignal.reason;
         }
         modelTurnRan = true;
-        queuedLifecycle?.onSettled?.();
+        await queuedLifecycle?.onSettled?.();
       };
       queuedTurnReady.resolve();
       return undefined;
@@ -1282,10 +1280,9 @@ describe("createTelegramBot", () => {
   });
 
   it("preserves a bot mention split across ordinary long-paste fragments", async () => {
-    loadConfig.mockReturnValue({
-      messages: { inbound: { debounceMs: 0 } },
-      channels: { telegram: { groupPolicy: "open", groups: { "*": { requireMention: true } } } },
-    });
+    loadConfig.mockReturnValue(
+      makeTelegramConfig({ groupPolicy: "open", groups: { "*": { requireMention: true } } }),
+    );
     const timerSpy = vi.spyOn(globalThis, "setTimeout");
     const work: Promise<unknown>[] = [];
     let flush: (() => void) | undefined;
@@ -1733,16 +1730,13 @@ describe("createTelegramBot", () => {
         namespace,
         handler: pluginHandler,
       });
-      loadConfig.mockReturnValue({
-        messages: { inbound: { debounceMs: 0 } },
-        channels: {
-          telegram: {
-            dmPolicy: "open",
-            allowFrom: ["*"],
-            capabilities: { inlineButtons: "off" },
-          },
-        },
-      });
+      loadConfig.mockReturnValue(
+        makeTelegramConfig({
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          capabilities: { inlineButtons: "off" },
+        }),
+      );
 
       await createTelegramBot({ token: "tok" });
       await getCallbackHandler()(
@@ -1864,10 +1858,7 @@ describe("createTelegramBot", () => {
   it.each(["polling", "spooled replay"] as const)(
     "keeps pairing store failures retryable during %s",
     async (mode) => {
-      loadConfig.mockReturnValue({
-        messages: { inbound: { debounceMs: 0 } },
-        channels: { telegram: { dmPolicy: "pairing" } },
-      });
+      loadConfig.mockReturnValue(makeTelegramConfig({ dmPolicy: "pairing" }));
       readChannelAllowFromStore.mockRejectedValueOnce(new Error("store temporarily unavailable"));
       if (mode === "polling") {
         readChannelAllowFromStore.mockResolvedValueOnce(["123456789"]);
@@ -1952,15 +1943,12 @@ describe("createTelegramBot", () => {
       me: { username: "openclaw_bot" },
     },
   ])("drops $name before issuing pairing challenges", async ({ requireTopic, message, me }) => {
-    loadConfig.mockReturnValue({
-      messages: { inbound: { debounceMs: 0 } },
-      channels: {
-        telegram: {
-          dmPolicy: "pairing",
-          ...(requireTopic ? { direct: { "1234": { requireTopic: true } } } : {}),
-        },
-      },
-    });
+    loadConfig.mockReturnValue(
+      makeTelegramConfig({
+        dmPolicy: "pairing",
+        ...(requireTopic ? { direct: { "1234": { requireTopic: true } } } : {}),
+      }),
+    );
     readChannelAllowFromStore.mockResolvedValue([]);
     await createTelegramBot({ token: "tok" });
     await getMessageHandler()({
@@ -1982,10 +1970,7 @@ describe("createTelegramBot", () => {
   it.each(["disabled", "pairing"] as const)(
     "blocks unauthorized DM photo downloads with %s policy",
     async (dmPolicy) => {
-      loadConfig.mockReturnValue({
-        messages: { inbound: { debounceMs: 0 } },
-        channels: { telegram: { dmPolicy } },
-      });
+      loadConfig.mockReturnValue(makeTelegramConfig({ dmPolicy }));
       if (dmPolicy === "pairing") {
         readChannelAllowFromStore.mockResolvedValue([]);
         upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
@@ -2039,22 +2024,19 @@ describe("createTelegramBot", () => {
   );
 
   it("dedupes duplicate updates for callback_query, message, and channel_post", async () => {
-    loadConfig.mockReturnValue({
-      messages: { inbound: { debounceMs: 0 } },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groupPolicy: "open",
-          groups: {
-            "-100777111222": {
-              enabled: true,
-              requireMention: false,
-            },
+    loadConfig.mockReturnValue(
+      makeTelegramConfig({
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupPolicy: "open",
+        groups: {
+          "-100777111222": {
+            enabled: true,
+            requireMention: false,
           },
         },
-      },
-    });
+      }),
+    );
 
     await createTelegramBot({ token: "tok" });
     const callbackHandler = getCallbackHandler();
@@ -2204,7 +2186,7 @@ describe("createTelegramBot", () => {
     });
     const queuedLifecycle = await queuedLifecycleReady.promise;
     expect(queuedLifecycle?.onAbandoned).toEqual(expect.any(Function));
-    queuedLifecycle?.onAbandoned?.();
+    await queuedLifecycle?.onAbandoned?.();
     const firstReplay = await firstReplayPromise;
     const firstDeferredWork = requireValue(firstReplay.deferredWork, "first deferred spooled work");
     await expect(firstDeferredWork.task).resolves.toMatchObject({ kind: "failed-retryable" });
@@ -2381,21 +2363,18 @@ describe("createTelegramBot", () => {
         handler: pluginHandler,
       }),
     ).toEqual({ ok: true });
-    loadConfig.mockReturnValue({
-      messages: { inbound: { debounceMs: 0 } },
-      channels: {
-        telegram: {
-          groupPolicy: "allowlist",
-          groupAllowFrom: testCase.baseAllowFrom,
-          groups: {
-            [String(chatId)]: {
-              allowFrom: testCase.baseAllowFrom,
-              topics: { "77": { allowFrom: testCase.topicAllowFrom } },
-            },
+    loadConfig.mockReturnValue(
+      makeTelegramConfig({
+        groupPolicy: "allowlist",
+        groupAllowFrom: testCase.baseAllowFrom,
+        groups: {
+          [String(chatId)]: {
+            allowFrom: testCase.baseAllowFrom,
+            topics: { "77": { allowFrom: testCase.topicAllowFrom } },
           },
         },
-      },
-    });
+      }),
+    );
 
     await createTelegramBot({ token: "tok" });
     await getCallbackHandler()({
@@ -2425,10 +2404,9 @@ describe("createTelegramBot", () => {
   });
 
   it("allows group messages when the bot username is unavailable", async () => {
-    loadConfig.mockReturnValue({
-      messages: { inbound: { debounceMs: 0 } },
-      channels: { telegram: { groupPolicy: "open", groups: { "*": { requireMention: true } } } },
-    });
+    loadConfig.mockReturnValue(
+      makeTelegramConfig({ groupPolicy: "open", groups: { "*": { requireMention: true } } }),
+    );
     await dispatchMessage({
       message: {
         message_id: 1,
@@ -2496,16 +2474,11 @@ describe("createTelegramBot", () => {
       },
       {
         name: "DM pairing cannot override the group sender allowlist",
-        config: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: {
-            telegram: {
-              groupPolicy: "allowlist",
-              groupAllowFrom: ["222222222"],
-              groups: { "*": { requireMention: false } },
-            },
-          },
-        },
+        config: makeTelegramConfig({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["222222222"],
+          groups: { "*": { requireMention: false } },
+        }),
         storeAllowFrom: ["123456789"],
         message: {
           chat: { id: -100123456789, type: "group", title: "Test Group" },

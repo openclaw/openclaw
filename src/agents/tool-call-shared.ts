@@ -4,11 +4,9 @@
  * before routing them to any tool execution surface.
  */
 import type { AgentMessage } from "@openclaw/agent-core";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { collectCompletedToolCallBlocks } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { normalizeLowercaseStringSet } from "../shared/normalized-string-set.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
@@ -18,13 +16,7 @@ export function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): 
   if (!allowedToolNames) {
     return null;
   }
-  const normalized = new Set<string>();
-  for (const name of allowedToolNames) {
-    const key = normalizeOptionalLowercaseString(name);
-    if (key) {
-      normalized.add(key);
-    }
-  }
+  const normalized = normalizeLowercaseStringSet(allowedToolNames);
   return normalized.size > 0 ? normalized : null;
 }
 

@@ -31,6 +31,7 @@ import {
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
+import { git } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
 import * as provisionedSnapshots from "./provisioned-snapshot-store.js";
@@ -47,11 +48,6 @@ import { materializeManagedWorktreeFixture } from "./service.test-support.js";
 import { captureManagedWorktreeSnapshot } from "./snapshot-host.js";
 
 const execFileAsync = promisify(execFile);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-  return stdout.trim();
-}
 
 async function initializeRepository(root: string, gitTemplate: string): Promise<string> {
   const repo = path.join(root, "repo");
@@ -109,7 +105,7 @@ describe("ManagedWorktreeService provisioned state", () => {
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
     setRuntimeConfigSnapshot({}, {});
     now = 1_700_000_000_000;
-    service = new ManagedWorktreeService({ env, now: () => now });
+    service = new ManagedWorktreeService({ env });
   });
 
   afterEach(async () => {

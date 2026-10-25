@@ -132,13 +132,23 @@ export function createSessionActorMemoryPending(
         return snapshot;
       }
       const row = pending(input);
+      let committedEntryId: string | undefined;
       if (row) {
         if (Buffer.byteLength(row.message_json, "utf8") > MAX_PAYLOAD_BYTES) {
           throw new Error("Submitted input exceeds the Gateway payload limit");
         }
         snapshot.pending = structuredClone(row);
+        committedEntryId = row.consumed_event_id ?? undefined;
       } else if (!input.pendingOnly) {
-        snapshot.committed = committed(input, true)?.message;
+        const recorded = committed(input, true);
+        snapshot.committed = recorded?.message;
+        committedEntryId = recorded?.messageId;
+      }
+      const anchor = committedEntryId
+        ? state.hot.transcript.anchors.find(({ entryId }) => entryId === committedEntryId)
+        : undefined;
+      if (anchor) {
+        snapshot.committedMessageSeq = anchor.activeMessagePosition + 1;
       }
       return snapshot;
     },
@@ -211,7 +221,7 @@ export function createSessionActorMemoryPending(
           row.session_key === input.sessionKey &&
           row.session_id === input.sessionId &&
           input.ids.includes(row.input_id) &&
-          row.state === "queued" &&
+          (row.state === "queued" || row.state === "interrupted") &&
           row.consumed_event_id === null,
       );
       const candidates = selected.map((row) => ({

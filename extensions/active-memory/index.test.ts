@@ -23,15 +23,22 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  isMissingRegisteredMemoryToolsError,
-  resetActiveMemoryConfigForTests,
-  setMinimumTimeoutMsForTests,
-} from "./config.js";
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import { isMissingRegisteredMemoryToolsError } from "./config.js";
 import { registerActiveMemoryDiagnosticTests } from "./index.diagnostics.test-support.js";
 import plugin from "./index.js";
 import { registerActiveMemoryProviderTests } from "./index.memory-provider.test-support.js";
+import { createRecallStateFixture } from "./index.recall-state.test-support.js";
 import {
   assistantRecord,
   expectSingleTranscriptArtifact,
@@ -45,19 +52,14 @@ import {
   buildCacheKey,
   buildCircuitBreakerKey,
   getCachedResult,
+  forgetActiveRecallRun,
   isCircuitBreakerOpen,
-  resetActiveRecallStateForTests,
   resolveActiveRecallForRun,
   setCachedResult,
 } from "./recall-state.js";
-import {
-  readPartialAssistantText,
-  resetActiveMemoryTranscriptForTests,
-  setTimeoutPartialDataGraceMsForTests,
-} from "./transcript-result.js";
+import { readPartialAssistantText } from "./transcript-result.js";
 import * as transcriptWatch from "./transcript-watch.js";
 import { readMemoryResultFromSessionRecord } from "./transcript.js";
-import { resetTriggerRecallRunsForTests } from "./trigger-recall.js";
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
 const UNPAIRED_SURROGATE_RE =
@@ -549,20 +551,21 @@ describe("active-memory plugin", () => {
     expect(params.messageChannel).toBe(messageChannel);
     expect(params.messageProvider).toBe(messageProvider);
   };
+  const recallStateFixture = createRecallStateFixture();
   const runPromptBuild = (
     event: Record<string, unknown>,
     context: Record<string, unknown> = {},
   ) => {
     const defaultSession =
       "sessionKey" in context || "sessionId" in context ? {} : { sessionKey: "agent:main:main" };
-    return requireHook("before_prompt_build")(
+    const pending = requireHook("before_prompt_build")(
       { messages: [], ...event },
       {
         agentId: "main",
         trigger: "user",
         messageProvider: "webchat",
         toolAuthority: {
-          fingerprint: "allowed-memory-authority",
+          fingerprint: `allowed-memory-authority-${stateIndex}`,
           allows: () => true,
           assertActive: () => undefined,
         },
@@ -570,6 +573,8 @@ describe("active-memory plugin", () => {
         ...context,
       },
     );
+    recallStateFixture.trackRun(context.runId, pending);
+    return pending;
   };
   const runActiveMemoryCommand = (params: Record<string, unknown>) => {
     const args = typeof params.args === "string" ? params.args : "status";
@@ -593,7 +598,6 @@ describe("active-memory plugin", () => {
   };
 
   const configureRecallTimeout = (timeoutMs: number, overrides: Record<string, unknown> = {}) => {
-    setMinimumTimeoutMsForTests(1);
     registerPluginConfig({ timeoutMs, logging: true, ...overrides });
   };
 
@@ -636,6 +640,7 @@ describe("active-memory plugin", () => {
 
   beforeEach(async () => {
     vi.resetAllMocks();
+    recallStateFixture.observe();
     api.pluginConfig = { agents: ["main"] };
     hoisted.memoryCapability.deterministicRecallToolName = "memory_search";
     hoisted.memoryCapability.recallToolNames = undefined;
@@ -743,21 +748,13 @@ describe("active-memory plugin", () => {
         return { archivedTranscriptArtifacts: 0, removedEntries: 1 };
       },
     );
-    resetActiveRecallStateForTests();
-    resetActiveMemoryConfigForTests();
-    resetActiveMemoryTranscriptForTests();
-    resetTriggerRecallRunsForTests();
-    setTimeoutPartialDataGraceMsForTests(5);
     plugin.register(api as unknown as OpenClawPluginApi);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await recallStateFixture.cleanup();
     vi.useRealTimers();
     vi.restoreAllMocks();
-    resetActiveRecallStateForTests();
-    resetActiveMemoryConfigForTests();
-    resetActiveMemoryTranscriptForTests();
-    resetTriggerRecallRunsForTests();
   });
 
   afterAll(async () => {
@@ -852,12 +849,7 @@ describe("active-memory plugin", () => {
   });
 
   it("does not inject recall that completes after the turn authority closes", async () => {
-    let releaseRecall: () => void = () => {
-      throw new Error("recall gate was not initialized");
-    };
-    const recallGate = new Promise<void>((resolve) => {
-      releaseRecall = resolve;
-    });
+    const { promise: recallGate, resolve: releaseRecall } = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await recallGate;
       await writeUsableMemoryTranscript(params.sessionFile, "stale private memory");
@@ -963,6 +955,7 @@ describe("active-memory plugin", () => {
   });
 
   it("uses a unique SQLite session key for repeated identical recalls", async () => {
+    registerPluginConfig({ cacheTtlMs: 1000 });
     const hookParams = {
       agentId: "main",
       trigger: "user",
@@ -976,10 +969,7 @@ describe("active-memory plugin", () => {
       lastRuntimeEmbeddedRunParams().sessionKey,
       "expected first runtime session key",
     );
-    resetActiveRecallStateForTests();
-    resetActiveMemoryConfigForTests();
-    resetActiveMemoryTranscriptForTests();
-    resetTriggerRecallRunsForTests();
+    recallStateFixture.expireCacheAfter(1000);
     await runPromptBuild(event, hookParams);
     const secondSessionKey = requireNonEmptyString(
       lastRuntimeEmbeddedRunParams().sessionKey,
@@ -1033,30 +1023,25 @@ describe("active-memory plugin", () => {
     expect(lastEmbeddedRunParams().prompt).not.toContain("PROJECTED_HISTORY_ONE");
 
     // Expire the independent cross-turn cache so native admission identity is observable.
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 2000);
-    try {
-      await runPromptBuild(
-        {
-          prompt: projectedPrompt("PROJECTED_HISTORY_THREE"),
-          currentUserMessage,
-          currentUserMessageId: "message-2",
-        },
-        context,
-      );
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-      await runPromptBuild(
-        {
-          prompt: projectedPrompt("PROJECTED_HISTORY_FOUR"),
-          currentUserMessage: "what wings do I prefer?",
-          currentUserMessageId: "message-2",
-        },
-        context,
-      );
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
-    } finally {
-      clock.mockRestore();
-    }
+    using _ = recallStateFixture.expireCacheAfter(1000);
+    await runPromptBuild(
+      {
+        prompt: projectedPrompt("PROJECTED_HISTORY_THREE"),
+        currentUserMessage,
+        currentUserMessageId: "message-2",
+      },
+      context,
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    await runPromptBuild(
+      {
+        prompt: projectedPrompt("PROJECTED_HISTORY_FOUR"),
+        currentUserMessage: "what wings do I prefer?",
+        currentUserMessageId: "message-2",
+      },
+      context,
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
   });
 
   it("does not invent model-recall identity when the producer has no admission ID", async () => {
@@ -1075,12 +1060,7 @@ describe("active-memory plugin", () => {
   });
 
   it("joins concurrent identical recall attempts in one run", async () => {
-    let releaseRecall: () => void = () => {
-      throw new Error("recall gate was not initialized");
-    };
-    const recallGate = new Promise<void>((resolve) => {
-      releaseRecall = resolve;
-    });
+    const { promise: recallGate, resolve: releaseRecall } = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await recallGate;
       await writeUsableMemoryTranscript(params.sessionFile, "lemon pepper wings");
@@ -1109,7 +1089,7 @@ describe("active-memory plugin", () => {
 
   it("waits for timeout cleanup before replacing a recall in the same run", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    configureRecallTimeout(100);
+    configureRecallTimeout(250);
     const firstStarted = createDeferred<void>();
     const cleanupStarted = createDeferred<void>();
     const cleanupGate = createDeferred<void>();
@@ -1129,7 +1109,7 @@ describe("active-memory plugin", () => {
     const event = { prompt: "what wings should i order?" };
     const first = runPromptBuild(event, context);
     await firstStarted.promise;
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(250);
     await expect(first).resolves.toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
     await cleanupStarted.promise;
@@ -1151,22 +1131,28 @@ describe("active-memory plugin", () => {
   });
 
   it("evicts a rejected replacement after timeout cleanup settles", async () => {
-    let releaseCleanup: () => void = () => {
-      throw new Error("cleanup gate was not initialized");
+    const { promise: cleanupGate, resolve: releaseCleanup } = createDeferred<void>();
+    const pending: Array<ReturnType<typeof resolveActiveRecallForRun>> = [];
+    const recall = (start: Parameters<typeof resolveActiveRecallForRun>[1]) => {
+      const result = resolveActiveRecallForRun("run-rejected-replacement", start);
+      pending.push(result);
+      return result;
     };
-    const cleanupGate = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
+    onTestFinished(async () => {
+      releaseCleanup();
+      await Promise.allSettled(pending);
+      forgetActiveRecallRun("run-rejected-replacement");
     });
     const initialResult = { status: "timeout" as const, elapsedMs: 1, summary: null };
     await expect(
-      resolveActiveRecallForRun("run-rejected-replacement", async (onTimeoutCleanup) => {
+      recall(async (onTimeoutCleanup) => {
         onTimeoutCleanup(cleanupGate);
         return initialResult;
       }),
     ).resolves.toEqual(initialResult);
 
     let rejectedReplacementStarts = 0;
-    const rejectedReplacement = resolveActiveRecallForRun("run-rejected-replacement", async () => {
+    const rejectedReplacement = recall(async () => {
       rejectedReplacementStarts++;
       throw new Error("retry deadline expired");
     });
@@ -1181,7 +1167,7 @@ describe("active-memory plugin", () => {
     };
     let freshStarts = 0;
     await expect(
-      resolveActiveRecallForRun("run-rejected-replacement", async () => {
+      recall(async () => {
         freshStarts++;
         return freshResult;
       }),
@@ -2298,17 +2284,14 @@ describe("active-memory plugin", () => {
       ],
     ];
     const expectMemoryResult = ({ toolName, details, text, expected }: MemoryResultCase) => {
-      const record = {
-        message: {
-          role: "toolResult",
-          toolName,
-          details,
-          content: (Array.isArray(text) ? text : [text]).map((value) => ({
-            type: "text",
-            text: value,
-          })),
-        },
-      };
+      const record = memoryToolRecord(
+        toolName,
+        details,
+        (Array.isArray(text) ? text : [text]).map((value) => ({
+          type: "text",
+          text: value,
+        })),
+      );
       const toolsAllow = toolName.startsWith("memory_")
         ? toolName === "memory_lookup_custom"
           ? [toolName]
@@ -2382,7 +2365,6 @@ describe("active-memory plugin", () => {
     "preserves terminal recall outcome when cleanup crosses its deadline (failed=$failed, persist=$persistTranscripts, cleanupFails=$cleanupFails)",
     async ({ failed, persistTranscripts, cleanupFails }) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      setMinimumTimeoutMsForTests(1);
       registerPluginConfig({ timeoutMs: 1_000, persistTranscripts, logging: true });
       const sessionKey = "agent:main:completed-recall-cleanup-deadline";
       seedSession(sessionKey, "s-completed-recall-cleanup-deadline", 0);
@@ -2467,10 +2449,8 @@ describe("active-memory plugin", () => {
 
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    setMinimumTimeoutMsForTests(1);
-    setTimeoutPartialDataGraceMsForTests(50);
     registerPluginConfig({
-      timeoutMs: 100,
+      timeoutMs: 250,
       maxSummaryChars: 40,
       persistTranscripts: true,
       logging: true,
@@ -2505,7 +2485,7 @@ describe("active-memory plugin", () => {
       { sessionKey },
     );
     await transcriptWritten.promise;
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(250);
     const result = await resultPromise;
 
     expect(lastEmbeddedPrompt()).toContain("summary under 40 characters total");
@@ -2527,9 +2507,7 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text after temporary SQLite recall rows are cleaned up", async () => {
     // Worker transcript timestamps and cleanup share the real wall clock.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    setMinimumTimeoutMsForTests(1);
-    setTimeoutPartialDataGraceMsForTests(50);
-    registerPluginConfig({ timeoutMs: 100, maxSummaryChars: 80, logging: true });
+    registerPluginConfig({ timeoutMs: 250, maxSummaryChars: 80, logging: true });
     const sessionRuntime = await vi.importActual<
       typeof import("openclaw/plugin-sdk/session-store-runtime")
     >("openclaw/plugin-sdk/session-store-runtime");
@@ -2566,7 +2544,7 @@ describe("active-memory plugin", () => {
       { sessionKey },
     );
     const target = await transcriptWritten.promise;
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(250);
     const result = await resultPromise;
 
     expect(result, recallDiagnostics(sessionKey)).toMatchObject({
@@ -2590,7 +2568,6 @@ describe("active-memory plugin", () => {
   it.each([
     {
       name: "timeout boilerplate",
-      graceMs: 5,
       records: [
         usableMemoryTranscriptRecord("user prefers lemon pepper wings"),
         assistantRecord("LLM request timed out after 15000 ms."),
@@ -2600,7 +2577,6 @@ describe("active-memory plugin", () => {
     },
     {
       name: "later unavailable search",
-      graceMs: 50,
       records: [
         assistantRecord("I will inspect memory before answering."),
         memoryToolRecord("memory_search", {
@@ -2614,42 +2590,37 @@ describe("active-memory plugin", () => {
       excluded: undefined,
       singleStatus: false,
     },
-  ])(
-    "rejects timeout partials with $name",
-    async ({ records, graceMs, excluded, singleStatus }) => {
-      configureRecallTimeout(100);
-      setTimeoutPartialDataGraceMsForTests(graceMs);
-      const sessionKey = "agent:main:rejected-timeout-partial";
-      seedSession(sessionKey, "s-rejected-timeout-partial");
-      const recallRunSpy = vi.spyOn(recallRun, "runRecallSubagent");
-      runEmbeddedAgent.mockImplementationOnce(
-        async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-          await writeTranscriptJsonl(params.sessionFile, records);
-          return await waitForAbort(params.abortSignal);
-        },
-      );
-      const result = await runPromptBuild(
-        { prompt: "what food do i usually order?" },
-        { sessionKey },
-      ).finally(() => Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value)));
-      expect(result).toBeUndefined();
-      const lines = getActiveMemoryLines(sessionKey);
-      expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
-      expectLinesNotToContain(lines, "timeout_partial");
-      if (singleStatus) {
-        expect(lines).toHaveLength(1);
-      }
-      if (excluded) {
-        expectLinesNotToContain(lines, excluded);
-      }
-    },
-  );
+  ])("rejects timeout partials with $name", async ({ records, excluded, singleStatus }) => {
+    configureRecallTimeout(250);
+    const sessionKey = "agent:main:rejected-timeout-partial";
+    seedSession(sessionKey, "s-rejected-timeout-partial");
+    const recallRunSpy = vi.spyOn(recallRun, "runRecallSubagent");
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+        await writeTranscriptJsonl(params.sessionFile, records);
+        return await waitForAbort(params.abortSignal);
+      },
+    );
+    const result = await runPromptBuild(
+      { prompt: "what food do i usually order?" },
+      { sessionKey },
+    ).finally(() => Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value)));
+    expect(result).toBeUndefined();
+    const lines = getActiveMemoryLines(sessionKey);
+    expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
+    expectLinesNotToContain(lines, "timeout_partial");
+    if (singleStatus) {
+      expect(lines).toHaveLength(1);
+    }
+    if (excluded) {
+      expectLinesNotToContain(lines, excluded);
+    }
+  });
 
   it.each([
     { name: "failed agent", failed: true, cleanupFails: false },
     { name: "failed cleanup", failed: false, cleanupFails: true },
   ])("projects direct abort recovery for $name", async ({ failed, cleanupFails }) => {
-    setMinimumTimeoutMsForTests(1);
     registerPluginConfig({ timeoutMs: 5_000, persistTranscripts: true, logging: true });
     const sessionKey = "agent:main:abort-timeout-partial";
     seedSession(sessionKey, "s-abort-timeout-partial", 0);
@@ -2707,9 +2678,7 @@ describe("active-memory plugin", () => {
 
   it("keeps a timeout partial grounded only by the tool-result callback", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    setMinimumTimeoutMsForTests(1);
-    setTimeoutPartialDataGraceMsForTests(50);
-    registerPluginConfig({ timeoutMs: 100, logging: true });
+    registerPluginConfig({ timeoutMs: 250, logging: true });
     const sessionKey = "agent:main:timeout-partial-callback-evidence";
     seedSession(sessionKey, "s-timeout-partial-callback-evidence", 0);
     const transcriptWritten = createDeferred<void>();
@@ -2744,7 +2713,7 @@ describe("active-memory plugin", () => {
       { sessionKey },
     );
     await transcriptWritten.promise;
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(250);
     const result = await resultPromise;
 
     expectPrependContextContains(result, "User likes ramen with chili oil.");
@@ -2768,8 +2737,8 @@ describe("active-memory plugin", () => {
   );
 
   it.each([
-    { outcome: "timeout", timeoutMs: 1, cleanupCalls: 1 },
-    { outcome: "success", timeoutMs: 25, cleanupCalls: 0 },
+    { outcome: "timeout", timeoutMs: 250, cleanupCalls: 1 },
+    { outcome: "success", timeoutMs: 250, cleanupCalls: 0 },
   ])(
     "settles $outcome recall while status persistence stalls",
     async ({ outcome, timeoutMs, cleanupCalls }) => {
@@ -2799,7 +2768,7 @@ describe("active-memory plugin", () => {
           await vi.advanceTimersByTimeAsync(timeoutMs);
         }
         await persistenceStarted.promise;
-        await vi.advanceTimersByTimeAsync(outcome === "timeout" ? 1_500 : 1_525);
+        await vi.advanceTimersByTimeAsync(outcome === "timeout" ? 1_500 : 1_750);
         await expect(result).resolves.toBeUndefined();
         expect(hoisted.closeActiveMemorySearchManager).toHaveBeenCalledTimes(cleanupCalls);
       } finally {
@@ -2834,9 +2803,8 @@ describe("active-memory plugin", () => {
 
   it("does not spend the model timeout budget on active-memory subagent setup", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const CONFIGURED_TIMEOUT_MS = 25;
+    const CONFIGURED_TIMEOUT_MS = 250;
     const SETUP_GRACE_TIMEOUT_MS = 50;
-    setMinimumTimeoutMsForTests(1);
     registerPluginConfig({
       timeoutMs: CONFIGURED_TIMEOUT_MS,
       setupGraceTimeoutMs: SETUP_GRACE_TIMEOUT_MS,
@@ -2869,10 +2837,8 @@ describe("active-memory plugin", () => {
 
   it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-    const CONFIGURED_TIMEOUT_MS = 25;
-    const PARTIAL_DATA_GRACE_MS = 5;
-    setMinimumTimeoutMsForTests(1);
-    setTimeoutPartialDataGraceMsForTests(PARTIAL_DATA_GRACE_MS);
+    const CONFIGURED_TIMEOUT_MS = 250;
+    const PARTIAL_DATA_GRACE_MS = 500;
     registerPluginConfig({ timeoutMs: CONFIGURED_TIMEOUT_MS, logging: true });
     const embeddedStarted = createDeferred<AbortSignal | undefined>();
     // Simulate a subagent that never cooperatively checks the abort signal.
@@ -2907,17 +2873,12 @@ describe("active-memory plugin", () => {
   it("uses a late verbose summary after a successful result and later unavailable trace", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const CONFIGURED_TIMEOUT_MS = 1_000;
-    setMinimumTimeoutMsForTests(1);
-    setTimeoutPartialDataGraceMsForTests(5);
     registerPluginConfig({ timeoutMs: CONFIGURED_TIMEOUT_MS, maxSummaryChars: 120, logging: true });
     const sessionKey = "agent:main:terminal-unavailable-then-summary";
     seedSession(sessionKey, "s-terminal-unavailable-then-summary", 0);
     const verboseSummary =
       "This memory says the user usually orders tonkotsu ramen, keeps chili crisp nearby, and prefers short dinner suggestions without menu preamble.";
-    let markDelayScheduled: (() => void) | undefined;
-    const delayScheduled = new Promise<void>((resolve) => {
-      markDelayScheduled = resolve;
-    });
+    const { promise: delayScheduled, resolve: markDelayScheduled } = createDeferred<void>();
     runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await writeTranscriptJsonl(params.sessionFile, [
         memoryToolRecord(
@@ -3038,10 +2999,9 @@ describe("active-memory plugin", () => {
 
   it("fails open at the live deadline when pre-recall session state stalls", async () => {
     vi.useFakeTimers();
-    setMinimumTimeoutMsForTests(1);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 25,
+      timeoutMs: 250,
       logging: true,
     };
     let resolveLookup: ((value: undefined) => void) | undefined;
@@ -3079,11 +3039,9 @@ describe("active-memory plugin", () => {
       expect.objectContaining({ timeoutMs: 153_000 }),
     );
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-    setMinimumTimeoutMsForTests(1);
-    setTimeoutPartialDataGraceMsForTests(100);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 25,
+      timeoutMs: 250,
       logging: true,
     };
     vi.spyOn(api.runtime.state, "openKeyedStore").mockReturnValue({
@@ -3093,7 +3051,11 @@ describe("active-memory plugin", () => {
         }),
     });
     plugin.register(api as unknown as OpenClawPluginApi);
-    runEmbeddedAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
+    const recallStarted = createDeferred<void>();
+    runEmbeddedAgent.mockImplementationOnce(() => {
+      recallStarted.resolve();
+      return new Promise<never>(() => {});
+    });
 
     const resultPromise = runPromptBuild(
       { prompt: "what food do i usually order? delayed recall start" },
@@ -3102,19 +3064,8 @@ describe("active-memory plugin", () => {
       },
     );
     await vi.advanceTimersByTimeAsync(1_490);
-    const hasStartedRecall = () =>
-      vi
-        .mocked(api.logger.info)
-        .mock.calls.some((call: unknown[]) =>
-          String(call[0]).includes("session=agent:main:delayed-recall-start"),
-        );
-    for (let attempt = 0; attempt < 20 && !hasStartedRecall(); attempt += 1) {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
-    expect(hasStartedRecall()).toBe(true);
-    await vi.advanceTimersByTimeAsync(25);
+    await recallStarted.promise;
+    await vi.advanceTimersByTimeAsync(250);
     await vi.advanceTimersByTimeAsync(1_499);
 
     await expect(resultPromise).resolves.toBeUndefined();
@@ -3124,7 +3075,6 @@ describe("active-memory plugin", () => {
   });
 
   it("keeps rotated transcript evidence after a stale poll settles", async () => {
-    setMinimumTimeoutMsForTests(1);
     registerPluginConfig({
       timeoutMs: 1_000,
       toolsAllow: ["memory_get", "memory_search"],
@@ -3234,7 +3184,6 @@ describe("active-memory plugin", () => {
     "rejects completed output when a rotated SQLite transcript reports unavailable memory (%s)",
     async (identity) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      setMinimumTimeoutMsForTests(1);
       registerPluginConfig({ timeoutMs: 1_000, logging: true });
       const sessionKey = "agent:main:rotated-sqlite-memory-unavailable";
       seedSession(sessionKey, "s-rotated-sqlite-memory-unavailable", 0);
@@ -3631,73 +3580,67 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it.each(["cooldown", "a successful recall"] as const)(
-    "allows recall again after %s clears consecutive timeouts",
-    async (resetReason) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const CONFIGURED_TIMEOUT_MS = 25;
-      const COOLDOWN_MS = 60_000;
-      setMinimumTimeoutMsForTests(1);
-      registerPluginConfig({
-        timeoutMs: CONFIGURED_TIMEOUT_MS,
-        logging: true,
-        circuitBreakerMaxTimeouts: 2,
-        circuitBreakerCooldownMs: COOLDOWN_MS,
+  it("pauses failed cooldown probes and clears the streak after a completed recall", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const CONFIGURED_TIMEOUT_MS = 250;
+    const COOLDOWN_MS = 60_000;
+    registerPluginConfig({
+      timeoutMs: CONFIGURED_TIMEOUT_MS,
+      logging: true,
+      circuitBreakerMaxTimeouts: 2,
+      circuitBreakerCooldownMs: COOLDOWN_MS,
+    });
+    const sessionKey = "agent:main:cb-reset";
+    const recallRunSpy = vi.spyOn(recallRun, "runRecallSubagent");
+    const timeOutRecall = async (prompt: string) => {
+      const embeddedStarted = createDeferred<void>();
+      runEmbeddedAgent.mockImplementationOnce(
+        async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+          await writeTranscriptJsonl(params.sessionFile, []);
+          embeddedStarted.resolve();
+          return await waitForAbort(params.abortSignal);
+        },
+      );
+      const resultPromise = runPromptBuild({ prompt }, { sessionKey });
+      await embeddedStarted.promise;
+      await vi.advanceTimersByTimeAsync(CONFIGURED_TIMEOUT_MS);
+      await Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value));
+      expect(await resultPromise).toBeUndefined();
+    };
+    const recallSuccessfully = async (prompt: string, summary: string) => {
+      runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+        await writeUsableMemoryTranscript(params.sessionFile, summary);
+        return { payloads: [{ text: summary }] };
       });
-      const sessionKey = "agent:main:cb-reset";
-      const recallRunSpy = vi.spyOn(recallRun, "runRecallSubagent");
-      const timeOutRecall = async (prompt: string) => {
-        const embeddedStarted = createDeferred<void>();
-        runEmbeddedAgent.mockImplementationOnce(
-          async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
-            await writeTranscriptJsonl(params.sessionFile, []);
-            embeddedStarted.resolve();
-            return await waitForAbort(params.abortSignal);
-          },
-        );
-        const resultPromise = runPromptBuild({ prompt }, { sessionKey });
-        await embeddedStarted.promise;
-        await vi.advanceTimersByTimeAsync(CONFIGURED_TIMEOUT_MS);
-        await Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value));
-        expect(await resultPromise).toBeUndefined();
-      };
-      const recallSuccessfully = async (prompt: string, summary: string) => {
-        runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
-          await writeUsableMemoryTranscript(params.sessionFile, summary);
-          return { payloads: [{ text: summary }] };
-        });
-        const result = await runPromptBuild({ prompt }, { sessionKey });
-        expect(result?.prependContext).toContain(summary);
-      };
+      const result = await runPromptBuild({ prompt }, { sessionKey });
+      expect(result?.prependContext).toContain(summary);
+    };
 
-      try {
-        await timeOutRecall("cb reset test timeout");
-        expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    try {
+      await timeOutRecall("first timeout before a long gap");
+      await vi.advanceTimersByTimeAsync(COOLDOWN_MS + 1);
+      await timeOutRecall("second timeout after a long gap");
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+      await runPromptBuild({ prompt: "paused after spaced failures" }, { sessionKey });
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
 
-        if (resetReason === "cooldown") {
-          await timeOutRecall("cb reset second consecutive timeout");
-          expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-          await runPromptBuild({ prompt: "cb reset test skipped" }, { sessionKey });
-          expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-          await vi.advanceTimersByTimeAsync(COOLDOWN_MS);
-        } else {
-          await recallSuccessfully("cb reset first success", "lemon pepper wings");
-          expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-          await timeOutRecall("cb reset second timeout");
-          expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
-        }
+      await vi.advanceTimersByTimeAsync(COOLDOWN_MS);
+      await timeOutRecall("failed cooldown probe");
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
+      await runPromptBuild({ prompt: "paused after failed probe" }, { sessionKey });
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
 
-        await recallSuccessfully("cb reset test success", "buffalo wings");
-        expect(runEmbeddedAgent).toHaveBeenCalledTimes(resetReason === "cooldown" ? 3 : 4);
-        if (resetReason === "cooldown") {
-          await recallSuccessfully("cb reset test still ok", "blue cheese");
-          expect(runEmbeddedAgent).toHaveBeenCalledTimes(4);
-        }
-      } finally {
-        await Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value));
-      }
-    },
-  );
+      await vi.advanceTimersByTimeAsync(COOLDOWN_MS);
+      await recallSuccessfully("successful cooldown probe", "buffalo wings");
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(4);
+      await timeOutRecall("first timeout after completed recall");
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(5);
+      await recallSuccessfully("allowed below a fresh threshold", "blue cheese");
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(6);
+    } finally {
+      await Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value));
+    }
+  });
 });
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

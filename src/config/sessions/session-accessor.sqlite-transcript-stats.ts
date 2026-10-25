@@ -21,6 +21,7 @@ type TranscriptStatsRow = Omit<
   lastObservedMutationAtMs: number | null;
   generation: string | null;
   coldSessionId: string | null;
+  sessionKey: string | null;
 };
 
 function transcriptStatsFromRow(row: TranscriptStatsRow | undefined): SessionTranscriptStats {
@@ -52,10 +53,10 @@ const transcriptStatsQuery = createSqliteQueryCache((database: EngineConnection)
             .selectFrom("transcript_events")
             .select((eb) => [
               "session_id",
-              eb.fn.count<number>("seq").as("event_count"),
+              eb.fn.countAll<number>().as("event_count"),
               eb.fn.max<number>("seq").as("max_seq"),
               // kysely-allow-raw: JSONL byte size includes newline separators without decoding payloads.
-              sql<number>`COALESCE(SUM(${transcriptEventReadBytesSql()}), 0) + COUNT(*) - 1`.as(
+              sql<number>`CAST(COALESCE(SUM(${transcriptEventReadBytesSql()}), 0) + COUNT(*) - 1 AS BIGINT)`.as(
                 "size_bytes",
               ),
             ])
@@ -95,6 +96,7 @@ const transcriptStatsQuery = createSqliteQueryCache((database: EngineConnection)
           "session.transcript_observed_at as lastObservedMutationAtMs",
           "session.transcript_updated_at as lastMutationAtMs",
           "cold.session_id as coldSessionId",
+          (includeGeneration ? eb.ref("session.session_key") : eb.val(null)).as("sessionKey"),
           (includeGeneration
             ? eb
                 .selectFrom("transcript_rewrite_watermarks as rewrite")
@@ -116,11 +118,29 @@ const transcriptStatsQuery = createSqliteQueryCache((database: EngineConnection)
 export function readTranscriptStatsBatchFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionIds: readonly string[],
+  options: { includeGeneration: true },
+): Array<
+  SessionTranscriptStats & { generation: string | null; cold: boolean; sessionKey: string | null }
+>;
+export function readTranscriptStatsBatchFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionIds: readonly string[],
+  options?: { includeGeneration?: false },
+): SessionTranscriptStats[];
+export function readTranscriptStatsBatchFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionIds: readonly string[],
   options: { includeGeneration?: boolean } = {},
-): Array<SessionTranscriptStats & { generation?: string | null; cold?: boolean }> {
+): Array<
+  SessionTranscriptStats & {
+    generation?: string | null;
+    cold?: boolean;
+    sessionKey?: string | null;
+  }
+> {
   const queries = transcriptStatsQuery(database.db);
-  // Keep cheap indexed point reads for small requests; both shapes share projection and decoding.
-  const point = sessionIds.length <= 10;
+  // Export groups always share their metadata read, including small indexing batches.
+  const point = sessionIds.length <= (options.includeGeneration ? 1 : 10);
   const read = options.includeGeneration
     ? point
       ? queries.export
@@ -135,7 +155,11 @@ export function readTranscriptStatsBatchFromDatabase(
       return {
         ...transcriptStatsFromRow(row),
         ...(options.includeGeneration
-          ? { generation: row?.generation ?? null, cold: row?.coldSessionId != null }
+          ? {
+              generation: row?.generation ?? null,
+              cold: row?.coldSessionId != null,
+              sessionKey: row?.sessionKey ?? null,
+            }
           : {}),
       };
     });
@@ -148,17 +172,4 @@ export function readTranscriptStatsFromDatabase(
   sessionId: string,
 ): SessionTranscriptStats {
   return readTranscriptStatsBatchFromDatabase(database, [sessionId])[0]!;
-}
-
-/** Export readers carry the rewrite identity in their existing statistics statement. */
-export function readTranscriptExportStatsFromDatabase(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  sessionId: string,
-): { stats: SessionTranscriptStats; generation: string | null; cold: boolean } {
-  const row = transcriptStatsQuery(database.db).export([sessionId]).rows[0];
-  return {
-    generation: row?.generation ?? null,
-    cold: row?.coldSessionId != null,
-    stats: transcriptStatsFromRow(row),
-  };
 }

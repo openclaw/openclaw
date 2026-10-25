@@ -8,7 +8,7 @@ import * as chatThread from "./chat-thread.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
-import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
+import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
 
 describe("resolveChatProjectionRunId", () => {
   it("restores only an active run proven by the reconnecting outbox", () => {
@@ -50,7 +50,7 @@ describe("transcript run identity", () => {
     const transcript = createTestTranscript();
     onTestFinished(() => {
       view.unmount();
-      transcript.hostDisconnected();
+      transcript.dispose();
       container.remove();
     });
     const view = mountSolid(
@@ -79,8 +79,8 @@ describe("transcript run identity", () => {
       { container },
     );
     flush();
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     flush();
 
     expect(build).toHaveBeenCalledWith(expect.objectContaining({ runId: null }));

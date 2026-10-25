@@ -1,15 +1,17 @@
 import type { BoardGetParams, ProgressCardGetParams } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
+import { createMemo, createSignal, Errored, latest, Loading, onSettled, Show } from "solid-js";
 import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
+import { projectGateway } from "../../reactive/application.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
 import { projectProgressCard } from "../../reactive/domain-keyed.ts";
 import { t } from "../../reactive/i18n.ts";
 import { projectSource } from "../../reactive/projection.ts";
+import { projectSessionProgressRoster } from "../../reactive/session-progress-roster.ts";
 import {
   resolveSessionProgressCardTarget,
   sessionProgressCardsForGateway,
 } from "../../session-progress-cards.ts";
-import { isSessionRunActive } from "../../session-run-state.ts";
+import { isSessionRunStateActive } from "../../session-run-state.ts";
 import { parseAgentSessionKey } from "../../sessions/session-key.ts";
 import { sessionProgressTargetQuery } from "../../sessions/session-requests.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
@@ -37,14 +39,10 @@ function SessionProgressWidgetContent(
   host: SolidBridgeElement<SessionProgressWidgetProps>,
 ) {
   const context = useOptionalApplication();
-  const gateway = projectSource(context?.gateway, {
-    read: (owner) => owner?.snapshot,
-    subscribe: (owner, notify) => owner?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  });
+  const gateway = context ? projectGateway(context.gateway) : undefined;
   const target = createMemo(() => resolveSessionTarget(props.widget, props.session));
   const identity = createMemo(() =>
-    resolveSessionProgressCardTarget(gateway.read() ?? {}, target()),
+    resolveSessionProgressCardTarget(gateway?.read().snapshot ?? {}, target()),
   );
   const [mounted, setMounted] = createSignal(false);
   onSettled(() => {
@@ -52,7 +50,7 @@ function SessionProgressWidgetContent(
   });
   const progressScope = createMemo(
     () => {
-      const snapshot = gateway.read();
+      const snapshot = gateway?.read().snapshot;
       const staticTarget = target();
       return {
         store:
@@ -64,16 +62,17 @@ function SessionProgressWidgetContent(
         hello: snapshot?.hello,
         options: {
           // Read live admission facts even before the scope effect catches up.
-          admitAutomaticRead: () =>
-            untrack(
-              () =>
-                host.isConnected &&
-                props.active &&
-                target().sessionKey === staticTarget.sessionKey &&
-                target().agentId === staticTarget.agentId &&
-                context?.gateway.snapshot.client === snapshot?.client &&
-                context?.gateway.snapshot.hello === snapshot?.hello,
-            ),
+          admitAutomaticRead: () => {
+            const currentTarget = resolveSessionTarget(host.widget, host.session);
+            return (
+              host.isConnected &&
+              host.active &&
+              currentTarget.sessionKey === staticTarget.sessionKey &&
+              currentTarget.agentId === staticTarget.agentId &&
+              context?.gateway.snapshot.client === snapshot?.client &&
+              context?.gateway.snapshot.hello === snapshot?.hello
+            );
+          },
         },
       };
     },
@@ -86,11 +85,7 @@ function SessionProgressWidgetContent(
         a.target.agentId === b.target.agentId,
     },
   );
-  // Initial source identity is a one-time snapshot; the effect owns replacements.
-  const progress = projectProgressCard(untrack(progressScope));
-  // Bind the imperative store watch only while the widget is active.
-  createEffect(progressScope, (next) => progress.replaceSource(next));
-  const [sessionRevision, setSessionRevision] = createSignal(0, { ownedWrite: true });
+  const progress = projectProgressCard(progressScope);
   const rosterScope = createMemo(
     () => {
       return [
@@ -104,53 +99,57 @@ function SessionProgressWidgetContent(
         previous[0] === next[0] && previous[1] === next[1] && previous[2] === next[2],
     },
   );
-  createEffect(rosterScope, ([agentId, active, connected]) => {
-    if (!connected || !context || !active) {
-      return undefined;
-    }
-    const query = sessionProgressTargetQuery(agentId);
-    const release = context.sessions.subscribeList(query, () =>
-      setSessionRevision((value) => value + 1),
-    );
-    const snapshot = context.sessions.listSnapshot(query);
-    if (
-      !snapshot.result &&
-      !snapshot.loading &&
-      !snapshot.error &&
-      context.gateway.snapshot.phase === "connected"
-    ) {
-      void context.sessions.refreshList(query);
-    }
-    return release;
-  });
+  const roster = createMemo(() =>
+    projectSource(rosterScope(), {
+      read: ([agentId]) => context?.sessions.listSnapshot(sessionProgressTargetQuery(agentId)),
+      subscribe: ([agentId, active, connected], notify) => {
+        if (!context || !active || !connected) {
+          return () => {};
+        }
+        // A scoped child releases on invalidation even when an empty card never rereads it.
+        return projectSessionProgressRoster(context.sessions, agentId).subscribe(notify);
+      },
+      equality: "revision",
+    }),
+  );
   const row = createMemo(() => {
-    sessionRevision();
     const current = identity();
-    return context?.sessions
-      .listSnapshot(sessionProgressTargetQuery(current.agentId))
-      .result?.sessions.find(
+    return roster()
+      .read()
+      ?.result?.sessions.find(
         (entry) =>
           entry.key === current.sessionKey &&
           (entry.agentId ?? parseAgentSessionKey(entry.key)?.agentId) === current.agentId,
       );
   });
-  const state = createMemo(progress.read);
+  const card = createMemo(() => progress.read().card);
+  const error = createMemo(() => progress.read().error);
+  const receipt = createMemo(() => ({ completion: progress.read().completion }), {
+    equals: (previous, next) => previous.completion === next.completion,
+  });
+  // Readiness observes the owner's admitted work; accepted cards stay independently live.
+  const ready = createMemo(() => receipt().completion?.then(() => null) ?? null);
+  const LoadingNotice = () => (
+    <Show when={card() === undefined}>
+      <p class="board-widget__plugin-loading">{t("sessionProgressCard.widgetLoading")}</p>
+    </Show>
+  );
   const ErrorNotice = () => (
-    <Show when={state().error}>
-      {(error) => (
+    <Show when={error()}>
+      {(failure) => (
         <div
-          class={state().card ? "callout info" : "board-widget__plugin-loading"}
+          class={card() ? "callout info" : "board-widget__plugin-loading"}
           data-test-id="session-progress-error"
           role="alert"
         >
           <span>
             {t(
-              error() === "access-denied"
+              failure() === "access-denied"
                 ? "sessionProgressCard.widgetAccessDenied"
                 : "sessionProgressCard.widgetUnavailable",
             )}
           </span>
-          <Show when={error() === "unavailable"}>
+          <Show when={failure() === "unavailable"}>
             <button
               class="btn btn--sm"
               type="button"
@@ -170,27 +169,28 @@ function SessionProgressWidgetContent(
   return (
     <>
       <ErrorNotice />
-      <Show when={!state().error || state().card}>
-        <Show
-          when={!state().loading}
-          fallback={
-            <p class="board-widget__plugin-loading">{t("sessionProgressCard.widgetLoading")}</p>
-          }
-        >
+      <Show when={!error() || card()}>
+        <Loading on={receipt()} fallback={<LoadingNotice />}>
+          <Errored fallback={null}>{card() === undefined ? ready() : latest(ready)}</Errored>
+          <Show when={!receipt().completion}>
+            <LoadingNotice />
+          </Show>
+        </Loading>
+        <Show when={card() !== undefined}>
           <Show
-            when={state().card}
+            when={card()}
             fallback={
               <p class="board-widget__plugin-loading">{t("sessionProgressCard.widgetEmpty")}</p>
             }
           >
-            {(card) => (
+            {(acceptedCard) => (
               <SessionProgressCard
-                card={card()}
+                card={acceptedCard()}
                 placement="board"
                 sessionStatus={row()?.status}
                 startedAt={row()?.startedAt}
                 endedAt={row()?.endedAt}
-                hasActiveRun={isSessionRunActive(row() ?? {})}
+                hasActiveRun={isSessionRunStateActive(row() ?? {})}
               />
             )}
           </Show>

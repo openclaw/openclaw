@@ -26,6 +26,7 @@ import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 export type ProjectionOptions = {
@@ -112,6 +113,7 @@ export type Row = {
   profileRevision?: number;
   subagentRevision?: number;
   lastMessagePreview?: string;
+  lastAssistantMessage?: GatewaySessionRow["lastAssistantMessage"];
   fallbackModel?: ReturnType<
     typeof rowProjection.readSessionRowInputs
   >["presentation"]["activeModel"];
@@ -165,7 +167,8 @@ export type Query = {
   storePath?: string;
   key?: string;
   sessionIdOrKey?: string;
-  parentSessionKey?: string;
+  /** Prepared qualified rows carry identity; raw keys retain alias resolution. */
+  parentSessionKey?: string | Pick<Row, "key" | "agentId">;
   sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
 };
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
@@ -181,10 +184,11 @@ type RowTarget = Pick<Row, "agentId" | "key" | "storeTarget">;
 export const identity = (row: RowTarget) =>
   `${row.agentId}\0${row.storeTarget.storePath}\0${row.key}`;
 export const physical = (storePath: string, key: string) => `physical:${storePath}\0${key}`;
-const logical = (agentId: string, key: string) => `logical:${agentId}\0${key}`;
+export const logicalSessionRowIdentity = (agentId: string, key: string) =>
+  `logical:${agentId}\0${key}`;
 export function dependents(row: Row, byParent: ReadonlyMap<string, Set<string>>) {
   return new Set([
-    ...(byParent.get(logical(row.agentId, row.key)) ?? []),
+    ...(byParent.get(logicalSessionRowIdentity(row.agentId, row.key)) ?? []),
     ...(byParent.get(physical(row.storeTarget.storePath, row.key)) ?? []),
   ]);
 }
@@ -358,6 +362,7 @@ export function renewGeneration(row: Row): Row {
     sharingEntry: undefined,
     materialized: undefined,
     lastMessagePreview: undefined,
+    lastAssistantMessage: undefined,
     fallbackModel: undefined,
     generation: Symbol("row"),
   };
@@ -379,7 +384,7 @@ export function ready(row: Row | undefined): row is MaterializedRow {
 
 export function publishTranscriptFields(
   row: MaterializedRow,
-  fields: Pick<Row, "lastMessagePreview" | "fallbackModel">,
+  fields: Pick<Row, "lastMessagePreview" | "lastAssistantMessage" | "fallbackModel">,
   cfg: Inputs["cfg"],
   context: SessionListRowContext,
 ): boolean {
@@ -398,13 +403,21 @@ export function publishTranscriptFields(
   });
   if (
     row.lastMessagePreview === fields.lastMessagePreview &&
+    isDeepStrictEqual(row.lastAssistantMessage, fields.lastAssistantMessage) &&
     isDeepStrictEqual(row.fallbackModel, fallbackModel)
   ) {
     return false;
   }
-  Object.assign(row, { lastMessagePreview: fields.lastMessagePreview, fallbackModel });
-  row.materialized.source.lastMessagePreview = fields.lastMessagePreview;
-  row.materialized.row.lastMessagePreview = fields.lastMessagePreview;
+  Object.assign(row, {
+    lastMessagePreview: fields.lastMessagePreview,
+    lastAssistantMessage: fields.lastAssistantMessage,
+    fallbackModel,
+  });
+  const transcript = {
+    lastMessagePreview: fields.lastMessagePreview,
+    lastAssistantMessage: fields.lastAssistantMessage,
+  };
+  row.materialized = rowProjection.replaceSessionRowFacts(row.materialized, transcript, transcript);
   return true;
 }
 
@@ -483,6 +496,7 @@ export function present(
   }
   if (!options.includeLastMessage) {
     row.lastMessagePreview = undefined;
+    row.lastAssistantMessage = undefined;
   }
   return row;
 }
@@ -496,54 +510,6 @@ export function snapshot(
   return row
     ? { row: present(row, context, options), lifecycleRunId: row.entry.lifecycleRunId }
     : { row: null };
-}
-
-function updateIndex(
-  map: Map<string, Set<string>>,
-  key: string | undefined,
-  id: string,
-  deleting: boolean,
-) {
-  if (!key) {
-    return;
-  }
-  const values = map.get(key);
-  if (deleting) {
-    values?.delete(id);
-    if (values?.size === 0) {
-      map.delete(key);
-    }
-  } else if (values) {
-    values.add(id);
-  } else {
-    map.set(key, new Set([id]));
-  }
-}
-
-export function index(
-  row: Row,
-  indexes: {
-    byStore: Map<string, Set<string>>;
-    byAgent: Map<string, Set<string>>;
-    byKey: Map<string, Set<string>>;
-    byParent: Map<string, Set<string>>;
-  },
-  deleting = false,
-) {
-  const { byStore, byAgent, byKey, byParent } = indexes;
-  const id = identity(row);
-  updateIndex(byStore, row.storeTarget.storePath, id, deleting);
-  updateIndex(byAgent, row.agentId, id, deleting);
-  updateIndex(byKey, `key:${row.key}`, id, deleting);
-  updateIndex(byKey, row.entry && `id:${row.entry.sessionId}`, id, deleting);
-  updateIndex(byKey, logical(row.agentId, row.key), id, deleting);
-  // Only raw sentinel parents resolve by physical store; ordinary parents resolve logically.
-  if (row.key === "global" || row.key === "unknown") {
-    updateIndex(byKey, physical(row.storeTarget.storePath, row.key), id, deleting);
-  }
-  for (const parent of row.parents) {
-    updateIndex(byParent, parent, id, deleting);
-  }
 }
 
 export function isPrivateSourceCurrent(source: NonNullable<Row["privateSource"]>): boolean {
@@ -588,9 +554,13 @@ function selectSessionRowParent(
     cfg,
     agentId: fallbackAgentId,
     sessionKey: key,
-    read: (agentId, sessionKey) => referenced?.(logical(agentId, sessionKey))?.storedEntry,
+    read: (agentId, sessionKey) =>
+      referenced?.(logicalSessionRowIdentity(agentId, sessionKey))?.storedEntry,
   });
-  return { key: selected.key, reference: logical(selected.agentId, selected.key) };
+  return {
+    key: selected.key,
+    reference: logicalSessionRowIdentity(selected.agentId, selected.key),
+  };
 }
 
 /** Drop reader-only graphs while retaining cold metadata and index identity. */
@@ -605,6 +575,7 @@ export function dematerialize(row: Row): Row {
     databaseFactsRevision: row.databaseFactsRevision + 1,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
+    lastAssistantMessage: undefined,
     fallbackModel: undefined,
   };
 }
@@ -638,21 +609,26 @@ export function readSessionRowLineage(
   context: SessionListRowContext,
   referenced?: (reference: string) => Row | undefined,
 ) {
-  const entry = projectGatewaySessionEntry(
+  const projected = projectGatewaySessionEntry(
     cfg,
     storedEntry,
     (key) =>
       selectSessionRowParent(cfg, key, row.agentId, row.storeTarget.storePath, referenced).key,
   );
+  const entry = row.entry && isDeepStrictEqual(row.entry, projected) ? row.entry : projected;
+  const parents = readSessionRowParents(row, storedEntry, cfg, context, referenced);
+  const selection =
+    entry === row.entry ? row.selection : readSessionListSelectionFacts(row.key, entry);
   return {
     entry,
-    parents: readSessionRowParents(row, storedEntry, cfg, context, referenced),
-    selection: readSessionListSelectionFacts(row.key, entry),
+    parents: isDeepStrictEqual(row.parents, parents) ? row.parents : parents,
+    selection: isDeepStrictEqual(row.selection, selection) ? row.selection : selection,
   };
 }
 
 export function acquireSessionRowEntry(params: {
   row: Row;
+  rows: ReadonlyMap<string, Row>;
   storedEntry: SessionEntry | undefined;
   cfg: Inputs["cfg"];
   context: SessionListRowContext;
@@ -668,18 +644,17 @@ export function acquireSessionRowEntry(params: {
     return undefined;
   }
   const lineage = readSessionRowLineage(row, storedEntry, cfg, context, params.referenced);
-  const entryChanged = !isDeepStrictEqual(lineage.entry, row.entry);
-  // Selection and profile indexes retain entry identity until its metadata changes.
-  if (!entryChanged && row.entry) {
-    lineage.entry = row.entry;
-  }
+  const entryChanged = lineage.entry !== row.entry;
   const { entry, parents } = lineage;
   // Equal timestamps still need the full metadata comparison.
   const changed =
-    !isDeepStrictEqual(row.parents, parents) ||
-    !Object.is(storedEntry.updatedAt, row.storedEntry?.updatedAt) ||
-    !isDeepStrictEqual(storedEntry, row.storedEntry) ||
-    entryChanged;
+    row.parents !== parents || !isDeepStrictEqual(storedEntry, row.storedEntry) || entryChanged;
+  if (!changed && row.sharingEntry === row.storedEntry && !row.entryAcquisitionPending) {
+    if (params.rows.get(identity(row)) !== row) {
+      put(row);
+    }
+    return row;
+  }
   // Archive custody can retain new stored metadata before its lineage is acquired.
   const includeChildren =
     changesSessionRowDependents(row.storedEntry, storedEntry) ||
@@ -713,6 +688,7 @@ export function acquireSessionRowEntry(params: {
     ...(generation !== row.generation
       ? {
           lastMessagePreview: undefined,
+          lastAssistantMessage: undefined,
           fallbackModel: undefined,
           materialized: undefined,
           preparedAcpMeta: undefined,

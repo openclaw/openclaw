@@ -9,6 +9,7 @@ import {
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerSshProcess, WorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
@@ -32,14 +33,7 @@ export const BUNDLE_HASH = "a".repeat(64);
 export const PWD_COMMAND = { transportRetry: "idempotent", argv: ["pwd"] } as const;
 
 export function success(stdout = "", stderr = ""): SpawnResult {
-  return {
-    stdout,
-    stderr,
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  return { stdout, stderr, code: 0, signal: null, killed: false, termination: "exit" };
 }
 
 export function rsyncReceiverNonce(argv: readonly string[]): string | undefined {
@@ -54,9 +48,8 @@ function rsyncReceiverInvocation(argv: readonly string[]) {
   if (!words || words.length !== 5 || words[0] !== "node") {
     return undefined;
   }
-  const [node, receiverEntryPath, mode, encodedContext, nonce] = words;
+  const [, receiverEntryPath, mode, encodedContext, nonce] = words;
   if (
-    !node ||
     !receiverEntryPath ||
     !["workspace-root", "git-pack", "accepted-next"].includes(mode ?? "") ||
     !encodedContext ||
@@ -64,11 +57,8 @@ function rsyncReceiverInvocation(argv: readonly string[]) {
   ) {
     return undefined;
   }
-  const [workspace] = JSON.parse(Buffer.from(encodedContext, "base64url").toString("utf8")) as [
-    string,
-    string,
-    string,
-  ];
+  const context = Buffer.from(encodedContext, "base64url").toString("utf8");
+  const [workspace] = JSON.parse(context) as [string, string, string];
   const target =
     mode === "git-pack"
       ? path.join(workspace, ".openclaw-base.pack")
@@ -162,14 +152,9 @@ export function workspaceSetup(
 }
 
 export function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  void promise.catch(() => undefined);
-  return { promise, resolve, reject };
+  const pending = createDeferredCore<T>();
+  void pending.promise.catch(() => undefined);
+  return pending;
 }
 
 export function memoryWorkspaceJournal(
@@ -198,7 +183,6 @@ class FakeProcess implements WorkerSshProcess {
   readonly exited = this.exitDeferred.promise;
   stopCount = 0;
   private stopPromise?: Promise<void>;
-  private stopBarrier: Promise<void> | undefined;
 
   constructor(private readonly deferStop = false) {}
 
@@ -206,17 +190,8 @@ class FakeProcess implements WorkerSshProcess {
     this.readyDeferred.resolve();
   }
 
-  failReady(message = "connect failed", code = 1) {
-    this.readyDeferred.reject(new Error(message));
-    this.exitDeferred.resolve({ code, signal: null });
-  }
-
   exit(code = 1, stderrTail?: string) {
     this.exitDeferred.resolve({ code, signal: null, ...(stderrTail ? { stderrTail } : {}) });
-  }
-
-  blockStopUntil(barrier: Promise<void>) {
-    this.stopBarrier = barrier;
   }
 
   stop() {
@@ -225,8 +200,8 @@ class FakeProcess implements WorkerSshProcess {
         await Promise.resolve();
       }
       this.stopCount += 1;
-      if (this.stopBarrier || !this.deferStop) {
-        await this.stopBarrier;
+      if (!this.deferStop) {
+        await Promise.resolve();
       }
       this.readyDeferred.reject(new Error("stopped"));
       this.exitDeferred.resolve({ code: null, signal: "SIGTERM" });
@@ -239,7 +214,7 @@ export function fakeRunner(
     argv: string[],
     options: CommandOptions,
   ) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
-  defaults: { defaultStdout?: string; deferStop?: boolean } = {},
+  defaults: { defaultStdout?: string; deferStop?: boolean; ready?: boolean } = {},
 ) {
   const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
   const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
@@ -247,6 +222,9 @@ export function fakeRunner(
     start(argv, options) {
       const process = new FakeProcess(defaults.deferStop);
       starts.push({ argv, options, process });
+      if (defaults.ready) {
+        process.becomeReady();
+      }
       return process;
     },
     async run(argv, options) {
@@ -267,81 +245,67 @@ export function localWorkspaceRunner(
   ) => Promise<SpawnResult | undefined>,
   onCommandCompleted?: (argv: readonly string[], result: SpawnResult) => void,
 ) {
-  const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
-  const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
-  const runner: WorkerSshRunner = {
-    start(argv, options) {
-      const process = new FakeProcess();
-      starts.push({ argv, options, process });
-      return process;
-    },
-    async run(argv, options) {
-      runs.push({ argv, options });
-      if (argv[0] === "git") {
-        return await runCommandWithTimeout(argv, options);
-      }
-      if (argv[0] === "rsync") {
-        if (argv.some((arg) => arg.startsWith("--rsync-path="))) {
-          const boundary = await prepareLocalWorkspaceRsyncBoundary(remoteHome, argv);
-          const boundaryOptions = {
-            ...options,
-            baseEnv: { ...options.baseEnv, HOME: remoteHome },
-          };
-          const intercepted = await onRsync?.(
-            argv,
-            boundary.argv,
-            boundaryOptions,
-            boundary.receiverTarget,
-          );
-          return intercepted ?? (await runCommandWithTimeout(boundary.argv, boundaryOptions));
-        }
-        const localArgv = [...argv];
-        const remoteShellIndex = localArgv.indexOf("-e");
-        if (remoteShellIndex >= 0) {
-          localArgv.splice(remoteShellIndex, 2);
-        }
-        for (let index = localArgv.indexOf("--") + 1; index < localArgv.length; index += 1) {
-          const candidate = localArgv[index];
-          const separator = candidate?.indexOf(":") ?? -1;
-          if (!candidate || separator < 0) {
-            continue;
-          }
-          const remotePath = candidate.slice(separator + 1);
-          // Map both outbound destinations and inbound sources into the fake HOME.
-          localArgv[index] = path.isAbsolute(remotePath)
-            ? remotePath
-            : path.join(remoteHome, remotePath);
-        }
-        const localDestination = localArgv.at(-1);
-        if (!localDestination) {
-          throw new Error("missing test rsync destination");
-        }
-        await fs.mkdir(
-          localDestination.endsWith("/") ? localDestination : path.dirname(localDestination),
-          { recursive: true },
-        );
-        const intercepted = await onRsync?.(argv, localArgv, options);
-        if (intercepted) {
-          return intercepted;
-        }
-        return await runCommandWithTimeout(localArgv, options);
-      }
-      if (argv[0] === "ssh") {
-        const remoteCommand = argv.at(-1);
-        if (!remoteCommand) {
-          throw new Error("missing test SSH remote command");
-        }
-        const result = await runCommandWithTimeout(["sh", "-c", remoteCommand], {
+  return fakeRunner(async (argv, options) => {
+    if (argv[0] === "git") {
+      return await runCommandWithTimeout(argv, options);
+    }
+    if (argv[0] === "rsync") {
+      if (argv.some((arg) => arg.startsWith("--rsync-path="))) {
+        const boundary = await prepareLocalWorkspaceRsyncBoundary(remoteHome, argv);
+        const boundaryOptions = {
           ...options,
           baseEnv: { ...options.baseEnv, HOME: remoteHome },
-        });
-        onCommandCompleted?.(argv, result);
-        return result;
+        };
+        const intercepted = await onRsync?.(
+          argv,
+          boundary.argv,
+          boundaryOptions,
+          boundary.receiverTarget,
+        );
+        return intercepted ?? (await runCommandWithTimeout(boundary.argv, boundaryOptions));
       }
-      throw new Error(`unexpected test command: ${argv[0] ?? "missing"}`);
-    },
-  };
-  return { runner, runs, starts };
+      const localArgv = [...argv];
+      const remoteShellIndex = localArgv.indexOf("-e");
+      if (remoteShellIndex >= 0) {
+        localArgv.splice(remoteShellIndex, 2);
+      }
+      for (let index = localArgv.indexOf("--") + 1; index < localArgv.length; index += 1) {
+        const candidate = localArgv[index];
+        const separator = candidate?.indexOf(":") ?? -1;
+        if (!candidate || separator < 0) {
+          continue;
+        }
+        const remotePath = candidate.slice(separator + 1);
+        // Map both outbound destinations and inbound sources into the fake HOME.
+        localArgv[index] = path.isAbsolute(remotePath)
+          ? remotePath
+          : path.join(remoteHome, remotePath);
+      }
+      const localDestination = localArgv.at(-1);
+      if (!localDestination) {
+        throw new Error("missing test rsync destination");
+      }
+      await fs.mkdir(
+        localDestination.endsWith("/") ? localDestination : path.dirname(localDestination),
+        { recursive: true },
+      );
+      const intercepted = await onRsync?.(argv, localArgv, options);
+      return intercepted ?? (await runCommandWithTimeout(localArgv, options));
+    }
+    if (argv[0] === "ssh") {
+      const remoteCommand = argv.at(-1);
+      if (!remoteCommand) {
+        throw new Error("missing test SSH remote command");
+      }
+      const result = await runCommandWithTimeout(["sh", "-c", remoteCommand], {
+        ...options,
+        baseEnv: { ...options.baseEnv, HOME: remoteHome },
+      });
+      onCommandCompleted?.(argv, result);
+      return result;
+    }
+    throw new Error(`unexpected test command: ${argv[0] ?? "missing"}`);
+  });
 }
 
 export async function git(root: string, ...args: string[]): Promise<string> {
@@ -370,14 +334,8 @@ export function startTestTunnel(
   ssh: WorkerSshEndpoint = SSH,
   sharedHost = false,
 ) {
-  return manager.start({
-    environmentId,
-    ownerEpoch,
-    bundleHash: BUNDLE_HASH,
-    ssh,
-    sharedHost,
-    resolveIdentity,
-  });
+  const request = { environmentId, ownerEpoch, ssh, sharedHost, resolveIdentity };
+  return manager.start({ ...request, bundleHash: BUNDLE_HASH });
 }
 
 export async function startConnectedTunnel(
@@ -390,12 +348,7 @@ export async function startConnectedTunnel(
   } = {},
 ) {
   const manager = createWorkerTunnelManager({ runner: fake.runner });
-  const handle = await startTestTunnel(
-    manager,
-    environmentId,
-    ownerEpoch,
-    options.ssh,
-    options.sharedHost,
-  );
+  const { ssh, sharedHost } = options;
+  const handle = await startTestTunnel(manager, environmentId, ownerEpoch, ssh, sharedHost);
   return { manager, handle };
 }

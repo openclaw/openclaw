@@ -47,6 +47,7 @@ export function captureDurableSessionActor(params: {
       },
     }),
     transport: {
+      agentId: database.agentId,
       run: (operation, authorize, concurrentBoardReads) => {
         const prepared = concurrentBoardReads
           ? execution.capturePreparedGenerationClaim()
@@ -135,6 +136,3 @@ export function createSessionActorFactory(
     },
   };
 }
-
-/** Existing durable callers share the same acquisition owner. */
-export const createDurableSessionActorFactory = createSessionActorFactory;

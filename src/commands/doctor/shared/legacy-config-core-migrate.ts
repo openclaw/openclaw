@@ -1,13 +1,12 @@
-// Core doctor compatibility migration pipeline for current config objects.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentRosterProperty } from "../../../agents/agent-scope-config.js";
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
 import { migrateLegacyCommandOwners } from "../../doctor-command-owner.js";
+import { LegacyHeartbeatSchema } from "../../doctor-heartbeat-legacy.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import type { LegacyCodexModelIdentity } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
@@ -36,7 +35,7 @@ function repairInvalidHeartbeatActiveHours(cfg: OpenClawConfig, changes: string[
     if (
       isRecord(heartbeat) &&
       Object.hasOwn(heartbeat, "activeHours") &&
-      !HeartbeatSchema.safeParse({ activeHours: heartbeat.activeHours }).success
+      !LegacyHeartbeatSchema.safeParse({ activeHours: heartbeat.activeHours }).success
     ) {
       delete heartbeat.activeHours;
       changes.push(

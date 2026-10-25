@@ -1,6 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 type GatewayMethod = (options: {
   params?: { callId?: unknown };
@@ -32,13 +32,11 @@ function setRuntimeCoordinator(coordinator: unknown): void {
 }
 
 function registerStreamSessionMethod(): GatewayMethod {
-  let streamSessionMethod: GatewayMethod | undefined;
+  const methods = new Map<string, GatewayMethod>();
   fixturePlugin.register(
     {
       registerGatewayMethod(method, handler) {
-        if (method === "qa.voiceCall.streamSession") {
-          streamSessionMethod = handler;
-        }
+        methods.set(method, handler);
       },
       registerRealtimeVoiceProvider() {},
     },
@@ -46,6 +44,7 @@ function registerStreamSessionMethod(): GatewayMethod {
       throw new Error("Stream-session issuance must not submit a realtime tool result");
     },
   );
+  const streamSessionMethod = methods.get("qa.voiceCall.streamSession");
   if (!streamSessionMethod) {
     throw new Error("Voice Call fixture did not register qa.voiceCall.streamSession");
   }
@@ -55,99 +54,84 @@ function registerStreamSessionMethod(): GatewayMethod {
 async function expectUnavailable(streamSessionMethod: GatewayMethod): Promise<void> {
   const respond = vi.fn();
   await streamSessionMethod({ params: { callId: "call-123" }, respond });
-  expect(respond).toHaveBeenCalledOnce();
-  expect(respond).toHaveBeenCalledWith(false, undefined, unavailableError);
+  expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, unavailableError);
 }
 
-describe("Voice Call runtime fixture", () => {
-  beforeEach(() => {
-    delete (globalThis as Record<PropertyKey, unknown>)[runtimeCoordinatorKey];
-  });
+const clearCoordinator = () => {
+  delete (globalThis as Record<PropertyKey, unknown>)[runtimeCoordinatorKey];
+};
+beforeEach(clearCoordinator);
 
-  afterEach(() => {
-    delete (globalThis as Record<PropertyKey, unknown>)[runtimeCoordinatorKey];
-    vi.restoreAllMocks();
-  });
+afterEach(() => {
+  clearCoordinator();
+  vi.restoreAllMocks();
+});
 
-  it("returns unavailable without a runtime coordinator", async () => {
-    await expectUnavailable(registerStreamSessionMethod());
-  });
-
-  it.each(["starting", "stopping"] as const)(
-    "returns unavailable while the runtime is %s",
-    async (state) => {
-      const owner = {};
-      setRuntimeCoordinator({
-        current: { generation: owner },
-        slot: { state, owner, promise: Promise.resolve() },
-      });
-
-      await expectUnavailable(registerStreamSessionMethod());
-    },
-  );
-
-  it("returns unavailable for a running slot owned by a stale generation", async () => {
+it.each(["absent", "starting", "stopping", "stale"] as const)(
+  "returns unavailable for %s runtime",
+  async (state) => {
+    const owner = {};
     const getCall = vi.fn();
     const streamSessionIssuer = vi.fn();
-    setRuntimeCoordinator({
-      current: { generation: {} },
-      slot: {
-        state: "running",
-        owner: {},
-        runtime: { manager: { getCall, streamSessionIssuer } },
-      },
-    });
-
+    if (state !== "absent") {
+      setRuntimeCoordinator({
+        current: { generation: owner },
+        slot:
+          state === "stale"
+            ? {
+                state: "running",
+                owner: {},
+                runtime: { manager: { getCall, streamSessionIssuer } },
+              }
+            : { state, owner, promise: Promise.resolve() },
+      });
+    }
     await expectUnavailable(registerStreamSessionMethod());
     expect(getCall).not.toHaveBeenCalled();
     expect(streamSessionIssuer).not.toHaveBeenCalled();
-  });
+  },
+);
 
-  it("issues a stream session from the current running generation", async () => {
-    const callId = "call-123";
-    const owner = {};
-    const call = {
-      providerCallId: "provider-call-456",
-      from: "+15550000001",
-      to: "+15550000002",
-      direction: "outbound",
-    };
-    const getCall = vi.fn(() => call);
-    const streamSessionIssuer = vi.fn(() => ({
-      streamUrl: "wss://voice.example.test/stream",
-      token: "stream-token",
-    }));
-    setRuntimeCoordinator({
-      current: { generation: owner },
-      slot: {
-        state: "running",
-        owner,
-        runtime: {
-          manager: { getCall, streamSessionIssuer },
-          webhookUrl: "https://voice.example.test/webhook",
-        },
+it("issues a stream session from the current running generation", async () => {
+  const callId = "call-123";
+  const owner = {};
+  const call = {
+    providerCallId: "provider-call-456",
+    from: "+15550000001",
+    to: "+15550000002",
+    direction: "outbound",
+  };
+  const getCall = vi.fn(() => call);
+  const session = {
+    streamUrl: "wss://voice.example.test/stream",
+    token: "stream-token",
+  };
+  const streamSessionIssuer = vi.fn(() => session);
+  setRuntimeCoordinator({
+    current: { generation: owner },
+    slot: {
+      state: "running",
+      owner,
+      runtime: {
+        manager: { getCall, streamSessionIssuer },
+        webhookUrl: "https://voice.example.test/webhook",
       },
-    });
-    const respond = vi.fn();
+    },
+  });
+  const respond = vi.fn();
 
-    await registerStreamSessionMethod()({ params: { callId }, respond });
+  await registerStreamSessionMethod()({ params: { callId }, respond });
 
-    expect(getCall).toHaveBeenCalledOnce();
-    expect(getCall).toHaveBeenCalledWith(callId);
-    expect(streamSessionIssuer).toHaveBeenCalledOnce();
-    expect(streamSessionIssuer).toHaveBeenCalledWith({
-      providerName: "twilio",
-      callId,
-      from: call.from,
-      to: call.to,
-      direction: call.direction,
-    });
-    expect(respond).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(true, {
-      streamUrl: "wss://voice.example.test/stream",
-      token: "stream-token",
-      providerCallId: call.providerCallId,
-      webhookUrl: "https://voice.example.test/webhook",
-    });
+  expect(getCall).toHaveBeenCalledExactlyOnceWith(callId);
+  const { providerCallId, ...callDetails } = call;
+  expect(streamSessionIssuer).toHaveBeenCalledExactlyOnceWith({
+    providerName: "twilio",
+    callId,
+    ...callDetails,
+  });
+  expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+    ...session,
+    providerCallId,
+    webhookUrl: "https://voice.example.test/webhook",
   });
 });

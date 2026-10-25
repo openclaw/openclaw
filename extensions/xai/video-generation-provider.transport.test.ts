@@ -1,27 +1,13 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type { IncomingMessage } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
 
 vi.hoisted(() => vi.resetModules());
 vi.unmock("openclaw/plugin-sdk/provider-http");
 
-const resolveApiKeyForProviderMock = vi.hoisted(() =>
-  vi.fn(async () => ({
-    apiKey: "local-xai-key",
-    source: "profile",
-    mode: "api-key",
-  })),
-);
-
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
-
-afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
-  vi.resetModules();
-});
+afterAll(() => vi.resetModules());
 
 type CapturedRequest = {
   body: string;
@@ -30,143 +16,84 @@ type CapturedRequest = {
   url?: string;
 };
 
-const openServers: Server[] = [];
-
-async function readRequestBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-function writeJson(response: ServerResponse, payload: unknown) {
-  response.writeHead(200, { "content-type": "application/json" });
-  response.end(JSON.stringify(payload));
-}
-
-function writeVideo(response: ServerResponse) {
-  response.writeHead(200, { "content-type": "video/mp4" });
-  response.end(Buffer.from("mp4"));
-}
-
-async function startXaiVideoServer(): Promise<{
-  baseUrl: string;
-  requests: CapturedRequest[];
-}> {
+async function withXaiVideoServer(
+  run: (server: { baseUrl: string; requests: CapturedRequest[] }) => Promise<void>,
+) {
   const requests: CapturedRequest[] = [];
   let videoUrl = "";
-  const server = createServer((request, response) => {
-    void (async () => {
-      requests.push({
-        method: request.method,
-        url: request.url,
-        headers: request.headers,
-        body: await readRequestBody(request),
-      });
-      if (request.method === "POST" && request.url === "/v1/videos/generations") {
-        writeJson(response, { request_id: "local_request" });
-        return;
-      }
-      if (request.method === "GET" && request.url === "/v1/videos/local_request") {
-        writeJson(response, {
-          request_id: "local_request",
-          status: "done",
-          video: { url: videoUrl },
+  await withServer(
+    (request, response) => {
+      void (async () => {
+        requests.push({
+          method: request.method,
+          url: request.url,
+          headers: request.headers,
+          body: (await consumeBuffer(request)).toString("utf8"),
         });
-        return;
-      }
-      if (request.method === "GET" && request.url === "/media/generated.mp4") {
-        writeVideo(response);
-        return;
-      }
-      response.writeHead(404, { "content-type": "text/plain" });
-      response.end("not found");
-    })().catch((error: unknown) => {
-      response.writeHead(500, { "content-type": "text/plain" });
-      response.end(error instanceof Error ? error.message : String(error));
-    });
-  });
-  openServers.push(server);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address() as AddressInfo;
-  const origin = `http://127.0.0.1:${address.port}`;
-  videoUrl = `${origin}/media/generated.mp4`;
-  return {
-    baseUrl: `${origin}/v1`,
-    requests,
-  };
-}
-
-async function closeOpenServers() {
-  await Promise.all(
-    openServers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        }),
-    ),
+        const routes: Record<string, string | Buffer> = {
+          "POST /v1/videos/generations": JSON.stringify({ request_id: "local_request" }),
+          "GET /v1/videos/local_request": JSON.stringify({
+            request_id: "local_request",
+            status: "done",
+            video: { url: videoUrl },
+          }),
+          "GET /media/generated.mp4": Buffer.from("mp4"),
+        };
+        const body = routes[`${request.method} ${request.url}`];
+        response.writeHead(body === undefined ? 404 : 200, {
+          "content-type": Buffer.isBuffer(body) ? "video/mp4" : "application/json",
+        });
+        response.end(body ?? "not found");
+      })().catch((error: unknown) => {
+        response.writeHead(500, { "content-type": "text/plain" });
+        response.end(error instanceof Error ? error.message : String(error));
+      });
+    },
+    async (origin) => {
+      videoUrl = `${origin}/media/generated.mp4`;
+      await run({ baseUrl: `${origin}/v1`, requests });
+    },
   );
 }
 
-describe("xai video generation provider transport", () => {
-  afterEach(async () => {
-    await closeOpenServers();
+function generate(baseUrl: string, request?: Record<string, unknown>, prompt = "transport proof") {
+  return buildXaiVideoGenerationProvider().generateVideo({
+    provider: "xai",
+    model: "grok-imagine-video",
+    prompt,
+    cfg: {
+      models: {
+        providers: { xai: { baseUrl, apiKey: "local-xai-key", ...(request ? { request } : {}) } },
+      },
+    } as never,
   });
+}
 
+describe("xai video generation provider transport", () => {
   it("uses configured policy for xAI API requests without leaking headers to video downloads", async () => {
-    const server = await startXaiVideoServer();
-    const provider = buildXaiVideoGenerationProvider();
+    await withXaiVideoServer(async (server) => {
+      const result = await generate(server.baseUrl, {
+        allowPrivateNetwork: true,
+        headers: { "X-Xai-Trace": "transport-proof" },
+      });
 
-    const result = await provider.generateVideo({
-      provider: "xai",
-      model: "grok-imagine-video",
-      prompt: "transport proof",
-      cfg: {
-        models: {
-          providers: {
-            xai: {
-              baseUrl: server.baseUrl,
-              request: {
-                allowPrivateNetwork: true,
-                headers: { "X-Xai-Trace": "transport-proof" },
-              },
-            },
-          },
-        },
-      } as never,
+      expect(result.videos[0]?.buffer).toEqual(Buffer.from("mp4"));
+      const apiHeaders = {
+        authorization: "Bearer local-xai-key",
+        "x-xai-trace": "transport-proof",
+      };
+      expect(server.requests).toMatchObject([
+        { method: "POST", url: "/v1/videos/generations", headers: apiHeaders },
+        { method: "GET", url: "/v1/videos/local_request", headers: apiHeaders },
+        { method: "GET", url: "/media/generated.mp4" },
+      ]);
+      expect(JSON.parse(server.requests[0]?.body ?? "{}")).toMatchObject({
+        model: "grok-imagine-video",
+        prompt: "transport proof",
+      });
+      expect(server.requests[2]?.headers.authorization).toBeUndefined();
+      expect(server.requests[2]?.headers["x-xai-trace"]).toBeUndefined();
     });
-
-    expect(result.videos[0]?.buffer).toEqual(Buffer.from("mp4"));
-    expect(server.requests).toHaveLength(3);
-    expect(server.requests[0]).toMatchObject({
-      method: "POST",
-      url: "/v1/videos/generations",
-    });
-    expect(server.requests[0]?.headers.authorization).toBe("Bearer local-xai-key");
-    expect(server.requests[0]?.headers["x-xai-trace"]).toBe("transport-proof");
-    expect(JSON.parse(server.requests[0]?.body ?? "{}")).toMatchObject({
-      model: "grok-imagine-video",
-      prompt: "transport proof",
-    });
-    expect(server.requests[1]).toMatchObject({
-      method: "GET",
-      url: "/v1/videos/local_request",
-    });
-    expect(server.requests[1]?.headers.authorization).toBe("Bearer local-xai-key");
-    expect(server.requests[1]?.headers["x-xai-trace"]).toBe("transport-proof");
-    expect(server.requests[2]).toMatchObject({
-      method: "GET",
-      url: "/media/generated.mp4",
-    });
-    expect(server.requests[2]?.headers.authorization).toBeUndefined();
-    expect(server.requests[2]?.headers["x-xai-trace"]).toBeUndefined();
   });
 
   it.each([
@@ -175,33 +102,18 @@ describe("xai video generation provider transport", () => {
   ] as const)(
     "blocks %s loopback xAI video requests before reaching the server",
     async (policyName, requestPolicy) => {
-      const server = await startXaiVideoServer();
-      const provider = buildXaiVideoGenerationProvider();
+      await withXaiVideoServer(async (server) => {
+        await expect(
+          generate(server.baseUrl, requestPolicy, `${policyName} policy loopback proof`),
+        ).rejects.toThrow(
+          expect.objectContaining({
+            name: "SsrFBlockedError",
+            message: expect.stringContaining("private/internal/special-use IP address"),
+          }),
+        );
 
-      await expect(
-        provider.generateVideo({
-          provider: "xai",
-          model: "grok-imagine-video",
-          prompt: `${policyName} policy loopback proof`,
-          cfg: {
-            models: {
-              providers: {
-                xai: {
-                  baseUrl: server.baseUrl,
-                  ...(requestPolicy ? { request: requestPolicy } : {}),
-                },
-              },
-            },
-          } as never,
-        }),
-      ).rejects.toThrow(
-        expect.objectContaining({
-          name: "SsrFBlockedError",
-          message: expect.stringContaining("private/internal/special-use IP address"),
-        }),
-      );
-
-      expect(server.requests).toHaveLength(0);
+        expect(server.requests).toHaveLength(0);
+      });
     },
   );
 });

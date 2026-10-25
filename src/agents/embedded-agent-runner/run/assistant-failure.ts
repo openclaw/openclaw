@@ -5,24 +5,25 @@ import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
+  buildAssistantFailoverSignal,
   classifyAssistantFailoverReason,
-  formatBillingErrorMessage,
-  formatUserFacingAssistantErrorText,
-  GENERIC_ASSISTANT_ERROR_TEXT,
-  isTimeoutErrorMessage,
   isAuthAssistantError,
   isBillingAssistantError,
   isFailoverAssistantError,
   isRateLimitAssistantError,
-  parseImageDimensionError,
-  pickFallbackThinkingLevel,
-} from "../../embedded-agent-helpers.js";
-import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
+} from "../../embedded-agent-helpers/assistant-message-failures.js";
+import {
+  formatUserFacingAssistantErrorText,
+  GENERIC_ASSISTANT_ERROR_TEXT,
+} from "../../embedded-agent-helpers/error-text.js";
+import { parseImageDimensionError } from "../../embedded-agent-helpers/image-errors.js";
+import { pickFallbackThinkingLevel } from "../../embedded-agent-helpers/thinking.js";
 import {
   FailoverError,
   recordModelFallbackStop,
   resolveFailoverStatus,
 } from "../../failover-error.js";
+import { isTimeoutErrorMessage } from "../../failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import {
   classifyRateLimitWindow,
@@ -30,7 +31,10 @@ import {
   shouldRetryFailoverSignal,
 } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
-import { renderRateLimitRetryExhaustion } from "../../failover/user-copy.js";
+import {
+  formatBillingErrorMessage,
+  renderRateLimitRetryExhaustion,
+} from "../../failover/user-copy.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 import { log } from "../logger.js";
@@ -154,7 +158,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   const assistantProfileFailoverReason =
     assistantFailoverReason ??
     (assistantProviderStarted && (timedOut || idleTimedOut) ? "timeout" : null);
-  const assistantProfileFailureReason = input.failover.resolveAuthProfileFailureReason(
+  let assistantProfileFailureReason = input.failover.resolveAuthProfileFailureReason(
     assistantProfileFailoverReason,
     {
       providerStarted: assistantProviderStarted,
@@ -337,7 +341,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       result: effectiveFailoverReason === "timeout" ? "timeout" : result,
       ...(effectiveFailoverReason ? { reason: effectiveFailoverReason } : {}),
       stage: "assistant",
-      ...(typeof status === "number" ? { status } : {}),
+      ...(status !== undefined ? { status } : {}),
     });
   };
   const throwFailure = (error: FailoverError): never => {
@@ -374,6 +378,7 @@ export async function handleEmbeddedAssistantFailure(input: {
           profileId: failedProfileId,
           reason: assistantProfileFailureReason,
           modelId,
+          retryAfterMs: assistantSignal?.retryAfterMs,
         });
       } catch (err) {
         log.warn(`profile failure mark failed: ${String(err)}`);
@@ -414,15 +419,22 @@ export async function handleEmbeddedAssistantFailure(input: {
       logFallbackDecision: logFailoverDecision,
     });
 
+    if (assistantProfileFailureReason === "timeout" && !rotated && !runInput.fallbackConfigured) {
+      // A cooldown without a recovery target would only block subsequent turns.
+      assistantProfileFailureReason = null;
+    }
     const markFailedProfilePromise = markFailedProfile();
     if (timedOut && !runInput.isProbeSession && failedProfileId) {
       const timeoutLabel = idleTimedOut ? "idle timeout (model silent)" : "timed out";
       // Existing credentials are rotation targets only when config authorizes them.
-      log.warn(
-        rotated
-          ? `Profile ${failedProfileId} ${timeoutLabel}. Trying next account...`
-          : `Profile ${failedProfileId} ${timeoutLabel}. No further authorized account for this provider; create a backup auth profile and add its id to auth.order to enable failover.`,
-      );
+      const recoveryHint = rotated
+        ? "Trying next account..."
+        : runInput.fallbackConfigured
+          ? "No further authorized account for this provider; trying the next configured model."
+          : assistantProfileFailureReason
+            ? "No further authorized account for this provider; create a backup auth profile and add its id to auth.order to enable failover."
+            : "No failover target is available; leaving the profile available for the next turn.";
+      log.warn(`Profile ${failedProfileId} ${timeoutLabel}. ${recoveryHint}`);
     }
     if (cloudCodeAssistFormatError && failedProfileId) {
       log.warn(

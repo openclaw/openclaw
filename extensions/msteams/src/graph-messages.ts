@@ -17,11 +17,6 @@ import {
 } from "./graph.js";
 import { getMSTeamsReactionEmoji, resolveMSTeamsReactionEmoji } from "./reaction-types.js";
 
-type GraphPinnedMessage = {
-  id?: string;
-  message?: GraphMessage;
-};
-
 function stripTargetPrefix(raw: string): string {
   return raw
     .trim()
@@ -72,9 +67,7 @@ export async function resolveGraphConversationId(
 export function resolveConversationPath(to: string): {
   kind: "chat" | "channel";
   basePath: string;
-  chatId?: string;
   teamId?: string;
-  channelId?: string;
 } {
   const cleaned = stripTargetPrefix(to);
   const separatorIndex = cleaned.indexOf("/");
@@ -85,7 +78,6 @@ export function resolveConversationPath(to: string): {
       kind: "channel",
       basePath: `/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}`,
       teamId,
-      channelId,
     };
   }
   // Conversation IDs like 19:xxx@thread.tacv2 may represent either group chats
@@ -96,7 +88,6 @@ export function resolveConversationPath(to: string): {
   return {
     kind: "chat",
     basePath: `/chats/${encodeURIComponent(cleaned)}`,
-    chatId: cleaned,
   };
 }
 
@@ -177,34 +168,31 @@ export async function pinMessageMSTeams(
   return { ok: true, pinnedMessageId: result.id };
 }
 
-type UnpinMessageMSTeamsParams = {
+export async function unpinMessageMSTeams(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
   /** The pinned-message resource ID returned by pin or list-pins (not the message ID). */
   pinnedMessageId: string;
-};
-
-export async function unpinMessageMSTeams(
-  params: UnpinMessageMSTeamsParams,
-): Promise<{ ok: true }> {
+}): Promise<{ ok: true }> {
   const { token, basePath } = await resolveGraphPinContext(params, "modify");
   const path = `${basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
   await deleteGraphRequest({ token, path });
   return { ok: true };
 }
 
-type ListPinsMSTeamsParams = {
+const LIST_PINS_MAX_PAGES = 10;
+
+export async function listPinsMSTeams(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
-};
-
-const LIST_PINS_MAX_PAGES = 10;
-
-export async function listPinsMSTeams(params: ListPinsMSTeamsParams) {
+}) {
   const { token, basePath } = await resolveGraphPinContext(params, "list");
-  const { items } = await fetchAllGraphPages<GraphPinnedMessage>({
+  const { items } = await fetchAllGraphPages<{
+    id?: string;
+    message?: GraphMessage;
+  }>({
     token,
     path: `${basePath}/pinnedMessages?$expand=message`,
     maxPages: LIST_PINS_MAX_PAGES,
@@ -219,28 +207,8 @@ export async function listPinsMSTeams(params: ListPinsMSTeamsParams) {
   };
 }
 
-type GraphReaction = {
-  reactionType?: string;
-  user?: { user?: { id?: string; displayName?: string | null } | null } | null;
-  createdDateTime?: string;
-};
-
-type GraphMessageWithReactions = GraphMessage & {
-  reactions?: GraphReaction[];
-};
-
 type ReactMessageMSTeamsParams = MSTeamsMessageTarget & {
   reactionType: string;
-};
-
-type ReactionSummary = {
-  reactionType: string;
-  /** Display name for the reaction (matches reactionType for known types). */
-  name: string;
-  /** Emoji representation when available. */
-  emoji?: string;
-  count: number;
-  users: Array<{ id: string; displayName?: string }>;
 };
 
 // Graph reaction writes use beta and prefer delegated auth, falling back to
@@ -276,7 +244,15 @@ export function unreactMessageMSTeams(params: ReactMessageMSTeamsParams): Promis
 export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
   const { token, ...conv } = await resolveGraphMessageContext(params);
   const path = resolveMessagePath(conv, params);
-  const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
+  const msg = await fetchGraphJson<
+    GraphMessage & {
+      reactions?: {
+        reactionType?: string;
+        user?: { user?: { id?: string; displayName?: string | null } | null } | null;
+        createdDateTime?: string;
+      }[];
+    }
+  >({ token, path });
 
   const grouped = new Map<
     string,
@@ -300,7 +276,14 @@ export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
     }
   }
 
-  const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, group]) => ({
+  const reactions: {
+    reactionType: string;
+    /** Display name for the reaction (matches reactionType for known types). */
+    name: string;
+    emoji?: string;
+    count: number;
+    users: Array<{ id: string; displayName?: string }>;
+  }[] = Array.from(grouped.entries()).map(([type, group]) => ({
     reactionType: type,
     name: type,
     emoji: getMSTeamsReactionEmoji(type),
@@ -310,15 +293,6 @@ export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
 
   return { reactions };
 }
-
-type SearchMessagesMSTeamsParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-  query: string;
-  from?: string;
-  limit?: number;
-};
 
 const SEARCH_DEFAULT_LIMIT = 25;
 const SEARCH_MAX_LIMIT = 50;
@@ -348,7 +322,14 @@ function matchesSearchSender(message: GraphMessage, from: string | undefined): b
  * Graph does not support collection `$search` here, so filter bounded pages
  * locally without widening the read to the account's global message index.
  */
-export async function searchMessagesMSTeams(params: SearchMessagesMSTeamsParams) {
+export async function searchMessagesMSTeams(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+  query: string;
+  from?: string;
+  limit?: number;
+}) {
   const { token, basePath } = await resolveGraphMessageContext(params);
 
   const rawLimit = params.limit ?? SEARCH_DEFAULT_LIMIT;

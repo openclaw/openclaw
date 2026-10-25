@@ -4,15 +4,22 @@ import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
+import { focusChatComposerFromKeydown } from "../chat-pane-shared.ts";
 import { ChatPermissionPicker, type ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
 
 it("keeps locked modes unavailable and selects enabled numeric shortcuts with return focus", async () => {
   const onSelect = vi.fn();
-  const { container } = mountSolid(() => (
-    <ChatPermissionPicker canSelectFull={false} mode="guarded" onSelect={onSelect} />
-  ));
+  const canSelectFull = vi.fn(() => false);
+  const options: ChatPermissionPickerProps = {
+    get canSelectFull() {
+      return canSelectFull();
+    },
+    mode: "guarded",
+    onSelect,
+  };
+  const { container } = mountSolid(() => <ChatPermissionPicker {...options} />);
   flush();
+  expect(canSelectFull).not.toHaveBeenCalled();
   const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
   trigger.focus();
   trigger.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true, cancelable: true }));
@@ -72,8 +79,9 @@ it("keeps declared shortcuts in the menu and forwards ordinary typing to the com
     </>
   ));
   flush();
+  const composer = container.querySelector("textarea")!;
   const redirect = (event: KeyboardEvent) =>
-    focusChatComposerFromPrintableKeydown(container, event);
+    focusChatComposerFromKeydown(container, event, composer);
   document.addEventListener("keydown", redirect, true);
   onTestFinished(() => document.removeEventListener("keydown", redirect, true));
   const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;

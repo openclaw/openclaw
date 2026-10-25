@@ -8,6 +8,7 @@ import {
   getWorkboardState,
   hasCurrentWorkboardCards,
   invalidateWorkboardLoads,
+  subscribeWorkboard,
   workboardHasActiveWrites,
 } from "../lib/workboard/runtime.ts";
 import {
@@ -59,11 +60,6 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
             force: true,
             preserveError:
               state.error !== request.error && state.error !== workboardRuntime.loadError,
-            requestUpdate: () => {
-              if (isCurrent()) {
-                current.notify();
-              }
-            },
           });
         }
       })();
@@ -109,9 +105,11 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
         invalidateWorkboardLoads(current.owner);
         stopHost();
         stopEvents();
+        stopState();
         current.listeners.clear();
       },
     };
+    let stopState = subscribeWorkboard(current.owner, () => current.notify());
     let canWrite = host.connection.canWrite;
     const stopHost = host.subscribe(() => {
       const connection = host.connection;
@@ -123,7 +121,9 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
         load = null;
         pending = null;
         invalidateWorkboardLoads(current.owner);
+        stopState();
         current.owner = {};
+        stopState = subscribeWorkboard(current.owner, () => current.notify());
         if (current.connected) {
           void current.refresh();
         }
@@ -182,6 +182,25 @@ export class WorkboardWidgetModel {
   get cards() {
     return getWorkboardState(this.runtime.owner).cards.filter(isActiveWorkboardCard);
   }
+  get hasMore() {
+    return Boolean(getWorkboardState(this.runtime.owner).nextCursor);
+  }
+  get loadedCardCount() {
+    return getWorkboardState(this.runtime.owner).cards.length;
+  }
+  get loading() {
+    return this.runtime.loading;
+  }
+  async loadMore(): Promise<boolean> {
+    if (this.isActive() && this.connected) {
+      return loadWorkboard({
+        host: this.runtime.owner,
+        client: this.host,
+        more: true,
+      });
+    }
+    return false;
+  }
   get statuses() {
     return getWorkboardState(this.runtime.owner).statuses;
   }
@@ -216,11 +235,6 @@ export class WorkboardWidgetModel {
       cardId: card.id,
       status,
       position: nextWorkboardCardPosition(getWorkboardState(owner).cards, card, status),
-      requestUpdate: () => {
-        if (owner === this.runtime.owner) {
-          this.runtime.notify();
-        }
-      },
     });
   }
   async handleStatusChange(event: Event) {

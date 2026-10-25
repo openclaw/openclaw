@@ -1,5 +1,6 @@
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { StoreWriterQueue } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { TelegramRuntime } from "./runtime.types.js";
 import { persistBindingMutation } from "./thread-bindings-persistence.js";
 import { resolveBindingKey } from "./thread-bindings-session.js";
 import { sanitizeStoredBinding } from "./thread-bindings-store.js";
@@ -60,6 +61,7 @@ export function listBindingsForAccount(accountId: string): TelegramThreadBinding
 
 export function captureBindingMutation(
   manager: TelegramThreadBindingManager,
+  runtime: TelegramRuntime,
   conversationId: string,
 ) {
   const state = getThreadBindingsState();
@@ -113,6 +115,7 @@ export function captureBindingMutation(
       this.prepare(next);
       const committed = await persistBindingMutation({
         ...options,
+        runtime,
         accountId: manager.accountId,
         persist: manager.shouldPersistMutations(),
         binding,

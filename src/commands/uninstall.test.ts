@@ -1,4 +1,3 @@
-// Uninstall command tests cover cleanup flow, prompts, and runtime messages.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupCommandLogMessages,
@@ -29,6 +28,12 @@ describe("uninstallCommand", () => {
 
   const runUninstall = (options: Parameters<typeof uninstallCommand>[1]) =>
     uninstallCommand(runtime, { yes: true, nonInteractive: true, ...options });
+  const expectFailure = (options: Parameters<typeof uninstallCommand>[1]) =>
+    expect(runUninstall(options)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+  const expectDataPreserved = () => {
+    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
+    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
+  };
 
   beforeEach(() => {
     resetCleanupCommandMocks();
@@ -47,61 +52,39 @@ describe("uninstallCommand", () => {
       expect.objectContaining({ initialValues: ["service"] }),
     );
     expect(cleanupCommandLogMessages(runtime)).toContain("[dry-run] remove gateway service");
-    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
-    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
+    expectDataPreserved();
   });
 
-  it.each([
-    {
-      failure: "inspection fails",
-      arrange: () => gatewayService.isLoaded.mockRejectedValue(new Error("inspection failed")),
+  it.each(["isLoaded", "stop", "uninstall", "nix"] as const)(
+    "preserves user data when gateway teardown is blocked by %s",
+    async (failure) => {
+      if (failure === "nix") {
+        setCleanupNixMode(true);
+      } else {
+        gatewayService[failure].mockRejectedValue(new Error(`${failure} failed`));
+      }
+
+      await expectFailure({ all: true });
+      expectDataPreserved();
+      expect(cleanupCommandLogMessages(runtime)).not.toContain(
+        "CLI removal instructions: https://docs.openclaw.ai/install/uninstall",
+      );
+      if (failure === "nix") {
+        for (const mock of [
+          gatewayService.isLoaded,
+          gatewayService.stop,
+          gatewayService.uninstall,
+        ]) {
+          expect(mock).not.toHaveBeenCalled();
+        }
+      }
     },
-    {
-      failure: "stop fails",
-      arrange: () => gatewayService.stop.mockRejectedValue(new Error("stop failed")),
-    },
-    {
-      failure: "service removal fails",
-      arrange: () => gatewayService.uninstall.mockRejectedValue(new Error("uninstall failed")),
-    },
-  ])("preserves user data when gateway $failure", async ({ arrange }) => {
-    arrange();
-
-    await expect(
-      runUninstall({
-        all: true,
-      }),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-
-    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
-    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
-    expect(cleanupCommandLogMessages(runtime)).not.toContain(
-      "CLI removal instructions: https://docs.openclaw.ai/install/uninstall",
-    );
-  });
-
-  it("preserves user data when Nix owns service lifecycle", async () => {
-    setCleanupNixMode(true);
-
-    await expect(
-      runUninstall({
-        all: true,
-      }),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-
-    expect(gatewayService.isLoaded).not.toHaveBeenCalled();
-    expect(gatewayService.stop).not.toHaveBeenCalled();
-    expect(gatewayService.uninstall).not.toHaveBeenCalled();
-    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
-    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
-  });
+  );
 
   it("removes an unloaded service definition before deleting user data", async () => {
     gatewayService.isLoaded.mockResolvedValue(false);
 
-    await runUninstall({
-      all: true,
-    });
+    await runUninstall({ all: true });
 
     expect(gatewayService.stop).not.toHaveBeenCalled();
     expect(gatewayService.uninstall).toHaveBeenCalledOnce();
@@ -109,25 +92,9 @@ describe("uninstallCommand", () => {
     expect(removeWorkspaceDirs).toHaveBeenCalledOnce();
   });
 
-  it("recommends creating a backup before removing state or workspaces", async () => {
-    await runUninstall({
-      state: true,
-      dryRun: true,
-    });
-
-    expect(
-      cleanupCommandLogMessages(runtime).some((message) =>
-        message.includes("openclaw backup create"),
-      ),
-    ).toBe(true);
-  });
-
   it("preserves workspace dirs during state-only uninstall", async () => {
-    await runUninstall({
-      state: true,
-      dryRun: true,
-    });
-
+    await runUninstall({ state: true, dryRun: true });
+    expect(cleanupCommandLogMessages(runtime).join("\n")).toContain("openclaw backup create");
     expect(removeStateAndLinkedPaths).toHaveBeenCalledWith(
       expect.any(Object),
       runtime,
@@ -142,43 +109,27 @@ describe("uninstallCommand", () => {
     });
   });
 
-  it.each([
-    {
-      failure: "returns failures",
-      arrange: () => removeWorkspaceDirs.mockResolvedValueOnce(["retired state failed"]),
-    },
-  ])(
-    "continues state and app cleanup when retired workspace cleanup $failure",
-    async ({ arrange }) => {
-      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-      arrange();
-      try {
-        await expect(
-          runUninstall({
-            state: true,
-            app: true,
-          }),
-        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+  it("continues state and app cleanup when retired workspace cleanup returns failures", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    removeWorkspaceDirs.mockResolvedValueOnce(["retired state failed"]);
+    try {
+      await expectFailure({ state: true, app: true });
 
-        expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
-        expect(removePath).toHaveBeenCalledWith(
-          "/Applications/OpenClaw.app",
-          runtime,
-          expect.any(Object),
-        );
-        expect(cleanupCommandErrorMessages(runtime).join("\n")).toContain("retired state");
-      } finally {
-        platform.mockRestore();
-      }
-    },
-  );
+      expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
+      expect(removePath).toHaveBeenCalledWith(
+        "/Applications/OpenClaw.app",
+        runtime,
+        expect.any(Object),
+      );
+      expect(cleanupCommandErrorMessages(runtime).join("\n")).toContain("retired state");
+    } finally {
+      platform.mockRestore();
+    }
+  });
 
   it("fails when workspace cleanup returns failures", async () => {
     removeWorkspaceDirs.mockResolvedValueOnce(["/tmp/.openclaw/workspace"]);
-    await expect(runUninstall({ workspace: true })).rejects.toMatchObject({
-      name: "ExitError",
-      code: 1,
-    });
+    await expectFailure({ workspace: true });
     expect(cleanupCommandErrorMessages(runtime)).toContain(
       "Workspace cleanup incomplete: /tmp/.openclaw/workspace",
     );
@@ -187,12 +138,7 @@ describe("uninstallCommand", () => {
   it("blocks workspace cleanup after a thrown state ownership failure", async () => {
     removeStateAndLinkedPaths.mockRejectedValueOnce(new Error("state is live"));
 
-    await expect(
-      runUninstall({
-        state: true,
-        workspace: true,
-      }),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    await expectFailure({ state: true, workspace: true });
 
     expect(removeWorkspaceDirs).not.toHaveBeenCalled();
     expect(cleanupCommandErrorMessages(runtime)).toContain(

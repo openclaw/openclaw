@@ -8,6 +8,7 @@ import { getChildLogger } from "../logging/logger.js";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
+import { resolveRuntimeWorkerGenerationUrl } from "./runtime-worker-generation.js";
 import type {
   PreparedSqliteWorkerOpen,
   SqliteWorkerStoreOptions,
@@ -137,7 +138,7 @@ export function captureSqliteWorkerOpen(
   }
   assertOpening?.();
   const carrier = resolveRuntimeProcessEntrypointUrl("sqliteStore");
-  const carrierUrl = options.runtimeGeneration?.resolve(carrier) ?? carrier;
+  const carrierUrl = resolveRuntimeWorkerGenerationUrl(carrier, options.runtimeGeneration);
   return {
     ...native,
     retireIdle: retireIdle ? () => inCaller(retireIdle) : undefined,
@@ -344,9 +345,6 @@ export function assertSqliteWorkerActorReusable(
   inputHash: string,
   stateContext: SqliteWorkerStateContext | undefined,
 ): void {
-  if (actor.slot.failed) {
-    throw actor.slot.failed;
-  }
   if (actor.moduleUrl !== moduleUrl || actor.inputHash !== inputHash) {
     throw new Error("SQLite database already belongs to another worker backend");
   }

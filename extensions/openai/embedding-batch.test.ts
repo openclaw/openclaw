@@ -1,5 +1,8 @@
 import { createServer } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback as listenLoopbackServer } from "../test-support/hanging-loopback-server.js";
 import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import { runOpenAiEmbeddingBatches } from "./embedding-batch.js";
 
@@ -158,21 +161,6 @@ function parseStringBody(init: RequestInit | undefined): unknown {
   return JSON.parse(init.body) as unknown;
 }
 
-async function listenLoopbackServer(server: ReturnType<typeof createServer>): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
-}
-
 async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((err) => {
@@ -291,7 +279,7 @@ describe("OpenAI embedding batch output", () => {
     }
   });
 
-  it.each([
+  it.for([
     {
       name: "pending status",
       pollIntervalMs: 2_000,
@@ -319,16 +307,19 @@ describe("OpenAI embedding batch output", () => {
       advanceClock: false,
       timeoutCause: undefined,
     },
-  ])("clamps $name waits to the remaining batch timeout", async (scenario) => {
+  ])("clamps $name waits to the remaining batch timeout", async (scenario, { signal }) => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    // Provider error-body reads own independent 10s chunk timers; only poll
-    // delays belong to the embedding batch's 1s operation deadline.
+    // The polling owner logs immediately before arming its sleep. Dispatcher
+    // cleanup also owns 100ms timers, so delay values alone cannot identify polls.
+    const pollTimeoutIndexes: number[] = [];
     const pollTimeoutCalls = () =>
-      setTimeoutSpy.mock.calls.filter(([, timeout]) =>
-        scenario.expectedWaits.includes(Number(timeout)),
-      );
+      pollTimeoutIndexes.map((index) => setTimeoutSpy.mock.calls[index]);
+    const polling = scenario.expectedWaits.map((waitMs) => ({
+      waitMs,
+      gate: createDeferred(),
+    }));
     let statusCalls = 0;
     const statusTimes: number[] = [];
     const fetchImpl = batchFetch({
@@ -353,6 +344,10 @@ describe("OpenAI embedding batch output", () => {
         if (scenario.advanceClock && message.includes("batch-0 in_progress")) {
           vi.setSystemTime(500);
         }
+        if (message.startsWith("openai batch batch-0 ") && message.includes("; waiting ")) {
+          pollTimeoutIndexes.push(setTimeoutSpy.mock.calls.length);
+          polling[pollTimeoutIndexes.length - 1]?.gate.resolve();
+        }
       },
     });
     const rejection = expect(result).rejects.toMatchObject({
@@ -360,20 +355,32 @@ describe("OpenAI embedding batch output", () => {
       ...(scenario.timeoutCause ? { cause: { status: scenario.timeoutCause } } : {}),
     });
 
-    for (const [index, waitMs] of scenario.expectedWaits.entries()) {
-      for (let attempt = 0; attempt < 100 && pollTimeoutCalls().length < index + 1; attempt++) {
-        await Promise.resolve();
+    const settled = Promise.allSettled([result, rejection]);
+    try {
+      for (const [index, { waitMs, gate }] of polling.entries()) {
+        // Submission and response cleanup may span I/O turns before polling can arm a timer.
+        await withinTest(
+          awaitGateBeforeSettlement(gate.promise, result, "OpenAI batch settled before polling"),
+          signal,
+        );
+        expect(pollTimeoutCalls()).toHaveLength(index + 1);
+        expect(pollTimeoutCalls()[index]?.[1]).toBe(waitMs);
+        await vi.advanceTimersByTimeAsync(waitMs);
       }
-      expect(pollTimeoutCalls()).toHaveLength(index + 1);
-      expect(pollTimeoutCalls()[index]?.[1]).toBe(waitMs);
-      await vi.advanceTimersByTimeAsync(waitMs);
+      await withinTest(rejection, signal);
+      if (scenario.timeoutCause === undefined) {
+        await expect(result).rejects.not.toHaveProperty("cause");
+      }
+      expect(statusCalls).toBe(scenario.expectedStatusTimes.length);
+      expect(statusTimes).toEqual(scenario.expectedStatusTimes);
+    } finally {
+      vi.setSystemTime(1_000);
+      try {
+        await vi.runOnlyPendingTimersAsync();
+      } finally {
+        await settled;
+      }
     }
-    await rejection;
-    if (scenario.timeoutCause === undefined) {
-      await expect(result).rejects.not.toHaveProperty("cause");
-    }
-    expect(statusCalls).toBe(scenario.expectedStatusTimes.length);
-    expect(statusTimes).toEqual(scenario.expectedStatusTimes);
   });
 
   it.each(["create", "status", "failed"] as const)(

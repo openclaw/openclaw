@@ -10,7 +10,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { REPEATED_TOOL_ERROR_MESSAGE } from "../../packages/agent-core/src/errors.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
+import {
+  isIncognitoDiagnosticSession,
+  type SessionState,
+  type ToolCallRecord,
+} from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 import { getCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
@@ -23,7 +27,6 @@ import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
 import { digestToolOutcome } from "./tool-loop-outcome-hash.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
-import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { getComputerToolOutcome } from "./tools/computer-tool-outcome.js";
 import { getProgressCardToolOutcome } from "./tools/progress-card-tool-outcome.js";
@@ -48,7 +51,6 @@ type LoopDetectionResult =
       message: string;
       pairedToolName?: string;
       warningKey?: string;
-      livenessSignal?: "argument_churn";
     };
 
 const TOOL_CALL_HISTORY_SIZE = 30;
@@ -370,7 +372,8 @@ function hashToolOutcome(
         : { resultHash: execHash };
     }
   }
-  if (toolName === "write" && isWriteNoProgressOutcome(details)) {
+  // Display text echoes the path; the structured flag owns the no-progress fact.
+  if (toolName === "write" && details.changed === false) {
     return { resultHash: digestToolOutcome({ status: "unchanged" }), noProgress: true };
   }
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {
@@ -479,15 +482,7 @@ export function observeRepeatedToolError(
       };
 }
 
-function getPingPongStreak(
-  history: readonly ToolCallRecord[],
-  currentSignature: string,
-): {
-  count: number;
-  pairedToolName?: string;
-  pairedSignature?: string;
-  noProgressEvidence: boolean;
-} {
+function getPingPongStreak(history: readonly ToolCallRecord[], currentSignature: string) {
   const last = history.at(-1);
   if (!last) {
     return { count: 0, noProgressEvidence: false };
@@ -548,8 +543,6 @@ export function detectToolCallLoop(
   const argumentChurn = getArgumentChurnNoProgressStreak(history, toolName, currentHash);
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
-  const argumentChurnLivenessSignal =
-    argumentChurn.count >= TOOL_LOOP_WARNING_THRESHOLD ? ("argument_churn" as const) : undefined;
 
   if (unknownToolStreak.count >= UNKNOWN_TOOL_THRESHOLD) {
     return {
@@ -563,9 +556,11 @@ export function detectToolCallLoop(
   }
 
   if (noProgressStreak >= GLOBAL_CIRCUIT_BREAKER_THRESHOLD) {
-    log.error(
-      `Runaway-loop limit reached: ${toolName} repeated ${noProgressStreak} times with no progress`,
-    );
+    if (!isIncognitoDiagnosticSession(state)) {
+      log.error(
+        `Runaway-loop limit reached: ${toolName} repeated ${noProgressStreak} times with no progress`,
+      );
+    }
     return {
       stuck: true,
       level: "critical",
@@ -581,10 +576,12 @@ export function detectToolCallLoop(
     toolName === "wait" ? TOOL_LOOP_WARNING_THRESHOLD : CRITICAL_THRESHOLD;
   if (knownPollTool && noProgressStreak >= TOOL_LOOP_WARNING_THRESHOLD) {
     const critical = noProgressStreak >= pollCriticalThreshold;
-    if (critical) {
-      log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
-    } else {
-      log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+    if (!isIncognitoDiagnosticSession(state)) {
+      if (critical) {
+        log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
+      } else {
+        log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+      }
     }
     return {
       stuck: true,
@@ -595,9 +592,6 @@ export function detectToolCallLoop(
         ? `CRITICAL: Called ${toolName} with identical arguments and no progress ${noProgressStreak} times. This appears to be a stuck polling loop. Session execution blocked to prevent resource waste.`
         : `WARNING: You have called ${toolName} ${noProgressStreak} times with identical arguments and no progress. Stop polling and either (1) increase wait time between checks, or (2) report the task as failed if the process is stuck.`,
       warningKey: `poll:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
-      ...(!critical && argumentChurnLivenessSignal
-        ? { livenessSignal: argumentChurnLivenessSignal }
-        : {}),
     };
   }
 
@@ -607,14 +601,16 @@ export function detectToolCallLoop(
 
   if (pingPong.count >= TOOL_LOOP_WARNING_THRESHOLD) {
     const critical = pingPong.count >= CRITICAL_THRESHOLD && pingPong.noProgressEvidence;
-    if (critical) {
-      log.error(
-        `Critical ping-pong loop detected: alternating calls count=${pingPong.count} currentTool=${toolName}`,
-      );
-    } else {
-      log.warn(
-        `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
-      );
+    if (!isIncognitoDiagnosticSession(state)) {
+      if (critical) {
+        log.error(
+          `Critical ping-pong loop detected: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+        );
+      } else {
+        log.warn(
+          `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+        );
+      }
     }
     return {
       stuck: true,
@@ -626,9 +622,6 @@ export function detectToolCallLoop(
         : `WARNING: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls). This looks like a ping-pong loop; stop retrying and report the task as failed.`,
       pairedToolName: pingPong.pairedToolName,
       warningKey: pingPongWarningKey,
-      ...(!critical && argumentChurnLivenessSignal
-        ? { livenessSignal: argumentChurnLivenessSignal }
-        : {}),
     };
   }
 
@@ -638,7 +631,9 @@ export function detectToolCallLoop(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
   if (!knownPollTool && noProgressStreak >= CRITICAL_THRESHOLD) {
-    log.error(`Critical generic loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    if (!isIncognitoDiagnosticSession(state)) {
+      log.error(`Critical generic loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    }
     return {
       stuck: true,
       level: "critical",
@@ -650,12 +645,16 @@ export function detectToolCallLoop(
   }
 
   if (argumentChurn.count >= TOOL_LOOP_WARNING_THRESHOLD) {
-    log.warn(`Argument churn warning: ${toolName} cycled through stable argument patterns`);
+    if (!isIncognitoDiagnosticSession(state)) {
+      log.warn(`Argument churn warning: ${toolName} cycled through stable argument patterns`);
+    }
     return buildArgumentChurnWarning(toolName, argumentChurn);
   }
 
   if (!knownPollTool && recentCount >= TOOL_LOOP_WARNING_THRESHOLD) {
-    log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
+    if (!isIncognitoDiagnosticSession(state)) {
+      log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
+    }
     return {
       stuck: true,
       level: "warning",

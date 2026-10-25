@@ -7,18 +7,19 @@ import {
   createNoisyPngBuffer,
   createSolidPngBuffer,
 } from "../../../test/helpers/image-fixtures.js";
-import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import * as rootLogger from "../../logger.js";
 import * as localMediaAccess from "../../media/local-media-access.js";
 import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import * as mediaReferences from "../../media/media-reference.js";
 import { cleanOldMedia, saveMediaBuffer } from "../../media/store.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
@@ -118,7 +119,9 @@ async function harness(assistantText = "image received", workspace?: string) {
     }),
     stageAttachments: vi.fn(async (request) => {
       expect(request.isAuthorized()).toBe(true);
-      for (const file of await fs.readdir(request.localPath, { recursive: true })) {
+      for (const file of (await listDirectoryTreeStrict(request.localPath)).map(
+        (walkEntry) => walkEntry.relativePath,
+      )) {
         const source = path.join(request.localPath, file);
         if ((await fs.stat(source)).isFile() && !remoteFiles.has(file)) {
           remoteFiles.set(file, await fs.readFile(source));
@@ -562,7 +565,7 @@ describe("cloud turn media boundary", () => {
       if (closure === "unrelated") {
         await operation;
         expect(rig.launches).toHaveLength(1);
-        await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
+        await waitForSessionRunEnd(SESSION_ID, null);
         expect(transferSignal?.aborted).toBe(true);
         input.preparedRunAdmission.close();
       } else {

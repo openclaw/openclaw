@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { createGatewayTaskSupervisorProbe } from "../../src/daemon/schtasks.task-supervisor.native-test-support.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 const scriptPath = path.resolve("scripts/check-workflows.mts");
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 
 type WorkflowStep = {
@@ -34,6 +34,18 @@ type WorkflowJob = {
   steps: WorkflowStep[];
 };
 
+function findStep(job: WorkflowJob, value: string, key: "name" | "id" = "name") {
+  return job.steps.find((step) => step[key] === value)!;
+}
+function expectContains(actual: string | undefined, ...expected: string[]) {
+  for (const text of expected) {
+    expect(actual).toContain(text);
+  }
+}
+function writeCommand(binDir: string, name: string, lines: string[]) {
+  writeFileSync(path.join(binDir, name), ["#!/bin/sh", ...lines, ""].join("\n"), { mode: 0o755 });
+}
+
 function readWindowsProbe() {
   const workflow = parse(readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8")) as {
     on: {
@@ -53,10 +65,6 @@ function readWindowsProbe() {
   return { workflow, probe, native };
 }
 
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
-});
-
 describe("check-workflows", () => {
   it.each([
     { version: undefined, tool: "go" },
@@ -69,7 +77,7 @@ describe("check-workflows", () => {
   ])(
     "selects $tool actionlint for installed version $version ($acquireStatus/$lintStatus)",
     ({ version, tool, acquireStatus = 0, lintStatus = 0 }) => {
-      const tempDir = makeTempDir(tempDirs, "check-workflows-");
+      const tempDir = tempDirs.make("check-workflows-");
       const binDir = path.join(tempDir, "bin");
       const markerPath = path.join(tempDir, "go-install.txt");
       const binMarkerPath = path.join(tempDir, "go-bin.txt");
@@ -78,58 +86,34 @@ describe("check-workflows", () => {
       const actionlintMarkerPath = path.join(tempDir, "actionlint.txt");
       mkdirSync(binDir);
       if (version) {
-        writeFileSync(
-          path.join(binDir, "actionlint"),
-          [
-            "#!/bin/sh",
-            `if [ "$1" = "--version" ]; then printf '%s\\n' '${version}'; exit 0; fi`,
-            'printf "%s\\n" "$*" > "$ACTIONLINT_MARKER"',
-            "",
-          ].join("\n"),
-          { mode: 0o755 },
-        );
+        writeCommand(binDir, "actionlint", [
+          `if [ "$1" = "--version" ]; then printf '%s\\n' '${version}'; exit 0; fi`,
+          'printf "%s\\n" "$*" > "$ACTIONLINT_MARKER"',
+        ]);
       }
       if (tool === "go" || acquireStatus !== 0) {
-        writeFileSync(
-          path.join(binDir, "pinned-actionlint"),
-          [
-            "#!/bin/sh",
-            'printf "%s\\n" "$*" > "$PINNED_ACTIONLINT_MARKER"',
-            `exit ${lintStatus}`,
-            "",
-          ].join("\n"),
-          { mode: 0o755 },
-        );
-        writeFileSync(
-          path.join(binDir, "go"),
-          [
-            "#!/bin/sh",
-            'if [ "$1" = "version" ]; then exit 0; fi',
-            'if [ "$1" = "install" ]; then',
-            '  printf "%s\\n" "$*" > "$GO_FALLBACK_MARKER"',
-            '  printf "%s\\n" "$GOBIN" > "$GO_BIN_MARKER"',
-            `  if [ ${acquireStatus} != 0 ]; then exit ${acquireStatus}; fi`,
-            '  /bin/cp "$PINNED_ACTIONLINT" "$GOBIN/actionlint"',
-            "  exit 0",
-            "fi",
-            "exit 1",
-            "",
-          ].join("\n"),
-          { mode: 0o755 },
-        );
+        writeCommand(binDir, "pinned-actionlint", [
+          'printf "%s\\n" "$*" > "$PINNED_ACTIONLINT_MARKER"',
+          `exit ${lintStatus}`,
+        ]);
+        writeCommand(binDir, "go", [
+          'if [ "$1" = "version" ]; then exit 0; fi',
+          'if [ "$1" = "install" ]; then',
+          '  printf "%s\\n" "$*" > "$GO_FALLBACK_MARKER"',
+          '  printf "%s\\n" "$GOBIN" > "$GO_BIN_MARKER"',
+          `  if [ ${acquireStatus} != 0 ]; then exit ${acquireStatus}; fi`,
+          '  /bin/cp "$PINNED_ACTIONLINT" "$GOBIN/actionlint"',
+          "  exit 0",
+          "fi",
+          "exit 1",
+        ]);
       }
       if (tool !== "unavailable") {
-        writeFileSync(
-          path.join(binDir, "pre-commit"),
-          [
-            "#!/bin/sh",
-            'if [ "$1" = "--version" ]; then exit 0; fi',
-            'printf "%s\\n" "$*" >> "$PRE_COMMIT_MARKER"',
-            "exit 0",
-            "",
-          ].join("\n"),
-          { mode: 0o755 },
-        );
+        writeCommand(binDir, "pre-commit", [
+          'if [ "$1" = "--version" ]; then exit 0; fi',
+          'printf "%s\\n" "$*" >> "$PRE_COMMIT_MARKER"',
+          "exit 0",
+        ]);
       }
       for (const command of tool === "unavailable" ? ["node"] : ["python3", "node"]) {
         writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -168,10 +152,11 @@ describe("check-workflows", () => {
       if (lintStatus !== 0) {
         expect(existsSync(preCommitMarkerPath)).toBe(false);
         if (tool === "unavailable") {
-          expect(result.stderr).toContain(
+          expectContains(
+            result.stderr,
             "missing workflow linter: install actionlint built from 011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
+            "Go to acquire that revision, or a pre-commit runtime",
           );
-          expect(result.stderr).toContain("Go to acquire that revision, or a pre-commit runtime");
         }
         return;
       }
@@ -183,56 +168,46 @@ describe("check-workflows", () => {
     },
   );
 
-  it.each([
-    { mode: "bootstrap", code: 0, errors: [] },
-    {
-      mode: "old-python",
-      code: 1,
-      errors: ["python3 is 3.9.6", "pre-commit 4.6.2 requires Python >=3.10"],
-    },
-    {
-      mode: "missing-venv",
-      code: 1,
-      errors: [
+  it.each<[string, number, string[]]>([
+    ["bootstrap", 0, []],
+    ["old-python", 1, ["python3 is 3.9.6", "pre-commit 4.7.0 requires Python >=3.10"]],
+    [
+      "missing-venv",
+      1,
+      [
         "python venv unavailable",
         "missing pre-commit runtime for actionlint",
-        "Python venv support for pre-commit 4.6.2",
+        "Python venv support for pre-commit 4.7.0",
       ],
-    },
-    { mode: "hook-failure", code: 13, errors: ["hook failed"] },
-  ])("handles $mode through the temporary Python runtime", ({ mode, code, errors }) => {
-    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    ],
+    ["hook-failure", 13, ["hook failed"]],
+  ])("handles %s through the temporary Python runtime", (mode, code, errors) => {
+    const tempDir = tempDirs.make("check-workflows-");
     const binDir = path.join(tempDir, "bin");
     const markerPath = path.join(tempDir, "python.txt");
     const venvPath = path.join(tempDir, "venv-path.txt");
     mkdirSync(binDir);
     writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    writeFileSync(
-      path.join(binDir, "python3"),
-      [
-        "#!/bin/sh",
-        `if [ "$1" = "--version" ]; then printf '%s\\n' '${mode === "old-python" ? "Python 3.9.6" : ""}'; exit 0; fi`,
-        'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ] && [ "$3" = "--version" ]; then exit 1; fi',
-        'printf "%s\\n" "$*" >> "$PYTHON_MARKER"',
-        'if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then',
-        `  if [ '${mode}' = 'missing-venv' ]; then echo 'python venv unavailable' >&2; exit 1; fi`,
-        '  /bin/mkdir -p "$3/bin"',
-        '  /bin/cp "$0" "$3/bin/python"',
-        '  /bin/chmod +x "$3/bin/python"',
-        '  printf "%s\\n" "$3" > "$VENV_MARKER"',
-        "  exit 0",
-        "fi",
-        'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then exit 0; fi',
-        'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ]; then',
-        `  if [ '${mode}' = 'hook-failure' ]; then echo 'hook failed' >&2; exit 13; fi`,
-        "  exit 0",
-        "fi",
-        'if [ "$1" = "scripts/check-composite-action-input-interpolation.py" ]; then exit 0; fi',
-        "exit 1",
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
+    writeCommand(binDir, "python3", [
+      `if [ "$1" = "--version" ]; then printf '%s\\n' '${mode === "old-python" ? "Python 3.9.6" : ""}'; exit 0; fi`,
+      'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ] && [ "$3" = "--version" ]; then exit 1; fi',
+      'printf "%s\\n" "$*" >> "$PYTHON_MARKER"',
+      'if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then',
+      `  if [ '${mode}' = 'missing-venv' ]; then echo 'python venv unavailable' >&2; exit 1; fi`,
+      '  /bin/mkdir -p "$3/bin"',
+      '  /bin/cp "$0" "$3/bin/python"',
+      '  /bin/chmod +x "$3/bin/python"',
+      '  printf "%s\\n" "$3" > "$VENV_MARKER"',
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then exit 0; fi',
+      'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ]; then',
+      `  if [ '${mode}' = 'hook-failure' ]; then echo 'hook failed' >&2; exit 13; fi`,
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "scripts/check-composite-action-input-interpolation.py" ]; then exit 0; fi',
+      "exit 1",
+    ]);
     const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
       env: { ...process.env, PATH: binDir, PYTHON_MARKER: markerPath, VENV_MARKER: venvPath },
@@ -245,11 +220,10 @@ describe("check-workflows", () => {
       expect(existsSync(markerPath)).toBe(false);
     } else if (mode === "bootstrap") {
       const pythonArgs = readFileSync(markerPath, "utf8");
-      expect(pythonArgs).toContain("-m pip install --disable-pip-version-check pre-commit==4.6.2");
-      expect(pythonArgs).toContain(
+      expectContains(
+        pythonArgs,
+        "-m pip install --disable-pip-version-check pre-commit==4.7.0",
         "-m pre_commit run --config .pre-commit-config.yaml actionlint --files",
-      );
-      expect(pythonArgs).toContain(
         "-m pre_commit run --config .pre-commit-config.yaml zizmor --files",
       );
     } else if (mode === "hook-failure") {
@@ -260,27 +234,24 @@ describe("check-workflows", () => {
   it("keeps Windows WSL2 probe output normalized through the shared wrapper", () => {
     const workflow = readFileSync(".github/workflows/windows-testbox-probe.yml", "utf8");
 
-    expect(workflow).toContain(
+    expectContains(
+      workflow,
       '$import = Invoke-WslText -Arguments @("--import", "UbuntuProbe", $wslRoot, $rootfs, "--version", "2")',
-    );
-    expect(workflow).toContain("function Resolve-UbuntuWslRootfsUrl");
-    expect(workflow).toContain('"x64" { $wslArch = "amd64" }');
-    expect(workflow).toContain('"arm64" { $wslArch = "arm64" }');
-    expect(workflow).toContain("ubuntu-noble-wsl-$wslArch-wsl.rootfs.tar.gz");
-    expect(workflow).toContain("ubuntu_wsl_rootfs_arch=$wslArch");
-    expect(workflow).toContain("-ConnectionTimeoutSeconds 15");
-    expect(workflow).toContain("-OperationTimeoutSeconds 120");
-    expect(workflow).toContain('Write-Host "wsl_import_exit=$($import.Code)"');
-    expect(workflow).toContain("wsl2_restart_required=true");
-    expect(workflow).toContain("import_ubuntu_wsl2=skipped_restart_required");
-    expect(workflow).toContain("wsl_exec_skipped=restart_required");
-    expect(workflow).toContain(
+      "function Resolve-UbuntuWslRootfsUrl",
+      '"x64" { $wslArch = "amd64" }',
+      '"arm64" { $wslArch = "arm64" }',
+      "ubuntu-noble-wsl-$wslArch-wsl.rootfs.tar.gz",
+      "ubuntu_wsl_rootfs_arch=$wslArch",
+      "-ConnectionTimeoutSeconds 15",
+      "-OperationTimeoutSeconds 120",
+      'Write-Host "wsl_import_exit=$($import.Code)"',
+      "wsl2_restart_required=true",
+      "import_ubuntu_wsl2=skipped_restart_required",
+      "wsl_exec_skipped=restart_required",
       '"wsl2_restart_required=$($restartRequired.ToString().ToLowerInvariant())"',
-    );
-    expect(workflow).toContain(
       '$exec = Invoke-WslText -Arguments @("-d", $distro, "--exec", "bash", "-lc"',
+      'Write-Host "wsl_exec_exit=$($exec.Code)"',
     );
-    expect(workflow).toContain('Write-Host "wsl_exec_exit=$($exec.Code)"');
     expect(workflow).not.toContain("wsl.exe --import UbuntuProbe");
     expect(workflow).not.toContain("Microsoft-Hyper-V-All");
   });
@@ -309,7 +280,7 @@ describe("check-workflows", () => {
         expect(entry["continue-on-error"]).toBeUndefined();
       }
     }
-    const ci = probe.steps.find((step) => step.name === "Run Windows CI tests")!;
+    const ci = findStep(probe, "Run Windows CI tests");
     expect(ci.if).toBe("${{ inputs.run_windows_ci && inputs.installed_startup_package == '' }}");
     expect(ci.run).toContain("pnpm test:windows:ci");
     expect(ci.env).toMatchObject({ OPENCLAW_VITEST_MAX_WORKERS: 1 });
@@ -366,7 +337,7 @@ describe("check-workflows", () => {
     });
     expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
       REQUESTED_NODE_VERSION:
-        "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
+        "${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
       "./.github/actions/setup-pnpm-store-cache",
@@ -415,33 +386,27 @@ describe("check-workflows", () => {
 
   it("keeps installed startup measurement opt-in and binds the package independently from tooling", () => {
     const { workflow, probe, native } = readWindowsProbe();
-    expect(workflow.on.workflow_dispatch.inputs.installed_startup_package).toMatchObject({
-      default: "",
-      type: "string",
+    expect(workflow.on.workflow_dispatch.inputs).toMatchObject({
+      installed_startup_package: { default: "", type: "string" },
+      startup_node_version: { default: "26.12.1" },
+      installed_startup_cpu_diagnostic: { default: false, type: "boolean" },
     });
-    expect(workflow.on.workflow_dispatch.inputs.startup_node_version?.default).toBe("26.9.0");
-    expect(workflow.on.workflow_dispatch.inputs.installed_startup_cpu_diagnostic).toMatchObject({
-      default: false,
-      type: "boolean",
-    });
-    const validation = probe.steps.find((step) => step.id === "startup_input")!;
+    const validation = findStep(probe, "startup_input", "id");
     expect(validation.env).toMatchObject({
       STARTUP_PACKAGE: "${{ inputs.installed_startup_package }}",
       CPU_DIAGNOSTIC: "${{ inputs.installed_startup_cpu_diagnostic }}",
     });
-    expect(validation.run).toContain("$producer.run_attempt");
-    expect(validation.run).toContain("$artifact.digest");
-    const install = probe.steps.find((step) => step.id === "installed_package")!;
-    expect(install.run).toContain(
+    expectContains(validation.run, "$producer.run_attempt", "$artifact.digest");
+    const install = findStep(probe, "installed_package", "id");
+    expectContains(
+      install.run,
       "scripts/resolve-openclaw-package-candidate.mts --source artifact",
-    );
-    expect(install.run).toContain(
       "npm install --prefix $installRoot --no-audit --no-fund --ignore-scripts=false",
+      "npm rebuild --prefix $installRoot --ignore-scripts=false",
+      ".openclaw-lifecycle-pending",
+      "dist/openclaw-install-guard",
     );
-    expect(install.run).toContain("npm rebuild --prefix $installRoot --ignore-scripts=false");
-    expect(install.run).toContain(".openclaw-lifecycle-pending");
-    expect(install.run).toContain("dist/openclaw-install-guard");
-    const measure = probe.steps.find((step) => step.name === "Measure installed startup cohort")!;
+    const measure = findStep(probe, "Measure installed startup cohort");
     expect(measure.if).toBe(
       "${{ inputs.installed_startup_package != '' && !inputs.installed_repair_worker && !inputs.run_windows_ci }}",
     );
@@ -452,7 +417,7 @@ describe("check-workflows", () => {
     expect(measure.run).toContain('if ($env:CPU_DIAGNOSTIC -eq "true")');
     expect(measure.run).toContain('@("--installed-cpu-diagnostic")');
     expect(native.steps).not.toContainEqual(measure);
-    const upload = probe.steps.find((step) => step.name === "Upload installed startup evidence")!;
+    const upload = findStep(probe, "Upload installed startup evidence");
     expect(upload.if).toBe("${{ always() && inputs.installed_startup_package != '' }}");
     expect(upload.with?.path).toBe(
       [
@@ -481,9 +446,7 @@ describe("check-workflows", () => {
       NATIVE_PACKAGE_DIGEST: "${{ needs.probe.outputs.native_package_digest }}",
       NATIVE_MANIFEST_SHA256: "${{ needs.probe.outputs.native_manifest_sha256 }}",
     });
-    const download = installed.steps.find(
-      (step) => step.name === "Download this run's verified native package",
-    )!;
+    const download = findStep(installed, "Download this run's verified native package");
     expect(download.with).toMatchObject({
       "artifact-ids": "${{ env.NATIVE_PACKAGE_ID }}",
       "skip-decompress": true,
@@ -526,15 +489,11 @@ describe("check-workflows", () => {
       default: false,
       type: "boolean",
     });
-    const isolation = probe.steps.find((step) => step.id === "repair_isolation")!;
-    const validation = probe.steps.find((step) => step.id === "startup_input")!;
-    const install = probe.steps.find((step) => step.id === "installed_package")!;
-    const published = probe.steps.find(
-      (step) => step.name === "Install authenticated published repair controllers",
-    )!;
-    const proof = probe.steps.find(
-      (step) => step.name === "Prove installed repair worker compatibility and cleanup",
-    )!;
+    const isolation = findStep(probe, "repair_isolation", "id");
+    const validation = findStep(probe, "startup_input", "id");
+    const install = findStep(probe, "installed_package", "id");
+    const published = findStep(probe, "Install authenticated published repair controllers");
+    const proof = findStep(probe, "Prove installed repair worker compatibility and cleanup");
     for (const step of [isolation, validation, install, published, proof]) {
       expect(step).toBeDefined();
     }
@@ -555,19 +514,16 @@ describe("check-workflows", () => {
       /\$integrity -cne \$parent\.integrity[\s\S]*npm install --prefix \$prefix/u,
     );
     expect(proof.if).toBe("${{ inputs.installed_repair_worker }}");
-    expect(proof.run).toContain("scripts/windows-repair-worker-probe.mjs");
-    expect(proof.run).toContain("repair-results.json");
+    expectContains(proof.run, "scripts/windows-repair-worker-probe.mjs", "repair-results.json");
     expect(proof["continue-on-error"]).toBeUndefined();
   });
 
   it("retains exact-source native proof and cleanup evidence even on failure", () => {
     const { native } = readWindowsProbe();
-    const proof = native.steps.find((step) => step.id === "native_schtasks")!;
-    const cleanup = native.steps.find((step) => step.id === "native_cleanup")!;
-    const upload = native.steps.find((step) => step.id === "native_proof_upload")!;
-    const remove = native.steps.find(
-      (step) => step.name === "Remove retained native Scheduled Task evidence",
-    )!;
+    const proof = findStep(native, "native_schtasks", "id");
+    const cleanup = findStep(native, "native_cleanup", "id");
+    const upload = findStep(native, "native_proof_upload", "id");
+    const remove = findStep(native, "Remove retained native Scheduled Task evidence");
     expect(proof["timeout-minutes"]).toBe(5);
     expect(proof.if).toBe("${{ inputs.run_windows_ci && inputs.installed_startup_package == '' }}");
     expect(proof.env).toMatchObject({
@@ -630,20 +586,19 @@ describe("check-workflows", () => {
 
   it("identifies the producer's exact native probe before emergency process-tree cleanup", () => {
     const { native } = readWindowsProbe();
-    const cleanup = native.steps.find((step) => step.id === "native_cleanup")!.run;
+    const cleanup = findStep(native, "native_cleanup", "id").run;
     const probe = createGatewayTaskSupervisorProbe("probe-root");
     expect(cleanup).toContain(
       `$probePath = Join-Path $env:TEST_ROOT "${path.basename(probe.probePath)}"`,
     );
-    expect(cleanup).toContain('$activePidPath = Join-Path $env:TEST_ROOT "active-pid.txt"');
-    expect(cleanup).toContain('$eventsPath = Join-Path $env:TEST_ROOT "runs.txt"');
-    expect(cleanup).toContain(
+    expectContains(
+      cleanup,
+      '$activePidPath = Join-Path $env:TEST_ROOT "active-pid.txt"',
+      '$eventsPath = Join-Path $env:TEST_ROOT "runs.txt"',
       '$process.CommandLine -like "*$probePath*" -and\n        $process.CommandLine -like "*$eventsPath*"',
-    );
-    expect(cleanup).toContain(
       'throw "Refusing to kill reused or unverifiable process id $probePid."',
+      "taskkill.exe /F /T /PID $probePid",
+      "[DateTime]::UtcNow.AddSeconds(30)",
     );
-    expect(cleanup).toContain("taskkill.exe /F /T /PID $probePid");
-    expect(cleanup).toContain("[DateTime]::UtcNow.AddSeconds(30)");
   });
 });

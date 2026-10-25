@@ -3,8 +3,11 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
-import { resolveSlackMonitorEventScope } from "../event-scope.js";
-import { enqueueSlackInteractionEvent } from "./interaction-event.js";
+import { resolveSlackInteractionEventScope } from "../event-scope.js";
+import {
+  captureSlackInteractionEventRoute,
+  enqueueSlackInteractionEvent,
+} from "./interaction-event.js";
 
 type SlackShortcutHandlerArgs = SlackShortcutMiddlewareArgs &
   Pick<AllMiddlewareArgs, "context" | "client">;
@@ -17,18 +20,8 @@ export function registerSlackShortcutHandler(params: {
     const { ack, body } = args;
     await ack();
     const runtimeContext = await params.ctx.readRuntimeContext();
-    const eventScope = resolveSlackMonitorEventScope({
-      ctx: runtimeContext,
-      body,
-      context: args.context,
-      client: args.client,
-      onDrop: (reason) => runtimeContext.runtime.log?.(`slack:interaction drop shortcut ${reason}`),
-    });
+    const eventScope = resolveSlackInteractionEventScope(runtimeContext, args, "shortcut");
     if (eventScope === null) {
-      return;
-    }
-    if (runtimeContext.shouldDropMismatchedSlackEvent?.(body)) {
-      runtimeContext.runtime.log?.("slack:interaction drop shortcut payload (mismatched app/team)");
       return;
     }
 
@@ -90,13 +83,17 @@ export function registerSlackShortcutHandler(params: {
       messageText: messageBody?.message.text,
       responseUrl: messageBody?.response_url,
     };
-    const route = await runtimeContext.resolveSlackSystemEventRoute({
+    const destination = await runtimeContext.resolveSlackSystemEventRoute({
       channelId,
       channelType: auth.channelType,
       senderId: userId,
       threadTs,
       eventScope,
     });
+    const route = await captureSlackInteractionEventRoute(destination, runtimeContext.runtime.log);
+    if (!route || !runtimeContext.isRuntimePolicyCurrent()) {
+      return;
+    }
     const contextKey = [
       "slack:interaction:shortcut",
       interactionType,
@@ -112,14 +109,19 @@ export function registerSlackShortcutHandler(params: {
     runtimeContext.runtime.log?.(
       `slack:interaction ${interactionType} callback=${callbackId} user=${userId} channel=${channelId ?? "direct"}`,
     );
-    enqueueSlackInteractionEvent(eventPayload, route, {
-      contextKey,
-      deliveryContext: {
-        channel: "slack",
-        to: deferredTarget.target,
-        accountId: runtimeContext.accountId,
-        threadId: threadTs,
+    await enqueueSlackInteractionEvent(
+      eventPayload,
+      route,
+      {
+        contextKey,
+        deliveryContext: {
+          channel: "slack",
+          to: deferredTarget.target,
+          accountId: runtimeContext.accountId,
+          threadId: threadTs,
+        },
       },
-    });
+      runtimeContext.runtime.log,
+    );
   });
 }

@@ -1,6 +1,6 @@
 import type { NativeBrowserTab } from "../../app/native-browser-bridge.ts";
 import { resizeBrowserViewport, type BrowserRequestClient } from "./browser-client.ts";
-import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 
 interface BrowserPanelViewportHost {
@@ -9,18 +9,9 @@ interface BrowserPanelViewportHost {
   readonly activeTargetId: string | null;
   readonly canAutoResizeViewport: boolean;
   readonly view: BrowserPanelView | null;
-  readonly operations: Pick<BrowserPanelOperationOwnership, "captureClient">;
+  readonly operations: Pick<BrowserPanelOperations, "captureClient">;
   runAction(action: (client: BrowserRequestClient) => Promise<void>): Promise<boolean>;
 }
-
-type ViewportResize = {
-  targetId: string;
-  width: number;
-  height: number;
-  remoteWidth: number | undefined;
-  remoteHeight: number | undefined;
-  acknowledged: boolean;
-};
 
 const VIEWPORT_RESIZE_DELAY_MS = 300;
 const MIN_VIEWPORT_DIMENSION = 100;
@@ -29,7 +20,14 @@ const MAX_VIEWPORT_DIMENSION = 8192;
 /** Synchronous resize admission and acknowledgment; rendering does not own in-flight requests. */
 export class BrowserPanelViewportOwner {
   observedViewportSize: { width: number; height: number } | null = null;
-  private lastResize: ViewportResize | null = null;
+  private lastResize: {
+    targetId: string;
+    width: number;
+    height: number;
+    remoteWidth: number | undefined;
+    remoteHeight: number | undefined;
+    acknowledged: boolean;
+  } | null = null;
   private resizing = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
 

@@ -7,10 +7,12 @@ import {
   readMarkdownCodeBlockCopyText,
 } from "../../../components/markdown-code-blocks.ts";
 import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
+import { loadStreamingMarkdown } from "../../../components/markdown-live-loader.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { renderSolidRef } from "../../../test-helpers/render-solid-ref.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { prepareMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -107,6 +109,102 @@ function drawContent(content: RawContent["content"], media?: MarkdownMedia) {
 }
 
 describe("streaming Markdown DOM", () => {
+  it.each([
+    ["A reply", "A reply with **bold**", "strong", "bold"],
+    ["A reply", "A reply with `code`", "code", "code"],
+    ["A reply", "A reply with [link](https://example.com)", "a", "link"],
+    ["A **bold**", "A **bold** trailing text", "strong", "bold"],
+  ])("keeps inline syntax canonical while streaming %s", (initial, next, tag, text) => {
+    draw(initial);
+    draw(next);
+    expect(container.querySelector(tag)?.textContent).toBe(text);
+    expect(container.querySelector("p")?.textContent).not.toMatch(/\*|`|https:/u);
+  });
+
+  it("formats the first delta after an idle formatting window immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      draw("A growing reply");
+      await vi.advanceTimersByTimeAsync(50);
+      draw("A growing reply with **bold** text");
+      expect(container.querySelector("strong")?.textContent).toBe("bold");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces burst formatting into one bounded window and flushes an idle preview", async () => {
+    vi.useFakeTimers();
+    try {
+      draw("Visit www");
+      draw("Visit www.example");
+      await vi.advanceTimersByTimeAsync(25);
+      draw("Visit www.example.com here");
+      expect(container.textContent).toContain("www.example.com here");
+      expect(container.querySelector("a")).toBeNull();
+      await vi.advanceTimersByTimeAsync(24);
+      expect(container.querySelector("a")).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(container.querySelector("a")?.getAttribute("href")).toBe("http://www.example.com");
+
+      draw("Visit www.example.com here and www.openclaw.org here");
+      expect(container.textContent).toContain("www.openclaw.org here");
+      expect(container.querySelectorAll("a")).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(container.querySelectorAll("a")).toHaveLength(2);
+      expect(container.querySelectorAll("a")[1]?.getAttribute("href")).toBe(
+        "http://www.openclaw.org",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps visible plain text in place when deferred formatting catches up", async () => {
+    await loadStreamingMarkdown.preload();
+    vi.useFakeTimers();
+    const mutations: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => mutations.push(...records));
+    try {
+      draw("A growing reply");
+      draw("A growing reply with more text");
+      const text = container.querySelector("p")?.textContent;
+      observer.observe(container, { characterData: true, subtree: true });
+      draw("A growing reply with more text");
+      await vi.advanceTimersByTimeAsync(50);
+      expect(container.querySelector("p")?.textContent).toBe(text);
+      expect([...mutations, ...observer.takeRecords()]).toHaveLength(0);
+      observer.disconnect();
+      draw("A growing reply with more text and a pending suffix");
+      draw("A growing reply with more text");
+      expect(container.querySelector("p")?.textContent).toBe(text);
+    } finally {
+      observer.disconnect();
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows appended text before bounded formatting and flushes completion without a stale timer", async () => {
+    vi.useFakeTimers();
+    try {
+      draw("A growing reply");
+      const paragraph = container.querySelector("p");
+      draw("A growing reply with a plain tail");
+      expect(paragraph?.textContent).toBe("A growing reply with a plain tail");
+      await vi.advanceTimersByTimeAsync(50);
+      expect(container.querySelector("p")).toBe(paragraph);
+
+      draw("A growing reply with a plain tail and *final*");
+      draw("A growing reply with a plain tail and *final*", { streaming: false });
+      expect(container.querySelector("em")?.textContent).toBe("final");
+      draw("Replacement", { key: "replacement", streaming: false });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(container.textContent).toBe("Replacement\n");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { label: "paragraph", initial: "A growing reply", suffix: " with more text", selector: "p" },
     {
@@ -302,6 +400,14 @@ describe("streaming Markdown DOM", () => {
           wrapper.querySelector(".code-block-viewport")?.id,
         );
         expect(wrap.getAttribute("aria-pressed")).toBe("true");
+        if (!json) {
+          expect(wrapper.classList.contains("is-wrapped")).toBe(true);
+          expect(wrapper.classList.contains("is-collapsible")).toBe(true);
+          expect(wrapper.querySelector(".code-block-viewport")?.id).not.toBe("");
+          expect(readMarkdownCodeBlockCopyText(copy)).toBe(
+            initial.slice("```ts\n".length) + suffix,
+          );
+        }
         if (json) {
           expect(wrapper.querySelector(".code-block-json-modes")).not.toBeNull();
           expect(expand).toBe(previousExpand);
@@ -333,15 +439,19 @@ describe("streaming Markdown DOM", () => {
           expect(wrap.getAttribute("aria-pressed")).toBe("true");
           expect(expand.classList.contains("copied")).toBe(false);
           expect(expand.classList.contains("copy-failed")).toBe(false);
+          expand.click();
+          const growth = "\nconst ninth = 9;";
+          draw(initial + suffix + growth);
+          expect(wrapper.classList.contains("is-expanded")).toBe(true);
+          expect(expand.getAttribute("aria-expanded")).toBe("true");
+          expect(readMarkdownCodeBlockCopyText(copy)).toBe(
+            initial.slice("```ts\n".length) + suffix + growth,
+          );
         }
       } finally {
         vi.useRealTimers();
         fallback.mockRestore();
-        if (clipboard) {
-          Object.defineProperty(navigator, "clipboard", clipboard);
-        } else {
-          Reflect.deleteProperty(navigator, "clipboard");
-        }
+        restorePropertyDescriptor(navigator, "clipboard", clipboard);
       }
     },
   );
@@ -519,7 +629,7 @@ describe("streaming Markdown DOM", () => {
   );
 
   it("leaves component-owned children intact and handles canonical changes", async () => {
-    await import("../../../components/person-reference.ts");
+    await import("../../../components/solid/person-reference.tsx");
     const drawMention = (label: string, tail: string) => {
       const source = `${label} ${tail}`;
       drawContent(
@@ -614,7 +724,7 @@ describe("streaming Markdown promotion", () => {
     "preserves $language code controls when a live fence closes and finishes",
     async ({ language, code }) => {
       const initial = `\`\`\`${language}\n${code}`;
-      draw(initial);
+      draw(initial, { options: { linkFavicons: false } });
       await Promise.resolve();
       const wrapper = container.querySelector<HTMLElement>(".code-block-wrapper")!;
       const wrap = wrapper.querySelector<HTMLButtonElement>(".code-block-wrap")!;
@@ -627,14 +737,23 @@ describe("streaming Markdown promotion", () => {
       draw(closed);
       await Promise.resolve();
       expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
+      expect(container.querySelector(".chat-text > p:last-child")?.textContent).toBe(
+        "Following paragraph",
+      );
       expect(wrapper.querySelector(".code-block-wrap")).toBe(wrap);
       expect(wrapper.querySelector(".code-block-expand")).toBe(expand);
       expect(wrapper.querySelector(".code-block-copy")).toBe(copy);
       expect(wrapper.querySelector(".code-block-viewport")).toBe(viewport);
       const raw = wrapper.querySelector<HTMLButtonElement>('[data-json-mode="raw"]');
       raw?.click();
-      draw(closed, { streaming: false });
+      const completed = closed + "\n\nMore is arriving.";
+      draw(completed);
       expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
+      draw(completed, { streaming: false, options: { linkFavicons: true } });
+      expect(container.querySelector(".code-block-wrapper")).toBe(wrapper);
+      expect(container.querySelector(".chat-text > p:last-child")?.textContent).toBe(
+        "More is arriving.",
+      );
       expect(wrapper.classList.contains("is-wrapped")).toBe(true);
       expect(wrapper.classList.contains("is-expanded")).toBe(true);
       expect(wrap.getAttribute("aria-pressed")).toBe("true");
@@ -702,6 +821,7 @@ describe("streaming Markdown promotion", () => {
         change === "citation" || change === "reference" ? "p" : ".code-block-wrapper";
       draw(source);
       const previous = container.querySelector(selector);
+      container.querySelector<HTMLButtonElement>(".code-block-wrap")?.click();
       const next =
         change === "correction"
           ? source.replace("value", "corrected")
@@ -717,6 +837,7 @@ describe("streaming Markdown promotion", () => {
       expect(container.querySelector(selector)).not.toBe(previous);
       if (change === "options") {
         expect(container.querySelector(".code-block-wrap")).toBeNull();
+        expect(container.querySelector(".code-block-copy")).not.toBeNull();
       } else if (change === "citation") {
         expect(container.textContent?.trim()).toBe("Before");
         expect(container.textContent).not.toContain("source");
@@ -724,8 +845,14 @@ describe("streaming Markdown promotion", () => {
         expect(container.querySelector("a")?.getAttribute("href")).toBe("https://example.com/docs");
         expect(container.querySelector("a")?.textContent).toBe("docs");
       } else {
-        expect(container.querySelector("pre code")?.textContent).toContain(
-          change === "correction" ? "corrected" : "value",
+        if (change === "message") {
+          expect(container.querySelector(".code-block-wrap")?.getAttribute("aria-pressed")).toBe(
+            "false",
+          );
+        }
+        expect(container.querySelectorAll("pre code")).toHaveLength(1);
+        expect(container.querySelector("pre code")?.textContent).toBe(
+          change === "correction" ? "const corrected = 1;\n" : "const value = 1;\n",
         );
       }
     },

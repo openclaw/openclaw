@@ -1,31 +1,16 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 export function createSessionMutationTestClient(profileId?: string): GatewayClient {
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "openclaw-control-ui",
-        version: "test",
-        platform: "test",
-        mode: "webchat",
-      },
-      role: "operator",
-      scopes: ["operator.write"],
-    },
+    connect: gatewayConnect(["operator.write"]),
     ...(profileId
       ? {
           authenticatedUserId: `${profileId}@example.com`,
-          authenticatedUserProfile: {
-            profileId,
-            displayName: profileId,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          authenticatedUserProfile: gatewayProfile(profileId, profileId),
         }
       : {}),
   };
@@ -37,6 +22,5 @@ export function createSessionMutationTestContext(cfg: OpenClawConfig) {
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(["observer"]),
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
   } as unknown as GatewayRequestContext;
 }

@@ -2,6 +2,7 @@ import { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackPromiseFulfillment as tracked } from "../../test-support/async-gate.test-support.js";
 import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 
 const teardown = vi.hoisted(() => ({
@@ -67,57 +68,64 @@ function fixture(kind: "gateway" | "cli" = "gateway") {
   };
 }
 
+const stoppedResult = { process: "confirmed-stopped", errors: [] };
+async function beforeClose(
+  f: ReturnType<typeof fixture>,
+  pending: Promise<unknown>,
+  inspect: () => Promise<void>,
+) {
+  try {
+    await inspect();
+  } finally {
+    f.close();
+    await pending;
+    await f.lifetime.stop();
+  }
+}
+
 describe("QA Gateway owned child drain", () => {
-  it("preserves buffered output before finalizing logs, artifacts, and state", async () => {
-    const f = fixture();
-    let archived = "";
-    teardown.preserve.mockImplementation(async () => {
-      archived = f.output();
-    });
-    let stopped = false;
-    const stopping = f.lifetime.stop({ preserveToDir: "/fixture/proof" }).then((result) => {
-      stopped = true;
-      return result;
-    });
-    let beforeClose;
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      beforeClose = {
-        stopped,
-        logEnded: f.log.writableEnded,
-        removed: teardown.remove.mock.calls.length > 0,
-      };
-      f.child.stdout?.emit("data", Buffer.from("QA_FINAL_BUFFERED_TAIL\n"));
-    } finally {
-      f.close();
-      await stopping;
+  it.each([false, true])(
+    "drains buffered output before finalizing (already exited: %s)",
+    async (exited) => {
+      const f = fixture();
+      if (exited) {
+        Object.defineProperty(f.child, "exitCode", { value: 0 });
+        f.child.emit("exit", 0, null);
+      }
+      let archived = "";
+      teardown.preserve.mockImplementation(async () => {
+        archived = f.output();
+      });
+      const stopping = tracked(f.lifetime.stop({ preserveToDir: "/fixture/proof" }));
+      let before;
+      await beforeClose(f, stopping.promise, async () => {
+        await vi.advanceTimersByTimeAsync(0);
+        before = {
+          stopped: stopping.settled,
+          logEnded: f.log.writableEnded,
+          removed: teardown.remove.mock.calls.length > 0,
+        };
+        f.child.stdout?.emit("data", Buffer.from("QA_FINAL_BUFFERED_TAIL\n"));
+      });
       f.log.destroy();
-    }
-    expect(archived).toBe("QA_FINAL_BUFFERED_TAIL\n");
-    expect(beforeClose).toEqual({ stopped: false, logEnded: false, removed: false });
-    expect(teardown.stopTree).toHaveBeenCalledOnce();
-    expect(teardown.preserve).toHaveBeenCalledOnce();
-    expect(teardown.remove).toHaveBeenCalledOnce();
-  });
+      expect(archived).toBe("QA_FINAL_BUFFERED_TAIL\n");
+      expect(before).toEqual({ stopped: false, logEnded: false, removed: false });
+      expect(teardown.stopTree).toHaveBeenCalledOnce();
+      expect(teardown.preserve).toHaveBeenCalledOnce();
+      expect(teardown.remove).toHaveBeenCalledOnce();
+    },
+  );
 
   it("holds the direct stop boundary used before retry and state mutation", async () => {
     const f = fixture();
-    let mutationAdmitted = false;
-    const stopping = f.lifetime.stopProcess(f.owned).then((result) => {
-      mutationAdmitted = true;
-      return result;
-    });
-    try {
+    const stopping = tracked(f.lifetime.stopProcess(f.owned));
+    await beforeClose(f, stopping.promise, async () => {
       await vi.advanceTimersByTimeAsync(0);
-      expect(mutationAdmitted).toBe(false);
+      expect(stopping.settled).toBe(false);
       expect(f.owned.stopResult).toBeUndefined();
-    } finally {
-      f.close();
-      await stopping;
-      await f.lifetime.stop();
-    }
-    expect(mutationAdmitted).toBe(true);
-    expect(f.owned.stopResult).toEqual({ process: "confirmed-stopped", errors: [] });
+    });
+    expect(stopping.settled).toBe(true);
+    expect(f.owned.stopResult).toEqual(stoppedResult);
     expect(teardown.stopTree).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -126,10 +134,7 @@ describe("QA Gateway owned child drain", () => {
     const f = fixture();
     expect(f.child.listenerCount("close")).toBe(1);
     f.close();
-    await expect(f.lifetime.stop()).resolves.toEqual({
-      process: "confirmed-stopped",
-      errors: [],
-    });
+    await expect(f.lifetime.stop()).resolves.toEqual(stoppedResult);
     expect(f.child.listenerCount("close")).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -140,50 +145,26 @@ describe("QA Gateway owned child drain", () => {
     const lifetime = new QaGatewayChildLifecycle();
     lifetime.register(child, null);
     child.emit("error", new Error("synthetic spawn failure"));
-    let stopped = false;
-    const stopping = lifetime.stop().then((result) => {
-      stopped = true;
-      return result;
-    });
+    const stopping = tracked(lifetime.stop());
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
+      expect(stopping.settled).toBe(false);
     } finally {
       child.emit("close", -1, null);
-      await stopping;
+      await stopping.promise;
     }
-    expect(await stopping).toEqual({ process: "never-spawned", errors: [] });
+    expect(await stopping.promise).toEqual({ process: "never-spawned", errors: [] });
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("keeps reading after exit until the owned child's stdio closes", async () => {
-    const f = fixture();
-    Object.defineProperty(f.child, "exitCode", { value: 0 });
-    f.child.emit("exit", 0, null);
-    const stopping = f.lifetime.stop();
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(f.log.writableEnded).toBe(false);
-      f.child.stdout?.emit("data", Buffer.from("QA_AFTER_EXIT_TAIL\n"));
-    } finally {
-      f.close();
-      await stopping;
-    }
-    expect(f.output()).toBe("QA_AFTER_EXIT_TAIL\n");
   });
 
   it("retains log and state ownership when the existing close bound expires", async () => {
     const f = fixture();
-    const stopping = f.lifetime.stop();
-    let stopped = false;
-    void stopping.then(() => {
-      stopped = true;
-    });
-    try {
+    const stopping = tracked(f.lifetime.stop());
+    await beforeClose(f, stopping.promise, async () => {
       await vi.advanceTimersByTimeAsync(999);
-      expect(stopped).toBe(false);
+      expect(stopping.settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
-      expect(await stopping).toEqual({
+      expect(await stopping.promise).toEqual({
         process: "unconfirmed",
         errors: [
           expect.objectContaining({
@@ -194,11 +175,7 @@ describe("QA Gateway owned child drain", () => {
       expect(f.log.writableEnded).toBe(false);
       expect(teardown.remove).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      f.close();
-      await stopping;
-      await f.lifetime.stop();
-    }
+    });
     expect(teardown.stopTree).toHaveBeenCalledTimes(2);
     expect(teardown.remove).toHaveBeenCalledOnce();
   });
@@ -232,21 +209,14 @@ describe("QA Gateway owned child drain", () => {
       return "QA_CLI_OUTPUT";
     })();
     f.lifetime.completeCli(f.owned, operation);
-    let stopped = false;
-    const stopping = f.lifetime.stop().then((result) => {
-      stopped = true;
-      return result;
-    });
-    try {
+    const stopping = tracked(f.lifetime.stop());
+    await beforeClose(f, stopping.promise, async () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(treeStopped).toBe(true);
-      expect(stopped).toBe(false);
-    } finally {
-      f.close();
-      await operation;
-      await stopping;
-    }
-    expect(await stopping).toEqual({ process: "confirmed-stopped", errors: [] });
+      expect(stopping.settled).toBe(false);
+    });
+    await operation;
+    expect(await stopping.promise).toEqual(stoppedResult);
     expect(vi.getTimerCount()).toBe(0);
   });
 });

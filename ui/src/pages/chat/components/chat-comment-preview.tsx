@@ -1,10 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, onCleanup, Show, untrack, useContext } from "solid-js";
-import { observeScrollState } from "../../../components/scroll-state-observer.ts";
+import { Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { AttachmentPreviewChip } from "./chat-attachment-preview-chip.tsx";
 import type { CommentPreview } from "./chat-comment-preview.ts";
@@ -12,28 +12,15 @@ import type { CommentPreview } from "./chat-comment-preview.ts";
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 function scrollRef() {
-  let element: HTMLElement | undefined;
-  let observation: ReturnType<typeof observeScrollState> | undefined;
   const presented = useContext(ContentPresentation);
-  const connect = (active: boolean) => {
-    observation?.disconnect();
-    observation = undefined;
-    if (!active || !element) {
-      return;
-    }
-    const target = element;
-    observation = observeScrollState(target, (state) => {
+  return createScrollStateRef(
+    (element, state) => {
       for (const key of ["scrollable", "atStart", "atEnd"] as const) {
-        target.dataset[key] = String(state[key]);
+        element.dataset[key] = String(state[key]);
       }
-    });
-  };
-  createEffect(presented, connect);
-  onCleanup(() => observation?.disconnect());
-  return (value: HTMLElement) => {
-    element = value;
-    connect(untrack(presented));
-  };
+    },
+    { presented },
+  );
 }
 
 export function CommentPreviewRow(props: { comment: CommentPreview; children?: JSX.Element }) {
@@ -63,26 +50,25 @@ export function CommentPreviewRow(props: { comment: CommentPreview; children?: J
   );
 }
 
-type ChipProps = {
+export function CommentPreviewChip(props: {
   count: number;
   children?: JSX.Element;
   onReveal?: () => void;
   removal?: { onRemove: (event: Event) => void; disabled: boolean };
   elementRef?: (element: Element | undefined) => void;
-};
-
-export function CommentPreviewChip(props: ChipProps) {
+  previewRef?: (element: HTMLElement) => void;
+  triggerRef?: (element: HTMLButtonElement) => void;
+}) {
   const ref = scrollRef();
+  let trigger: HTMLButtonElement | undefined;
   return (
     <openclaw-tooltip
-      class={
-        props.removal
-          ? "chat-comment-preview chat-comment-preview--editable"
-          : "chat-comment-preview"
-      }
+      ref={props.previewRef}
+      class={["chat-comment-preview", { "chat-comment-preview--editable": Boolean(props.removal) }]}
       prop:placement="top-start"
       prop:autoSize={true}
       prop:describe={false}
+      prop:descriptionTarget={props.removal ? () => trigger ?? null : undefined}
       prop:openOnClick={true}
       prop:hoverDismissDelay={props.removal ? 200 : undefined}
     >
@@ -95,6 +81,7 @@ export function CommentPreviewChip(props: ChipProps) {
         onReveal={props.onReveal}
         onClick={props.onReveal}
         elementRef={props.elementRef}
+        triggerRef={[(element) => (trigger = element), props.triggerRef]}
         removal={
           props.removal
             ? { ...props.removal, label: t("chat.messages.removeAnnotations") }

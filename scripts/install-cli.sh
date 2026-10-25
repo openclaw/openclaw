@@ -43,9 +43,11 @@ installer_error() {
   local msg="$1"
   emit_json error message "$msg"
   log "ERROR: $msg"
+  log "Support: https://community.openclaw.ai/"
 }
 installer_npm_version_error() {
   log "ERROR: unable to determine npm version; no package changes were made"
+  log "Support: https://community.openclaw.ai/" >&2
 }
 installer_clone_error() {
   fail "Could not publish the cloned checkout: ${1}. Inspect the destination for partial files, move it or choose another --git-dir, then retry."
@@ -121,15 +123,15 @@ OPENCLAW_EFFECTIVE_HOME="$(resolve_home_path "${OPENCLAW_HOME:-$HOME}")"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 REQUIRED_COMPATIBLE_VERSION=""
-DEFAULT_NODE_VERSION="24.21.0"
+DEFAULT_NODE_VERSION="24.22.1"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-${DEFAULT_NODE_VERSION}}"
 NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
-MIN_NODE_24_VERSION="24.16.0"
-MIN_NODE_26_VERSION="26.1.0"
-SUPPORTED_NODE_VERSION_LABEL="Node 24.16.0+ or Node 26.1.0+"
+MIN_NODE_24_VERSION="24.22.1"
+MIN_NODE_26_VERSION="26.12.1"
+SUPPORTED_NODE_VERSION_LABEL="Node 24.22.1+ or Node 26.12.1+"
 NODE_RELEASE_VERSION_CORE=""
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
@@ -148,6 +150,10 @@ FRESH_GIT_MIN_FREE_KIB=$((6 * 1024 * 1024))
 print_usage() {
   cat <<EOF
 Usage: install-cli.sh [options]
+
+Support: https://community.openclaw.ai/
+FAQ: https://docs.openclaw.ai/start/faq
+
   --json                              Emit NDJSON events (no human output)
   --prefix <path>                     Install prefix (default: ~/.openclaw; use \$OPENCLAW_PREFIX to override)
   --install-method, --method npm|git  Install via npm (default) or from a git checkout
@@ -156,7 +162,7 @@ Usage: install-cli.sh [options]
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
-  --node-version <ver>                Node version (default: 24.21.0)
+  --node-version <ver>                Node version (default: 24.22.1)
   --node-only                         Install only a private Node runtime (no system package changes)
   --runtime-only                      Install CLI runtime without Gateway probes, service changes, or onboarding
   --onboard                           Run "openclaw onboard" after install
@@ -547,7 +553,7 @@ link_node_runtime_paths() {
   dir="$(node_dir)"
   runtime_bin="${node_path%/*}"
 
-  mkdir -p "${dir}/bin" "${PREFIX}/tools"
+  (umask 077; mkdir -p "${dir}/bin" "${PREFIX}/tools")
   ln -sfn "$node_path" "${dir}/bin/node"
   ln -sfn "$npm_path" "${dir}/bin/npm"
   for name in npx corepack; do
@@ -629,7 +635,7 @@ parse_node_release_version() {
   NODE_RELEASE_VERSION_CORE=""
   while [[ "$version" == [[:space:]]* ]]; do version="${version#?}"; done
   while [[ "$version" == *[[:space:]] ]]; do version="${version%?}"; done
-  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
     return 1
   fi
   major="${BASH_REMATCH[1]}"
@@ -640,6 +646,9 @@ parse_node_release_version() {
       return 1
     fi
   done
+  if [[ -n "${BASH_REMATCH[4]}" ]] && ((major <= 26)); then
+    return 1
+  fi
 
   NODE_RELEASE_VERSION_CORE="${major}.${minor}.${patch}"
 }
@@ -651,7 +660,7 @@ node_release_version_is_supported() {
 
 # Download labels are plain numeric Node distribution versions. Installed
 # runtimes use node_release_version_is_supported, which accepts canonical
-# release labels with a leading v or build metadata.
+# release labels with a leading v, build metadata, or future-major prereleases.
 node_version_is_supported() {
   local version="${1#v}"
   local major minor patch
@@ -915,7 +924,7 @@ install_node() {
   emit_json step name node status start version "$NODE_VERSION"
   log "Installing Node ${NODE_VERSION} (user-space)..."
 
-  mkdir -p "${PREFIX}/tools"
+  (umask 077; mkdir -p "${PREFIX}/tools")
   # Darwin's default mktemp location can ignore TMPDIR; use the prepared path explicitly.
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-node.XXXXXX")"
   TMPFILES+=("$tmp")
@@ -939,7 +948,7 @@ install_node() {
   fi
 
   rm -rf "$dir"
-  mkdir -p "$dir"
+  (umask 077; mkdir -p "$dir")
   tar -xzf "$tmp/node.tgz" -C "$dir" --strip-components=1
   rm -rf "$tmp"
 
@@ -950,7 +959,7 @@ install_node() {
     installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
     required_version="$(required_node_version)"
     sqlite_version="$(node_binary_sqlite_version "$(node_bin)")"
-    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.21.0 (or newer)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with WAL-reset-safe SQLite; found Node ${installed_version}, SQLite ${sqlite_version}. Re-run with --node-version 24.22.1 (or newer)"
   fi
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
   ln -sfn "$dir" "${PREFIX}/tools/node"
@@ -961,7 +970,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.11.1"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.15.0"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1014,7 +1023,7 @@ fix_npm_prefix_if_needed() {
   fi
 
   local target="${HOME}/.npm-global"
-  mkdir -p "$target"
+  (umask 077; mkdir -p "$target")
   "$(npm_bin)" config set prefix "$target"
 
   local path_line="export PATH=\"${target}/bin:\$PATH\""
@@ -1032,7 +1041,7 @@ fix_npm_prefix_if_needed() {
 publish_executable_wrapper() {
   local target="$1" target_dir="" temp="" backup=""
   target_dir="${target%/*}"
-  mkdir -p "$target_dir"
+  (umask 077; mkdir -p "$target_dir")
   temp="$(mktemp "${target_dir}/.openclaw-wrapper.XXXXXX")" || return 1
   TMPFILES+=("$temp")
   cat > "$temp"
@@ -1103,13 +1112,11 @@ install_openclaw() {
   if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
     log "npm install openclaw@${resolved_requested} did not produce a usable package; retrying once"
     if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
-      emit_json error message "npm install did not produce a usable OpenClaw package"
-      log "ERROR: npm install did not produce a usable OpenClaw package"
+      installer_error "npm install did not produce a usable OpenClaw package"
       return 1
     fi
   fi
 
-  mkdir -p "${PREFIX}/bin"
   publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1126,7 +1133,7 @@ install_openclaw_from_git() {
   if [[ -z "$repo_dir" ]]; then
     fail "Git install dir cannot be empty"
   fi
-  mkdir -p "$(dirname "$repo_dir")"
+  (umask 077; mkdir -p "$(dirname "$repo_dir")")
   if [[ -d "$repo_dir" ]]; then
     repo_dir="$(cd "$repo_dir" && pwd -P)"
   else
@@ -1206,7 +1213,6 @@ install_openclaw_from_git() {
   run_pnpm -C "$repo_dir" build
   emit_json step name cli-build status ok
 
-  mkdir -p "${PREFIX}/bin"
   publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1356,6 +1362,7 @@ main() {
   fi
   emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
+  log "Support: https://community.openclaw.ai/"
 
   if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
     "${PREFIX}/bin/openclaw" onboard

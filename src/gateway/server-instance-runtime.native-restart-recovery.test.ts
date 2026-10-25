@@ -7,13 +7,14 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
-import { mainSessionRecoveryLog } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
+import { admitTestReplyTurn } from "../auto-reply/reply/reply-turn-admission.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -25,10 +26,19 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
 import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createOwnershipRecord } from "../plugins/registry-ownership.test-support.js";
+import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
+import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
@@ -51,6 +61,7 @@ import {
   createCreatorTransportTools,
 } from "./server-methods/requester-cron-authority.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 const startTurn = vi.hoisted(() => vi.fn<ReturnType<typeof createAgentTurnService>["startTurn"]>());
 
@@ -67,12 +78,203 @@ afterEach(() => {
   startTurn.mockReset();
   vi.restoreAllMocks();
   resetAgentEventsForTest();
+  resetGlobalHookRunner();
+  resetTestPluginRegistry();
 });
 
+function createRecoveryRuntime(context: ReturnType<typeof createDirectChatContext>) {
+  return createGatewayInstanceRuntime({
+    getContext: () => context,
+    getMethodRegistry: () => createRequestGatewayMethodRegistry(),
+    isDispatchAvailable: () => true,
+  });
+}
+
+async function appendInterruptedTurn(target: Parameters<typeof appendTranscriptMessage>[0]) {
+  for (const message of [
+    { role: "user", content: "Continue the accepted task", timestamp: 1 },
+    { role: "assistant", content: [], stopReason: "aborted", timestamp: 2 },
+  ]) {
+    await appendTranscriptMessage(target, { message });
+  }
+}
+
+const settledRecovery = { started: 0, settled: 1, failed: 0, skipped: 0 };
+
 describe("cold restart recovery of native operator input", () => {
+  it("retires stale operator recovery once and admits new messages to the rotated session", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const context = createDirectChatContext({ trackExecution: trackAsyncWork });
+      const profile = ensureProfileForEmail("stale-recovery@example.test");
+      const fixture = await createOperatorRecoveryFixture({
+        stateDir: state.stateDir,
+        context,
+        profileId: profile.id,
+        config: {},
+      });
+      const target = { ...fixture.target, sessionId: "rotated-session" };
+      await replaceSessionEntry(target, {
+        ...fixture.entry,
+        sessionId: target.sessionId,
+        status: "failed",
+        abortedLastRun: true,
+        lifecycleRunId: target.sourceRunId,
+        mainRestartRecovery: { cycleId: "failed-recovery", revision: 1, chargedAttempts: 1 },
+        restartRecoveryRuns: [{ runId: target.sourceRunId, lifecycleGeneration: "before-restart" }],
+      });
+      await appendInterruptedTurn(target);
+      const originalTranscript = await loadTranscriptEvents(target);
+      await cleanupSessionStateForTest({ stateDir: state.stateDir });
+      rotateAgentEventLifecycleGeneration();
+      const runtime = createRecoveryRuntime(context);
+      context.recoveryRuntime = runtime.recovery;
+      const admit = () =>
+        admitTestReplyTurn({
+          ...target,
+          expectedSessionId: target.sessionId,
+          resolveGatewayContext: () => context,
+        });
+      try {
+        const next = await admit();
+        expect(next.status).toBe("owned");
+        if (next.status === "owned") {
+          next.operation.complete();
+        }
+        const entry = await readSessionEntryReadOnlyInWorker(target);
+        expect(entry).toMatchObject({ sessionId: target.sessionId, abortedLastRun: false });
+        expect(entry?.mainRestartRecovery).toBeUndefined();
+        expect(entry?.restartRecoveryOperatorSource).toBeUndefined();
+        expect(entry?.restartRecoveryTerminalRunIds).toContain(target.sourceRunId);
+        const transcript = await loadTranscriptEvents(target);
+        expect(transcript).toHaveLength(originalTranscript.length + 1);
+        expect(transcript.slice(0, originalTranscript.length)).toEqual(originalTranscript);
+        expect(JSON.stringify(transcript)).toContain(
+          "Restart recovery operator source no longer owns this input",
+        );
+        expect(JSON.stringify(transcript)).toContain(
+          "Send a new authenticated message to continue.",
+        );
+        const later = await admit();
+        expect(later.status).toBe("owned");
+        if (later.status === "owned") {
+          later.operation.complete();
+        }
+        expect(await loadTranscriptEvents(target)).toEqual(transcript);
+        expect(startTurn).not.toHaveBeenCalled();
+      } finally {
+        runtime.close();
+      }
+    });
+  });
+
+  it.each([
+    "write operator",
+    "trusted proxy",
+    "delegated session",
+    "revoked operator",
+    "revoked operator with saved final",
+  ] as const)(
+    "settles one interrupted turn for %s without broadening its authority",
+    async (scenario) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
+        const context = createDirectChatContext({ trackExecution: trackAsyncWork });
+        const profile = ensureProfileForEmail("session-recovery@example.test");
+        const revoked = scenario.startsWith("revoked");
+        const pendingFinalDelivery =
+          scenario === "revoked operator with saved final"
+            ? { kind: "replayable" as const, text: "Saved interrupted response", createdAt: 1 }
+            : undefined;
+        const scopes = [
+          scenario === "write operator" ? "operator.write" : "operator.sessions.write",
+        ];
+        const fixture = await createOperatorRecoveryFixture({
+          stateDir: state.stateDir,
+          context,
+          profileId: profile.id,
+          config: {},
+          scopes,
+          tokenlessDevice: scenario === "trusted proxy",
+          sourceRunId:
+            scenario === "delegated session"
+              ? "announce:requester-settle:main:parent:child:yield-1"
+              : undefined,
+          inputProvenance:
+            scenario === "delegated session"
+              ? {
+                  kind: "inter_session",
+                  sourceTool: "subagent_settle",
+                  sourceChannel: "internal",
+                  sourceSessionKey: "agent:main:subagent:child",
+                }
+              : undefined,
+        });
+        await replaceSessionEntry(fixture.target, {
+          ...fixture.entry,
+          status: "interrupted",
+          lifecycleRunId: fixture.target.sourceRunId,
+          pendingFinalDelivery,
+        });
+        await appendInterruptedTurn(fixture.target);
+        await cleanupSessionStateForTest({ stateDir: state.stateDir });
+        rotateAgentEventLifecycleGeneration();
+        if (revoked) {
+          setUserProfileRole(profile.id, "revoked-role");
+        }
+        const runtime = createRecoveryRuntime(context);
+        startTurn.mockImplementation(async ({ principal, io, preflight }) => {
+          expect(principal?.internal?.operatorRunAuthority?.scopes).toEqual(scopes);
+          io.emitAcceptance([
+            true,
+            { runId: preflight.request.idempotencyKey, status: "ok" },
+            undefined,
+          ]);
+        });
+        try {
+          await markStartupOrphanedMainSessionsForRecovery({ stateDir: state.stateDir, cfg: {} });
+          const recover = () =>
+            recoverStore({
+              storeAgentId: "main",
+              storePath: fixture.target.storePath,
+              stateDir: state.stateDir,
+              cfg: {},
+              handledSessionKeys: new Set(),
+              gatewayRuntime: runtime.recovery,
+            });
+          expect(await recover()).toEqual(settledRecovery);
+          const settledTranscript = await loadTranscriptEvents(fixture.target);
+          await recover();
+          expect(await loadTranscriptEvents(fixture.target)).toEqual(settledTranscript);
+          expect(startTurn).toHaveBeenCalledTimes(revoked ? 0 : 1);
+          if (pendingFinalDelivery) {
+            const entry = await readSessionEntryReadOnlyInWorker(fixture.target);
+            expect(entry?.mainRestartRecovery?.tombstone?.reason).toContain("operator");
+            expect(entry?.pendingFinalDelivery).toEqual(pendingFinalDelivery);
+            expect(entry?.status).toBe("failed");
+            expect(JSON.stringify(settledTranscript)).toContain("I couldn't continue this session");
+          } else if (revoked) {
+            const entry = await readSessionEntryReadOnlyInWorker(fixture.target);
+            expect(entry?.lastRunError).toContain("operator");
+            expect(entry?.mainRestartRecovery).toBeUndefined();
+            expect(entry?.status).toBe("interrupted");
+            expect(JSON.stringify(settledTranscript)).toContain(
+              "Send a new authenticated message to continue.",
+            );
+          }
+        } finally {
+          runtime.close();
+        }
+      });
+    },
+  );
+
   it.each([
     "native source",
+    "declaring plugin loaded",
     "native steering",
+    "peer follow-up",
+    "requester continuation after cohort settlement",
     "Control UI source",
     "unowned delegated source",
     "detached cron input",
@@ -84,10 +286,6 @@ describe("cold restart recovery of native operator input", () => {
     "role reassigned after admission",
   ] as const)("guards real automation writes for %s", async (scenario) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const warnings: string[] = [];
-      vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation((message) =>
-        warnings.push(message),
-      );
       const sourceMissing = ["unowned delegated source", "detached cron input"].includes(scenario);
       const sourceMismatch = [
         "mismatched agent",
@@ -96,6 +294,22 @@ describe("cold restart recovery of native operator input", () => {
         "mismatched lifecycle",
       ].includes(scenario);
       const sourceUnavailable = sourceMissing || sourceMismatch;
+      const inputProvenance: InputProvenance | undefined =
+        scenario === "peer follow-up"
+          ? {
+              kind: "inter_session",
+              sourceTool: "sessions_send",
+              sourceChannel: "webchat",
+              sourceSessionKey: "agent:main:dashboard:peer",
+            }
+          : scenario === "requester continuation after cohort settlement"
+            ? {
+                kind: "inter_session",
+                sourceTool: "subagent_settle",
+                sourceChannel: "internal",
+                sourceSessionKey: "agent:main:subagent:completed-child",
+              }
+            : undefined;
       const config = {
         agents: { defaults: { model: "openai/gpt-4.1" } },
         tools: { allow: [AUTOMATIONS_TOOL_NAME] },
@@ -116,6 +330,24 @@ describe("cold restart recovery of native operator input", () => {
         ],
       });
       setRuntimeConfigSnapshot(config);
+      if (scenario === "declaring plugin loaded") {
+        // An additional plain-text recovery case proves compatibility with a
+        // declaring command present, not recovery/replay of a command handler.
+        const builder = createTestPluginRegistry();
+        const record = createOwnershipRecord("recovery-native-command", {
+          contracts: { commandRuntimeCapabilities: ["subagents"] },
+        });
+        builder.createApi(record, { config }).registerCommand({
+          name: "pstack-recovery-probe",
+          description: "Probe command presence during plain-text restart recovery",
+          requireAuth: true,
+          runtimeCapabilities: ["subagents"],
+          handler: () => ({ text: "Command handler is separate from agent recovery" }),
+        });
+        builder.registry.plugins.push(record);
+        setTestPluginRegistry(builder.registry);
+        initializeGlobalHookRunner(builder.registry);
+      }
       const cronStorePath = path.join(state.stateDir, "cron", "jobs.json");
       const cron = new CronService({
         scheduler: createTestGatewayScheduler(),
@@ -125,7 +357,6 @@ describe("cold restart recovery of native operator input", () => {
         defaultAgentId: "main",
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         listConfiguredChannels: async () => [],
       });
@@ -154,6 +385,15 @@ describe("cold restart recovery of native operator input", () => {
             ? { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT }
             : { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: GATEWAY_CLIENT_MODES.UI },
         localOperator: scenario !== "Control UI source",
+        inputProvenance,
+        requesterOrigin:
+          scenario === "peer follow-up"
+            ? { sessionKey: "agent:main:dashboard:peer", operatorProfileId: owner.id }
+            : undefined,
+        sourceRunId:
+          scenario === "requester continuation after cohort settlement"
+            ? "announce:requester-settle:main:parent:completed-child:yield-1"
+            : undefined,
         device: {
           deviceId: "native-recovery-device",
           publicKey: "synthetic-public-key",
@@ -172,9 +412,6 @@ describe("cold restart recovery of native operator input", () => {
         },
       });
       expect(fixture.sourceAuthority.assertCurrent).toThrow("no longer active");
-      expect(fixture.entry.restartRecoverySourceIngress).toBe(
-        scenario === "Control UI source" ? "control-ui" : "internal",
-      );
       const savedSource = sourceMissing
         ? undefined
         : {
@@ -199,6 +436,7 @@ describe("cold restart recovery of native operator input", () => {
           role: "user",
           content: "Finish the synthetic task",
           timestamp: 1,
+          ...(inputProvenance ? { provenance: inputProvenance } : {}),
           ...(scenario === "detached cron input"
             ? { provenance: { kind: "internal_system", sourceTool: "cron" } }
             : {}),
@@ -217,98 +455,117 @@ describe("cold restart recovery of native operator input", () => {
       await cleanupSessionStateForTest({ stateDir: state.stateDir });
       rotateAgentEventLifecycleGeneration();
       const context = makeContext();
-      const runtime = createGatewayInstanceRuntime({
-        getContext: () => context,
-        getMethodRegistry: () => createRequestGatewayMethodRegistry(),
-        isDispatchAvailable: () => true,
-      });
+      const runtime = createRecoveryRuntime(context);
       let turnRegistration: ReturnType<typeof registerChatAbortController> | undefined;
-      startTurn.mockImplementation(async ({ principal, assertAdmissionCurrent, io }) => {
-        const authority = expectDefined(
-          principal?.internal?.operatorRunAuthority,
-          "restored owner",
-        );
-        expect(authority.profileId).toBe(owner.id);
-        if (scenario === "device revoked after admission") {
-          invalidateGatewayDeviceRevocation(context, "native-recovery-device", "operator");
-        } else if (scenario === "role reassigned after admission") {
-          setUserProfileRole(owner.id, "replacement-role");
-        }
-        assertAdmissionCurrent?.();
-        authority.assertCurrent();
-        // The service replacement must publish the preparation owner that the
-        // real turn service registers before constructing or invoking tools.
-        turnRegistration = registerChatAbortController({
-          chatAbortControllers: context.chatAbortControllers,
-          agentId: "main",
-          runId: fixture.target.recoveryRunId,
-          sessionKey: SESSION,
-          sessionId: SESSION_ID,
-          kind: "agent",
-          timeoutMs: resolveAgentTimeoutMs({ cfg: config }),
-        });
-        if (!turnRegistration.registered) {
-          throw new Error("expected a registered recovery run");
-        }
-        io.emitStartOwner?.(fixture.target.recoveryRunId, turnRegistration.entry);
-        const client = createSyntheticPluginRuntimeClient({
-          operatorRoleActor: { kind: "operator", profileId: authority.profileId },
-          operatorRunAuthority: authority,
-          scopes: [...authority.scopes],
-        });
-        const creator = expectDefined(
-          resolveGatewayCronCreatorAuthorityAdmission({
+      startTurn.mockImplementation(
+        async ({ principal, assertAdmissionCurrent, controllerInput, io }) => {
+          const authority = expectDefined(
+            principal?.internal?.operatorRunAuthority,
+            "restored owner",
+          );
+          expect(authority.profileId).toBe(owner.id);
+          if (scenario === "device revoked after admission") {
+            invalidateGatewayDeviceRevocation(context, "native-recovery-device", "operator");
+          } else if (scenario === "role reassigned after admission") {
+            setUserProfileRole(owner.id, "replacement-role");
+          }
+          assertAdmissionCurrent?.();
+          authority.assertCurrent();
+          // The service replacement must publish the preparation owner that the
+          // real turn service registers before constructing or invoking tools.
+          turnRegistration = registerChatAbortController({
+            target: captureSessionTarget({
+              storeScope: fixture.target.storePath,
+              sessionKey: SESSION,
+              incarnation: SESSION_ID,
+              agentId: "main",
+            }),
+            sourceInput: controllerInput,
+            agentId: "main",
             runId: fixture.target.recoveryRunId,
-            resolvedSessionKey: SESSION,
+            sessionKey: SESSION,
             sessionId: SESSION_ID,
-            client,
-            request: {
-              message: "Finish the accepted automation task",
-              idempotencyKey: fixture.target.recoveryRunId,
+            kind: "agent",
+            timeoutMs: resolveAgentTimeoutMs({ cfg: config }),
+          });
+          if (!turnRegistration.registered) {
+            throw new Error("expected a registered recovery run");
+          }
+          io.emitStartOwner?.(fixture.target.recoveryRunId, turnRegistration.entry);
+          await withSessionTurn(
+            {
+              sessionKey: SESSION,
+              sessionId: SESSION_ID,
+              target: turnRegistration.entry.input.target,
+              controllerInput: turnRegistration.entry.input,
+              abortSignal: turnRegistration.controller.signal,
             },
-            hasRestoredCronContinuation: false,
-            isOneShotModelRun: false,
-            isRestartRecoveryResumeRun: true,
-          }),
-          "restored creator admission",
-        );
-        await withPluginRuntimeGatewayRequestScope(
-          { client, context, isWebchatConnect: () => false },
-          () =>
-            inRun(
-              fixture.target.recoveryRunId,
-              creator,
-              async (_identity, admitted) => {
-                bindGatewayContextResolver(admitted, () => context);
-                try {
-                  const tools = await createCreatorTransportTools({
-                    transport: "embedded",
-                    config,
-                    admitted,
-                    senderIsOwner: authority.scopes.includes("operator.admin"),
-                    workspaceDir: state.workspaceDir,
-                  });
-                  await tools.invoke(AUTOMATIONS_TOOL_NAME, {
-                    action: "add",
-                    job: {
-                      name: "Recovered authorized task",
-                      enabled: false,
-                      schedule: { kind: "every", everyMs: 60000 },
-                      sessionTarget: "current",
-                      payload: { kind: "agentTurn", message: "Synthetic checkback" },
-                      delivery: { mode: "none" },
+            async () => {
+              const client = createSyntheticPluginRuntimeClient({
+                operatorRoleActor: { kind: "operator", profileId: authority.profileId },
+                operatorRunAuthority: authority,
+                scopes: [...authority.scopes],
+              });
+              const creator = expectDefined(
+                resolveGatewayCronCreatorAuthorityAdmission({
+                  runId: fixture.target.recoveryRunId,
+                  resolvedSessionKey: SESSION,
+                  sessionId: SESSION_ID,
+                  client,
+                  request: {
+                    message: "Finish the accepted automation task",
+                    idempotencyKey: fixture.target.recoveryRunId,
+                  },
+                  hasRestoredCronContinuation: false,
+                  isOneShotModelRun: false,
+                  isRestartRecoveryResumeRun: true,
+                }),
+                "restored creator admission",
+              );
+              await withPluginRuntimeGatewayRequestScope(
+                { client, context, isWebchatConnect: () => false },
+                () =>
+                  inRun(
+                    fixture.target.recoveryRunId,
+                    creator,
+                    async (_identity, admitted) => {
+                      bindGatewayContextResolver(admitted, () => context);
+                      try {
+                        const tools = await createCreatorTransportTools({
+                          transport: "embedded",
+                          config,
+                          admitted,
+                          senderIsOwner: authority.scopes.includes("operator.admin"),
+                          workspaceDir: state.workspaceDir,
+                        });
+                        await tools.invoke(AUTOMATIONS_TOOL_NAME, {
+                          action: "add",
+                          job: {
+                            name: "Recovered authorized task",
+                            enabled: false,
+                            schedule: { kind: "every", everyMs: 60000 },
+                            sessionTarget: "current",
+                            payload: { kind: "agentTurn", message: "Synthetic checkback" },
+                            delivery: { mode: "none" },
+                          },
+                        });
+                      } finally {
+                        clearGatewayContextResolver(admitted);
+                      }
                     },
-                  });
-                } finally {
-                  clearGatewayContextResolver(admitted);
-                }
-              },
-              authority,
-            ),
-        );
-        io.emitAcceptance([true, { runId: fixture.target.recoveryRunId, status: "ok" }, undefined]);
-        io.emitFinal([true, { runId: fixture.target.recoveryRunId, status: "ok" }, undefined]);
-      });
+                    authority,
+                  ),
+              );
+            },
+          );
+          io.emitAcceptance([
+            true,
+            { runId: fixture.target.recoveryRunId, status: "ok" },
+            undefined,
+          ]);
+          io.emitFinal([true, { runId: fixture.target.recoveryRunId, status: "ok" }, undefined]);
+        },
+      );
       try {
         await expect(
           markStartupOrphanedMainSessionsForRecovery({ stateDir: state.stateDir, cfg: {} }),
@@ -321,34 +578,34 @@ describe("cold restart recovery of native operator input", () => {
           handledSessionKeys: new Set(),
           gatewayRuntime: runtime.recovery,
         });
+        const deviceRevoked = scenario === "device revoked after admission";
+        expect(result).toEqual({
+          ...settledRecovery,
+          settled: deviceRevoked ? 0 : 1,
+          failed: deviceRevoked ? 1 : 0,
+        });
+        expect(startTurn).toHaveBeenCalledTimes(sourceUnavailable ? 0 : 1);
         if (sourceMissing) {
-          expect(result).toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
-          expect(startTurn).not.toHaveBeenCalled();
           const entry = await readSessionEntryReadOnlyInWorker(fixture.target);
-          expect(entry?.mainRestartRecovery?.tombstone).toBeDefined();
+          expect(entry).toMatchObject({
+            sessionId: fixture.entry.sessionId,
+            status: "interrupted",
+            abortedLastRun: false,
+          });
+          expect(entry?.mainRestartRecovery).toBeUndefined();
+          expect(entry?.lastRunId).toBeDefined();
+          expect(entry?.restartRecoveryTerminalRunIds).toContain(entry?.lastRunId);
+          expect(entry?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
         } else if (sourceMismatch) {
           // Current Gateway restoration owns exact-claim validation, not the
           // transcript classifier. Refusal must precede turn/tool execution.
-          expect(result).toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
-          expect(startTurn).not.toHaveBeenCalled();
           const entry = await readSessionEntryReadOnlyInWorker(fixture.target);
-          expect(warnings.join("\n")).toContain(
+          expect(entry?.lastRunError).toBe(
             "Restart recovery operator source no longer owns this input.",
           );
-          expect(entry?.mainRestartRecovery?.tombstone).toBeUndefined();
-          expect(entry?.restartRecoveryOperatorSource).toEqual(savedSource);
-          expect(entry?.abortedLastRun).toBe(true);
-        } else if (scenario.includes("after admission")) {
-          expect(result).toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
-          expect(startTurn).toHaveBeenCalledOnce();
-        } else {
-          expect(result, warnings.join("\n")).toEqual({
-            started: 0,
-            settled: 1,
-            failed: 0,
-            skipped: 0,
-          });
-          expect(startTurn).toHaveBeenCalledOnce();
+          expect(entry?.mainRestartRecovery).toBeUndefined();
+          expect(entry?.restartRecoveryOperatorSource).toBeUndefined();
+          expect(entry?.abortedLastRun).toBe(false);
         }
         const jobs = (await loadCronStore(cronStorePath)).jobs;
         if (sourceUnavailable || scenario.includes("after admission")) {
@@ -361,7 +618,6 @@ describe("cold restart recovery of native operator input", () => {
               owner: { agentId: "main", sessionKey: SESSION },
             },
           ]);
-          expect(jobs).toHaveLength(1);
         }
       } finally {
         turnRegistration?.cleanup();

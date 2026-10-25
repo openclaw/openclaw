@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
@@ -14,6 +14,9 @@ import {
 } from "../../scripts/lib/code-mode-matrix-gateway-fixtures.js";
 import { runGatewayMatrixCell } from "../../scripts/lib/code-mode-matrix-gateway.js";
 import * as performanceFixtures from "../../scripts/lib/code-mode-matrix-performance-fixtures.js";
+import { prepareGatewayMatrixProcessOwner } from "../../scripts/lib/code-mode-matrix-process-owner.js";
+import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -78,6 +81,15 @@ function invoke<T>(entry: string, actions: Action[]): Invocation<T> {
   return invocation;
 }
 
+const activation = {
+  active: true,
+  toolsEnabled: true,
+  toolsDisabled: false,
+  rawRun: false,
+  fallbackActive: false,
+  allowlist: "unset",
+};
+const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
 describe("Gateway code-mode matrix fixtures", () => {
   it("supplies a full oversized invoice export with an independently verified unpaid-total oracle", () => {
     const { fixture, root, entry } = prepare("invoices-auto-retention");
@@ -378,19 +390,18 @@ if (process.argv.includes("call")) {
 `;
 
 it.each([
-  { executor: "node", modelError: undefined, capture: false, wrongActivation: false },
-  { executor: "quickjs", modelError: undefined, capture: false, wrongActivation: false },
-  {
-    executor: "node",
-    modelError: "The model does not exist or is not available",
-    capture: false,
-    wrongActivation: false,
-  },
-  { executor: "node", modelError: undefined, capture: true, wrongActivation: false },
-  { executor: "node", modelError: undefined, capture: true, wrongActivation: true },
+  ["node", undefined, false, false],
+  ["quickjs", undefined, false, false],
+  ["node", "The model does not exist or is not available", false, false],
+  ["node", undefined, true, false],
+  ["node", undefined, true, true],
 ] as const)(
-  "routes $executor and preserves task/interview/provider failure evidence ($modelError, capture=$capture, wrongActivation=$wrongActivation)",
-  async ({ executor, modelError, capture, wrongActivation }) => {
+  "routes %s and preserves failure evidence (modelError=%s, capture=%s, wrongActivation=%s)",
+  async (executor, modelError, capture, wrongActivation) => {
+    const builtOwner = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor);
+    expect(builtOwner.pathname).toMatch(/\.js$/u);
+    // The fake Gateway owns fixture data; supervision still needs the prepared runtime.
+    const runtimeRoot = path.resolve(path.dirname(fileURLToPath(builtOwner)), "../../..");
     const root = tempDirs.make("openclaw-matrix-producer-");
     const runtime = path.join(root, "fake-gateway.mjs");
     const fixture = createGatewayMatrixFixture("partial-failure", 1);
@@ -430,7 +441,11 @@ it.each([
           task: capture ? "repo-invoice-repair" : "partial-failure",
           repetition: 1,
         },
-        runtime: { args: [runtime], cwd: root },
+        runtime: {
+          args: [runtime],
+          cwd: runtimeRoot,
+          processOwnerBootstrap: await prepareGatewayMatrixProcessOwner(runtimeRoot, root),
+        },
         repoRoot: root,
         outputDir: root,
         keepState: false,
@@ -441,9 +456,7 @@ it.each([
         sourceDirty: false,
         sourcePatchSha256: null,
       });
-      const observedConfig = JSON.parse(
-        fs.readFileSync(path.join(root, "observed-config.json"), "utf8"),
-      );
+      const observedConfig = readJson(path.join(root, "observed-config.json"));
       expect(observedConfig.codeMode.executor).toBe(executor);
       expect(observedConfig.plugins.allow.includes("code-mode-quickjs")).toBe(
         executor === "quickjs",
@@ -455,10 +468,11 @@ it.each([
       const gateway = expectDefined(result.gateway, "producer Gateway evidence");
       expect(gateway.settings.executor).toBe(executor);
       if (capture) {
-        expect(result.passed).toBe(!wrongActivation);
-        expect(result.oracle.engagement).toBe(!wrongActivation);
-        expect(result.failureCategory).toBe(wrongActivation ? "activation" : null);
-        expect(result.oracle.answer).toBeNull();
+        expect(result).toMatchObject({
+          passed: !wrongActivation,
+          failureCategory: wrongActivation ? "activation" : null,
+          oracle: { engagement: !wrongActivation, answer: null },
+        });
         expect(gateway.behavior.finalResponsePresent).toBe(true);
         expect(gateway.deliveredFiles).toMatchObject([
           { source: "report.json", status: "captured" },
@@ -479,37 +493,23 @@ it.each([
         expect(result.error?.message).toContain("agent run failed");
         return;
       }
-      expect(result.oracle.identity).toBe(true);
-      expect(result.oracle.engagement).toBe(true);
+      expect(result.oracle).toMatchObject({ identity: true, engagement: true });
       expect(gateway.behavior.exactlyOneEffect).toBe(true);
       expect(result.failureCategory).toBe("interview_mismatch");
       expect(gateway.interview.checks.noExternalAction).toBe(false);
       const artifacts = path.join(root, "cells", "receipt-boundary");
-      const readReceipts = (name: string) =>
-        JSON.parse(fs.readFileSync(path.join(artifacts, name), "utf8")) as {
-          kind: string;
-          tool: string;
-        }[];
-      const rawEvidence = JSON.parse(
-        fs.readFileSync(path.join(artifacts, "evidence.json"), "utf8"),
+      const readReceipts = (name: string): { kind: string; tool: string }[] =>
+        readJson(path.join(artifacts, name));
+      const rawEvidence = readJson(path.join(artifacts, "evidence.json"));
+      expect(rawEvidence).toMatchObject({
+        task: { usage: { input_tokens: 20, output_tokens: 4 } },
+        interview: { usage: { input_tokens: 10, output_tokens: 2 } },
+        activationComplete: true,
+      });
+      expect(rawEvidence.observedActivation).toEqual([{ runId: "task-response", ...activation }]);
+      const timeline: { interview: boolean; requestAt: number; responseAt: number }[] = readJson(
+        path.join(root, "response-timeline.json"),
       );
-      expect(rawEvidence.task.usage).toMatchObject({ input_tokens: 20, output_tokens: 4 });
-      expect(rawEvidence.interview.usage).toMatchObject({ input_tokens: 10, output_tokens: 2 });
-      expect(rawEvidence.activationComplete).toBe(true);
-      expect(rawEvidence.observedActivation).toEqual([
-        {
-          runId: "task-response",
-          active: true,
-          toolsEnabled: true,
-          toolsDisabled: false,
-          rawRun: false,
-          fallbackActive: false,
-          allowlist: "unset",
-        },
-      ]);
-      const timeline = JSON.parse(
-        fs.readFileSync(path.join(root, "response-timeline.json"), "utf8"),
-      ) as { interview: boolean; requestAt: number; responseAt: number }[];
       const taskResponseAt = expectDefined(gateway.taskResponseAt, "root response boundary");
       expect(taskResponseAt).toBeGreaterThanOrEqual(
         expectDefined(timeline[0], "task response timing").responseAt,

@@ -14,7 +14,6 @@ import {
   estimateRenderedPromptTokens,
   estimateToolSchemaTokens,
 } from "../../sessions/context-token-pressure.js";
-import { log } from "../logger.js";
 import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
@@ -254,15 +253,11 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   };
 }
 
-/** Price the projected foreground request; persisted usage alone cannot bind its prefix. */
-export function resolveProjectedRequestPressure(params: {
+/** Price a request only after its caller has matched the measured predecessor. */
+export function estimateProjectedRequestTokenPressure(params: {
   context: Parameters<StreamFn>[1];
   previousRequest?: MeasuredRequestContext;
-  contextTokenBudget: number;
-  reserveTokens: number;
-  toolResultMaxChars?: number;
-  replay?: CompactionReplayPressureContext;
-}) {
+}): LlmBoundaryTokenPressure {
   const { context, previousRequest } = params;
   const anchor = previousRequest && previousRequest.contextTokens > 0 ? previousRequest : undefined;
   const messages = context.messages;
@@ -283,33 +278,35 @@ export function resolveProjectedRequestPressure(params: {
   const estimate = createFreshLlmBoundaryTokenEstimator(
     anchor ? {} : { ...context, retainCompletionUsage: true },
   );
+  return {
+    estimatedPromptTokens:
+      (anchor?.contextTokens ?? 0) + estimate({ messages: appended, prompt: "" }),
+    source: anchor ? "provider_context_usage" : "transcript_estimate",
+  };
+}
+
+/** Price the projected foreground request; persisted usage alone cannot bind its prefix. */
+export function resolveProjectedRequestPressure(params: {
+  context: Parameters<StreamFn>[1];
+  previousRequest?: MeasuredRequestContext;
+  contextTokenBudget: number;
+  reserveTokens: number;
+  toolResultMaxChars?: number;
+  replay?: CompactionReplayPressureContext;
+}) {
+  const { context, previousRequest } = params;
+  const anchor = previousRequest && previousRequest.contextTokens > 0 ? previousRequest : undefined;
   const precheck = shouldPreemptivelyCompactBeforePrompt({
     ...params,
-    messages,
+    messages: context.messages,
     systemPrompt: context.systemPrompt,
     toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
     prompt: "",
     // A current-run anchor already includes any provider-owned compaction prefix.
     replay: anchor ? undefined : params.replay,
-    llmBoundaryTokenPressure: {
-      estimatedPromptTokens:
-        (anchor?.contextTokens ?? 0) +
-        estimate({
-          messages: appended,
-          prompt: "",
-        }),
-      source: anchor ? "provider_context_usage" : "transcript_estimate",
-    },
+    llmBoundaryTokenPressure: estimateProjectedRequestTokenPressure(params),
   });
-  const decision = precheck.compactionReplay ?? precheck;
-  log.debug(
-    `[context-overflow-midturn-precheck] provider-bound check route=${decision.route} ` +
-      `messages=${messages.length} pressureSource=${decision.pressureSource} ` +
-      `estimatedPromptTokens=${decision.estimatedPromptTokens} ` +
-      `promptBudgetBeforeReserve=${decision.promptBudgetBeforeReserve} ` +
-      `overflowTokens=${decision.overflowTokens}`,
-  );
-  return decision;
+  return precheck.compactionReplay ?? precheck;
 }
 
 /** Stop before a projected foreground request that no longer fits its budget. */

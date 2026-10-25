@@ -49,6 +49,11 @@ export function resolveAgentRestartRecoveryContext(params: {
   ) {
     return undefined;
   }
+  // A channel-less agent RPC turn resumes channel-less; recorded channels keep the
+  // ingress-specific restoration below, including channel delivery authority.
+  if (params.isRestartRecoveryResumeRun && entry.restartRecoverySourceMessageChannel === null) {
+    return undefined;
+  }
   if (params.isRestartRecoveryResumeRun && entry.restartRecoverySourceIngress === "control-ui") {
     return { messageChannel: INTERNAL_MESSAGE_CHANNEL, pinnedWidgetAuthoring: true };
   }
@@ -57,7 +62,8 @@ export function resolveAgentRestartRecoveryContext(params: {
     entry.restartRecoverySourceIngress === "internal" &&
     !entry.restartRecoveryDeliveryContext
   ) {
-    // WebChat context lets message tools infer external recipients from session keys.
+    // Older in-flight claims omitted the channel; retain their WebChat fallback.
+    // WebChat context can infer recipients, so external session routes stay excluded.
     const route = parseSessionDeliveryRoute(params.resolvedSessionKey);
     return !route || route.channel === INTERNAL_MESSAGE_CHANNEL
       ? { messageChannel: INTERNAL_MESSAGE_CHANNEL }

@@ -16,6 +16,7 @@ import {
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { readWorkspaceTreeFile } from "./workspace-reconcile-fs.js";
+import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js";
 import {
   requireWorkerResultStorageRef,
   STAGED_RESULT_MESSAGE,
@@ -29,11 +30,12 @@ function stagedResultMessage(params: {
   currentManifestRef: string;
   baseManifestRaw: Uint8Array<ArrayBuffer>;
   currentManifestRaw: Uint8Array<ArrayBuffer>;
+  gitHistory?: WorkerWorkspaceGitHistory;
 }): { chunks: Buffer[]; byteLength: number } {
   const base = bufferView(params.baseManifestRaw);
   const current = bufferView(params.currentManifestRaw);
   const header = Buffer.from(
-    `${STAGED_RESULT_MESSAGE}\nversion 2\nbase-ref ${params.baseManifestRef}\ncurrent-ref ${params.currentManifestRef}\nbase-bytes ${base.byteLength}\ncurrent-bytes ${current.byteLength}\n\n`,
+    `${STAGED_RESULT_MESSAGE}\nversion ${params.gitHistory ? 3 : 2}\nbase-ref ${params.baseManifestRef}\ncurrent-ref ${params.currentManifestRef}\nbase-bytes ${base.byteLength}\ncurrent-bytes ${current.byteLength}\n${params.gitHistory ? `git-history ${JSON.stringify(params.gitHistory)}\n` : ""}\n`,
   );
   return {
     chunks: [header, base, current],
@@ -75,7 +77,7 @@ async function publicationStageSource(
     size: content.byteLength,
     sha256: sha256(content),
   });
-  const entries = [...inline].map(([pathname, content]) => file(pathname, content));
+  const entries = Array.from(inline, ([pathname, content]) => file(pathname, content));
   const blobs = new Set(
     snapshot.entries.flatMap((entry) => (entry.sha && entry.mode !== "160000" ? [entry.sha] : [])),
   );
@@ -144,10 +146,12 @@ export async function buildWorkspaceStageInput(
     parseWorkerWorkspaceManifest(
       bufferView(source.baseManifestRaw).toString("utf8"),
       source.baseManifestRef,
+      params.buildCacheInputs,
     ),
     parseWorkerWorkspaceManifest(
       bufferView(source.currentManifestRaw).toString("utf8"),
       source.currentManifestRef,
+      params.buildCacheInputs,
     ),
   );
   // Deletions are represented by the authenticated manifests and need no blob.
@@ -156,7 +160,12 @@ export async function buildWorkspaceStageInput(
     inputPath: params.inputPath,
     ref: stagedResultRef,
     entries: compared.entries,
-    message: stagedResultMessage(source),
+    message: stagedResultMessage({ ...source, gitHistory: params.gitHistory }),
+    parentCommit:
+      params.parentCommit ??
+      (params.gitHistory?.descendsFromBase && !params.gitHistory.unavailableReason
+        ? params.gitHistory.headCommit
+        : undefined),
     readVerifiedContent: source.readVerifiedContent,
   });
   return null;

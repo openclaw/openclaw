@@ -123,7 +123,9 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     }>[];
     /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
     inlineProviderModels: readonly InlineModelEntry[];
-    createStores: () => PreparedModelRuntimeStores;
+    createStores: (
+      publishedModels?: ReadonlyMap<string, readonly Model[]>,
+    ) => PreparedModelRuntimeStores;
     /** Bounded metadata shared by runs; replacing the model/auth generation drops the memo. */
     routeModelResolutionMemo?: Map<string, Promise<Model>>;
   }>;
@@ -280,12 +282,13 @@ export type PreparedModelRuntimeOwner = {
   /** Source-bound attempt status, including failure before any inventory was published. */
   catalogAttempt?: PreparedModelCatalogAttempt;
   refreshError?: Error;
-  /** Demand may recheck a failed catalog-worker replacement; scheduled demand gets one attempt. */
+  /** Demand may recheck a failed publication; scheduled demand gets one attempt. */
   catalogRecovery?: {
     error: Error;
     scheduledAttempted: boolean;
     retryAfter: number;
     replacementGateId?: PreparedModelRuntimeReplacementGateId;
+    pending?: Promise<void>;
   };
   /** The configured publication owner recovers when an idle Gateway lender retires. */
   onPluginGenerationRetired?: () => void;

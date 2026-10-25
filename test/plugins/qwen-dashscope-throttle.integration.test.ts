@@ -1,46 +1,45 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
-import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../../src/agents/auth-profiles/credential-fixtures.test-support.js";
 import { readPersistedAuthProfileStateRaw } from "../../src/agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../src/agents/auth-profiles/store-runtime.js";
+import type { AuthProfileState } from "../../src/agents/auth-profiles/types.js";
 import { isProfileInCooldown } from "../../src/agents/auth-profiles/usage-state.js";
 import { handleEmbeddedAssistantFailure } from "../../src/agents/embedded-agent-runner/run/assistant-failure.js";
+import { makeAssistantFailureInput } from "../../src/agents/embedded-agent-runner/run/assistant-failure.test-support.js";
 import { createEmbeddedRunFailoverRetryController } from "../../src/agents/embedded-agent-runner/run/failover-retry-controller.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "../../src/agents/embedded-agent-runner/run/terminal-outcome.js";
-import { makeEmbeddedRunnerAttempt } from "../../src/agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { createPluginMetadataSnapshot } from "../../src/config/plugin-auto-enable.test-helpers.js";
+import { makeProviderModelFixture } from "../../src/agents/test-helpers/provider-model-fixture.js";
 import { withPluginMetadataSnapshotScope } from "../../src/plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginManifestRegistryCore } from "../../src/plugins/manifest-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
-import { resolveProviderRuntimePluginHandle } from "../../src/plugins/provider-hook-runtime.js";
-import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
-import { withPluginRuntimeGenerationScope } from "../../src/plugins/runtime/generation-scope.js";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
-import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../src/test-utils/plugin-registration.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "../helpers/gateway-integration-fixtures.js";
+import { loadBundledProviderPlugin } from "../helpers/media-generation/bundled-provider-builders.js";
 
 const MODEL_ID = "qwen3.8-max";
 const QWEN_TOKEN_PLAN_PROVIDER_ID = "qwen-token-plan";
 
-const model = {
+const model = makeProviderModelFixture<"openai-completions">({
   id: MODEL_ID,
-  name: "Qwen fixture",
   api: "openai-completions",
   provider: QWEN_TOKEN_PLAN_PROVIDER_ID,
   baseUrl: "",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 32_000,
-  maxTokens: 2_048,
-} satisfies Model<"openai-completions">;
+});
 
 const registeredProviders = new Map<string, ProviderPlugin[]>();
 let availabilitySnapshot: ReturnType<typeof createPluginMetadataSnapshotFixture>;
@@ -57,9 +56,7 @@ beforeAll(async () => {
   });
   availabilitySnapshot = createPluginMetadataSnapshotFixture(registry);
   for (const pluginId of ["qwen", "openrouter"]) {
-    const { default: plugin } = await loadBundledPluginFacade<{
-      default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-    }>({ pluginId, artifactBasename: "index.js" });
+    const plugin = await loadBundledProviderPlugin(pluginId);
     const { providers } = await registerProviderPlugin({ plugin, id: pluginId, name: pluginId });
     registeredProviders.set(pluginId, providers);
   }
@@ -68,381 +65,249 @@ beforeAll(async () => {
 type ErrorFixture = {
   status: number;
   code: string | number;
-  type?: string;
   message: string;
   metadata?: { raw: string };
 };
 
-type ProfileUsageReadback = {
-  cooldownUntil?: number;
-  cooldownReason?: string;
-  cooldownModel?: string;
-  disabledUntil?: number;
-  disabledReason?: string;
-};
-
-function prepareProviderOwner(providerId: string, pluginId = "qwen"): ProviderPlugin {
-  const provider = requireRegisteredProvider(registeredProviders.get(pluginId) ?? [], providerId);
-  const registry = createEmptyPluginRegistry();
-  registry.providers.push({ pluginId, provider, source: "test" });
-  const config = {};
-  const metadataSnapshot = createPluginMetadataSnapshot({
-    config,
-    manifestRegistry: { plugins: [], diagnostics: [] },
-  });
-  const handle = withPluginRuntimeGenerationScope(
-    { metadataSnapshot, pluginRegistry: registry },
-    () =>
-      resolveProviderRuntimePluginHandle({
-        provider: providerId,
-        providerOwner: provider.id,
-        modelId: MODEL_ID,
-        config,
-      }),
-  );
-  if (!handle.plugin) {
-    throw new Error(`prepared provider owner missing for ${providerId}`);
-  }
-  return handle.plugin;
-}
-
-async function runTransportError(params: {
-  provider: string;
-  fixture: ErrorFixture;
-}): Promise<AssistantMessage> {
-  const server = createServer((request, response) => {
-    request.resume();
-    response.writeHead(params.fixture.status, { "content-type": "application/json" });
-    response.end(
-      JSON.stringify({
-        error: {
-          code: params.fixture.code,
-          type: params.fixture.type ?? params.fixture.code,
-          message: params.fixture.message,
-          ...(params.fixture.metadata ? { metadata: params.fixture.metadata } : {}),
-        },
-      }),
-    );
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  try {
-    const address = server.address() as AddressInfo;
-    const context: Context = {
-      messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    };
-    const assistant = await streamOpenAICompletions(
-      {
-        ...model,
-        provider: params.provider,
-        baseUrl: `http://127.0.0.1:${address.port}/compatible-mode/v1`,
-      },
-      context,
-      { apiKey: "synthetic-test-key" },
-    ).result();
-    expect(assistant).toMatchObject({
-      stopReason: "error",
-      provider: params.provider,
-      model: MODEL_ID,
-      errorCode: String(params.fixture.code),
-    });
-    expect(assistant.errorMessage).toContain(params.fixture.message);
-    if (params.fixture.metadata) {
-      expect(assistant.errorMessage).toContain(params.fixture.metadata.raw);
-    }
-    return assistant;
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-}
-
-async function runThroughFailureRecoveryInScope(params: {
-  provider: string;
-  providerOwner?: ProviderPlugin;
-  fixture: ErrorFixture;
-}): Promise<{
-  failureReason: unknown;
-  usage: ProfileUsageReadback | undefined;
-  affectedModelBlocked: boolean;
-  otherModelBlocked: boolean;
-  suspensionReasons: string[];
-}> {
-  const assistant = await runTransportError(params);
-  return await withOpenClawTestState(
-    { label: `qwen-dashscope-${params.provider.replaceAll(/[^a-z0-9]+/gi, "-")}` },
-    async (state) => {
-      const profileId = `${params.provider}:fixture`;
-      const profileStore = {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type: "api_key" as const,
-            provider: params.provider,
-            key: "synthetic-test-key",
+async function runThroughFailureRecovery(
+  {
+    provider,
+    providerOwner,
+    fixture,
+  }: {
+    provider: string;
+    providerOwner?: ProviderPlugin;
+    fixture: ErrorFixture;
+  },
+  snapshot = availabilitySnapshot,
+) {
+  return withPluginMetadataSnapshotScope(
+    snapshot,
+    async () => {
+      const server = createServer((request, response) => {
+        request.resume();
+        respondJson(
+          response,
+          {
+            error: {
+              code: fixture.code,
+              type: fixture.code,
+              message: fixture.message,
+              ...(fixture.metadata ? { metadata: fixture.metadata } : {}),
+            },
           },
-        },
-      };
-      await state.writeAuthProfiles(profileStore);
-      const runId = `run:${params.provider}:${params.fixture.code}`;
-      const sessionId = `session:${params.provider}:${params.fixture.code}`;
-      const runParams = {
-        runId,
-        sessionId,
-        sessionKey: `agent:main:${params.provider}:${params.fixture.code}`,
-        sessionFile: `${state.agentDir()}/session.jsonl`,
-        workspaceDir: state.agentDir(),
-        prompt: "hello",
-        timeoutMs: 60_000,
-        config: {},
-      } satisfies Parameters<typeof handleEmbeddedAssistantFailure>[0]["runInput"]["runParams"];
-      const failover = createEmbeddedRunFailoverRetryController({
-        runInput: {
-          runParams,
-          globalLane: "qwen-dashscope-throttle-test",
-          agentDir: state.agentDir(),
-          fallbackConfigured: false,
-        },
-        preparedRuntime: {
-          provider: params.provider,
-          modelId: MODEL_ID,
-          profileFailureStore: profileStore,
-          snapshot: () => ({
-            lastProfileId: profileId,
-            pluginHarnessOwnsTransport: false,
-            agentHarness: { id: "embedded" },
-          }),
-          getApiKeyInfo: () => null,
-          advanceAttemptAuthProfile: async () => false,
-        },
-        getSessionId: () => sessionId,
+          fixture.status,
+        );
       });
-      const attempt = makeEmbeddedRunnerAttempt({
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        messagesSnapshot: [assistant],
-      });
-      const terminalState = resolveEmbeddedRunAttemptTerminalState({
-        attempt,
-        assistant,
-      });
-      let failureReason: unknown;
-      const suspensionReasons: string[] = [];
+      const baseUrl = `${await listenLoopback(server)}/compatible-mode/v1`;
+      let assistant;
       try {
-        await handleEmbeddedAssistantFailure({
-          runInput: {
-            runParams,
+        assistant = await streamOpenAICompletions(
+          { ...model, provider, baseUrl },
+          { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+          { apiKey: "synthetic-test-key" },
+        ).result();
+      } finally {
+        await closeHttpServer(server);
+      }
+      expect(assistant).toMatchObject({
+        stopReason: "error",
+        provider,
+        model: MODEL_ID,
+        errorCode: String(fixture.code),
+      });
+      expect(assistant.errorMessage).toContain(fixture.message);
+      if (fixture.metadata) {
+        expect(assistant.errorMessage).toContain(fixture.metadata.raw);
+      }
+      return await withOpenClawTestState(
+        { label: `qwen-dashscope-${provider.replaceAll(/[^a-z0-9]+/gi, "-")}` },
+        async (state) => {
+          const profileId = `${provider}:fixture`;
+          const agentDir = state.agentDir();
+          const profileStore = createAuthProfileStoreFixture({
+            [profileId]: createApiKeyCredential(provider, "synthetic-test-key"),
+          });
+          await state.writeAuthProfiles(profileStore);
+          const sessionId = `session:${provider}:${fixture.code}`;
+          const input = makeAssistantFailureInput(assistant, {
+            profileId,
             fallbackConfigured: false,
-            suspendForFailure: ({ reason }) => {
+          });
+          const { runInput, preparedRuntime, runtime, normalizedAttempt } = input;
+          Object.assign(runInput.runParams, {
+            runId: `run:${provider}:${fixture.code}`,
+            sessionId,
+            sessionKey: `agent:main:${provider}:${fixture.code}`,
+            sessionFile: `${agentDir}/session.jsonl`,
+            workspaceDir: agentDir,
+            prompt: "hello",
+            config: {},
+          });
+          const suspensionReasons: string[] = [];
+          const controllerRunInput = Object.assign(runInput, {
+            agentDir,
+            globalLane: "qwen-dashscope-throttle-test",
+            suspendForFailure: ({ reason }: { reason: string }) => {
               suspensionReasons.push(reason);
             },
-            agentDir: state.agentDir(),
-            isProbeSession: false,
-          },
-          normalizedAttempt: {
-            attempt,
-            attemptAssistant: assistant,
-            currentAttemptAssistant: assistant,
-            terminalState,
-            activeErrorContext: { provider: params.provider, model: MODEL_ID },
-          },
-          preparedRuntime: {
-            provider: params.provider,
-            modelId: MODEL_ID,
-            model: { id: MODEL_ID },
-            attemptedThinking: new Set(["off"]),
+          });
+          runtime.thinkLevel = "off";
+          const controllerRuntime = Object.assign(preparedRuntime, {
+            attemptedThinking: new Set([runtime.thinkLevel]),
             attemptAuthProfileStore: profileStore,
-            maybeRefreshRuntimeAuthForAuthError: async () => false,
-          },
-          runtime: {
-            thinkLevel: "off",
-            pluginHarnessOwnsTransport: false,
-            lastProfileId: profileId,
-          },
-          providerOwner: params.providerOwner,
-          getThinkLevel: () => "off",
-          runtimeAuthRetry: false,
-          failover,
-          emptyErrorRetries: 0,
-          overloadProfileRotations: 0,
-          previousRetryFailoverReason: null,
-          traceAttempts: [],
-          suspensionSessionId: sessionId,
-        });
-      } catch (error) {
-        failureReason =
-          typeof error === "object" && error !== null && "reason" in error
-            ? Reflect.get(error, "reason")
-            : undefined;
-      }
-      const persisted = readPersistedAuthProfileStateRaw(state.agentDir()) as {
-        usageStats?: Record<string, ProfileUsageReadback>;
-      } | null;
-      const freshStore = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir());
-      expect(freshStore.usageStats?.[profileId]).toEqual(persisted?.usageStats?.[profileId]);
-      return {
-        failureReason,
-        usage: persisted?.usageStats?.[profileId],
-        affectedModelBlocked: isProfileInCooldown(freshStore, profileId, undefined, MODEL_ID),
-        otherModelBlocked: isProfileInCooldown(freshStore, profileId, undefined, "qwen3.8-flash"),
-        suspensionReasons,
-      };
+            profileFailureStore: profileStore,
+            snapshot: () => ({ ...runtime, agentHarness: { id: "embedded" } }),
+            getApiKeyInfo: () => null,
+            advanceAttemptAuthProfile: async () => false,
+          });
+          normalizedAttempt.attempt.messagesSnapshot = [assistant];
+          normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+            attempt: normalizedAttempt.attempt,
+            assistant,
+          });
+          input.providerOwner = providerOwner;
+          input.getThinkLevel = () => "off";
+          input.suspensionSessionId = sessionId;
+          input.failover = createEmbeddedRunFailoverRetryController({
+            runInput: controllerRunInput,
+            preparedRuntime: controllerRuntime,
+            getSessionId: () => sessionId,
+          });
+          let failureReason: unknown;
+          try {
+            await handleEmbeddedAssistantFailure(input);
+          } catch (error) {
+            failureReason =
+              typeof error === "object" && error !== null && "reason" in error
+                ? Reflect.get(error, "reason")
+                : undefined;
+          }
+          const persisted = readPersistedAuthProfileStateRaw(agentDir) as AuthProfileState | null;
+          const freshStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+          expect(freshStore.usageStats?.[profileId]).toEqual(persisted?.usageStats?.[profileId]);
+          const blocked = (id: string) => isProfileInCooldown(freshStore, profileId, undefined, id);
+          return {
+            failureReason,
+            usage: persisted?.usageStats?.[profileId],
+            affectedModelBlocked: blocked(MODEL_ID),
+            otherModelBlocked: blocked("qwen3.8-flash"),
+            suspensionReasons,
+          };
+        },
+      );
     },
-  );
-}
-
-function runThroughFailureRecovery(params: Parameters<typeof runThroughFailureRecoveryInScope>[0]) {
-  return withPluginMetadataSnapshotScope(
-    availabilitySnapshot,
-    () => runThroughFailureRecoveryInScope(params),
     { trustConfigIdentity: true },
   );
 }
 
-function expectRateLimitState(result: Awaited<ReturnType<typeof runThroughFailureRecovery>>): void {
-  expect.soft(result.failureReason).toBe("rate_limit");
-  expect.soft(result.usage).toMatchObject({
-    cooldownReason: "rate_limit",
-    cooldownModel: MODEL_ID,
-    cooldownUntil: expect.any(Number),
-  });
-  expect.soft(result.usage).not.toHaveProperty("disabledReason");
-  expect.soft(result.usage).not.toHaveProperty("disabledUntil");
-  expect.soft(result.affectedModelBlocked).toBe(true);
-  expect.soft(result.otherModelBlocked).toBe(false);
-}
-
-function expectBillingState(result: Awaited<ReturnType<typeof runThroughFailureRecovery>>): void {
-  expect.soft(result.failureReason).toBe("billing");
-  expect.soft(result.usage).toMatchObject({
-    disabledReason: "billing",
-    disabledUntil: expect.any(Number),
-  });
-  expect.soft(result.usage).not.toHaveProperty("cooldownReason");
-  expect.soft(result.affectedModelBlocked).toBe(true);
-  expect.soft(result.otherModelBlocked).toBe(true);
-}
-
-function expectOpenRouterState(
+function expectFailureState(
   result: Awaited<ReturnType<typeof runThroughFailureRecovery>>,
   reason: "rate_limit" | "billing",
+  openRouter: boolean,
 ): void {
-  expect.soft(result.failureReason).toBe(reason);
-  expect
-    .soft(result.suspensionReasons)
-    .toEqual([reason === "rate_limit" ? "quota_exhausted" : "manual"]);
-  if (reason === "billing") {
-    expectBillingState(result);
-  } else {
+  const billing = reason === "billing";
+  const managedThrottle = openRouter && !billing;
+  // These throttles carry no provider retry timing, so a rate limit blocks no model.
+  expect.soft(result).toMatchObject({
+    failureReason: reason,
+    affectedModelBlocked: billing,
+    otherModelBlocked: billing,
+  });
+  if (openRouter) {
+    expect.soft(result.suspensionReasons).toEqual([billing ? "manual" : "quota_exhausted"]);
+  }
+  if (managedThrottle) {
     expect.soft(result.usage).toBeUndefined();
-    expect.soft(result.affectedModelBlocked).toBe(false);
-    expect.soft(result.otherModelBlocked).toBe(false);
+    return;
+  }
+  expect.soft(result.usage).toMatchObject(
+    billing
+      ? {
+          disabledReason: "billing",
+          disabledUntil: expect.any(Number),
+        }
+      : { lastRateLimitAt: expect.any(Number) },
+  );
+  for (const key of billing
+    ? ["cooldownReason"]
+    : ["cooldownReason", "cooldownUntil", "disabledReason", "disabledUntil"]) {
+    expect.soft(result.usage).not.toHaveProperty(key);
   }
 }
 
-describe("self-managed provider HTTP recovery", () => {
-  const provider = "self-managed-fixture";
-  const snapshot = createPluginMetadataSnapshotFixture({
-    plugins: [{ id: provider, providers: [provider], managesOwnAvailability: true }],
-  });
-  it.each([
-    { status: 429, message: "Too many requests", reason: "rate_limit", transient: true },
-    { status: 503, message: "Provider overloaded", reason: "overloaded", transient: true },
-    { status: 401, message: "Invalid API key", reason: "auth", transient: false },
-    { status: 402, message: "Insufficient credits", reason: "billing", transient: false },
-  ] as const)(
-    "enforces policy after HTTP $status",
-    async ({ status, message, reason, transient }) => {
-      const result = await withPluginMetadataSnapshotScope(
-        snapshot,
-        () =>
-          runThroughFailureRecoveryInScope({
-            provider,
-            fixture: { status, code: status, message },
-          }),
-        { trustConfigIdentity: true },
-      );
-      expect(result.failureReason).toBe(reason);
-      if (transient) {
-        expect(result.usage).toBeUndefined();
-      } else {
-        expect(result.usage).toMatchObject(
-          reason === "billing"
-            ? { disabledReason: reason, disabledUntil: expect.any(Number) }
-            : { cooldownReason: reason, cooldownUntil: expect.any(Number) },
-        );
-      }
-      expect(result.affectedModelBlocked).toBe(!transient);
-      expect(result.otherModelBlocked).toBe(!transient);
-    },
-  );
+const selfManagedProvider = "self-managed-fixture";
+const snapshot = createPluginMetadataSnapshotFixture({
+  plugins: [
+    { id: selfManagedProvider, providers: [selfManagedProvider], managesOwnAvailability: true },
+  ],
 });
-
-describe("Qwen DashScope 429 profile classification", () => {
-  it.each<
-    [
-      provider: string,
-      code: ErrorFixture["code"],
-      message: string,
-      reason: "rate_limit" | "billing",
-      metadata?: ErrorFixture["metadata"],
-    ]
-  >([
-    ["openrouter", 429, "Provider returned error", "rate_limit"],
-    [
-      "openrouter",
-      429,
-      "Provider returned error",
-      "billing",
-      { raw: '{"error":{"code":"insufficient_quota","type":"insufficient_quota"}}' },
-    ],
-    ["openrouter", 429, "API key budget limit exceeded", "billing"],
-    [
-      QWEN_TOKEN_PLAN_PROVIDER_ID,
-      "insufficient_quota",
-      "Allocated quota exceeded, please increase your quota limit.",
-      "rate_limit",
-    ],
-    [
-      "qwen",
-      "Throttling.AllocationQuota",
-      "Allocated quota exceeded, please increase your quota limit.",
-      "rate_limit",
-    ],
-    [
-      "bailian-token-plan",
-      "insufficient_quota",
-      "You exceeded your current quota, please check your plan and billing details.",
-      "rate_limit",
-    ],
-    ["qwen", "PrepaidBillOverdue", "The prepaid bill is overdue.", "billing"],
-    ["qwen", "rate_limit_error", "Rate limit exceeded", "rate_limit"],
-    [
-      "openai",
-      "insufficient_quota",
-      "You exceeded your current quota, please check your plan and billing details.",
-      "billing",
-    ],
-    ["qwen", "insufficient_quota", "Free allocated quota exceeded.", "billing"],
-    ["qwen", "insufficient_quota", "Unknown quota condition", "billing"],
-  ])("classifies %s %s (%s) as %s", async (provider, code, message, reason, metadata) => {
+it.each([
+  { status: 429, message: "Too many requests", reason: "rate_limit", transient: true },
+  { status: 503, message: "Provider overloaded", reason: "overloaded", transient: true },
+  { status: 401, message: "Invalid API key", reason: "auth", transient: false },
+  { status: 402, message: "Insufficient credits", reason: "billing", transient: false },
+] as const)(
+  "self-managed provider policy after HTTP $status",
+  async ({ status, message, reason, transient }) => {
+    const result = await runThroughFailureRecovery(
+      {
+        provider: selfManagedProvider,
+        fixture: { status, code: status, message },
+      },
+      snapshot,
+    );
+    expect(result).toMatchObject({
+      failureReason: reason,
+      affectedModelBlocked: !transient,
+      otherModelBlocked: !transient,
+    });
+    if (transient) {
+      expect(result.usage).toBeUndefined();
+    } else {
+      expect(result.usage).toMatchObject(
+        reason === "billing"
+          ? { disabledReason: reason, disabledUntil: expect.any(Number) }
+          : { cooldownReason: reason, cooldownUntil: expect.any(Number) },
+      );
+    }
+  },
+);
+const quotaCode = "insufficient_quota";
+const allocated = "Allocated quota exceeded, please increase your quota limit.";
+const exceeded = "You exceeded your current quota, please check your plan and billing details.";
+it.each([
+  ["openrouter", 429, "Provider returned error", "rate_limit"],
+  [
+    "openrouter",
+    429,
+    "Provider returned error",
+    "billing",
+    { raw: '{"error":{"code":"insufficient_quota","type":"insufficient_quota"}}' },
+  ],
+  ["openrouter", 429, "API key budget limit exceeded", "billing"],
+  [QWEN_TOKEN_PLAN_PROVIDER_ID, quotaCode, allocated, "rate_limit"],
+  ["qwen", "Throttling.AllocationQuota", allocated, "rate_limit"],
+  ["bailian-token-plan", quotaCode, exceeded, "rate_limit"],
+  ["qwen", "PrepaidBillOverdue", "The prepaid bill is overdue.", "billing"],
+  ["qwen", "rate_limit_error", "Rate limit exceeded", "rate_limit"],
+  ["openai", quotaCode, exceeded, "billing"],
+  ["qwen", quotaCode, "Free allocated quota exceeded.", "billing"],
+  ["qwen", quotaCode, "Unknown quota condition", "billing"],
+] as const)(
+  "%s %s (%s) classifies as %s",
+  async (...[provider, code, message, reason, metadata]) => {
     const result = await runThroughFailureRecovery({
       provider,
       providerOwner:
         provider === "openai"
           ? undefined
-          : prepareProviderOwner(provider, provider === "openrouter" ? "openrouter" : "qwen"),
+          : requireRegisteredProvider(
+              registeredProviders.get(provider === "openrouter" ? "openrouter" : "qwen") ?? [],
+              provider,
+            ),
       fixture: { status: 429, code, message, ...(metadata ? { metadata } : {}) },
     });
-    if (provider === "openrouter") {
-      expectOpenRouterState(result, reason);
-    } else if (reason === "rate_limit") {
-      expectRateLimitState(result);
-    } else {
-      expectBillingState(result);
-    }
-  });
-});
+    expectFailureState(result, reason, provider === "openrouter");
+  },
+);

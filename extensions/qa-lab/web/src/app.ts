@@ -1,6 +1,7 @@
 import { formatErrorMessage as formatSharedErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
+import { deleteCaptureData } from "./capture-actions.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { getJson, postJson, QaLabHttpError } from "./http.js";
 import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
@@ -62,10 +63,6 @@ function summarizeCaptureCoverageFromEvents(
     apis: countCaptureDimension(events, (event) => event.api),
     models: countCaptureDimension(events, (event) => event.model),
     hosts: countCaptureDimension(events, (event) => event.host),
-    localPeers: countCaptureDimension(events, (event) => {
-      const host = event.host?.trim();
-      return host && /^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host) ? host : undefined;
-    }),
   };
 }
 
@@ -81,14 +78,6 @@ function defaultModelsForProviderMode(
     primaryModel,
     alternateModel,
     fastMode: isQaFastModeEnabled({ primaryModel, alternateModel }),
-  };
-}
-
-function cloneRunnerSelection(selection: RunnerSelection): RunnerSelection {
-  return {
-    ...selection,
-    runtimePair: selection.runtimePair ? [...selection.runtimePair] : null,
-    scenarioIds: selection.scenarioIds ? [...selection.scenarioIds] : null,
   };
 }
 
@@ -232,7 +221,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     error: null,
   };
 
-  /* Track whether user has scrolled up in the chat */
   let chatScrollLocked = true;
   let previousMessageCount = 0;
 
@@ -267,7 +255,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
         state.evidencePathDraft = bootstrap.runner.artifacts.evidencePath;
       }
       if (!state.runnerDraft || !state.runnerDraftDirty) {
-        state.runnerDraft = cloneRunnerSelection(bootstrap.runner.selection);
+        state.runnerDraft = bootstrap.runner.selection;
         state.runnerDraftDirty = false;
       }
       if (!state.selectedConversationKey) {
@@ -414,7 +402,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
   function updateRunnerDraft(mutator: (draft: RunnerSelection) => RunnerSelection) {
     const fallback = state.bootstrap?.runner.selection;
     if (!state.runnerDraft && fallback) {
-      state.runnerDraft = cloneRunnerSelection(fallback);
+      state.runnerDraft = fallback;
     }
     if (!state.runnerDraft) {
       return;
@@ -426,6 +414,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
   }
 
   async function runBusyAction(action: () => Promise<void>, onError?: (error: unknown) => void) {
+    if (state.busy) {
+      return;
+    }
     state.busy = true;
     render();
     try {
@@ -522,21 +513,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
       async () => {
         const result = await postJson<{ runner: { selection: RunnerSelection } }>(
           "/api/scenario/suite",
-          {
-            profile: selection.profile,
-            channel: selection.channel,
-            channelDriver: selection.channelDriver,
-            evidenceMode: selection.evidenceMode,
-            providerMode: selection.providerMode,
-            primaryModel: selection.primaryModel,
-            alternateModel: selection.alternateModel,
-            fastMode: selection.fastMode,
-            runtimePair: selection.runtimePair,
-            runtimePairLane: selection.runtimePairLane,
-            scenarioIds: selection.scenarioIds,
-          },
+          selection,
         );
-        state.runnerDraft = cloneRunnerSelection(result.runner.selection);
+        state.runnerDraft = result.runner.selection;
         state.runnerDraftDirty = false;
         state.runnerPlanOverride = null;
         state.activeTab = "chat";
@@ -635,10 +614,10 @@ export async function createQaLabApp(root: HTMLDivElement) {
     if (!normalized) {
       return;
     }
-    state.selectedCaptureSessionIds = [...normalized.sessionIds];
-    state.captureKindFilter = [...normalized.kindFilter];
-    state.captureProviderFilter = [...normalized.providerFilter];
-    state.captureHostFilter = [...normalized.hostFilter];
+    state.selectedCaptureSessionIds = normalized.sessionIds;
+    state.captureKindFilter = normalized.kindFilter;
+    state.captureProviderFilter = normalized.providerFilter;
+    state.captureHostFilter = normalized.hostFilter;
     state.captureSearchText = normalized.searchText;
     state.captureHeaderMode = normalized.headerMode;
     state.captureViewMode = normalized.viewMode;
@@ -658,10 +637,10 @@ export async function createQaLabApp(root: HTMLDivElement) {
     return {
       id: crypto.randomUUID(),
       name,
-      sessionIds: [...state.selectedCaptureSessionIds],
-      kindFilter: [...state.captureKindFilter],
-      providerFilter: [...state.captureProviderFilter],
-      hostFilter: [...state.captureHostFilter],
+      sessionIds: state.selectedCaptureSessionIds,
+      kindFilter: state.captureKindFilter,
+      providerFilter: state.captureProviderFilter,
+      hostFilter: state.captureHostFilter,
       searchText: state.captureSearchText,
       headerMode: state.captureHeaderMode,
       viewMode: state.captureViewMode,
@@ -707,27 +686,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     state.captureTimelineBrushCurrentPct = null;
     state.selectedCaptureEventKey = null;
     render();
-  }
-
-  async function deleteCaptureData(sessionIds?: string[]) {
-    if (sessionIds?.length === 0) {
-      return;
-    }
-    const confirmed = window.confirm(
-      sessionIds
-        ? `Delete ${sessionIds.length} selected capture session${sessionIds.length === 1 ? "" : "s"}?`
-        : "Purge all captured sessions, events, and blobs?",
-    );
-    if (!confirmed) {
-      return;
-    }
-    await postJson(
-      sessionIds ? "/api/capture/delete-sessions" : "/api/capture/purge",
-      sessionIds ? { sessionIds } : {},
-    );
-    state.selectedCaptureSessionIds = [];
-    state.selectedCaptureEventKey = null;
-    await refresh();
   }
 
   function bindEvents() {
@@ -987,10 +945,12 @@ export async function createQaLabApp(root: HTMLDivElement) {
     root
       .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
       ?.addEventListener("click", () => {
-        void deleteCaptureData(state.selectedCaptureSessionIds);
+        void runBusyAction(() =>
+          deleteCaptureData(state, refresh, state.selectedCaptureSessionIds),
+        );
       });
     root.querySelector<HTMLButtonElement>("#capture-purge-all")?.addEventListener("click", () => {
-      void deleteCaptureData();
+      void runBusyAction(() => deleteCaptureData(state, refresh));
     });
     bindValue("#capture-preset", "change", (value) => {
       state.captureQueryPreset = value as UiState["captureQueryPreset"];
@@ -1204,7 +1164,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       if (!text) {
         return;
       }
-      void navigator.clipboard.writeText(text).catch(() => undefined);
+      void runBusyAction(() => navigator.clipboard.writeText(text));
     });
     root.querySelectorAll<HTMLElement>("[data-capture-sparkline-window]").forEach((node) => {
       const readWindow = () => {

@@ -1,4 +1,3 @@
-// Verifies fast-mode precedence across session, agent, and model defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatFastModeAutoLabel } from "../shared/fast-mode.js";
@@ -11,23 +10,29 @@ import {
   resolveFastModeState,
 } from "./fast-mode.js";
 
+function resolve(options: Partial<Parameters<typeof resolveFastModeState>[0]> = {}) {
+  return resolveFastModeState({ cfg: {}, provider: "openai", model: "gpt-5.5", ...options });
+}
+function modelConfig(
+  params: Record<string, unknown>,
+  key = "openai/gpt-5.5",
+  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {},
+): OpenClawConfig {
+  return { agents: { defaults: { ...defaults, models: { [key]: { params } } } } };
+}
+
 describe("resolveFastModeState", () => {
   it.each(["serviceTier", "service_tier"])(
     "keeps %s inherited until a speed is selected",
     (key) => {
-      const cfg = {
-        agents: {
-          defaults: { models: { "openai/speed-fixture": { params: { [key]: "ultrafast" } } } },
-        },
-      } as OpenClawConfig;
-      const state = resolveFastModeState({ cfg, provider: "openai", model: "speed-fixture" });
+      const cfg = modelConfig({ [key]: "ultrafast" }, "openai/speed-fixture");
+      const state = resolve({ cfg, provider: "openai", model: "speed-fixture" });
       expect(state).toMatchObject({ mode: "ultrafast", source: "config" });
       expect(state.requestMode).toBeUndefined();
       for (const mode of [false, true, "ultrafast"] as const) {
         expect(
-          resolveFastModeState({
+          resolve({
             cfg,
-            provider: "openai",
             model: "speed-fixture",
             sessionEntry: { fastMode: mode },
           }),
@@ -36,88 +41,33 @@ describe("resolveFastModeState", () => {
     },
   );
 
-  it("prefers session overrides over per-agent and global defaults", () => {
-    const state = resolveFastModeState({
-      cfg: {
-        agents: {
-          defaults: { fastModeDefault: "auto" },
-          entries: { main: { fastModeDefault: false } },
-        },
-      } as OpenClawConfig,
-      provider: "openai",
-      model: "gpt-4o",
-      agentId: "main",
-      sessionEntry: { fastMode: true },
-    });
-
-    expect(state.enabled).toBe(true);
-    expect(state.mode).toBe(true);
-    expect(state.source).toBe("session");
-  });
-
-  it.each(["auto", "ultrafast"] as const)(
-    "keeps %s as the persisted mode and starts enabled",
-    (mode) => {
-      const state = resolveFastModeState({
-        cfg: {} as OpenClawConfig,
-        provider: "openai",
-        model: "gpt-5.5",
-        sessionEntry: { fastMode: mode },
-      });
-
-      expect(state.mode).toBe(mode);
-      expect(state.enabled).toBe(true);
+  it.each([
+    [true, false, "auto", undefined, true, "session"],
+    ["auto", undefined, undefined, undefined, "auto", "session"],
+    ["ultrafast", undefined, undefined, undefined, "ultrafast", "session"],
+    [undefined, undefined, true, false, true, "agent"],
+    [undefined, false, true, true, false, "agent"],
+  ] as const)(
+    "resolves session=%s, agent=%s, global=%s, model=%s by priority",
+    (session, agent, global, modelMode, mode, source) => {
+      const configured = global !== undefined;
+      const cfg: OpenClawConfig = configured
+        ? modelConfig(modelMode === undefined ? {} : { fastMode: modelMode }, "openai/gpt-4o", {
+            fastModeDefault: global,
+          })
+        : {};
+      if (agent !== undefined) {
+        cfg.agents = { ...cfg.agents, entries: { main: { fastModeDefault: agent } } };
+      }
+      expect(
+        resolve({
+          cfg,
+          ...(configured ? { model: "gpt-4o", agentId: "main" } : {}),
+          sessionEntry: { fastMode: session },
+        }),
+      ).toMatchObject({ mode, enabled: mode !== false, source });
     },
   );
-
-  it("uses rosterless global fastModeDefault over model config", () => {
-    const fastModeDefault = true;
-    const cfg = {
-      agents: {
-        defaults: {
-          fastModeDefault,
-          models: {
-            "openai/gpt-4o": { params: { fastMode: false } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai",
-      model: "gpt-4o",
-      agentId: "main",
-    });
-
-    expect(state.mode).toBe(fastModeDefault);
-    expect(state.enabled).toBe(true);
-    expect(state.source).toBe("agent");
-  });
-
-  it("prefers per-agent fastModeDefault over the global default", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          fastModeDefault: true,
-          models: {
-            "openai/gpt-4o": { params: { fastMode: true } },
-          },
-        },
-        entries: { main: { fastModeDefault: false } },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai",
-      model: "gpt-4o",
-      agentId: "main",
-    });
-
-    expect(state.mode).toBe(false);
-    expect(state.source).toBe("agent");
-  });
 
   it("formats auto mode with the default threshold", () => {
     expect(formatFastModeAutoLabel()).toBe("auto (60 sec)");
@@ -140,146 +90,44 @@ describe("resolveFastModeState", () => {
     ).toBe("Current fast mode: auto (30 sec) (default: model).");
   });
 
-  it("uses model fastAutoOnSeconds for auto cutoff across session overrides", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai",
-      model: "gpt-5.5",
-      sessionEntry: { fastMode: "auto" },
-    });
-
-    expect(state.mode).toBe("auto");
-    expect(state.source).toBe("session");
-    expect(state.fastAutoOnSeconds).toBe(30);
+  it.each([
+    ["fastAutoOnSeconds", 30, { fastMode: "auto" as const }, "session"],
+    ["fast_seconds", 15, undefined, "config"],
+  ] as const)("uses model %s for auto cutoff", (key, seconds, sessionEntry, source) => {
+    expect(
+      resolve({ cfg: modelConfig({ fastMode: "auto", [key]: seconds }), sessionEntry }),
+    ).toMatchObject({ mode: "auto", source, fastAutoOnSeconds: seconds });
   });
 
-  it("uses model fast_seconds alias for auto cutoff", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { params: { fastMode: "auto", fast_seconds: 15 } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai",
-      model: "gpt-5.5",
+  it.each([
+    ["openai/gpt-5.5", "openai", "openai/gpt-5.5", true, "config"],
+    [
+      "openrouter/anthropic/claude-sonnet-4-6",
+      "openrouter",
+      "anthropic/claude-sonnet-4-6",
+      true,
+      "config",
+    ],
+    ["anthropic/claude-sonnet-4-6", "openrouter", "anthropic/claude-sonnet-4-6", false, "default"],
+  ] as const)("scopes model config %s to provider %s", (key, provider, model, enabled, source) => {
+    expect(resolve({ cfg: modelConfig({ fastMode: true }, key), provider, model })).toMatchObject({
+      enabled,
+      source,
     });
-
-    expect(state.mode).toBe("auto");
-    expect(state.source).toBe("config");
-    expect(state.fastAutoOnSeconds).toBe(15);
-  });
-
-  it("uses model config when the runtime passes a provider-qualified model ref", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { params: { fastMode: true } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai",
-      model: "openai/gpt-5.5",
-    });
-
-    expect(state.enabled).toBe(true);
-    expect(state.source).toBe("config");
-  });
-
-  it("uses canonical provider/model config for slash-containing model ids", () => {
-    // OpenRouter-style models can contain slashes, so matching must build the
-    // canonical provider/model key instead of splitting on the first slash.
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openrouter/anthropic/claude-sonnet-4-6": { params: { fastMode: true } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openrouter",
-      model: "anthropic/claude-sonnet-4-6",
-    });
-
-    expect(state.enabled).toBe(true);
-    expect(state.source).toBe("config");
-  });
-
-  it("does not use another provider's slash-containing model config", () => {
-    // Provider qualification prevents a model-id substring from borrowing
-    // another provider's fast-mode setting.
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": { params: { fastMode: true } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openrouter",
-      model: "anthropic/claude-sonnet-4-6",
-    });
-
-    expect(state.enabled).toBe(false);
-    expect(state.source).toBe("default");
   });
 });
 
 describe("resolveFastModeForElapsed", () => {
   it("uses configured auto seconds as the elapsed threshold", () => {
-    expect(
-      resolveFastModeForElapsed({
-        mode: "auto",
-        fastAutoOnSeconds: 30,
-        startedAtMs: 1_000,
-        nowMs: 31_000,
-      }),
-    ).toMatchObject({
-      mode: "auto",
+    const input = { mode: "auto" as const, fastAutoOnSeconds: 30, startedAtMs: 1_000 };
+    const expected = { mode: "auto", elapsedSeconds: 30, fastAutoOnSeconds: 30 };
+    expect(resolveFastModeForElapsed({ ...input, nowMs: 31_000 })).toMatchObject({
+      ...expected,
       enabled: true,
-      elapsedSeconds: 30,
-      fastAutoOnSeconds: 30,
     });
-    expect(
-      resolveFastModeForElapsed({
-        mode: "auto",
-        fastAutoOnSeconds: 30,
-        startedAtMs: 1_000,
-        nowMs: 31_001,
-      }),
-    ).toMatchObject({
-      mode: "auto",
+    expect(resolveFastModeForElapsed({ ...input, nowMs: 31_001 })).toMatchObject({
+      ...expected,
       enabled: false,
-      elapsedSeconds: 30,
-      fastAutoOnSeconds: 30,
     });
   });
 

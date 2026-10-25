@@ -1,22 +1,17 @@
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  untrack,
-} from "solid-js";
+import { For, Show, createMemo, createSignal, createStore, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { createOverlayAnchor } from "./overlay-anchor.ts";
-import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
+import { createAnchoredOverlay } from "../lib/reactive/overlay-anchor.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import { createScrollPosition, createScrollStateRef } from "../lib/reactive/scroll-state.ts";
+import type { OverlayPlacement } from "./overlay-anchor.ts";
+import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
-import { revealInScrollRegion } from "./scroll-state.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useMenuMachine } from "./solid/menu-machine.ts";
+import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
+import { useOverlayControl } from "./solid/overlay-control.ts";
 import "./solid/overlay.css";
 
 type Section<Option> = { group?: PickerGroup; options: Option[]; expanded: boolean };
@@ -44,28 +39,46 @@ export function PickerContent<Option extends PickerOption>(props: {
   let input: HTMLInputElement | undefined;
   let back: HTMLButtonElement | undefined;
   const optionElements = new Map<string, HTMLDivElement>();
-  let anchor: ReturnType<typeof createOverlayAnchor> | undefined;
+  const groupButtons = new Set<HTMLButtonElement>();
+  const groupButtonRef = () => {
+    let button!: HTMLButtonElement;
+    onSettled(() => {
+      groupButtons.add(button);
+      return () => groupButtons.delete(button);
+    });
+    return (element: HTMLButtonElement) => (button = element);
+  };
+  const focusElements = () => [
+    trigger,
+    ...(back ? [back] : []),
+    ...(input ? [input] : []),
+    list,
+    ...groupButtons,
+    ...optionElements.values(),
+  ];
+  onSettled(() => {
+    props.params.focusRef?.({ trigger, elements: focusElements });
+  });
   let sheetScroll: { root: Element; top: number } | undefined;
   let hoverTimer: ReturnType<typeof setTimeout> | undefined;
   let hoverOpened = false;
-  const [opened, setOpened] = createSignal(false);
+  // A row the pointer highlights is already where the user is looking. Revealing
+  // it would scroll a clipped edge row against an in-progress wheel or trackpad scroll.
+  let pointerHighlight = false;
   const [searching, setSearching] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [keyboard, setKeyboard] = createSignal(false);
-  const [collapsed, setCollapsed] = createSignal(new Set<string>());
+  const [collapsed, setCollapsed] = createStore<string[]>([]);
   const direction = () => (getComputedStyle(props.host).direction === "rtl" ? "rtl" : "ltr");
-  const updateAnchor = (
+  const resolvePlacement = (
     placement: PickerParams<Option>["placement"],
     variant: PickerParams<Option>["variant"],
-  ) =>
-    anchor?.update(
-      trigger,
-      variant === "submenu"
-        ? direction() === "rtl"
-          ? "left-start"
-          : "right-start"
-        : `${placement ?? "bottom"}-start`,
-    );
+  ): OverlayPlacement =>
+    variant === "submenu"
+      ? direction() === "rtl"
+        ? "left-start"
+        : "right-start"
+      : `${placement ?? "bottom"}-start`;
   const options = createMemo((): readonly Option[] => {
     const { value, options: configuredOptions } = props.params;
     if (
@@ -78,52 +91,59 @@ export function PickerContent<Option extends PickerOption>(props: {
     // SAFETY: Unknown selected references use only the base option fields, as before migration.
     return [...configuredOptions, { value, label: value } as Option];
   });
-  const sections = createMemo(() => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
-    const ungrouped: Section<Option> = { options: [], expanded: true };
-    const groups = new Map<string, Section<Option>>();
-    for (const option of options()) {
-      const group = props.params.groupBy?.(option);
-      if (
-        !terms.every((term) =>
-          [option.label, option.value, option.description, group?.label]
-            .join(" ")
-            .toLocaleLowerCase()
-            .includes(term),
-        )
-      ) {
-        continue;
+  const sections = createMemo(
+    () => {
+      const search = query().trim().toLocaleLowerCase();
+      const terms = search ? search.split(/\s+/u) : [];
+      const ungrouped: Section<Option> = { options: [], expanded: true };
+      const groups = new Map<string, Section<Option>>();
+      for (const option of options()) {
+        const group = props.params.groupBy?.(option);
+        if (
+          terms.length > 0 &&
+          !terms.every((term) =>
+            [option.label, option.value, option.description, group?.label]
+              .join(" ")
+              .toLocaleLowerCase()
+              .includes(term),
+          )
+        ) {
+          continue;
+        }
+        if (!group) {
+          ungrouped.options.push(option);
+          continue;
+        }
+        let section = groups.get(group.id);
+        if (!section) {
+          section = {
+            group,
+            options: [],
+            expanded: Boolean(search) || !collapsed.includes(group.id),
+          };
+          groups.set(group.id, section);
+        }
+        section.options.push(option);
       }
-      if (!group) {
-        ungrouped.options.push(option);
-        continue;
-      }
-      let section = groups.get(group.id);
-      if (!section) {
-        section = {
-          group,
-          options: [],
-          expanded: Boolean(query().trim()) || !collapsed().has(group.id),
-        };
-        groups.set(group.id, section);
-      }
-      section.options.push(option);
-    }
-    return [ungrouped, ...groups.values()].map((section, position) =>
-      Object.assign(section, { position }),
-    );
-  });
-  const rows = createMemo(() =>
-    sections().flatMap((section) => (section.expanded ? section.options : [])),
+      return [ungrouped, ...groups.values()].map((section, position) =>
+        Object.assign(section, { position }),
+      );
+    },
+    { lazy: true },
+  );
+  const rows = createMemo(
+    () => sections().flatMap((section) => (section.expanded ? section.options : [])),
+    { lazy: true },
   );
   const selected = createMemo(() =>
     options().find((option) => option.value === props.params.value),
   );
-  const visible = createMemo(() => new Set(rows().map((option) => option.value)));
+  const visible = createMemo(() => new Set(rows().map((option) => option.value)), { lazy: true });
   const optionId = (value: string) => `${id}:${value}`;
+  // Native presentation mode belongs to this mounted overlay lifetime.
+  const initialSheet = untrack(() => props.params.sheet);
   const overlay = createOverlay(id, undefined, {
-    // Native presentation mode belongs to this mounted overlay lifetime.
-    native: untrack(() => props.params.sheet) ? sheetAdapter : undefined,
+    native: initialSheet ? sheetAdapter : undefined,
     exclusiveGroup: "menu",
     isValid: () => !props.params.disabled,
     acquireOcclusion: acquireNativeOverlaySurface,
@@ -133,10 +153,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         intent === "last" &&
         !rows().some((option) => option.value === props.params.value && !option.disabled)
       ) {
-        menu.service.send({
-          type: "HIGHLIGHTED.SET",
-          value: rows().findLast((option) => !option.disabled)?.value ?? null,
-        });
+        menu.setHighlightedValue(rows().findLast((option) => !option.disabled)?.value ?? null);
       }
       target?.focus({ preventScroll: true });
     },
@@ -148,17 +165,38 @@ export function PickerContent<Option extends PickerOption>(props: {
       return false;
     },
   });
+  const opened = projectOwner(overlay, (owner) => owner.open, Object.is).read;
+  const control = useOverlayControl(overlay, undefined, {
+    get disabled() {
+      return props.params.disabled;
+    },
+  });
+  const anchor = createAnchoredOverlay(
+    overlay,
+    () => trigger,
+    () => {
+      const { placement, variant } = props.params;
+      return { placement: () => resolvePlacement(placement, variant) };
+    },
+    { anchored: !initialSheet, paused: () => !overlay.open },
+  );
   onSettled(() => overlay.bindSurface(surface));
-  const menu = useMenuMachine(overlay, direction, commit, undefined, {
-    ids: { content: contentId, trigger: () => untrack(triggerId) },
+  // The menu refreshes direction on accepted open; closed pickers need no style read.
+  const menuDirection: typeof direction = () => (overlay.open ? direction() : "ltr");
+  const menu = useMenuMachine(overlay, menuDirection, commit, undefined, {
+    ids: { content: contentId, trigger: triggerId },
     surface: "listbox",
     focus: "retain",
-    items: rows,
+    items: () => {
+      opened();
+      // Native opening asks for its initial highlight before Solid publishes open.
+      return overlay.open ? rows() : [];
+    },
     value: () => props.params.value,
   });
-  const active = () => menu.read().highlightedValue;
+  const active = () => menu.highlightedValue();
   const controls = () =>
-    props.params.groupBy
+    opened() && props.params.groupBy
       ? sections()
           .map((_, index) => `${id}-group-${index}`)
           .join(" ")
@@ -184,10 +222,13 @@ export function PickerContent<Option extends PickerOption>(props: {
         Boolean(props.params.searchable && (props.params.groupBy || options().length > 8)),
     );
     queueMicrotask(() => {
-      if (
-        !props.host.isConnected ||
-        !overlay.request(true, focus ? (last ? "last" : "first") : "none")
-      ) {
+      if (!props.host.isConnected) {
+        return;
+      }
+      if (!initialSheet) {
+        anchor.update(trigger, resolvePlacement(props.params.placement, props.params.variant));
+      }
+      if (!overlay.request(true, focus ? (last ? "last" : "first") : "none")) {
         return;
       }
       if (initialKey) {
@@ -195,7 +236,7 @@ export function PickerContent<Option extends PickerOption>(props: {
           if (searching()) {
             setQuery(initialKey);
           } else {
-            menu.service.send({ type: "TYPEAHEAD", key: initialKey });
+            menu.typeahead(initialKey);
           }
         });
       }
@@ -203,21 +244,30 @@ export function PickerContent<Option extends PickerOption>(props: {
   }
 
   function scrollFade() {
+    if (!overlay.open) {
+      return;
+    }
     list.toggleAttribute("data-fade-start", list.scrollTop > 0);
     list.toggleAttribute(
       "data-fade-end",
       list.scrollTop + list.clientHeight < list.scrollHeight - 1,
     );
   }
+  const scrollRef = createScrollStateRef(scrollFade, {
+    presented: opened,
+    content: () => (opened() ? rows() : undefined),
+  });
   function handleKeydown(event: KeyboardEvent) {
     if (event.isComposing || props.params.disabled) {
       return;
     }
+    pointerHighlight = false;
     const editing = event.target instanceof HTMLInputElement;
     if (!editing || event.key.startsWith("Arrow")) {
       setKeyboard(true);
     }
-    const forward = direction() === "rtl" ? "ArrowLeft" : "ArrowRight";
+    const forward =
+      props.params.variant === "submenu" && direction() === "rtl" ? "ArrowLeft" : "ArrowRight";
     if (!overlay.open) {
       const printable = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
       if (
@@ -282,65 +332,49 @@ export function PickerContent<Option extends PickerOption>(props: {
       enter ? 120 : 150,
     );
   }
-  onCleanup(() => {
-    clearTimeout(hoverTimer);
-    overlay.dispose();
-  });
-  createEffect(
-    () => props.params.disabled,
-    (disabled) => {
-      if (disabled) {
-        overlay.request(false);
+  createScrollPosition(
+    () => ({
+      reveal: opened()
+        ? {
+            identity: [opened(), active(), query(), rows()],
+            target: () =>
+              overlay.open && !pointerHighlight
+                ? optionElements.get(menu.highlightedValueNow() ?? "")
+                : undefined,
+          }
+        : undefined,
+    }),
+    { region: () => list, revealTiming: "animation-frame" },
+  );
+  function onOpenChange(next: boolean) {
+    if (next) {
+      pointerHighlight = false;
+      props.params.onOpen?.();
+      const root = surface.offsetParent;
+      if (props.params.sheet && root) {
+        sheetScroll = { root, top: root.scrollTop };
+        root.scrollTop = 0;
       }
-    },
-  );
-  createEffect(
-    () => [props.params.placement, props.params.variant] as const,
-    ([placement, variant]) => updateAnchor(placement, variant),
-  );
-  createEffect(
-    () => [opened(), active(), query(), rows()] as const,
-    ([isOpen, highlighted]) => {
-      if (list) {
-        const node = optionElements.get(highlighted ?? "");
-        if (isOpen && node) {
-          revealInScrollRegion(list, node);
-        }
-        scrollFade();
+    } else {
+      setQuery("");
+      setSearching(false);
+      setCollapsed((draft) => {
+        draft.length = 0;
+      });
+      hoverOpened = false;
+      if (sheetScroll) {
+        sheetScroll.root.scrollTop = sheetScroll.top;
+        sheetScroll = undefined;
       }
-    },
-  );
-  onSettled(() => {
-    overlay.bindTrigger(trigger);
-    overlay.setParent(findOverlayParent(trigger));
-    if (!props.params.sheet) {
-      anchor = createOverlayAnchor(surface);
-      updateAnchor(props.params.placement, props.params.variant);
     }
-    const stop = overlay.subscribe((next) => {
-      setOpened(next);
-      if (next) {
-        props.params.onOpen?.();
-        const root = surface.offsetParent;
-        if (props.params.sheet && root) {
-          sheetScroll = { root, top: root.scrollTop };
-          root.scrollTop = 0;
-        }
-      } else {
-        setQuery("");
-        setSearching(false);
-        // Disabled overlays can retire repeatedly as unrelated DOM content changes.
-        setCollapsed((current) => (current.size ? new Set<string>() : current));
-        hoverOpened = false;
-        if (sheetScroll) {
-          sheetScroll.root.scrollTop = sheetScroll.top;
-          sheetScroll = undefined;
-        }
-      }
-    });
+  }
+  onSettled(() => {
+    const disconnectAnchor = anchor.connect();
+    const stop = control.connect(() => {}, onOpenChange);
     return () => {
+      clearTimeout(hoverTimer);
       stop();
-      anchor?.dispose();
+      disconnectAnchor();
     };
   });
   const Leading = (row: { option?: Option }) => {
@@ -352,17 +386,21 @@ export function PickerContent<Option extends PickerOption>(props: {
     );
   };
   const OptionRow = (row: { option: () => Option; grouped: boolean }) => {
-    // The parent For keys each mounted row by value.
-    const value = untrack(() => row.option().value);
+    const itemRef = menu.itemRef();
     let element: HTMLDivElement;
-    onCleanup(() => {
-      if (optionElements.get(value) === element) {
-        optionElements.delete(value);
-      }
+    onSettled(() => {
+      // The parent For keeps this registration's value for the row's lifetime.
+      const value = row.option().value;
+      optionElements.set(value, element);
+      return () => {
+        if (optionElements.get(value) === element) {
+          optionElements.delete(value);
+        }
+      };
     });
     return (
       <div
-        ref={(node) => optionElements.set(value, (element = node))}
+        ref={[itemRef, (node) => (element = node)]}
         {...menu.item(
           row.option().value,
           row.option().disabled || !visible().has(row.option().value),
@@ -382,8 +420,9 @@ export function PickerContent<Option extends PickerOption>(props: {
         onMouseDown={(event) => event.preventDefault()}
         onMouseMove={() => {
           setKeyboard(false);
+          pointerHighlight = true;
           if (!row.option().disabled) {
-            menu.read().setHighlightedValue(row.option().value);
+            menu.setHighlightedValue(row.option().value);
           }
         }}
         onClick={() => commit(row.option().value)}
@@ -476,6 +515,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         popover={props.params.sheet ? undefined : "manual"}
         hidden={props.params.sheet ? true : undefined}
       >
+        <MenuNavigationError binding={menu} />
         <Show when={props.params.sheet}>
           <div class="picker-select__page-header">
             <button
@@ -514,10 +554,9 @@ export function PickerContent<Option extends PickerOption>(props: {
           />
         </Show>
         <div
-          ref={(element) => (list = element)}
+          ref={[(element) => (list = element), scrollRef]}
           class="picker-select__options"
           role={props.params.groupBy ? undefined : "listbox"}
-          onScroll={scrollFade}
           id={props.params.groupBy ? undefined : id}
           aria-label={props.params.groupBy ? undefined : props.params.label}
           data-picker-focus={!searching() ? "" : undefined}
@@ -548,6 +587,7 @@ export function PickerContent<Option extends PickerOption>(props: {
                 {(group) => (
                   <div class="picker-select__group" role="group" aria-label={group().label}>
                     <button
+                      ref={groupButtonRef()}
                       class="picker-select__group-toggle"
                       type="button"
                       tabindex={opened() ? 0 : -1}
@@ -555,14 +595,13 @@ export function PickerContent<Option extends PickerOption>(props: {
                       aria-controls={`${id}-group-${index()}`}
                       disabled={Boolean(query().trim())}
                       onClick={() =>
-                        setCollapsed((current) => {
-                          const next = new Set(current);
-                          if (next.has(group().id)) {
-                            next.delete(group().id);
+                        setCollapsed((draft) => {
+                          const collapsedIndex = draft.indexOf(group().id);
+                          if (collapsedIndex !== -1) {
+                            draft.splice(collapsedIndex, 1);
                           } else {
-                            next.add(group().id);
+                            draft.push(group().id);
                           }
-                          return next;
                         })
                       }
                     >
@@ -594,7 +633,7 @@ export function PickerContent<Option extends PickerOption>(props: {
         <div
           class="picker-select__empty"
           role="status"
-          hidden={sections().some((section) => section.options.length > 0)}
+          hidden={!opened() || sections().some((section) => section.options.length > 0)}
         >
           {t("common.pickerNoMatches")}
         </div>

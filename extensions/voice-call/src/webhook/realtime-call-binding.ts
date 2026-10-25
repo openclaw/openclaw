@@ -11,7 +11,7 @@ import type {
   RealtimeRoomBinding,
   RealtimeTelephonyBinding,
 } from "./realtime-call-transport.js";
-import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
+import type { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 
 type RealtimeCallPlayback = ReturnType<typeof createRealtimeCallPlayback>;
 
@@ -28,7 +28,7 @@ export function createRealtimeTelephonyBinding(params: {
   hostSpeech: RealtimeCallPlayback["hostSpeech"];
   activeBridgesByCallId: Map<string, RealtimeVoiceBridgeSession>;
   activeBindingsByCallId: Map<string, RealtimeTelephonyBinding>;
-  streamDisconnectLifecycle: StreamDisconnectLifecycle;
+  streamDisconnectLifecycle: StreamDisconnectGrace;
   previousBinding?: RealtimeTelephonyBinding;
   idleHangupMs?: number;
   emitCallEnd: (cause: RealtimeCallEndCause) => Promise<void>;

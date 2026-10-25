@@ -25,6 +25,8 @@ These schedule flags work with both `openclaw automations add` and `openclaw aut
 
 Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to interpret an offset-less `--at` datetime, or to evaluate a cron expression, in that IANA timezone. Cron expressions without `--tz` use the Gateway host timezone. `--tz` is not valid with `--every` or `--on-exit`.
 
+The Control UI's **Run at** field uses your browser's local timezone. A time skipped by a daylight-saving transition is invalid; choose a time before or after the gap. A newly entered repeated fall-back time uses its first occurrence. Editing other fields preserves the existing one-shot instant, including its original offset and timestamp precision.
+
 Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing, or `--stagger 30s` for an explicit window (cron schedules only).
 
 In the Control UI, enable **Exact timing** to disable staggering. For recurring top-of-hour expressions, turn it off and clear **Stagger window** to restore the default window of up to 5 minutes. For other expressions, clearing a saved window without changing the expression disables staggering and reopens with **Exact timing** enabled. A new schedule with a blank window keeps default timing when its expression changes.
@@ -37,15 +39,149 @@ Changing an `at` or `on-exit` job to an `every` or `cron` schedule clears its in
 
 ### Heartbeat task migration
 
-Heartbeat scratch supported a structured `tasks:` block before v2026.8.1. If you are upgrading from an earlier release, run `openclaw doctor --fix` to convert each entry into an ordinary editable main-session automation job. Doctor preserves the interval and previous last-run timing, creates the jobs before removing the block, and safely converges the same declaration keys on rerun.
+Run `openclaw doctor --fix` to convert supported heartbeat configuration,
+system-owned monitor jobs, and structured scratch tasks into ordinary editable
+`agentTurn` jobs. Doctor supports July 2026 and later heartbeat shapes. See
+[Heartbeat migration](/gateway/heartbeat) for the migration and older-version guidance.
 
-These migrated jobs carry public `systemEvent` payloads, so `openclaw automations list`, `get`, `edit`, and `remove` plus the `automations` agent tool manage them like other jobs (the tool still accepts its legacy `cron` name as a compatibility alias). Their execution uses the guarded heartbeat task wake: active hours, minimum spacing, flood control, and busy retries still apply, while the scheduler owns each task's independent cadence. Jobs due in the same coalescing window can share one heartbeat turn. A scheduled occurrence outside heartbeat active hours is skipped and retried at the job's next occurrence.
+Conversions preserve job IDs and history, scratch revisions, disabled state,
+schedule anchors and pending occurrences, and tool authority. Doctor retires
+legacy configuration or scratch task blocks only after verifying the destination.
+If an import is ambiguous or incomplete, it keeps the source and reports what
+needs attention rather than starting a partially migrated job.
 
-Heartbeat scratch is monitor prose only. Runtime heartbeats do not parse `tasks:` text as schedules; create new recurring work as automations.
+The job becomes authoritative after migration. Use `openclaw automations list`,
+`get`, `edit`, and `remove`, or the `automations` agent tool, to manage it. Config
+reloads, restarts, and subsequent Doctor runs do not overwrite edits or recreate
+a deleted migrated monitor. Runtime does not interpret scratch `tasks:` blocks
+as schedules or read `HEARTBEAT.md`.
+
+### Monitoring policies
+
+Use job-level policies for periodic checks that should respect quiet hours and
+foreground work. They apply through ordinary scheduler and session admission;
+no separate heartbeat runner is involved.
+
+| Field                                    | Behavior                                                                                                               |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `activeHours: { start, end, timezone? }` | Restricts execution to a timezone-aware window. Start is inclusive; end is exclusive. Overnight windows are supported. |
+| `idleOnly: true`                         | Gives foreground work priority without occupying a running slot while waiting.                                         |
+| `payload.skipIfScratchEmpty: true`       | Skips an agent turn with explicitly empty scratch. Missing scratch still runs.                                         |
+
+Omitting these fields keeps ordinary automation defaults. A manual force-run
+bypasses cadence, but still respects active hours, authorization, lifecycle, and
+delivery restrictions. Starting foreground work does not replay side effects
+from an already-started run.
+
+`activeHours.start` and `end` use `HH:MM`; only `end` accepts `24:00`.
+Equal start and end define an empty window. `timezone` accepts `user` (the
+default, using the configured user timezone), `local` (Gateway host), or an IANA
+timezone. The window uses local wall-clock time across daylight saving changes,
+independently of the cron expression's schedule timezone.
+
+A one-shot `at` job due outside its active hours stays pending until the window
+opens. Recurring `every` and `cron` schedules skip that occurrence and advance
+to the next scheduled time.
+
+```bash
+openclaw automations add \
+  --name "Project monitor" \
+  --every 30m \
+  --session isolated \
+  --message "Check the job scratch for newly blocked work. Report changes that need attention; otherwise reply NO_REPLY." \
+  --active-hours-start 08:00 \
+  --active-hours-end 22:00 \
+  --active-hours-timezone user \
+  --idle-only \
+  --skip-if-scratch-empty \
+  --no-deliver
+```
+
+The same flags work with `automations edit`. Supply both window endpoints when
+adding a window; edits can change one field of an existing window. Use
+`--clear-active-hours` to remove the window, `--no-idle-only` to turn off idle
+priority, or `--clear-idle-only` to remove that stored policy.
+
+Keep instructions explicit: name the sources or checklist, do not infer old
+tasks from past chats, and report changes that need attention. A human check-in
+is a separate job with an intentional cadence. See
+[Job scratch and quiet results](/automation/cron-jobs/payloads#job-scratch-and-quiet-results)
+and [Owner delivery](/automation/cron-jobs/delivery#owner-delivery-and-direct-messages).
 
 ### Stream sources
 
-A stream schedule keeps an operator-authored argv command running under the Gateway and fires the job from its stdout and stderr lines. Stream schedules are event-driven, never time-due, and are available by default. Set `cron.triggers.enabled: false` to disable them together with condition-trigger scripts and script payloads. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with the scheduler's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
+A stream schedule keeps an operator-authored argv command running under the Gateway and fires the job from its stdout and stderr lines. Stream schedules are event-driven, never time-due, and are available by default.
+
+The agent-facing `automations` tool requires the creator turn to expose `exec` for the stream’s execution location. With `ask: "always"`, creating a stream asks the user to approve that specific persistent watcher. The question identifies the command and execution location, describes output behavior and delivery, and explains that the watcher continues after the conversation and automatically restarts after interruptions and Gateway restarts until disabled or deleted. Approval authorizes that saved watcher, not other commands or additional watchers. Time spent awaiting approval does not require another approval for the same proposal.
+
+```json
+{
+  "tools": {
+    "exec": {
+      "host": "gateway",
+      "security": "allowlist",
+      "ask": "always"
+    }
+  }
+}
+```
+
+Source changes (`command`, `cwd`, matching, or batching), setting `enabled: true`, and clearing restart exhaustion require fresh approval when exec asks. Disabling or deleting a watcher, equivalent schedule resaves, and unrelated payload or delivery edits do not ask for execution approval. Account-owned streams remain manageable by their creator; operator-created streams retain operator management.
+
+When exec asks, the Gateway saves no runnable job without affirmative approval. Denial, expiry, cancellation, or unavailable approval delivery leaves the job unchanged, regardless of `askFallback`. A declined, expired, or canceled approval request is closed and cannot later be approved; ask the agent for a new proposal if you want another attempt under the existing permissions and approval settings. It rechecks current policy and the exact proposal when saving: newly required approval opens a question, a changed proposal or policy requires a fresh decision, and `security: "deny"` still refuses execution. Sandbox exec authorizes a stream in a dedicated container under that sandbox's policy; it cannot authorize a Gateway stream. Node-only exec cannot create streams. Full unattended Gateway exec remains available without a question; explicit full-permission sessions retain their existing host-policy exemption. Changing the approval setting alone does not prompt again for an already approved watcher.
+
+A successful `automations` add or update includes `streamExecutionApproval` when that save consumed a native user approval. It reports the `approvalId`, `decision: "allow-once"`, `source: "operator"`, and a human-readable approval message. This confirms the question was already approved, even when the reply is not visible in chat. The field is absent for unattended saves and unchanged declarations; it does not grant permission to future agent actions or report whether the watcher is still running.
+
+When a native approval ends without permission, `automations` returns `saved: false` with an `outcome` of `operator-denied`, `expired`, or `cancelled`. This is a terminal outcome for that proposal, not invalid parameters. A refused update leaves the existing watcher unchanged. The refusal applies to that proposal. Later actions, including actions from the same request, must independently satisfy their current permissions and approval settings. Automations saved earlier continue under their configured lifecycle. A generic operator receipt does not establish that the current viewer approved it.
+
+In Control UI, a stream proposal shows **Start watching** or **Save watcher change** alongside **Cancel**. Reopening the conversation restores pending approvals.
+
+For current saved watcher state, ask the agent to inspect the known job with `automations get`. The result includes `enabled` and `state.streamStatus`. Assistant prose, an earlier observation, and the `enabled` flag alone do not confirm source termination.
+
+Watcher tool results distinguish the saved configuration from the runtime's observed state, such as starting, running, stopped, or error. A disabled watcher whose stop is unconfirmed means automatic restart is disabled; it does not mean the source has exited. Chat history preserves the observation made for that operation, not a fresh status check or permission grant. Removing a saved record alone also does not prove physical termination.
+
+To stop a saved watcher, ask the agent to disable it with `update` and `job: { enabled: false }`, or open it on the **Automations** page and turn off its **Active** switch. The switch then shows **Paused**; the saved record remains. Disabling a watcher does not stop separate ordinary background processes. Those require their own process IDs and confirmed cleanup.
+
+Conversational requests can disable or delete an authorized automation by its exact ID without another confirmation. The owner checks its captured configuration revision before applying the change; a changed definition requires a fresh inspection. If the intended target is unclear, the agent should clarify it before acting. The Automations switch remains a single action. Required execution approval for creating or restarting a watcher is unchanged.
+
+Approval covers the saved command and paths for the watcher's lifetime. Gateway streams check executable, script, and working-directory identity across the approval wait. Sandbox streams recheck the configured image and sandbox policy across that wait; guest paths resolve in the image and approved mounts. Approval does not permanently freeze image tags or files at those paths. Each sandbox start resolves the operator-configured image and pins its immutable Docker image ID for that attempt.
+
+#### Sandboxed streams
+
+An agent using a supported local Docker sandbox can create a stream in a dedicated container. Every start and restart creates a fresh container from the configured image, with the same approved workspace, mounts, user, filesystem access, and network restrictions. The configured `setupCommand` runs for each fresh container. Commands and working directories refer to guest paths. There is no host fallback.
+
+The stream does not share the agent container's existing writable layer, temporary files, sockets, or running services. Install dependencies in the image or `setupCommand`, or keep them in approved mounted paths. Mounted workspace data persists; changes elsewhere in a stream container disappear when that attempt ends.
+
+Each stream container receives the configured resource limits separately. Additional streams therefore add containers and can increase total memory, CPU, process, and disk use; they do not share one resource budget with the agent container.
+
+Sandbox tool policy excludes `automations` by default. Enable it explicitly alongside `exec`; an existing explicit deny still takes precedence:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: { mode: "all", scope: "session", workspaceAccess: "ro" },
+    },
+  },
+  tools: {
+    allow: ["exec", "automations"],
+    exec: { host: "sandbox", ask: "always" },
+    sandbox: { tools: { alsoAllow: ["automations"] } },
+  },
+}
+```
+
+This support requires a supported local Docker Unix socket. Other sandbox backends and remote Docker endpoints retain ordinary exec support but cannot create persistent streams. The approval question identifies the dedicated Docker container behavior and explains the long-running command and automatic restarts.
+
+OpenClaw checks current session, operator, exec, and sandbox authority before each start and while the stream is active. A revoked grant, removed session, explicit exec denial, or changed sandbox configuration cannot inherit the old approval. Active streams prevent idle pruning. Explicit sandbox removal or recreation removes the associated stream containers and settles workspace changes before retiring their workspace owner.
+
+A stream can continue running after a controller crash or lost connection until OpenClaw recovers and cleans it up. There is no autonomous execution lease inside the container. Recovery removes the exact recorded stream container through its original Docker daemon and confirms its absence before settling the workspace, deleting cleanup records, or starting a replacement. An unreachable or changed Docker daemon blocks replacement; restore access to the original daemon so cleanup can finish.
+
+After a Linux or macOS host reboot, recovery requires the same recorded machine identity before reclaiming a previous controller's cleanup work. Missing, changed, or unreadable machine identity keeps cleanup blocked; a hostname alone cannot establish that the previous controller is gone. OpenClaw retains only an application-specific hash of the OS machine identifier.
+
+Before downgrading, stop and settle sandbox streams on the current version. Older versions quarantine these jobs instead of running them on the Gateway. After upgrading again, explicitly restore or recreate them under current policy and approval; they do not resume automatically from quarantine.
+
+Set `cron.triggers.enabled: false` to disable streams together with condition-trigger scripts and script payloads. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with the scheduler's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
 
 ```bash
 openclaw automations add \
@@ -56,6 +192,25 @@ openclaw automations add \
   --stream-batch-ms 250 \
   --session isolated \
   --message "Investigate these build events."
+```
+
+For a simple log condition, use the existing match mode instead of writing a trigger program. Prepare the source with finite inspection, then create the saved watcher directly; a separate ordinary background watcher is unnecessary. For example, the agent tool can receive:
+
+```json
+{
+  "action": "add",
+  "job": {
+    "name": "Application errors",
+    "schedule": {
+      "kind": "stream",
+      "command": ["tail", "-n", "0", "-F", "/workspace/application.log"],
+      "mode": "match",
+      "match": "ERROR"
+    },
+    "sessionTarget": "current",
+    "payload": { "kind": "agentTurn", "message": "Report the matching application errors." }
+  }
+}
 ```
 
 `mode: "line"` (the default) accepts every line. `mode: "match"` accepts only lines matching the compiled `match` regex. A batch closes after `batchMs` of quiet (default 250 ms, clamped to 50–5000) or at `maxBatchBytes` (default 16384, clamped to 1024–65536). At the byte cap the batch ends with `[truncated]`. Match mode always evaluates complete lines against their full text, even past `maxBatchBytes` (only the delivered batch is truncated); a line cut at the bounded raw-intake limit is only a prefix, so it is treated as unmatched rather than letting an end-anchored pattern fire on the cut. The batch is appended to the system-event text or agent-turn message. Command payloads are rejected for stream schedules because the source command and payload command would have ambiguous process ownership.
@@ -98,17 +253,65 @@ This fires roughly 5-6 times a month instead of 0-1 times a month. To require bo
 
 An event trigger adds a headless condition script to an `every`, `cron`, or `stream` schedule. Time schedules evaluate it when due; stream schedules evaluate it for each closed batch. The scheduler runs the normal payload only when the script returns `fire: true`:
 
-```json5
-{
-  schedule: { kind: "every", everyMs: 30000 },
-  trigger: {
-    // Fires only when the observed status differs from the last evaluation.
-    script: "const res = await exec({ command: 'gh pr checks 123 --json state -q \\'.[].state\\' | sort -u' }); const status = String(res?.aggregated ?? '').trim(); json({ fire: status !== trigger.state?.status, message: `PR 123 CI: ${trigger.state?.status ?? 'unknown'} -> ${status}`, state: { status } });",
-    once: false,
-  },
-  payload: { kind: "agentTurn", message: "Investigate the CI status change." },
+For example, save this read-only PR CI gate as `watch-pr-ci.js`, then use
+`--trigger-script ./watch-pr-ci.js` with an agent-turn payload that investigates
+the changed checks. It compares the exact PR head and individual check/status
+identities, not an aggregate pass/fail string:
+
+```js
+const repo = "owner/repo";
+const pr = 123;
+async function readJson(command) {
+  const response = await exec({ command });
+  if (response.status !== "completed" || response.exitCode !== 0) {
+    throw new Error("CI observation failed; inspect this automation's run diagnostics.");
+  }
+  return JSON.parse(response.aggregated);
 }
+const { headRefOid: head } = await readJson(
+  "gh pr view " + pr + " --repo " + repo + " --json headRefOid",
+);
+const pages = await readJson(
+  "gh api repos/" + repo + "/commits/" + head + "/check-runs --paginate --slurp",
+);
+const checks = pages
+  .flatMap((page) => page.check_runs)
+  .map((check) => ({
+    id: check.id,
+    name: check.name,
+    appId: check.app.id,
+    head: check.head_sha,
+    status: check.status,
+    conclusion: check.conclusion,
+  }))
+  .sort((a, b) => a.id - b.id);
+const commitStatus = await readJson("gh api repos/" + repo + "/commits/" + head + "/status");
+const contexts = commitStatus.statuses
+  .map((status) => ({
+    id: status.id,
+    context: status.context,
+    state: status.state,
+  }))
+  .sort((a, b) => a.context.localeCompare(b.context));
+const observed = { head, checks, contexts };
+const changed = JSON.stringify(observed) !== JSON.stringify(trigger.state);
+return {
+  fire: changed,
+  ...(changed
+    ? { message: "PR " + pr + " CI observation changed: " + JSON.stringify(observed) }
+    : {}),
+  state: observed,
+};
 ```
+
+A new head, a rerun with a new check identity, or a check/status transition fires
+the payload even when the aggregate status is unchanged. An unchanged observation
+returns `fire: false`, so no model turn or visible update is produced. Observation
+errors throw and remain actionable scheduler failures; do not convert them to
+`fire: false`. Keep this example within the 16 KiB state limit by scoping large
+repositories to the checks the watcher owns. Do not use a change-only gate for an
+explicitly requested recurring report or digest: that job should deliver at its
+requested cadence even if the observations are unchanged.
 
 Forced manual runs bypass this gate: `openclaw automations run <job-id>` (forced by default) and the `automations` tool with `action: "run", runMode: "force"` skip `trigger.script` and execute the payload directly. An `agentTurn` payload wakes the model even if the script would return `fire: false`. To test the gate, wait for a scheduled evaluation or use `openclaw automations run <job-id> --due` when the job is due. The tool's default `runMode: "due"` also honors the gate; neither due mode makes a job due early.
 
@@ -140,7 +343,7 @@ return {
 };
 ```
 
-Removing or disabling a job during condition evaluation cancels that evaluation before its payload can start. After a main-session payload hands work to heartbeat, that shared heartbeat retains its own lifecycle.
+Removing or disabling a job during condition evaluation cancels that evaluation before its payload can start. Main-session payloads use ordinary session admission and retain the job’s cancellation and authority checks.
 
 Author watchers around **actionable state**, not only success: a watcher that goes quiet when its check fails or times out looks healthy while broken. Compare the observation with `trigger.state` and return fresh state to deduplicate; do not rely on model or process memory. When firing, make `message` self-contained because it becomes the fired run's complete event context.
 

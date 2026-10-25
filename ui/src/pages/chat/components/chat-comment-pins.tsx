@@ -1,21 +1,34 @@
-import { For, createEffect, createMemo, onCleanup, onSettled } from "solid-js";
+import { For, createMemo, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { chatCommentLineEnd, resolveChatCommentAnchor } from "./chat-comment-anchor.ts";
 import { currentChatComments } from "./chat-comment-controller.ts";
 import { dispatchChatCommentAction } from "./chat-selection-annotations.tsx";
+import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 import "../../../styles/chat/selection-annotations.css";
 
 registerChatMessageMetadataEnglish();
 
 type ChatCommentPinsProps = {
+  threadState?: { commentPins?: ChatCommentPinsHandle };
+  transcript?: {
+    readonly messageElements: TranscriptMessageElements;
+    readonly contentElement: HTMLDivElement | null;
+  };
   attachments: readonly ChatAttachment[];
   sessionKey: string;
   disabled: boolean;
 };
+
+export type ChatCommentPinsHandle = {
+  visiblePin: (id: string) => HTMLButtonElement | undefined;
+};
+const inputHandlers = new WeakMap<HTMLElement, () => void>();
 
 /** Draft attachments own the data; this transcript-local view owns source pins. */
 export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
@@ -24,11 +37,11 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
     let root: HTMLElement | null = null;
     let resizeObserver: ResizeObserver | undefined;
     let mutationObserver: MutationObserver | undefined;
-    let frame: number | undefined;
     let observedInner: Element | undefined;
     let disposed = false;
     /** Source bubbles placed by the last layout; null while any pin is unplaced. */
     let anchors: HTMLElement[] | null = null;
+    let pins: HTMLButtonElement[] = [];
     const inputs = createMemo(
       () => ({ attachments: props.attachments, sessionKey: props.sessionKey }),
       {
@@ -39,6 +52,28 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
     const comments = createMemo(() =>
       currentChatComments(inputs().attachments, inputs().sessionKey),
     );
+    const handle: ChatCommentPinsHandle = {
+      visiblePin: (id) => {
+        const thread = root?.getBoundingClientRect();
+        if (!thread) {
+          return undefined;
+        }
+        return pins.find((pin) => {
+          if (!pin.isConnected || pin.dataset.attachmentId !== id || pin.hidden) {
+            return false;
+          }
+          const bounds = pin.getBoundingClientRect();
+          return (
+            bounds.width > 0 &&
+            bounds.height > 0 &&
+            bounds.top >= Math.max(thread.top, 0) &&
+            bounds.bottom <= Math.min(thread.bottom, window.innerHeight) &&
+            bounds.left >= Math.max(thread.left, 0) &&
+            bounds.right <= Math.min(thread.right, window.innerWidth)
+          );
+        });
+      },
+    };
 
     /** The transcript is top-aligned, so content after every placed source cannot move a pin. */
     function canMovePins(target: Node) {
@@ -56,45 +91,48 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
       );
     }
 
-    const scheduleLayout = () => {
-      if (frame !== undefined || !host.isConnected) {
+    const queueLayout = () => {
+      if (!host.isConnected) {
         return;
       }
-      frame = requestAnimationFrame(() => {
-        frame = undefined;
-        layoutPins();
-      });
+      scheduleLayout(host, layoutPins);
     };
 
     function layoutPins() {
       if (!root) {
-        return;
+        return undefined;
       }
-      const inner = root.querySelector(".chat-thread-inner");
-      if (inner && inner !== observedInner) {
+      const content = props.transcript?.contentElement;
+      const inner = content?.isConnected ? content : undefined;
+      if (inner !== observedInner) {
         if (observedInner) {
           resizeObserver?.unobserve(observedInner);
         }
-        resizeObserver?.observe(inner);
+        if (inner) {
+          resizeObserver?.observe(inner);
+        }
         observedInner = inner;
       }
       const origin = host.getBoundingClientRect();
       const edge = root.getBoundingClientRect().right - 28;
-      const occupied: Array<{ left: number; top: number }> = [];
+      const occupied: Array<{ pin: HTMLButtonElement; left: number; top: number }> = [];
+      const hidden: HTMLButtonElement[] = [];
       const placedAnchors: HTMLElement[] = [];
       let placed = true;
+      pins = pins.filter((pin) => pin.isConnected);
       for (const attachment of comments()) {
-        const pin = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(
-          (item) => item.dataset.attachmentId === attachment.id,
-        );
+        const pin = pins.find((item) => item.dataset.attachmentId === attachment.id);
         if (!pin) {
           placed = false;
           continue;
         }
-        const anchor = resolveChatCommentAnchor(root, attachment.selectionAnnotation);
+        const anchor = resolveChatCommentAnchor(
+          props.transcript?.messageElements.elements.values() ?? [],
+          attachment.selectionAnnotation,
+        );
         const line = anchor ? chatCommentLineEnd(anchor) : null;
-        pin.hidden = !line;
         if (!anchor || !line) {
+          hidden.push(pin);
           placed = false;
           continue;
         }
@@ -110,14 +148,29 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
             top += 24;
           }
         }
-        occupied.push({ left, top });
-        pin.style.left = `${left}px`;
-        pin.style.top = `${top}px`;
+        occupied.push({ pin, left, top });
       }
       anchors = placed ? placedAnchors : null;
+      return () => {
+        for (const pin of hidden) {
+          pin.hidden = true;
+        }
+        for (const { pin, left, top } of occupied) {
+          pin.hidden = false;
+          pin.style.left = `${left}px`;
+          pin.style.top = `${top}px`;
+        }
+      };
     }
 
     onSettled(() => {
+      inputHandlers.set(host, queueLayout);
+      // The parent keys this view by its pane's thread state.
+      const initialThreadState = props.threadState;
+      if (initialThreadState) {
+        initialThreadState.commentPins = handle;
+      }
+      let disconnect: (() => void) | undefined;
       // Native bridge content settles before its host is inserted by the parent.
       queueMicrotask(() => {
         if (disposed) {
@@ -125,11 +178,11 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
         }
         root = host.closest(".chat-thread");
         if (root) {
-          resizeObserver = new ResizeObserver(scheduleLayout);
+          resizeObserver = new ResizeObserver(queueLayout);
           resizeObserver.observe(root);
           mutationObserver = new MutationObserver((records) => {
             if (records.some((record) => canMovePins(record.target))) {
-              scheduleLayout();
+              queueLayout();
             }
           });
           mutationObserver.observe(root, {
@@ -138,25 +191,27 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
             characterData: true,
             attributes: true,
           });
-          root.addEventListener("scroll", scheduleLayout, { passive: true });
-          scheduleLayout();
+          disconnect = listen(root, "scroll", queueLayout, { passive: true });
+          queueLayout();
         }
       });
-    });
-    createEffect(comments, scheduleLayout);
-    onCleanup(() => {
-      disposed = true;
-      resizeObserver?.disconnect();
-      mutationObserver?.disconnect();
-      root?.removeEventListener("scroll", scheduleLayout);
-      if (frame !== undefined) {
-        cancelAnimationFrame(frame);
-      }
+      return () => {
+        inputHandlers.delete(host);
+        if (initialThreadState?.commentPins === handle) {
+          initialThreadState.commentPins = undefined;
+        }
+        disposed = true;
+        resizeObserver?.disconnect();
+        mutationObserver?.disconnect();
+        disconnect?.();
+        cancelLayout(host);
+      };
     });
     return (
       <For each={comments()} keyed={(attachment) => attachment.id}>
         {(attachment, index) => (
           <button
+            ref={(element) => pins.push(element)}
             type="button"
             class="btn primary chat-comment-pin"
             data-attachment-id={attachment().id}
@@ -178,7 +233,10 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
     );
   },
   {
+    propertyChanged: (host) => inputHandlers.get(host)?.(),
     properties: {
+      threadState: { default: undefined, attribute: false },
+      transcript: { default: undefined, attribute: false },
       attachments: { default: [], attribute: false },
       sessionKey: { default: "" },
       disabled: { default: false, attribute: false },

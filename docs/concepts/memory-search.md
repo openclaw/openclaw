@@ -11,8 +11,8 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
-The built-in index supports SQLite and PostgreSQL agent databases. PostgreSQL
-search is experimental and uses engine-local text ranking, so scores and ordering
+The built-in index supports SQLite and PostgreSQL agent databases. The PostgreSQL
+engine remains experimental. Search uses engine-local text ranking, so scores and ordering
 can differ from SQLite. It requires `unaccent` for text search, `pg_trgm` for the
 trigram tokenizer, and `vector` for semantic search. Explicit
 `memory.search.provider: "none"` enables keyword-only search without `vector`;
@@ -20,6 +20,21 @@ memory status reports this as `fts-only`. See
 [PostgreSQL memory search](/concepts/memory#postgresql-memory-search) for lifecycle
 behavior and [Database engines](/reference/database-engines#search-on-postgresql)
 for extension setup.
+
+On PostgreSQL, both body keywords and filename/path lookup use the admitted
+index. Source and selected-agent scope restrict candidates before the result
+limit; semantic retrieval also filters the embedding model. Text uses native
+full-text ranking; semantic retrieval uses exact
+cosine distance over a derived float32 vector projection. Hybrid search keeps
+the same vector/text weights, but PostgreSQL text scores are not SQLite BM25
+scores. A phrase with nearby terms can rank above scattered terms without
+promising identical ordering across engines.
+
+PostgreSQL memory queries accept at most 4,096 UTF-16 code units and 128 terms, return
+at most 200 hits, and bound each snippet to 700 characters. Larger queries return
+an actionable error before search. Memory transcript recall retains its existing
+200-candidate window followed by session visibility checks; it does not promise
+complete recall beyond that window or SQL-level session permission filtering.
 
 The result-count argument is `maxResults` (an integer of at least 1). The tool
 also accepts `max_results` and `limit` as aliases. If several are supplied,
@@ -60,7 +75,11 @@ explicitly:
 
 `provider` can also reference a custom `models.providers.<id>` entry (for
 example `ollama-5080`), as long as that entry sets `api` to `"ollama"` or
-another provider id with a memory embedding adapter.
+another provider id with a memory embedding adapter. Entries using
+`api: "openai-completions"`, `api: "openai-responses"`, or a `baseUrl` without an
+explicit API use the generic OpenAI-compatible bridge. For ClawRouter, see
+[Text embeddings for memory](/providers/clawrouter#text-embeddings-for-memory)
+for the `/v1` base URL, explicit router credential binding, and qualified model id.
 
 For local embeddings with no API key, install and configure the official
 llama.cpp provider, then set `provider: "local"`:
@@ -110,6 +129,11 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 
 To move off Ollama, [llmman](/providers/llmman#advanced-configuration) serves the same `/api/embed`, so `provider: "ollama"` only needs a new `remote.baseUrl`.
 
+For models that require a query prefix, set
+[`memory.search.queryInstruction`](/reference/memory-config#query-instructions),
+for example `"search_query: "` for a Nomic model served under a generic alias.
+It changes query text only and does not require rebuilding the document index.
+
 ## How search works
 
 OpenClaw runs two retrieval paths in parallel and merges the results:
@@ -129,12 +153,13 @@ flowchart LR
 
 - **Vector search** matches similar meaning ("gateway host" matches "the
   machine running OpenClaw").
-- **BM25 keyword search** matches exact terms (IDs, error strings, config
+- **Keyword search** matches exact terms (IDs, error strings, config
   keys). It accepts NFC and NFD Unicode spellings without rewriting notes or
   rebuilding existing indexes, including notes that mix those forms across words.
   Search first requires every query term. Only when neither body nor filename
   search finds a match does it retry body search once with any query term and
-  language-specific keyword expansion, ranked by BM25. This recovers answers
+  language-specific keyword expansion. SQLite ranks by BM25; PostgreSQL uses its
+  native full-text rank or trigram similarity. This recovers answers
   without broadening a keyword query that already has matches.
 - **Filename search** indexes paths separately from note bodies. Exact full
   paths, basenames, and filename stems rank ahead of partial path matches,
@@ -143,6 +168,15 @@ flowchart LR
 If only one path is available, the other runs alone. Keyword boosts stay bounded
 without clipping distinct lexical scores to the same maximum, so relevance
 continues to influence ranking when dated notes decay.
+
+When both paths return results, the builtin engine scales each query's keyword
+scores before weighting them. The strongest keyword match earns at most the best
+semantic score, and every other keyword match earns a share in proportion to its
+BM25 relevance, never more than its own keyword score. A match much weaker than
+the query's best keyword match adds little, so sharing a common word rarely
+outweighs a note that is closer in meaning. This matters most for questions
+asked in a different language than the notes. `minScore` applies to the weighted
+sum of the cosine similarity and the scaled keyword score.
 
 The builtin engine then applies fixed ranking rules:
 
@@ -273,6 +307,9 @@ conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 
 Use `corpus: "memory"` to search only memory notes. Results containing no session
 transcripts do not load session history or perform session-visibility lookups.
+For session hits, visibility checks read the matching sessions and their aliases
+instead of loading the full session catalog. Private recall also checks its anchor
+conversation and any shared aliases before returning transcript content.
 
 Session hits obey `tools.sessions.visibility`, which defaults to `"all"`.
 `memory_search` still searches the selected agent's indexed corpus; use

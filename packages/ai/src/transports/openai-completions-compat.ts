@@ -16,18 +16,6 @@ import { resolveProviderRequestCapabilities as resolveModelProviderRequestCapabi
 
 type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
 
-type OpenAICompletionsCompatDefaultsInput = {
-  provider?: string;
-  modelId?: string;
-  reasoning?: boolean;
-  baseUrl?: string;
-  endpointClass: string;
-  knownProviderFamily: string;
-  supportsNativeStreamingUsageCompat?: boolean;
-  supportsOpenAICompletionsStreamingUsageCompat?: boolean;
-  usesExplicitProxyLikeEndpoint?: boolean;
-};
-
 type OpenAICompletionsCompatDefaults = {
   supportsStore: boolean;
   supportsDeveloperRole: boolean;
@@ -35,6 +23,7 @@ type OpenAICompletionsCompatDefaults = {
   supportsUsageInStreaming: boolean;
   maxTokensField: "max_completion_tokens" | "max_tokens";
   thinkingFormat: "openai" | "openrouter" | "deepseek" | "together" | "zai";
+  emitsDsmlToolCalls: boolean;
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
   requiresTypedUnionBranches: boolean;
@@ -42,6 +31,7 @@ type OpenAICompletionsCompatDefaults = {
   requiresReasoningContentOnAssistantMessages: boolean;
   requiresNonEmptyUserOrAssistantMessage: boolean;
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+  cacheControlSystemOnly: boolean;
   sessionAffinityFormat: Exclude<OpenAICompletionsSessionAffinity, "none">;
   supportsLongCacheRetention: boolean;
 };
@@ -56,9 +46,11 @@ export type ResolvedOpenAICompletionsCompat = Omit<
 > &
   Pick<OpenAICompletionsCompat, "reasoningEffortMap" | "supportedReasoningEfforts"> & {
     cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+    cacheControlSystemOnly: boolean;
     openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
     sessionAffinity: OpenAICompletionsSessionAffinity;
     visibleReasoningDetailTypes: string[];
+    emitsDsmlToolCalls: boolean;
     requiresNonEmptyUserOrAssistantMessage: boolean;
     requiresTypedUnionBranches: boolean;
     configuredSupportsLongCacheRetention?: boolean;
@@ -137,126 +129,6 @@ export function resolveOpenAIPromptCacheKeySupport(model: {
   );
 }
 
-/** Resolves default request flags for an OpenAI-compatible completions endpoint. */
-function resolveOpenAICompletionsCompatDefaults(
-  input: OpenAICompletionsCompatDefaultsInput,
-): OpenAICompletionsCompatDefaults {
-  const {
-    provider,
-    modelId,
-    endpointClass,
-    knownProviderFamily,
-    supportsNativeStreamingUsageCompat = false,
-    supportsOpenAICompletionsStreamingUsageCompat = false,
-    usesExplicitProxyLikeEndpoint = false,
-  } = input;
-  const isDefaultRoute = endpointClass === "default";
-  const usesConfiguredNonOpenAIEndpoint =
-    endpointClass !== "default" && endpointClass !== "openai-public";
-  const isMoonshot = knownProviderFamily === "moonshot" || endpointClass === "moonshot-native";
-  const isMoonshotLike =
-    isMoonshot || knownProviderFamily === "modelstudio" || endpointClass === "modelstudio-native";
-  const isModelStudioLike =
-    knownProviderFamily === "modelstudio" ||
-    endpointClass === "modelstudio-native" ||
-    (isDefaultRoute && isDefaultRouteProvider(provider, "dashscope", "modelstudio", "qwen"));
-  const isZai =
-    endpointClass === "zai-native" ||
-    (isDefaultRoute && isDefaultRouteProvider(input.provider, "zai"));
-  const isDeepSeek =
-    endpointClass === "deepseek-native" ||
-    (isDefaultRoute && isDefaultRouteProvider(input.provider, "deepseek"));
-  const isTogether =
-    knownProviderFamily === "together" ||
-    input.baseUrl?.includes("api.together.ai") === true ||
-    input.baseUrl?.includes("api.together.xyz") === true ||
-    (isDefaultRoute && isDefaultRouteProvider(input.provider, "together"));
-  const isCloudflareAiGateway =
-    provider === "cloudflare-ai-gateway" ||
-    input.baseUrl?.includes("gateway.ai.cloudflare.com") === true;
-  const isXiaomi =
-    endpointClass === "xiaomi-native" ||
-    (isDefaultRoute && isDefaultRouteProvider(input.provider, "xiaomi"));
-  const isNonStandard =
-    endpointClass === "cerebras-native" ||
-    endpointClass === "chutes-native" ||
-    endpointClass === "deepseek-native" ||
-    endpointClass === "mistral-public" ||
-    endpointClass === "opencode-native" ||
-    endpointClass === "opencode-go-native" ||
-    endpointClass === "xai-native" ||
-    isXiaomi ||
-    isZai ||
-    (isDefaultRoute &&
-      isDefaultRouteProvider(input.provider, "cerebras", "chutes", "deepseek", "opencode", "xai"));
-  const isOpenRouterLike = input.provider === "openrouter" || endpointClass === "openrouter";
-  const isLocalEndpoint = endpointClass === "local";
-  const isMistral = knownProviderFamily === "mistral" || endpointClass === "mistral-public";
-  const usesMaxTokens =
-    endpointClass === "chutes-native" ||
-    endpointClass === "novita-native" ||
-    isMistral ||
-    isMoonshot ||
-    isCloudflareAiGateway ||
-    isZai ||
-    isTogether ||
-    (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
-  return {
-    supportsStore: !isNonStandard && !isMistral && !usesExplicitProxyLikeEndpoint,
-    supportsDeveloperRole: !isNonStandard && !isMoonshotLike && !usesConfiguredNonOpenAIEndpoint,
-    supportsReasoningEffort:
-      !isZai &&
-      !isTogether &&
-      !isMistral &&
-      endpointClass !== "xai-native" &&
-      (!usesExplicitProxyLikeEndpoint || input.reasoning === true),
-    supportsUsageInStreaming:
-      supportsOpenAICompletionsStreamingUsageCompat ||
-      (!isNonStandard &&
-        (isLocalEndpoint ||
-          !usesConfiguredNonOpenAIEndpoint ||
-          supportsNativeStreamingUsageCompat)),
-    maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
-    thinkingFormat:
-      isDeepSeek || isXiaomi
-        ? "deepseek"
-        : isZai
-          ? "zai"
-          : isTogether
-            ? "together"
-            : isOpenRouterLike
-              ? "openrouter"
-              : "openai",
-    visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
-    supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
-    requiresTypedUnionBranches: isMoonshot,
-    supportsJsonSchemaResponseFormat:
-      (endpointClass === "openai-public" ||
-        (isDefaultRoute && isDefaultRouteProvider(provider, "openai"))) &&
-      isKnownOpenAIJsonSchemaModelId(modelId),
-    requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
-    requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
-    cacheControlFormat:
-      (isModelStudioLike && endpointClass !== "custom") ||
-      (normalizeOpenRouterModelFamilyId(modelId)?.startsWith("anthropic/") === true &&
-        (endpointClass === "openrouter" ||
-          (isDefaultRoute && provider === "openrouter") ||
-          provider === "deepinfra"))
-        ? "anthropic"
-        : undefined,
-    sessionAffinityFormat: isOpenRouterLike ? "openrouter" : "openai",
-    supportsLongCacheRetention:
-      !isModelStudioLike &&
-      provider !== "cloudflare-workers-ai" &&
-      provider !== "cloudflare-ai-gateway" &&
-      knownProviderFamily !== "together" &&
-      !input.baseUrl?.includes("api.cloudflare.com") &&
-      !input.baseUrl?.includes("gateway.ai.cloudflare.com") &&
-      !input.baseUrl?.includes("api.together.ai") &&
-      !input.baseUrl?.includes("api.together.xyz"),
-  };
-}
-
 /** Detects endpoint capabilities and defaults for an OpenAI-completions model. */
 export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id" | "reasoning"> & {
@@ -278,16 +150,136 @@ export function detectOpenAICompletionsCompat(
         ? (model.compat as { supportsStore?: boolean })
         : undefined,
   });
-  return {
-    capabilities,
-    defaults: resolveOpenAICompletionsCompatDefaults({
-      provider: model.provider,
-      modelId: model.id,
-      reasoning: model.reasoning,
-      baseUrl: model.baseUrl,
-      ...capabilities,
-    }),
+  const {
+    provider,
+    modelId,
+    reasoning,
+    baseUrl,
+    endpointClass,
+    knownProviderFamily,
+    supportsNativeStreamingUsageCompat,
+    supportsOpenAICompletionsStreamingUsageCompat,
+    usesExplicitProxyLikeEndpoint,
+  } = {
+    provider: model.provider,
+    modelId: model.id,
+    reasoning: model.reasoning,
+    baseUrl: model.baseUrl,
+    ...capabilities,
   };
+  const isDefaultRoute = endpointClass === "default";
+  const usesConfiguredNonOpenAIEndpoint =
+    endpointClass !== "default" && endpointClass !== "openai-public";
+  const isMoonshot = knownProviderFamily === "moonshot" || endpointClass === "moonshot-native";
+  const isMoonshotLike =
+    isMoonshot || knownProviderFamily === "modelstudio" || endpointClass === "modelstudio-native";
+  const isModelStudioLike =
+    knownProviderFamily === "modelstudio" ||
+    endpointClass === "modelstudio-native" ||
+    (isDefaultRoute && isDefaultRouteProvider(provider, "dashscope", "modelstudio", "qwen"));
+  const isZai =
+    endpointClass === "zai-native" || (isDefaultRoute && isDefaultRouteProvider(provider, "zai"));
+  const isDeepSeek =
+    endpointClass === "deepseek-native" ||
+    (isDefaultRoute && isDefaultRouteProvider(provider, "deepseek"));
+  const isTogether =
+    knownProviderFamily === "together" ||
+    baseUrl?.includes("api.together.ai") ||
+    baseUrl?.includes("api.together.xyz") ||
+    (isDefaultRoute && isDefaultRouteProvider(provider, "together"));
+  const isCloudflareAiGateway =
+    provider === "cloudflare-ai-gateway" || baseUrl?.includes("gateway.ai.cloudflare.com");
+  const isXiaomi =
+    endpointClass === "xiaomi-native" ||
+    (isDefaultRoute && isDefaultRouteProvider(provider, "xiaomi"));
+  const isNonStandard =
+    endpointClass === "cerebras-native" ||
+    endpointClass === "chutes-native" ||
+    endpointClass === "deepseek-native" ||
+    endpointClass === "mistral-public" ||
+    endpointClass === "opencode-native" ||
+    endpointClass === "opencode-go-native" ||
+    endpointClass === "xai-native" ||
+    isXiaomi ||
+    isZai ||
+    (isDefaultRoute &&
+      isDefaultRouteProvider(provider, "cerebras", "chutes", "deepseek", "opencode", "xai"));
+  const isOpenRouterLike = provider === "openrouter" || endpointClass === "openrouter";
+  const openRouterModelId = normalizeOpenRouterModelFamilyId(modelId);
+  const isOpenRouterGemini =
+    (endpointClass === "openrouter" || (isDefaultRoute && provider === "openrouter")) &&
+    openRouterModelId?.startsWith("google/gemini") === true;
+  const isLocalEndpoint = endpointClass === "local";
+  const isMistral = knownProviderFamily === "mistral" || endpointClass === "mistral-public";
+  const usesMaxTokens =
+    endpointClass === "chutes-native" ||
+    endpointClass === "novita-native" ||
+    isMistral ||
+    isMoonshot ||
+    isCloudflareAiGateway ||
+    isZai ||
+    isTogether ||
+    (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
+  const defaults: OpenAICompletionsCompatDefaults = {
+    supportsStore: !isNonStandard && !isMistral && !usesExplicitProxyLikeEndpoint,
+    supportsDeveloperRole: !isNonStandard && !isMoonshotLike && !usesConfiguredNonOpenAIEndpoint,
+    supportsReasoningEffort:
+      !isZai &&
+      !isTogether &&
+      !isMistral &&
+      endpointClass !== "xai-native" &&
+      (!usesExplicitProxyLikeEndpoint || reasoning),
+    supportsUsageInStreaming:
+      supportsOpenAICompletionsStreamingUsageCompat ||
+      (!isNonStandard &&
+        (isLocalEndpoint ||
+          !usesConfiguredNonOpenAIEndpoint ||
+          supportsNativeStreamingUsageCompat)),
+    maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
+    emitsDsmlToolCalls: isDeepSeek || isXiaomi || /(?:^|\/)deepseek(?:[-/]|$)/i.test(modelId ?? ""),
+    thinkingFormat:
+      isDeepSeek || isXiaomi
+        ? "deepseek"
+        : isZai
+          ? "zai"
+          : isTogether
+            ? "together"
+            : isOpenRouterLike
+              ? "openrouter"
+              : "openai",
+    visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
+    supportsStrictMode:
+      !isZai && (!usesConfiguredNonOpenAIEndpoint || endpointClass === "openrouter"),
+    requiresTypedUnionBranches: isMoonshot,
+    supportsJsonSchemaResponseFormat:
+      (endpointClass === "openai-public" ||
+        (isDefaultRoute && isDefaultRouteProvider(provider, "openai"))) &&
+      isKnownOpenAIJsonSchemaModelId(modelId),
+    requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
+    requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
+    cacheControlFormat:
+      isOpenRouterGemini ||
+      (isModelStudioLike && endpointClass !== "custom") ||
+      (openRouterModelId?.startsWith("anthropic/") === true &&
+        (endpointClass === "openrouter" ||
+          (isDefaultRoute && provider === "openrouter") ||
+          provider === "deepinfra"))
+        ? "anthropic"
+        : undefined,
+    cacheControlSystemOnly: isOpenRouterGemini,
+    sessionAffinityFormat: isOpenRouterLike ? "openrouter" : "openai",
+    supportsLongCacheRetention:
+      !isOpenRouterGemini &&
+      !isModelStudioLike &&
+      provider !== "cloudflare-workers-ai" &&
+      provider !== "cloudflare-ai-gateway" &&
+      knownProviderFamily !== "together" &&
+      !baseUrl?.includes("api.cloudflare.com") &&
+      !baseUrl?.includes("gateway.ai.cloudflare.com") &&
+      !baseUrl?.includes("api.together.ai") &&
+      !baseUrl?.includes("api.together.xyz"),
+  };
+  return { capabilities, defaults };
 }
 
 function resolveSessionAffinity(
@@ -348,6 +340,8 @@ export function resolveOpenAICompletionsCompat(
       configured?.requiresReasoningContentOnAssistantMessages ??
       defaults.requiresReasoningContentOnAssistantMessages,
     thinkingFormat,
+    // Explicit DeepSeek-format aliases retain their existing response contract.
+    emitsDsmlToolCalls: configured?.thinkingFormat === "deepseek" || defaults.emitsDsmlToolCalls,
     openRouterRouting: configured?.openRouterRouting,
     vercelGatewayRouting: configured?.vercelGatewayRouting ?? {},
     zaiToolStream: configured?.zaiToolStream ?? false,
@@ -356,6 +350,7 @@ export function resolveOpenAICompletionsCompat(
     supportsJsonSchemaResponseFormat:
       configured?.supportsJsonSchemaResponseFormat ?? defaults.supportsJsonSchemaResponseFormat,
     cacheControlFormat: configured?.cacheControlFormat ?? defaults.cacheControlFormat,
+    cacheControlSystemOnly: defaults.cacheControlSystemOnly,
     sessionAffinity: resolveSessionAffinity(model, defaults.sessionAffinityFormat),
     supportsPromptCacheKey: resolveOpenAIPromptCacheKeySupport(model),
     supportsLongCacheRetention:

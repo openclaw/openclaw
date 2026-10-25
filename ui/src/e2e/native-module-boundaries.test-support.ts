@@ -1,4 +1,5 @@
 import { describe, expect, it, onTestFinished } from "vitest";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   type createControlUiE2eSuite,
   holdModuleResponse,
@@ -32,7 +33,10 @@ export function defineNativeModuleBoundaryTests(
         });
         await held.request;
         const element = page.locator(testCase.tag).first();
-        expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
+        expect(await element.count()).toBe(0);
+        expect(
+          await page.evaluate((tag) => customElements.get(tag) === undefined, testCase.tag),
+        ).toBe(true);
         const toggle = page.locator(".topbar-nav-toggle");
         const navigation = page.getByRole("dialog", { name: "Navigation" });
         await toggle.click();
@@ -223,7 +227,7 @@ export function defineNativeModuleBoundaryTests(
       await page.setViewportSize({ width: 900, height: 900 });
       const drawer = page.locator(".shell-nav.nav-drawer");
       await expect.poll(() => drawer.count()).toBe(1);
-      await page.locator(".chat-pane__nav-toggle:visible").first().click();
+      await navigationDrawerToggle(page).click();
       const drawerAnimationName = await drawer.evaluate(
         (element) => getComputedStyle(element).animationName,
       );

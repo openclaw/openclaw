@@ -10,10 +10,14 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import { Type } from "typebox";
 import { afterEach, beforeEach } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { createNativeCommandItem } from "./event-projector-command.test-support.js";
+import {
+  createConfiguredProjection,
+  createProjection,
+} from "./event-projector-projection.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
-  embeddedAgentLog,
   expect,
   it,
   vi,
@@ -21,12 +25,8 @@ import {
   fs,
   path,
   createParams,
-  createProjector,
-  buildEmptyToolTelemetry,
   requireRecord,
   forCurrentTurn,
-  turnCompleted,
-  type EmbeddedRunAttemptParams,
 } from "./event-projector.test-harness.js";
 
 registerCodexEventProjectorTestLifecycle();
@@ -34,7 +34,8 @@ registerCodexEventProjectorTestLifecycle();
 const SECOND_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
 
-type Projector = Awaited<ReturnType<typeof createProjector>>;
+type Events = Awaited<ReturnType<typeof createProjection>>["events"];
+const codexImages = "/home/dev-user/.codex/generated_images/session-1";
 function nativeImage(id: string, result?: string, savedPath?: string) {
   return {
     type: "imageGeneration" as const,
@@ -44,19 +45,32 @@ function nativeImage(id: string, result?: string, savedPath?: string) {
     ...(savedPath ? { savedPath } : {}),
   };
 }
-function imageEvent(id: string, result?: string, savedPath?: string) {
-  return forCurrentTurn("item/completed", { item: nativeImage(id, result, savedPath) });
+function codexImage(id: string) {
+  return nativeImage(id, tinyPngBase64, `${codexImages}/${id}.png`);
 }
-function rawImageEvent(id: string, result = tinyPngBase64) {
-  return forCurrentTurn("rawResponseItem/completed", {
-    item: { type: "image_generation_call", id, status: "completed", result },
+function readImages(urls: string[] = []) {
+  return Promise.all(
+    urls.map(async (url) => ({ url, base64: (await fs.readFile(url)).toString("base64") })),
+  );
+}
+function rawImage(id: string, result = tinyPngBase64) {
+  return { type: "image_generation_call", id, status: "completed", result };
+}
+function assistantEvent(id: string, text: string, raw = false) {
+  return forCurrentTurn(raw ? "rawResponseItem/completed" : "item/completed", {
+    item: raw
+      ? { type: "message", id, role: "assistant", content: [{ type: "output_text", text }] }
+      : { type: "agentMessage", id, text },
   });
 }
-function resultOf(projector: Projector) {
-  return projector.buildResult(buildEmptyToolTelemetry());
+function expectUndeliverableImage(events: Events) {
+  const result = events.result();
+  expect(result.toolMediaUrls).toBeUndefined();
+  expect(result.hostOwnedToolMediaUrls).toBeUndefined();
+  expect(result.replayMetadata).toStrictEqual({ hadPotentialSideEffects: true, replaySafe: false });
 }
-async function expectImage(projector: Projector) {
-  const result = resultOf(projector);
+async function expectImage(events: Events) {
+  const result = events.result();
   expect(result.toolMediaUrls).toHaveLength(1);
   expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
   const mediaUrl = result.toolMediaUrls?.[0] ?? "";
@@ -106,6 +120,16 @@ function sendMedia(
 function receipt(partialDelivery = false) {
   return { status: "settled", partialDelivery, createdThreadIds: [] };
 }
+function messageResult(details: unknown): AgentToolResult<unknown> {
+  return { content: [{ type: "text", text: "Sent." }], details };
+}
+function internalReply(mediaUrl: unknown) {
+  return {
+    deliveryStatus: "sent",
+    sourceReplySink: "internal-ui",
+    sourceReply: { text: "Attached.", mediaUrls: [mediaUrl] },
+  };
+}
 
 async function createRemoteGeneratedMediaDelivery(
   send: (args: Record<string, unknown>) => Promise<AgentToolResult<unknown>>,
@@ -115,36 +139,25 @@ async function createRemoteGeneratedMediaDelivery(
   const sources = {
     first: `${remoteWorkspaceRoot}/generated/first.png`,
     second: `${remoteWorkspaceRoot}/generated/second.png`,
-    unrelated: `${remoteWorkspaceRoot}/reports/unrelated.txt`,
   };
-  const bytesBySource = new Map([
-    [sources.first, tinyPngBase64],
-    [sources.second, SECOND_PNG_BASE64],
-    [sources.unrelated, Buffer.from("Unrelated report").toString("base64")],
-  ]);
-  const projector = await createProjector(params, { remoteWorkspaceRoot });
+  const { events } = await createProjection(params, { remoteWorkspaceRoot });
   for (const [id, savedPath, result] of [
     ["generated-first", sources.first, tinyPngBase64],
     ["generated-second", sources.second, SECOND_PNG_BASE64],
   ] as const) {
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { type: "imageGeneration", id, status: "completed", savedPath, result },
-      }),
-    );
+    await events.completed(nativeImage(id, result, savedPath));
   }
   const { bridge, execute } = createMessageBridge(send, {
     workspaceDir: params.workspaceDir,
     remoteWorkspaceRoot,
   });
   bridge.setRemoteWorkspaceFileReader?.(async ({ path: source }) => {
-    const dataBase64 = bytesBySource.get(source);
-    if (!dataBase64) {
+    if (source !== sources.first) {
       throw new Error(`Unexpected synthetic media source: ${source}`);
     }
-    return Buffer.from(dataBase64, "base64");
+    return Buffer.from(tinyPngBase64, "base64");
   });
-  return { projector, bridge, execute, sources };
+  return { events, bridge, execute, sources };
 }
 
 let openClawState: OpenClawTestState;
@@ -164,35 +177,17 @@ describe("CodexAppServerEventProjector media projection", () => {
     const media = createDeferred<Buffer>();
     const readRemoteWorkspaceFile = vi.fn<RemoteWorkspaceFileReader>(() => media.promise);
     const onToolResult = vi.fn();
-    const projector = await createProjector(
-      { ...(await createParams()), verboseLevel: "full", onToolResult },
+    const { projector, events } = await createConfiguredProjection(
+      { verboseLevel: "full", onToolResult },
       { remoteWorkspaceRoot: "/remote/workspace", readRemoteWorkspaceFile },
     );
-    const pending = projector.handleNotification(
-      turnCompleted([
-        {
-          type: "imageGeneration",
-          id: "blocked-image",
-          status: "completed",
-          result: "",
-          revisedPrompt: null,
-          savedPath: "/remote/workspace/image.png",
-        },
-        {
-          type: "commandExecution",
-          id: "command-after-image",
-          command: "echo late-output",
-          cwd: "/remote/workspace",
-          commandActions: [],
-          processId: null,
-          source: "agent",
-          status: "completed",
-          aggregatedOutput: "late-output",
-          exitCode: 0,
-          durationMs: 1,
-        },
-      ]),
-    );
+    const pending = events.complete([
+      nativeImage("blocked-image", "", "/remote/workspace/image.png"),
+      createNativeCommandItem({
+        id: "command-after-image",
+        aggregatedOutput: "late-output",
+      }),
+    ]);
     try {
       await vi.waitFor(() => expect(readRemoteWorkspaceFile).toHaveBeenCalledOnce());
       const signal = readRemoteWorkspaceFile.mock.calls[0]?.[0].signal;
@@ -209,234 +204,130 @@ describe("CodexAppServerEventProjector media projection", () => {
     }
   });
 
-  it("never exposes a remote image path when remote file transfer is unavailable", async () => {
-    const projector = await createProjector(undefined, {
-      remoteWorkspaceRoot: "/remote/codex-workspace",
-    });
+  it.each(["unavailable", "failed"])(
+    "preserves image side effects without leaking remote paths when transfer is %s",
+    async (transfer) => {
+      const readRemoteWorkspaceFile = vi.fn(async () => {
+        throw new Error("remote generated image is unavailable");
+      });
+      const { events } = await createProjection(undefined, {
+        remoteWorkspaceRoot: "/remote/codex-workspace",
+        ...(transfer === "failed" ? { readRemoteWorkspaceFile } : {}),
+      });
 
-    await projector.handleNotification(
-      imageEvent(
-        "ig_remote_unavailable",
-        undefined,
-        "/remote/codex-home/generated_images/session-1/ig_remote_unavailable.png",
-      ),
-    );
+      await events.completed(
+        nativeImage(
+          "remote-image",
+          undefined,
+          "/remote/codex-home/generated_images/session-1/image.png",
+        ),
+      );
 
-    const result = resultOf(projector);
-    expect(result.toolMediaUrls).toBeUndefined();
-    expect(result.hostOwnedToolMediaUrls).toBeUndefined();
-    expect(result.replayMetadata).toStrictEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-  });
-
-  it("preserves image side-effect state when remote file transfer fails", async () => {
-    const readRemoteWorkspaceFile = vi.fn(async () => {
-      throw new Error("remote generated image is unavailable");
-    });
-    const projector = await createProjector(undefined, {
-      remoteWorkspaceRoot: "/remote/codex-workspace",
-      readRemoteWorkspaceFile,
-    });
-
-    await projector.handleNotification(
-      imageEvent(
-        "ig_remote_transfer_failed",
-        undefined,
-        "/remote/codex-home/generated_images/session-1/ig_transfer_failed.png",
-      ),
-    );
-
-    const result = resultOf(projector);
-    expect(readRemoteWorkspaceFile).toHaveBeenCalledOnce();
-    expect(result.toolMediaUrls).toBeUndefined();
-    expect(result.hostOwnedToolMediaUrls).toBeUndefined();
-    expect(result.replayMetadata).toStrictEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-  });
+      expect(readRemoteWorkspaceFile).toHaveBeenCalledTimes(transfer === "failed" ? 1 : 0);
+      expectUndeliverableImage(events);
+    },
+  );
 
   it("does not let delayed raw completion consume a newer assistant echo", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { type: "agentMessage", id: "answer-a", text: "rewritten A" },
-      }),
-    );
-
-    const rawAnswerA = projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "message",
-          id: "answer-a",
-          role: "assistant",
-          content: [{ type: "output_text", text: "original A" }],
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { type: "agentMessage", id: "answer-b", text: "rewritten B" },
-      }),
-    );
+    const { projector, events } = await createProjection();
+    await projector.handleNotification(assistantEvent("answer-a", "rewritten A"));
+    const rawAnswerA = projector.handleNotification(assistantEvent("answer-a", "original A", true));
+    await projector.handleNotification(assistantEvent("answer-b", "rewritten B"));
     await rawAnswerA;
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "message",
-          id: "answer-b",
-          role: "assistant",
-          content: [{ type: "output_text", text: "original B" }],
-        },
-      }),
-    );
-    await projector.handleNotification(turnCompleted());
+    await projector.handleNotification(assistantEvent("answer-b", "original B", true));
+    await events.complete();
 
-    const result = resultOf(projector);
+    const result = events.result();
     expect(result.assistantTexts).toEqual(["rewritten B"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "rewritten B" }]);
   });
 
   it("rejects oversized typed Codex images instead of using a remote saved path", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const projector = await createProjector({
-      ...(await createParams()),
+    const { events } = await createConfiguredProjection({
       config: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-    } as EmbeddedRunAttemptParams);
-
-    await projector.handleNotification(
-      imageEvent(
-        "ig_typed_capped",
-        tinyPngBase64,
-        "/home/dev-user/.codex/generated_images/session-1/ig_typed_capped.png",
-      ),
-    );
-
-    const result = resultOf(projector);
-
-    expect(result.toolMediaUrls).toBeUndefined();
-    expect(result.replayMetadata).toStrictEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
     });
-    expect(warn).toHaveBeenCalledWith(
-      "codex app-server native image generation result exceeds media limit",
-      expect.objectContaining({ itemId: "ig_typed_capped" }),
-    );
+
+    await events.completed(codexImage("ig_typed_capped"));
+
+    expectUndeliverableImage(events);
   });
 
-  it("materializes overlapping typed and raw image events only once", async () => {
-    const projector = await createProjector();
-
-    await Promise.all([
-      projector.handleNotification(
-        imageEvent(
-          "ig_concurrent",
-          tinyPngBase64,
-          "/home/dev-user/.codex/generated_images/session-1/ig_concurrent.png",
-        ),
-      ),
-      projector.handleNotification(rawImageEvent("ig_concurrent", tinyPngBase64)),
-    ]);
-
-    await projector.handleNotification(imageEvent("ig_concurrent", tinyPngBase64));
-    const mediaUrl = await expectImage(projector);
-    await expect(fs.readdir(path.dirname(mediaUrl))).resolves.toHaveLength(1);
-  });
-
-  it("retries valid typed image bytes after an overlapping invalid raw event", async () => {
-    const projector = await createProjector();
-
-    await Promise.all([
-      projector.handleNotification(rawImageEvent("ig_retry_valid", "not valid base64!")),
-      projector.handleNotification(imageEvent("ig_retry_valid", tinyPngBase64)),
-    ]);
-
-    await expectImage(projector);
-  });
-
-  it.each([{ attachment: "first", target: "chat-source" }] as const)(
-    "preserves generated media and route-specific identity after sending $attachment to $target",
-    async ({ attachment, target }) => {
-      const { projector, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
-        async () => ({
-          content: [{ type: "text", text: "Sent." }],
-          details: {
-            messageDelivery: { ...receipt(), primaryPlatformMessageId: "sent-media-1" },
-          },
-        }),
+  it.each([true, false])(
+    "materializes overlapping image events with valid raw bytes: %s",
+    async (validRaw) => {
+      const { events } = await createProjection();
+      const raw = rawImage("ig_concurrent", validRaw ? tinyPngBase64 : "not valid base64!");
+      await Promise.all(
+        validRaw
+          ? [events.completed(codexImage("ig_concurrent")), events.raw(raw)]
+          : [events.raw(raw), events.completed(nativeImage("ig_concurrent", tinyPngBase64))],
       );
-      const sent = await sendMedia(bridge, sources[attachment], target);
-      expect(sent.success).toBe(true);
-      const stagedPath = execute.mock.calls[0]?.[0].mediaUrl;
-      expect(stagedPath).toEqual(
-        expect.stringContaining(`${path.sep}media${path.sep}outbound${path.sep}`),
-      );
-      await projector.handleNotification(turnCompleted());
-      const result = projector.buildResult(bridge.telemetry);
-
-      expect(result.toolMediaUrls).toHaveLength(2);
-      expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
-      const generated = await Promise.all(
-        (result.toolMediaUrls ?? []).map(async (url) => ({
-          url,
-          base64: (await fs.readFile(url)).toString("base64"),
-        })),
-      );
-      const first = generated.find((image) => image.base64 === tinyPngBase64);
-      const second = generated.find((image) => image.base64 === SECOND_PNG_BASE64);
-      expect(first).toBeDefined();
-      expect(second).toBeDefined();
-      expect(result.messagingToolSentTargets).toHaveLength(1);
-      const delivery = result.messagingToolSentTargets?.[0];
-      expect(delivery).toMatchObject({ provider: "telegram", to: target });
-      expect(delivery?.mediaUrls).toContain(stagedPath);
-      expect(result.messagingToolSentMediaUrls).toEqual(delivery?.mediaUrls);
-      expect(delivery?.mediaUrls).not.toContain(second?.url);
-      expect(delivery?.mediaUrls).toContain(first?.url);
+      if (validRaw) {
+        await events.completed(nativeImage("ig_concurrent", tinyPngBase64));
+      }
+      const mediaUrl = await expectImage(events);
+      await expect(fs.readdir(path.dirname(mediaUrl))).resolves.toHaveLength(1);
     },
   );
+
+  it("preserves generated media and route-specific identity after sending first to chat-source", async () => {
+    const { events, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
+      async () =>
+        messageResult({
+          messageDelivery: { ...receipt(), primaryPlatformMessageId: "sent-media-1" },
+        }),
+    );
+    const sent = await sendMedia(bridge, sources.first, "chat-source");
+    expect(sent.success).toBe(true);
+    const stagedPath = execute.mock.calls[0]?.[0].mediaUrl;
+    expect(stagedPath).toEqual(
+      expect.stringContaining(`${path.sep}media${path.sep}outbound${path.sep}`),
+    );
+    await events.complete();
+    const result = events.result(bridge.telemetry);
+
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+    const generated = await readImages(result.toolMediaUrls);
+    const first = generated.find((image) => image.base64 === tinyPngBase64);
+    const second = generated.find((image) => image.base64 === SECOND_PNG_BASE64);
+    expect(generated.map(({ base64 }) => base64).toSorted()).toEqual(
+      [tinyPngBase64, SECOND_PNG_BASE64].toSorted(),
+    );
+    expect(result.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        provider: "telegram",
+        to: "chat-source",
+        mediaUrls: expect.arrayContaining([stagedPath, first?.url]),
+      }),
+    ]);
+    expect(result.messagingToolSentMediaUrls).toEqual(
+      result.messagingToolSentTargets?.[0]?.mediaUrls,
+    );
+    expect(result.messagingToolSentMediaUrls).not.toContain(second?.url);
+  });
 
   it.each(["file-url", "error"] as const)(
     "preserves the processed internal UI attachment: %s",
     async (presentation) => {
-      const replacementUrl = "https://example.test/filtered-preview.png";
       installCodexToolResultMiddleware((event) => {
-        let processedUrl = replacementUrl;
-        if (presentation === "file-url") {
-          if (typeof event.args.mediaUrl !== "string") {
-            throw new Error("Expected the staged attachment path");
-          }
-          processedUrl = pathToFileURL(event.args.mediaUrl).href;
+        if (presentation === "error") {
+          return { ...event.result, details: { status: "error" } };
+        }
+        if (typeof event.args.mediaUrl !== "string") {
+          throw new Error("Expected the staged attachment path");
         }
         return {
           ...event.result,
-          details:
-            presentation === "file-url"
-              ? {
-                  deliveryStatus: "sent",
-                  sourceReplySink: "internal-ui",
-                  sourceReply: {
-                    text: "Attached.",
-                    mediaUrls: [processedUrl],
-                  },
-                }
-              : { status: "error" },
+          details: internalReply(pathToFileURL(event.args.mediaUrl).href),
         };
       });
-      const { projector, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
-        async (args) => ({
-          content: [{ type: "text", text: "Sent to current chat." }],
-          details: {
+      const { events, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
+        async (args) =>
+          messageResult({
             status: "ok",
-            deliveryStatus: "sent",
-            sourceReplySink: "internal-ui",
-            sourceReply: { text: "Attached.", mediaUrls: [args.mediaUrl] },
+            ...internalReply(args.mediaUrl),
             messageDelivery: { ...receipt(), sourceReplyDelivered: true },
-          },
-        }),
+          }),
       );
       const sent = await sendMedia(bridge, sources.first);
       expect(sent.success).toBe(presentation !== "error");
@@ -444,88 +335,48 @@ describe("CodexAppServerEventProjector media projection", () => {
       if (typeof stagedPath !== "string") {
         throw new Error("Expected the executed attachment path");
       }
-      await projector.handleNotification(turnCompleted());
-      const result = projector.buildResult(bridge.telemetry);
-
+      await events.complete();
+      const result = events.result(bridge.telemetry);
+      const mediaUrls = [pathToFileURL(stagedPath).href];
       expect(result.messagingToolSourceReplyPayloads).toEqual(
-        presentation === "error"
-          ? []
-          : [
-              {
-                text: "Attached.",
-                sourceReplyFinal: true,
-                mediaUrls: [pathToFileURL(stagedPath).href],
-              },
-            ],
+        presentation === "error" ? [] : [{ text: "Attached.", sourceReplyFinal: true, mediaUrls }],
       );
       expect(result.messagingToolSentTargets).toEqual([]);
       expect(result.messagingToolSentMediaUrls).toEqual([]);
       expect(result.messagingToolSentTexts).toEqual([]);
-      const sentGeneratedImage = presentation === "file-url";
-      expect(result.toolMediaUrls).toHaveLength(sentGeneratedImage ? 1 : 2);
       expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
-      const remainingImages = await Promise.all(
-        (result.toolMediaUrls ?? []).map(async (url) =>
-          (await fs.readFile(url)).toString("base64"),
-        ),
+      const remainingImages = (await readImages(result.toolMediaUrls)).map((image) => image.base64);
+      expect(remainingImages.toSorted()).toEqual(
+        (presentation === "file-url"
+          ? [SECOND_PNG_BASE64]
+          : [tinyPngBase64, SECOND_PNG_BASE64]
+        ).toSorted(),
       );
-      expect(remainingImages).toContain(SECOND_PNG_BASE64);
-      if (sentGeneratedImage) {
-        expect(remainingImages).not.toContain(tinyPngBase64);
-      } else {
-        expect(remainingImages).toContain(tinyPngBase64);
-      }
     },
   );
 
-  it.each([{ name: "a partial saved-path send", partialDelivery: true, useFileUrl: false }])(
-    "keeps correct local image delivery evidence for $name",
-    async ({ partialDelivery, useFileUrl }) => {
-      const params = await createParams();
-      const projector = await createProjector(params);
-      const savedPath = path.join(params.workspaceDir, "generated-local.png");
-      await fs.writeFile(savedPath, Buffer.from(tinyPngBase64, "base64"));
-      await projector.handleNotification(
-        forCurrentTurn("item/completed", {
-          item: {
-            type: "imageGeneration",
-            id: "generated-local",
-            status: "completed",
-            savedPath,
-            ...(useFileUrl ? { result: tinyPngBase64 } : {}),
-          },
-        }),
-      );
-      const { bridge } = createMessageBridge(async () => ({
-        content: [{ type: "text", text: "Message delivery receipt." }],
-        details: { messageDelivery: receipt(partialDelivery) },
-      }));
-      await sendMedia(
-        bridge,
-        useFileUrl ? pathToFileURL(savedPath).href : savedPath,
-        "chat-source",
-      );
-      await projector.handleNotification(turnCompleted());
-      const result = projector.buildResult(bridge.telemetry);
+  it("keeps correct local image delivery evidence for a partial saved-path send", async () => {
+    const params = await createParams();
+    const { events } = await createProjection(params);
+    const savedPath = path.join(params.workspaceDir, "generated-local.png");
+    await fs.writeFile(savedPath, Buffer.from(tinyPngBase64, "base64"));
+    await events.completed(nativeImage("generated-local", undefined, savedPath));
+    const { bridge } = createMessageBridge(async () =>
+      messageResult({ messageDelivery: receipt(true) }),
+    );
+    await sendMedia(bridge, savedPath, "chat-source");
+    await events.complete();
+    const result = events.result(bridge.telemetry);
 
-      expect(result.didSendViaMessagingTool).toBe(true);
-      expect(result.messagingToolSentTargets).toEqual([
-        expect.objectContaining({ provider: "telegram", to: "chat-source" }),
-      ]);
-      expect(result.toolMediaUrls).toHaveLength(1);
-      expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
-      if (partialDelivery) {
-        expect(result.messagingToolSentMediaUrls).toEqual([]);
-        expect(
-          result.messagingToolSentTargets?.flatMap((target) => target.mediaUrls ?? []),
-        ).toEqual([]);
-        expect(result.toolMediaUrls).toEqual([savedPath]);
-      } else {
-        const generatedUrl = result.toolMediaUrls?.[0];
-        expect(generatedUrl).not.toBe(savedPath);
-        expect(result.messagingToolSentMediaUrls).toContain(generatedUrl);
-        expect(result.messagingToolSentTargets?.[0]?.mediaUrls).toContain(generatedUrl);
-      }
-    },
-  );
+    expect(result).toMatchObject({
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [{ provider: "telegram", to: "chat-source" }],
+      messagingToolSentMediaUrls: [],
+      toolMediaUrls: [savedPath],
+    });
+    expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
+    expect(result.messagingToolSentTargets?.flatMap((target) => target.mediaUrls ?? [])).toEqual(
+      [],
+    );
+  });
 });

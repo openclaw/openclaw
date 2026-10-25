@@ -2913,7 +2913,7 @@ final class TalkModeManager {
         let requestedVoice = voice?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
         if let requestedVoice, !requestedVoice.isEmpty, resolvedVoice == nil {
-            self.logger.warning("unknown voice alias \(requestedVoice, privacy: .public)")
+            self.logger.warning("unknown voice alias")
         }
         return resolvedVoice
     }
@@ -2922,9 +2922,9 @@ final class TalkModeManager {
         let requestedOutputFormat = (directiveFormat ?? self.defaultOutputFormat)?.trimmedNonEmpty
         let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(
             requestedOutputFormat ?? self.effectiveDefaultOutputFormat)
-        if outputFormat == nil, let requestedOutputFormat {
+        if outputFormat == nil, requestedOutputFormat != nil {
             self.logger.warning(
-                "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
+                "talk output_format unsupported for local playback")
         }
         return outputFormat
     }
@@ -3546,7 +3546,7 @@ extension TalkModeManager {
             if let resolved = TalkVoiceAliases.resolve(trimmed, aliases: self.voiceAliases) {
                 return resolved
             }
-            self.logger.warning("unknown voice alias \(trimmed, privacy: .public)")
+            self.logger.warning("unknown voice alias")
         }
         if let fallbackVoiceId {
             return fallbackVoiceId
@@ -3658,7 +3658,29 @@ extension TalkModeManager {
         case "Confirmation needed":
             (String(localized: "Confirmation needed"), .idle, .localized("Confirmation needed"))
         default:
-            (status, .idle, .verbatim(status))
+            self.realtimeInputNoticePresentation(for: status) ?? (status, .idle, .verbatim(status))
+        }
+    }
+
+    /// Input-loss notices arrive mid-call; the relay keeps listening while the user repeats.
+    private static func realtimeInputNoticePresentation(for status: String) -> (
+        text: String,
+        phase: TalkPhase,
+        watch: TalkWatchPresentation)?
+    {
+        switch status {
+        case "Realtime audio input fell behind; repeat the last part":
+            (
+                String(localized: "Realtime audio input fell behind; repeat the last part"),
+                .listening,
+                .localized("Realtime audio input fell behind; repeat the last part"))
+        case "Microphone input recovered; repeat the last part":
+            (
+                String(localized: "Microphone input recovered; repeat the last part"),
+                .listening,
+                .localized("Microphone input recovered; repeat the last part"))
+        default:
+            nil
         }
     }
 

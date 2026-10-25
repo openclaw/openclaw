@@ -12,10 +12,11 @@ import { visibleCurrentAssistantStreamTail } from "./stream-reconciliation.ts";
 import type { ToolStreamEntry } from "./tool-stream-contract.ts";
 import type { handleAgentEvent } from "./tool-stream.ts";
 
-export type TestState = ChatHistoryHost &
-  Parameters<typeof handleAgentEvent>[0] & { requestUpdate: () => void };
+export type TestState = ChatHistoryHost & Parameters<typeof handleAgentEvent>[0];
 
-export function createState(result: ChatHistoryResult): TestState {
+export function createState(
+  result: ChatHistoryResult,
+): TestState & ReturnType<typeof makeChatHost> {
   const host = makeChatHost({
     requestHandlers: { "chat.history": result },
     sessionKey: "main",
@@ -29,13 +30,11 @@ export function createState(result: ChatHistoryResult): TestState {
     chatToolMessages: host.chatToolMessages ?? [],
     chatStreamSegments: host.chatStreamSegments ?? [],
     connectionEpoch: 1,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatStreamStartedAt: null,
     toolStreamById: host.toolStreamById ?? new Map<string, ToolStreamEntry>(),
     toolStreamOrder: host.toolStreamOrder ?? [],
     toolStreamSyncTimer: host.toolStreamSyncTimer ?? null,
-    requestUpdate: vi.fn(),
   };
 }
 

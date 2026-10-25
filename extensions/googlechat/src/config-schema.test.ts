@@ -35,7 +35,6 @@ describe("googlechat config schema", () => {
       dmPolicy: "allowlist",
       allowFrom: ["users/1234567890"],
       markdown: { tables: "bullets" },
-      heartbeatVisibility: { showOk: false },
       contextVisibility: "allowlist_quote",
     });
 
@@ -46,5 +45,13 @@ describe("googlechat config schema", () => {
     const result = GoogleChatConfigSchema.safeParse({ dm: { policy: "pairing" } });
 
     expect(result.success).toBe(false);
+  });
+
+  it("rejects retired heartbeat visibility at channel and account scopes", () => {
+    const heartbeatVisibility = { showOk: false };
+    expect(GoogleChatConfigSchema.safeParse({ heartbeatVisibility }).success).toBe(false);
+    expect(
+      GoogleChatConfigSchema.safeParse({ accounts: { work: { heartbeatVisibility } } }).success,
+    ).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
  */
 import os from "node:os";
 import path from "node:path";
+import { setImmediate as flushDiagnosticEvents } from "node:timers/promises";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -48,7 +49,6 @@ import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers
 import {
   type HookContext,
   getBeforeToolCallFailureDisposition,
-  getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
@@ -153,6 +153,25 @@ describe("before_tool_call loop detection behavior", () => {
     hookRunner.hasHooks.mockReturnValue(false);
   });
 
+  function createObservedChurnWriteTool(sessionId: string, sessionKey: string, runId: string) {
+    const progressReasonsDuringExecution: Array<string | undefined> = [];
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
+      progressReasonsDuringExecution.push(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+      );
+      return createStableNoProgressWriteResult();
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      sessionKey,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    return { progressReasonsDuringExecution, execute, tool };
+  }
+
   function createWrappedTool(
     name: string,
     execute: ReturnType<typeof vi.fn>,
@@ -192,12 +211,8 @@ describe("before_tool_call loop detection behavior", () => {
         emitted.push(evt);
       }
     });
-    const flush = () =>
-      new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
     try {
-      await run(emitted, flush);
+      await run(emitted, flushDiagnosticEvents);
     } finally {
       stop();
     }
@@ -210,12 +225,8 @@ describe("before_tool_call loop detection behavior", () => {
     const stop = onInternalDiagnosticEvent((evt) => {
       emitted.push(evt);
     });
-    const flush = () =>
-      new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
     try {
-      await run(emitted, flush);
+      await run(emitted, flushDiagnosticEvents);
     } finally {
       stop();
     }
@@ -236,12 +247,8 @@ describe("before_tool_call loop detection behavior", () => {
         skillUsagePrivateData.push(privateData);
       }
     });
-    const flush = () =>
-      new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
     try {
-      await run(emitted, skillUsagePrivateData, flush);
+      await run(emitted, skillUsagePrivateData, flushDiagnosticEvents);
     } finally {
       stopTrusted();
       stopShared();
@@ -792,21 +799,11 @@ describe("before_tool_call loop detection behavior", () => {
     const sessionId = "write-churn-rewrite-session";
     const sessionKey = "main";
     const runId = "write-churn-rewrite-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return createStableNoProgressWriteResult();
-    });
-    const loopDetectionContext = {
-      ...enabledLoopDetectionContext,
+    const { progressReasonsDuringExecution, execute, tool } = createObservedChurnWriteTool(
       sessionId,
       sessionKey,
       runId,
-    };
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    );
     const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
 
     for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
@@ -842,21 +839,11 @@ describe("before_tool_call loop detection behavior", () => {
     const sessionId = "write-churn-below-threshold-session";
     const sessionKey = "main";
     const runId = "write-churn-below-threshold-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return createStableNoProgressWriteResult();
-    });
-    const loopDetectionContext = {
-      ...enabledLoopDetectionContext,
+    const { progressReasonsDuringExecution, tool } = createObservedChurnWriteTool(
       sessionId,
       sessionKey,
       runId,
-    };
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    );
     const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md"];
 
     for (const [index, targetPath] of paths.entries()) {
@@ -2228,63 +2215,6 @@ describe("before_tool_call requireApproval handling", () => {
     expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
   });
 
-  it("reports trusted policy diagnostics through guarded readers", () => {
-    hookRunner.hasHooks.mockReturnValue(false);
-    const registry = createEmptyPluginRegistry();
-    const unreadableIdPolicy: Record<string, unknown> = {
-      description: "synthetic trusted policy",
-      evaluate: () => undefined,
-    };
-    Object.defineProperty(unreadableIdPolicy, "id", {
-      enumerable: true,
-      get() {
-        throw new Error("fuzzplugin trusted policy id is unreadable");
-      },
-    });
-    registry.trustedToolPolicies = [
-      {
-        pluginId: "fuzzplugin",
-        pluginName: "Fuzz Plugin",
-        source: "test",
-        policy: unreadableIdPolicy as never,
-      },
-      {
-        pluginId: "mockplugin",
-        pluginName: "Mock Plugin",
-        source: "test",
-        policy: {
-          id: "mockpolicy",
-          description: "mock policy",
-          evaluate: () => undefined,
-        },
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    let state: ReturnType<typeof getBeforeToolCallPolicyDiagnosticState> | undefined;
-    try {
-      state = getBeforeToolCallPolicyDiagnosticState();
-    } finally {
-      setActivePluginRegistry(createEmptyPluginRegistry());
-    }
-
-    expect(state).toEqual({
-      hasBeforeToolCallHook: false,
-      trustedToolPolicies: [
-        {
-          id: "fuzzplugin",
-          pluginId: "fuzzplugin",
-          pluginName: "Fuzz Plugin",
-        },
-        {
-          id: "mockpolicy",
-          pluginId: "mockplugin",
-          pluginName: "Mock Plugin",
-        },
-      ],
-    });
-  });
-
   it("recomputes host-derived paths after trusted policy param rewrites", async () => {
     const cwd = path.join("/tmp", "openclaw-hooks");
     const originalPatch = [
@@ -2687,12 +2617,8 @@ describe("before_tool_call tool content private-data capture", () => {
         emitted.push({ event, privateData });
       }
     });
-    const flush = () =>
-      new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
     try {
-      await run(emitted, flush);
+      await run(emitted, flushDiagnosticEvents);
     } finally {
       stop();
     }

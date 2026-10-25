@@ -47,7 +47,7 @@ function writeStore(env: NodeJS.ProcessEnv, store: unknown, agentDir?: string) {
 
 describe("Doctor stored auth alias migration", () => {
   it.each(["import", "repair sequence"])(
-    "refuses config-selected retired sidecars before direct %s mutates auth",
+    "imports config-selected OAuth sidecars through %s before alias repair",
     async (entrypoint) => {
       await withOpenClawTestState(
         { label: "auth-retired-sidecar", layout: "home", env: { OPENCLAW_OAUTH_DIR: undefined } },
@@ -62,6 +62,7 @@ describe("Doctor stored auth alias migration", () => {
               "openai-codex:default": {
                 type: "oauth",
                 provider: "openai-codex",
+                expires: 1_900_000_000_000,
                 oauthRef: {
                   source: "openclaw-credentials",
                   provider: "openai-codex",
@@ -71,7 +72,17 @@ describe("Doctor stored auth alias migration", () => {
             },
           });
           fs.mkdirSync(path.dirname(sidecar), { recursive: true });
-          fs.writeFileSync(sidecar, "unparsed historical bytes");
+          fs.writeFileSync(
+            sidecar,
+            JSON.stringify({
+              version: 1,
+              profileId: "openai-codex:default",
+              provider: "openai-codex",
+              access: "synthetic-access",
+              refresh: "synthetic-refresh",
+            }),
+          );
+          const sidecarBytes = fs.readFileSync(sidecar);
           const sourceBytes = fs.readFileSync(sourcePath);
           const cfg = {
             plugins: { enabled: false },
@@ -89,10 +100,27 @@ describe("Doctor stored auth alias migration", () => {
                   env: fixture.env,
                   doctorFixCommand: "openclaw doctor --fix",
                 });
-          await expect(pending).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
-          expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
-          expect(fs.readFileSync(sidecar, "utf8")).toBe("unparsed historical bytes");
-          expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["auth-profiles.json"]);
+          await pending;
+          expect(loadPersistedSharedAuthProfileStore(fixture.env)?.profiles).toMatchObject({
+            "example:default": { type: "api_key", key: "synthetic-key" },
+            "openai:default": {
+              type: "oauth",
+              provider: "openai",
+              access: "synthetic-access",
+              refresh: "synthetic-refresh",
+            },
+          });
+          for (const [source, bytes] of [
+            [sourcePath, sourceBytes],
+            [sidecar, sidecarBytes],
+          ] as const) {
+            expect(fs.existsSync(source)).toBe(false);
+            const archive = fs
+              .readdirSync(path.dirname(source))
+              .find((name) => name.startsWith(`${path.basename(source)}.migrated-`));
+            expect(archive).toBeDefined();
+            expect(fs.readFileSync(path.join(path.dirname(source), archive!))).toEqual(bytes);
+          }
           expect(fixture.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
         },
       );
@@ -596,22 +624,12 @@ describe("Doctor stored auth alias migration", () => {
     await withOpenClawTestState({ label: "alias-partial", layout: "home" }, async (fixture) => {
       const cfg: OpenClawConfig = { plugins: { enabled: false } };
       const invalid = { version: 1, profiles: { "google-gemini-cli:broken": 17 } };
-      runAuthProfileWriteTransaction(
-        undefined,
-        (database) => {
-          writePersistedAuthProfileStoreRaw(
-            {
-              version: 1,
-              profiles: {
-                "claude-cli:work": { type: "api_key", provider: "claude-cli", key: "retained-key" },
-              },
-            },
-            undefined,
-            database,
-          );
+      writeStore(fixture.env, {
+        version: 1,
+        profiles: {
+          "claude-cli:work": { type: "api_key", provider: "claude-cli", key: "retained-key" },
         },
-        { env: fixture.env },
-      );
+      });
       writeStore(fixture.env, invalid, fixture.agentDir("broken"));
       const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
       const result = await maybeRepairLegacyAuthProfileStores({
@@ -731,22 +749,12 @@ describe("Doctor stored auth alias migration", () => {
   it("refuses alias planning when an agent location is not a directory", async () => {
     await withOpenClawTestState({ label: "alias-census", layout: "home" }, async (fixture) => {
       const cfg: OpenClawConfig = { plugins: { enabled: false } };
-      runAuthProfileWriteTransaction(
-        undefined,
-        (database) => {
-          writePersistedAuthProfileStoreRaw(
-            {
-              version: 1,
-              profiles: {
-                "claude-cli:work": { type: "api_key", provider: "claude-cli", key: "retained-key" },
-              },
-            },
-            undefined,
-            database,
-          );
+      writeStore(fixture.env, {
+        version: 1,
+        profiles: {
+          "claude-cli:work": { type: "api_key", provider: "claude-cli", key: "retained-key" },
         },
-        { env: fixture.env },
-      );
+      });
       await fixture.writeText("agents/unavailable/agent", "not an agent directory");
       const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
       expect(profileIdMap.size).toBe(0);
@@ -837,12 +845,7 @@ describe("Doctor stored auth alias migration", () => {
         },
         { env: fixture.env },
       );
-      runAuthProfileWriteTransaction(
-        fixture.agentDir("worker"),
-        (database) =>
-          writePersistedAuthProfileStoreRaw(agent, fixture.agentDir("worker"), database),
-        { env: fixture.env },
-      );
+      writeStore(fixture.env, agent, fixture.agentDir("worker"));
       expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(shared);
       expect(readPersistedAuthProfileStoreRaw(fixture.agentDir("worker"))).toEqual(agent);
 

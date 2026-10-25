@@ -1,23 +1,9 @@
-// agents_list tests cover subagent discovery, runtime metadata, and legacy
-// runtime override handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createAgentsListTool } from "./agents-list-tool.js";
 
 const loadConfigMock = vi.fn<() => OpenClawConfig>();
-
-type AgentListDetails = {
-  requester?: string;
-  allowAny?: boolean;
-  agents?: Array<{
-    id?: string;
-    name?: string;
-    configured?: boolean;
-    model?: string;
-    agentRuntime?: { id?: string; source?: string };
-  }>;
-};
 
 vi.mock("../../config/config.js", async () => {
   const actual =
@@ -27,6 +13,26 @@ vi.mock("../../config/config.js", async () => {
     getRuntimeConfig: () => loadConfigMock(),
   };
 });
+
+async function expectAgents(
+  agents: unknown[],
+  tool = createAgentsListTool({ agentSessionKey: "agent:main:main" }),
+) {
+  expect((await tool.execute("call", {})).details).toStrictEqual({
+    requester: "main",
+    allowAny: false,
+    agents,
+  });
+}
+
+function expectedAgent(
+  model: string,
+  agentRuntime: { id: string; source: string },
+  id = "main",
+  name?: string,
+) {
+  return { id, name, configured: true, model, agentRuntime };
+}
 
 describe("agents_list tool", () => {
   beforeEach(() => {
@@ -62,53 +68,38 @@ describe("agents_list tool", () => {
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
       '{ agents: Array<{ configured: boolean; id: string; agentRuntime?: { id: string; source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session" | "session-key" }; model?: string; name?: string }>; allowAny: boolean; requester: string }',
     );
-    const result = await tool.execute("call", {});
-    const details = result.details as AgentListDetails;
-
-    expect(details).toStrictEqual({
-      requester: "main",
-      allowAny: false,
-      agents: [
-        {
-          id: "codex",
-          name: "Codex",
-          configured: true,
-          model: "openai/gpt-5.5",
-          agentRuntime: { id: "codex", source: "model" },
-        },
-      ],
-    });
+    await expectAgents(
+      [expectedAgent("openai/gpt-5.5", { id: "codex", source: "model" }, "codex", "Codex")],
+      tool,
+    );
   });
 
   it.each([
     {
       selection: "a plain alias",
       primary: "fast",
-      alias: "fast",
       model: "openai/gpt-5.6-sol",
       agentRuntime: { id: "codex", source: "model" },
     },
     {
       selection: "an explicit provider with a colliding alias",
       primary: "clawrouter/openai/gpt-5.6",
-      alias: "clawrouter/openai/gpt-5.6",
       model: "clawrouter/openai/gpt-5.6",
       agentRuntime: { id: "auto", source: "implicit" },
     },
   ])(
     "reports canonical model and runtime for $selection",
-    async ({ primary, alias, model, agentRuntime }) => {
+    async ({ primary, model, agentRuntime }) => {
       // Alias expansion must not redirect an explicitly named registered provider.
       loadConfigMock.mockReturnValue({
         agents: {
           defaults: {
             model: {
               primary,
-              fallbacks: ["openai/gpt-5.6-luna"],
             },
             models: {
               "openai/gpt-5.6-sol": {
-                alias,
+                alias: primary,
                 agentRuntime: { id: "codex" },
               },
             },
@@ -118,48 +109,18 @@ describe("agents_list tool", () => {
         },
       } as unknown as OpenClawConfig);
 
-      const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-        "call",
-        {},
-      );
-      const details = result.details as AgentListDetails;
-
-      expect(details).toStrictEqual({
-        requester: "main",
-        allowAny: false,
-        agents: [
-          {
-            id: "main",
-            name: undefined,
-            configured: true,
-            model,
-            agentRuntime,
-          },
-        ],
-      });
+      await expectAgents([expectedAgent(model, agentRuntime)]);
     },
   );
 
   it("does not advertise stale allowlist-only targets as spawnable agents", async () => {
-    // Allowlist entries are permissions, not agent definitions; stale ids should
-    // not be presented as runnable subagents.
     loadConfigMock.mockReturnValue({
       agents: {
         entries: { main: { subagents: { allowAgents: ["stale"] } } },
       },
     } satisfies OpenClawConfig);
 
-    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-      "call",
-      {},
-    );
-    const details = result.details as AgentListDetails;
-
-    expect(details).toStrictEqual({
-      requester: "main",
-      allowAny: false,
-      agents: [],
-    });
+    await expectAgents([]);
   });
 
   it("returns requester as the only target when no subagent allowlist is configured", async () => {
@@ -170,25 +131,7 @@ describe("agents_list tool", () => {
       },
     } satisfies OpenClawConfig);
 
-    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-      "call",
-      {},
-    );
-    const details = result.details as AgentListDetails;
-
-    expect(details).toStrictEqual({
-      requester: "main",
-      allowAny: false,
-      agents: [
-        {
-          id: "main",
-          name: undefined,
-          configured: true,
-          model: "openai/gpt-5.6-sol",
-          agentRuntime: { id: "codex", source: "implicit" },
-        },
-      ],
-    });
+    await expectAgents([expectedAgent("openai/gpt-5.6-sol", { id: "codex", source: "implicit" })]);
   });
 
   it("uses the persisted fixed-store owner for a bare requester key", async () => {

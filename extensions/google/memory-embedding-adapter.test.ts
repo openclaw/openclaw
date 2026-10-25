@@ -1,8 +1,4 @@
-// Google tests cover memory embedding adapter plugin behavior.
-import {
-  sanitizeEmbeddingCacheHeaders,
-  type MemoryEmbeddingProvider,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -12,10 +8,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./embedding-provider.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./embedding-provider.js")>();
-  return {
-    ...actual,
-    createGeminiEmbeddingProvider: mocks.createGeminiEmbeddingProvider,
-  };
+  return { ...actual, createGeminiEmbeddingProvider: mocks.createGeminiEmbeddingProvider };
 });
 
 vi.mock("./embedding-batch.js", () => ({
@@ -24,29 +17,30 @@ vi.mock("./embedding-batch.js", () => ({
 
 import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
+const MODEL = "gemini-embedding-2";
+const VERSION = "openclaw/2026.7.1-beta.5";
 const provider: MemoryEmbeddingProvider = {
   id: "gemini",
-  model: "gemini-embedding-2",
+  model: MODEL,
   embed: async () => [1, 0],
   embedBatch: async (inputs) => inputs.map(() => [1, 0]),
 };
 
-const clientBase = {
-  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-  model: "gemini-embedding-2",
-  modelPath: "models/gemini-embedding-2",
-  outputDimensionality: 768,
-};
-
-async function createAdapterWithHeaders(headers: Record<string, string>) {
+async function createAdapter(headers: Record<string, string>, version?: string) {
   mocks.createGeminiEmbeddingProvider.mockResolvedValueOnce({
     provider,
-    client: { ...clientBase, headers },
+    client: {
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      model: MODEL,
+      modelPath: "models/gemini-embedding-2",
+      outputDimensionality: 768,
+      headers: { ...headers, ...(version ? { "x-goog-api-client": version } : {}) },
+    },
   });
   return await geminiMemoryEmbeddingProviderAdapter.create({
     config: {} as never,
     provider: "gemini",
-    model: "gemini-embedding-2",
+    model: MODEL,
     fallback: "none",
   });
 }
@@ -57,25 +51,18 @@ describe("Gemini memory embedding adapter", () => {
     mocks.runGeminiEmbeddingBatches.mockClear();
   });
 
-  it.each(["gemini-embedding-2", "gemini-embedding-2-preview"])(
-    "accepts multimodal memory for %s",
-    (model) => {
-      expect(geminiMemoryEmbeddingProviderAdapter.supportsMultimodalEmbeddings?.({ model })).toBe(
-        true,
-      );
-    },
-  );
-
-  it("keeps legacy Gemini embeddings text-only", () => {
-    expect(
-      geminiMemoryEmbeddingProviderAdapter.supportsMultimodalEmbeddings?.({
-        model: "gemini-embedding-001",
-      }),
-    ).toBe(false);
+  it.each([
+    ["gemini-embedding-2", true],
+    ["gemini-embedding-2-preview", true],
+    ["gemini-embedding-001", false],
+  ] as const)("resolves multimodal support for %s", (model, expected) => {
+    expect(geminiMemoryEmbeddingProviderAdapter.supportsMultimodalEmbeddings?.({ model })).toBe(
+      expected,
+    );
   });
 
   it("formats stable Gemini asynchronous batch documents without a task type", async () => {
-    const result = await createAdapterWithHeaders({});
+    const result = await createAdapter({});
 
     await result.runtime?.batchEmbed?.({
       agentId: "main",
@@ -87,60 +74,36 @@ describe("Gemini memory embedding adapter", () => {
       debug: () => {},
     });
 
+    const request = {
+      content: { parts: [{ text: "title: none | text: remember this" }] },
+      model: "models/gemini-embedding-2",
+      outputDimensionality: 768,
+    };
     expect(mocks.runGeminiEmbeddingBatches).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requests: [
-          {
-            custom_id: "0",
-            request: {
-              content: { parts: [{ text: "title: none | text: remember this" }] },
-              model: "models/gemini-embedding-2",
-              outputDimensionality: 768,
-            },
-          },
-        ],
-      }),
+      expect.objectContaining({ requests: [{ custom_id: "0", request }] }),
     );
   });
 
-  it("keeps durable identity stable across generated client-version changes", async () => {
+  it.each(["client-version", "semantic-header"])("keys memory identity by %s", async (change) => {
+    const stable = change === "client-version";
     const sharedHeaders = {
       "Content-Type": "application/json",
       "x-goog-api-key": "secret-key",
       Authorization: "Bearer token",
       "X-Custom-Region": "us-central1",
     };
-    const older = await createAdapterWithHeaders({
-      ...sharedHeaders,
-      "x-goog-api-client": "openclaw/2026.6.11",
-    });
-    const newer = await createAdapterWithHeaders({
-      ...sharedHeaders,
-      "x-goog-api-client": "openclaw/2026.7.1-beta.5",
-    });
-
-    expect(older.runtime?.cacheKeyData).toEqual(newer.runtime?.cacheKeyData);
-    expect(older.runtime?.cacheKeyData?.headers).toEqual(
-      sanitizeEmbeddingCacheHeaders(
-        {
-          "Content-Type": "application/json",
-          "X-Custom-Region": "us-central1",
-        },
-        [],
-      ),
-    );
-  });
-
-  it("still invalidates identity when a semantic custom header changes", async () => {
-    const first = await createAdapterWithHeaders({
-      "x-goog-api-client": "openclaw/2026.7.1-beta.5",
-      "x-custom-endpoint": "https://example.invalid/a",
-    });
-    const second = await createAdapterWithHeaders({
-      "x-goog-api-client": "openclaw/2026.7.1-beta.5",
-      "x-custom-endpoint": "https://example.invalid/b",
-    });
-
-    expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
+    const firstHeaders = stable ? sharedHeaders : { ...sharedHeaders, "X-Scope": "a" };
+    const secondHeaders = stable ? sharedHeaders : { ...sharedHeaders, "X-Scope": "b" };
+    const first = await createAdapter(firstHeaders, stable ? "openclaw/2026.6.11" : VERSION);
+    const second = await createAdapter(secondHeaders, VERSION);
+    if (stable) {
+      expect(first.runtime?.cacheKeyData).toEqual(second.runtime?.cacheKeyData);
+      expect(first.runtime?.cacheKeyData?.headers).toEqual([
+        ["Content-Type", "application/json"],
+        ["X-Custom-Region", "us-central1"],
+      ]);
+    } else {
+      expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
+    }
   });
 });

@@ -8,7 +8,6 @@ import {
   createExtensionOxlintShards,
   selectExtensionOxlintStripe,
 } from "../../scripts/run-oxlint-shards.mts";
-import { createChangedCiTypeCheckPlan } from "../../scripts/run-tsgo-core-test-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   evaluateWorkflowExpression,
@@ -40,6 +39,13 @@ vi.mock("../../scripts/lib/ci-extension-lint-plan.mts", () => ({
 const stripeMatrix = (count: number) => ({
   include: Array.from({ length: count }, (_, i) => ({ stripe: i + 1 })),
 });
+const coreGraphNames = [
+  "agents-root",
+  "agents-other",
+  "agents-tools",
+  "gateway-root",
+  "gateway-server",
+];
 const checks = (...tasks: string[]) => ({
   include: tasks.map((task) => ({ check_name: `check-${task}`, task, runner: "unused" })),
 });
@@ -103,13 +109,7 @@ function materializePlan(runnerProfile: string, rows: number, changedBaseRef?: s
     typeGraphBoundaryOwner: "",
     changedPaths: ["docs/ci.md"],
     runnerProfile,
-    checkMatrix: {
-      include: Array.from({ length: rows }, (_, index) => ({
-        check_name: `check-guards-${index}`,
-        task: "guards",
-        runner: "blacksmith-4vcpu-ubuntu-2404",
-      })),
-    },
+    checkMatrix: { include: Array.from({ length: rows }, () => checks("guards").include[0]!) },
     coreTypeMatrix: stripeMatrix(0),
     // A null lint plan retains templates even when their runner profile disables them.
     lintCoreMatrix: stripeMatrix(rows ? 2 : 0),
@@ -127,89 +127,59 @@ function materializePlan(runnerProfile: string, rows: number, changedBaseRef?: s
   return { run, outputs: existsSync(output) ? readWorkflowOutputs(output) : {} };
 }
 
-it.each(["hybrid", "github", "blacksmith"])(
-  "preserves full owners and extension scope: %s",
-  async (runnerProfile) => {
-    for (const mode of ["affected", "none", "full"] as const) {
-      const roots = selectLint(mode);
-      vi.mocked(createChangedCiTypeCheckPlan).mockClear();
-      const checkMatrix = checks("lint", "prod-types", "test-types", "guards");
-      const coreTypeMatrix = stripeMatrix(5);
-      const plan = await createPlan({
-        changedBaseRef: "a".repeat(40),
-        extensionLintMode: mode === "full" ? "full" : "affected",
-        preserveFullChecks: true,
-        typeGraphBoundaryOwner: "additional-checks",
-        changedPaths: ["package.json"],
-        runnerProfile,
-        checkMatrix,
-        coreTypeMatrix,
-        lintCoreMatrix: stripeMatrix(runnerProfile === "hybrid" ? 2 : 5),
-        lintExtensionMatrix: stripeMatrix(6),
-      });
-      expect(plan.check_matrix.include).toEqual(
-        runnerProfile === "hybrid"
-          ? checkMatrix.include.filter(({ task }) => task !== "lint")
-          : checkMatrix.include,
+it.each([
+  ["hybrid", "affected"],
+  ["hybrid", "none"],
+  ["hybrid", "full"],
+  ["github", "full"],
+  ["blacksmith", "affected"],
+] as const)("preserves extension scope: %s / %s", async (runnerProfile, mode) => {
+  const roots = selectLint(mode);
+  const plan = await createPlan({
+    changedBaseRef: "a".repeat(40),
+    extensionLintMode: mode === "full" ? "full" : "affected",
+    preserveFullChecks: true,
+    typeGraphBoundaryOwner: "additional-checks",
+    changedPaths: ["package.json"],
+    runnerProfile,
+    checkMatrix: checks("lint", "prod-types", "test-types", "guards"),
+    lintCoreMatrix: stripeMatrix(runnerProfile === "hybrid" ? 2 : 5),
+    lintExtensionMatrix: stripeMatrix(6),
+  });
+  const payloads = [
+    plan.central_lint_selection_json,
+    ...plan.lint_core_matrix.include.map((row) => row.lint_selection_json),
+    ...plan.lint_extension_matrix.include.map((row) => row.lint_selection_json),
+  ].flatMap((value) => (value ? [JSON.parse(value)] : []));
+  const central = JSON.parse(plan.central_lint_selection_json);
+  expect(central.fullGroups).toEqual(
+    runnerProfile === "blacksmith" ? ["core", "scripts"] : ["scripts"],
+  );
+  const extensionPayloads = payloads.filter(
+    (payload) => payload.extensionRoots || payload.fullExtensionStripes,
+  );
+  if (mode === "none") {
+    expect(extensionPayloads).toEqual([]);
+    expect(plan.lint_extension_matrix.include).toEqual([]);
+  } else {
+    expect(extensionPayloads.length).toBeGreaterThan(0);
+    for (const payload of extensionPayloads) {
+      expect(payload.extensionStripeCount).toBe(
+        runnerProfile === "hybrid" ? 3 : runnerProfile === "github" ? 6 : 1,
       );
-      expect(resolveCiExtensionLintSelection).toHaveBeenLastCalledWith(
-        ["package.json"],
-        process.cwd(),
-        { forceFull: mode === "full", baseRef: "a".repeat(40) },
-      );
-      expect(plan.core_type_matrix.include).toEqual(
-        runnerProfile === "blacksmith" ? [] : coreTypeMatrix.include,
-      );
-      expect(createChangedCiTypeCheckPlan).not.toHaveBeenCalled();
-      const payloads = [
-        plan.central_lint_selection_json,
-        ...plan.lint_core_matrix.include.map((row) => row.lint_selection_json),
-        ...plan.lint_extension_matrix.include.map((row) => row.lint_selection_json),
-      ].flatMap((value) => (value ? [JSON.parse(value)] : []));
-      const central = JSON.parse(plan.central_lint_selection_json);
-      expect(central.fullGroups).toEqual(
-        runnerProfile === "blacksmith" ? ["core", "scripts"] : ["scripts"],
-      );
-      if (runnerProfile === "hybrid") {
-        expect(plan.lint_core_matrix.include).toEqual([
-          { stripe: 1, shared_central_lint_selection_json: plan.central_lint_selection_json },
-          { stripe: 2 },
-        ]);
-        expect(plan.run_lint_extensions).toBe(mode !== "none");
-      } else if (runnerProfile === "github") {
-        expect(payloads.flatMap((payload) => payload.fullCoreStripes ?? [])).toEqual([
-          1, 2, 3, 4, 5,
-        ]);
-      }
-      const extensionPayloads = payloads.filter(
-        (payload) => payload.extensionRoots || payload.fullExtensionStripes,
-      );
-      if (mode === "none") {
-        expect(extensionPayloads).toEqual([]);
-        expect(plan.lint_extension_matrix.include).toEqual([]);
-      } else {
-        expect(extensionPayloads.length).toBeGreaterThan(0);
-        for (const payload of extensionPayloads) {
-          expect(payload.extensionStripeCount).toBe(
-            runnerProfile === "hybrid" ? 3 : runnerProfile === "github" ? 6 : 1,
-          );
-          expect(payload.extensionRoots).toEqual(mode === "affected" ? roots : undefined);
-          expect(
-            (mode === "affected" ? payload.extensionStripes : payload.fullExtensionStripes).length,
-          ).toBeGreaterThan(0);
-          if (mode === "affected") {
-            expect(payload.fullExtensionStripes).toBeUndefined();
-          }
-        }
+      expect(payload.extensionRoots).toEqual(mode === "affected" ? roots : undefined);
+      expect(
+        (mode === "affected" ? payload.extensionStripes : payload.fullExtensionStripes).length,
+      ).toBeGreaterThan(0);
+      if (mode === "affected") {
+        expect(payload.fullExtensionStripes).toBeUndefined();
       }
     }
-  },
-);
+  }
+});
 it.each([
   ["src/config/sessions/session-input-actor.ts", true, false],
   ["ui/src/styles/base.css", false, false],
-  ["test/scripts/ci-check-plan.test.ts", false, false],
-  ["scripts/ci-check-plan.mts", true, false],
   ["package.json", false, true],
 ] as const)(
   "shares only formatting/scripts, retaining the last row: %s",
@@ -264,52 +234,39 @@ it.each([0, 7])("propagates shared central lint exit %s", (exitCode) => {
   const run = runStep(step, context, cwd);
   expect(run.status, run.stderr).toBe(exitCode);
 });
-it.each(["check-plan", "additional-checks"] as const)(
-  "admits parallel owners without adding rows: %s",
-  async (typeGraphBoundaryOwner) => {
-    typeSelection.graphs = resolveCiTsgoGraphs(["extensions", "extensions-test", "test-root"]);
-    vi.mocked(createChangedCiTypeCheckPlan).mockClear();
-    const paths = ["extensions/example/value.ts"];
-    const plan = await createPlan({
-      typeGraphBoundaryOwner,
-      changedPaths: paths,
-      checkMatrix: checks("prod-types", "test-types"),
-    });
-    expect(createChangedCiTypeCheckPlan).toHaveBeenCalledExactlyOnceWith(paths, {
-      cwd: process.cwd(),
-      coreBoundaryOwner:
-        typeGraphBoundaryOwner === "additional-checks" ? "additional-checks" : undefined,
-    });
-    expect(plan.core_type_matrix.include).toEqual([]);
-    expect(plan.check_matrix.include.map((row) => JSON.parse(row.type_graph_names_json!))).toEqual([
-      ["extensions"],
-      ["extensions-test", "test-root"],
-    ]);
-  },
-);
-
 it.each([
-  ["hybrid", [1, 2, 4, 5]],
-  ["hybrid", [1, 2, 5]],
-  ["blacksmith", [1, 2, 3, 4, 5]],
+  ["hybrid", [1, 2, 4, 5], ["test-root-tooling", "test-root-other"]],
+  ["hybrid", [1, 2, 5], ["test-root-e2e"]],
+  ["hybrid", [1, 2, 4, 5], ["test-root"]],
+  ["blacksmith", [1, 2, 3, 4, 5], ["test-root"]],
 ] as const)(
-  "assigns root partitions without adding %s rows (%j)",
-  async (runnerProfile, stripes) => {
-    const core = ["agents-root", "agents-other", "agents-tools", "gateway-root", "gateway-server"];
+  "preserves selected root partition identity on %s (%j, %j)",
+  async (runnerProfile, stripes, roots) => {
     typeSelection.graphs = resolveCiTsgoGraphs([
-      ...stripes.map((stripe) => `core-test-${core[stripe - 1]}`),
+      ...stripes.map((stripe) => `core-test-${coreGraphNames[stripe - 1]}`),
       "scripts",
-      "test-root",
+      ...roots,
     ]);
     const plan = await createPlan({ runnerProfile });
-    const hosted = runnerProfile !== "blacksmith";
-    const moved = hosted && stripes.length >= 4;
-    expect(plan.core_type_matrix.include.map((row) => row.stripe)).toEqual(hosted ? stripes : []);
+    const moved = runnerProfile === "hybrid" && stripes.length >= 4;
+    expect(plan.core_type_matrix.include.map((row) => row.stripe)).toEqual(
+      runnerProfile === "hybrid" ? stripes : [],
+    );
     expect(plan.core_type_matrix.include.flatMap((row) => row.root_type_stripe ?? [])).toEqual(
-      moved ? ["1/4", "2/4", "3/4", "4/4"] : [],
+      !moved
+        ? []
+        : roots[0] === "test-root"
+          ? ["1/4", "2/4", "3/4", "4/4"]
+          : roots[0] === "test-root-e2e"
+            ? ["3/4"]
+            : ["1/4", "4/4"],
     );
     expect(JSON.parse(plan.check_matrix.include[0]!.type_graph_names_json!)).toEqual(
-      moved ? ["scripts"] : hosted ? ["scripts", "test-root"] : ["test-root", "scripts"],
+      moved
+        ? ["scripts"]
+        : runnerProfile === "hybrid"
+          ? ["scripts", ...roots]
+          : [...roots, "scripts"],
     );
   },
 );

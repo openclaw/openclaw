@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import {
   UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
@@ -15,11 +14,16 @@ import type {
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import { deferPackageStateVerification } from "../../infra/package-update-verification-step.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
   getUpdateDoctorConfigFailureReason,
   type UpdateDoctorConfigChange,
 } from "../../infra/update-doctor-config.js";
+import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -57,6 +61,7 @@ import {
   runUpdateStep,
   UpdatePreMutationError,
 } from "./shared.js";
+import { readUpdateTargetCliOptions } from "./update-command-cli-options.js";
 import {
   createUpdateConfigSnapshot,
   captureUpdateConfigSnapshot,
@@ -82,6 +87,7 @@ type PackageDoctorContext = {
 
 type PackageDoctorOptions = {
   root: string;
+  fullIntegrityCheck?: boolean;
   restart?: boolean;
   timeoutMs?: number;
   /** Null leaves forward work unbounded; omission retains the caller's timeout. */
@@ -97,6 +103,10 @@ type PackageDoctorOptions = {
 };
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
+  const doctorTimeoutMs = resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs);
+  const remaining = createDoctorServiceInspectionBudget(
+    doctorTimeoutMs === undefined ? undefined : Date.now() + doctorTimeoutMs,
+  );
   const assertRequesterCurrent = params.assertCurrent;
   const context = params.getDoctorContext?.();
   const assertCurrent = () => {
@@ -121,25 +131,45 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   // transaction protects this migration and the later restart verification.
   const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
     targetVersion: candidateHostVersion,
-    allowGatewayServiceRepair: false,
   });
   let doctorArgv: string[];
   if (context) {
+    const workerRuntime = params.nodeRunner ?? resolveNodeRunner();
     doctorArgv = [
-      params.nodeRunner ?? resolveNodeRunner(),
-      path.join(
-        params.root,
-        "dist",
-        runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+      workerRuntime,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl({
+          ...runtimeProcessEntrypoints.updateMigratedFinalize,
+          root: params.root,
+        }),
+        workerRuntime,
       ),
       "--doctor",
     ];
   } else {
+    const fullIntegrityCheck =
+      params.fullIntegrityCheck &&
+      (
+        await readUpdateTargetCliOptions(
+          {
+            nodeRunner: params.nodeRunner ?? resolveNodeRunner(),
+            entryPath,
+            command: "doctor",
+          },
+          { cwd: params.root, baseEnv: doctorEnv, timeoutMs: params.timeoutMs },
+        )
+      ).has("--full-integrity-check");
+    // Older candidates already check fully and reject the new option.
     const invocation = resolveOpenClawCliInvocation({
       execPath: params.nodeRunner ?? resolveNodeRunner(),
       entryPath,
       execArgv: [],
-      args: ["doctor", "--non-interactive", ...(doctorPolicy.fix ? ["--fix"] : [])],
+      args: [
+        "doctor",
+        "--non-interactive",
+        ...(doctorPolicy.fix ? ["--fix"] : []),
+        ...(fullIntegrityCheck ? ["--full-integrity-check"] : []),
+      ],
     });
     doctorArgv = [invocation.command, ...invocation.args];
   }
@@ -163,9 +193,11 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   }
   await params.progress?.onStepStart?.(doctorProgressInfo);
   assertCurrent();
+  const completedSteps: UpdateStepResult[] = [];
   const completeDoctorStep = createPackageUpdateDoctorCompletion({
     root: params.root,
     progress: params.progress,
+    results: completedSteps,
     onConfigSnapshot: params.onConfigSnapshot,
     context,
     configSnapshot,
@@ -173,7 +205,6 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     assertCurrent,
     doctorProgressInfo,
   });
-  const completedSteps: UpdateStepResult[] = [];
   let processSettlement: UpdateStepResult | undefined;
   const runDoctor = (runCommand?: Parameters<typeof runUpdateStep>[0]["runCommand"]) =>
     runUpdateStep({
@@ -196,7 +227,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]:
           params.restart === false ? "0" : UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
       },
-      timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
+      timeoutMs: remaining(),
       runCommand: sectionTiming.wrap(runCommand ?? runCommandWithTimeout),
     });
   let outcome: { step: UpdateStepResult } | { error: unknown };
@@ -216,9 +247,14 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
               input: {
                 configInputHash: context.inputHash,
                 repair: doctorPolicy.fix,
+                fullIntegrityCheck: params.fullIntegrityCheck,
                 databaseGenerations: context.databaseBackup?.sourceGenerations,
                 databasePluginOwners: context.databaseBackup?.pluginOwners,
                 originalRecoveryCapture: context.originalRecoveryCapture,
+                get serviceInspectionDeadlineAtMs() {
+                  const budget = remaining();
+                  return budget === undefined ? undefined : Date.now() + budget;
+                },
               },
             },
             runDoctor,
@@ -491,7 +527,7 @@ export async function runPackageInstallUpdate(
     });
 
   const before = pkgRoot ? await readPackageUpdateIdentity(pkgRoot) : { version: null };
-  const doctorSettlements: UpdateStepResult[] = [];
+  const doctorReceipts: UpdateStepResult[] = [];
 
   const packageUpdate = await runGlobalPackageUpdateSteps({
     localOverrides: {
@@ -531,8 +567,12 @@ export async function runPackageInstallUpdate(
       try {
         return await runPackageUpdateDoctor({ ...resolveDoctorOptions(), root, results });
       } finally {
-        doctorSettlements.push(
-          ...(results?.filter((result) => result.name === "doctor process settlement") ?? []),
+        doctorReceipts.push(
+          ...(results?.filter(
+            (result) =>
+              result.name === "doctor process settlement" ||
+              result.name === "database migration writes",
+          ) ?? []),
         );
       }
     },
@@ -561,7 +601,7 @@ export async function runPackageInstallUpdate(
       version: packageUpdate.afterVersion,
       ...(afterBuildId ? { buildId: afterBuildId } : {}),
     },
-    steps: [...packageUpdate.steps, ...doctorSettlements],
+    steps: [...packageUpdate.steps, ...doctorReceipts],
     failedStep: packageUpdate.failedStep ?? undefined,
     recovery: packageUpdate.recovery,
     localOverrides: packageUpdate.localOverrides,

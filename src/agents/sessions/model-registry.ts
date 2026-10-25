@@ -1,11 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { Api, Model, SimpleStreamOptions } from "../../llm/types.js";
+import type { Model, SimpleStreamOptions } from "../../llm/types.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
@@ -35,6 +34,7 @@ import {
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
 import { resolveModelRegistryRequestAuth } from "./model-registry-request-auth.js";
+import { createRegistryRuntimeModel } from "./model-registry-runtime-model.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -177,7 +177,7 @@ export class ModelRegistry {
     this.pluginMetadataSnapshot = source.pluginMetadataSnapshot;
   }
 
-  /** @deprecated Use createAsync or fromCapturedSources. Supported through 2026-12-31. */
+  /** @deprecated Use createAsync or fromCapturedSources. Supported through 2026-12-31; removal ships in the first January 2027 stable release. */
   static create(
     authStorage: AuthStorage,
     modelsJsonPath: string = join(getAgentDir(), "models.json"),
@@ -227,10 +227,16 @@ export class ModelRegistry {
     return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this }, publishedModels);
   }
 
-  /** @deprecated Await refreshAsync for disk-backed catalogs. Supported through 2026-12-31. */
+  /** @deprecated Await refreshAsync for disk-backed catalogs. Supported through 2026-12-31; removal ships in the first January 2027 stable release. */
   refresh(): void {
     if (this.reloadPluginCatalogs && this.modelsJsonPath) {
       ModelRegistry.warnNativeCatalogRead("ModelRegistry.refresh", "ModelRegistry.refreshAsync");
+    }
+    this.refreshFromStorage();
+  }
+
+  private refreshFromStorage(): void {
+    if (this.reloadPluginCatalogs && this.modelsJsonPath) {
       // Legacy SDK callers retain synchronous disk freshness through 2026-12-31.
       this.pluginCatalogs = undefined;
       this.pluginCatalogReadError = undefined;
@@ -624,7 +630,7 @@ export class ModelRegistry {
 
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
         models.push(
-          this.createRuntimeModel(providerName, providerConfig, modelDef, api, {
+          createRegistryRuntimeModel(providerName, providerConfig, modelDef, api, {
             baseUrl,
             input: runtimeInput,
           }),
@@ -633,40 +639,6 @@ export class ModelRegistry {
     }
 
     return models;
-  }
-
-  private createRuntimeModel(
-    provider: string,
-    config: ProviderModelCatalog,
-    model: NonNullable<ProviderModelCatalog["models"]>[number],
-    api: string | undefined,
-    catalog?: { baseUrl: string; input: Model["input"] },
-  ): Model {
-    return {
-      id: model.id,
-      name: catalog ? (model.name ?? model.id) : model.name,
-      api: api as Api,
-      provider,
-      baseUrl: catalog ? catalog.baseUrl : (model.baseUrl ?? config.baseUrl!),
-      reasoning: catalog ? (model.reasoning ?? false) : model.reasoning,
-      thinkingLevelMap: model.thinkingLevelMap,
-      input: catalog ? catalog.input : model.input,
-      cost: catalog ? normalizeResolvedPricing(model.cost ?? {}) : model.cost,
-      // Missing catalog windows remain unknown on disk; estimates belong to runtime models.
-      contextWindow: model.contextWindow ?? Math.max(model.contextTokens ?? 0, 128000),
-      ...(model.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
-      contextTokens: model.contextTokens,
-      ...(model.parameterCount !== undefined ? { parameterCount: model.parameterCount } : {}),
-      contextWindows: model.contextWindows,
-      contextWindowDefault: model.contextWindowDefault,
-      maxTokens: catalog ? (model.maxTokens ?? 16384) : model.maxTokens,
-      ...(catalog && model.maxTokens !== undefined
-        ? { maxTokensSource: model.maxTokensSource }
-        : {}),
-      params: model.params,
-      headers: undefined,
-      compat: model.compat,
-    } as Model;
   }
 
   getAll(): Model[] {
@@ -853,14 +825,19 @@ export class ModelRegistry {
    * Also resets dynamic OAuth and API stream registrations before reapplying
    * remaining dynamic providers.
    * Has no effect if the provider was never registered.
-   * @deprecated Use unregisterProviderAsync for disk-backed registries. Supported through 2026-12-31.
+   * @deprecated Use unregisterProviderAsync for disk-backed registries. Supported through 2026-12-31; removal ships in the first January 2027 stable release.
    */
   unregisterProvider(providerName: string): void {
-    if (!this.registeredProviders.has(providerName)) {
+    if (this.reloadPluginCatalogs && this.modelsJsonPath) {
+      ModelRegistry.warnNativeCatalogRead(
+        "ModelRegistry.unregisterProvider",
+        "ModelRegistry.unregisterProviderAsync",
+      );
+    }
+    if (!this.registeredProviders.delete(providerName)) {
       return;
     }
-    this.registeredProviders.delete(providerName);
-    this.refresh();
+    this.refreshFromStorage();
   }
 
   async unregisterProviderAsync(providerName: string): Promise<void> {
@@ -901,7 +878,7 @@ export class ModelRegistry {
         const api = modelDef.api || config.api;
         this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
 
-        this.models.push(this.createRuntimeModel(providerName, config, modelDef, api));
+        this.models.push(createRegistryRuntimeModel(providerName, config, modelDef, api));
       }
 
       if (config.oauth?.modifyModels) {

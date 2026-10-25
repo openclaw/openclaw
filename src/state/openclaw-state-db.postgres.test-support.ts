@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import { parentPort, threadId, workerData } from "node:worker_threads";
+import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { createSqlStatementObserver } from "../infra/database-engine/sql-statement-observer.test-support.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   installSqliteDatabaseAdmissions,
@@ -26,27 +29,52 @@ import { ensureUserBackgroundSchema } from "./user-background.store.js";
 
 const input: {
   path: string;
+  env: NodeJS.ProcessEnv;
   mode: "bootstrap" | "restart" | "migrate";
   admissions: SqliteDatabaseAdmissions;
 } = workerData;
 if (parentPort) {
   const port = parentPort;
   let catalogReads = 0;
-  const observer = (message: unknown) => {
-    if (
-      message &&
-      typeof message === "object" &&
-      "sql" in message &&
-      typeof message.sql === "string" &&
-      message.sql.startsWith("WITH captured")
-    ) {
+  const observer = createSqlStatementObserver(
+    (sql) => sql.startsWith("WITH captured"),
+    () => {
       catalogReads++;
-    }
-  };
+    },
+  );
   channel("openclaw.database.statement").subscribe(observer);
   try {
     installSqliteDatabaseAdmissions(input.admissions);
-    const options = { path: input.path };
+    const options = { path: input.path, env: input.env };
+    if (input.mode === "migrate") {
+      const lock = await acquireGatewayLock({
+        env: input.env,
+        allowInTests: true,
+        role: "sqlite-maintenance",
+        timeoutMs: 0,
+      });
+      assert(lock);
+      try {
+        const migration = await lock.run(() =>
+          prepareDoctorDatabaseMigrations({
+            env: input.env,
+            databasePaths: [input.path],
+            pendingDatabasePaths: [input.path],
+            pendingMigrations: [
+              {
+                kind: "state",
+                path: input.path,
+                foundVersion: 24,
+                supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+              },
+            ],
+          }),
+        );
+        assert.deepEqual(migration.warnings, []);
+      } finally {
+        await lock.release();
+      }
+    }
     let database = openOpenClawStateDatabase(options);
     assert(isPostgresSqlConnection(database.db));
     const initial = getPostgresPhysicalFacts(database.db);

@@ -5,6 +5,18 @@ import {
   classifyAssistantFailoverReason,
 } from "./embedded-agent-helpers/assistant-message-failures.js";
 import { recordModelFallbackStop } from "./model-fallback-stop.js";
+import type { UsageLike } from "./usage.js";
+
+export type IsolatedCompletionResult = {
+  text: string;
+  provider: string;
+  model: string;
+  owner: { kind: "cli" | "harness"; id: string };
+  /** CLI runtimes may not report token usage; absence must not be projected as zero. */
+  usage?: UsageLike;
+  /** Terminal cumulative CLI turn usage; diagnostics prefer it over `usage`. */
+  diagnosticUsage?: UsageLike;
+};
 
 type IsolatedCompletionErrorCode =
   | "unsupported"

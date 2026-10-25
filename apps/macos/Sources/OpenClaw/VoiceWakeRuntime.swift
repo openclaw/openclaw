@@ -1,6 +1,5 @@
 import AVFoundation
 import Foundation
-import OpenClawKit
 import OSLog
 import Speech
 import SwabbleKit
@@ -31,12 +30,7 @@ actor VoiceWakeRuntime {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.runtime")
 
-    private var recognizerCache = SpeechRecognizerCache()
-    // Lazily created on start to avoid creating an AVAudioEngine at app launch, which can switch Bluetooth
-    // headphones into the low-quality headset profile even if Voice Wake is disabled.
-    private var audioEngine: AVAudioEngine?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
+    private let capture = SpeechCaptureResources(mode: .voiceWake)
     private var recognitionGeneration: Int = 0 // drop stale callbacks after restarts
     private var lastHeard: Date?
     private var noiseFloorRMS: Double = 1e-4
@@ -85,14 +79,7 @@ actor VoiceWakeRuntime {
     private func haltRecognitionPipeline() {
         // Bump generation first so any in-flight callbacks from the cancelled task get dropped.
         self.recognitionGeneration &+= 1
-        self.recognitionTask?.cancel()
-        self.recognitionTask = nil
-        self.recognitionRequest?.endAudio()
-        self.recognitionRequest = nil
-        self.audioEngine?.inputNode.removeTap(onBus: 0)
-        self.audioEngine?.stop()
-        // Release the engine so we also release any audio session/resources when Voice Wake is idle.
-        self.audioEngine = nil
+        self.capture.stop()
     }
 
     struct RuntimeConfig: Equatable {
@@ -102,14 +89,6 @@ actor VoiceWakeRuntime {
         let triggerChime: VoiceWakeChime
         let sendChime: VoiceWakeChime
         let triggersTalkMode: Bool
-    }
-
-    private struct RecognitionUpdate {
-        let transcript: String?
-        let segments: [WakeWordSegment]
-        let isFinal: Bool
-        let error: Error?
-        let generation: Int
     }
 
     func refresh(state: AppState) async {
@@ -128,7 +107,7 @@ actor VoiceWakeRuntime {
         }
         guard generation == self.refreshGeneration, self.pauseLeases.isEmpty, self.diagnostic == nil else { return }
 
-        guard self.permissions.supported(), snapshot.0 else {
+        guard snapshot.0 else {
             self.stop()
             return
         }
@@ -141,13 +120,13 @@ actor VoiceWakeRuntime {
 
         let config = snapshot.1
 
-        if self.scheduledRestartTask != nil, config == self.currentConfig, self.recognitionTask == nil {
+        if self.scheduledRestartTask != nil, config == self.currentConfig, !self.capture.isRunning {
             return
         }
 
         SimpleTaskSupport.stop(task: &self.scheduledRestartTask)
 
-        if config == self.currentConfig, self.recognitionTask != nil {
+        if config == self.currentConfig, self.capture.isRunning {
             return
         }
 
@@ -162,71 +141,21 @@ actor VoiceWakeRuntime {
             self.recognitionGeneration &+= 1
             let generation = self.recognitionGeneration
 
-            let recognizer = self.recognizerCache.recognizer(localeID: config.localeID ?? Locale.current.identifier)
-
-            guard let recognizer, recognizer.isAvailable else {
-                throw NSError(domain: "VoiceWakeRuntime", code: 1, userInfo: [
-                    NSLocalizedDescriptionKey: "Speech recognition unavailable",
-                ])
-            }
-            let request = SFSpeechAudioBufferRecognitionRequest()
-            self.recognitionRequest = request
-            try SpeechRecognitionRequestPolicy.configurePassiveVoiceWake(
-                request,
-                supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition)
-
-            // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
-            let audioEngine = self.audioEngine ?? AVAudioEngine()
-            self.audioEngine = audioEngine
-
-            guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
-                self.audioEngine = nil
-                throw NSError(
-                    domain: "VoiceWakeRuntime",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
-            }
-
-            let input = audioEngine.inputNode
-            let format = input.outputFormat(forBus: 0)
-            guard format.channelCount > 0, format.sampleRate > 0 else {
-                throw NSError(
-                    domain: "VoiceWakeRuntime",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
-            }
-            input.removeTap(onBus: 0)
-            input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self, weak request] buffer, _ in
-                request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-                let rms = TalkAudioLevel.rms(buffer: buffer)
-                Task.detached { [weak self] in
-                    await self?.noteAudioLevel(rms: rms)
-                }
-            }
-
-            audioEngine.prepare()
-            try audioEngine.start()
+            try self.capture.start(
+                localeID: config.localeID ?? Locale.current.identifier,
+                onAudioLevel: { [weak self] rms in
+                    Task.detached { [weak self] in
+                        await self?.noteAudioLevel(rms: rms)
+                    }
+                },
+                onUpdate: { [weak self, generation] update in
+                    guard let self else { return }
+                    Task { await self.handleRecognition(update, generation: generation, config: config) }
+                })
 
             self.currentConfig = config
             self.lastHeard = Date()
             // Preserve any existing cooldownUntil so the debounce after send isn't wiped by a restart.
-
-            self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self, generation] result, error in
-                guard let self else { return }
-                let transcription = result?.bestTranscription
-                let transcript = transcription?.formattedString
-                let segments = transcription.map {
-                    WakeWordSpeechSegments.from(transcription: $0, transcript: $0.formattedString)
-                } ?? []
-                let isFinal = result?.isFinal ?? false
-                let update = RecognitionUpdate(
-                    transcript: transcript,
-                    segments: segments,
-                    isFinal: isFinal,
-                    error: error,
-                    generation: generation)
-                Task { await self.handleRecognition(update, config: config) }
-            }
 
             let preferred = config.micID ?? "system-default"
             self.logger.info(
@@ -265,15 +194,7 @@ actor VoiceWakeRuntime {
         self.stop(dismissOverlay: false)
         self.diagnostic = Diagnostic(id: id, update: onUpdate)
         do {
-            let recognizer = self.recognizerCache.recognizer(localeID: localeID ?? Locale.current.identifier)
-            guard let recognizer, recognizer.isAvailable else {
-                throw NSError(domain: "VoiceWakeRuntime", code: 1, userInfo: [
-                    NSLocalizedDescriptionKey: "Speech recognition unavailable",
-                ])
-            }
-            guard recognizer.supportsOnDeviceRecognition else {
-                throw SpeechRecognitionRequestPolicy.PolicyError.onDeviceRecognitionUnavailable
-            }
+            try self.capture.validatePassiveVoiceWake(localeID: localeID ?? Locale.current.identifier)
             let privacyKeys = ["NSSpeechRecognitionUsageDescription", "NSMicrophoneUsageDescription"]
             guard privacyKeys
                 .allSatisfy({ (Bundle.main.object(forInfoDictionaryKey: $0) as? String)?.isEmpty == false })
@@ -310,9 +231,7 @@ actor VoiceWakeRuntime {
 
     func finalizeDiagnostic(id: UUID) {
         guard self.diagnostic?.id == id, self.diagnostic?.update != nil else { return }
-        self.recognitionRequest?.endAudio()
-        self.audioEngine?.inputNode.removeTap(onBus: 0)
-        self.audioEngine?.stop()
+        self.capture.finishAudio()
         self.updateDiagnostic(.finalizing)
         self.captureTask = Task { [weak self] in
             guard await SimpleTaskSupport.waitForNextOperation(interval: 1.5) else { return }
@@ -402,8 +321,12 @@ actor VoiceWakeRuntime {
         }
     }
 
-    private func handleRecognition(_ update: RecognitionUpdate, config: RuntimeConfig) async {
-        if update.generation != self.recognitionGeneration {
+    private func handleRecognition(
+        _ update: SpeechCaptureResources.Update,
+        generation: Int,
+        config: RuntimeConfig) async
+    {
+        if generation != self.recognitionGeneration {
             return // stale callback from a superseded recognizer session
         }
         if let error = update.error {

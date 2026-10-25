@@ -6,7 +6,6 @@ import path from "node:path";
 import OpenAI from "openai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
 import { makeTerminalInput } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import {
@@ -58,6 +57,7 @@ import {
   readRawChatCompletionStream,
 } from "./http-stream.test-support.js";
 import { registerOpenAiHttpSamplingTests } from "./openai-http.sampling.test-support.js";
+import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommandMock,
@@ -1175,7 +1175,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         agentCommandMock.mockClear();
-        agentCommandMock.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+        agentCommandMock.mockRejectedValueOnce(new Error("client tool name conflict: exec"));
         const res = await postChatCompletions(port, {
           stream: false,
           model: "openclaw",
@@ -2698,7 +2698,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         agentCommandMock.mockClear();
-        agentCommandMock.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+        agentCommandMock.mockRejectedValueOnce(new Error("client tool name conflict: exec"));
 
         const toolConflictRes = await postChatCompletions(port, {
           stream: true,
@@ -3225,14 +3225,7 @@ describe("OpenAI-compatible HTTP API (e2e) with independent Gateways", () => {
       async () => {
         let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
         const previousGatewayAuth = testState.gatewayAuth;
-        const trustedProxyAuth = {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        };
+        const trustedProxyAuth = browserProxyAuth();
         testState.gatewayAuth = trustedProxyAuth;
         try {
           await writeGatewayConfig({

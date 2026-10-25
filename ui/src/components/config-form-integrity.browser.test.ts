@@ -5,8 +5,8 @@ import {
   renderArrayFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
+import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import { configFieldId } from "./config-form.shared.ts";
-import { analyzeConfigSchema } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -644,10 +644,13 @@ describe("config form integrity", () => {
 
     expect(textarea.value).toBe('{"enabled":');
     expect(textarea.getAttribute("aria-invalid")).toBe("true");
+    const errorId = configFieldId(["accounts", "primary"], "json-error");
+    expect(textarea.getAttribute("aria-describedby")?.split(" ")).toContain(errorId);
     const error = expectElement(
-      container.querySelector<HTMLElement>("[role='alert']"),
-      "JSON error",
+      container.querySelector<HTMLElement>(`#${errorId}`),
+      "associated JSON error",
     );
+    expect(error.getAttribute("role")).toBe("alert");
     expect(error.hidden).toBe(false);
     expect(error.textContent).toContain("valid JSON");
     expect(onPatch).not.toHaveBeenCalled();

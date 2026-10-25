@@ -7,6 +7,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { emitInternalRunUsageDiagnostic } from "../../agents/internal-run-usage.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -23,10 +24,10 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
+  retainSqliteDatabaseWriteScopesForPath,
   sqliteSessionIdWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getGatewayRestartDrainSignal,
   runWithGatewayDetachedWorkAdmission,
@@ -39,8 +40,6 @@ import { listWorkshopChanges } from "./library.js";
 import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
 import { runSkillWorkshopReview } from "./review-run.js";
 import { workshopReviewRunId } from "./review-undo.js";
-
-const log = createSubsystemLogger("skills/workshop");
 
 /** Admits a queued review only when Workshop is on and the session's policy exposes the tool. */
 export async function prepareSkillExperienceReviewCandidate(
@@ -236,28 +235,37 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   };
   const prepareSource = async (): Promise<PreparedSessionSourceAuthority> => {
     assertScopeCurrent();
-    if (validatedWriteToken === undefined || readWriteToken() !== validatedWriteToken) {
-      // The reader retains writer admission through this callback. Reuse its
-      // authority until an owning session or transcript writer publishes a change.
-      validatedWriteToken = undefined;
-      await readSessionTranscriptAnchorsAsync(
-        source,
-        {
-          entryIds: [],
-          contextValidation: { through: candidate.source, expectedAuthority: sourceEntry },
-        },
-        abortSignal,
-        (facts) => {
-          if (facts.contextValidated) {
-            validatedWriteToken = readWriteToken();
-          }
-        },
-      );
+    const release = retainSqliteDatabaseWriteScopesForPath(source.storePath, writeScopes);
+    if (!release) {
+      throw new SessionTranscriptReadFenceError("Session review source is unavailable");
     }
-    const token = validatedWriteToken;
-    const assertCurrent = () => assertReceiptCurrent(token);
-    assertCurrent();
-    return { assertCurrent, checks: [] };
+    try {
+      if (validatedWriteToken === undefined || readWriteToken() !== validatedWriteToken) {
+        // The reader retains writer admission through this callback. Reuse its
+        // authority until an owning session or transcript writer publishes a change.
+        validatedWriteToken = undefined;
+        await readSessionTranscriptAnchorsAsync(
+          source,
+          {
+            entryIds: [],
+            contextValidation: { through: candidate.source, expectedAuthority: sourceEntry },
+          },
+          abortSignal,
+          (facts) => {
+            if (facts.contextValidated) {
+              validatedWriteToken = readWriteToken();
+            }
+          },
+        );
+      }
+      const token = validatedWriteToken;
+      const assertCurrent = () => assertReceiptCurrent(token);
+      assertCurrent();
+      return { assertCurrent, checks: [], release };
+    } catch (error) {
+      release();
+      throw error;
+    }
   };
   const assertSourceCurrent = composeSessionSourceAssertion([
     Object.assign(
@@ -313,13 +321,22 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
       ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
     });
   try {
-    assertSkillReviewRunSucceeded(
-      capability ? await runWithCronCreatorAuthorityCapability(capability, run) : await run(),
-    );
+    const result = capability
+      ? await runWithCronCreatorAuthorityCapability(capability, run)
+      : await run();
+    emitInternalRunUsageDiagnostic(result, {
+      config,
+      agentId,
+      agentDir: foregroundPromptContext.agentDir,
+      sessionId: reviewSession.sessionId,
+      sessionKey: reviewSession.sessionKey,
+      provider: candidate.ctx.modelProviderId,
+      model: candidate.ctx.modelId,
+    });
+    assertSkillReviewRunSucceeded(result);
   } finally {
     // Each skill_workshop call commits on its own, so a failed or aborted run may have changed skills.
     const changes = await listWorkshopChanges(agentId, { runId });
-    log.debug(`experience review finished: session=${sessionKey} changes=${changes.length}`);
     await postWorkshopChangeNotice({ config, generation, runId, changes });
   }
 }

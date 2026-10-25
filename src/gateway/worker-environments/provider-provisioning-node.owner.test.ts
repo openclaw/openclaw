@@ -1,6 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type {
   NodeWorkerSupervisorNodeProof,
@@ -8,22 +6,19 @@ import type {
 } from "../node-registry-private.js";
 import { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import * as support from "./service.test-support.js";
 
 function createHeldInstaller(boundary: "attachment read" | "discovery" | "installation") {
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const node: NodeWorkerSupervisorNodeProof = {
+  const node: NodeWorkerSupervisorNodeProof = createNodeWorkerBundleTestNode({
     nodeId: "cloud-owner-node",
     connId: "owner-connection",
     pairingIdentity: "owner-pairing",
     pairingGeneration: "owner-generation",
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: "node",
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: { enabled: true, capacity: { total: 1, available: 1 }, bundlePrewarm: 1 },
-    commands: [],
-  };
+  });
   const transfer = createNodeWorkerBundleTransferService();
   const grant = vi.spyOn(transfer, "prepare");
   const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => {

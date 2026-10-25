@@ -22,6 +22,7 @@ import {
   freezeDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import {
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
   ensureGlobalUndiciDispatcherStreamTimeouts,
@@ -34,7 +35,6 @@ import {
   type ProviderRuntimePluginHandle,
 } from "../../../plugins/provider-hook-runtime.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
-import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -78,6 +78,7 @@ type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
 export type EmbeddedAttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
 
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.initialize");
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
   const providerThinkingLevel = mapThinkingLevelForProvider(params.thinkLevel, params.model);
@@ -90,9 +91,6 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     timeoutMs: Math.max(params.timeoutMs, DEFAULT_UNDICI_STREAM_TIMEOUT_MS),
   });
 
-  log.debug(
-    `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
-  );
   const prepStages = createStageTimingTracker(Date.now);
   const emitPrepStageSummary = createEmbeddedRunStageSummaryEmitter({
     label: "prep stages",
@@ -117,7 +115,9 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     );
   };
 
+  phases.mark("attempt.setup.workspace");
   const workspace = await resolveAttemptWorkspaceSandbox(params);
+  phases.mark("attempt.setup.finalize");
   const { effectiveWorkspace } = workspace;
 
   const getCurrentAttemptPluginMetadataSnapshot = (): PluginMetadataSnapshot | undefined =>
@@ -168,6 +168,19 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
 }
 
 type PromptCacheRetention = Parameters<typeof buildLoopPromptCacheInfo>[0]["retention"];
+
+// Stream completion can retain this callback beyond the attempt's context guards.
+function createCacheTouchRecorder(initialTimestamp: number | null) {
+  let lastCacheTouchAt = initialTimestamp;
+  return {
+    get lastCacheTouchAt() {
+      return lastCacheTouchAt;
+    },
+    recordCacheTouch: (startedAt: number) => {
+      lastCacheTouchAt = startedAt;
+    },
+  };
+}
 
 export function installEmbeddedAttemptContextGuards(input: {
   activeContextEngine?: ContextEngine;
@@ -222,12 +235,14 @@ export function installEmbeddedAttemptContextGuards(input: {
       ? resolveCacheTtlPruningSettings(contextPruning)
       : undefined;
   const previousCacheTtlTransform = activeSession.agent.transformContext;
-  let lastCacheTouchAt = cacheTtlSettings
-    ? readLastCacheTtlTimestamp(input.sessionManager, {
-        provider: attempt.provider,
-        modelId: attempt.modelId,
-      })
-    : null;
+  const cacheTouch = createCacheTouchRecorder(
+    cacheTtlSettings
+      ? readLastCacheTtlTimestamp(input.sessionManager, {
+          provider: attempt.provider,
+          modelId: attempt.modelId,
+        })
+      : null,
+  );
   if (cacheTtlSettings) {
     activeSession.agent.transformContext = async (messages, signal) => {
       const sourceMessages = previousCacheTtlTransform
@@ -237,7 +252,7 @@ export function installEmbeddedAttemptContextGuards(input: {
         messages: sourceMessages,
         settings: cacheTtlSettings,
         contextWindowTokens: contextTokenBudget,
-        lastCacheTouchAt,
+        lastCacheTouchAt: cacheTouch.lastCacheTouchAt,
         dropThinkingBlocksForEstimate: input.dropThinkingBlocksForEstimate,
         now: Date.now(),
         projectionState: input.toolResultPromptProjectionState,
@@ -246,7 +261,7 @@ export function installEmbeddedAttemptContextGuards(input: {
         pruneNewRounds: !input.getServerToolClearingEnabled(),
         onPruned: () => {
           declarePromptHistoryRewrite({ ...attempt, reason: "pruning" });
-          lastCacheTouchAt = Date.now();
+          cacheTouch.recordCacheTouch(Date.now());
         },
       });
     };
@@ -276,6 +291,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       tokenBudget: attempt.contextTokenBudget,
       reserveTokens: () => settingsManager.getCompactionReserveTokens(),
       getSystemPrompt: input.getSystemPrompt,
+      getTools: () => activeSession.agent.state.tools,
       modelId: attempt.modelId,
       ...(input.repairToolUseResultPairing
         ? {
@@ -316,7 +332,6 @@ export function installEmbeddedAttemptContextGuards(input: {
             }),
         }),
       runtimeSettings,
-      isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
     });
   }
   const removeToolResultGuard = installToolResultContextGuard({
@@ -382,9 +397,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       });
     },
     getAfterTurnCheckpoint: () => afterTurnCheckpoint,
-    recordCacheTouch: (startedAt: number) => {
-      lastCacheTouchAt = startedAt;
-    },
+    recordCacheTouch: cacheTouch.recordCacheTouch,
     remove: () => {
       activeSession.agent.transformContext = previousContextTransform;
       removeToolResultGuard();

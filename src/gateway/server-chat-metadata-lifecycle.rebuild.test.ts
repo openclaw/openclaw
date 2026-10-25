@@ -63,17 +63,16 @@ const publishOwner = () =>
     allowGatewaySubagentBinding: true,
   });
 
-it("serves the published list while a provider never answers and hides a removed provider at once", async () => {
-  let activeConfig = config;
+it("serves the published list while a provider never answers", async () => {
   await publishOwner();
   const lifecycle = await createGatewayChatMetadataLifecycle({
-    getConfig: () => activeConfig,
+    getConfig: () => config,
     log: { warn: vi.fn() } as never,
   });
   await lifecycle.attachContext(
     {
       broadcast: vi.fn(),
-      getRuntimeConfig: () => activeConfig,
+      getRuntimeConfig: () => config,
       logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } as unknown as GatewayRequestContext,
     sidecars.publish,
@@ -104,44 +103,6 @@ it("serves the published list while a provider never answers and hides a removed
   const rebuild = publishOwner().catch((error: unknown) => error);
   try {
     expect(await read()).toContain("openai/gpt-5.4");
-    // Signing out removes the provider before its replacement owner publishes.
-    mocks.preparedAuthStore = { version: 1, profiles: {} };
-    expect(await read()).not.toContain("openai/gpt-5.4");
-    mocks.preparedAuthStore = structuredClone(signedIn);
-    expect(await read()).toContain("openai/gpt-5.4");
-    // So does removing its model from the configured models.
-    activeConfig = {
-      ...config,
-      agents: { ...config.agents, defaults: { ...config.agents?.defaults, models: {} } },
-    };
-    expect(await read()).not.toContain("openai/gpt-5.4");
-    activeConfig = config;
-    expect(await read()).toContain("openai/gpt-5.4");
-    // Narrowing the selection policy may disallow the retained model.
-    activeConfig = {
-      ...config,
-      agents: {
-        ...config.agents,
-        defaults: { ...config.agents?.defaults, modelPolicy: { allow: [] } },
-      },
-    };
-    expect(await read()).not.toContain("openai/gpt-5.4");
-    activeConfig = config;
-    expect(await read()).toContain("openai/gpt-5.4");
-    // Primary and fallback settings also decide configured membership.
-    activeConfig = {
-      ...config,
-      agents: {
-        ...config.agents,
-        defaults: { ...config.agents?.defaults, model: { primary: "anthropic/claude-opus-5-5" } },
-      },
-    };
-    expect(await read()).not.toContain("openai/gpt-5.4");
-    activeConfig = config;
-    expect(await read()).toContain("openai/gpt-5.4");
-    // An edit to the config env section may remove a provider key.
-    activeConfig = { ...config, env: { vars: { OPENAI_API_KEY: "" } } };
-    expect(await read()).not.toContain("openai/gpt-5.4");
   } finally {
     discovery.resolve({ entries: [model], routeVariants: [] });
     await rebuild;

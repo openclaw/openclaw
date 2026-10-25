@@ -12,12 +12,13 @@ import {
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
 import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type {
   MigrationItem,
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { extractErrorCode, pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexAuthItems } from "./auth.js";
@@ -58,18 +59,6 @@ function pluginConfigValue(entry: CodexPluginMigrationConfigEntry) {
       ? { allow_destructive_actions: entry.allowDestructiveActions }
       : {}),
   };
-}
-
-async function lstatIfExists(filePath: string) {
-  try {
-    return await fs.lstat(filePath);
-  } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 async function buildCodexMemoryItems(params: {

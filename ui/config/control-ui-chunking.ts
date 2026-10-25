@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, type Plugin, type ResolvedConfig } from "vite";
-import { resolvedLocaleConfigHintsModulePrefix } from "./control-ui-locales.ts";
+import {
+  resolvedLocaleConfigHintsModulePrefix,
+  resolvedLocaleNamespaceModulePrefix,
+} from "./control-ui-locales.ts";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(configDir, "../..");
@@ -14,6 +17,24 @@ const controlUiBootModules = JSON.parse(
 ) as Record<"shared" | "new" | "chat", string[]> & {
   entries: Record<"shared" | "new" | "chat", string[]>;
 };
+
+const chatVisibleModules = new Set([
+  "ui/src/pages/chat/components/chat-tool-card-chrome.tsx",
+  "ui/src/pages/chat/components/chat-tool-outcome-summary.solid.tsx",
+  "ui/src/pages/chat/components/chat-tool-render-model.ts",
+  "ui/src/pages/chat/components/chat-message-bubble-tools.tsx",
+  "ui/src/pages/chat/components/chat-permission-card.tsx",
+  "ui/src/pages/chat/components/chat-tool-content.solid.tsx",
+  "ui/src/pages/chat/components/chat-tool-cards.solid.tsx",
+  "ui/src/pages/chat/components/chat-message-activity-operation.tsx",
+  "ui/src/pages/chat/components/chat-diff-stat.solid.tsx",
+  "ui/src/pages/chat/components/chat-tool-row-presentation.ts",
+  "ui/src/lib/chat/tool-display-identity.ts",
+  "ui/src/lib/chat/tool-call-input.ts",
+  "src/agents/tool-display-name.ts",
+  "ui/src/i18n/locales/en-chat-details.ts",
+  "ui/src/pages/chat/components/chat-environment-content.tsx",
+]);
 
 const bootEntryRoutes = new Map(
   (["shared", "new", "chat"] as const).flatMap((route) =>
@@ -55,22 +76,130 @@ export const controlUiLocaleConfigHintsChunkPrefix = "locale-config-hints-";
 export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
-  if (
-    normalized.startsWith("\0@oxc-project+runtime@") &&
-    normalized.endsWith("/helpers/esm/decorate.js")
-  ) {
-    // Chat and New Session still use decorators; neither route owns their shared helper.
-    return "decorator-runtime";
-  }
-
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/chat/components/chat-details-people.css":
+    case "ui/src/pages/chat/components/chat-outputs.css":
+    case "ui/src/pages/chat/components/chat-details-environment-desktop.css":
+      // Share styles without making Outputs import the Details renderer.
+      return "chat-details-styles";
+    case "ui/src/components/session-git-diff.tsx":
+    case "ui/src/lib/sessions/usage.ts":
+    case "src/shared/weak-owner-map.ts":
+    case "src/shared/assistant-display-content.ts":
+    case "src/shared/agent-run-status.ts":
+    case "ui/src/app/assistant-media.ts":
+    case "src/shared/dedupe-by-key.ts":
+    case "ui/src/lib/image-download.ts":
+    case "ui/src/lib/download.ts":
+    case "src/shared/markdown-code.ts":
+      return "deferred-ui-support";
+    case "ui/src/pages/chat/components/chat-image-preview-size.ts":
+    case "ui/src/pages/chat/components/chat-image-rendition.ts":
+    case "ui/src/pages/chat/components/chat-message-image-open.ts":
+    case "ui/src/pages/chat/components/chat-message-images-solid.tsx":
+    case "ui/src/pages/chat/components/chat-image-actions.tsx":
+    case "ui/src/pages/chat/components/chat-message-local-media.ts":
+    case "ui/src/pages/chat/components/chat-message-attachment-availability.ts":
+    case "ui/src/pages/chat/components/chat-media-playback.ts":
+    case "ui/src/pages/chat/components/chat-message-image-loading.ts":
+      return "chat-message-media-runtime";
+    case "ui/src/pages/chat/chat-provider-review-controller.tsx":
+      return "chat-provider-review";
+    // Keep optional compression groups separate from code evaluated by text-only Chat.
+    case "ui/src/pages/chat/chat-send-delivery.runtime.ts":
+    case "ui/src/pages/chat/chat-send-queue-runtime.ts":
+    case "ui/src/pages/chat/chat-model-recovery.runtime.ts":
+    case "ui/src/pages/chat/chat-command-dispatch.runtime.ts":
+    case "ui/src/pages/chat/chat-pane-session-operations.ts":
+    case "ui/src/pages/chat/chat-pane-session-operations.runtime.ts":
+      return "chat-interaction-runtime";
+    case "ui/src/pages/chat/components/chat-context-breakdown.tsx":
+    case "ui/src/pages/chat/components/chat-context-breakdown-model.ts":
+    case "ui/src/pages/chat/components/chat-context-report.tsx":
+    case "ui/src/pages/chat/components/chat-details-environment-body.tsx":
+    case "ui/src/lib/session-context-report.ts":
+      return "chat-interaction-runtime";
+    case "node_modules/@solidjs/signals/dist/prod/deferred.js":
+      // Route readers share this hook below without adding it to eager Solid code.
+      return undefined;
+    case "ui/src/pages/chat/components/chat-outputs.tsx":
+      return "chat-outputs";
+    case "ui/src/pages/chat/components/chat-details-people-list.tsx":
+      return "chat-details-people-list";
+    case "ui/src/lib/nodes/device-signing.runtime.ts":
+      return "device-signing-runtime";
+    case "ui/src/pages/chat/chat-live-events.runtime.ts":
+    case "ui/src/pages/chat/chat-gateway.ts":
+    case "ui/src/pages/chat/tool-stream.ts":
+    case "ui/src/pages/chat/tool-stream-status.ts":
+    case "ui/src/pages/chat/tool-stream-preamble.ts":
+      return "chat-live-events-runtime";
+    case "ui/src/pages/chat/chat-mobile-host.runtime.tsx":
+    case "ui/src/pages/chat/chat-mobile-scroll-fades.runtime.ts":
+    case "ui/src/pages/chat/components/chat-mobile-people-grid.tsx":
+    case "ui/src/pages/chat/components/chat-mobile-people-grid.css":
+      // Keep gesture and People implementations separate from retained header chrome.
+      return "chat-mobile-runtime";
+    case "ui/src/lib/device-pair-setup.ts":
+      // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
+      return "device-pair-setup-runtime";
+    case "ui/src/pages/chat/talk/conversation.ts":
+      return "talk-conversation-runtime";
+    case "ui/src/pages/chat/chat-goal-operations.runtime.ts":
+      return "chat-goal-operations-runtime";
+    case "ui/src/pages/chat/chat-export.runtime.ts":
+    case "ui/src/pages/chat/export.ts":
+      return "chat-export-runtime";
+    case "ui/src/lib/sessions/session-mutation-operations.runtime.ts":
+    case "ui/src/lib/sessions/session-mutation-refresh.ts":
+    case "ui/src/lib/sessions/create.ts":
+    case "ui/src/lib/sessions/session-patch-row-facts.ts":
+    case "src/shared/session-unread.ts":
+    case "ui/src/lib/sessions/session-delete-operation.ts":
+      // Session actions must not import whole route chunks through earlier boot captures.
+      return "session-mutation-runtime";
+    case "ui/src/lib/chat/emoji.ts":
+    case "node_modules/markdown-it-emoji/lib/data/full.mjs":
+      // Shortcode input owns the catalog; earlier boot captures must not keep it eager.
+      return "emoji-runtime";
+    case "ui/src/components/mascot-animator.ts":
+      // Only visible mascots request motion; stale boot captures must not keep it eager.
+      return "mascot-motion-runtime";
+    case "ui/src/components/emoji-search-panel.tsx":
+    case "ui/src/styles/emoji-search-panel.css":
+      return "emoji-search-panel";
+    case "ui/src/pages/chat/components/chat-composer-emoji-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-emoji.tsx":
+    case "ui/src/pages/chat/components/chat-composer-mention-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-mention-menu.tsx":
+    case "ui/src/pages/chat/components/chat-composer-menu.tsx":
+    case "ui/src/pages/chat/components/chat-composer-skill-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-skill-menu.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu-dom.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu.tsx":
+      // Share interaction-only rows without four separate preload-map entries.
+      return "composer-invocation-menus";
+    case "ui/src/app/app-root-focus.ts":
+    case "ui/src/app/app-root-focus-view.tsx":
+      return "focus-dashboard-runtime";
+    case "ui/src/components/solid/gateway-url-confirmation.tsx":
+      // A pending target owns this dialog; ordinary boot never requests it.
+      return "gateway-confirmation-runtime";
+    case "ui/src/pages/chat/route-entry.ts":
+      // Pending New Session previews must render while the Chat route entry waits.
+      return "chat-route-entry";
+    case "ui/src/i18n/locales/en-chat-composer.ts":
+      // New Session shares composer copy; session copy stays with Chat's boot group.
+      return "chat-english";
+    case "ui/src/pages/devices/devices-page.tsx":
+      return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
     case "ui/src/pages/cron/cron-page.tsx":
       return "cron-page";
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
-    case "packages/gateway-protocol/src/schema/plugin-install-progress.ts":
     case "packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts":
       // Shared protocol readers must not pull the lazy Plugins page into chat.
       return "plugin-contracts-runtime";
@@ -78,7 +207,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/copy-button-state.ts":
       // Login recovery also copies commands, before any Chat route can load.
       return "copy-button-runtime";
-    case "ui/src/components/login-gate.ts":
     case "ui/src/components/login-gate-solid.tsx":
     case "ui/src/components/login-gate-feedback.ts":
     case "ui/src/i18n/locales/en-login.ts":
@@ -89,52 +217,67 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "sidebar-update-runtime";
     case "ui/src/components/markdown-parser.ts":
       return "markdown-runtime";
+    case "ui/src/components/markdown-live.ts":
+    case "ui/src/components/markdown-streaming.ts":
+    case "ui/src/components/markdown-tokens.ts":
+      return "markdown-streaming-runtime";
     case "ui/src/pages/chat/session-snapshot-database.ts":
       // Warm boot reads while the Gateway connects; the chat boot group made it wait for the whole route.
       return "session-snapshot-database";
   }
 
+  if (
+    moduleIdIncludesPackage(id, "solid-js") ||
+    moduleIdIncludesPackage(id, "@solidjs/signals") ||
+    moduleIdIncludesPackage(id, "@solidjs/web")
+  ) {
+    // Keep Solid's eager initializers out of route groups, with one compression dictionary.
+    return "solid-runtime";
+  }
+
   if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
   }
-
-  if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {
-    return "gateway-runtime";
+  if (normalized.startsWith(resolvedLocaleNamespaceModulePrefix)) {
+    return `locale-namespace-${normalized.slice(resolvedLocaleNamespaceModulePrefix.length).replace("/", "-")}`;
   }
 
-  if (
-    normalized.endsWith("/ui/src/styles/chat/grouped.css") ||
-    normalized.endsWith("/ui/src/styles/chat/message-layout.css")
-  ) {
-    // Both routes load transcript styles; keep them outside the larger shared boot stylesheet.
-    return "chat-transcript-styles";
+  // Code highlighting is requested by the first completed code block; it must
+  // not share the parser/sanitizer chunk used by ordinary transcript prose.
+  if (moduleIdIncludesPackage(id, "highlight.js")) {
+    return "markdown-highlight-runtime";
   }
-
+  if (moduleIdIncludesPackage(id, "remend")) {
+    return "markdown-streaming-runtime";
+  }
   if (
-    moduleIdIncludesPackage(id, "highlight.js") ||
-    moduleIdIncludesPackage(id, "markdown-it") ||
     moduleIdIncludesPackage(id, "dompurify") ||
+    moduleIdIncludesPackage(id, "markdown-it") ||
     moduleIdIncludesPackage(id, "entities") ||
     moduleIdIncludesPackage(id, "linkify-it") ||
     moduleIdIncludesPackage(id, "mdurl") ||
     moduleIdIncludesPackage(id, "punycode.js") ||
     moduleIdIncludesPackage(id, "uc.micro")
   ) {
+    // Keep the parser closure with its lazy consumers, outside stale shared boot captures.
     return "markdown-runtime";
   }
 
-  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
+  if (moduleIdIncludesPackage(id, "zod")) {
     return "config-runtime";
+  }
+  if (moduleIdIncludesPackage(id, "json5")) {
+    // Config parsing loads only when a config consumer warms it.
+    return "json5-runtime";
   }
 
   if (moduleIdIncludesPackage(id, "libphonenumber-js")) {
     return "phone-runtime";
   }
 
-  // @noble/hashes stays out of this startup chunk deliberately: it is only
-  // dynamically imported as the insecure-context fallback digest provider.
-  if (moduleIdIncludesPackage(id, "@noble/ed25519") || moduleIdIncludesPackage(id, "ipaddr.js")) {
-    return "gateway-runtime";
+  // Keep fallback digests separate so secure contexts only download the signer.
+  if (moduleIdIncludesPackage(id, "@noble/ed25519")) {
+    return "device-signing-runtime";
   }
 
   return undefined;
@@ -151,24 +294,30 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
       },
       {
         name: "control-ui-core",
-        test: (id: string) => normalizeModuleId(id).includes("/ui/src/"),
+        test: () => true,
         tags: ["$initial"] as ["$initial"],
         priority: 10,
-        maxSize: 1024 * 1024,
-      },
-      {
-        name: "control-ui-foundation",
-        test: (id: string) => !normalizeModuleId(id).includes("/ui/src/"),
-        tags: ["$initial"] as ["$initial"],
-        priority: 10,
-        // Already-initial dependencies compress well; the UI source-size cap
-        // fragmented them into tiny requests. The asset gzip budget bounds them.
+        // The initial graph is already eager; one dictionary avoids serial h1 requests.
+        maxSize: 4096 * 1024,
       },
       ...(options.includeBootGroups === false
         ? []
         : [
             ...(["shared", "new", "chat"] as const).map((route, index) => {
               const modules = new Set(controlUiBootModules[route]);
+              if (route === "shared") {
+                // Plugin activation validates versions on every route without
+                // evaluating Chat or adding a separate contract request.
+                modules.add("src/shared/plugin-inline-view.ts");
+                // Plugin contributions can initialize after the New Session boot capture.
+                modules.add("ui/src/plugins/control-ui-actions.ts");
+                // Both routes read deferred resources; share their existing boot partition.
+                modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
+                // Opened person cards share labels with New Session, not its composer chunk.
+                modules.add("ui/src/lib/platform-label.ts");
+                // Placement and delivery share retries without importing either route's bundle.
+                modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
+              }
               return {
                 name: `control-ui-boot-${route}`,
                 test: (id: string) => modules.has(controlUiBootManifestKey(id)),
@@ -176,22 +325,36 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // them (and therefore other routes) into its eagerly imported chunk.
                 priority: 8 - index,
                 includeDependenciesRecursively: true,
-                // Shared boot needs a smaller partition cap because its dense chat
-                // modules can exceed the compressed-size budget after regrouping.
-                // Fold small post-port partitions back into their boot parents;
-                // route membership and the maximum chunk size stay unchanged.
-                minSize: 128 * 1024,
-                maxSize: (route === "shared" ? 1280 : 1408) * 1024,
+                // Keep each measured boot partition together instead of queueing
+                // several fragments over HTTP/1.1. Shared and route-only code
+                // retain separate groups and their existing lazy boundaries.
+                minSize: (route === "chat" ? 384 : 128) * 1024,
+                maxSize: (route === "shared" || route === "chat" ? 5120 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {
               const styles = new Set(
                 controlUiBootModules[route].filter((id) => id.endsWith(".css")),
               );
+              if (route === "shared") {
+                styles.add("ui/src/components/solid/text-overflow.css");
+              }
+              if (route === "chat") {
+                styles.delete("ui/src/components/solid/text-overflow.css");
+                // These optional views share the route's preloaded stylesheet.
+                styles.add("ui/src/pages/chat/components/chat-pane-mobile-header.css");
+                styles.add("ui/src/pages/chat/components/chat-pane-mobile-composition.css");
+                styles.add("ui/src/styles/chat/context-breakdown.css");
+                styles.add("ui/src/pages/chat/components/chat-session-activity.css");
+              }
               return {
                 name: `control-ui-boot-${route}-styles`,
                 test: (id: string) =>
-                  !/[?&]inline(?:[=&]|$)/u.test(id) && styles.has(controlUiBootManifestKey(id)),
+                  !/[?&]inline(?:[=&]|$)/u.test(id) &&
+                  (styles.has(controlUiBootManifestKey(id)) ||
+                    (route === "chat" && chatVisibleModules.has(controlUiBootManifestKey(id))) ||
+                    (route === "shared" &&
+                      controlUiBootManifestKey(id) === "ui/src/components/solid/text-overflow.ts")),
                 // One stylesheet per measured route set, without per-page JS facades.
                 // Keep it separate from core CSS to preserve its existing size ceiling.
                 priority: 9,

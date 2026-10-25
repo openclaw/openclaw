@@ -6,12 +6,16 @@ import { containsAsciiControlCharacter } from "@openclaw/normalization-core/stri
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  parsePublicConfigDiagnosticLines,
+  publicConfigIssueMessage,
   redactPublicSupportDiagnosticLine,
   redactSupportDiagnosticLine,
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { StateLeaseLossSchema, type StateLeaseLoss } from "../shared/state-lease-loss.js";
 import { UPDATE_FOREIGN_DESTINATION_REASON } from "../shared/update-outcome.js";
+import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -110,11 +114,15 @@ export function createUpdateErrorFact(
   error: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): UpdateFailureFact {
+  let leaseLoss: StateLeaseLoss | undefined;
   // The formatter must never reach raw cause identities or stringify private object metadata.
   const errors = collectErrorGraphCandidates(error ?? String(error), (current) => [
     ...(readErrorMetadata(() => readErrorCauses(current)) ?? []),
     readErrorMetadata(() => current.cause),
   ]).map((current) => {
+    if (current instanceof OpenClawStateLeaseError) {
+      leaseLoss ??= current.loss;
+    }
     const rawName = readErrorMetadata(() =>
       current instanceof Error ? current.constructor.name : readErrorName(current),
     );
@@ -174,6 +182,7 @@ export function createUpdateErrorFact(
       errorName: primary?.name ?? "Error",
       location: location ?? null,
       message: formatErrorMessage(new AggregateError(errors, primary?.message)),
+      ...(leaseLoss ? { leaseLoss } : {}),
     },
     env,
   );
@@ -186,18 +195,22 @@ export function createUpdateFailureFact(
 ): UpdateFailureFact {
   const context = { env, stateDir: resolveStateDir(env) };
   const line = (value: string, limit: number) => redactSupportDiagnosticLine(value, context, limit);
+  const configFact = fact.code === "invalid-config" || fact.code === "candidate-config-failed";
+  const configText = (value: string, limit: number) =>
+    redactSupportString(value, context, { maxLength: limit, truncationSuffix: "" });
+  const issueKind = configFact
+    ? publicConfigIssueMessage({ path: fact.affectedKey ?? "", message: fact.message ?? "" })
+    : undefined;
   // Redact credentials and complete email addresses before replacing their host suffixes.
   // Protocol-1 candidate refusals carry field facts in multiline text; retain them before truncation.
   const configDiagnostic =
-    fact.code === "invalid-config" && fact.message
-      ? redactPublicSupportDiagnosticLine(fact.message, context)
+    configFact && fact.message
+      ? parsePublicConfigDiagnosticLines(fact.message)
+          .map((issue) => `${configText(issue.path, 128)}: ${issue.message}`)
+          .join("; ") || (issueKind !== "Invalid configuration field" ? issueKind : undefined)
       : undefined;
   const diagnostic =
-    configDiagnostic && configDiagnostic !== "[redacted-diagnostic]"
-      ? configDiagnostic
-      : fact.message
-        ? line(fact.message, Number.MAX_SAFE_INTEGER)
-        : undefined;
+    configDiagnostic ?? (fact.message ? line(fact.message, Number.MAX_SAFE_INTEGER) : undefined);
   // Closed recovery facts contain generated basenames, not hostnames.
   const recoveryDiagnostic = diagnostic?.startsWith("Package recovery ")
     ? redactPublicSupportDiagnosticLine(diagnostic, context)
@@ -225,15 +238,25 @@ export function createUpdateFailureFact(
     fact.code === UPDATE_FOREIGN_DESTINATION_REASON && fact.destination
       ? normalizeDestinationFailure(fact.destination, context)
       : undefined;
+  const leaseLoss = StateLeaseLossSchema.safeParse(fact.leaseLoss).data;
   return {
     check: line(fact.check, 128),
     code: line(fact.code, 80),
-    ...(message ? { message: line(message, 200) } : {}),
+    // Closed issue kinds have no values to redact; scanning them as secret assignments
+    // would erase schema fields such as apiKey on a second normalization pass.
+    ...(message
+      ? { message: configDiagnostic ? truncateUtf16Safe(message, 200) : line(message, 200) }
+      : {}),
     ...(fact.errorName ? { errorName: line(fact.errorName, 80) } : {}),
     ...(fact.location !== undefined ? { location } : {}),
-    ...(fact.affectedKey ? { affectedKey: line(fact.affectedKey, 128) } : {}),
+    ...(fact.affectedKey
+      ? {
+          affectedKey: configFact ? configText(fact.affectedKey, 128) : line(fact.affectedKey, 128),
+        }
+      : {}),
     ...(fact.pluginId ? { pluginId: line(fact.pluginId, 80) } : {}),
     ...(destination ? { destination } : {}),
+    ...(leaseLoss ? { leaseLoss } : {}),
     ...(fact.npmErrorCode || fact.code === "global-install-failed"
       ? {
           npmErrorCode:

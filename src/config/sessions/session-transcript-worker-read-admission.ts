@@ -4,7 +4,7 @@ import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
   armDatabaseWorkerIdleRetirement,
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   refreshDatabaseWorkerPressureSubscription,
   targetDiscoveryLane,
   type SessionHistoryWorkerLane,
@@ -44,7 +44,7 @@ export async function withSessionHistoryReadAdmission<T>(
     const cold = !request.knownSource && !hasSqliteDatabaseSchemaAdmissionForPath(options.path);
     const lane = cold ? targetDiscoveryLane : requestedLane;
     if (lane !== requestedLane) {
-      historyClearTimeout(lane.idleTimer);
+      clearDatabaseWorkerIdleRetirement(lane);
       lane.pending++;
       additionalLane = lane;
       refreshDatabaseWorkerPressureSubscription();

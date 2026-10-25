@@ -1,4 +1,5 @@
 // Msteams tests cover errors plugin behavior.
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import {
   classifyMSTeamsSendError,
@@ -13,6 +14,41 @@ function replaySafeRetryAfterMs(error: unknown): number | undefined {
 }
 
 describe("msteams errors", () => {
+  it.each([
+    [403, "auth"],
+    [429, "replay-safe"],
+    [504, "ambiguous"],
+  ] as const)("classifies real Connector HTTP %i errors as %s", async (status, kind) => {
+    const { Client: ApiClient } = await import("@microsoft/teams.api");
+    let requests = 0;
+    await withServer(
+      (request, response) => {
+        requests += 1;
+        request.resume();
+        response.writeHead(status, {
+          "content-type": "application/json",
+          "retry-after": "2",
+        });
+        response.end(JSON.stringify({ error: { code: "ConnectorFailure", message: "rejected" } }));
+      },
+      async (baseUrl) => {
+        const api = new ApiClient(baseUrl);
+        const result = await api.conversations
+          .activities("loopback-conversation")
+          .create({ type: "message", text: "synthetic reply" })
+          .then(
+            () => undefined,
+            (error: unknown) => classifyMSTeamsSendError(error),
+          );
+        expect(result).toMatchObject({ kind, statusCode: status });
+        if (result?.kind === "replay-safe") {
+          expect(result.retryAfterMs).toBe(2000);
+        }
+        expect(requests).toBe(1);
+      },
+    );
+  });
+
   it("formats unknown errors", () => {
     expect(formatUnknownError("oops")).toBe("oops");
     expect(formatUnknownError(null)).toBe("null");
@@ -23,15 +59,14 @@ describe("msteams errors", () => {
     expect(classifyMSTeamsSendError({ statusCode: 403 }).kind).toBe("auth");
   });
 
-  it("classifies Teams rate limiting as replay-safe and parses retry-after", () => {
-    const result = classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5" });
+  it("retains the normalized retry delay on replay-safe rate limits", () => {
+    const result = classifyMSTeamsSendError({ statusCode: 429, retryAfterMs: 1500 });
     expect(result.kind).toBe("replay-safe");
     expect(result.statusCode).toBe(429);
-    expect(replaySafeRetryAfterMs({ statusCode: 429, retryAfter: "1.5" })).toBe(1500);
+    expect(replaySafeRetryAfterMs({ statusCode: 429, retryAfterMs: 1500 })).toBe(1500);
   });
 
   it("does not parse partial retry-after values", () => {
-    expect(replaySafeRetryAfterMs({ statusCode: 429, retryAfter: "1.5s" })).toBeUndefined();
     expect(
       replaySafeRetryAfterMs({
         statusCode: 429,
@@ -51,18 +86,6 @@ describe("msteams errors", () => {
       replaySafeRetryAfterMs({
         statusCode: 429,
         retryAfterMs: Number.MAX_SAFE_INTEGER + 1,
-      }),
-    ).toBeUndefined();
-    expect(
-      replaySafeRetryAfterMs({
-        statusCode: 429,
-        retryAfter: Number.MAX_SAFE_INTEGER,
-      }),
-    ).toBeUndefined();
-    expect(
-      replaySafeRetryAfterMs({
-        statusCode: 429,
-        retryAfter: "9007199254741",
       }),
     ).toBeUndefined();
     expect(
@@ -130,7 +153,7 @@ describe("msteams errors", () => {
       formatMSTeamsSendErrorHint(
         classifyMSTeamsSendError({
           statusCode: 403,
-          response: { body: { error: { code: "ContentStreamNotAllowed" } } },
+          code: "ContentStreamNotAllowed",
         }),
       ),
     ).toContain("expired the content stream");

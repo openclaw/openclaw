@@ -271,7 +271,6 @@ describe("cron runtime row publication", () => {
     await saveCronStore(storePath, { version: 1, jobs });
     const job = jobs[64]!;
     const prepared = prepareCronRunReceiptClaim({
-      observed: undefined,
       storePath,
       job,
       agentId: "main",
@@ -333,7 +332,6 @@ describe("cron runtime row publication", () => {
       log: noopLogger,
       nowMs: () => dueAt,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       onEvent,
     });

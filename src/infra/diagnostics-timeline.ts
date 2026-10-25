@@ -57,7 +57,7 @@ type DiagnosticsTimelineSpanOptions = DiagnosticsTimelineOptions &
     omitErrorMessage?: boolean;
   };
 
-type DiagnosticsTimelineOptions = {
+export type DiagnosticsTimelineOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 };
@@ -79,12 +79,22 @@ const activeDiagnosticsTimelineSpan = new AsyncLocalStorage<ActiveDiagnosticsTim
 type SpanObserver = (
   name: string,
   attributes: DiagnosticsTimelineAttributes | undefined,
+  durationMs?: number,
 ) => (() => void) | undefined;
 const spanObserver = new AsyncLocalStorage<SpanObserver>();
 
 /** Observe existing spans within one request, independently of timeline file logging. */
 export function withDiagnosticsTimelineObserver<T>(observer: SpanObserver, run: () => T): T {
   return spanObserver.run(observer, run);
+}
+
+/** Forward an owner's measured duration without timing the same operation again. */
+export function recordDiagnosticsTimelineDuration(name: string, durationMs: number) {
+  try {
+    spanObserver.getStore()?.(name, undefined, durationMs)?.();
+  } catch {
+    // Diagnostic observers cannot change the measured operation.
+  }
 }
 
 function observeSpan(name: string, options: DiagnosticsTimelineSpanOptions) {
@@ -104,6 +114,21 @@ function observeSpan(name: string, options: DiagnosticsTimelineSpanOptions) {
       } catch {
         // Preserve the original result or failure.
       }
+    },
+  };
+}
+
+/** Consecutive owner phases cover waits and synchronous work without gaps or extra async hops. */
+export function observeDiagnosticsTimelinePhases(initialPhase: string) {
+  let current = observeSpan(initialPhase, {});
+  return {
+    mark(phase: string) {
+      current?.[Symbol.dispose]();
+      current = observeSpan(phase, {});
+    },
+    [Symbol.dispose]() {
+      current?.[Symbol.dispose]();
+      current = undefined;
     },
   };
 }

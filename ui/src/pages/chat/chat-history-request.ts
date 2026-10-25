@@ -4,7 +4,8 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sleepWithAbort } from "@openclaw/retry";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import {
@@ -32,8 +33,10 @@ import {
   chatHistoryRequests,
   beginHistoryRequest,
   acceptsHistoryResult,
+  type InitialChatHistoryReceipt,
 } from "./chat-history-state.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import {
   projectChatTranscriptMetadata,
@@ -43,12 +46,65 @@ import {
 export const CHAT_HISTORY_REQUEST_LIMIT = 80;
 const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
 const CHAT_HISTORY_TOOL_RESULT_MAX_CHARS = 2_000;
-const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
+
+export function chatHistoryRequestParams(
+  method: "chat.history" | "chat.startup",
+  sessionKey: string,
+  requestAgentId: string | undefined,
+  cursor?: string,
+  inputRunIds: string[] = [],
+  historyState?: ChatHistoryState,
+) {
+  const knownState =
+    cursor !== undefined && historyState
+      ? {
+          ...(historyState.pendingInputs
+            ? { pendingInputs: historyState.stateRevision.pendingInputs }
+            : {}),
+          ...(historyState.sessionInfo
+            ? { sessionInfo: historyState.stateRevision.sessionInfo }
+            : {}),
+          ...(method === "chat.startup" && historyState.commands
+            ? { commands: historyState.stateRevision.commands }
+            : {}),
+        }
+      : {};
+  return {
+    sessionKey,
+    toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
+    knownState,
+    ...(requestAgentId ? { agentId: requestAgentId } : {}),
+    ...(cursor !== undefined ? { cursor } : {}),
+    limit: CHAT_HISTORY_REQUEST_LIMIT,
+    maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
+    ...(inputRunIds.length ? { inputRunIds } : {}),
+  };
+}
+
+export function captureChatHistoryRun(
+  state: ChatState,
+  isCurrent: () => boolean,
+): ChatHistoryRunObservation | undefined {
+  const runId = state.chatRunId;
+  const sessionId = state.currentSessionId;
+  const generation = state.chatRunLifecycleGeneration ?? 0;
+  return isCurrent() && runId && sessionId
+    ? {
+        runId,
+        sessionId,
+        isCurrent: () =>
+          isCurrent() &&
+          state.chatRunId === runId &&
+          (state.chatRunLifecycleGeneration ?? 0) === generation &&
+          state.currentSessionId === sessionId,
+      }
+    : undefined;
+}
 
 // Keep startup small, then amortize older-history reads and prepend work across
 // larger pages. The Gateway owns the response byte and single-message limits.
 const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
-const CHAT_HISTORY_OLDER_PAGE_MAX_BYTES = 1024 * 1024;
+const CHAT_HISTORY_OLDER_PAGE_MAX_BYTES = 3 * 1024 * 1024;
 
 export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
   if (isHistoryCursor(result) && result.kind === "reset") {
@@ -110,7 +166,8 @@ type SharedChatHistoryArgs = [
   consumerObservation: Pick<SharedChatHistoryConsumer, "isCurrent" | "captureRun" | "onRetry">,
   cursor?: string,
   inputRunIds?: string[],
-  budget?: { limit: number; maxBytes: number },
+  historyState?: ChatHistoryState,
+  initialHistory?: InitialChatHistoryReceipt,
 ];
 
 export function requestSharedHistory(
@@ -133,9 +190,19 @@ export function requestSharedHistory(
     consumerObservation,
     cursor,
     inputRunIds = [],
-    budget = { limit: CHAT_HISTORY_REQUEST_LIMIT, maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES },
+    historyState,
+    initialHistory,
   ]: SharedChatHistoryArgs
 ): Promise<ChatHistoryResponse & { observation?: ChatHistoryObservation }> {
+  const params = chatHistoryRequestParams(
+    method,
+    sessionKey,
+    requestAgentId,
+    cursor,
+    inputRunIds,
+    historyState,
+  );
+  requestKey += JSON.stringify(params.knownState);
   let owners = sharedChatHistoryRequests.get(client);
   if (!owners) {
     owners = new WeakMap();
@@ -150,14 +217,12 @@ export function requestSharedHistory(
     shared && [...shared.consumers].some((entry) => entry.owner === consumerOwner);
   const consumer: SharedChatHistoryConsumer = { owner: consumerOwner, ...consumerObservation };
   if (!shared || existingOwner) {
-    const params = {
-      sessionKey,
-      toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
-      ...(requestAgentId ? { agentId: requestAgentId } : {}),
-      ...(cursor !== undefined ? { cursor } : {}),
-      ...budget,
-      ...(inputRunIds.length ? { inputRunIds } : {}),
-    };
+    let prepared =
+      method === "chat.startup" &&
+      initialHistory?.isCurrent() &&
+      initialHistory.paramsKey === JSON.stringify(params)
+        ? initialHistory
+        : undefined;
     const controller = new AbortController();
     const consumers = new Set([consumer]);
     let lastRetryableError: unknown;
@@ -178,20 +243,57 @@ export function requestSharedHistory(
       Date.now() < deadlineAt &&
       [...consumers].some((entry) => entry.isCurrent());
     const attempt = async () => {
+      const initial = prepared;
+      prepared = undefined;
       // Each attempt observes only its present consumers and their current runs.
       // A late join acquires custody on a retry, never from an earlier read.
       const consumersAtIssue = new Map(
-        [...consumers].map((entry) => [entry, entry.captureRun?.()] as const),
+        [...consumers].map(
+          (entry) =>
+            [entry, initial?.owner === entry.owner ? initial.run : entry.captureRun?.()] as const,
+        ),
       );
-      const observation = sessions
-        ? { owner: sessions, reconcile: sessions.captureReconcile() }
-        : undefined;
+      const observation =
+        initial?.observation ??
+        (sessions ? { owner: sessions, reconcile: sessions.captureReconcile() } : undefined);
+      if (initial && !initial.result.ok) {
+        throw new GatewayRequestError(initial.result.error);
+      }
       const response = attachHistoryActivity(
-        await client.request<ChatHistoryResponse>(method, params, {
-          signal: controller.signal,
-          timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-        }),
+        initial?.result.ok
+          ? (initial.result.payload as ChatHistoryResponse) // SAFETY: canonical chat.startup payload.
+          : await client.request<ChatHistoryResponse>(method, params, {
+              signal: controller.signal,
+              timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+            }),
       );
+      if (!(isHistoryCursor(response) && response.kind === "reset") && historyState) {
+        // Resolve omissions against this request's exact payload, never a later cache write.
+        if (
+          response.metadata &&
+          response.stateRevision?.commands &&
+          response.stateRevision.commands === historyState.stateRevision.commands
+        ) {
+          response.metadata.commands ??= historyState.commands;
+        }
+        if (
+          response.stateRevision?.pendingInputs &&
+          response.stateRevision.pendingInputs === historyState.stateRevision.pendingInputs
+        ) {
+          response.pendingInputs ??= historyState.pendingInputs;
+        }
+        if (
+          response.stateRevision?.sessionInfo &&
+          response.stateRevision.sessionInfo === historyState.stateRevision.sessionInfo &&
+          !response.sessionInfo &&
+          historyState.sessionInfo
+        ) {
+          response.sessionInfo = {
+            ...historyState.sessionInfo,
+            snapshotAt: response.sessionInfoSnapshotAt,
+          };
+        }
+      }
       return { ...response, observation, consumersAtIssue };
     };
     const signal = controller.signal;
@@ -256,7 +358,7 @@ export function requestSharedHistory(
 
 type ChatSessionSnapshotRequestResult =
   | { kind: "snapshot"; snapshot: ChatSessionSnapshot }
-  | ChatHistoryDeltaResult
+  | (ChatHistoryDeltaResult & { sessionInfo: GatewaySessionRow })
   | ChatHistoryResetResult;
 
 export async function requestChatSessionSnapshot(
@@ -279,11 +381,15 @@ export async function requestChatSessionSnapshot(
     consumerOwner,
     { isCurrent: isCurrentConsumer },
     cursor,
-    undefined,
-    CHAT_HISTORY_PREFETCH_BUDGET,
   );
   if (isHistoryCursor(result)) {
-    return result;
+    if (result.kind === "reset") {
+      return result;
+    }
+    if (!result.sessionInfo) {
+      throw new Error("chat history delta omitted uncached session metadata");
+    }
+    return { ...result, sessionInfo: result.sessionInfo };
   }
   const sessionInfo = result.sessionInfo;
   return {
@@ -297,6 +403,13 @@ export async function requestChatSessionSnapshot(
       messages: visibleChatHistoryMessages(result.messages),
       pagination: resolveChatHistoryPagination(result),
       sessionId: historySessionId(result),
+      historyState: result.stateRevision
+        ? {
+            stateRevision: result.stateRevision,
+            pendingInputs: result.pendingInputs,
+            sessionInfo,
+          }
+        : undefined,
     },
   };
 }

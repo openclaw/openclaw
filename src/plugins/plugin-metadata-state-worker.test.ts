@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -5,16 +6,20 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { sourceHostPluginConflict } from "../claws/plugin-capability-probe.js";
 import {
   resolveConfigWidePluginMetadataSnapshot,
   resolveConfigWidePluginMetadataSnapshotAsync,
 } from "../config/io.plugin-metadata.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
+import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { migrateLegacyConfigMachineState } from "../infra/state-migrations.config-machine-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import * as machineState from "../state/config-machine-state.js";
+import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -23,15 +28,20 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledDiscovery from "./bundled-discovery-state.js";
-import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  setGatewayPluginMetadataSnapshot,
+} from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { readStartupBundledDiscoveryMode } from "./gateway-startup-plugin-config.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
 import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   parseInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
@@ -44,7 +54,6 @@ import {
   adoptProcessPluginCache,
   createPluginCache,
   getProcessPluginCache,
-  PluginCacheFactInvalidatedError,
   retirePluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
@@ -52,6 +61,7 @@ import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
+import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -108,6 +118,32 @@ function familyHashes(databasePath: string) {
       : [suffix, null];
   });
 }
+
+it("prepares Claw metadata off-thread and observes committed inventory and policy changes", async () => {
+  const env = environment();
+  await seed(env, index());
+  const pkg = {
+    kind: "plugin",
+    source: "clawhub",
+    ref: "@example/fixture",
+    version: "1.0.0",
+  } as const;
+  const check = async (
+    records: InstalledPluginIndex["installRecords"],
+    mode: "compat" | undefined,
+  ) => {
+    await withoutMainThreadSql(async () => {
+      expect(await sourceHostPluginConflict(pkg, "fixture", { env })).toBeUndefined();
+      expect(await loadInstalledPluginIndexInstallRecords({ env })).toEqual(records);
+      expect(readStartupBundledDiscoveryMode({}, env)).toBe(mode);
+    });
+  };
+  await check({}, undefined);
+  const installRecords = { fixture: { source: "npm" as const, spec: "@example/fixture@1.0.0" } };
+  await writePersistedInstalledPluginIndex({ ...index(), installRecords }, { env });
+  migrateLegacyConfigMachineState({ config: { plugins: { allow: ["fixture"] } }, env });
+  await check(installRecords, "compat");
+});
 
 async function withoutMainThreadSql(run: () => Promise<void>) {
   requireNodeSqlite();
@@ -167,6 +203,56 @@ it("transfers startup metadata out of its private snapshot and observes same-pro
     }
   } finally {
     adoptProcessPluginCache(processCache);
+  }
+});
+
+it("prepares external auth from the published inventory after an index write without rereading it", async () => {
+  const env = environment();
+  const config = {};
+  await seed(env, index());
+  const resolver = createProviderExternalAuthResolver({ resolveProviderPluginsForHooks: () => [] });
+  try {
+    const coldReads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+    const coldBatches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
+    await withoutMainThreadSql(async () => {
+      await resolver.withPreparedExternalAuthProfiles({ config, env }, async () => {
+        expect(getCurrentPluginMetadataSnapshot({ config, env })).toBeDefined();
+      });
+    });
+    expect(coldReads).not.toHaveBeenCalled();
+    expect(coldBatches).toHaveBeenCalledOnce();
+    coldReads.mockRestore();
+    coldBatches.mockRestore();
+    for (const message of ["boot inventory", "replacement inventory"]) {
+      const snapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
+        config,
+        env,
+        allowCurrent: false,
+      });
+      setGatewayPluginMetadataSnapshot(snapshot, { config, env });
+      // Writes invalidate raw index facts; the published runtime inventory remains authoritative.
+      await writePersistedInstalledPluginIndex(index(message), { env });
+      const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+      const batches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
+      await withoutMainThreadSql(async () => {
+        await resolver.withPreparedExternalAuthProfiles({ config, env }, async () => {
+          expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(snapshot);
+          expect(
+            resolver.resolveExternalAuthProfilesWithPlugins({
+              config,
+              env,
+              context: { env, store: { version: 1, profiles: {} } },
+            }),
+          ).toEqual([]);
+        });
+      });
+      expect(reads).not.toHaveBeenCalled();
+      expect(batches).not.toHaveBeenCalled();
+      reads.mockRestore();
+      batches.mockRestore();
+    }
+  } finally {
+    clearCurrentPluginMetadataSnapshot();
   }
 });
 
@@ -384,6 +470,108 @@ it("preserves database-family bytes during ambient artifact-preserving async ins
   expect(familyHashes(databasePath)).toEqual(before);
 });
 
+it("reads committed live metadata without space for a database snapshot", async () => {
+  const env = environment();
+  const databasePath = await seed(env, index());
+  const moduleUrl = (name: string) => new URL(name, import.meta.url).href;
+  const writer = spawn(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerThreadExecArgv(
+        new URL("../infra/gateway-state-owner.ts", import.meta.url),
+      ),
+      "--input-type=module",
+      "--eval",
+      `
+        import { DatabaseSync } from "node:sqlite";
+        import { acquireGatewayStateOwner } from ${JSON.stringify(moduleUrl("../infra/gateway-state-owner.ts"))};
+        import { defaultPayload } from ${JSON.stringify(moduleUrl("../infra/gateway-state-owner-record.ts"))};
+        const pathname = process.argv[1];
+        const owner = acquireGatewayStateOwner({
+          databasePath: pathname,
+          payload: { ...defaultPayload(pathname), role: "gateway" },
+        });
+        const database = new DatabaseSync(pathname);
+        database.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE unrelated_payload(data BLOB)");
+        process.on("message", value => {
+          database.exec("BEGIN IMMEDIATE; INSERT INTO unrelated_payload VALUES(zeroblob(1048576))");
+          if (value === "newer-schema") {
+            database.exec("PRAGMA user_version=2147483647");
+          } else {
+            database.prepare("UPDATE config_machine_state SET value_json=? WHERE state_key='plugins.installedIndex'").run(JSON.stringify(value));
+          }
+          database.exec("COMMIT");
+          process.send("committed");
+        });
+        process.on("disconnect", () => { database.close(); owner.release(); });
+        process.send("ready");
+      `,
+      databasePath,
+    ],
+    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+  );
+  let stderr = "";
+  writer.stderr?.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  const closed = once(writer, "close");
+  const nextMessage = () =>
+    Promise.race([
+      once(writer, "message"),
+      closed.then(([code]) => {
+        throw new Error(`Synthetic metadata writer exited (${code}): ${stderr}`);
+      }),
+    ]);
+  try {
+    expect((await nextMessage())[0]).toBe("ready");
+    const preload = path.join(env.OPENCLAW_STATE_DIR, "no-snapshot-space.cjs");
+    fs.writeFileSync(
+      preload,
+      `
+        const fs = require("node:fs");
+        const original = fs.mkdtempSync;
+        fs.mkdtempSync = function (prefix, ...args) {
+          if (String(prefix).includes("openclaw-sqlite-readonly")) {
+            throw Object.assign(new Error("synthetic snapshot disk full"), { code: "ENOSPC" });
+          }
+          return original.call(this, prefix, ...args);
+        };
+        require("node:module").syncBuiltinESMExports();
+      `,
+    );
+    await withEnvAsync(sqliteWorkerPreloadEnv(preload), async () => {
+      for (const message of ["first committed inventory", "inventory after unrelated growth"]) {
+        const committed = nextMessage();
+        writer.send({ revision: 1, index: index(message) });
+        expect((await committed)[0]).toBe("committed");
+        await withoutMainThreadSql(() =>
+          withArtifactPreservingStateReads(() =>
+            withPluginCache(createPluginCache(), async () => {
+              expect((await readPersistedInstalledPluginIndex({ env }))?.diagnostics).toEqual([
+                { level: "warn", message },
+              ]);
+            }),
+          ),
+        );
+      }
+    });
+    const committed = nextMessage();
+    writer.send("newer-schema");
+    expect((await committed)[0]).toBe("committed");
+    await expect(
+      withArtifactPreservingStateReads(() =>
+        withPluginCache(createPluginCache(), () => readPersistedInstalledPluginIndex({ env })),
+      ),
+    ).rejects.toBeInstanceOf(SqliteSchemaVersionError);
+  } finally {
+    if (writer.connected) {
+      writer.disconnect();
+    }
+    const [code] = await closed;
+    expect(code, stderr).toBe(0);
+  }
+});
+
 it("reads retained metadata snapshots off-thread and sees committed writes after the scope", async () => {
   const env = environment();
   await seed(env, index("captured ledger"));
@@ -494,21 +682,6 @@ it("shares a pending index read and returns the same validated inventory", async
     expect(left?.diagnostics).toEqual([{ level: "warn", message: "synthetic index" }]);
     expect(right).toBe(left);
     expect(read).toHaveBeenCalledTimes(1);
-  });
-});
-
-it("uses a newer synchronous index publication when an older worker read finishes", async () => {
-  const env = environment();
-  await seed(env, index("current ledger"));
-  const row = createDeferredCore<{ value_json: string }>();
-  vi.spyOn(metadataWorker, "readPluginMetadataStateRow").mockReturnValue(row.promise);
-  await using cache = createPluginCache();
-  await withPluginCache(cache, async () => {
-    const pending = readPersistedInstalledPluginIndex({ env });
-    const current = readPersistedInstalledPluginIndexSync({ env });
-    row.resolve({ value_json: JSON.stringify({ revision: 1, index: index("stale ledger") }) });
-    expect(await pending).toBe(current);
-    expect(current?.diagnostics).toEqual([{ level: "warn", message: "current ledger" }]);
   });
 });
 
@@ -642,7 +815,7 @@ it("keeps captured async policy and inventory in pinned roots after a concurrent
     // An escaped descendant cannot replace its closed snapshot with live policy.
     writeConfigMachineState("plugins.bundledDiscovery", "compat", { env });
     afterCleanup.resolve();
-    await expect(descendant).rejects.toThrow(PluginCacheFactInvalidatedError);
+    await expect(descendant).rejects.toThrow(StateDatabaseReadAdmissionInvalidatedError);
   } finally {
     resume.resolve();
     afterCleanup.resolve();

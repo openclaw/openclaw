@@ -168,3 +168,14 @@ export function buildMemoryPromptSection({
       : "Citations: include Source: <path#line> when it helps the user verify memory snippets.";
   return ["## Memory Recall", guidance, ...sessionGuidance, outcomeGuidance, citationGuidance, ""];
 }
+
+/** Ask agents to tag repository-specific curated entries with the run's safe project key. */
+export function buildProjectMemoryWriteInstruction(projectKey: string | undefined): string[] {
+  // Keys become HTML comments in curated Markdown, so line breaks or angle brackets are unsafe.
+  return projectKey && !/[\r\n<>]/u.test(projectKey)
+    ? [
+        `For every repository-specific memory entry you write, add <!-- project: ${projectKey} --> on the same line. Do not project-scope user-level preferences, standing intents, or facts that are not specific to this repository.`,
+        "",
+      ]
+    : [];
+}

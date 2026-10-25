@@ -1,3 +1,4 @@
+import { omitNullRequestHeaders } from "@openclaw/llm-core";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
@@ -14,7 +15,7 @@ import {
   registerSessionResourceCleanup,
   type SessionResourceOwner,
 } from "../session-resources.js";
-import type { Model, StreamOptions, UserMessage } from "../types.js";
+import type { Model, ModelRequestHeaders, StreamOptions, UserMessage } from "../types.js";
 import {
   recordResponsesContinuationState,
   resolveResponsesContinuationRequest,
@@ -24,6 +25,7 @@ import {
 } from "./openai-responses-continuation.js";
 import {
   parseOpenAIResponsesWebSocketServerError,
+  isResponsesTerminalEventType,
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketPreDispatchError,
   OpenAIResponsesWebSocketSafeRetryError,
@@ -150,18 +152,46 @@ function scheduleSessionWebSocketExpiry(cacheKey: string, entry: CachedWebSocket
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
   }
-  entry.idleTimer = setTimeout(() => {
-    if (entry.busy) {
-      return;
-    }
-    invalidateOwnedWebSocketSession(cacheKey, entry, "idle_timeout");
-  }, SESSION_WEBSOCKET_CACHE_TTL_MS);
+  entry.idleTimer = entry.owner.runInDetachedAsyncContext(() =>
+    setTimeout(() => {
+      if (entry.busy) {
+        return;
+      }
+      invalidateOwnedWebSocketSession(cacheKey, entry, "idle_timeout");
+    }, SESSION_WEBSOCKET_CACHE_TTL_MS),
+  );
   entry.idleTimer.unref?.();
+}
+
+function markDegradedWebSocketConnection(
+  key: string,
+  owner: SessionResourceOwner,
+  sessionId: string | undefined,
+  cooldownMs: number | undefined,
+): void {
+  if (cooldownMs === undefined || !Number.isFinite(cooldownMs) || cooldownMs <= 0) {
+    return;
+  }
+  // Keep only the cooldown identity, outside both the request closure and its async context.
+  const entry: DegradedWebSocketConnection = {
+    sessionId,
+    owner,
+    retryAt: Date.now() + cooldownMs,
+    expiryTimer: owner.runInDetachedAsyncContext(() =>
+      setTimeout(() => {
+        if (degradedWebSocketConnections.get(key) === entry) {
+          degradedWebSocketConnections.delete(key);
+        }
+      }, cooldownMs),
+    ),
+  };
+  entry.expiryTimer.unref?.();
+  degradedWebSocketConnections.set(key, entry);
 }
 
 type PreparedWebSocketConnection = ReturnType<typeof prepareWebSocketConnection>;
 
-function prepareWebSocketConnection(client: OpenAI, headers: Record<string, string> | undefined) {
+function prepareWebSocketConnection(client: OpenAI, headers: ModelRequestHeaders | undefined) {
   if (!isOfficialOpenAIResponsesBaseUrl(client.baseURL)) {
     throw new Error("OpenAI Responses WebSocket requires the official API endpoint");
   }
@@ -170,7 +200,7 @@ function prepareWebSocketConnection(client: OpenAI, headers: Record<string, stri
   }
   const owner = getAiTransportHost();
   const resolvedApiKey = owner.resolveSecretSentinel(client.apiKey);
-  const resolvedHeaders = { ...resolveAiTransportHeaderSentinels(headers) };
+  const resolvedHeaders = { ...omitNullRequestHeaders(resolveAiTransportHeaderSentinels(headers)) };
   for (const key of Object.keys(resolvedHeaders)) {
     const normalizedKey = key.toLowerCase();
     if (normalizedKey === "authorization" || normalizedKey === "traceparent") {
@@ -180,7 +210,12 @@ function prepareWebSocketConnection(client: OpenAI, headers: Record<string, stri
   if (!resolvedApiKey) {
     throw new Error("OpenAI Responses WebSocket requires a resolved API key");
   }
-  const resolvedClient = client.withOptions({ apiKey: resolvedApiKey });
+  // Cached sockets must not retain HTTP hooks, including the SDK logger bound to that client.
+  const resolvedClient = client.withOptions({
+    apiKey: resolvedApiKey,
+    fetch: undefined,
+    logger: undefined,
+  });
   return {
     client: resolvedClient,
     headers: resolvedHeaders,
@@ -203,9 +238,12 @@ function createWebSocket(
   // openai's dual ESM declaration paths give the same runtime client two nominal
   // private-field types under NodeNext resolution. The SDK constructor receives
   // the actual OpenAI instance; bridge only that declaration mismatch here.
-  const socket = new ResponsesWS(
-    connection.client as unknown as ConstructorParameters<typeof ResponsesWS>[0],
-    { headers: connection.headers, maxQueueSize: 1 },
+  const socket = connection.owner.runInDetachedAsyncContext(
+    () =>
+      new ResponsesWS(
+        connection.client as unknown as ConstructorParameters<typeof ResponsesWS>[0],
+        { headers: connection.headers, maxQueueSize: 1 },
+      ),
   );
   // The SDK async iterator removes its own listeners after every response while
   // cached sockets remain open. Keep one lifetime listener so an idle socket
@@ -347,7 +385,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
   restoreRequest?: (request: ResponsesContinuationRequest) => ResponsesContinuationRequest;
   mode: OpenAIResponsesWebSocketMode;
   sessionId?: string;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   signal?: AbortSignal;
   callerSignal?: AbortSignal;
   degradeCooldownMs?: number;
@@ -368,24 +406,13 @@ export function createOpenAIResponsesWebSocketStream(params: {
     clearTimeout(degraded.expiryTimer);
   }
   degradedWebSocketConnections.delete(degradationKey);
-  const markDegraded = () => {
-    const cooldownMs = params.degradeCooldownMs;
-    if (cooldownMs === undefined || !Number.isFinite(cooldownMs) || cooldownMs <= 0) {
-      return;
-    }
-    const entry: DegradedWebSocketConnection = {
-      sessionId: params.sessionId,
-      owner: connection.owner,
-      retryAt: Date.now() + cooldownMs,
-      expiryTimer: setTimeout(() => {
-        if (degradedWebSocketConnections.get(degradationKey) === entry) {
-          degradedWebSocketConnections.delete(degradationKey);
-        }
-      }, cooldownMs),
-    };
-    entry.expiryTimer.unref?.();
-    degradedWebSocketConnections.set(degradationKey, entry);
-  };
+  const markDegraded = () =>
+    markDegradedWebSocketConnection(
+      degradationKey,
+      connection.owner,
+      params.sessionId,
+      params.degradeCooldownMs,
+    );
   let lease: ReturnType<typeof acquireWebSocket>;
   try {
     lease = acquireWebSocket(params, connection);
@@ -484,7 +511,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
           onActiveResponse: params.onActiveResponse,
           toInput: params.steeringInput,
           send: (event) => lease.socket.sendRaw(JSON.stringify(event)),
-          needsContinuation: () => deferredInput,
+          needsContinuation: deferredInput,
           assertActive: () => {
             if (released || terminalReceived || params.signal?.aborted) {
               throw new Error("Responses steering is no longer active");
@@ -571,10 +598,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
           if (event.type === "response.completed") {
             terminalResponse = event.response;
           }
-          terminalReceived =
-            event.type === "response.completed" ||
-            event.type === "response.incomplete" ||
-            event.type === "response.failed";
+          terminalReceived = isResponsesTerminalEventType(event.type);
           if (terminalReceived) {
             steering?.seal();
             if (event.type === "response.failed") {

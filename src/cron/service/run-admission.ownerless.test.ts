@@ -7,7 +7,6 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  clearCommandLane,
   enqueueCommandInLane,
   getTotalQueueSize,
   setCommandLaneConcurrency,
@@ -31,12 +30,12 @@ import {
   finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.test-support.js";
-import type { CronJob } from "../types.js";
+import type { CronEvent, CronJob } from "../types.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
 import { enqueueRun, run } from "./ops-run.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
-import type { CronEvent, CronServiceState } from "./state.js";
+import type { CronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
 const NOW = Date.parse("2026-09-06T20:24:00.000Z");
@@ -226,7 +225,6 @@ describe("ownerless reservation and manual completion", () => {
     } finally {
       release.resolve();
       await blocker;
-      clearCommandLane(CommandLane.Cron);
     }
   });
 });
@@ -325,17 +323,17 @@ describe("ownerless skip transaction guards", () => {
       expect.soft(records).toHaveLength(1);
       expect(records[0]?.agentId).toBeUndefined();
       if (testCase.configuredDefault) {
-        expect.soft(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+        expect.soft(state.deps.enqueueSessionEvent).toHaveBeenCalledOnce();
         expect
-          .soft(state.deps.enqueueSystemEvent)
+          .soft(state.deps.enqueueSessionEvent)
           .toHaveBeenCalledWith(
             expect.any(String),
             expect.objectContaining({ agentId: testCase.configuredDefault }),
           );
       } else {
-        expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+        expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
       }
+      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(receipts(storePath, job.id)).toEqual([]);
       expect(execute).not.toHaveBeenCalled();
     } finally {
@@ -381,7 +379,6 @@ describe("ownerless skip transaction guards", () => {
     const job = commandJob("ownerless-live-receipt");
     const { state, storePath, events, execute } = await setupOwnerlessJob(job, () => owner);
     const prepared = prepareCronRunReceiptClaim({
-      observed: undefined,
       storePath,
       job,
       agentId: "ops",

@@ -4,8 +4,9 @@ import readline from "node:readline";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import {
   isToolCallBlock,
   resolveToolUseId,
@@ -209,7 +210,9 @@ export async function claudeCliSessionTranscriptHasOrphanedToolUse(
         continue;
       }
       const rec = safeParseJsonRecord(line);
-      if (rec?.isSidechain === true) {
+      // Only conversation records count. Claude also logs request echoes
+      // (`api-request-blob`) that repeat answered tool calls under role=assistant.
+      if (rec?.isSidechain === true || (rec?.type !== "user" && rec?.type !== "assistant")) {
         continue;
       }
       const message = asOptionalRecord(rec?.message);
@@ -343,7 +346,6 @@ function formatFallbackTurns(
 export async function buildClaudeCliFallbackContextPrelude(params: {
   cliSessionId: string | undefined;
   homeDir?: string;
-  charBudget?: number;
 }): Promise<string> {
   const sessionId = params.cliSessionId?.trim();
   if (!sessionId) {
@@ -356,13 +358,9 @@ export async function buildClaudeCliFallbackContextPrelude(params: {
   if (!seed) {
     return "";
   }
-  const charBudget = Math.max(
-    CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS,
-    params.charBudget ?? CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET,
-  );
   const heading = "## Prior session context (from claude-cli)";
   const sections: string[] = [heading];
-  let remaining = charBudget - heading.length;
+  let remaining = CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET - heading.length;
   if (seed.summaryText) {
     const summarySection = `\nSummary of earlier conversation:\n${seed.summaryText}`;
     if (summarySection.length <= remaining) {
@@ -412,22 +410,17 @@ export function createAcpVisibleTextAccumulator() {
           : chunk;
       rawText += delta;
       if (!released) {
-        const candidate = rawText.trimStart();
-        if (
-          SILENT_REPLY_TOKEN.startsWith(candidate) ||
-          (candidate.startsWith(SILENT_REPLY_TOKEN) &&
-            !candidate.slice(SILENT_REPLY_TOKEN.length).trim())
-        ) {
+        const candidate = rawText.trimStart().toUpperCase();
+        const stripped = stripMixedSilentReplyTokens(rawText);
+        if (SILENT_REPLY_TOKEN.startsWith(candidate) || isSilentReplyText(candidate)) {
           // A literal newline ends the one permitted control line. Its suffix
           // is ordinary text, even if it spells another control token.
-          if (!rawText.startsWith(`${SILENT_REPLY_TOKEN}\n`)) {
+          if (stripped === null) {
             return null;
           }
         }
         released = true;
-        visibleText = rawText.startsWith(`${SILENT_REPLY_TOKEN}\n`)
-          ? rawText.slice(SILENT_REPLY_TOKEN.length + 1)
-          : rawText;
+        visibleText = stripped ?? rawText;
         return visibleText ? { text: visibleText, delta: visibleText } : null;
       }
       visibleText += delta;

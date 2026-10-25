@@ -1,4 +1,5 @@
 import {
+  AgentHarnessPreflightError,
   applyEmbeddedAttemptToolsAllow,
   buildAgentHookContextChannelFields,
   buildEmbeddedAttemptToolRunContext,
@@ -15,6 +16,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { applyGatewayToolPolicy } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveCodexScheduledToolProjectionFactory } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
@@ -99,7 +101,6 @@ type DynamicToolBuildParams = {
   cronCreatorToolAllowlistCaptureRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistCaptureRef"];
   resolveCronCreatorToolAuthority?: Parameters<typeof createCodexHostToolSurface>[3];
   cronCreatorAuthorityUnavailableReason?: OpenClawCodingToolsOptions["cronCreatorAuthorityUnavailableReason"];
-  forceHeartbeatTool?: boolean;
   ignoreDisableMessageTool?: boolean;
   ignoreRuntimePlan?: boolean;
   /** Host fact resolver; injectable only for focused plugin contract tests. */
@@ -270,8 +271,6 @@ export async function buildDynamicTools(
         params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
       disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
       forceMessageTool: shouldForceMessageTool(messagePolicyParams),
-      enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
-      forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
       onYield: (message, acknowledgment) => {
         input.onYieldDetected(message, acknowledgment);
         input.onCodexAppServerEvent?.({
@@ -295,7 +294,16 @@ export async function buildDynamicTools(
     const allTools = await createCodexHostToolSurface(
       params,
       options,
-      { cwd: input.effectiveCwd ?? input.effectiveWorkspace },
+      {
+        cwd: input.effectiveCwd ?? input.effectiveWorkspace,
+        nativeLocalExecution:
+          input.nativeToolSurfaceEnabled === true &&
+          nativeExecutionPolicy.nativeToolSurfaceAllowed &&
+          nativeExecutionPolicy.effectiveExecHost === "gateway" &&
+          !nativeExecutionPolicy.sandboxed
+            ? true
+            : undefined,
+      },
       input.resolveCronCreatorToolAuthority,
     );
     toolBuildStages.mark("create-openclaw-coding-tools");
@@ -342,7 +350,9 @@ export async function buildDynamicTools(
       nativeImageInspectionEnabled: input.nativeToolSurfaceEnabled === true,
     });
     toolBuildStages.mark("vision-filtering");
-    const webSearchPresent = visionFilteredTools.some((tool) => tool.name === "web_search");
+    const webSearchPresent =
+      !webSearchPlan.suppressManagedWebSearch &&
+      visionFilteredTools.some((tool) => tool.name === "web_search");
     const persistentCodexWebSearchSurface =
       params.config?.tools?.web?.search?.enabled !== false &&
       !isCodexDynamicToolExcluded(input.pluginConfig, ["web_search"]);
@@ -353,6 +363,7 @@ export async function buildDynamicTools(
         config: params.config,
         nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
       }).kind === "native-hosted";
+    const webSearchPolicy = params.preparedWebSearchPolicy;
     let nativeWebSearchAllowed = false;
     let persistentWebSearchAllowed = webSearchPresent;
     if (
@@ -360,35 +371,18 @@ export async function buildDynamicTools(
         (webSearchPlan.kind === "native-hosted" &&
           (input.onWebSearchPolicyResolved || webSearchPlan.webFetchHostnameAllowlist))) &&
       !webSearchPresent &&
-      persistentCodexWebSearchSurface
+      persistentCodexWebSearchSurface &&
+      webSearchPolicy
     ) {
-      const webSearchPolicy = (
-        await import("openclaw/plugin-sdk/agent-harness")
-      ).resolveWebSearchToolPolicy({
-        config: params.config,
-        modelProvider: params.model.provider,
-        modelId: params.modelId,
-        agentId: input.policyAgentId,
-        sessionKey: input.sandboxSessionKey,
-        sessionId: params.sessionId,
-        ...(persistentHostedWebSearchEligible
-          ? { runtimeToolAllowlist: toolRunContext.runtimeToolAllowlist }
-          : {}),
-        sandboxToolPolicy: input.sandbox?.tools,
-        messageProvider: messageToolProvider,
-        agentAccountId: params.agentAccountId,
-        groupId: params.groupId,
-        groupChannel: params.groupChannel,
-        groupSpace: params.groupSpace,
-        spawnedBy: params.spawnedBy,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-        inputProvenance: params.inputProvenance,
-        trustedInternalHandoff: params.trustedInternalHandoff,
-        scheduledToolPolicy: params.scheduledToolPolicy,
-      });
+      if (
+        webSearchPolicy.modelRef &&
+        (webSearchPolicy.modelRef.provider !== params.model.provider ||
+          webSearchPolicy.modelRef.model !== params.modelId)
+      ) {
+        throw new AgentHarnessPreflightError(
+          "Native model changed after web search policy preparation. Retry the turn to prepare policy for the current model.",
+        );
+      }
       persistentWebSearchAllowed =
         webSearchPolicy.persistentAllowed &&
         (persistentHostedWebSearchEligible ||
@@ -397,6 +391,10 @@ export async function buildDynamicTools(
       nativeWebSearchAllowed =
         webSearchPlan.kind === "native-hosted" &&
         webSearchPolicy.allowed &&
+        applyEmbeddedAttemptToolsAllow(
+          [{ name: "web_search" }],
+          toolRunContext.runtimeToolAllowlist,
+        ).length > 0 &&
         !isCodexMemoryFlushRun(params);
     }
     input.onPersistentWebSearchPolicyResolved?.(persistentWebSearchAllowed);
@@ -439,7 +437,9 @@ export async function buildDynamicTools(
     // Resolve policy before hiding the managed tool. Hosted search follows the
     // same effective policy, while only one search implementation is exposed.
     const webSearchAllowed =
-      nativeWebSearchAllowed || normalizedTools.some((tool) => tool.name === "web_search");
+      nativeWebSearchAllowed ||
+      (!webSearchPlan.suppressManagedWebSearch &&
+        normalizedTools.some((tool) => tool.name === "web_search"));
     webFetchHostnameAllowlistRef.value = webSearchAllowed
       ? webSearchPlan.webFetchHostnameAllowlist
       : undefined;
@@ -447,9 +447,12 @@ export async function buildDynamicTools(
     const webSearchFilteredTools = webSearchPlan.suppressManagedWebSearch
       ? normalizedTools.filter((tool) => tool.name !== "web_search")
       : normalizedTools;
-    const exposedTools = placeDisabledNativeShellToolsInDirectNamespace(
-      webSearchFilteredTools,
-      input.nativeToolSurfaceEnabled,
+    const exposedTools = applyGatewayToolPolicy(
+      placeDisabledNativeShellToolsInDirectNamespace(
+        webSearchFilteredTools,
+        input.nativeToolSurfaceEnabled,
+      ),
+      params.config,
     );
     if (preNormalizationDiagnostics.length > 0) {
       embeddedAgentLog.warn(
@@ -468,7 +471,7 @@ export async function buildDynamicTools(
     }
     const summary = toolBuildStages.snapshot();
     if (shouldWarnCodexDynamicToolBuildStageSummary(summary, input.profilerEnabled)) {
-      const phase = input.forceHeartbeatTool ? "registered-tools" : "runtime-tools";
+      const phase = input.ignoreRuntimePlan ? "registered-tools" : "runtime-tools";
       embeddedAgentLog.warn(
         `codex app-server dynamic tool build timings runId=${params.runId} sessionId=${params.sessionId} phase=${phase} totalMs=${summary.totalMs} stages=${formatStageTimings(summary.stages)}`,
         {
@@ -482,7 +485,6 @@ export async function buildDynamicTools(
           visionFilteredToolCount: visionFilteredTools.length,
           filteredToolCount: filteredTools.length,
           normalizedToolCount: exposedTools.length,
-          forceHeartbeatTool: input.forceHeartbeatTool === true,
           ignoreRuntimePlan: input.ignoreRuntimePlan === true,
           nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled === true,
         },

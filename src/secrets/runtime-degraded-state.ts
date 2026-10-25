@@ -164,30 +164,19 @@ function ownerKey(ownerKind: DegradedSecretOwner["ownerKind"], ownerId: string):
   return `${ownerKind}\0${ownerId}`;
 }
 
-function cloneOwner<T extends DegradedSecretOwner>(owner: T): T {
-  return {
-    ...owner,
-    paths: [...owner.paths],
-    refKeys: [...owner.refKeys],
-    ...(owner.providerFailures
-      ? { providerFailures: owner.providerFailures.map((failure) => ({ ...failure })) }
-      : {}),
-  };
-}
-
 /** Publishes the degraded-owner snapshot at the same edge as runtime config activation. */
 export function setActiveDegradedSecretOwners(owners: readonly DegradedSecretOwner[]): void {
-  activeDegradedOwners = owners.map(cloneOwner);
+  activeDegradedOwners = [...owners];
 }
 
 /** Publishes one runtime-discovered channel credential owner. */
 export function setActiveCredentialDegradedOwner(owner: DegradedSecretOwner): void {
-  activeCredentialDegradedOwners.set(ownerKey(owner.ownerKind, owner.ownerId), cloneOwner(owner));
+  activeCredentialDegradedOwners.set(ownerKey(owner.ownerKind, owner.ownerId), owner);
 }
 
 /** Lists credential owners independently of the replaceable SecretRef snapshot. */
 export function listActiveCredentialDegradedOwners(): DegradedSecretOwner[] {
-  return Array.from(activeCredentialDegradedOwners.values(), cloneOwner);
+  return [...activeCredentialDegradedOwners.values()];
 }
 
 /** Clears credential-owner state only when its owning secrets runtime is torn down. */
@@ -203,9 +192,9 @@ export function clearActiveCredentialDegradedOwner(
   activeCredentialDegradedOwners.delete(ownerKey(ownerKind, ownerId));
 }
 
-/** Returns the active degraded-owner snapshot without exposing mutable registry state. */
+/** Lists snapshot-owned records; trusted runtime consumers do not mutate their metadata. */
 export function listActiveDegradedSecretOwners(): DegradedSecretOwner[] {
-  return [...activeDegradedOwners.map(cloneOwner), ...listActiveCredentialDegradedOwners()];
+  return [...activeDegradedOwners, ...listActiveCredentialDegradedOwners()];
 }
 
 /** Associates a strict activation failure with the owners it prevented from refreshing. */
@@ -216,7 +205,7 @@ export function associateSecretResolutionErrorOwners(
   if ((typeof error !== "object" && typeof error !== "function") || error === null) {
     return;
   }
-  resolutionErrorOwners.set(error, owners.map(cloneOwner));
+  resolutionErrorOwners.set(error, [...owners]);
 }
 
 /** Returns owner metadata recorded for a strict activation failure. */
@@ -224,7 +213,7 @@ export function listSecretResolutionErrorOwners(error: unknown): SecretResolutio
   if ((typeof error !== "object" && typeof error !== "function") || error === null) {
     return [];
   }
-  return (resolutionErrorOwners.get(error) ?? []).map(cloneOwner);
+  return [...(resolutionErrorOwners.get(error) ?? [])];
 }
 
 /** Returns one active degraded owner, if present. */
@@ -232,14 +221,14 @@ export function findActiveDegradedSecretOwner(
   ownerKind: DegradedSecretOwner["ownerKind"],
   ownerId: string,
 ): DegradedSecretOwner | undefined {
-  const owner =
+  return (
     activeDegradedOwners.find(
       (entry) =>
         entry.ownerKind === ownerKind &&
         entry.ownerId === ownerId &&
         entry.degradationState !== "stale",
-    ) ?? activeCredentialDegradedOwners.get(ownerKey(ownerKind, ownerId));
-  return owner ? cloneOwner(owner) : undefined;
+    ) ?? activeCredentialDegradedOwners.get(ownerKey(ownerKind, ownerId))
+  );
 }
 
 /** Throws the canonical typed error when an owner was isolated at startup. */

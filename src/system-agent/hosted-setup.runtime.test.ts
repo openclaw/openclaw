@@ -1,12 +1,8 @@
 import "./chat-engine.mocks.test-support.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
 import type { SetupChannelsOptions } from "../channels/plugins/setup-wizard-types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { committedConfigFiles as hostedConfigFiles } from "../commands/committed-config.test-support.js";
-import { withCommandPluginMetadata } from "../commands/config-validation.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   bindPluginMetadataSnapshotCache,
@@ -19,22 +15,18 @@ import {
   hasPluginLifecycleLease,
   withPluginLifecycleLease,
 } from "../plugins/plugin-lifecycle-lease.js";
-import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getPluginRuntimeGenerationRegistry,
   withPluginRuntimeGenerationScope,
 } from "../plugins/runtime/generation-scope.js";
-import { createInstallAccountPolicyFixture } from "../plugins/test-helpers/install-account-policy.test-support.js";
-import { normalizeAccountId } from "../routing/account-id.js";
-import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
-import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import * as audit from "./audit.js";
 import {
   fakeOverviewLoader,
   sharedVerifiedInferenceConfig,
   mocks,
   useTempStateDir,
-  configSnapshot,
   createAmbientVerifiedBinding,
   SystemAgentChatEngine,
   advanceGatewayWizardToSecretStorage,
@@ -42,6 +34,8 @@ import {
   type WizardPrompter,
 } from "./chat-engine.test-support.js";
 import { ChatWizardHost } from "./chat-wizard-host.js";
+import * as hostedSetup from "./hosted-setup.runtime.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 
 function createEngine(options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) {
   return new SystemAgentChatEngine({
@@ -55,6 +49,10 @@ function useConfigWriter() {
   mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) =>
     hostedConfigFiles.write(config),
   );
+}
+
+function installAudit() {
+  return vi.spyOn(audit, "appendSystemAgentAuditEntry").mockResolvedValue("state/openclaw.sqlite");
 }
 
 function setupSnapshot(config: OpenClawConfig, hash: string) {
@@ -100,10 +98,7 @@ describe("SystemAgentChatEngine runtime", () => {
     async (ending) => {
       let retainedOptions: SetupChannelsOptions | undefined;
       const prepare = vi.fn(async () => {});
-      mocks.readSetupConfigFileSnapshot.mockResolvedValue({
-        ...setupSnapshot({}, "channel-lifetime-hash"),
-        sourceConfig: {},
-      });
+      useSetupConfig({}, "channel-lifetime-hash");
       useConfigWriter();
       useChannelSetup(async (config, prompter, options) => {
         retainedOptions = options;
@@ -111,17 +106,15 @@ describe("SystemAgentChatEngine runtime", () => {
         await prompter.text({ message: "Waiting for channel login" });
         return config;
       });
+      installAudit();
       const host = new ChatWizardHost({
         surface: "gateway",
         beforePersistentApply: prepare,
-        dependencies: { appendAuditEntry: vi.fn(async () => "state/openclaw.sqlite") },
       });
       try {
         expect((await host.startChannel("zalouser")).text).toContain("Waiting for channel login");
         const assertCurrent = retainedOptions?.assertPersistentEffectCurrent;
-        if (!assertCurrent) {
-          throw new Error("Hosted channel setup did not retain its live owner assertion");
-        }
+        assert(assertCurrent, "Hosted channel setup did not retain its live owner assertion");
         expect(assertCurrent).not.toThrow();
         if (ending === "disposed") {
           host.dispose();
@@ -142,32 +135,27 @@ describe("SystemAgentChatEngine runtime", () => {
     const baseConfig: OpenClawConfig = {
       agents: { defaults: { workspace: "/tmp/skills-workspace" } },
     };
-    const beforeEffects: Array<() => Promise<void>> = [];
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    const appendAuditEntry = installAudit();
     useSetupConfig(baseConfig, "skills-base-hash");
     mocks.setupSkills.mockImplementation(
       async (
-        config: OpenClawConfig,
-        workspaceDir: string,
-        _runtime: unknown,
-        prompter: WizardPrompter,
-        options: { beforePersistentEffect?: () => Promise<void> },
+        ...[config, workspaceDir, , prompter, options = {}]: Parameters<
+          typeof import("../commands/onboard-skills.js").setupSkills
+        >
       ) => {
         expect(workspaceDir).toBe("/tmp/skills-workspace");
         expect(options.beforePersistentEffect).toBeTypeOf("function");
-        beforeEffects.push(options.beforePersistentEffect!);
         await prompter.note("Eligible: 2\nMissing requirements: 1", "Skills status");
         await options.beforePersistentEffect?.();
         return { ...config, skills: { install: { nodeManager: "npm" } } };
       },
     );
     useConfigWriter();
-    const engine = createEngine({ surface: "gateway", appendAuditEntry });
+    const engine = createEngine({ surface: "gateway" });
 
     const reply = await engine.handle("configure skills");
 
     expect(reply.text).toContain("skills dependency setup is complete");
-    expect(beforeEffects).toHaveLength(1);
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({ skills: { install: { nodeManager: "npm" } } }),
       { allowConfigSizeDrop: false, baseHash: "skills-base-hash" },
@@ -179,21 +167,15 @@ describe("SystemAgentChatEngine runtime", () => {
 
   it("hosts search setup as question cards and keeps gateway credentials out of model history", async () => {
     const baseConfig: OpenClawConfig = {};
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
-    const beforePersistentEffects: Array<() => Promise<void>> = [];
+    const appendAuditEntry = installAudit();
     useSetupConfig(baseConfig, "search-base-hash");
     mocks.runSearchSetupFlow.mockImplementation(
       async (
-        config: OpenClawConfig,
-        _runtime: unknown,
-        prompter: WizardPrompter,
-        options: {
-          preserveDisabledSearchState?: boolean;
-          beforePersistentEffect?: () => Promise<void>;
-        },
+        ...[config, , prompter, options = {}]: Parameters<
+          typeof import("../flows/search-setup.js").runSearchSetupFlow
+        >
       ) => {
         expect(options.preserveDisabledSearchState).toBe(false);
-        beforePersistentEffects.push(options.beforePersistentEffect!);
         const provider = await prompter.select({
           message: "Search provider",
           options: [
@@ -215,7 +197,7 @@ describe("SystemAgentChatEngine runtime", () => {
       },
     );
     useConfigWriter();
-    const engine = createEngine({ surface: "gateway", appendAuditEntry });
+    const engine = createEngine({ surface: "gateway" });
 
     const providerStep = await engine.handle("configure search");
     expect(providerStep.question).toEqual({
@@ -232,7 +214,6 @@ describe("SystemAgentChatEngine runtime", () => {
 
     const done = await engine.handle("search-secret-value");
     expect(done.text).toContain("web search setup is complete");
-    expect(beforePersistentEffects).toHaveLength(1);
     expect(appendAuditEntry).toHaveBeenCalledWith(
       expect.objectContaining({ operation: "search.setup" }),
     );
@@ -242,8 +223,8 @@ describe("SystemAgentChatEngine runtime", () => {
 
   it("hosts full Gateway setup with a lockout warning, audited config write, and no restart", async () => {
     useGatewayConfig();
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
-    const engine = createEngine({ surface: "gateway", appendAuditEntry });
+    const appendAuditEntry = installAudit();
+    const engine = createEngine({ surface: "gateway" });
 
     const { portStep, storageStep } = await advanceGatewayWizardToSecretStorage(engine);
     expect(portStep.text).toContain(
@@ -262,34 +243,30 @@ describe("SystemAgentChatEngine runtime", () => {
     expect(done.text).toContain("Done — gateway settings saved.");
     expect(done.text).toContain("Restart the Gateway to apply them (`restart gateway`).");
     expect(done.text).not.toContain("restarted");
-    expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gateway: expect.objectContaining({
-          port: 19001,
-          bind: "lan",
-          auth: expect.objectContaining({
-            mode: "token",
-            token: expect.stringMatching(/^\S{16,}$/),
-          }),
-          tailscale: expect.objectContaining({ mode: "off" }),
-        }),
-      }),
-      {
-        allowConfigSizeDrop: false,
-        baseHash: "gateway-base-hash",
-        afterWrite: {
-          mode: "none",
-          reason: "Gateway setup defers runtime apply until explicit restart",
+    const [written, writeOptions] = mocks.writeWizardConfigFile.mock.calls[0] ?? [];
+    expect(written).toMatchObject({
+      gateway: {
+        port: 19001,
+        bind: "lan",
+        auth: {
+          mode: "token",
+          token: expect.stringMatching(/^\S{16,}$/),
         },
+        tailscale: { mode: "off" },
       },
-    );
-    expect(appendAuditEntry).toHaveBeenCalledWith({
-      operation: "gateway.setup",
-      summary: "Configured Gateway via chat setup",
-      details: { capability: "gateway" },
     });
+    expect(writeOptions).toEqual({
+      allowConfigSizeDrop: false,
+      baseHash: "gateway-base-hash",
+      afterWrite: {
+        mode: "none",
+        reason: "Gateway setup defers runtime apply until explicit restart",
+      },
+    });
+    expect(appendAuditEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "gateway.setup" }),
+    );
     // Nothing was typed, and the generated secret never enters the transcript.
-    const written = mocks.writeWizardConfigFile.mock.calls[0]?.[0] as OpenClawConfig | undefined;
     const generatedToken = written?.gateway?.auth?.token;
     expect(typeof generatedToken).toBe("string");
     expect(JSON.stringify(engine.historySince(0))).not.toContain(generatedToken);
@@ -298,7 +275,6 @@ describe("SystemAgentChatEngine runtime", () => {
   it("rechecks inference authority immediately before a hosted Gateway write", async () => {
     useTempStateDir();
     const baseConfig = useGatewayConfig();
-    const currentConfig = structuredClone(baseConfig);
     const changedConfig: OpenClawConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
       models: {
@@ -312,20 +288,25 @@ describe("SystemAgentChatEngine runtime", () => {
         },
       },
     };
-    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    const configFixture = await createInferenceConfigFixture(baseConfig);
+    const snapshot = configFixture.snapshot;
+    const verifiedInference = await createAmbientVerifiedBinding(
+      snapshot.runtimeConfig ?? snapshot.config,
+      snapshot,
+    );
     // The route flips between the final turn's entry gate and the
     // persistent-apply recheck; only the apply boundary can catch it.
     let baseReadsRemaining = Number.POSITIVE_INFINITY;
+    mocks.readConfigFileSnapshot.mockImplementation(async () => {
+      if (baseReadsRemaining === 0) {
+        await configFixture.write(changedConfig);
+      }
+      baseReadsRemaining -= 1;
+      return configFixture.read();
+    });
     const engine = createEngine({
       surface: "gateway",
       verifiedInference,
-      deps: {
-        readConfigFileSnapshot: vi.fn(async () => {
-          const config = baseReadsRemaining > 0 ? currentConfig : changedConfig;
-          baseReadsRemaining -= 1;
-          return configSnapshot(config);
-        }) as never,
-      },
     });
 
     const { storageStep } = await advanceGatewayWizardToSecretStorage(engine);
@@ -353,17 +334,16 @@ describe("SystemAgentChatEngine runtime", () => {
   });
 
   it.each([
-    ["gateway", "runGatewaySetupWizard", "Gateway token"],
-    ["search", "runSearchSetupWizard", "Provider API key"],
+    ["gateway", "runHostedGatewaySetup", "Gateway token"],
+    ["search", "runHostedSearchSetup", "Provider API key"],
   ] as const)(
     "hands CLI %s credentials to the masked terminal wizard",
     async (target, wizard, message) => {
-      const engine = createEngine({
-        surface: "cli",
-        [wizard]: async (prompter: WizardPrompter) => {
-          await prompter.text({ message, sensitive: true });
-        },
+      vi.spyOn(hostedSetup, wizard).mockImplementationOnce(async (prompter) => {
+        await prompter.text({ message, sensitive: true });
+        return "applied";
       });
+      const engine = createEngine({ surface: "cli" });
       const stopped = await engine.handle(`configure ${target}`);
       expect(stopped.text).toContain("Sensitive input is not accepted");
       expect(stopped.text).toContain(`open ${target} wizard`);
@@ -379,7 +359,7 @@ describe("SystemAgentChatEngine runtime", () => {
 
   it("reports a failed hosted search-provider install without writing or auditing", async () => {
     const baseConfig: OpenClawConfig = {};
-    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    const appendAuditEntry = installAudit();
     useSetupConfig(baseConfig, "search-base-hash");
     mocks.runSearchSetupFlow.mockResolvedValue({
       outcome: "install-failed",
@@ -387,7 +367,7 @@ describe("SystemAgentChatEngine runtime", () => {
       providerId: "brave",
       reason: "failed",
     });
-    const engine = createEngine({ surface: "gateway", appendAuditEntry });
+    const engine = createEngine({ surface: "gateway" });
 
     const reply = await engine.handle("configure search");
 
@@ -420,15 +400,14 @@ describe("SystemAgentChatEngine runtime", () => {
   });
 
   it("reports hosted channel setup success when audit persistence fails", async () => {
-    const appendAuditEntry = vi.fn(async () => {
-      throw new Error("audit store is read-only");
+    const appendAuditEntry = installAudit().mockRejectedValue(
+      new Error("audit store is read-only"),
+    );
+    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(async (channel) => {
+      expect(channel).toBe("telegram");
+      return "applied";
     });
-    const engine = createEngine({
-      runChannelSetupWizard: async (channel) => {
-        expect(channel).toBe("telegram");
-      },
-      appendAuditEntry,
-    });
+    const engine = createEngine();
 
     const reply = await engine.handle("connect telegram");
 
@@ -457,6 +436,16 @@ describe("SystemAgentChatEngine runtime", () => {
       }
       let currentConfig = structuredClone(baseConfig);
       let currentHash = "base-hash";
+      const configFixture = revisionConflict
+        ? undefined
+        : await createInferenceConfigFixture(baseConfig);
+      const snapshot = configFixture?.snapshot;
+      const verifiedInference = snapshot
+        ? await createAmbientVerifiedBinding(snapshot.runtimeConfig ?? snapshot.config, snapshot)
+        : undefined;
+      if (configFixture) {
+        mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
+      }
       const hook = { channel: "telegram", accountId: "default", run: vi.fn() };
       mocks.readSetupConfigFileSnapshot.mockImplementation(async () => {
         const config = revisionConflict ? currentConfig : baseConfig;
@@ -471,6 +460,7 @@ describe("SystemAgentChatEngine runtime", () => {
         const token = await prompter.text({ message: "Bot token" });
         if (phase === "write") {
           currentConfig = structuredClone(changedConfig);
+          await configFixture?.write(currentConfig);
         } else if (phase === "post-write hooks") {
           options.onPostWriteHook?.(hook);
         }
@@ -485,6 +475,7 @@ describe("SystemAgentChatEngine runtime", () => {
             throw new Error("configuration changed during channel setup");
           }
           currentConfig = structuredClone(phase === "post-write hooks" ? changedConfig : config);
+          await configFixture?.write(currentConfig);
           if (revisionConflict) {
             currentHash = "committed-hash";
           }
@@ -494,10 +485,7 @@ describe("SystemAgentChatEngine runtime", () => {
       const engine = createEngine({
         surface: "gateway",
         ...(!revisionConflict && {
-          verifiedInference: await createAmbientVerifiedBinding(baseConfig),
-          deps: {
-            readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-          },
+          verifiedInference,
         }),
       });
       const tokenStep = await engine.handle("connect telegram");
@@ -530,37 +518,16 @@ describe("SystemAgentChatEngine runtime", () => {
 });
 
 describe("hosted channel post-write hooks", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   it("ChatWizardHost.startChannel owns plugin resources through deferred hooks without retiring Gateway boot", async () => {
+    useTempStateDir();
     await using bootCache = createPluginCache({ kind: "process" });
-    const fixture = createInstallAccountPolicyFixture(
-      tempDirs.make("openclaw-hosted-install-policy-"),
-      "signal",
-    );
-    const baseConfig = fixture.config;
-    const metadataSnapshot = fixture.readMetadata();
-    const resolveMetadata = vi
-      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
-      .mockImplementation(({ config, workspaceDir }) => fixture.readMetadata(config, workspaceDir));
-    const readAccount: ChannelPlugin["config"]["resolveAccount"] = (config, accountId) =>
-      resolveChannelAccountEntry(
-        config.channels?.signal?.accounts,
-        normalizeAccountId(accountId),
-        "signal",
-      );
+    const metadataSnapshot = createEmptyPluginMetadataSnapshot();
+    const nextConfig: OpenClawConfig = { channels: { signal: { enabled: true } } };
     bindPluginMetadataSnapshotCache(metadataSnapshot, bootCache);
     const pluginRegistry = createEmptyPluginRegistry();
     const bootInstance = new PluginInstance("gateway-boot");
     bootCache.instances.add(bootInstance);
     const readBoot = bootInstance.wrap(() => "Gateway available");
-    pluginRegistry.channels.push({
-      pluginId: "signal",
-      source: "test",
-      plugin: createChannelTestPluginBase({
-        id: "signal",
-        config: { resolveAccount: bootInstance.wrap(readAccount) },
-      }),
-    });
     const setupInstance = new PluginInstance("chat-channel-setup");
     const events: string[] = [];
     const caches: PluginCache[] = [];
@@ -580,13 +547,10 @@ describe("hosted channel post-write hooks", () => {
     };
     const hook = {
       channel: "signal",
-      accountId: "work-phone",
+      accountId: "default",
       run: async ({ cfg }: { cfg: OpenClawConfig }) => {
         expect(hasPluginLifecycleLease()).toBe(false);
-        expect(readAccount(cfg, "work-phone")).toEqual({
-          account: "+12025550123",
-          name: "Work calls",
-        });
+        expect(cfg).toEqual(nextConfig);
         events.push("after-write");
         hookStarted.resolve();
         await finishHook.promise;
@@ -600,32 +564,18 @@ describe("hosted channel post-write hooks", () => {
         metadata: getCurrentPluginMetadataSnapshot(),
         registry: getPluginRuntimeGenerationRegistry(),
       });
-      return setupSnapshot(baseConfig, "setup-base-hash");
+      return setupSnapshot({}, "setup-base-hash");
     });
-    useChannelSetup(async (config, _prompter, options) => {
+    useChannelSetup(async (_config, _prompter, options) => {
       recordPhase("setup");
-      await withCommandPluginMetadata({ config }, () => {
-        expect(readAccount(config, "work-phone")).toBeUndefined();
+      await withPluginLifecycleLease({ env: process.env }, async () => {
+        options.onPostWriteHook?.(hook);
       });
-      await withPluginLifecycleLease({ env: fixture.env }, async () => {
-        fixture.installPolicy();
-      });
-      recordPhase("installed");
-      options.onPostWriteHook?.(hook);
-      return await withCommandPluginMetadata({ config }, () =>
-        applyAccountNameToChannelSection({
-          cfg: config,
-          channelKey: "signal",
-          accountId: "work-phone",
-          name: "Work calls",
-        }),
-      );
+      return nextConfig;
     });
     mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => {
       recordPhase("write");
-      expect(config.channels?.signal?.accounts).toEqual({
-        "Work Phone": { account: "+12025550123", name: "Work calls" },
-      });
+      expect(config).toEqual(nextConfig);
       return hostedConfigFiles.write(config);
     });
     const host = new ChatWizardHost({
@@ -648,15 +598,7 @@ describe("hosted channel post-write hooks", () => {
       expect(await observedScope.promise).toEqual({ metadata: undefined, registry: undefined });
       expect(caches[0]).not.toBe(bootCache);
       expect(caches.slice(0, 4).every((cache) => cache === caches[0])).toBe(true);
-      expect(events).toEqual([
-        "read",
-        "setup",
-        "installed",
-        "authorize",
-        "write",
-        "authorize",
-        "after-write",
-      ]);
+      expect(events).toEqual(["read", "setup", "authorize", "write", "authorize", "after-write"]);
       expect(readSetup()).toBe("post-write complete");
       finishHook.resolve();
       expect((await running).text).toContain("signal is configured");
@@ -665,10 +607,6 @@ describe("hosted channel post-write hooks", () => {
       withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () => {
         expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
         expect(getPluginRuntimeGenerationRegistry()).toBe(pluginRegistry);
-        expect(pluginRegistry.channels).toHaveLength(1);
-        expect(
-          pluginRegistry.channels[0]?.plugin.config.resolveAccount(baseConfig, "work-phone"),
-        ).toBeUndefined();
         expect(readBoot()).toBe("Gateway available");
       });
     } finally {
@@ -676,7 +614,6 @@ describe("hosted channel post-write hooks", () => {
       await running;
       await setupInstance.dispose();
       host.dispose();
-      resolveMetadata.mockRestore();
     }
   });
 

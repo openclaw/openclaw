@@ -1,15 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { A2aMessageRecord, A2aTaskRecord } from "./protocol.js";
 
 const A2A_TERMINAL_MAX_TASKS = 500;
 const A2A_TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000;
 const A2A_ERROR_MAX_LENGTH = 512;
 
-type A2aTaskWaiter = {
-  resolve: (task: A2aTaskRecord) => void;
-  timer: ReturnType<typeof setTimeout>;
-};
+type A2aTaskWaiter = (task: A2aTaskRecord) => void;
 
 function isTerminalTask(task: A2aTaskRecord): boolean {
   return task.status.state !== "TASK_STATE_SUBMITTED" && task.status.state !== "TASK_STATE_WORKING";
@@ -32,10 +31,10 @@ export class A2aTaskStore {
   readonly #terminalTasks = new Map<string, number>();
   readonly #waiters = new Map<string, Set<A2aTaskWaiter>>();
 
-  create(contextId: string, ownerPeer?: string, messageId?: string): A2aTaskRecord {
+  create(contextId: string, ownerPeer: string, messageId: string): A2aTaskRecord {
     this.#pruneTerminalTasks();
-    const messageKey = messageId === undefined ? undefined : JSON.stringify([ownerPeer, messageId]);
-    const existing = messageKey === undefined ? undefined : this.#messageTasks.get(messageKey);
+    const messageKey = JSON.stringify([ownerPeer, messageId]);
+    const existing = this.#messageTasks.get(messageKey);
     if (existing) {
       return existing;
     }
@@ -47,19 +46,15 @@ export class A2aTaskStore {
       history: [],
     };
     this.#tasks.set(task.id, task);
-    if (ownerPeer !== undefined) {
-      this.#taskOwners.set(task.id, ownerPeer);
-    }
-    if (messageKey !== undefined) {
-      this.#messageTasks.set(messageKey, task);
-      this.#taskMessageKeys.set(task.id, messageKey);
-    }
+    this.#taskOwners.set(task.id, ownerPeer);
+    this.#messageTasks.set(messageKey, task);
+    this.#taskMessageKeys.set(task.id, messageKey);
     return task;
   }
 
-  get(taskId: string, ownerPeer?: string): A2aTaskRecord | undefined {
+  get(taskId: string, ownerPeer: string): A2aTaskRecord | undefined {
     this.#pruneTerminalTasks();
-    if (ownerPeer !== undefined && this.#taskOwners.get(taskId) !== ownerPeer) {
+    if (this.#taskOwners.get(taskId) !== ownerPeer) {
       return undefined;
     }
     return this.#tasks.get(taskId);
@@ -101,25 +96,20 @@ export class A2aTaskStore {
     return this.#finishWithMessage(taskId, "TASK_STATE_REJECTED", reason);
   }
 
-  wait(taskId: string, timeoutMs: number): Promise<A2aTaskRecord | undefined> {
-    const task = this.get(taskId);
-    if (!task || isTerminalTask(task)) {
+  wait(task: A2aTaskRecord, timeoutMs: number): Promise<A2aTaskRecord> {
+    if (isTerminalTask(task)) {
       return Promise.resolve(task);
     }
-    return new Promise((resolve) => {
-      const waiters = this.#waiters.get(taskId) ?? new Set<A2aTaskWaiter>();
-      const waiter: A2aTaskWaiter = {
-        resolve,
-        timer: setTimeout(() => {
-          waiters.delete(waiter);
-          if (waiters.size === 0) {
-            this.#waiters.delete(taskId);
-          }
-          resolve(task);
-        }, timeoutMs),
-      };
-      waiters.add(waiter);
-      this.#waiters.set(taskId, waiters);
+    const taskId = task.id;
+    const completed = createDeferred<A2aTaskRecord>();
+    const waiters = this.#waiters.get(taskId) ?? new Set<A2aTaskWaiter>();
+    waiters.add(completed.resolve);
+    this.#waiters.set(taskId, waiters);
+    return raceWithTimeout(completed.promise, timeoutMs, () => task).finally(() => {
+      waiters.delete(completed.resolve);
+      if (waiters.size === 0) {
+        this.#waiters.delete(taskId);
+      }
     });
   }
 
@@ -156,9 +146,8 @@ export class A2aTaskStore {
     const waiters = this.#waiters.get(task.id);
     if (waiters) {
       this.#waiters.delete(task.id);
-      for (const waiter of waiters) {
-        clearTimeout(waiter.timer);
-        waiter.resolve(task);
+      for (const resolve of waiters) {
+        resolve(task);
       }
     }
     this.#pruneTerminalTasks();

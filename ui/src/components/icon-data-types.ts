@@ -59,3 +59,7 @@ export function strokeIconData(children: readonly IconNode[]): IconData {
     children,
   };
 }
+
+export function strokePathData(...paths: string[]): IconData {
+  return strokeIconData(paths.map((d): IconNode => ["path", { d }]));
+}

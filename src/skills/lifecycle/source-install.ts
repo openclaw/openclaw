@@ -13,7 +13,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { resolveUserPath } from "../../utils.js";
-import { parseSkillFrontmatter } from "../loading/frontmatter.js";
 import {
   loadSingleSkillDirectory,
   type LocalSkillLoadDiagnostic,
@@ -41,69 +40,12 @@ type SkillSourceInstallParams = {
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 };
 
-type SkillSourceInstallResult =
-  | {
-      ok: true;
-      slug: string;
-      targetDir: string;
-      source: "path" | "git";
-      git?: SkillSourceOrigin["git"];
-    }
-  | { ok: false; error: string };
-
-async function resolveSkillInstallSlug(params: {
-  sourceDir: string;
-  fallbackLabel: string;
-  slug?: string;
-}): Promise<string> {
-  const explicit = normalizeOptionalString(params.slug);
-  if (explicit) {
-    return validateRequestedSkillSlug(explicit);
-  }
-
-  try {
-    const raw = await fs.readFile(path.join(params.sourceDir, "SKILL.md"), "utf8");
-    const frontmatterName = normalizeOptionalString(parseSkillFrontmatter(raw).name);
-    if (frontmatterName) {
-      return validateRequestedSkillSlug(frontmatterName);
-    }
-  } catch {
-    // Missing/unreadable metadata and invalid display names fall back to the source label.
-  }
-
-  return validateRequestedSkillSlug(params.fallbackLabel);
-}
-
-async function rejectUndiscoverableSkillSource(params: {
-  sourceDir: string;
-  config?: OpenClawConfig;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  let rootRealPath: string;
-  try {
-    rootRealPath = await fs.realpath(params.sourceDir);
-  } catch {
-    return { ok: false, error: `Skill path not found: ${params.sourceDir}` };
-  }
-  const diagnostics: LocalSkillLoadDiagnostic[] = [];
-  // Discovery owns the content rules. Install copies source bytes into a new
-  // file, so a hardlinked SKILL.md does not remain a hardlink after install.
-  // Rejecting that source link here would fail a skill the staged copy can load.
-  const loaded = loadSingleSkillDirectory({
-    skillDir: rootRealPath,
-    rootRealPath,
-    source: "source-install",
-    maxBytes: resolveSkillDiscoveryLimits(params.config).maxSkillFileBytes,
-    rejectHardlinks: false,
-    onDiagnostic: (diagnostic) => {
-      diagnostics.push(diagnostic);
-    },
-  });
-  if (loaded) {
-    return { ok: true };
-  }
-  const message = diagnostics[0]?.message ?? "SKILL.md is missing";
-  return { ok: false, error: `Skill source is not loadable: ${message}` };
-}
+type InstalledSkillSource = {
+  slug: string;
+  targetDir: string;
+  source: "path" | "git";
+  git?: SkillSourceOrigin["git"];
+};
 
 async function installLocalSkillDir(
   params: Omit<SkillSourceInstallParams, "spec"> & {
@@ -113,23 +55,52 @@ async function installLocalSkillDir(
     fallbackLabel: string;
     git?: SkillSourceOrigin["git"];
   },
-): Promise<SkillSourceInstallResult> {
-  const slug = await resolveSkillInstallSlug({
-    sourceDir: params.sourceDir,
-    fallbackLabel: params.fallbackLabel,
-    slug: params.slug,
-  });
-  const discoverable = await rejectUndiscoverableSkillSource({
-    sourceDir: params.sourceDir,
-    config: params.config,
-  });
-  if (!discoverable.ok) {
-    return discoverable;
-  }
+): Promise<InstalledSkillSource> {
+  const slug = await (async (): Promise<string> => {
+    const { sourceDir, fallbackLabel, slug: slugInput, config } = params;
+    const explicit = normalizeOptionalString(slugInput);
+    const requestedSlug = explicit ? validateRequestedSkillSlug(explicit) : undefined;
+    let rootRealPath: string;
+    try {
+      rootRealPath = await fs.realpath(sourceDir);
+    } catch (error) {
+      throw new Error(`Skill path not found: ${sourceDir}`, { cause: error });
+    }
+    const diagnostics: LocalSkillLoadDiagnostic[] = [];
+    // Discovery owns the content rules. Install copies source bytes into a new
+    // file, so a hardlinked SKILL.md does not remain a hardlink after install.
+    // Rejecting that source link here would fail a skill the staged copy can load.
+    const loaded = loadSingleSkillDirectory({
+      skillDir: rootRealPath,
+      rootRealPath,
+      source: "source-install",
+      maxBytes: resolveSkillDiscoveryLimits(config).maxSkillFileBytes,
+      rejectHardlinks: false,
+      onDiagnostic: (diagnostic) => {
+        diagnostics.push(diagnostic);
+      },
+    });
+    if (!loaded) {
+      const message = diagnostics[0]?.message ?? "SKILL.md is missing";
+      throw new Error(`Skill source is not loadable: ${message}`);
+    }
+    if (requestedSlug) {
+      return requestedSlug;
+    }
+    const frontmatterName = normalizeOptionalString(loaded.frontmatter.name);
+    if (frontmatterName) {
+      try {
+        return validateRequestedSkillSlug(frontmatterName);
+      } catch {
+        // Invalid display names use the source label instead.
+      }
+    }
+    return validateRequestedSkillSlug(fallbackLabel);
+  })();
   const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
   const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
   if (access && !access.recordSkillSourceInstall) {
-    return { ok: false, error: "Remote workspace skill source tracking is unavailable" };
+    throw new Error("Remote workspace skill source tracking is unavailable");
   }
   const recordInstall = access?.recordSkillSourceInstall ?? recordSkillSourceInstall;
   const install = await installExtractedSkillRoot({
@@ -162,7 +133,7 @@ async function installLocalSkillDir(
     },
   });
   if (!install.ok) {
-    return { ok: false, error: install.error };
+    throw new Error(install.error);
   }
 
   await recordInstall({
@@ -185,7 +156,6 @@ async function installLocalSkillDir(
   }
 
   return {
-    ok: true,
     slug,
     targetDir: install.targetDir,
     source: params.source,
@@ -193,12 +163,10 @@ async function installLocalSkillDir(
   };
 }
 
-async function installGitSkill(
-  params: SkillSourceInstallParams,
-): Promise<SkillSourceInstallResult> {
+async function installGitSkill(params: SkillSourceInstallParams): Promise<InstalledSkillSource> {
   const parsed = parseGitPluginSpec(params.spec);
   if (!parsed) {
-    return { ok: false, error: `Unsupported git skill spec: ${params.spec}` };
+    throw new Error(`Unsupported git skill spec: ${params.spec}`);
   }
 
   return await withInstallWorkspace("openclaw-git-skill-", async (tmpDir) => {
@@ -221,7 +189,7 @@ async function installGitSkill(
       }),
     });
     if (!acquired.ok) {
-      return acquired;
+      throw new Error(acquired.error);
     }
 
     const git = {
@@ -236,7 +204,7 @@ async function installGitSkill(
         filter: (source) => !path.relative(repoDir, source).split(path.sep).includes(".git"),
       });
     } catch (err) {
-      return { ok: false, error: `failed to prepare git skill source: ${String(err)}` };
+      throw new Error(`failed to prepare git skill source: ${String(err)}`, { cause: err });
     }
 
     return await installLocalSkillDir({
@@ -263,7 +231,7 @@ export function isSkillSourceInstallSpec(raw: string): boolean {
 
 export async function installSkillFromSource(
   params: SkillSourceInstallParams,
-): Promise<SkillSourceInstallResult> {
+): Promise<InstalledSkillSource> {
   const spec = params.spec.trim();
   if (spec.toLowerCase().startsWith("git:")) {
     return await installGitSkill({ ...params, spec });
@@ -272,11 +240,11 @@ export async function installSkillFromSource(
   let stat;
   try {
     stat = await fs.stat(sourceDir);
-  } catch {
-    return { ok: false, error: `Skill path not found: ${sourceDir}` };
+  } catch (error) {
+    throw new Error(`Skill path not found: ${sourceDir}`, { cause: error });
   }
   if (!stat.isDirectory()) {
-    return { ok: false, error: `Skill path is not a directory: ${sourceDir}` };
+    throw new Error(`Skill path is not a directory: ${sourceDir}`);
   }
   return await installLocalSkillDir({
     ...params,

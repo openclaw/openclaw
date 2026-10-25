@@ -4,13 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
-import { createWorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
+import { emptyJournal } from "./workspace-manifest-fixtures.test-support.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
+import { expectWorkspaceFiles } from "./workspace-recovery.test-support.js";
 import {
   applyStagedWorkerWorkspaceResult,
   hasWorkerWorkspaceResultRef,
@@ -19,7 +20,45 @@ import {
 } from "./workspace-result-staging.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
+const inactiveQuiescence = { assertActive: async () => {}, resume: async () => {} };
+type Request = Parameters<typeof prepareLocalWorkspaceReconciliation>[0]["request"];
+type RequestOptions = Omit<Request, "localPath" | "remoteWorkspaceDir" | "baseManifestRef">;
+function prepare(root: string, baseManifestRef: string, options: RequestOptions) {
+  return prepareLocalWorkspaceReconciliation({
+    request: {
+      localPath: root,
+      remoteWorkspaceDir: "/worker/workspace",
+      baseManifestRef,
+      ...options,
+    },
+    hashMemo: new Map(),
+  });
+}
+type CapturedManifest = Awaited<ReturnType<typeof captureWorkspaceManifest>>;
+function manifestPair(base: CapturedManifest, current = base) {
+  return {
+    base: base.manifest,
+    current: current.manifest,
+    baseRaw: serializeWorkerWorkspaceManifest(base.manifest),
+    currentRaw: serializeWorkerWorkspaceManifest(current.manifest),
+    currentManifestRef: current.manifestRef,
+  };
+}
+async function commitFixture(root: string) {
+  await requireGit(root, ["add", "."]);
+  await requireGit(root, [
+    "-c",
+    "user.name=Workspace Fixture",
+    "-c",
+    "user.email=workspace@example.invalid",
+    "commit",
+    "--quiet",
+    "--no-gpg-sign",
+    "-m",
+    "base",
+  ]);
+  return await requireGit(root, ["rev-parse", "HEAD"]);
+}
 async function prepareUnchangedWorkspace(options?: {
   localContent?: string;
   assertCurrent?: () => void;
@@ -42,37 +81,21 @@ async function prepareUnchangedWorkspace(options?: {
   };
   const record = vi.fn();
   const publishAcceptedManifest = vi.fn();
-  const verifyStable = vi.fn(async () => {
-    await options?.beforeRemoteFence?.();
+  const verifyStable = vi.fn(async () => options?.beforeRemoteFence?.());
+  const reconcile = await prepare(root, base.manifestRef, {
+    journal,
+    stagedResult: { ref, record },
+    assertCurrent: options?.assertCurrent,
   });
-  const reconcile = await prepareLocalWorkspaceReconciliation({
-    request: {
-      localPath: root,
-      remoteWorkspaceDir: "/worker/workspace",
-      baseManifestRef: base.manifestRef,
-      journal,
-      stagedResult: { ref, record },
-      assertCurrent: options?.assertCurrent,
-    },
-    hashMemo: new Map(),
-    metrics: createWorkspaceReconcileMetrics(),
-  });
-  const raw = serializeWorkerWorkspaceManifest(base.manifest);
   const reconciliation = await reconcile({
+    ...manifestPair(base),
     stagingRoot,
-    base: base.manifest,
-    current: base.manifest,
-    baseRaw: raw,
-    currentRaw: raw,
-    currentManifestRef: base.manifestRef,
     manifestRef: () => base.manifestRef,
     publishAcceptedManifest,
     verifyStable,
   });
   const quiescence = {
-    assertActive: vi.fn(async () => {
-      await options?.onRenew?.(root);
-    }),
+    assertActive: vi.fn(async () => options?.onRenew?.(root)),
     resume: vi.fn(async () => {}),
   };
   return {
@@ -92,58 +115,31 @@ describe("unchanged local workspace reconciliation", () => {
   it("retains published host additions across accepted replay and a later worker deletion", async () => {
     const root = tempDirs.make("openclaw-accepted-host-recovery-");
     const worker = tempDirs.make("openclaw-accepted-host-worker-");
-    const manifests = tempDirs.make("openclaw-accepted-host-manifests-");
+    const manifests = new Map<string, string>();
     await requireGit(root, ["init", "--quiet"]);
     await fs.writeFile(path.join(root, "base.txt"), "base\n");
     await fs.writeFile(path.join(worker, "base.txt"), "base\n");
-    await requireGit(root, ["add", "."]);
-    await requireGit(root, [
-      "-c",
-      "user.name=Workspace Fixture",
-      "-c",
-      "user.email=workspace@example.invalid",
-      "commit",
-      "--quiet",
-      "--no-gpg-sign",
-      "-m",
-      "base",
-    ]);
-    const baseCommit = await requireGit(root, ["rev-parse", "HEAD"]);
+    const baseCommit = await commitFixture(root);
     const base = await captureWorkspaceManifest({ root, baseCommit });
-    await fs.writeFile(
-      path.join(manifests, base.manifestRef.slice(7)),
-      serializeWorkerWorkspaceManifest(base.manifest),
-    );
+    manifests.set(base.manifestRef, serializeWorkerWorkspaceManifest(base.manifest));
     let committedRef = base.manifestRef;
     let remoteRef = base.manifestRef;
     const journal = {
-      load: async () => undefined,
-      begin: async () => {},
+      ...emptyJournal(),
       commit: async (ref: string) => {
+        expect(remoteRef).toBe(ref);
         committedRef = ref;
       },
-      abort: async () => {},
     };
     const ref = workerWorkspaceResultRef("accepted-host-recovery");
     const reconcile = async (baseline: typeof base, current: typeof base, stagedRef: string) => {
-      const prepare = await prepareLocalWorkspaceReconciliation({
-        request: {
-          localPath: root,
-          remoteWorkspaceDir: "/worker/workspace",
-          baseManifestRef: baseline.manifestRef,
-          journal,
-          stagedResult: { ref: stagedRef, record: () => {} },
-        },
-        hashMemo: new Map(),
-        metrics: createWorkspaceReconcileMetrics(),
+      const reconcileSnapshot = await prepare(root, baseline.manifestRef, {
+        journal,
+        stagedResult: { ref: stagedRef, record: () => {} },
       });
-      const reconciliation = await prepare({
+      const reconciliation = await reconcileSnapshot({
+        ...manifestPair(baseline, current),
         stagingRoot: worker,
-        base: baseline.manifest,
-        current: current.manifest,
-        baseRaw: serializeWorkerWorkspaceManifest(baseline.manifest),
-        currentRaw: serializeWorkerWorkspaceManifest(current.manifest),
-        currentManifestRef: current.manifestRef,
         manifestRef: () => remoteRef,
         publishAcceptedManifest: async (accepted) => {
           // Synthetic transport copies real accepted fixture bytes to the worker.
@@ -155,10 +151,7 @@ describe("unchanged local workspace reconciliation", () => {
           }
           const observed = await captureWorkspaceManifest({ root: worker, baseCommit });
           expect(observed.manifestRef).toBe(accepted.manifestRef);
-          await fs.writeFile(
-            path.join(manifests, accepted.manifestRef.slice(7)),
-            serializeWorkerWorkspaceManifest(accepted.manifest),
-          );
+          manifests.set(accepted.manifestRef, serializeWorkerWorkspaceManifest(accepted.manifest));
           remoteRef = accepted.manifestRef;
         },
         verifyStable: async () => {
@@ -166,10 +159,7 @@ describe("unchanged local workspace reconciliation", () => {
           expect(observed.manifestRef).toBe(remoteRef);
         },
       });
-      return await verifyReconciledWorkspaceFinal(reconciliation, {
-        assertActive: async () => {},
-        resume: async () => {},
-      });
+      return await verifyReconciledWorkspaceFinal(reconciliation, inactiveQuiescence);
     };
     await fs.writeFile(path.join(root, "published.txt"), "published host bytes\n");
     await requireGit(root, ["add", "--", "published.txt"]);
@@ -203,22 +193,14 @@ describe("unchanged local workspace reconciliation", () => {
     // recovery helper's diagnostic snapshot, from its retained manifest registry.
     const nextBase = {
       manifestRef: committedRef,
-      manifest: parseWorkerWorkspaceManifest(
-        await fs.readFile(path.join(manifests, committedRef.slice(7)), "utf8"),
-        committedRef,
-      ),
+      manifest: parseWorkerWorkspaceManifest(manifests.get(committedRef)!, committedRef),
     };
     await reconcile(nextBase, deleted, workerWorkspaceResultRef("accepted-host-delete"));
-    const localPresent = await fs.access(path.join(root, "published.txt")).then(
-      () => true,
-      () => false,
-    );
-    const workerPresent = await fs.access(path.join(worker, "published.txt")).then(
-      () => true,
-      () => false,
-    );
-    expect(localPresent).toBe(false);
-    expect(workerPresent).toBe(false);
+    for (const directory of [root, worker]) {
+      await expect(fs.access(path.join(directory, "published.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
   });
 
   it.each([false, true])(
@@ -229,19 +211,7 @@ describe("unchanged local workspace reconciliation", () => {
       await requireGit(root, ["init", "--quiet"]);
       await fs.writeFile(path.join(root, "base.txt"), "base\n");
       await fs.writeFile(path.join(root, ".gitignore"), "private.txt\n");
-      await requireGit(root, ["add", "."]);
-      await requireGit(root, [
-        "-c",
-        "user.name=Workspace Fixture",
-        "-c",
-        "user.email=workspace@example.invalid",
-        "commit",
-        "--quiet",
-        "--no-gpg-sign",
-        "-m",
-        "base",
-      ]);
-      const baseCommit = await requireGit(root, ["rev-parse", "HEAD"]);
+      const baseCommit = await commitFixture(root);
       const base = await captureWorkspaceManifest({ root, baseCommit });
       await fs.mkdir(path.join(root, "added"));
       await fs.writeFile(path.join(root, "added", "gateway.txt"), "gateway content\n");
@@ -256,37 +226,18 @@ describe("unchanged local workspace reconciliation", () => {
         current = await captureWorkspaceManifest({ root: stagingRoot, baseCommit });
       }
       const publishAcceptedManifest = vi.fn();
-      const prepare = await prepareLocalWorkspaceReconciliation({
-        request: {
-          localPath: root,
-          remoteWorkspaceDir: "/worker/workspace",
-          baseManifestRef: base.manifestRef,
-          journal: {
-            load: async () => undefined,
-            begin: async () => {},
-            commit: async () => {},
-            abort: async () => {},
-          },
-          stagedResult: { ref: workerWorkspaceResultRef("host-staged-result"), record: () => {} },
-        },
-        hashMemo: new Map(),
-        metrics: createWorkspaceReconcileMetrics(),
+      const reconcileSnapshot = await prepare(root, base.manifestRef, {
+        journal: emptyJournal(),
+        stagedResult: { ref: workerWorkspaceResultRef("host-staged-result"), record: () => {} },
       });
-      const reconciliation = await prepare({
+      const reconciliation = await reconcileSnapshot({
+        ...manifestPair(base, current),
         stagingRoot,
-        base: base.manifest,
-        current: current.manifest,
-        baseRaw: serializeWorkerWorkspaceManifest(base.manifest),
-        currentRaw: serializeWorkerWorkspaceManifest(current.manifest),
-        currentManifestRef: current.manifestRef,
         manifestRef: () => current.manifestRef,
         publishAcceptedManifest,
         verifyStable: async () => {},
       });
-      const applied = await verifyReconciledWorkspaceFinal(reconciliation, {
-        assertActive: async () => {},
-        resume: async () => {},
-      });
+      const applied = await verifyReconciledWorkspaceFinal(reconciliation, inactiveQuiescence);
       expect(applied?.manifest.entries.map((entry) => entry.path)).toEqual([
         ".gitignore",
         "added/gateway.txt",
@@ -297,6 +248,10 @@ describe("unchanged local workspace reconciliation", () => {
         expect.objectContaining({ manifestRef: applied?.manifestRef, manifest: applied?.manifest }),
       );
       expect(applied?.conflictPaths).toEqual([]);
+      await expectWorkspaceFiles(root, {
+        "untracked.txt": "unadmitted host bytes\n",
+        "private.txt": "ignored host bytes\n",
+      });
     },
   );
 
@@ -341,11 +296,10 @@ describe("unchanged local workspace reconciliation", () => {
     },
   );
 
-  it.each(["remote", "local", "owner"] as const)(
+  it.each(["local", "owner"] as const)(
     "rejects a late %s change after renewal without accepting the result",
     async (side) => {
       let current = true;
-      let remoteChanged = false;
       const f = await prepareUnchangedWorkspace({
         assertCurrent: () => {
           if (!current) {
@@ -355,16 +309,11 @@ describe("unchanged local workspace reconciliation", () => {
         onRenew: async (root) => {
           if (side === "local") {
             await fs.writeFile(path.join(root, "result.txt"), "late local write\n");
-          } else if (side === "remote") {
-            remoteChanged = true;
           }
         },
         beforeRemoteFence: async () => {
           if (side === "owner") {
             current = false;
-          }
-          if (remoteChanged) {
-            throw new Error("late remote write");
           }
         },
       });

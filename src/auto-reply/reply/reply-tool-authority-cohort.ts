@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
@@ -29,6 +30,43 @@ export function captureReplyToolAuthoritySession(
     sources: loaded.capturedReadSources,
     sessionId: loaded.entry?.sessionId,
     lifecycleRevision: loaded.entry?.lifecycleRevision,
+  };
+}
+
+const actorComparisonOptions = { skipPrototype: true };
+
+/** Retain the captured file-backed classification while its published entry remains current. */
+export function retainReplyToolAuthorityClassification(
+  original: CapturedReplyToolAuthoritySession | undefined,
+  entry: SessionEntry | undefined,
+  assertCurrent: () => void,
+) {
+  if (!original?.source || typeof original.source.databaseIdentity !== "string") {
+    return undefined;
+  }
+  const predicate = retainPreparedSessionEntryPredicate({
+    databaseIdentity: `file:${original.source.databaseIdentity}`,
+    sessionKey: original.canonicalKey,
+    entry,
+    matches: (before, after) =>
+      before?.sessionId === after?.sessionId &&
+      before?.lifecycleRevision === after?.lifecycleRevision &&
+      before?.sandbox === after?.sandbox &&
+      before?.sandboxMode === after?.sandboxMode &&
+      // Admitted actor data is structural: key order/prototypes do not identify a creator.
+      isDeepStrictEqual(before?.createdActor, after?.createdActor, actorComparisonOptions),
+  });
+  return {
+    release: () => predicate.release(),
+    assertCurrent: () => {
+      assertCurrent();
+      if (!predicate.isCurrent()) {
+        const reason = predicate.canRefresh()
+          ? "entry predicate pending or unknown"
+          : "entry predicate changed or released";
+        throw new Error(`Tool authority classification session changed (${reason})`);
+      }
+    },
   };
 }
 

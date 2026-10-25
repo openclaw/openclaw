@@ -25,64 +25,76 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 
 afterEach(async () => {
   await drainGlobalSingletonLifecycleState();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   logs.info.mockClear();
 });
 
-it.each([45_000, 60_001, 90_000])(
-  "reuses concurrent Git readers across %i ms polls and releases them when idle",
-  async (pollMs) => {
-    const lifecycle = () =>
-      getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
-        (worker) => worker.script === "git-operation.worker.js",
-      );
-    const starts = () => lifecycle()?.started ?? 0;
-    const idleExits = () =>
-      lifecycle()?.retired.find((entry) => entry.reason === "idle_timeout")?.count ?? 0;
-    const before = starts();
-    const exitsBefore = idleExits();
-    const poll = () =>
-      Promise.all(
-        [0, 1].map(() =>
-          runGitWorkerOperation({ type: "repository.identities", input: { roots: [] } }),
-        ),
-      );
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    try {
-      await expect(poll()).resolves.toEqual([[], []]);
-      expect(starts() - before).toBe(2);
-      for (let round = 0; round < 3; round++) {
-        await vi.advanceTimersByTimeAsync(pollMs);
-        await expect(poll()).resolves.toEqual([[], []]);
-        expect(starts() - before).toBe(2);
-      }
-      await vi.advanceTimersByTimeAsync(120_000);
-      await vi.waitFor(() => expect(idleExits() - exitsBefore).toBe(2));
-      await expect(poll()).resolves.toEqual([[], []]);
-      expect(starts() - before).toBe(4);
-    } finally {
-      await drainGlobalSingletonLifecycleState();
-      vi.useRealTimers();
-    }
+it("reuses concurrent Git readers across polling intervals and releases them when idle", async () => {
+  const lifecycle = () =>
+    getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
+      (worker) => worker.script === "git-operation.worker.js",
+    );
+  const starts = () => lifecycle()?.started ?? 0;
+  const idleExits = () =>
+    lifecycle()?.retired.find((entry) => entry.reason === "idle_timeout")?.count ?? 0;
+  const before = starts();
+  const exitsBefore = idleExits();
+  const poll = () =>
+    Promise.all(
+      [0, 1].map(() =>
+        runGitWorkerOperation({ type: "repository.identities", input: { roots: [] } }),
+      ),
+    );
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  await expect(poll()).resolves.toEqual([[], []]);
+  expect(starts() - before).toBe(2);
+  for (const pollMs of [45_000, 60_001, 90_000]) {
+    await vi.advanceTimersByTimeAsync(pollMs);
+    await expect(poll()).resolves.toEqual([[], []]);
+    expect(starts() - before).toBe(2);
+  }
+  await vi.advanceTimersByTimeAsync(120_000);
+  await vi.waitFor(() => expect(idleExits() - exitsBefore).toBe(2));
+  await expect(poll()).resolves.toEqual([[], []]);
+  expect(starts() - before).toBe(4);
+});
+
+const cwd = "/private/checkouts/diagnostic-fixture";
+const branchFacts = {
+  type: "pull-request.branch-facts",
+  input: {
+    root: cwd,
+    branch: "fixture",
+    mergedHeads: [],
+    refreshIndex: true,
+    comparison: { statsBase: null, creatable: true, equalPushedTips: false, complete: true },
   },
-);
+} as const;
+const checkoutDiff = { type: "checkout.diff", input: { cwd, summaryOnly: true } } as const;
 
 it.each([
-  {
-    args: ["--no-lazy-fetch", "-c", "diff.private=secret", "diff", "--shortstat"],
-    command: "diff",
-    diffMode: "--shortstat",
-  },
-  { args: ["diff", "--patch", "--no-index"], command: "diff", diffMode: "--no-index" },
-  { args: ["private-command"], command: "other" },
-])(
-  "prints attribution and a swallowed $command $diffMode timeout in the journal message",
-  async ({ args: slowArgs, command, diffMode }) => {
+  [
+    branchFacts,
+    ["--no-lazy-fetch", "-c", "diff.private=secret", "diff", "--shortstat"],
+    "diff",
+    "--shortstat",
+  ],
+  [branchFacts, ["diff", "--patch", "--no-index"], "diff", "--no-index"],
+  [branchFacts, ["private-command"], "other", undefined],
+  [checkoutDiff, ["diff", "--raw"], "diff", "--raw"],
+] as const)(
+  "prints %j attribution and a %j %s %s timeout in the journal message",
+  async (request, slowArgs, command, diffMode) => {
+    const operation = request.type;
     let clock = 1_000_000;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     vi.spyOn(diagnostics, "areDiagnosticsEnabledForProcess").mockReturnValue(true);
-    const cwd = "/private/checkouts/diagnostic-fixture";
     const privateRef = "refs/heads/private-branch";
+    const value =
+      operation === "checkout.diff"
+        ? { files: [], additions: 0, deletions: 0 }
+        : { creatable: true, stats: null };
     const run = vi.fn(async (_cwd: string, args: string[]) => {
       const timeout = args[0] !== "merge-base";
       clock += timeout ? 120_000 : 50;
@@ -117,38 +129,21 @@ it.each([
           { signal, yieldSignal: signal },
         );
       }
-      // Optional PR statistics intentionally retain an unknown result after a timeout.
-      return { ok: true, value: { creatable: true, stats: null } };
+      return { ok: true, value };
     });
     await expect(
-      runGitWorkerOperation(
-        {
-          type: "pull-request.branch-facts",
-          input: {
-            root: cwd,
-            branch: "fixture",
-            mergedHeads: [],
-            refreshIndex: true,
-            comparison: {
-              statsBase: null,
-              creatable: true,
-              equalPushedTips: false,
-              complete: true,
-            },
-          },
-        },
-        { git: { text: run, buffered: run } },
-      ),
-    ).resolves.toEqual({ creatable: true, stats: null });
+      runGitWorkerOperation(request, { git: { text: run, buffered: run } }),
+    ).resolves.toEqual(value);
 
     expect(logs.info).toHaveBeenCalledOnce();
     const [message, fields] = logs.info.mock.calls[0]!;
     expect(message).toMatch(/^slow Git content read \{/);
     expect(JSON.parse(message.slice("slow Git content read ".length))).toEqual(fields);
     expect(fields).toMatchObject({
-      operation: "pull-request.branch-facts",
+      operation,
+      ...(operation === "checkout.diff" ? { scope: "all", summaryOnly: true } : {}),
       checkoutId: expect.stringMatching(/^[a-f0-9]{16}$/),
-      checkoutClass: "managed",
+      checkoutClass: operation === "checkout.diff" ? "unspecified" : "managed",
       workerQueueWaitMs: 400,
       firstHostRequestMs: 500,
       workerMs: 120_050,
@@ -167,6 +162,11 @@ it.each([
       },
       outcome: "returned",
     });
+    if (operation !== "checkout.diff") {
+      expect(fields).not.toHaveProperty("scope");
+      expect(fields).not.toHaveProperty("summaryOnly");
+    }
+    const journal = `${message}\n${JSON.stringify(fields)}`;
     for (const privateValue of [
       cwd,
       privateRef,
@@ -175,8 +175,7 @@ it.each([
       "fixture output",
       "private-command",
     ]) {
-      expect(message).not.toContain(privateValue);
-      expect(JSON.stringify(fields)).not.toContain(privateValue);
+      expect(journal).not.toContain(privateValue);
     }
   },
 );

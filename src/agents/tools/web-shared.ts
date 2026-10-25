@@ -168,9 +168,7 @@ function sniffDocumentCharset(bytes: Uint8Array): string | undefined {
 }
 
 function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
-  const headers = res.headers;
-  const contentType = typeof headers?.get === "function" ? headers.get("content-type") : null;
-  const charset = sniffCharset(contentType, bytes);
+  const charset = sniffCharset(res.headers.get("content-type"), bytes);
   try {
     return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
   } catch {
@@ -186,7 +184,7 @@ export async function readResponseText(
   const maxBytes = maxBytesRaw === undefined ? undefined : Math.floor(maxBytesRaw);
 
   const body = res.body;
-  if (maxBytes && body && typeof body === "object" && typeof body.getReader === "function") {
+  if (maxBytes && body) {
     const reader = body.getReader();
     let bytesRead = 0;
     let truncated = false;
@@ -229,29 +227,13 @@ export async function readResponseText(
   }
 
   if (maxBytes) {
-    // Whole-body fallbacks cannot honor a byte cap. Only a native bodyless
-    // response is known complete without reading; other fallbacks fail closed.
-    return { text: "", truncated: !(res instanceof Response && res.body === null), bytesRead: 0 };
-  }
-
-  if (typeof res.arrayBuffer === "function") {
-    try {
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      return {
-        text: decodeResponseBytes(res, bytes),
-        truncated: false,
-        bytesRead: bytes.byteLength,
-      };
-    } catch {
-      // Fall back to text() for lightweight Response-like mocks that do not expose bytes.
-    }
-  }
-
-  try {
-    const text = await res.text();
-    const bytes = new TextEncoder().encode(text);
-    return { text, truncated: false, bytesRead: bytes.byteLength };
-  } catch {
     return { text: "", truncated: false, bytesRead: 0 };
   }
+
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  return {
+    text: decodeResponseBytes(res, bytes),
+    truncated: false,
+    bytesRead: bytes.byteLength,
+  };
 }

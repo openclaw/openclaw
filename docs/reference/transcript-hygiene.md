@@ -134,6 +134,11 @@ image stays omitted on every replay. Successful outcomes (verified as-is, or the
 downscaled replacement) are cached in process by content digest and limits,
 bounded to 16 MiB, so later turns reuse them instead of decoding the same bytes
 again.
+Image-free content from immutable transcript publications reuses its cleanup
+result for the same replay policy. New or mutable content is still inspected;
+image-bearing content always goes through the image sanitizer, so unavailable
+backends and failed checks remain retryable. These weakly keyed results expire
+with their source content and do not change stored transcript bytes.
 This also helps
 control image-driven token pressure for vision-capable models: lower max
 dimensions reduce token usage, higher dimensions preserve detail.
@@ -293,6 +298,11 @@ inter-session user turns that only have provenance metadata.
 
 **OpenAI-compatible Chat Completions**
 
+- Historical calls to tools absent from the outgoing catalog, including tools whose
+  schemas were rejected, replay as assistant text together with their results.
+  The model still sees errors such as `Tool session_status not found`. Declared
+  calls retain native tool protocol, with their results kept together in mixed
+  batches. This deterministic request projection leaves stored history unchanged.
 - Historical assistant thinking/reasoning blocks are stripped before replay
   so local and proxy-style OpenAI-compatible servers do not receive
   prior-turn reasoning fields such as `reasoning` or `reasoning_content`.

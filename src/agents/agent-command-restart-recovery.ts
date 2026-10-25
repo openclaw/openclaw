@@ -1,14 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
-import { hasMainSessionRecoveryClaim } from "../config/sessions/restart-recovery-state.js";
+import { resolveRestartRecoveryTerminalDeliveryDisposition } from "../config/sessions/restart-recovery-receipt-state.js";
+import {
+  hasMainSessionRecoveryClaim,
+  hasRestartRecoveryTerminalRun,
+} from "../config/sessions/restart-recovery-state.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidenceResult,
 } from "../config/sessions/restart-recovery-types.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
-import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import {
   captureHarnessCompletionRecovery,
@@ -27,119 +29,12 @@ import {
   hasVisibleCommittedMessagingToolDeliveryEvidence,
   type AgentDeliveryEvidence,
 } from "./embedded-agent-runner/delivery-evidence.js";
-import { mergeAttemptToolMediaPayloads } from "./embedded-agent-runner/run/tool-media-payloads.js";
-
-/** Restore the exact host-owned delivery constraints before starting a recovery turn. */
-export function resolveCommandRecoveryOptions(params: {
-  opts: AgentCommandOpts;
-  sessionEntry?: SessionEntry;
-  runId: string;
-}): AgentCommandOpts {
-  const { sessionEntry: entry } = params;
-  const media =
-    entry?.restartRecoveryDeliveryRunId === params.runId &&
-    Array.isArray(entry.restartRecoveryDeliveryMediaUrls)
-      ? entry.restartRecoveryDeliveryMediaUrls
-      : undefined;
-  const opts =
-    media !== undefined
-      ? {
-          ...params.opts,
-          internalDeliveryMediaUrls: [...media],
-          internalDeliverySuppressText: entry?.restartRecoverySuppressTextDelivery,
-          sourceReplyDeliveryMode: entry?.restartRecoverySourceReplyDeliveryMode,
-          disableMessageTool: entry?.restartRecoveryDisableMessageTool,
-          forceRestartSafeTools: entry?.restartRecoveryForceSafeTools,
-        }
-      : params.opts;
-  if (
-    (opts.internalDeliverySuppressText === true && opts.internalDeliveryMediaUrls === undefined) ||
-    ((opts.internalDeliveryMediaUrls !== undefined || opts.internalDeliverySuppressText === true) &&
-      (opts.forceRestartSafeTools !== true ||
-        opts.disableMessageTool !== true ||
-        opts.sourceReplyDeliveryMode !== "automatic"))
-  ) {
-    throw new Error(
-      "internal delivery media constraints require automatic delivery with restart-safe tools and no message tool",
-    );
-  }
-  return opts;
-}
 
 function normalizeOptionalThreadId(value: unknown): string | undefined {
   return (
     normalizeOptionalString(value) ??
     (typeof value === "number" && Number.isFinite(value) ? String(value) : undefined)
   );
-}
-
-/** Replace model-selected media with the exact host-owned delivery set. */
-export function constrainRestartRecoveryDeliveryPayloads(
-  payloads: ReplyPayload[] | undefined,
-  mediaUrls: string[],
-  suppressText = false,
-): ReplyPayload[] {
-  const constrained: ReplyPayload[] = [];
-  for (const payload of payloads ?? []) {
-    const constrainedPayload: ReplyPayload = {};
-    if (!suppressText && typeof payload.text === "string") {
-      constrainedPayload.text = payload.text;
-    }
-    for (const flag of [
-      "isError",
-      "isReasoning",
-      "isCommentary",
-      "isReasoningSnapshot",
-      "isCompactionNotice",
-      "isFallbackNotice",
-      "isStatusNotice",
-    ] as const) {
-      if (payload[flag] === true) {
-        constrainedPayload[flag] = true;
-      }
-    }
-    if (Object.keys(constrainedPayload).length > 0) {
-      constrained.push(constrainedPayload);
-    }
-  }
-  const exactMediaUrls = Array.from(
-    new Set(mediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
-  );
-  if (exactMediaUrls.length === 0) {
-    return constrained;
-  }
-
-  if (!suppressText) {
-    const visibleReplyIndex = constrained.findIndex((payload) =>
-      hasVisibleAgentPayload(
-        { payloads: [payload] },
-        {
-          includeErrorPayloads: false,
-          requireTerminalContent: true,
-        },
-      ),
-    );
-    const visibleReply = constrained[visibleReplyIndex];
-    if (visibleReply) {
-      // Recovery owns the exact artifacts; merge them with the actual final
-      // reply so automatic delivery cannot emit a caption before its media.
-      const [mergedReply] =
-        mergeAttemptToolMediaPayloads({
-          payloads: [visibleReply],
-          toolMediaUrls: exactMediaUrls,
-          hostOwnedToolMediaUrls: exactMediaUrls,
-          toolTrustedLocalMedia: true,
-          sourceReplyDeliveryMode: "automatic",
-        }) ?? [];
-      if (mergedReply) {
-        constrained[visibleReplyIndex] = mergedReply;
-        return constrained;
-      }
-    }
-  }
-
-  constrained.push({ mediaUrls: exactMediaUrls, trustedLocalMedia: true });
-  return constrained;
 }
 
 type RestartRecoveryTerminalDeliveryInput = Omit<AgentDeliveryEvidence, "deliveryStatus"> &
@@ -329,11 +224,37 @@ export function shouldPersistCurrentRunSessionCleanup(
   );
 }
 
+/** A terminal predecessor must not remain the delivery owner of a newly admitted command. */
+export function canReplaceTerminalCommandRecoveryClaim(
+  entry: SessionEntry,
+  runId: string,
+): boolean {
+  const previousRunId = entry.restartRecoveryDeliveryRunId;
+  return Boolean(
+    previousRunId &&
+    previousRunId !== runId &&
+    !entry.pendingFinalDelivery &&
+    !entry.mainRestartRecovery &&
+    !entry.restartRecoveryHarnessCompletion &&
+    !entry.restartRecoveryBeforeAgentReplyState &&
+    !entry.restartRecoveryDeliveryReceiptState &&
+    !entry.restartRecoveryDeliveryToolCallId &&
+    !entry.restartRecoveryRuns?.some(
+      (run) => run.runId !== runId && !hasRestartRecoveryTerminalRun(entry, run.runId),
+    ) &&
+    resolveRestartRecoveryTerminalDeliveryDisposition(entry, {
+      sessionId: entry.sessionId,
+      sourceTurnId: entry.restartRecoveryDeliverySourceRunId ?? previousRunId,
+    }) === "already-delivered",
+  );
+}
+
 export function shouldPersistRestartRecoveryContextClaim(
   current: SessionEntry | undefined,
   sessionId: string,
   runId: string,
   allowCreate: boolean,
+  previousEntry: SessionEntry,
 ): boolean {
   if (!current) {
     return allowCreate;
@@ -346,23 +267,29 @@ export function shouldPersistRestartRecoveryContextClaim(
   }
   return (
     current.restartRecoveryDeliveryRunId === undefined ||
-    current.restartRecoveryDeliveryRunId === runId
+    current.restartRecoveryDeliveryRunId === runId ||
+    (canReplaceTerminalCommandRecoveryClaim(previousEntry, runId) &&
+      current.lifecycleRevision === previousEntry.lifecycleRevision &&
+      current.restartRecoveryDeliveryRunId === previousEntry.restartRecoveryDeliveryRunId &&
+      current.restartRecoveryDeliverySourceRunId ===
+        previousEntry.restartRecoveryDeliverySourceRunId &&
+      canReplaceTerminalCommandRecoveryClaim(current, runId))
   );
 }
 
 export function buildCurrentRunRestartRecoveryClaim(params: {
   harnessCompletion?: HarnessCompletionRecovery;
   deliveryContext?: DeliveryContext;
-  deliveryMediaUrls?: string[];
   disableMessageTool?: boolean;
   entry: SessionEntry;
   forceRestartSafeTools?: boolean;
   runId: string;
   operatorSource?: SessionEntry["restartRecoveryOperatorSource"];
+  requesterSource?: SessionEntry["restartRecoveryRequesterSource"];
   sourceIngress?: SessionEntry["restartRecoverySourceIngress"];
+  sourceMessageChannel?: SessionEntry["restartRecoverySourceMessageChannel"];
   sourceRunId?: string;
   sourceReplyDeliveryMode?: SessionEntry["restartRecoverySourceReplyDeliveryMode"];
-  suppressTextDelivery?: boolean;
 }): Pick<
   SessionEntry,
   | "restartRecoveryDeliveryContext"
@@ -373,7 +300,9 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   | "restartRecoveryHarnessCompletion"
   | "restartRecoveryForceSafeTools"
   | "restartRecoveryOperatorSource"
+  | "restartRecoveryRequesterSource"
   | "restartRecoverySourceIngress"
+  | "restartRecoverySourceMessageChannel"
   | "restartRecoverySourceReplyDeliveryMode"
   | "restartRecoverySuppressTextDelivery"
 > {
@@ -397,7 +326,9 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       restartRecoveryDeliveryRunId: params.runId,
       restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
       restartRecoveryOperatorSource: entry.restartRecoveryOperatorSource,
+      restartRecoveryRequesterSource: entry.restartRecoveryRequesterSource,
       restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+      restartRecoverySourceMessageChannel: entry.restartRecoverySourceMessageChannel,
       restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
       restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
     };
@@ -413,18 +344,18 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
         ? { restartRecoveryHarnessCompletion: undefined }
         : {}),
     restartRecoveryDeliveryContext: params.deliveryContext,
-    restartRecoveryDeliveryMediaUrls:
-      createsScopedDeliveryClaim && params.deliveryMediaUrls !== undefined
-        ? [...params.deliveryMediaUrls]
-        : undefined,
+    restartRecoveryDeliveryMediaUrls: undefined,
     restartRecoveryDisableMessageTool:
       createsScopedDeliveryClaim && params.disableMessageTool === true ? true : undefined,
-    restartRecoverySuppressTextDelivery:
-      createsScopedDeliveryClaim && params.suppressTextDelivery === true ? true : undefined,
+    restartRecoverySuppressTextDelivery: undefined,
     restartRecoveryDeliveryRunId: createsScopedDeliveryClaim ? params.runId : undefined,
     restartRecoveryDeliverySourceRunId: params.sourceRunId,
     restartRecoveryOperatorSource: createsScopedDeliveryClaim ? params.operatorSource : undefined,
+    restartRecoveryRequesterSource: createsScopedDeliveryClaim ? params.requesterSource : undefined,
     restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
+    restartRecoverySourceMessageChannel: createsScopedDeliveryClaim
+      ? params.sourceMessageChannel
+      : undefined,
     restartRecoverySourceReplyDeliveryMode: params.sourceRunId
       ? params.sourceReplyDeliveryMode
       : undefined,
@@ -455,12 +386,10 @@ export function prepareCommandHarnessCompletionRecovery(params: {
     : undefined;
   const internalCompletionSourceRunId =
     opts.inputProvenance?.kind === "inter_session" &&
-    ((opts.inputProvenance.sourceTool === "subagent_settle" &&
-      opts.inputProvenance.sourceChannel === "internal" &&
-      Boolean(opts.inputProvenance.sourceSessionKey?.trim()) &&
-      runId.startsWith("announce:requester-settle:")) ||
-      (opts.internalDeliveryMediaUrls !== undefined &&
-        isAgentMediatedCompletionSourceTool(opts.inputProvenance.sourceTool)))
+    opts.inputProvenance.sourceTool === "subagent_settle" &&
+    opts.inputProvenance.sourceChannel === "internal" &&
+    Boolean(opts.inputProvenance.sourceSessionKey?.trim()) &&
+    runId.startsWith("announce:requester-settle:")
       ? runId
       : undefined;
   const claimedHarnessCompletion =

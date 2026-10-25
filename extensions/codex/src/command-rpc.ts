@@ -58,13 +58,6 @@ import type { CodexCatalogPreviewCache } from "./session-catalog-native-projecti
 
 export type SafeValue<T> = { ok: true; value: T } | { ok: false; error: string };
 
-export type SafeCodexControlRequestFn = (
-  pluginConfig: CodexPluginConfig | undefined,
-  method: CodexControlMethod,
-  requestParams: JsonValue | undefined,
-  options?: CodexControlRequestOptions,
-) => Promise<SafeValue<JsonValue | undefined>>;
-
 type AuthProfileOrderConfig = Parameters<
   typeof resolveCodexAppServerAuthProfileIdForAgent
 >[0]["config"];
@@ -82,6 +75,7 @@ export type CodexControlRequestOptions = {
   timeoutMs?: number;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
+  assertDispatchCurrentAsync?: () => Promise<void>;
   /** Owner authority applies before dispatch; accepted responses still settle. */
   assertOwnerCurrent?: () => void;
   catalogPreview?: true;
@@ -324,6 +318,7 @@ export async function codexControlRequest(
       timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
       assertCurrent: options.assertCurrent,
       assertCurrentAsync: options.assertCurrentAsync,
+      assertDispatchCurrentAsync: options.assertDispatchCurrentAsync,
       startOptions,
       config: options.config,
       agentId: options.agentId,

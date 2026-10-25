@@ -510,9 +510,7 @@ async function serveAuthorizedSessionHistory(
       return;
     }
     streamStopped = true;
-    if (streamResources.heartbeat) {
-      clearInterval(streamResources.heartbeat);
-    }
+    clearInterval(streamResources.heartbeat);
     streamResources.unsubscribe?.();
     sharing?.release();
     streamClosed.resolve();
@@ -547,8 +545,8 @@ async function serveAuthorizedSessionHistory(
 
   function handleResponseStreamClose() {
     releaseStreamResources();
-    req.off("close", handleRequestStreamClose);
-    req.off("error", handleRequestStreamError);
+    // The request can emit its abort error after the response closes. Its own
+    // close handler releases those listeners once request errors have settled.
     res.off("close", handleResponseStreamClose);
     res.off("finish", handleResponseStreamFinish);
     res.off("error", handleResponseStreamError);

@@ -21,12 +21,28 @@ const enDesktop = {
     pictureInPictureUnavailable:
       "Picture-in-Picture requires a supported browser and a secure connection",
     pickerTitle: "Desktop sources",
+    availableDesktops: "Available desktops",
     thisMachine: "This machine",
     refresh: "Refresh",
     refreshing: "Refreshing…",
     loading: "Loading desktop sources…",
     empty: "No desktop-capable sources are available.",
     sourceUnavailable: "The requested desktop is unavailable. Retry when the machine is ready.",
+    hostDesktopOff:
+      "Desktop access is not enabled on the Gateway host. This panel shares the Gateway host's screen, not the screen of the device running this browser.",
+    hostDesktopEnableHint:
+      "Enable desktop access to view and control the Gateway host in OpenClaw.",
+    hostScreenSharingSetupHint:
+      "On the Gateway host Mac, open System Settings → General → Sharing. Turn on Screen Sharing, or allow the Gateway host account to Observe and Control in Remote Management, then check again.",
+    hostDesktopServerSetupHint:
+      "Set up a password-protected VNC server on the Gateway host, or configure a managed desktop on Linux, then check again.",
+    hostScreenSharingAccount:
+      "Screen Sharing signs in with a macOS user account on the Gateway host. A sign-in prompt follows after you enable access.",
+    hostDesktopServerAccount:
+      "The desktop server on the Gateway host uses its own password. A sign-in prompt may follow after you enable access.",
+    screenSharingNetwork:
+      "Screen Sharing may also be reachable from other devices on your network.",
+    desktopServerNetwork: "The desktop server may be reachable from other devices on your network.",
     macLocked:
       "This Mac is locked. Sign in through Screen Sharing or on the Mac to use computer control.",
     macLockStateUnknown:
@@ -36,6 +52,21 @@ const enDesktop = {
     starting: "Starting your machine…",
     preparing: "Preparing the desktop…",
     takeControl: "Take control",
+    clickToTakeControl: "Click to take control",
+    takingControl: "Taking control…",
+    switchingToViewing: "Switching to view only…",
+    controlling: "Controlling",
+    connectionLost: "Connection lost",
+    connectionError: "Could not connect",
+    inventoryError: "Could not load desktops",
+    credentialsTitle: "Connect to desktop",
+    emptyTitle: "No desktop available",
+    backToViewing: "Back to viewing",
+    connected: "Connected",
+    gatewayHost: "Gateway host",
+    moreActions: "Desktop actions",
+    expandPanel: "Expand panel",
+    collapsePanel: "Collapse panel",
     switchToViewOnly: "Switch to view only",
     viewOnly: "View only",
     control: "Control",
@@ -57,7 +88,10 @@ const enDesktop = {
     keyboardInput: "Remote desktop keyboard input",
     touchControls: "Remote desktop controls",
     fit: "Fit",
+    fitHeight: "Fit height",
+    fitWidth: "Fit width",
     actual: "Actual",
+    actualSizeLabel: "Actual size",
     match: "Match",
     sizing: "Desktop size",
     matchRequirement: "Match requires a VNC server that supports desktop resizing.",

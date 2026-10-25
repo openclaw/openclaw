@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { PolicyRoutingRules } from "../policy-routing.js";
 import { collectPolicyEvidence } from "../policy-state.js";
+import {
+  runPolicyChecksFixture,
+  setupPolicyDoctorTest,
+  teardownPolicyDoctorTest,
+} from "./register.test-harness.js";
 import { routingFindings } from "./routing-findings.js";
 
 const secretPeer = "+15555550123";
@@ -17,11 +22,10 @@ const baseRules: PolicyRoutingRules = {
 };
 
 function evaluate(cfg: Record<string, unknown>, rules: PolicyRoutingRules = baseRules) {
-  const policy = { routing: rules };
   const evidence = collectPolicyEvidence(cfg, { routing: rules });
   return {
     evidence,
-    findings: routingFindings(policy, "policy.jsonc", "policy.jsonc", evidence),
+    findings: routingFindings(rules, "policy.jsonc", "policy.jsonc", evidence),
   };
 }
 
@@ -86,5 +90,24 @@ describe("routing policy findings", () => {
     expect(result.findings.map((finding) => finding.checkId)).toContain(
       "policy/routing-bindings-required",
     );
+  });
+});
+
+describe("registered routing policy validation", () => {
+  beforeEach(setupPolicyDoctorTest);
+  afterEach(teardownPolicyDoctorTest);
+
+  it.each([
+    [{ routing: [] }, "oc://policy.jsonc/routing"],
+    [{ routing: { probes: "invalid" } }, "oc://policy.jsonc/routing/probes"],
+  ])("reports malformed routing without evaluating its probes", async (policy, target) => {
+    const result = await runPolicyChecksFixture(policy);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        severity: "error",
+        target,
+      }),
+    ]);
   });
 });

@@ -17,13 +17,14 @@ import {
   readDeferredPluginMigrations,
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
+import { DeferredPluginSessionImportSchema } from "../infra/deferred-plugin-session-import-schema.js";
+import { readDeferredPluginSessionImportReceipt } from "../infra/deferred-plugin-session-source-read.js";
+import { rebuildDeferredPluginSessionSourceIndex } from "../infra/deferred-plugin-session-source-recovery.js";
 import {
   hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
-  readDeferredPluginSessionImportReceipt,
   readStaleDeferredPluginSessionImport,
-  rebuildDeferredPluginSessionSourceIndex,
   resolveVerifiedSessionSource,
   type DeferredPluginSessionImport,
   type SessionImportSource,
@@ -52,7 +53,6 @@ import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { DeferredPluginSessionImportSchema } from "../infra/state-migrations.deferred-session-import.js";
 import { markLegacyMigrationSourceRemovedInDatabase } from "../infra/state-migrations.receipts.js";
 import {
   createRetainedAgentDatabaseMatcher,
@@ -194,6 +194,11 @@ export async function prepareRetainedSessionImport(
     }),
     allowMissingIndex: true,
     onEmptySource: (sourcePath: string, reason: string) => emptySources.set(sourcePath, reason),
+    onMissingSource: (sourcePath: string, reason: string) =>
+      issues.push({
+        code: "retained_missing_transcript_superseded",
+        message: `${sourcePath}: ${reason}`,
+      }),
     onSourceConflict: (sourcePath: string, artifactPath = sourcePath, error?: unknown) => {
       if (sourceConflicts.has(artifactPath)) {
         return;

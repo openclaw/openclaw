@@ -5,8 +5,9 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -22,13 +23,15 @@ import {
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type { SqliteSessionArtifactPreparationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
-import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readSessionEntryStore } from "./session-accessor.sqlite-entry-inventory.js";
 import type {
   LifecycleArtifactCleanupInput,
   LifecycleArtifactCleanupPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
+import {
+  collectSessionStateIdsForEntry,
+  readReferencedSessionIds,
+} from "./session-accessor.sqlite-references.js";
 import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
@@ -86,35 +89,57 @@ function sqliteTranscriptStateIsReclaimable(params: {
   return updatedAt === undefined || params.nowMs - updatedAt >= params.orphanTranscriptMinAgeMs;
 }
 
-function sqliteTranscriptStateHasMarker(params: {
+function readOrphanTranscriptMarkerSessionIds(params: {
   database: Pick<OpenClawAgentDatabase, "db">;
-  sessionId: string;
+  sessionIds: string[];
+  updatedBefore: number;
   transcriptContentMarker: string;
   diagnostics?: SqliteSessionArtifactPreparationDiagnostics;
-}): boolean {
-  const startedAt = params.diagnostics ? performance.now() : 0;
-  if (params.diagnostics) {
-    params.diagnostics.markerWindows = (params.diagnostics.markerWindows ?? 0) + 1;
+}): Set<string> {
+  const marked = new Set<string>();
+  if (params.sessionIds.length === 0) {
+    return marked;
   }
+  const startedAt = params.diagnostics ? performance.now() : 0;
   try {
     const db = getSessionKysely(params.database.db);
     const rows = iterateSqliteQuerySync(
       params.database.db,
       db
         .selectFrom("transcript_events")
-        .select(transcriptEventJsonSql(params.database.db).as("event_json"))
-        .where("session_id", "=", params.sessionId)
-        .orderBy("seq", "asc"),
+        .select("session_id")
+        .distinct()
+        .where(
+          "session_id",
+          "in",
+          db
+            .selectFrom("transcript_events")
+            .select("session_id")
+            .where("session_id", "in", params.sessionIds)
+            .groupBy("session_id")
+            .having((eb) => eb(eb.fn.max("created_at"), "<=", params.updatedBefore)),
+        )
+        .where((eb) =>
+          eb(
+            eb.fn<number>(isPostgresSqlConnection(params.database.db) ? "strpos" : "instr", [
+              transcriptEventJsonSql(params.database.db),
+              eb.val(params.transcriptContentMarker),
+            ]),
+            ">",
+            0,
+          ),
+        )
+        .orderBy("session_id", "asc"),
     );
     // Consume every row so late SQLite errors still abort cleanup planning.
-    let hasMarker = false;
     for (const row of rows) {
       if (params.diagnostics) {
         params.diagnostics.markerRows = (params.diagnostics.markerRows ?? 0) + 1;
+        params.diagnostics.markerWindows = (params.diagnostics.markerWindows ?? 0) + 1;
       }
-      hasMarker ||= row.event_json.includes(params.transcriptContentMarker);
+      marked.add(row.session_id);
     }
-    return hasMarker;
+    return marked;
   } finally {
     if (params.diagnostics) {
       params.diagnostics.markerScanMs =
@@ -163,31 +188,26 @@ function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
     if (params.diagnostics) {
       params.diagnostics.windowRows = (params.diagnostics.windowRows ?? 0) + rows.length;
     }
-    for (const row of rows) {
-      if (
-        !sessionKeyBelongsToAgent(row.session_key, params.agentId) ||
-        params.referencedSessionIds.has(row.session_id) ||
-        params.excludedSessionIds?.has(row.session_id) ||
-        (params.pluginOwnerId &&
-          row.plugin_owner_id &&
-          row.plugin_owner_id !== params.pluginOwnerId)
-      ) {
-        continue;
-      }
-      if (
-        !sqliteTranscriptStateIsReclaimable({
-          database: params.database,
-          sessionId: row.session_id,
-          nowMs: params.nowMs,
-          orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
-        }) ||
-        !sqliteTranscriptStateHasMarker({
-          database: params.database,
-          sessionId: row.session_id,
-          transcriptContentMarker: params.transcriptContentMarker,
-          diagnostics: params.diagnostics,
-        })
-      ) {
+    const eligibleIds = rows
+      .filter(
+        (row) =>
+          sessionKeyBelongsToAgent(row.session_key, params.agentId) &&
+          !params.referencedSessionIds.has(row.session_id) &&
+          !params.excludedSessionIds?.has(row.session_id) &&
+          (!params.pluginOwnerId ||
+            !row.plugin_owner_id ||
+            row.plugin_owner_id === params.pluginOwnerId),
+      )
+      .map((row) => row.session_id);
+    const markedIds = readOrphanTranscriptMarkerSessionIds({
+      database: params.database,
+      sessionIds: eligibleIds,
+      updatedBefore: params.nowMs - params.orphanTranscriptMinAgeMs,
+      transcriptContentMarker: params.transcriptContentMarker,
+      diagnostics: params.diagnostics,
+    });
+    for (const sessionId of eligibleIds) {
+      if (!markedIds.has(sessionId)) {
         continue;
       }
       const plan = planSessionStateDeleteIfUnreferenced({
@@ -196,7 +216,7 @@ function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
         database: params.database,
         reason: "deleted",
         referencedSessionIds: params.referencedSessionIds,
-        sessionId: row.session_id,
+        sessionId,
       });
       if (plan) {
         deletePlans.push(plan);
@@ -251,7 +271,7 @@ export function planSessionLifecycleArtifactCleanup(
   const pages = planSessionLifecycleArtifactCleanupPages(database, params);
   for (;;) {
     const page = readWithCanonicalSessionReaderContinuation(database, params.continuation, () =>
-      runSqliteDeferredTransactionSync(database.db, () => {
+      runSqliteReadSnapshotSync(database.db, () => {
         assertCanonicalSqliteSessionKeysCurrent(database);
         return pages.next();
       }),
@@ -291,10 +311,7 @@ function* planSessionLifecycleArtifactCleanupPages(
     const db = getSessionKysely(database.db);
     const rows = executeSqliteQuerySync(
       database.db,
-      db
-        .selectFrom("session_nodes")
-        .select(["session_key", "current_session_id", "updated_at"])
-        .orderBy("session_key", "asc"),
+      db.selectFrom("session_nodes").select(["session_key", "current_session_id", "updated_at"]),
     ).rows;
 
     if (diagnostics) {
@@ -315,41 +332,43 @@ function* planSessionLifecycleArtifactCleanupPages(
     );
     const removedSessionIds = new Set<string>();
     const entries: LifecycleArtifactCleanupPlan["entries"] = [];
-    const candidateEntries = readSessionEntryStore(database, {
-      sessionKeys: candidates.map((row) => row.session_key),
-    });
-    const foreignOwnedSessionIds = params.pluginOwnerId
-      ? new Set(
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .selectFrom("session_windows")
-              .select("session_id")
-              .where("plugin_owner_id", "is not", null)
-              .where("plugin_owner_id", "!=", params.pluginOwnerId),
-          ).rows.map((row) => row.session_id),
-        )
-      : undefined;
-    for (const row of candidates) {
-      const entry = candidateEntries[row.session_key];
-      const sessionIds = uniqueStrings([
-        row.current_session_id,
-        ...(entry ? collectSessionStateIdsForEntry(entry) : []),
-      ]);
-      // Window ownership survives placeholder nodes and ownerless row projections; preserve
-      // the entire node when any referenced generation belongs to another plugin.
-      if (
-        (params.pluginOwnerId &&
-          entry?.pluginOwnerId &&
-          entry.pluginOwnerId !== params.pluginOwnerId) ||
-        sessionIds.some((sessionId) => foreignOwnedSessionIds?.has(sessionId))
-      ) {
-        continue;
+    if (candidates.length > 0) {
+      const candidateEntries = readSessionEntryStore(database, {
+        sessionKeys: candidates.map((row) => row.session_key),
+      });
+      const foreignOwnedSessionIds = params.pluginOwnerId
+        ? new Set(
+            executeSqliteQuerySync(
+              database.db,
+              db
+                .selectFrom("session_windows")
+                .select("session_id")
+                .where("plugin_owner_id", "is not", null)
+                .where("plugin_owner_id", "!=", params.pluginOwnerId),
+            ).rows.map((row) => row.session_id),
+          )
+        : undefined;
+      for (const row of candidates) {
+        const entry = candidateEntries[row.session_key];
+        const sessionIds = uniqueStrings([
+          row.current_session_id,
+          ...(entry ? collectSessionStateIdsForEntry(entry) : []),
+        ]);
+        // Window ownership survives placeholder nodes and ownerless row projections; preserve
+        // the entire node when any referenced generation belongs to another plugin.
+        if (
+          (params.pluginOwnerId &&
+            entry?.pluginOwnerId &&
+            entry.pluginOwnerId !== params.pluginOwnerId) ||
+          sessionIds.some((sessionId) => foreignOwnedSessionIds?.has(sessionId))
+        ) {
+          continue;
+        }
+        for (const sessionId of sessionIds) {
+          removedSessionIds.add(sessionId);
+        }
+        entries.push({ expectedEntry: entry, sessionKey: row.session_key });
       }
-      for (const sessionId of sessionIds) {
-        removedSessionIds.add(sessionId);
-      }
-      entries.push({ expectedEntry: entry, sessionKey: row.session_key });
     }
 
     if (diagnostics) {

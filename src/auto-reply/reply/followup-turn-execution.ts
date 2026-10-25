@@ -1,11 +1,16 @@
+import {
+  isFreshChannelCronAuthorityTurn,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
-import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -17,13 +22,12 @@ import { createReplyAgentRestartRecoveryController } from "./agent-runner-restar
 import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { captureReplyOperationSessionReader } from "./reply-run-registry.state.js";
-import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
@@ -84,8 +88,6 @@ export async function executeFollowupTurn(params: {
   const sourceOpts = defaults.opts;
   const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
-  // Queued turns are never heartbeats; heartbeat runs never supply the drain callback.
-  const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const progressAllowed = () =>
@@ -133,11 +135,15 @@ export async function executeFollowupTurn(params: {
   const pendingTaskFailures: { progress?: unknown; tool?: unknown } = {};
   const pendingWorkTasks = new Set<Promise<void>>();
   const trackPendingWork = (task: Promise<void>, kind: "progress" | "tool") => {
+    const releaseExecution = turn.operation.retainExecution();
     const observedTask = task.catch((error: unknown) => {
       pendingTaskFailures[kind] ??= error;
       throw error;
     });
-    const watcher = observedTask.finally(() => pendingWorkTasks.delete(watcher));
+    const watcher = observedTask.finally(() => {
+      pendingWorkTasks.delete(watcher);
+      releaseExecution();
+    });
     void watcher.catch(() => undefined);
     pendingWorkTasks.add(watcher);
   };
@@ -182,7 +188,6 @@ export async function executeFollowupTurn(params: {
   const baseTypingSignals = createTypingSignaler({
     typing: defaults.typing,
     mode: progressAllowed() ? defaults.typingMode : "never",
-    isHeartbeat,
   });
   const typingSignals: TypingSignaler = {
     ...baseTypingSignals,
@@ -198,11 +203,15 @@ export async function executeFollowupTurn(params: {
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
-    isHeartbeat,
+    // Derived follow-ups take execution capabilities from their queued input.
+    cronCreatorAuthorityCapability: undefined,
     sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
+    bootstrapContextMode: turn.queued.run.bootstrapContextMode,
+    cleanupBundleMcpOnRunEnd: undefined,
+    scheduledAutomation: turn.queued.run.scheduledAutomation,
     internalEventExecution: turn.queued.run.internalEventExecution,
     userTurnTranscriptRecorder: turn.queued.userTurnTranscriptRecorder,
-    // A refreshed runner owns presentation defaults, never another source's authority or callbacks.
+    // The source runner owns callbacks; the queued input owns this execution's authority.
     operatorAuthority: turn.queued.operatorAuthority,
     abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
@@ -303,7 +312,7 @@ export async function executeFollowupTurn(params: {
   let pendingWorkDrain: Promise<void> | undefined;
   const drainPendingWork = () => {
     pendingWorkDrain ??= (async () => {
-      await drainPendingToolTasks({ tasks: pendingWorkTasks, onTimeout: logVerbose });
+      await drainPendingToolTasks({ tasks: pendingWorkTasks });
       // This terminal owner gets one bounded wait. Retire the accounting handoff
       // so timed-out tool delivery cannot start a second idle window.
       pendingToolTasks.clear();
@@ -369,9 +378,9 @@ export async function executeFollowupTurn(params: {
         ? sessionPersonalProfileId(turn.session.current())
         : undefined;
       await turn.operation.bindToolAuthoritySnapshotAsync(
-        prepareReplyToolAuthority(
+        prepareReplyRunToolAuthority(
           turn.queued,
-          undefined,
+          turn.session.current(),
           captureReplyOperationSessionReader(turn.operation),
         ),
       );
@@ -405,7 +414,6 @@ export async function executeFollowupTurn(params: {
           shouldEmitToolResult,
           shouldEmitToolOutput,
           pendingToolTasks,
-          isHeartbeat,
           sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
           getActiveSessionEntry: turn.session.current,
@@ -427,7 +435,33 @@ export async function executeFollowupTurn(params: {
       // Queued execution outlives its ingress scope. Re-enter the exact source
       // custody after lazy collection binds it, so runtime appends consume all sources.
       turn.operation.abortSignal.throwIfAborted();
-      execution = await withCurrentUserTurnInput(recorder, execute);
+      // Only the original fresh ingress can recreate authority for this new run.
+      // Maintenance copies and synthetic turns must not reuse the source factory.
+      const run = turn.queued.run;
+      const capability =
+        run.senderIsOwner &&
+        isFreshChannelCronAuthorityTurn({
+          messageProvider: run.messageProvider,
+          senderId: run.senderId,
+          isRoomEvent: roomEvent,
+          inputProvenance: run.inputProvenance,
+          spawnedBy: run.spawnedBy,
+          suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+        })
+          ? turn.queued.createChannelCronAuthority?.(
+              turn.runId,
+              getCommandOwnerAuthority(run)?.isCurrent,
+            )
+          : undefined;
+      progressOpts.cronCreatorAuthorityCapability = capability;
+      const runWithInput = () => withCurrentUserTurnInput(recorder, execute);
+      execution = capability
+        ? await runWithCronCreatorAuthorityCapability(
+            capability,
+            runWithInput,
+            turn.operation.abortSignal,
+          )
+        : await runWithInput();
     }
   } catch (error) {
     await drainPendingWork();
@@ -446,14 +480,13 @@ export async function executeFollowupTurn(params: {
       outcome: {
         kind: "rejected",
         payload: buildTerminalAgentRunFailureReplyPayload({
-          isHeartbeat,
           replyExpectation: terminalReplyExpectation,
           visibleReplyDelivered,
         }),
       },
     };
   }
-  // Runner defaults may be newer; only the queued sources own this execution result.
+  // Only the queued sources own this execution result.
   recordReplyOperationAgentTurn(
     turn.queued.replyOperationRunStates,
     turn.operation,
