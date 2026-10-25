@@ -1,11 +1,10 @@
-import type { AssistantMessageEventStreamLike, Model } from "@openclaw/llm-core";
+import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
-import { configureAiTransportHost, getAiTransportHost } from "./host.js";
 import {
   anthropicModel,
   context,
   anthropicEvents,
-  createAnthropicResponse,
+  captureAnthropicExchange,
   registerParityHostLifecycle,
 } from "./provider-transport-parity.test-support.js";
 import { makeProviderModel } from "./providers/provider-model.test-support.js";
@@ -154,20 +153,6 @@ const messageDelta = (stop_reason?: string, tokens?: unknown) => ({
 });
 const messageStop = { type: "message_stop" };
 
-async function observeStream(stream: AssistantMessageEventStreamLike) {
-  const eventTrace = [];
-  for await (const event of stream) {
-    eventTrace.push(
-      Object.fromEntries(
-        Object.entries(event).filter(([key]) =>
-          ["type", "contentIndex", "delta", "content", "reason"].includes(key),
-        ),
-      ),
-    );
-  }
-  return { eventTrace, terminal: await stream.result() };
-}
-
 async function runOpenAi(
   implementation: "provider" | "transport",
   chunks: readonly OpenAIChunk[],
@@ -192,41 +177,7 @@ async function runOpenAi(
     implementation === "provider"
       ? providerStream(model, context, options)
       : await createTransport()(model, context, options as never);
-  return observeStream(stream);
-}
-
-async function runAnthropic(
-  implementation: "provider" | "transport",
-  events: readonly Record<string, unknown>[] = anthropicEvents,
-) {
-  let stream: AssistantMessageEventStreamLike;
-  const [{ streamAnthropic }, { createAnthropicMessagesTransportStreamFn: createTransport }] =
-    await Promise.all([
-      import("./providers/anthropic.js"),
-      import("./transports/anthropic-transport-stream.js"),
-    ]);
-  const options = {
-    apiKey: "sk-test",
-    thinkingEnabled: true,
-    thinkingBudgetTokens: 1024,
-    effort: "low",
-  } as const;
-  if (implementation === "provider") {
-    const client = {
-      messages: {
-        create: () => ({ asResponse: async () => createAnthropicResponse(events) }),
-      },
-    };
-    stream = streamAnthropic(anthropicModel, context, {
-      ...options,
-      client: client as never,
-    });
-  } else {
-    const fetchMock: typeof fetch = async () => createAnthropicResponse(events);
-    configureAiTransportHost({ ...getAiTransportHost(), buildModelFetch: () => fetchMock });
-    stream = await createTransport()(anthropicModel, context, options as never);
-  }
-  return observeStream(stream);
+  return { terminal: await stream.result() };
 }
 
 type ContentCase = [
@@ -270,15 +221,15 @@ describe("provider and transport observable parity fixtures", () => {
     const answer = `${seeded ? "Hello" : ""}${deltas ? " world" : ""}`;
     const signature = deltas ? "final-signature" : "seed-signature";
     for (const implementation of ["provider", "transport"] as const) {
-      const result = await runAnthropic(implementation, events);
+      const result = await captureAnthropicExchange(implementation, { events });
       expect(result.terminal).toMatchObject({
         stopReason: "stop",
         content: [thinking(thought, signature), text(answer)],
       });
       expect(result.eventTrace).toEqual(
         expect.arrayContaining([
-          { type: "thinking_end", contentIndex: 0, content: thought },
-          { type: "text_end", contentIndex: 1, content: answer },
+          expect.objectContaining({ type: "thinking_end", contentIndex: 0, content: thought }),
+          expect.objectContaining({ type: "text_end", contentIndex: 1, content: answer }),
         ]),
       );
     }
@@ -326,7 +277,7 @@ describe("provider and transport observable parity fixtures", () => {
         messageStop,
       ];
       for (const implementation of ["provider", "transport"] as const) {
-        const result = await runAnthropic(implementation, events);
+        const result = await captureAnthropicExchange(implementation, { events });
         expect(result.terminal).toMatchObject({
           stopReason: "stop",
           content: [{ type: "text", text: "Done." }],
@@ -366,7 +317,7 @@ describe("provider and transport observable parity fixtures", () => {
       messageStop,
     ];
     for (const implementation of ["provider", "transport"] as const) {
-      const result = await runAnthropic(implementation, events);
+      const result = await captureAnthropicExchange(implementation, { events });
       if (implementation === "provider" && fixture.providerError) {
         expect(result.terminal.stopReason).toBe("error");
         expect(result.terminal.errorMessage).toContain("malformed JSON arguments");

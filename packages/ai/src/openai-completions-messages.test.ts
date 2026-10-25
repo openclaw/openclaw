@@ -30,6 +30,10 @@ const toolCall = (id: string, name: string, args: Record<string, unknown> = {}) 
 const thought = (thinking: string, thinkingSignature: string) =>
   ({ type: "thinking", thinking, thinkingSignature }) as const;
 const wireUser = (content: unknown) => ({ role: "user", content });
+const wireImage = (data = "aW1n") => ({
+  type: "image_url",
+  image_url: { url: `data:image/png;base64,${data}` },
+});
 const wireTool = (tool_call_id: string, content: string) => ({
   role: "tool",
   tool_call_id,
@@ -72,29 +76,25 @@ const marked = (facts: string) =>
 function runtimeContext(messages: Context["messages"], overrides: Partial<Context> = {}): Context {
   return { messages, systemPrompt: `Stable prefix${marked("Runtime facts")}`, ...overrides };
 }
+function lookupTurn(id: string, result: string): Context["messages"] {
+  return [assistant([toolCall(id, "read")]), makeTextToolResult(id, "read", result, false, 3)];
+}
 
 describe("convertMessages assistant text replay", () => {
   it("serializes advertised video in ordered Chat Completions user content", () => {
-    const videoModel: ProviderModel<"openai-completions"> = {
-      ...model,
-      input: ["text", "image", "video"],
-    };
+    const content = [
+      text("before"),
+      image("image"),
+      { type: "video" as const, mimeType: "video/mp4", data: "video" },
+      text("after"),
+    ];
     const converted = convert(
-      {
-        messages: [
-          user([
-            text("before"),
-            image("image"),
-            { type: "video", mimeType: "video/mp4", data: "video" },
-            text("after"),
-          ]),
-        ],
-      },
-      videoModel,
+      { messages: [user(content)] },
+      { ...model, input: ["text", "image", "video"] },
     );
     expect(converted[0]?.content).toEqual([
       text("before"),
-      { type: "image_url", image_url: { url: "data:image/png;base64,image" } },
+      wireImage("image"),
       { type: "video_url", video_url: { url: "data:video/mp4;base64,video" } },
       text("after"),
     ]);
@@ -143,29 +143,21 @@ describe("convertMessages assistant text replay", () => {
     const prefix = "a".repeat(39);
     const oversizedId = `${prefix}🐱`;
     const targetModel = { ...model, id: "target-model", provider: "openai" };
-    const context: Context = {
-      tools: tools("lookup"),
-      messages: [
-        assistant([toolCall(oversizedId, "lookup")], {
-          api: targetModel.api,
-          provider: targetModel.provider,
-          model: "source-model",
-          timestamp: 1,
-        }),
-        makeTextToolResult(oversizedId, "lookup", "ok", false, 2),
-      ],
-    };
-
-    const converted = convert(context, targetModel);
-    const assistantParam = converted.find((message) => message.role === "assistant");
-    const toolParam = converted.find((message) => message.role === "tool");
-    const normalizedAssistantId =
-      assistantParam?.role === "assistant" ? assistantParam.tool_calls?.[0]?.id : undefined;
-    const normalizedToolResultId = toolParam?.role === "tool" ? toolParam.tool_call_id : undefined;
-
-    expect(oversizedId.slice(0, 40).charCodeAt(39)).toBe(0xd83d);
-    expect(normalizedAssistantId).toBe(prefix);
-    expect(normalizedToolResultId).toBe(prefix);
+    const converted = convert(
+      {
+        tools: tools("lookup"),
+        messages: [
+          assistant([toolCall(oversizedId, "lookup")], {
+            provider: targetModel.provider,
+            model: "source-model",
+            timestamp: 1,
+          }),
+          makeTextToolResult(oversizedId, "lookup", "ok", false, 2),
+        ],
+      },
+      targetModel,
+    );
+    expect(converted).toEqual([expectedToolCall(prefix, "lookup", "{}"), wireTool(prefix, "ok")]);
   });
 });
 
@@ -193,25 +185,17 @@ it("counts every reply when labeling sparse images from an unnamed tool", () => 
   ).toEqual(callIds);
   expect(converted.find((message) => message.role === "user")?.content).toEqual([
     text("Image(s) from tool result #2:"),
-    { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+    wireImage("AAAA"),
     text("Image(s) from tool result #4:"),
-    { type: "image_url", image_url: { url: "data:image/png;base64,BBBB" } },
+    wireImage("BBBB"),
   ]);
 });
 
 describe("convertMessages relocatable region", () => {
   const compat = () => resolveOpenAICompletionsCompat(model);
   const system = { role: "system", content: "Stable prefix" };
-  const wireImage = { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } };
-  it.each<
-    [
-      name: string,
-      input: Context,
-      target: Model<"openai-completions">,
-      expected: unknown[],
-      optOut?: number[],
-    ]
-  >([
+  type ReplayCase = [string, Context, Model<"openai-completions">, unknown[], number[]?];
+  it.each<ReplayCase>([
     [
       "keeps Runtime in system content for an unsupported empty image",
       runtimeContext([user([image("")])]),
@@ -249,7 +233,11 @@ describe("convertMessages relocatable region", () => {
         system,
         expectedToolCall("image_call", "read", '{"path":"image.png"}'),
         wireTool("image_call", "(see attached image)"),
-        wireUser([text("Image(s) from tool result #1 (read):"), wireImage, text("Runtime facts")]),
+        wireUser([
+          text("Image(s) from tool result #1 (read):"),
+          wireImage(),
+          text("Runtime facts"),
+        ]),
         { role: "developer", content: "OpenClaw runtime context:\nlater context" },
       ],
       [3, 4],
@@ -266,7 +254,7 @@ describe("convertMessages relocatable region", () => {
         ],
       },
       imageModel,
-      [system, wireUser([text("legacy plugin runtime context"), wireImage])],
+      [system, wireUser([text("legacy plugin runtime context"), wireImage()])],
       [1],
     ],
   ])("%s", (_name, input, target, expected, optOut) => {
@@ -293,11 +281,7 @@ describe("convertMessages relocatable region", () => {
       });
       const withToolResult: Context = {
         ...turn1,
-        messages: [
-          ...turn1.messages,
-          assistant([toolCall("c1", "read")]),
-          makeTextToolResult("c1", "read", toolResult, false, 3),
-        ],
+        messages: [...turn1.messages, ...lookupTurn("c1", toolResult)],
       };
       const followUp: Context = {
         ...withToolResult,
@@ -334,11 +318,8 @@ describe("convertMessages relocatable region", () => {
   );
 
   it("keeps trailing permission guidance in the system message", () => {
-    const notice = [
-      "<!-- openclaw:attempt:PERMISSION -->",
-      "Permissions changed. Inspect interrupted actions; do not repeat completed ones.",
-      "<!-- /openclaw:attempt:PERMISSION -->",
-    ].join("\n");
+    const notice =
+      "<!-- openclaw:attempt:PERMISSION -->\nPermissions changed. Inspect interrupted actions; do not repeat completed ones.\n<!-- /openclaw:attempt:PERMISSION -->";
     const context: Context = {
       systemPrompt: `Stable prefix${marked("Runtime: session=alpha")}\n${notice}`,
       messages: [user("hi")],

@@ -7,6 +7,7 @@ import type {
   UserMessage,
 } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { createFailureMessage } from "../../agent-core/src/turn-interruption.js";
 import {
   anthropicModel,
@@ -75,14 +76,7 @@ function appendToolRound(messages: Context["messages"], model: Model, round: num
   }));
   messages.push(
     assistant(model, calls, round * 2, "toolUse"),
-    ...ids.map((id) => ({
-      role: "toolResult" as const,
-      toolCallId: id,
-      toolName: "lookup",
-      timestamp: round * 2 + 1,
-      isError: false,
-      content: [{ type: "text" as const, text: `Answer ${id}` }],
-    })),
+    ...ids.map((id) => makeTextToolResult(id, "lookup", `Answer ${id}`, false, round * 2 + 1)),
   );
 }
 
@@ -95,19 +89,18 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       "retained v2026.9.7 context",
       "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
     ].join("\n");
-    const legacyCarrier = userMessage([textBlock(legacyText)], {
-      timestamp: 2,
-      runtimeContextCarrier: true,
-      runtimeContextCarrierRetained: true,
-    });
     const messages: Context["messages"] = [
       user("Original question", 1),
-      legacyCarrier,
+      userMessage([textBlock(legacyText)], {
+        timestamp: 2,
+        runtimeContextCarrier: true,
+        runtimeContextCarrierRetained: true,
+      }),
       assistant(
         anthropicModel,
         [
           { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
-          { type: "text", text: "Original answer" },
+          textBlock("Original answer"),
         ],
         3,
       ),
@@ -152,12 +145,12 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     "preserves excluded-consult updates and the prompt prefix (prior conversation=%s)",
     async (priorConversation) => {
       const model = { ...anthropicModel, id: "claude-opus-5-5" };
-      const answer = assistant(model, [{ type: "text", text: "Answer" }]);
+      const answer = assistant(model, [textBlock("Answer")]);
       const prior: Context["messages"] = priorConversation
         ? [user("Earlier question", 0), answer]
         : [];
       // The generated consult prompt was excluded from replay; both updates survive.
-      const messages: Context["messages"] = [
+      const messages = [
         ...prior,
         user("Changed instructions", 2, false),
         user("Consult facts", 3, true),
@@ -186,8 +179,10 @@ describe("Anthropic runtime-context cache lifecycle", () => {
           wireAssistant([textBlock("Answer")]),
           wireUser("Next question"),
         ]);
-        expect(second.payload.system).toEqual(first.payload.system);
-        expect(second.payload.system).toEqual([textBlock(context.systemPrompt)]);
+        expect([first.payload.system, second.payload.system]).toEqual([
+          [textBlock(context.systemPrompt)],
+          [textBlock(context.systemPrompt)],
+        ]);
         expect((second.payload.messages as unknown[]).slice(0, expected.length)).toEqual(
           first.payload.messages,
         );
@@ -195,7 +190,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     },
   );
 
-  it("sends turn-scoped operator context with system authority", async () => {
+  it("keeps operator context at system authority and its historical position after an abort", async () => {
     const messages: Context["messages"] = [
       user("Question", 1),
       user("Prompt update", 2, false),
@@ -205,14 +200,28 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       const { payload, headers } = await captureMessages(implementation, opusModel, messages, {
         headers: { "anthropic-beta": "custom-beta" },
       });
-      expect(payload.messages).toEqual([
+      const expected = [
         wireUser("Question"),
         system("Prompt update"),
         system("Runtime facts", true),
-      ]);
+      ];
+      expect(payload.messages).toEqual(expected);
       const betas = headers.get("anthropic-beta")?.split(",");
       expect(betas).toContain("custom-beta");
       expect(betas).toContain("mid-conversation-system-clear-at-2026-08-21");
+      const replay = await captureMessages(implementation, opusModel, [
+        ...messages,
+        createFailureMessage(opusModel, new Error("Interrupted"), true),
+        user("Second question", 4),
+        user("Second turn facts", 5, true),
+      ]);
+      expect(replay.payload.system).toEqual(payload.system);
+      expect(replay.payload.messages).toEqual([
+        ...expected,
+        wireAssistant([textBlock(STREAM_ERROR_FALLBACK_TEXT)]),
+        wireUser("Second question"),
+        system("Second turn facts", true),
+      ]);
     }
   });
 
@@ -242,30 +251,6 @@ describe("Anthropic runtime-context cache lifecycle", () => {
           ["call_1_a", "call_1_b"].map((tool_use_id) => ({ type: "tool_result", tool_use_id })),
         ),
         system("Permission changed"),
-      ]);
-    }
-  });
-
-  it("preserves historical operator positions before the next user with an aborted assistant", async () => {
-    const messages: Context["messages"] = [
-      user("First question", 1),
-      user("First turn facts", 2, true),
-    ];
-    const nextMessages: Context["messages"] = [...messages];
-    nextMessages.push(createFailureMessage(opusModel, new Error("Interrupted"), true));
-    nextMessages.push(user("Second question", 4), user("Second turn facts", 5, true));
-    for (const implementation of ["provider", "transport"] as const) {
-      const initial = await captureMessages(implementation, opusModel, messages);
-      const replay = await captureMessages(implementation, opusModel, nextMessages);
-      if (!Array.isArray(initial.payload.messages)) {
-        throw new Error("Expected initial messages");
-      }
-      expect(replay.payload.system).toEqual(initial.payload.system);
-      expect(replay.payload.messages).toEqual([
-        ...initial.payload.messages,
-        wireAssistant([textBlock(STREAM_ERROR_FALLBACK_TEXT)]),
-        wireUser("Second question"),
-        system("Second turn facts", true),
       ]);
     }
   });
