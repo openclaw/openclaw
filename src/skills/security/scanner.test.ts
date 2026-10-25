@@ -174,6 +174,41 @@ describe("scanSource", () => {
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
     },
     {
+      name: "detects child_process exec through an inline require receiver",
+      source: `
+require("child_process").exec("node server.js");
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process exec through an inline node: require receiver",
+      source: `
+require("node:child_process").exec("node server.js");
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process exec through an inline getBuiltinModule receiver",
+      source: `
+process.getBuiltinModule("child_process").exec("node server.js");
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process computed exec through an inline require receiver",
+      source: `
+require("child_process")["exec"]("node server.js");
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process computed spawn through an inline getBuiltinModule receiver",
+      source: `
+process.getBuiltinModule("child_process")["spawn"]("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
       name: "detects child_process direct exec through an ESM namespace import",
       source: '\nimport * as proc from "node:child_process";\nproc.exec("node server.js");\n',
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
@@ -211,6 +246,18 @@ describe("scanSource", () => {
   it("does not flag a computed exec-style call on a non-child_process object", () => {
     const source =
       '\nimport { exec } from "child_process";\nconst re = /pattern/;\nre["exec"](value);\n';
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
+  it("does not attribute a child_process load elsewhere on the line to a later .exec", () => {
+    // A require() earlier on the same line is a separate statement; the .exec
+    // receiver here is `getProc()`, which is not a proven child_process
+    // namespace, so provenance scoping must keep this call benign.
+    const source = `
+function getProc() { return require("child_process"); }
+const result = require("child_process"); getProc().exec("node server.js");
+`;
     const findings = scanSource(source, "plugin.ts");
     expectRulePresence(findings, "dangerous-exec", false);
   });
