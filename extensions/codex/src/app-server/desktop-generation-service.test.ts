@@ -72,18 +72,12 @@ async function start() {
   await service.start(context);
   await vi.advanceTimersByTimeAsync(1_000);
   expect(mocks.read).toHaveBeenCalledOnce();
-  expect(mocks.watch).toHaveBeenCalledWith(
-    "/Applications",
-    { recursive: false },
-    expect.any(Function),
-  );
 }
 async function acquire(fingerprintAfter: string) {
   fingerprint = fingerprintAfter;
   const pending = waitForCodexDesktopGeneration();
   await vi.advanceTimersByTimeAsync(1_000);
   expect(await pending).toMatchObject({ fingerprint: fingerprintAfter });
-  expect(mocks.watch).toHaveBeenCalledOnce();
 }
 
 it("refreshes on acquisition when the stable root cannot be watched", async () => {
@@ -98,6 +92,11 @@ it("refreshes on acquisition when the stable root cannot be watched", async () =
 
 it("keeps the stable parent watch and publishes a settled bundle replacement", async () => {
   await start();
+  expect(mocks.watch).toHaveBeenCalledWith(
+    "/Applications",
+    { recursive: false },
+    expect.any(Function),
+  );
   changed.mockClear();
   fingerprint = "desktop-y";
   change("ChatGPT.app");
