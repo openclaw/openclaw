@@ -46,6 +46,9 @@ import {
 // mock-isolation: Only model decisions are synthetic; tool, controller and storage owners stay real.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
 const model = vi.mocked(runEmbeddedAgent);
+const summary = "Report ready.";
+const failure = "Synthetic automation failed.";
+const request = "Check the synthetic report.";
 await Promise.all([
   import("../dispatch.js"),
   import("./get-reply-from-config.runtime.js").then((runtime) =>
@@ -65,6 +68,11 @@ it.for([
 ] as const)(
   "settles a $admission automation $result ($notification/$messageTool) through its shared session owner",
   async (scenario, { signal }) => {
+    const progress = scenario.result === "progress";
+    const failed = scenario.result === "failed";
+    const result = progress ? { outcome: "progress", summary } : { outcome: "no_change" };
+    const waitForGate = (gate: Promise<void>, settled: Promise<unknown>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, settled, message), signal);
     await withOpenClawTestState(
       { label: "automation-shared-result", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
@@ -74,7 +82,6 @@ it.for([
         openOpenClawStateDatabase();
         const registry = captureActivePluginRegistrySnapshot();
         const current = expectDefined(registry.activeRegistry, "active plugin registry");
-        // This is the external transport boundary; routing and delivery settlement stay real.
         const sendText = vi
           .fn<NonNullable<ChannelOutboundAdapter["sendText"]>>()
           .mockResolvedValue({
@@ -122,7 +129,7 @@ it.for([
           delivery: "notification" in scenario ? { mode: "none" } : { mode: "announce", ...route },
           payload: {
             kind: "agentTurn",
-            message: "Check the synthetic report.",
+            message: request,
             includeReasoning: true,
           },
         });
@@ -156,10 +163,9 @@ it.for([
           });
           await tool.execute("result", {
             action: "record_result",
-            outcome: scenario.result === "progress" ? "progress" : "no_change",
-            ...(scenario.result === "progress" ? { summary: "Report ready." } : {}),
+            ...result,
           });
-          const finalPayload = { text: "Report ready." };
+          const finalPayload = { text: summary };
           if ("messageTool" in scenario && scenario.messageTool === "mirror") {
             setReplyPayloadMetadata(finalPayload, {
               sourceReplyTranscriptMirror: {
@@ -169,26 +175,22 @@ it.for([
               },
             });
           }
-          return scenario.result === "failed"
-            ? {
-                payloads: [{ text: "Synthetic automation failed.", isError: true }],
-                meta: {
-                  durationMs: 1,
-                  error: { kind: "retry_limit", message: "Synthetic automation failed." },
-                },
-              }
-            : {
-                payloads: [{ text: "Reasoning for the report.", isReasoning: true }, finalPayload],
-                meta: { durationMs: 1 },
-                ...("messageTool" in scenario
-                  ? {
-                      didSendViaMessagingTool: true,
-                      messagingToolSentTargets: [
-                        { tool: "message", provider: "telegram", ...route },
-                      ],
-                    }
-                  : {}),
-              };
+          if (failed) {
+            return {
+              payloads: [{ text: failure, isError: true }],
+              meta: { durationMs: 1, error: { kind: "retry_limit", message: failure } },
+            };
+          }
+          return {
+            payloads: [{ text: "Reasoning for the report.", isReasoning: true }, finalPayload],
+            meta: { durationMs: 1 },
+            ...("messageTool" in scenario
+              ? {
+                  didSendViaMessagingTool: true,
+                  messagingToolSentTargets: [{ tool: "message", provider: "telegram", ...route }],
+                }
+              : {}),
+          };
         });
         let first: ReturnType<typeof enqueueSessionEventForHost> | undefined;
         let scheduled: ReturnType<typeof runCronSessionTurn> | undefined;
@@ -204,21 +206,14 @@ it.for([
               abortSignal: signal,
               deliver: false,
             });
-            await withinTest(
-              awaitGateBeforeSettlement(
-                firstStarted.promise,
-                first.settled,
-                "holding turn never started",
-              ),
-              signal,
-            );
+            await waitForGate(firstStarted.promise, first.settled, "holding turn never started");
           }
           scheduled = runCronSessionTurn({
             occurrence: TEST_SCHEDULED_OCCURRENCE,
             ...scope,
             cfg,
             job,
-            text: "Check the synthetic report.",
+            text: request,
             admissionSource: "operator-schedule",
             deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
             abortSignal: signal,
@@ -230,24 +225,18 @@ it.for([
             },
           });
           if (first) {
-            await withinTest(
-              awaitGateBeforeSettlement(
-                queued.promise,
-                scheduled,
-                "automation never entered the controller queue",
-              ),
-              signal,
-            );
+            await waitForGate(queued.promise, scheduled, "automation never entered the queue");
             expect(automationRunId).toBeUndefined();
             releaseFirst.resolve();
             await expect(first.settled).resolves.toMatchObject({ status: "completed" });
           }
           const outcome = await scheduled;
           expect(outcome, outcome.error).toMatchObject({
-            status: scenario.result === "failed" ? "error" : "ok",
+            status: failed ? "error" : "ok",
             executionStarted: true,
-            ...(scenario.result === "failed" ? { error: "Synthetic automation failed." } : {}),
+            ...(failed ? { error: failure } : {}),
           });
+          expect(outcome.result).toEqual(result);
           expect(nativeCalls).toBe(scenario.admission === "queued" ? 2 : 1);
           const settled = expectDefined(
             await readSessionEntryInWorker(scope),
@@ -264,22 +253,15 @@ it.for([
               message?.model === "automation-result" ||
               message?.idempotencyKey === `source-result:${automationRunId}`,
           );
-          expect(facts).toHaveLength(scenario.result === "progress" ? 1 : 0);
-          if (scenario.result === "progress") {
-            expect(facts[0]?.content).toEqual([{ type: "text", text: "Report ready." }]);
-          }
-          expect(outcome.result).toEqual(
-            scenario.result === "progress"
-              ? { outcome: "progress", summary: "Report ready." }
-              : { outcome: "no_change" },
+          expect(facts.map((fact) => fact?.content)).toEqual(
+            progress ? [[{ type: "text", text: summary }]] : [],
           );
-          if (scenario.result === "progress") {
-            expect(outcome.summary).toBe("Report ready.");
-            expect(outcome.delivered).toBe(!("notification" in scenario));
+          if (progress) {
+            expect(outcome).toMatchObject({ summary, delivered: !("notification" in scenario) });
             expect(sendText.mock.calls.map(([sent]) => sent.text)).toEqual(
               "notification" in scenario || "messageTool" in scenario
                 ? []
-                : ["Reasoning for the report.", "Report ready."],
+                : ["Reasoning for the report.", summary],
             );
           } else if (scenario.result === "no_change") {
             expect(outcome).toMatchObject({
@@ -289,11 +271,7 @@ it.for([
             });
             expect(sendText).not.toHaveBeenCalled();
           } else {
-            expect(
-              sendText.mock.calls.some(([sent]) =>
-                sent.text.includes("Synthetic automation failed."),
-              ),
-            ).toBe(true);
+            expect(sendText.mock.calls.some(([sent]) => sent.text.includes(failure))).toBe(true);
           }
         } finally {
           releaseFirst.resolve();
