@@ -348,24 +348,6 @@ it.each(
   }
 });
 
-it("queues detached followups behind direct commands without a reply operation", async ({
-  signal,
-}) => {
-  const f = recoveryFixture({ status: undefined, abortedLastRun: undefined });
-  const command = await f.claim();
-  const input = f.reserve();
-  const selected = vi.fn();
-  const pending = claimSessionControllerTask(input, selected, "queued_followup");
-  expect(input.phase).toBe("waiting");
-  expect(selected).not.toHaveBeenCalled();
-  expect(input.mailbox.owner.active).toBeUndefined();
-  releaseSessionControllerClaim(command);
-  const mailboxClaim = await withinTest(pending, signal);
-  expect(selected).toHaveBeenCalledExactlyOnceWith(mailboxClaim);
-  const result = await withinTest(f.admit({ mailboxClaim, kind: "queued_followup" }), signal);
-  expect(result).toMatchObject({ status: "owned" });
-});
-
 it("rejects command adoption without waiting behind a live recovery fence", async () => {
   const f = fencedRecovery("active-run", 0);
   const context = createRecoveryGatewayContext(f.storePath);
@@ -454,7 +436,7 @@ it("revalidates channel authority before reclaiming orphaned recovery", async ({
   expect(f.read()).toEqual(before);
 });
 
-async function busyReply(withRecoveryFence = true) {
+async function busyReply() {
   const fixture = recoveryFixture({ status: undefined, abortedLastRun: false });
   const reply = owned(await fixture.admit());
   const replyReleased = captureSessionControllerSettlement(fixture.scope);
@@ -469,14 +451,11 @@ async function busyReply(withRecoveryFence = true) {
     storePath: fixture.storePath,
   };
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const fence = [recoveryRun("busy-reply")];
-  if (withRecoveryFence) {
-    await fixture.write({
-      ...fixture.entry,
-      restartRecoveryRuns: fence,
-      restartRecoveryDeliveryRunId: "busy-reply",
-    });
-  }
+  await fixture.write({
+    ...fixture.entry,
+    restartRecoveryRuns: [recoveryRun("busy-reply")],
+    restartRecoveryDeliveryRunId: "busy-reply",
+  });
   const commands: Promise<unknown>[] = [];
   type Command = Parameters<typeof runWithAgentCommandRecoveryOwner<typeof target, string>>[0];
   disposals.unshift(async () => {
@@ -512,59 +491,37 @@ async function busyReply(withRecoveryFence = true) {
   };
 }
 
-it.for(["recovery fence", "worker-owned input"] as const)(
-  "keeps two accepted commands in FIFO order behind a reply with %s",
-  async (ownership, { signal }) => {
-    const fixture = await busyReply(ownership === "recovery fence");
-    const releaseFirst = deferred();
-    const firstStarted = deferred();
-    const order: string[] = [];
-    const first = fixture.command("first", {
-      run: async () => {
-        order.push("first");
-        firstStarted.resolve();
-        await releaseFirst.promise;
-        return "first";
-      },
-    });
-    await vi.waitFor(() => expect(fixture.queued()).toBe(1));
-    const second = fixture.command("second", {
-      run: async () => {
-        order.push("second");
-        return "second";
-      },
-    });
-    await vi.waitFor(() => expect(fixture.queued()).toBe(2));
-    expect(order).toEqual([]);
-    await fixture.finish();
-    await withinTest(firstStarted.promise, signal);
-    expect(order).toEqual(["first"]);
-    releaseFirst.resolve();
-    await expect(withinTest(Promise.all([first, second]), signal)).resolves.toEqual([
-      "first",
-      "second",
-    ]);
-    expect(order).toEqual(["first", "second"]);
-  },
-);
-
 it("keeps a successor behind an acquired turn's delayed durable claim", async ({ signal }) => {
   const fixture = await busyReply();
   const claim = observeRecoveryClaim("racing");
-  const run = vi.fn(async () => "ran");
-  const command = fixture.command("racing", { run });
+  const firstStarted = deferred();
+  const releaseFirst = deferred();
+  const order: string[] = [];
+  const run = vi.fn(async (runId: string) => {
+    order.push(runId);
+    if (runId === "racing") {
+      firstStarted.resolve();
+      await releaseFirst.promise;
+    }
+    return runId;
+  });
+  const command = fixture.command("racing", { run: () => run("racing") });
   await vi.waitFor(() => expect(fixture.queued()).toBe(1));
   await fixture.finish();
   await beforeSettlement(claim.claimed, command, signal, "Command skipped its durable claim");
-  const successor = fixture.command("successor", { run });
+  const successor = fixture.command("successor", { run: () => run("successor") });
   await vi.waitFor(() => expect(fixture.queued()).toBe(2));
   expect(run).not.toHaveBeenCalled();
   claim.release();
+  await withinTest(firstStarted.promise, signal);
+  expect(order).toEqual(["racing"]);
+  releaseFirst.resolve();
   await expect(withinTest(Promise.all([command, successor]), signal)).resolves.toEqual([
-    "ran",
-    "ran",
+    "racing",
+    "successor",
   ]);
   expect(run).toHaveBeenCalledTimes(2);
+  expect(order).toEqual(["racing", "successor"]);
 });
 
 it("settles committed recovery without replay after preparation changes", async ({ signal }) => {

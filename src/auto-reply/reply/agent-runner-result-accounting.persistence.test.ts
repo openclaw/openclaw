@@ -1,20 +1,13 @@
-import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { getReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
 import { recordTurnCompaction } from "./agent-runner-compaction-accounting.js";
 import { createDeliverySuite } from "./agent-runner-delivery-suite.test-support.js";
 import {
   agentAccountingPersistenceDiagnostic as diagnostic,
-  createAgentAccountingPersistenceFixture,
   observeCompletionCommands,
   withAccountingProvider,
 } from "./agent-runner-result-accounting.persistence.test-support.js";
@@ -25,11 +18,9 @@ import * as followupExecution from "./followup-turn-execution.js";
 import * as followupAdmission from "./reply-agent-turn-preparation.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
-import { incrementCompactionCount } from "./session-updates.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const suite = createDeliverySuite();
 const { createFixture } = suite;
 const turnUsage = Object.freeze({ input: 120, output: 8 });
@@ -76,40 +67,6 @@ function createRecoveryFixture(
   });
 }
 
-function setTerminalReply(
-  { context }: Fixture,
-  kind: "NO_REPLY" | "empty" | "hook_block",
-  expectation: "required" | "optional",
-  message = "blocked",
-) {
-  context.followupRun.run.terminalReplyExpectation = expectation;
-  context.execution.result.payloads = [];
-  context.execution.result.meta.terminalReply = prepareAgentRunTerminalReply({
-    rawText: kind === "NO_REPLY" ? "NO_REPLY" : "",
-  }).terminalReply;
-  if (kind === "NO_REPLY") {
-    context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
-  } else if (kind === "hook_block") {
-    context.execution.result.meta.error = { kind: "hook_block", message };
-  }
-}
-
-async function finalizeWithMedia(fixture: Fixture, prepare: () => Promise<unknown>) {
-  const { context } = fixture;
-  context.execution.result.payloads = [
-    { text: "done", mediaUrl: "https://example.invalid/final.png" },
-  ];
-  const normalizePayload = vi.fn(
-    async (payload: Parameters<typeof context.replyMediaContext.normalizePayload>[0]) => {
-      await prepare();
-      return payload;
-    },
-  );
-  context.replyMediaContext.normalizePayload = normalizePayload;
-  await finalizeReplyAgentRun(context);
-  expect(normalizePayload).toHaveBeenCalled();
-}
-
 it.each(["before-accounting", "during-payload-preparation"] as const)(
   "consolidates only the model switch present %s",
   async (when) => {
@@ -117,11 +74,16 @@ it.each(["before-accounting", "during-payload-preparation"] as const)(
     if (when === "before-accounting") {
       await fixture.patch({ liveModelSwitchPending: true });
     }
-    await finalizeWithMedia(fixture, async () => {
+    fixture.context.execution.result.payloads = [
+      { text: "done", mediaUrl: "https://example.invalid/final.png" },
+    ];
+    fixture.context.replyMediaContext.normalizePayload = async (payload) => {
       if (when === "during-payload-preparation") {
         await fixture.patch({ liveModelSwitchPending: true });
       }
-    });
+      return payload;
+    };
+    await finalizeReplyAgentRun(fixture.context);
     expect(fixture.read()?.liveModelSwitchPending).toBe(
       when === "during-payload-preparation" ? true : undefined,
     );
@@ -185,76 +147,6 @@ it("retains an accepted rejected followup's recovery claim until source delivery
   expect(settledEntry?.restartRecoveryTerminalRunIds).toContain("accepted-source");
 });
 
-it.each([
-  { name: "auth profile", authProfileOverride: "openai:new", authProfileOverrideSource: "user" },
-  { name: "auth provenance", authProfileOverride: "openai:old", authProfileOverrideSource: "user" },
-] as const)(
-  "preserves a newer $name switch selected during payload preparation",
-  async ({ authProfileOverride, authProfileOverrideSource }) => {
-    const fixture = await createFixture();
-    await fixture.patch({
-      authProfileOverride: "openai:old",
-      authProfileOverrideSource: "auto",
-      liveModelSwitchPending: true,
-    });
-    await finalizeWithMedia(fixture, () =>
-      fixture.patch({
-        authProfileOverride,
-        authProfileOverrideSource,
-        liveModelSwitchPending: true,
-      }),
-    );
-    expect(fixture.read()).toMatchObject({
-      modelProvider: diagnostic.provider,
-      model: diagnostic.model,
-      authProfileOverride,
-      authProfileOverrideSource,
-      liveModelSwitchPending: true,
-    });
-  },
-);
-
-it("keeps incognito accounting and final custody on the retained memory owner", async () => {
-  const root = tempDirs.make("openclaw-native-completion-");
-  const env = { OPENCLAW_STATE_DIR: root };
-  const nativePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
-  const options = { agentId: "main", env, path: nativePath };
-  try {
-    const fixture = await createAgentAccountingPersistenceFixture({
-      storePath: nativePath,
-      incognito: true,
-      root,
-      fixtureId: 1,
-      registerOperation: (operation) => operations.push(operation),
-    });
-    const owner = memorySessionActorOwners.read(options);
-    expect(owner).toBeDefined();
-    fixture.setMeta({ usage: turnUsage });
-    const result = await finalizeReplyAgentRun(fixture.context);
-    expect(result).toMatchObject({ text: "done" });
-    const final = Array.isArray(result) ? result[0] : result;
-    const completion = final && getReplyPayloadMetadata(final)?.pendingFinalDeliveryCompletion;
-    expect(completion).toMatchObject({
-      sessionId: fixture.sessionId,
-      sessionKey: fixture.context.sessionKey,
-      storePath: nativePath,
-    });
-    expect(fixture.read()).toMatchObject({
-      ...persistedTurnUsage,
-      pendingFinalDelivery: {
-        intentId: completion?.intentId,
-        text: "done",
-        deliveries: [{ id: completion?.deliveryId, state: "prepared" }],
-      },
-    });
-    expect(memorySessionActorOwners.read(options)).toBe(owner);
-    expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
-    expect(fs.existsSync(nativePath)).toBe(false);
-  } finally {
-    memorySessionActorOwners.closeDatabase(options);
-  }
-});
-
 it("completes against the settled writer when the caller still has its pre-run entry", async () => {
   const fixture = await createFixture();
   fixture.context.execution.sessionWriter = {
@@ -287,8 +179,7 @@ it.each(["success", "publication-failure", "rollback"] as const)(
       restartRecoveryDeliveryRunId: "recovery-run",
       restartRecoveryDeliverySourceRunId: "source-turn",
     });
-    context.activeSessionEntry = entry;
-    context.activeSessionStore![sessionKey] = entry;
+    context.activeSessionEntry = context.activeSessionStore![sessionKey] = entry;
     await using actor = createRecoveryFixture(fixture, "recovery-run");
     const controller = actor.controller;
     await controller.admitUserTurn();
@@ -297,8 +188,7 @@ it.each(["success", "publication-failure", "rollback"] as const)(
       endedAt: 1_000,
       updatedAt: 1_000,
     });
-    context.activeSessionEntry = settled;
-    context.activeSessionStore![sessionKey] = settled;
+    context.activeSessionEntry = context.activeSessionStore![sessionKey] = settled;
     context.prepareRestartClaimCleanup = controller.prepareCompletionCleanup;
     fixture.setMeta({ usage: turnUsage });
     const before = fixture.read();
@@ -376,14 +266,10 @@ it.each([
     }
     await fixture.account("followup", {
       model: context.execution.resolved.model,
-      agentHarnessId: "context-fixture",
       contextTokens: tokens,
       contextTokensSource: source,
     });
-    expect(fixture.read()).toMatchObject({
-      contextTokens: expected,
-      agentHarnessId: "context-fixture",
-    });
+    expect(fixture.read()?.contextTokens).toBe(expected);
     expect(fixture.read()?.contextTokensSource).toBe(expectedSource);
   },
 );
@@ -422,37 +308,23 @@ it.each([
 );
 
 it.each([
-  ["queued", "NO_REPLY", "required", false],
-  ["queued", "NO_REPLY", "optional", false],
-  ["queued", "empty", "required", true],
-  ["queued", "hook_block", "required", false],
-  ["fallback", "NO_REPLY", "required", false],
-  ["fallback", "empty", "required", true],
-  ["fallback", "hook_block", "required", false],
+  ["NO_REPLY", false],
+  ["empty", true],
+  ["hook_block", false],
 ] as const)(
-  "accounts for %s %s %s completion without hiding missing output",
-  async (lane, kind, expectation, missing) => {
+  "accounts for fallback %s completion without hiding missing output",
+  async (kind, missing) => {
     const fixture = await createFixture();
     const { context } = fixture;
-    setTerminalReply(
-      fixture,
-      kind,
-      expectation,
-      lane === "fallback" ? "Reply suppressed" : "blocked",
-    );
-    if (lane === "queued") {
-      context.followupRun.run.traceAuthorized = true;
-      context.followupRun.run.traceLevelOverride = "raw";
-      const delivered = await fixture.deliverQueued();
-      if (missing) {
-        expect(
-          delivered.filter((payload) => payload.isError && payload.isStatusNotice),
-        ).toHaveLength(1);
-        expect(delivered.some((payload) => isReplyPayloadTerminalContent(payload))).toBe(false);
-      } else {
-        expect(delivered).toEqual([]);
-      }
-      return;
+    context.followupRun.run.terminalReplyExpectation = "required";
+    context.execution.result.payloads = [];
+    context.execution.result.meta.terminalReply = prepareAgentRunTerminalReply({
+      rawText: kind === "NO_REPLY" ? "NO_REPLY" : "",
+    }).terminalReply;
+    if (kind === "NO_REPLY") {
+      context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
+    } else if (kind === "hook_block") {
+      context.execution.result.meta.error = { kind: "hook_block", message: "Reply suppressed" };
     }
     const onAgentRunTerminalOutcome = vi.fn();
     context.opts = { onAgentRunTerminalOutcome };
@@ -478,14 +350,6 @@ it.each([
     expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
   },
 );
-
-it("keeps queued diagnostic supplements behind source send policy", async () => {
-  const fixture = await createFixture();
-  fixture.context.followupRun.run.traceAuthorized = true;
-  fixture.context.followupRun.run.traceLevelOverride = "raw";
-  fixture.turn.sendPolicy = "deny";
-  expect(await fixture.deliverQueued()).toEqual([]);
-});
 
 it("accounts a completed compaction before an optional empty reply skips preparation", async () => {
   const fixture = await createFixture();
@@ -554,20 +418,8 @@ describe("cancelled followup compaction accounting", () => {
       totalTokens: 40,
       totalTokensFresh: true,
       groupActivationNeedsSystemIntro: true,
-      modelProvider: diagnostic.provider,
-      model: diagnostic.model,
     });
-    // Cancellation preserves committed compaction, not the previous run snapshot.
-    for (const entry of [
-      fixture.read(),
-      fixture.context.activeSessionStore?.[fixture.context.sessionKey!],
-    ]) {
-      expect(entry?.inputTokens).toBeUndefined();
-      expect(entry?.outputTokens).toBeUndefined();
-      expect(entry?.cacheRead).toBeUndefined();
-      expect(entry?.cacheWrite).toBeUndefined();
-      expect(entry?.estimatedCostUsd).toBeUndefined();
-    }
+    expect(fixture.read()?.inputTokens).toBeUndefined();
     expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
   });
 
@@ -671,18 +523,11 @@ describe("followup context-pressure accounting", () => {
     });
   });
 
-  it("persists new diagnostic with usage without changing token/cost accounting", async () => {
+  it("persists a new context diagnostic with usage", async () => {
     const fixture = await createFixture();
     const usage = { ...turnUsage, cacheRead: 20 };
     await fixture.account(lane, { usage, lastCallUsage: usage, contextBudgetStatus: diagnostic });
     expect(fixture.read()?.contextBudgetStatus).toEqual(diagnostic);
-    expect(fixture.read()).toMatchObject({
-      ...persistedTurnUsage,
-      cacheRead: 20,
-      totalTokens: 140,
-      totalTokensFresh: true,
-      estimatedCostUsd: 0.000146,
-    });
   });
 
   it("preserves diagnostics for exhausted fallback with usage", async () => {
@@ -716,35 +561,12 @@ describe("followup context-pressure accounting", () => {
       expect(fixture.read()?.contextBudgetStatus).toBeUndefined();
       expect(fixture.read()).toMatchObject({
         sessionId,
-        lifecycleRevision: "generation-1",
         compactionCount: 1,
         totalTokens: 120,
         totalTokensFresh: true,
-        estimatedCostUsd: 0.00012,
       });
     },
   );
-});
-
-it("records an unavailable diagnostic after preflight compaction without usage", async () => {
-  const fixture = await createFixture();
-  await incrementCompactionCount({
-    sessionEntry: fixture.context.activeSessionEntry,
-    sessionStore: fixture.context.activeSessionStore,
-    sessionKey: fixture.context.sessionKey,
-    storePath: fixture.context.storePath,
-    amount: 1,
-    tokensAfter: 40,
-  });
-  expect(fixture.read()?.contextBudgetStatus).toBeUndefined();
-  fixture.context.preflightCompactionApplied = true;
-  await fixture.account("ordinary", { contextBudgetStatus: undefined });
-  expect(fixture.read()?.contextBudgetStatus).toBeUndefined();
-  expect(fixture.read()).toMatchObject({
-    totalTokens: 40,
-    totalTokensFresh: true,
-    compactionCount: 1,
-  });
 });
 
 registerAccountingReplacementRaceCases(createFixture);

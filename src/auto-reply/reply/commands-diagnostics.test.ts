@@ -17,7 +17,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 type PluginCommandHandler = OpenClawPluginCommandDefinition["handler"];
-import type { MsgContext } from "../templating.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -212,44 +211,6 @@ afterEach(() => {
 });
 
 describe("diagnostics command", () => {
-  it("uses the originating Telegram route for native diagnostics followups", async () => {
-    const { execCalls } = createDiagnosticsHandlerForTest();
-    const params = buildDiagnosticsParams("/diagnostics", {
-      ctx: {
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:8460800771",
-        From: "telegram:8460800771",
-        To: "slash:8460800771",
-        CommandSource: "native",
-        AccountId: "account-1",
-      } as MsgContext,
-      command: {
-        commandBodyNormalized: "/diagnostics",
-        isAuthorizedSender: true,
-        senderIsOwner: true,
-        senderId: "8460800771",
-        channel: "telegram",
-        channelId: "telegram",
-        surface: "telegram",
-        ownerList: [],
-        rawBodyNormalized: "/diagnostics",
-        from: "telegram:8460800771",
-        to: "slash:8460800771",
-      },
-      sessionKey: "agent:main:telegram:slash:8460800771",
-    });
-
-    await handleDiagnosticsCommand(params, true);
-
-    expect(execCalls).toHaveLength(1);
-    const execCall = requireExecCall(execCalls);
-    expect(execCall.defaults.messageProvider).toBe("telegram");
-    expect(execCall.defaults.currentChannelId).toBe("telegram:8460800771");
-    expect(execCall.defaults.accountId).toBe("account-1");
-  });
-
   it("falls back to a visible reply when approval cannot be queued", async () => {
     const { execCalls } = createDiagnosticsHandlerForTest({
       execResult: {
@@ -276,13 +237,21 @@ describe("diagnostics command", () => {
     expect(execCalls).toHaveLength(1);
   });
 
-  it("wraps Codex feedback upload into the Gateway diagnostics approval", async () => {
+  it("wraps native Codex feedback in approval on the originating Telegram route", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest();
     const { execCalls } = createDiagnosticsHandlerForTest();
     const params = buildDiagnosticsParams("/diagnostics flaky tool call", {
       sessionEntry: createCodexDiagnosticsSessionEntry(),
     });
-    params.ctx.ApprovalReviewerDeviceId = "device-diagnostics-reviewer";
+    Object.assign(params.ctx, {
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:1",
+      CommandSource: "native",
+      ApprovalReviewerDeviceId: "device-diagnostics-reviewer",
+    });
+    Object.assign(params.command, { channel: "telegram", channelId: "telegram", to: "slash:1" });
     const result = await handleDiagnosticsCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
@@ -297,10 +266,13 @@ describe("diagnostics command", () => {
     expect(diagnosticsSessions[0]?.agentHarnessId).toBe("codex");
     expect(diagnosticsSessions[0]?.sessionId).toBe("session-1");
     expect(diagnosticsSessions[0]?.sessionFile).toBe("agent:main:whatsapp:direct:user-1");
-    expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
+    expect(diagnosticsSessions[0]?.channel).toBe("telegram");
     expect(diagnosticsSessions[0]?.accountId).toBe("account-1");
     expect(execCalls).toHaveLength(1);
     const { defaults, params: execParams } = requireExecCall(execCalls);
+    expect(defaults.messageProvider).toBe("telegram");
+    expect(defaults.currentChannelId).toBe("telegram:1");
+    expect(defaults.accountId).toBe("account-1");
     expect(defaults.host).toBe("gateway");
     expect(defaults.security).toBe("allowlist");
     expect(defaults.ask).toBe("always");

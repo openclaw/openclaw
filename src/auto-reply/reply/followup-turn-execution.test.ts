@@ -103,21 +103,6 @@ describe("executeFollowupTurn", () => {
     });
   });
 
-  it("refreshes the eligible queued turn from its current personal profile", async () => {
-    const turn = sessionTurn(() => ({
-      sessionId: "session",
-      updatedAt: 2,
-      createdActor: { type: "human", source: "profile", id: "creator" },
-      owner: { actor: { type: "human", id: "new-owner" } },
-    }));
-    turn.queued.personalBootstrapEligible = true;
-    turn.queued.run.bootstrapUserProfileId = "previous-owner";
-    await executeTestTurn({ turn });
-    expect(state.execute.mock.calls[0]?.[0]?.followupRun.run.bootstrapUserProfileId).toBe(
-      "new-owner",
-    );
-  });
-
   it("records preflight failure on source receipts without changing newer runner state", async () => {
     const receipts: ReplyOperationRunState[] = [{}, {}];
     const newerReceipt: ReplyOperationRunState = {};
@@ -185,9 +170,7 @@ describe("executeFollowupTurn", () => {
     let verboseLevel: "on" | "off" = "off";
     let isVerboseProgressActive = () => true;
     const turn = sessionTurn(() => ({ sessionId: "session", updatedAt: 1, verboseLevel }));
-    mockExecution((params) => {
-      expect(params.resolvedVerboseLevel).toBe("off");
-      expect(params.opts?.commentaryPayloadsEnabled).toBe(false);
+    mockExecution(() => {
       verboseLevel = "on";
       expect(isVerboseProgressActive()).toBe(false);
     });
@@ -297,11 +280,13 @@ describe("executeFollowupTurn", () => {
       queued: { ...createTurn().queued, currentInboundEventKind: "room_event" },
     });
     const typing = createMockTypingController();
+    const callbacks = {
+      onCompactionStart: vi.fn(async () => {}),
+      onCompactionEnd: vi.fn(async () => {}),
+      onReasoningEnd: vi.fn(async () => {}),
+      onNarrationUpdate: vi.fn(async () => {}),
+    };
     const onToolResult = vi.fn(async () => {});
-    const onCompactionStart = vi.fn(async () => {});
-    const onCompactionEnd = vi.fn(async () => {});
-    const onReasoningEnd = vi.fn(async () => {});
-    const onNarrationUpdate = vi.fn(async () => {});
     mockExecution(async (params) => {
       await params.typingSignals.signalRunStart();
       await params.opts?.onToolResult?.({ text: "private progress" });
@@ -318,10 +303,7 @@ describe("executeFollowupTurn", () => {
         typingMode: "instant",
         opts: {
           forceToolResultProgress: true,
-          onCompactionStart,
-          onCompactionEnd,
-          onReasoningEnd,
-          onNarrationUpdate,
+          ...callbacks,
         },
       },
       onToolResult,
@@ -332,10 +314,7 @@ describe("executeFollowupTurn", () => {
       typing.startTypingLoop,
       typing.startTypingOnText,
       onToolResult,
-      onCompactionStart,
-      onCompactionEnd,
-      onReasoningEnd,
-      onNarrationUpdate,
+      ...Object.values(callbacks),
     ]) {
       expect(callback).not.toHaveBeenCalled();
     }
@@ -390,10 +369,12 @@ describe("executeFollowupTurn", () => {
 
   it("keeps lifecycle-only progress separate from generic summaries", async () => {
     const onToolStart = vi.fn(async () => true);
-    const onItemEvent = vi.fn(async () => true);
-    const onCommandOutput = vi.fn(async () => true);
-    const onApprovalEvent = vi.fn(async () => true);
-    const onPatchSummary = vi.fn(async () => true);
+    const hiddenCallbacks = {
+      onItemEvent: vi.fn(async () => true),
+      onCommandOutput: vi.fn(async () => true),
+      onApprovalEvent: vi.fn(async () => true),
+      onPatchSummary: vi.fn(async () => true),
+    };
     const onChannelToolResult = vi.fn(async () => {});
     const onDurableToolResult = vi.fn(async () => {});
     const turn = createTurn();
@@ -418,10 +399,7 @@ describe("executeFollowupTurn", () => {
       opts: {
         allowToolLifecycleWhenProgressHidden: true,
         onToolStart,
-        onItemEvent,
-        onCommandOutput,
-        onApprovalEvent,
-        onPatchSummary,
+        ...hiddenCallbacks,
         onToolResult: onChannelToolResult,
       },
       onToolResult: onDurableToolResult,
@@ -429,7 +407,7 @@ describe("executeFollowupTurn", () => {
     await result.progress.drain();
 
     expect(onToolStart).toHaveBeenCalledOnce();
-    for (const callback of [onItemEvent, onCommandOutput, onApprovalEvent, onPatchSummary]) {
+    for (const callback of Object.values(hiddenCallbacks)) {
       expect(callback).not.toHaveBeenCalled();
     }
     expect(onChannelToolResult).not.toHaveBeenCalled();
@@ -491,8 +469,8 @@ describe("executeFollowupTurn lifecycle", () => {
   );
 
   it("drains detached progress before the caller can project a final", async () => {
+    const gate = createDeferred();
     const order: string[] = [];
-    const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();
     mockExecution((params) => {
       void params.opts?.onItemEvent?.({ progressText: "working" });
     });
@@ -500,7 +478,7 @@ describe("executeFollowupTurn lifecycle", () => {
       turn: createTurn(),
       opts: {
         onItemEvent: async () => {
-          await progressBarrier;
+          await gate.promise;
           order.push("progress");
         },
       },
@@ -508,7 +486,7 @@ describe("executeFollowupTurn lifecycle", () => {
     const drain = result.progress.drain().then(() => order.push("drained"));
     await Promise.resolve();
     expect(order).toEqual([]);
-    releaseProgress();
+    gate.resolve();
     await drain;
     expect(order).toEqual(["progress", "drained"]);
   });
@@ -533,38 +511,14 @@ describe("executeFollowupTurn lifecycle", () => {
     await expect(result.progress.drain()).rejects.toBe(failure);
   });
 
-  it("surfaces a failure after input acceptance without retrying before model start", async () => {
-    const order: string[] = [];
-    const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();
-    const failure = new Error("execution failed");
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      void params.opts?.onItemEvent?.({ progressText: "working" });
-      throw failure;
-    });
-    const turn = createTurn();
-    const onAdopted = vi.fn();
-    turn.queued.turnAdoptionLifecycle = { onAdopted };
-    const pending = executeTestTurn({
-      turn,
-      opts: {
-        onItemEvent: async () => {
-          await progressBarrier;
-          order.push("progress");
-        },
-      },
-    });
-    await Promise.resolve();
-    expect(order).toEqual([]);
-    releaseProgress();
-    await expect(pending).resolves.toMatchObject({
-      execution: { outcome: { kind: "rejected", payload: { isError: true } } },
-    });
-    expect(onAdopted).toHaveBeenCalledOnce();
-    expect(state.execute).toHaveBeenCalledOnce();
-    expect(order).toEqual(["progress"]);
-  });
-
   it.each([
+    {
+      expectation: "required",
+      progress: "item",
+      accepted: undefined,
+      visible: true,
+      beforeStart: true,
+    },
     { expectation: "required", progress: "none", accepted: false, visible: false },
     { expectation: "result-required", progress: "none", accepted: false, visible: false },
     { expectation: "optional", progress: "none", accepted: false, visible: false },
@@ -573,28 +527,33 @@ describe("executeFollowupTurn lifecycle", () => {
     { expectation: "optional", progress: "item", accepted: undefined, visible: true },
     { expectation: "optional", progress: "compaction", accepted: undefined, visible: true },
   ] as const)(
-    "settles $expectation failure after $progress progress accepts $accepted",
-    async ({ expectation, progress, accepted, visible }) => {
+    "settles $expectation failure after $progress progress accepts $accepted (before start: $beforeStart)",
+    async (testCase) => {
+      const { expectation, progress, accepted, visible } = testCase;
+      const beforeStart = "beforeStart" in testCase && testCase.beforeStart;
       const receipt: ReplyOperationRunState = {};
       const failure = new Error("execution failed after start");
       const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();
-      const fail = vi.fn();
-      const operation = {
-        ...createMockReplyOperation().replyOperation,
-        fail,
-      } as unknown as AdmittedFollowupTurn["operation"];
+      const { replyOperation: operation, failMock: fail } = createMockReplyOperation();
       const turn = createTurn({ operation });
+      const onAdopted = vi.fn();
+      turn.queued.turnAdoptionLifecycle = { onAdopted };
       turn.queued.replyOperationRunStates = [receipt];
       turn.queued.run.terminalReplyExpectation = expectation;
       let observedVisibility: boolean | undefined;
+      let completedProgress = false;
       state.execute.mockImplementation(async (params: AgentTurnParams) => {
-        markReplyOperationExecutionStarted(operation);
+        if (!beforeStart) {
+          markReplyOperationExecutionStarted(operation);
+        }
         if (progress === "item") {
           void params.opts?.onItemEvent?.({ progressText: "working" });
         } else if (progress === "compaction") {
           void params.onCompactionNoticePayload?.({ text: "Context compacted." });
         }
-        observedVisibility = await params.resolveVisibleReplyDelivery?.();
+        if (!beforeStart) {
+          observedVisibility = await params.resolveVisibleReplyDelivery?.();
+        }
         throw failure;
       });
       const pending = executeTestTurn({
@@ -602,18 +561,24 @@ describe("executeFollowupTurn lifecycle", () => {
         opts: {
           onItemEvent: async () => {
             await progressBarrier;
+            completedProgress = true;
             return accepted;
           },
         },
         onCompactionNoticePayload: async () => {
           await progressBarrier;
+          completedProgress = true;
         },
       });
       await Promise.resolve();
+      expect(completedProgress).toBe(false);
       releaseProgress();
       const result = await pending;
 
-      expect(observedVisibility).toBe(visible);
+      expect(observedVisibility).toBe(beforeStart ? undefined : visible);
+      expect(completedProgress).toBe(progress !== "none");
+      expect(onAdopted).toHaveBeenCalledOnce();
+      expect(state.execute).toHaveBeenCalledOnce();
       expect(result.execution.outcome).toMatchObject({
         kind: "rejected",
         payload:
