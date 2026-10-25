@@ -20,15 +20,14 @@ const toolCalls = [
 ];
 
 describe("openai completions transport requests", () => {
-  it.each([
-    {
-      api: "openai-completions" as const,
-      provider: "openai",
-      createStream: createOpenAICompletionsTransportStreamFn,
-    },
-  ])(
-    "honors turn timeout and pinned SDK retries over real $api HTTP",
-    expectOpenAITransportRequestPolicy,
+  it(
+    "honors turn timeout and pinned SDK retries over real completions HTTP",
+    () =>
+      expectOpenAITransportRequestPolicy({
+        api: "openai-completions" as const,
+        provider: "openai",
+        createStream: createOpenAICompletionsTransportStreamFn,
+      }),
     COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
   );
   it("preserves OpenAI-compatible error metadata on failed chat requests", async () => {
@@ -72,22 +71,18 @@ describe("openai completions transport requests", () => {
   it.each(["managed", "direct"] as const)(
     "preserves JSON completions and honors streaming controls (%s)",
     async (mode) => {
-      const capturedRequests: Array<Record<string, unknown>> = [];
+      let request: Record<string, unknown> | undefined;
       let includeTools = false;
       let oversized = false;
       let releaseBody: (() => void) | undefined;
       await withServer(
         (_req, res, body) => {
-          capturedRequests.push(JSON.parse(body) as Record<string, unknown>);
-          res.writeHead(200, {
-            "content-type": "application/json; charset=utf-8",
-          });
+          request = JSON.parse(body) as Record<string, unknown>;
+          res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
           const responseBody = oversized
             ? " ".repeat(16 * 1024 * 1024 + 1)
             : JSON.stringify({
                 id: "chatcmpl-json-fallback",
-                object: "chat.completion",
-                model: "moonshotai/kimi-k2.6",
                 choices: [
                   {
                     index: 0,
@@ -95,22 +90,20 @@ describe("openai completions transport requests", () => {
                       role: "assistant",
                       reasoning_content: "Need a direct answer.",
                       content: "live-ok",
-                      ...(includeTools
-                        ? {
-                            tool_calls: toolCalls.map(({ name, arguments: args }) => ({
-                              id: `call_${name}`,
-                              type: "function",
-                              function: { name, arguments: JSON.stringify(args) },
-                            })),
-                          }
-                        : {}),
+                      tool_calls: includeTools
+                        ? toolCalls.map(({ name, arguments: args }) => ({
+                            id: `call_${name}`,
+                            type: "function",
+                            function: { name, arguments: JSON.stringify(args) },
+                          }))
+                        : undefined,
                     },
                     finish_reason: includeTools ? "tool_calls" : "stop",
                   },
                 ],
                 usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
               });
-          if (capturedRequests.at(-1)?.stream === false) {
+          if (request.stream === false) {
             releaseBody = () => res.end(responseBody);
             res.flushHeaders();
           } else {
@@ -121,49 +114,35 @@ describe("openai completions transport requests", () => {
         async (baseUrl) => {
           const model = makeCompletionsModel({
             id: "moonshotai/kimi-k2.6",
-            name: "Kimi K2.6",
             provider: "openrouter",
             baseUrl,
-            contextWindow: 256_000,
-            maxTokens: 16_384,
-            compat: {
-              supportsReasoningEffort: true,
-            },
+            compat: { supportsReasoningEffort: true },
           });
           const createStream =
             mode === "managed"
               ? createOpenAICompletionsTransportStreamFn()
               : streamSimpleOpenAICompletions;
-          for (const scenario of [
-            { params: {}, options: {}, expected: true, tools: false },
-            { params: { streaming: false }, options: {}, expected: false, tools: false },
-            { params: {}, options: { streaming: false }, expected: false, tools: true },
-            {
-              params: { streaming: false },
-              options: { streaming: true },
-              expected: true,
-              tools: true,
-            },
-          ]) {
-            includeTools = scenario.tools;
-            const options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "streaming"> = {
-              apiKey: "test-key",
-              reasoning: "high",
-              ...scenario.options,
-              onResponse: () => {
-                releaseBody?.();
-              },
-            };
+          const options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "streaming"> = {
+            apiKey: "test-key",
+            reasoning: "high",
+            onResponse: () => releaseBody?.(),
+          };
+          for (const [param, option, expected, tools] of [
+            [undefined, undefined, true, false],
+            [false, undefined, false, false],
+            [undefined, false, false, true],
+            [false, true, true, true],
+          ] as const) {
+            includeTools = tools;
             const stream = await createStream(
-              { ...model, params: scenario.params },
+              { ...model, params: { streaming: param } },
               replyContext("Reply live-ok"),
-              options,
+              { ...options, streaming: option },
             );
             const { result: final, events } = await collectStream(stream);
             const eventTypes = events.map((event) => event.type);
-            const request = capturedRequests.at(-1);
-            expect(request?.stream).toBe(scenario.expected);
-            if (scenario.expected) {
+            expect(request?.stream).toBe(expected);
+            if (expected) {
               expect(request?.stream_options).toEqual({ include_usage: true });
             } else {
               expect(request).not.toHaveProperty("stream_options");
@@ -177,21 +156,20 @@ describe("openai completions transport requests", () => {
               stopReason: includeTools ? "toolUse" : "stop",
               usage: { input: 2, output: 3, totalTokens: 5 },
             });
-            expect(final?.content).toEqual([
-              expect.objectContaining({
+            expect(final.content).toMatchObject([
+              {
                 type: "thinking",
                 thinking: "Need a direct answer.",
                 thinkingSignature: "reasoning_content",
-              }),
-              expect.objectContaining({ type: "text", text: "live-ok" }),
+              },
+              { type: "text", text: "live-ok" },
               ...(includeTools
-                ? toolCalls.map((call) =>
-                    expect.objectContaining({
-                      type: "toolCall",
-                      id: `call_${call.name}`,
-                      ...call,
-                    }),
-                  )
+                ? toolCalls.map(({ name, arguments: args }) => ({
+                    type: "toolCall",
+                    id: `call_${name}`,
+                    name,
+                    arguments: args,
+                  }))
                 : []),
             ]);
             expect(eventTypes.filter((type) => type === "toolcall_end")).toHaveLength(
@@ -199,17 +177,10 @@ describe("openai completions transport requests", () => {
             );
           }
           oversized = true;
-          const options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "streaming"> = {
-            apiKey: "test-key",
-            streaming: false,
-            onResponse: () => {
-              releaseBody?.();
-            },
-          };
           const oversizedStream = await createStream(
             model,
             { messages: replyContext().messages },
-            options,
+            { ...options, streaming: false },
           );
           expect(await oversizedStream.result()).toMatchObject({
             stopReason: "error",
