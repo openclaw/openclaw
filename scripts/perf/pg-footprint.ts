@@ -280,6 +280,10 @@ if (values.mode === "seed") {
           ),
       );
   const sample = async (label: string) => {
+    // RSS is measured in the unprofiled run; profiling uses thread exit artifacts.
+    if (values.profile) {
+      return;
+    }
     const before = workerEvents();
     const identity = (pid: number, id: number) => `${pid}:${id}`;
     const parents = new Map(

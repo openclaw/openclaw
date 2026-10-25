@@ -26,6 +26,8 @@ report counts and CPU profiles only, explicitly leaving timing unqualified.
 
 The initial attribution run has no candidate and makes no speedup claim. Capture
 one unprofiled baseline for counts/memory, then a separate per-thread CPU profile.
+The profile pass omits duplicate memory snapshots and validates its per-thread
+profile coverage after shutdown; its sampled timing never replaces the baseline.
 The frozen SQL observer stays byte-identical. PG bridge instrumentation is
 supplemental because the frozen observer observes native SQLite, not PG wire
 queries. Match before/after data shapes, transaction ordering and failures through
