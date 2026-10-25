@@ -472,6 +472,10 @@ export async function runServiceRestart(params: {
   const renderRestartFailureHints = (error: unknown) =>
     error instanceof GatewayRestartPreparationError && error.reason === "serving-owner"
       ? [
+          // Diagnosis only. Native mutation stays refused; --safe is the documented RPC recovery.
+          ...(error.detail?.includes("does not match this host")
+            ? [formatCliCommand("openclaw gateway restart --safe")]
+            : []),
           formatCliCommand("openclaw gateway status --deep"),
           `Fix the reported startup failure, then run \`${formatCliCommand("openclaw gateway start")}\` to wait for readiness without restarting the process.`,
         ]
