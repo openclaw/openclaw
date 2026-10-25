@@ -29,16 +29,15 @@ function start(
   });
 }
 
-function mockPty(term = "term", force = "force") {
+function mockPty() {
   const order: string[] = [];
   let onData: ((data: string) => void) | undefined;
   let onExit: ((event: { exitCode: number; signal?: number }) => void) | undefined;
-  const kill = vi.fn(() => order.push(term));
-  const write = vi.fn();
+  const kill = vi.fn(() => order.push("term"));
   nodePtyMocks.spawn.mockReturnValue({
     pid: 4242,
     kill,
-    write,
+    write: vi.fn(),
     onData: (listener) => {
       onData = listener;
       return { dispose: () => order.push("data-dispose") };
@@ -49,13 +48,12 @@ function mockPty(term = "term", force = "force") {
     },
   } satisfies Pick<IPty, "pid" | "kill" | "write" | "onData" | "onExit">);
   processTreeMocks.signalProcessTree.mockImplementation((_pid, _signal, opts) => {
-    order.push(force);
+    order.push("force");
     opts?.onComplete?.();
   });
   return {
     order,
     kill,
-    write,
     emit: (data: string) => onData?.(data),
     exit: (signal?: number) => {
       order.push("exit");
@@ -121,48 +119,31 @@ describe("TUI PTY test support", () => {
     }
   });
 
-  it("waits for PTY exit before completing idempotent disposal", async () => {
-    const { order, kill, exit } = mockPty("kill");
-    const run = start({});
-
-    const disposal = run.dispose();
-    expect(run.dispose()).toBe(disposal);
-    expect(order).toEqual(["kill"]);
-
-    exit();
-    await disposal;
-
-    expect(order).toEqual(["kill", "exit", "data-dispose", "exit-dispose"]);
-    expect(kill).toHaveBeenCalledWith("SIGTERM");
-  });
-
-  it("force-kills the owned process tree when graceful disposal times out", async () => {
-    const { order, kill } = mockPty();
-    const run = start({}, { exitTimeoutMs: 1 });
-
-    await run.dispose();
-
-    expect(kill).toHaveBeenCalledWith("SIGTERM");
-    expect(processTreeMocks.signalProcessTree).toHaveBeenCalledWith(4242, "SIGKILL", {
-      onComplete: expect.any(Function),
-    });
-    expect(order).toEqual(["term", "force", "data-dispose", "exit-dispose"]);
-  });
-
-  it("force-kills the PTY and waits for its exit event", async () => {
-    const { order, exit } = mockPty("term", "kill");
-    const run = start({});
-
-    const forcedExit = run.forceKill();
-    expect(run.forceKill()).toBe(forcedExit);
-    expect(order).toEqual(["kill"]);
-    exit(9);
-    await forcedExit;
-    expect(run.dispose()).toBe(forcedExit);
-
-    expect(order).toEqual(["kill", "exit", "data-dispose", "exit-dispose"]);
-    expect(processTreeMocks.signalProcessTree).toHaveBeenCalledExactlyOnceWith(4242, "SIGKILL", {
-      onComplete: expect.any(Function),
-    });
+  it.each([
+    ["graceful", ["term", "exit", "data-dispose", "exit-dispose"]],
+    ["timeout", ["term", "force", "data-dispose", "exit-dispose"]],
+    ["forced", ["force", "exit", "data-dispose", "exit-dispose"]],
+  ] as const)("orders %s shutdown and subscription cleanup", async (mode, expected) => {
+    const { order, kill, exit } = mockPty();
+    const run = start({}, mode === "timeout" ? { exitTimeoutMs: 1 } : {});
+    const method = mode === "forced" ? "forceKill" : "dispose";
+    const pending = run[method]();
+    if (mode !== "timeout") {
+      expect(run[method]()).toBe(pending);
+      expect(order).toEqual([mode === "forced" ? "force" : "term"]);
+      exit(mode === "forced" ? 9 : undefined);
+    }
+    await pending;
+    expect(order).toEqual(expected);
+    if (mode === "forced") {
+      expect(run.dispose()).toBe(pending);
+    } else {
+      expect(kill).toHaveBeenCalledWith("SIGTERM");
+    }
+    if (mode !== "graceful") {
+      expect(processTreeMocks.signalProcessTree).toHaveBeenCalledExactlyOnceWith(4242, "SIGKILL", {
+        onComplete: expect.any(Function),
+      });
+    }
   });
 });

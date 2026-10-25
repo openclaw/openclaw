@@ -24,14 +24,11 @@ function expectPng(image: TuiImageData, width: number, height: number) {
   expect(readImageMetadataFromHeader(Buffer.from(image.data, "base64"))).toEqual({ width, height });
 }
 
-const requests: Array<{ url?: string; authorization?: string; edge?: string }> = [];
+const requests: Array<[url: string | undefined, authorization: string | undefined, edge: string]> =
+  [];
 let handler: RequestListener;
 const serve: RequestListener = (req, res) => {
-  requests.push({
-    url: req.url,
-    authorization: req.headers.authorization,
-    edge: String(req.headers["x-image-proof"] ?? ""),
-  });
+  requests.push([req.url, req.headers.authorization, String(req.headers["x-image-proof"] ?? "")]);
   handler(req, res);
 };
 const server = http.createServer(serve);
@@ -52,7 +49,7 @@ const load = (
     signal: new AbortController().signal,
     ...options,
   });
-const requestUrl = (index = 0) => new URL(requests[index]!.url!, "http://localhost");
+const requestUrl = (index = 0) => new URL(requests[index]![0]!, "http://localhost");
 
 beforeAll(async () => {
   requestSpy = vi.spyOn(GatewayClient.prototype, "request");
@@ -106,7 +103,7 @@ it("loads inbound images from the connected subpath, authenticates, and emits a 
     edgeAuthHeaders: { "x-image-proof": "bound-edge-header" },
   };
   expectPng(await load(photo, { agentId: "main" }, connection), 300, 150);
-  expect(requests.map((entry) => entry.authorization)).toEqual([
+  expect(requests.map(([, authorization]) => authorization)).toEqual([
     "Bearer stale-image-token",
     "Bearer image-password",
   ]);
@@ -117,7 +114,7 @@ it("loads inbound images from the connected subpath, authenticates, and emits a 
     sessionKey,
     agentId: "main",
   });
-  expect(requests[1]?.edge).toBe("bound-edge-header");
+  expect(requests[1]?.[2]).toBe("bound-edge-header");
 });
 
 it("resolves a disabled Control UI media mount through the WebSocket path", async () => {
@@ -146,11 +143,11 @@ it("resolves generated images through the selected session and uses only the tic
     { sessionKey, agentId: "main", artifactId },
   ]);
   expect(requests).toEqual([
-    {
-      url: `/gateway${managedSource.replace(/\/full$/, "/thumbnail")}?mediaTicket=synthetic-ticket`,
-      authorization: undefined,
-      edge: "",
-    },
+    [
+      `/gateway${managedSource.replace(/\/full$/, "/thumbnail")}?mediaTicket=synthetic-ticket`,
+      undefined,
+      "",
+    ],
   ]);
 });
 
@@ -221,7 +218,7 @@ it.each([
   } else {
     await expect(result).rejects.toThrow("fingerprint mismatch");
   }
-  expect(requests.map(({ authorization }) => authorization)).toEqual(
+  expect(requests.map(([, authorization]) => authorization)).toEqual(
     valid ? ["Bearer tls-image-token"] : [],
   );
 });
