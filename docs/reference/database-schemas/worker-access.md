@@ -277,6 +277,11 @@ storage primitive. Lifecycle callbacks remain outside it, and ownership checks
 still read the current owner and expiry before permitting an effect.
 The CLI entry records an immutable process role before state access;
 one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
+Connections share four I/O services per process; inherited worker endpoints
+connect directly to those services. A bridge deadline resets the entire assigned
+service with an unknown outcome, rather than only the caller's connection. See
+[PostgreSQL topology](/gateway/postgresql#when-to-use-postgresql) and
+[timeout and recovery behavior](/gateway/postgresql#updates-and-schema-migrations).
 An unset role still refuses main-thread access. Interactive onboarding and
 `setup` (including `crestodian`) keep the CLI role through their prompts and
 local setup console. Any Gateway they start runs in a separate process with

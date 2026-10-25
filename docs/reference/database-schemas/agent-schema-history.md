@@ -50,6 +50,8 @@ backup and its matching build, not just reinstalling the older package.
 | 31      | Memory publication advances the index revision once per committed batch instead of once per source or chunk row                                                                                                                                        | `Unreleased` |
 | 32      | Set-based PostgreSQL vector decoding with one TOAST materialization; metadata-only SQLite advance                                                                                                                                                      | `Unreleased` |
 | 33      | Approximate PostgreSQL memory vector search with generated binary sketches and exact cosine reranking; metadata-only SQLite advance                                                                                                                    | `Unreleased` |
+| 34      | Native PostgreSQL index ordering for non-null keys; metadata-only SQLite advance ([#183015](https://github.com/openclaw/openclaw/pull/183015))                                                                                                         | `Unreleased` |
+| 35      | Native PostgreSQL ordering for predicate-proven non-null partial-index keys; metadata-only SQLite advance ([#183443](https://github.com/openclaw/openclaw/pull/183443))                                                                                | `Unreleased` |
 | 36      | Indexed PostgreSQL exact-path memory candidates with unchanged ranking; metadata-only SQLite advance                                                                                                                                                   | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
@@ -84,6 +86,19 @@ Canonical paths, chunks, embeddings, and other indexes stay unchanged. SQLite
 advances version metadata only. Rollback requires the verified pre-upgrade backup
 and its matching build. SQLite's Unicode keyword fallback can still scan broadly;
 this migration does not change that engine's search behavior.
+
+### Agent schemas 34 and 35
+
+Schema 34 gives non-null PostgreSQL index keys native null ordering. Schema 35
+extends that rule to direct keys whose partial-index predicate proves they are
+non-null. Doctor rebuilds only changed indexes on existing tables under the
+agent migration transaction; retained rows and primary-key indexes stay intact.
+SQLite advances metadata only.
+
+Stop writers and run `openclaw doctor --fix` before opening an older PostgreSQL
+agent store. Doctor backs up the predecessor and applies consecutive migrations,
+including schema 36 when needed. Rollback requires the verified pre-upgrade
+backup and matching build. See the [ordering migration contract](/reference/database-schemas/storage-changes#postgresql-index-ordering-migrations).
 
 ### Agent schema 33
 
