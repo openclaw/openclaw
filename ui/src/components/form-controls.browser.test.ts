@@ -514,86 +514,41 @@ describeBrowserLayout("form controls and app chrome styles", () => {
           page,
           mobile
             ? `<div class="shell shell--mobile-nav">
-              <span class="nav-item">Mobile navigation</span>
-              <div class="file-view__search"><input value="query" /></div>
-              <input class="settings-sidebar__search-input" value="settings" />
+              <span data-scale data-baseline="12" class="nav-item">Mobile navigation</span>
+              <div class="file-view__search"><input data-scale data-baseline="16" data-scale-base="12" value="query" /></div>
+              <input data-scale data-baseline="16" data-scale-base="12.5" class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
-                <span class="sidebar-recent-session__name">Child session</span>
-                <span class="session-row-trail">3m</span>
+                <span data-scale data-baseline="12" class="sidebar-recent-session__name">Child session</span>
+                <span data-scale data-baseline="10" class="session-row-trail">3m</span>
               </div>
             </div>`
-            : `<span class="nav-item__text">Navigation</span>
-            <span class="sidebar-recent-session__name">Recent session</span>
-            <span class="session-row-trail">3m</span>
-            <div class="sidebar-session-catalog-host__head">
-              <span class="sidebar-session-catalog-host__label">Local host</span>
-              <span class="sidebar-session-catalog-host__count">100</span>
-            </div>
-            <button class="sidebar-session-catalog-project__head">
-              <span class="sidebar-session-catalog-project__label">Project</span>
-              <span class="sidebar-session-catalog-project__count">100</span>
-            </button>
-            <span class="sidebar-agent-card__name">Agent</span>
-            <span class="settings-sidebar__item-label">Settings</span>
-            <span class="sidebar-file-view__path">workspace/file.ts</span>
-            <span class="chat-workspace-rail__file-badge">3 files</span>
-            <span class="session-menu__shortcut">⌘K</span>
-            <div class="file-view__search">
-              <input value="query" />
-              <span class="file-view__search-counter">1/2</span>
-            </div>
-            <div class="sidebar-recent-session">
-              <button class="sidebar-child-session-toggle">
-                <span class="sidebar-child-session-toggle__count">100</span>
-              </button>
-            </div>
-            <span class="file-view__save-notice">Unsaved changes</span>
-            <article class="sidebar-markdown"><pre><code>const scaled = true;</code></pre></article>
-            <article class="md-preview-dialog__reader sidebar-markdown">
-              <h3>Preview heading</h3>
-              <p>Agent file preview</p>
-              <table><tbody><tr><td>Preview cell</td></tr></tbody></table>
-            </article>`,
+            : `<span data-scale class="nav-item__text">Navigation</span>
+              <span data-scale class="sidebar-recent-session__name">Recent session</span>
+              <span data-scale class="session-row-trail">3m</span>
+              <div class="sidebar-session-catalog-host__head"><span class="sidebar-session-catalog-host__label">Local host</span><span data-scale class="sidebar-session-catalog-host__count">100</span></div>
+              <button class="sidebar-session-catalog-project__head"><span class="sidebar-session-catalog-project__label">Project</span><span data-scale class="sidebar-session-catalog-project__count">100</span></button>
+              <span data-scale class="sidebar-agent-card__name">Agent</span>
+              <span data-scale class="settings-sidebar__item-label">Settings</span>
+              <span data-scale class="sidebar-file-view__path">workspace/file.ts</span>
+              <span data-scale class="chat-workspace-rail__file-badge">3 files</span>
+              <span data-scale class="session-menu__shortcut">⌘K</span>
+              <div class="file-view__search"><input data-scale data-baseline="12" value="query" /><span data-scale class="file-view__search-counter">1/2</span></div>
+              <div class="sidebar-recent-session"><button class="sidebar-child-session-toggle"><span class="sidebar-child-session-toggle__count">100</span></button></div>
+              <span data-scale class="file-view__save-notice">Unsaved changes</span>
+              <article class="sidebar-markdown"><pre><code data-scale>const scaled = true;</code></pre></article>
+              <article class="md-preview-dialog__reader sidebar-markdown"><h3 data-scale>Preview heading</h3><p data-scale>Agent file preview</p><table><tbody><tr><td data-scale>Preview cell</td></tr></tbody></table></article>`,
           "",
           mobile ? '<meta name="viewport" content="width=device-width, initial-scale=1.0" />' : "",
         );
-        const targets: [selector: string, baseline?: number, scaledBase?: number][] = mobile
-          ? [
-              [".sidebar-recent-session--child .sidebar-recent-session__name", 12],
-              [".sidebar-recent-session--child .session-row-trail", 10],
-              [".file-view__search input", 16, 12],
-              [".settings-sidebar__search-input", 16, 12.5],
-              [".shell--mobile-nav .nav-item", 12],
-            ]
-          : [
-              ...[
-                ".nav-item__text",
-                ".sidebar-recent-session__name",
-                ".session-row-trail",
-                ".sidebar-session-catalog-host__count",
-                ".sidebar-session-catalog-project__count",
-                ".sidebar-agent-card__name",
-                ".settings-sidebar__item-label",
-                ".sidebar-file-view__path",
-                ".chat-workspace-rail__file-badge",
-                ".session-menu__shortcut",
-                ".file-view__search-counter",
-                ".file-view__save-notice",
-                ".sidebar-markdown pre code",
-                ".md-preview-dialog__reader.sidebar-markdown > p",
-                ".md-preview-dialog__reader.sidebar-markdown > h3",
-                ".md-preview-dialog__reader.sidebar-markdown td",
-              ].map((selector): [string] => [selector]),
-              [".file-view__search input", 12],
-            ];
-        const readSizes = async () =>
-          (
-            await readStyles(
-              page,
-              targets.map(([selector]) => selector),
-              "fontSize",
-            )
-          ).map((size) => Number.parseFloat(size));
+        const readSizes = () =>
+          page.locator("[data-scale]").evaluateAll((nodes) =>
+            nodes.map((node) => ({
+              label: node.getAttribute("class") || node.tagName,
+              size: Number.parseFloat(getComputedStyle(node).fontSize),
+              baseline: Number(node.getAttribute("data-baseline")) || undefined,
+              scaleBase: Number(node.getAttribute("data-scale-base")) || undefined,
+            })),
+          );
         const baseline = await readSizes();
         if (mobile) {
           expect(
@@ -604,15 +559,15 @@ describeBrowserLayout("form controls and app chrome styles", () => {
           document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
         });
         const scaled = await readSizes();
-        targets.forEach(([selector, expectedBaseline, scaledBase], index) => {
-          const initial = baseline[index];
-          if (initial === undefined) {
-            throw new Error(`Missing computed sidebar font size for ${selector}`);
+        expect(scaled).toHaveLength(mobile ? 5 : 17);
+        baseline.forEach((initial, index) => {
+          if (initial.baseline !== undefined) {
+            expect(initial.size, initial.label).toBe(initial.baseline);
           }
-          if (expectedBaseline !== undefined) {
-            expect(initial, selector).toBe(expectedBaseline);
-          }
-          expect(scaled[index], selector).toBeCloseTo((scaledBase ?? initial) * 1.4, 1);
+          expect(scaled[index]?.size, initial.label).toBeCloseTo(
+            (initial.scaleBase ?? initial.size) * 1.4,
+            1,
+          );
         });
         if (!mobile) {
           for (const selector of [

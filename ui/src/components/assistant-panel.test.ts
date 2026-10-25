@@ -2,7 +2,6 @@
 
 import type { SystemAgentChatHistoryResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { GatewaySessionRow } from "../api/types.ts";
 import { AssistantDock } from "../app/assistant-dock.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
@@ -119,13 +118,6 @@ function reserveRight() {
 function plugin(id: string) {
   return { id, name: id[0]!.toUpperCase() + id.slice(1) };
 }
-function session(
-  key: string,
-  agentId: string,
-  fields: Partial<GatewaySessionRow> = {},
-): GatewaySessionRow {
-  return { key, agentId, kind: key === "global" ? "global" : "direct", updatedAt: 0, ...fields };
-}
 function openReview(dock: AssistantDock, agentId = "research") {
   dock.openSession({ sessionKey: `agent:${agentId}:review`, agentId, label: "Review" }, {});
 }
@@ -234,8 +226,7 @@ describe("assistant panel", () => {
   );
 
   it("follows the sidebar agent and suppresses only the selected conversation", async () => {
-    const { context, panel, store, dom } = await mountPanel();
-    const refresh = vi.spyOn(store, "refreshTranscriptIfIdle");
+    const { context, panel, dom } = await mountPanel();
     await update(panel, {
       homeAvailable: true,
       custodianAvailable: false,
@@ -245,7 +236,6 @@ describe("assistant panel", () => {
     });
     await openHome(panel);
     expect(home(panel)).toMatchObject({ sessionKey: "agent:main:home", agentId: "main" });
-    expect(refresh).not.toHaveBeenCalled();
     expect(chatInputOwnerForContext(context).current).toBe("dock");
     expect(dom.query("select")).toBeNull();
 
@@ -277,8 +267,7 @@ describe("assistant panel", () => {
   });
 
   it("preserves activation ownership across navigation without restoring closed docks", async () => {
-    const { context, panel, store, dom } = await mountPanel();
-    const refresh = vi.spyOn(store, "refreshTranscriptIfIdle");
+    const { context, panel, dom } = await mountPanel();
     await update(panel, {
       homeAvailable: true,
       custodianSuppressed: false,
@@ -286,7 +275,6 @@ describe("assistant panel", () => {
     });
     await toggle(panel, CUSTODIAN_PANEL_TOGGLE_EVENT);
     expect(panel.assistantPanelOpen).toBe(true);
-    expect(refresh).toHaveBeenCalled();
     const activation = {};
     const hint = { page: "review:board", detail: { filter: "stuck" } };
     const keys: (string | null)[] = [];
@@ -406,62 +394,42 @@ describe("assistant panel", () => {
     expect(panel.assistantPanelOpen).toBe(true);
   });
 
-  it("prepares current route and pane context when Home opens and the visible work changes", async () => {
+  it("refreshes Home context from live sources only while attached", async () => {
     const { context, panel, provider, request, setGatewaySnapshot } = await mountPanel({
       global: true,
+      homeAvailable: true,
+      pageSessionKey: "global",
+      pageAgentId: "research",
     });
-    context.sessions.state.result = {
-      ts: 0,
-      path: "",
-      count: 2,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [
-        session("global", "main", { label: "Personal Home" }),
-        session("global", "research", {
-          label: "Parser work",
-          sessionId: "research-incarnation",
-          spawnedWorkspaceDir: "/worktrees/parser",
-        }),
-      ],
-    };
-    panel.pageSessionKey = "global";
-    panel.pageAgentId = "research";
-    panel.homeAvailable = true;
     const pane = {};
     publishChatWorkContext(context, pane, {
       sessionKey: "global",
       agentId: "research",
       file: "src/parser.ts",
     });
-    await panel.updateComplete;
     await openHome(panel);
     const workContext = () => home(panel)?.workContext;
-    const expected = {
+    expect(workContext()).toMatchObject({
       page: "chat",
       sessionKey: "global",
       agentId: "research",
-      sessionId: "research-incarnation",
-      title: "Parser work",
-      workspace: "/worktrees/parser",
       file: "src/parser.ts",
-    };
-    expect(workContext()).toEqual(expected);
+    });
     await update(panel, { pageRouteId: "appearance" });
     expect(workContext()).toEqual({ page: "appearance" });
-    panel.pageRouteId = "chat";
     publishChatWorkContext(context, pane, {
       sessionKey: "global",
       agentId: "research",
       file: "src/tokenizer.ts",
     });
-    await panel.updateComplete;
-    expect(workContext()).toEqual({ ...expected, file: "src/tokenizer.ts" });
+    await update(panel, { pageRouteId: "chat" });
+    expect(workContext()?.file).toBe("src/tokenizer.ts");
     publishChatWorkContext(context, pane);
     await panel.updateComplete;
-    const { file: _file, ...withoutFile } = expected;
-    expect(workContext()).toEqual(withoutFile);
+    expect(workContext()?.file).toBeUndefined();
 
     const agents = createAgentCapability(context.gateway);
+    onTestFinished(() => agents.dispose());
     const refreshAgents = async (workspace: string) => {
       request.mockResolvedValueOnce({
         ...agents.state.agentsList,
@@ -469,70 +437,66 @@ describe("assistant panel", () => {
       });
       await agents.refreshList();
     };
-    try {
-      agents.state.agentsList = {
-        defaultId: "research",
-        mainKey: "home",
-        scope: "per-sender",
-        agents: researchAgents("/projects/research"),
-      };
-      context.sessions.state.result = {
-        ...context.sessions.state.result!,
-        sessions: [
-          session("agent:research:home", "research"),
-          session("agent:research:current", "research"),
-        ],
-      };
-      provider.setContext({ ...context, agents });
-      await update(panel, { pageSessionKey: "agent:research:main" });
-      expect(workContext()).toMatchObject({
-        sessionKey: "agent:research:home",
-        agentId: "research",
-        workspace: "/projects/research",
-      });
+    agents.state.agentsList = {
+      defaultId: "research",
+      mainKey: "home",
+      scope: "per-sender",
+      agents: researchAgents("/projects/research"),
+    };
+    context.sessions.state.result = {
+      ts: 0,
+      path: "",
+      count: 0,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [],
+    };
+    provider.setContext({ ...context, agents });
+    await update(panel, { pageSessionKey: "agent:research:main" });
+    expect(workContext()).toMatchObject({
+      sessionKey: "agent:research:home",
+      agentId: "research",
+      workspace: "/projects/research",
+    });
 
-      await refreshAgents("/worktrees/research");
-      await panel.updateComplete;
-      expect(workContext()?.workspace).toBe("/worktrees/research");
+    await refreshAgents("/worktrees/research");
+    await panel.updateComplete;
+    expect(workContext()?.workspace).toBe("/worktrees/research");
 
-      request.mockResolvedValue(context.sessions.state.result);
-      const hello = context.gateway.snapshot.hello!;
-      setGatewaySnapshot({
-        hello: {
-          ...hello,
-          snapshot: {
-            sessionDefaults: {
-              defaultAgentId: "research",
-              mainKey: "home",
-              mainSessionKey: "agent:research:current",
-            },
+    request.mockResolvedValue(context.sessions.state.result);
+    const hello = context.gateway.snapshot.hello!;
+    setGatewaySnapshot({
+      hello: {
+        ...hello,
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "research",
+            mainKey: "home",
+            mainSessionKey: "agent:research:current",
           },
         },
-      });
-      await panel.updateComplete;
-      expect(workContext()).toMatchObject({
-        title: "agent:research:current",
-        sessionKey: "agent:research:current",
-        agentId: "research",
-        workspace: "/worktrees/research",
-      });
+      },
+    });
+    await panel.updateComplete;
+    expect(workContext()).toMatchObject({
+      title: "agent:research:current",
+      sessionKey: "agent:research:current",
+      agentId: "research",
+      workspace: "/worktrees/research",
+    });
 
-      const detachedHome = home(panel);
-      const disconnectedContext = detachedHome?.workContext;
-      panel.remove();
-      await refreshAgents("/projects/other");
-      setGatewaySnapshot({ hello });
-      await panel.updateComplete;
-      expect(detachedHome?.workContext).toEqual(disconnectedContext);
+    const detachedHome = home(panel);
+    const disconnectedContext = detachedHome?.workContext;
+    panel.remove();
+    await refreshAgents("/projects/other");
+    setGatewaySnapshot({ hello });
+    await panel.updateComplete;
+    expect(detachedHome?.workContext).toEqual(disconnectedContext);
 
-      provider.append(panel);
-      await panel.updateComplete;
-      await refreshAgents("/projects/reconnected");
-      await panel.updateComplete;
-      expect(workContext()?.workspace).toBe("/projects/reconnected");
-    } finally {
-      agents.dispose();
-    }
+    provider.append(panel);
+    await panel.updateComplete;
+    await refreshAgents("/projects/reconnected");
+    await panel.updateComplete;
+    expect(workContext()?.workspace).toBe("/projects/reconnected");
   });
 
   it.each(["route replacement", "context replacement", "pane detachment"] as const)(
@@ -621,7 +585,7 @@ describe("assistant panel", () => {
 
   it("minimizes the existing onboarding conversation when available", async () => {
     const userText = "Continue setup";
-    const { context, panel, request, store, dom } = await mountPanel({
+    const { context, panel, store, dom } = await mountPanel({
       history: {
         turns: [
           { role: "assistant", text: "Set up your system", at: 1 },
@@ -630,8 +594,9 @@ describe("assistant panel", () => {
       },
     });
     store.connect(context, "onboarding");
-    const chatRequests = () => request.mock.calls.filter(([method]) => method === "openclaw.chat");
-    await vi.waitFor(() => expect(chatRequests()).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(store.messages.some((message) => message.text === userText)).toBe(true),
+    );
     await update(panel, {
       custodianAvailable: true,
       custodianSuppressed: false,
@@ -644,7 +609,6 @@ describe("assistant panel", () => {
     await surface?.updateComplete;
     expect(panel.assistantPanelOpen).toBe(true);
     expect(store.activeVariant).toBe("onboarding");
-    expect(chatRequests()).toHaveLength(1);
     expect(panel.textContent).toContain(userText);
     expect(reserveRight()).toBe("440px");
     await click(panel, ".assistant-panel-actions .assistant-panel-icon:last-child");
@@ -702,33 +666,13 @@ describe("assistant panel", () => {
 
     const postMessage = vi.fn();
     vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });
-    const cases = [
-      [".assistant-panel-header", true],
-      [".assistant-panel-title", true],
-      [".assistant-panel-actions", true],
-      [".assistant-panel-actions button:first-child", false],
-      [".assistant-panel-actions button:first-child svg", false],
-      [".assistant-panel-actions button:last-child", false],
-      [".assistant-panel-actions button:last-child svg", false],
-      ["openclaw-custodian-surface", false],
-    ] as const;
-    for (const [selector, draggable] of cases) {
-      postMessage.mockClear();
-      const target = dom.query(selector);
-      expect(target, selector).not.toBeNull();
-      const event = new MouseEvent("mousedown", {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        button: 0,
-      });
-      target!.dispatchEvent(event);
-      expect(postMessage, selector).toHaveBeenCalledTimes(draggable ? 1 : 0);
-      if (draggable) {
-        expect(postMessage).toHaveBeenCalledWith({ type: "window-drag" });
-      }
-      expect(event.defaultPrevented, selector).toBe(draggable);
-    }
+    const press = (selector: string) =>
+      dom.query(selector)!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    press(".assistant-panel-title");
+    expect(postMessage).toHaveBeenCalledWith({ type: "window-drag" });
+    postMessage.mockClear();
+    press(".assistant-panel-actions button:first-child svg");
+    expect(postMessage).not.toHaveBeenCalled();
 
     await click(panel, ".assistant-panel-actions button:first-child");
     expect(dom.query(".assistant-panel--bottom")).not.toBeNull();

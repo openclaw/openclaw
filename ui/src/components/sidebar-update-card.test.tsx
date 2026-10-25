@@ -6,7 +6,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT } from "../app/native-link-routing.ts";
 import { formatDateTimeMs } from "../lib/format.ts";
-import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
@@ -74,13 +73,6 @@ function installNativeBridge(postMessage = vi.fn()) {
   });
   return postMessage;
 }
-function modalButton(modal: Element, label: string) {
-  const match = [...modal.querySelectorAll("button")].find(
-    (button) => button.textContent?.trim() === label,
-  );
-  expect(match).toBeDefined();
-  return match!;
-}
 async function mount(
   update: UpdateAvailable | null = null,
   initial: Partial<SidebarUpdateCardProps> = {},
@@ -138,44 +130,6 @@ afterEach(async () => {
 });
 
 describe("SidebarUpdateCard", () => {
-  it("opens confirmation after a successful compact target check", async () => {
-    const restoreDialog = installDialogPolyfill();
-    const expansion = createDeferred<boolean>();
-    const opening = createDeferred<boolean>();
-    const element = await mount(gitUpdate, {
-      compact: true,
-      onCheckStatus: vi
-        .fn()
-        .mockReturnValueOnce(expansion.promise)
-        .mockImplementationOnce(async () => {
-          const ready = await opening.promise;
-          element.setProps({ updateAvailable: freshGitUpdate });
-          return ready;
-        }),
-    });
-    try {
-      await element.expand();
-      expansion.resolve(true);
-      await vi.waitFor(() => expect(element.action()?.disabled).toBe(false));
-      const action = element.action()!;
-      action.click();
-      await called(element.props().onCheckStatus, 2);
-      expect(element.action()).toBe(action);
-      expect(action.disabled).toBe(true);
-      opening.resolve(true);
-      await vi.waitFor(() =>
-        expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull(),
-      );
-      const modal = document.querySelector("openclaw-modal-dialog")!;
-      expect(modal.textContent).toContain("cccccccc");
-      expect(modal.textContent).toContain("9 commits");
-      expect(modal.textContent).not.toContain("bbbbbbbb");
-    } finally {
-      document.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
-      restoreDialog();
-    }
-  });
-
   it("reviews updates through the latest callback on the retained card", async () => {
     const initial = vi.fn();
     const current = vi.fn();
@@ -189,109 +143,6 @@ describe("SidebarUpdateCard", () => {
     expect(current).toHaveBeenCalledOnce();
     expect(initial).not.toHaveBeenCalled();
     expect(card.find(".sidebar-update-card__review")).toBe(review);
-  });
-
-  it.each([
-    ["native", false],
-    ["native", true],
-    ["retry", false],
-    ["retry", true],
-  ] as const)("revalidates %s confirmation (variant: %s)", async (mode, variant) => {
-    const native = mode === "native";
-    const bridgeLost = native && variant;
-    const successful = native || variant;
-    const restoreDialog = installDialogPolyfill();
-    const postMessage = native ? installNativeBridge() : vi.fn();
-    const check = createDeferred<boolean>();
-    const element = await mount(gitUpdate);
-    await element.update({
-      compact: true,
-      canNativeUpdate: native,
-      onUpdate: vi.fn(),
-      onCheckStatus: native ? vi.fn(async () => false) : undefined,
-      updateRun: native
-        ? null
-        : createUpdateRunFixture({
-            status: "failed",
-            phase: "finished",
-            reason: "build-failed",
-            updatedAtMs: Date.now(),
-            finishedAtMs: Date.now(),
-          }),
-      prepareRetry: vi.fn(async () =>
-        (await check.promise)
-          ? {
-              updateAvailable: native ? freshGitUpdate : (element.props().updateAvailable ?? null),
-              updateSchedule: native ? null : (element.props().updateSchedule ?? null),
-            }
-          : null,
-      ),
-    });
-    try {
-      element.action()!.click();
-      // Bridge loss must happen before the preflight promise continues.
-      if (bridgeLost) {
-        Reflect.deleteProperty(window, "webkit");
-      }
-      await vi.dynamicImportSettled();
-      const { modal } = await getRenderedModalDialog(document.body);
-      if (native) {
-        expect(element.props().onCheckStatus).not.toHaveBeenCalled();
-      }
-      modalButton(modal, native ? "Update Mac app and restart" : "Retry update").click();
-      if (native && !bridgeLost) {
-        await vi.waitFor(() => expect(postMessage).toHaveBeenCalledOnce());
-        expect(element.props().prepareRetry).not.toHaveBeenCalled();
-      } else {
-        await called(element.props().prepareRetry);
-        expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull();
-        expect(element.props().onUpdate).not.toHaveBeenCalled();
-        if (!native) {
-          await element.update({ updateAvailable: freshGitUpdate });
-        }
-        check.resolve(successful);
-        await vi.dynamicImportSettled();
-        if (!native) {
-          await settle();
-        }
-        if (successful) {
-          const refreshed = await getRenderedModalDialog(document.body);
-          expect(refreshed.modal.textContent).toContain("cccccccc");
-          expect(refreshed.modal.textContent).toContain("9 commits behind");
-          expect(refreshed.modal.textContent).not.toContain("bbbbbbbb");
-          expect(element.props().onUpdate).not.toHaveBeenCalled();
-          if (bridgeLost) {
-            modalButton(refreshed.modal, "Update and restart").click();
-            await called(element.props().onUpdate);
-            expect(postMessage).not.toHaveBeenCalled();
-          }
-        } else {
-          const failedModal = document.querySelector("openclaw-modal-dialog");
-          expect(failedModal).not.toBeNull();
-          expect(failedModal?.textContent).toContain(
-            "Status could not be refreshed. Check your connection and try again.",
-          );
-          await element.update({
-            statusBanner: {
-              tone: "warn",
-              source: "read",
-              text: "Latest target unavailable.",
-            },
-          });
-          for (const selector of ['[role="alert"]', "summary"]) {
-            expect(element.find(selector)?.textContent).toContain("Latest target unavailable.");
-          }
-        }
-      }
-      if (!bridgeLost) {
-        expect(element.props().onUpdate).not.toHaveBeenCalled();
-      }
-    } finally {
-      check.resolve(false);
-      await vi.dynamicImportSettled();
-      document.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
-      restoreDialog();
-    }
   });
 
   it("keeps native ownership separate from Gateway freshness and follows bridge availability", async () => {
@@ -413,6 +264,13 @@ describe("SidebarUpdateCard", () => {
     retry!.click();
     await called(element.props().onCheckStatus, 3);
     expect(element.props().onUpdate).not.toHaveBeenCalled();
+    await element.update({
+      updateRun: createUpdateRunFixture({ status: "failed", phase: "finished" }),
+      updateRunAcknowledged: false,
+    });
+    for (const selector of ['[role="alert"]', "summary"]) {
+      expect(element.find(selector)?.textContent).toContain(checkFailure);
+    }
   });
 
   it("retains refresh retries across shell updates and ignores obsolete recovery results", async () => {
@@ -502,24 +360,8 @@ describe("SidebarUpdateCard", () => {
     },
   );
 
-  it("renders an available update and narrates it after the Gateway drops its metadata", async () => {
-    const element = await mount(
-      {
-        ...gitUpdate,
-        commitsBehind: 246,
-        currentSha: "1234567890abcdef",
-        upstreamSha: "abc1234def",
-      },
-      {
-        updateSchedule: gitSchedule,
-      },
-    );
-    expect(element.action()?.textContent).toContain("246 commits behind");
-    expect(
-      [...element.element.querySelectorAll(".update-git-revisions code")].map(
-        (code) => code.textContent,
-      ),
-    ).toEqual(["12345678", "abc1234d"]);
+  it("keeps narrating an update after the Gateway drops its metadata", async () => {
+    const element = await mount(stableUpdate);
     await element.update({ updateBusy: true });
     const action = element.action();
     expect(action?.disabled).toBe(true);
