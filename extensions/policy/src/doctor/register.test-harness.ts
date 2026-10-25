@@ -55,6 +55,10 @@ export function cfgWithPolicyOverrides(
   return { ...cfgWithPolicy(), ...overrides };
 }
 
+export function cfgWithWorkspaceRepairs<T extends object>(overrides: T) {
+  return { ...cfgWithPolicy({ workspaceRepairs: true }), ...overrides };
+}
+
 export function cfgWithPolicySandbox(
   sandbox: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["sandbox"],
 ) {
