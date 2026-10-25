@@ -220,46 +220,30 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       }).token,
     ).toBeUndefined();
   });
-
-  it.each([
-    { name: "unresolved bare shorthand", authored: "$MISSING", env: {}, expected: null },
-    {
-      name: "substituted braced-looking literal",
-      authored: "${SOURCE}",
-      env: { SOURCE: "${OTHER}" },
-      expected: "${OTHER}",
-    },
-  ])(
-    "classifies gateway credentials from authored provenance: $name",
-    ({ authored, env, expected }) => {
-      const cfg = authoredConfig(authored, env);
-      const resolve = () => resolveGatewayCredentialsFromConfig({ cfg, env: EMPTY_GATEWAY_ENV });
-
-      if (expected === null) {
-        expect(resolve).toThrow("gateway.auth.token");
-        return;
-      }
-      expect(resolve()).toEqual({
-        token: expected,
-        password: undefined,
-      });
-    },
-  );
 });
 
 describe("resolveGatewayCredentialsWithSecretInputs", () => {
   it.each([
-    ["pending bare shorthand", "$SOURCE", {}, { SOURCE: "${OTHER}" }],
-    ["substituted template-looking literal", "${SOURCE}", { SOURCE: "${OTHER}" }, {}],
-  ] satisfies [string, string, NodeJS.ProcessEnv, NodeJS.ProcessEnv][])(
-    "materializes authored provenance atomically: %s",
-    async (_name, authored, readEnv, runtimeEnv) => {
+    ["pending bare shorthand", "$SOURCE", {}, { SOURCE: "${OTHER}" }, true],
+    ["substituted template-looking literal", "${SOURCE}", { SOURCE: "${OTHER}" }, {}, false],
+  ] satisfies [string, string, NodeJS.ProcessEnv, NodeJS.ProcessEnv, boolean][])(
+    "classifies and materializes authored provenance atomically: %s",
+    async (_name, authored, readEnv, runtimeEnv, pending) => {
+      const config = authoredConfig(authored, readEnv, "local");
+      const resolve = () =>
+        resolveGatewayCredentialsFromConfig({ cfg: config, env: EMPTY_GATEWAY_ENV });
+      const expected = { token: "${OTHER}", password: undefined };
+      if (pending) {
+        expect(resolve).toThrow("gateway.auth.token");
+      } else {
+        expect(resolve()).toEqual(expected);
+      }
       await expect(
         resolveGatewayCredentialsWithSecretInputs({
-          config: authoredConfig(authored, readEnv, "local"),
+          config,
           env: runtimeEnv,
         }),
-      ).resolves.toEqual({ token: "${OTHER}", password: undefined });
+      ).resolves.toEqual(expected);
     },
   );
 

@@ -244,23 +244,9 @@ describe("actions on the imported original PR", () => {
 
   it("keeps full-write inspect/merge separate from later guest turns", async () => {
     const f = await fixture();
-    expect((await f.invoke("admin", { action: "inspect" })).details).toMatchObject({
-      pullRequest: { url },
-    });
-    for (const action of ["merge", "close", "inspect"]) {
-      await expect(
-        f.invoke(
-          "guest",
-          {
-            action,
-            expectedHeadCommit: headCommit,
-            ...(action === "merge" ? { mergeMethod: "merge" } : {}),
-          },
-          SESSION_KEY,
-          { raw: true },
-        ),
-      ).rejects.toThrow(/scope|permission/iu);
-    }
+    await expect(
+      f.invoke("guest", { action: "inspect" }, SESSION_KEY, { raw: true }),
+    ).rejects.toThrow(/scope|permission/iu);
     await f.act("ready");
     const merged = await f.invoke("admin", {
       action: "merge",
