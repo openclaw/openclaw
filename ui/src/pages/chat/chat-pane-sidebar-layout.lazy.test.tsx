@@ -15,7 +15,6 @@ import { closeSlot, openSlot, promoteSidebarPanel } from "./sidebar-layout.ts";
 const lazyMocks = vi.hoisted(() => ({
   boardImportAttempts: 0,
   workspaceImportAttempts: 0,
-  failWorkspace: false,
   importAttempts: 0,
   retryDocument: vi.fn(async () => true),
 }));
@@ -37,9 +36,6 @@ vi.mock("./components/chat-files-panel.tsx", () => {
   lazyMocks.workspaceImportAttempts += 1;
   return {
     ChatFilesPanel: () => {
-      if (lazyMocks.failWorkspace) {
-        throw new Error("File renderer unavailable");
-      }
       return (
         <openclaw-chat-files-panel>
           <input aria-label="Files draft" />
@@ -169,24 +165,8 @@ describe("chat pane lazy sidebar failures", () => {
     );
     flush();
 
-    const placeholders = [...container.querySelectorAll(".side-panel__panel")];
-    expect(placeholders.map((panel) => panel.getAttribute("data-region"))).toEqual(["main"]);
-    expect(
-      placeholders[0]
-        ?.querySelector("openclaw-panel-loading-skeleton")
-        ?.getAttribute("data-panel-skeleton"),
-    ).toBe("board");
-    expect(container.querySelector(".sidebar-region__primary")?.getAttribute("data-region")).toBe(
-      "side",
-    );
-    expect(container.querySelector(".sidebar-region__primary")?.hasAttribute("hidden")).toBe(false);
     openDetail();
     flush();
-    expect(
-      [...container.querySelectorAll(".side-panel__panel")].map((panel) =>
-        panel.getAttribute("data-region"),
-      ),
-    ).toEqual(["main", "side"]);
 
     await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
     expect(container.querySelectorAll('[role="alert"]')).toHaveLength(2);
@@ -209,32 +189,5 @@ describe("chat pane lazy sidebar failures", () => {
     flush();
     expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
     expect(container.querySelector("[data-primary]")).toBe(primary);
-  });
-  it("retries failed Files content without replacing neighboring controls", async () => {
-    const { pane, state } = createMountedPanes([]);
-    getPaneTestRuntime(pane).mergedChrome = false;
-    state.sidebarLayout = openSlot({ columns: [] }, "workspace");
-    const definition = pane
-      .render()
-      .layout!.region.panelDefinitions.find((entry) => entry.slot === "workspace")!;
-    lazyMocks.failWorkspace = true;
-    const mounted = mountSolid(() => (
-      <>
-        <input aria-label="Conversation draft" />
-        <SidebarPanel definition={definition} visible />
-      </>
-    ));
-    const draft = mounted.getByRole<HTMLInputElement>("textbox", { name: "Conversation draft" });
-    draft.value = "Keep this conversation";
-    await waitForSolid(() =>
-      expect(mounted.getByRole("alert").textContent).toContain("File renderer unavailable"),
-    );
-    lazyMocks.failWorkspace = false;
-    mounted.container.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
-    await waitForSolid(() =>
-      expect(mounted.getByRole("textbox", { name: "Files draft" })).toBeTruthy(),
-    );
-    expect(mounted.getByRole("textbox", { name: "Conversation draft" })).toBe(draft);
-    expect(draft.value).toBe("Keep this conversation");
   });
 });

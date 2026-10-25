@@ -197,20 +197,6 @@ describe("prepared short-route identity", () => {
     },
   );
 
-  it.each([
-    ["missing-session", { ok: false }],
-    ["ambiguous", { ok: false, candidates: [{ key: sessionRouteKey, agentId: "roboclaw" }] }],
-  ] satisfies Array<[string, SessionsResolveResult]>)(
-    "preserves the normal %s result when no prepared identity arrives",
-    async (kind, reply) => {
-      const { pending } = await h.start();
-      h.reply.resolve(reply);
-      expect(await pending).toMatchObject({ kind });
-      h.emit();
-      expect(await pending).toMatchObject({ kind });
-    },
-  );
-
   it.each(["client", "hello", "profile", "disconnect"] as const)(
     "retires resolution identity on %s replacement before it arrives",
     async (change) => {

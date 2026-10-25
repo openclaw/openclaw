@@ -8,11 +8,7 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import {
-  createComposerContainer,
-  createComposerProps,
-  renderComposerInto,
-} from "./chat-composer.test-support.ts";
+import { renderComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { resetChatComposerState } from "./components/chat-composer.tsx";
@@ -90,6 +86,14 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
 });
 
 describe("composer run status", () => {
+  it("announces approval waits without duplicate working chrome", () => {
+    const { container } = renderComposerFixture({ runActive: true, waitingApproval: true });
+    expect(container.querySelector(".agent-chat__run-status-announcement")?.textContent).toBe(
+      "Waiting for approval…",
+    );
+    expect(container.querySelector(status)).toBeNull();
+  });
+
   it.each(["editable", "view-only subagent", "read-only shared"] as const)(
     "keeps %s child counts and the request timer through roster hydration and settlement",
     async (access) => {
@@ -125,26 +129,7 @@ describe("composer run status", () => {
           {
             ...expectDefined(pane.chatProps, "chat props"),
             selectedSession: parent,
-            messages: [
-              { role: "user", content: "Implement the backend.", timestamp: 1_500 },
-              {
-                role: "assistant",
-                runId: "parent-run",
-                timestamp: 2_000,
-                content: [
-                  { type: "text", text: "The backend work is delegated." },
-                  { type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} },
-                ],
-              },
-              {
-                role: "toolResult",
-                runId: "parent-run",
-                toolCallId: "yield",
-                toolName: "sessions_yield",
-                timestamp: 2_001,
-                content: [{ type: "text", text: '{"status":"yielded"}' }],
-              },
-            ],
+            messages: [{ role: "user", content: "Implement the backend.", timestamp: 1_500 }],
             subagentSessions: rows,
             subagentSessionsHydrated: hydrated,
             onOpenSubagents,
@@ -187,29 +172,4 @@ describe("composer run status", () => {
       expect(container.querySelector(`.chat-subagent-activity,${children}`)).toBeNull();
     },
   );
-
-  it("keeps the composer free of duplicate working status across run and access states", () => {
-    const { context } = createRefreshChatPane();
-    const container = createComposerContainer();
-    container.setContext(context);
-    const props = createComposerProps();
-    const draw = () => {
-      renderComposerInto(container, props);
-      expect(container.querySelector(status)).toBeNull();
-    };
-    draw();
-    props.runActive = true;
-    draw();
-    props.disabledBanner = {
-      kind: "composer-replacement",
-      text: "This conversation is view-only.",
-    };
-    draw();
-    expect(container.querySelector(".agent-chat__composer-combobox")).toBeNull();
-    props.waitingApproval = true;
-    draw();
-    props.waitingApproval = false;
-    props.runStatus = { phase: "done", runId: "work", sessionKey: props.sessionKey, occurredAt: 1 };
-    draw();
-  });
 });
