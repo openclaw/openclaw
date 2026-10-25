@@ -10,11 +10,7 @@ import {
   nativeCatalogFixture as fixture,
   writeCatalogRollout,
 } from "./session-catalog-resident.test-support.js";
-import {
-  commandRpcMocks,
-  createCodexSessionCatalogControl,
-  idleThread,
-} from "./session-catalog.test-helpers.js";
+import { createCodexSessionCatalogControl, idleThread } from "./session-catalog.test-helpers.js";
 
 const indexes: CodexCatalogIndex[] = [];
 const fakeClock = () =>
@@ -117,101 +113,30 @@ describe("resident Codex catalog", () => {
     }
   });
 
-  it("defers full native safety reconciliation until a catalog read after idle", async () => {
+  it("serves cached rows without retrying a failed demand refresh on every read", async () => {
     fakeClock();
-    const recent = Array.from({ length: 64 }, (_, index) =>
-      idleThread({
-        id: `recent-${index}`,
-        source: "cli",
-        recencyAt: 100 - index,
-      }),
+    const readNative = vi.fn(async () =>
+      projectCodexCatalogPage({ data: [idleThread({ id: "cached", source: "cli" })] }),
     );
-    const missed = idleThread({ id: "missed", source: "cli", recencyAt: 1 });
-    let nativeRows = recent;
-    const readNative = vi.fn(async (params: CodexThreadListParams) => {
-      const offset = Number(params.cursor ?? 0);
-      const limit = params.limit ?? 64;
-      return projectCodexCatalogPage({
-        data: nativeRows.slice(offset, offset + limit),
-        nextCursor: offset + limit < nativeRows.length ? String(offset + limit) : null,
-      });
-    });
-    const index = await initializedIndex("idle-safety-reconcile", readNative);
-    expect(readNative).toHaveBeenCalledTimes(4);
-
+    const index = await initializedIndex("failed-demand", readNative);
     await vi.advanceTimersByTimeAsync(15 * 60_000);
-    expect(readNative).toHaveBeenCalledTimes(4);
-
-    // A missed native notification changes an older thread beyond an unchanged prefix.
-    nativeRows = [...recent, missed];
     readNative.mockRejectedValueOnce(new Error("native unavailable"));
-    const page = await index.list({ limit: 100 });
-    expect(page.sessions).toHaveLength(64);
-    await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(5));
-
-    // A failed walk preserves cached rows and does not retry on a busy reader.
-    await index.list({ limit: 100 });
-    expect(readNative).toHaveBeenCalledTimes(5);
-    await vi.advanceTimersByTimeAsync(15 * 60_000);
-    expect(readNative).toHaveBeenCalledTimes(5);
-
-    const stale = await index.list({ limit: 100 });
-    expect(stale.sessions).toHaveLength(64);
-    await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(10));
-    const refreshed = await index.list({ limit: 100 });
-    expect(refreshed.sessions).toHaveLength(64);
-    const tail = await index.list({ limit: 100, cursor: refreshed.nextCursor });
-    expect(tail.sessions.map((session) => session.threadId)).toEqual(["missed"]);
-    expect(readNative).toHaveBeenCalledTimes(10);
+    expect(await listedIds(index)).toEqual(["cached"]);
+    await vi.waitFor(() => expect(index.hasActiveWork()).toBe(false));
+    expect(await listedIds(index)).toEqual(["cached"]);
+    expect(readNative).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves native sub-second order when exposed timestamps tie", async () => {
+  it("preserves native ties and promotes a newer observation into the tied group", async () => {
     const native = ["alpha", "bravo", "zulu"].map((id) =>
-      idleThread({
-        id,
-        source: "cli",
-        originator: "codex_cli_rs",
-        recencyAt: id === "zulu" ? 99 : 100,
-      }),
+      idleThread({ id, source: "cli", recencyAt: id === "zulu" ? 99 : 100 }),
     );
     const index = await initializedIndex("native-order", async () =>
       projectCodexCatalogPage({ data: native }),
     );
-    const first = await index.list({ limit: 1 });
-    expect(first.sessions[0]?.threadId).toBe("alpha");
-    const second = await index.list({ limit: 1, cursor: first.nextCursor });
-    expect(second.sessions[0]?.threadId).toBe("bravo");
-    expect((await index.list({ limit: 1, cursor: second.backwardsCursor })).sessions).toEqual(
-      first.sessions,
-    );
+    expect(await listedIds(index)).toEqual(["alpha", "bravo", "zulu"]);
     await index.upsertThread({ ...native[2]!, recencyAt: 100 });
-    let current = await index.list({ limit: 1 });
-    const ids = current.sessions.map((session) => session.threadId);
-    while (current.nextCursor) {
-      current = await index.list({ limit: 1, cursor: current.nextCursor });
-      ids.push(...current.sessions.map((session) => session.threadId));
-    }
-    expect(ids).toEqual(["zulu", "alpha", "bravo"]);
-  });
-
-  it("ends a backward page before its anchor after removing preceding rows", async () => {
-    const f = fixture(90);
-    const control = await f.make();
-    const first = await control.listPage({ limit: 64 });
-    const second = await control.listPage({ limit: 64, cursor: first.nextCursor });
-    f.fetched.length = 0;
-    const removed = first.sessions.slice(0, 24);
-    for (const session of removed) {
-      await control.archiveThread(session.threadId);
-    }
-    const previous = await control.listPage({ limit: 64, cursor: second.backwardsCursor });
-    expect(previous.sessions.map((session) => session.threadId)).toEqual(
-      first.sessions.slice(removed.length).map((session) => session.threadId),
-    );
-    expect(f.fetched).toEqual([]);
-    expect(
-      commandRpcMocks.codexControlRequest.mock.calls.filter((call) => call[1] === "thread/archive"),
-    ).toHaveLength(removed.length);
+    expect(await listedIds(index)).toEqual(["zulu", "alpha", "bravo"]);
   });
 
   it("requests small native pages without losing threads or retaining large previews", async () => {

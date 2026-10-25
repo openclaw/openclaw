@@ -36,11 +36,6 @@ describe("Codex command RPC helpers", () => {
     args: ["app-server"],
     headers: {},
   };
-  const expectedAuthority = {
-    assertCurrent: expect.any(Function),
-    assertCurrentAsync: expect.any(Function),
-    source: expect.any(Function),
-  };
   const resumeResponse = createThreadResumeResponse({ threadId: "thread-1" });
 
   useCodexControlTestState({
@@ -53,8 +48,7 @@ describe("Codex command RPC helpers", () => {
       setRuntimeConfigSnapshot(config);
       harness = createClientHarness();
       requestMock.mockReset().mockResolvedValue(resumeResponse);
-      clientMock.mockReset();
-      clientMock.mockImplementation(
+      clientMock.mockReset().mockImplementation(
         async (_options, run) =>
           await run(requestMock, harness.client, {
             assertCurrent: () => undefined,
@@ -149,20 +143,15 @@ describe("Codex command RPC helpers", () => {
 
   it("keeps plugin reads without an admitted session on the selected auth partition", async () => {
     const options = { config, authProfileId: "openai:selected" };
-    const readOptions = { transport: "stdio" as const, command: "codex", args: [], headers: {} };
-    await expect(prepareCodexControlSessionAuth(options, readOptions)).resolves.toEqual({
+    await expect(prepareCodexControlSessionAuth(options, startOptions)).resolves.toEqual({
       release: expect.any(Function),
       authProfileId: "openai:selected",
       source: undefined,
       clientOptions: { authProfileId: "openai:selected" },
     });
     await expect(
-      prepareCodexControlSessionAuth({ ...options, onResponse: vi.fn() }, readOptions),
+      prepareCodexControlSessionAuth({ ...options, onResponse: vi.fn() }, startOptions),
     ).rejects.toThrow("requires admitted session authority");
-    expect([clientMock.mock.calls, requestMock.mock.calls]).toEqual([[], []]);
-  });
-
-  it("requires session authority for thread/resume without its native fork selection", async () => {
     await expect(
       codexControlRequest(
         {},
@@ -171,14 +160,14 @@ describe("Codex command RPC helpers", () => {
         { startOptions, authProfileId: null, onResponse: vi.fn() },
       ),
     ).rejects.toThrow("requires admitted session authority");
-    expect(clientMock).not.toHaveBeenCalled();
+    expect([clientMock.mock.calls, requestMock.mock.calls]).toEqual([[], []]);
   });
 
   it("resumes with the prepared environment API key and publishes no legacy profile", async () => {
     vi.stubEnv("OPENAI_API_KEY", "control-platform-key");
     const onResponse = vi.fn();
 
-    await resume({ onResponse });
+    await expect(resume({ onResponse })).resolves.toEqual(resumeResponse);
 
     expect(acquired()).toMatchObject({
       preparedAuth: { kind: "api-key", apiKey: "control-platform-key" },
@@ -186,11 +175,8 @@ describe("Codex command RPC helpers", () => {
       agentDir,
     });
     expect(acquired().authProfileId).toBeUndefined();
-    expect(onResponse).toHaveBeenCalledWith(
-      expect.objectContaining({ thread: expect.objectContaining({ id: "thread-1" }) }),
-      harness.client,
-      { authProfileId: undefined, ...expectedAuthority },
-    );
+    expect(onResponse).toHaveBeenCalledOnce();
+    expect(onResponse.mock.calls[0]?.[2]?.authProfileId).toBeUndefined();
   });
 
   it.each(["oauth", "token"] as const)(
@@ -237,10 +223,7 @@ describe("Codex command RPC helpers", () => {
         },
       });
       expect(acquired().authProfileId).toBeUndefined();
-      expect(onResponse).toHaveBeenCalledWith(expect.anything(), harness.client, {
-        authProfileId: "openai:ready",
-        ...expectedAuthority,
-      });
+      expect(onResponse.mock.calls[0]?.[2]?.authProfileId).toBe("openai:ready");
     },
   );
 

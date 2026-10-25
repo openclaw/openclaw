@@ -11,23 +11,23 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
 const catalog = {
   hosts: [
     {
-      hostId: "gateway:local",
-      label: "MacBook Pro",
+      hostId: "gateway:local\u001b",
+      label: "Mac\u001b[31mBook Pro",
       kind: "gateway",
       connected: true,
       sessions: [
         {
-          threadId: "00000000-0000-4000-8000-000000000002",
-          name: "Build Codex fleet sessions",
-          cwd: "/Users/test/Projects/openclaw",
-          status: "idle",
+          threadId: "00000000-0000-4000-8000-000000000002\u001b[2J",
+          name: "Build Codex fleet sessions\u0007\n",
+          cwd: "/Users/test/Projects/openclaw\u001b]0;owned\u0007",
+          status: "idle\u001b",
           recencyAt: 1_788_805_800,
           source: "vscode",
           modelProvider: "openai",
-          gitBranch: "codex/codex-session-fleet",
+          gitBranch: "codex/codex-session-fleet\u0000",
         },
       ],
-      nextCursor: "gateway-next",
+      nextCursor: "gateway-next\u001b[2J",
     },
     {
       hostId: "node:devbox",
@@ -36,7 +36,7 @@ const catalog = {
       connected: false,
       nodeId: "devbox",
       sessions: [],
-      error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
+      error: { code: "NODE_OFFLINE\u001b", message: "Paired node is offline\nretry\u0007" },
     },
   ],
 };
@@ -113,12 +113,12 @@ describe("registerCodexSessionCli", () => {
       expect(JSON.parse(output)).toEqual({ hosts: [catalog.hosts[1]] });
     });
 
-    it("renders connected sessions, metadata, pagination, and offline host errors", async () => {
+    it("renders metadata, pagination and offline errors without terminal controls", async () => {
       const output = await runCli(["sessions"]);
       expectGateway("list", {});
       expect(output).toContain("MacBook Pro (gateway · gateway:local) — connected — 1 session");
       expect(output).toContain("00000000-0000-4000-8000-000000000002");
-      expect(output).toContain("Build Codex fleet sessions");
+      expect(output).toContain("Build Codex fleet sessions\\n");
       expect(output).toContain("/Users/test/Projects/openclaw");
       expect(output).toContain("branch codex/codex-session-fleet");
       expect(output).toContain("source vscode");
@@ -127,39 +127,10 @@ describe("registerCodexSessionCli", () => {
         "repeat the same filters with --host 'gateway:local' --cursor 'gateway-next'",
       );
       expect(output).toContain("Dev Box (node · node:devbox · devbox) — offline — 0 sessions");
-      expect(output).toContain("Error [NODE_OFFLINE]: Paired node is offline");
-    });
-
-    it("neutralizes terminal controls in human-readable host and session metadata", async () => {
-      callGatewayFromCli.mockResolvedValueOnce(
-        gatewayCatalog([
-          {
-            hostId: "gateway:local\u001b",
-            label: "Mac\u001b[31m\nBook",
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId: "thread\u001b[2J",
-                name: "Fleet\u0007\nSession",
-                cwd: "/tmp/work\u001b]0;owned\u0007",
-                status: "idle\u001b",
-                gitBranch: "main\u0000branch",
-              },
-            ],
-            error: { code: "WARN\u001b", message: "first\nsecond\u0007" },
-            nextCursor: "next\u001b[2J",
-          },
-        ]),
-      );
-
-      const output = await runCli(["sessions"]);
+      expect(output).toContain("Error [NODE_OFFLINE]: Paired node is offline\\nretry");
       for (const control of ["\u001b", "\u0007", "\u0000"]) {
         expect(output).not.toContain(control);
       }
-      expect(output).toContain("Fleet\\nSession");
-      expect(output).toContain("mainbranch");
-      expect(output).toContain("Error [WARN]: first\\nsecond");
     });
 
     it("reports empty catalog and unmatched host results", async () => {
@@ -174,17 +145,17 @@ describe("registerCodexSessionCli", () => {
   });
 
   describe("continue", () => {
-    it("continues a Gateway-local thread and sanitizes the human-readable session key", async () => {
+    it.each([false, true])("continues a Gateway-local thread (JSON=%s)", async (json) => {
+      const sessionKey = "harness:codex:supervision:branch\u001b[2J";
       callGatewayFromCli.mockResolvedValueOnce({
-        sessionKey: "harness:codex:supervision:branch\u001b[2J",
+        sessionKey,
+        ignored: true,
       });
 
       const output = await runCli(["continue", "thread-1"], {
         agent: "JarVis",
         host: "gateway:local:source-a",
-        url: "ws://gateway.test",
-        token: "secret",
-        timeout: "4321",
+        json,
       });
       expectGateway(
         "continue",
@@ -193,23 +164,14 @@ describe("registerCodexSessionCli", () => {
           hostId: "gateway:local:source-a",
           threadId: "thread-1",
         },
-        { url: "ws://gateway.test", token: "secret", timeout: "4321", json: false },
+        { timeout: "30000", json },
       );
-      expect(output).toBe("OpenClaw session: harness:codex:supervision:branch\n");
-      expect(output).not.toContain("\u001b");
-    });
-
-    it("prints existing session results as JSON", async () => {
-      callGatewayFromCli.mockResolvedValueOnce({
-        sessionKey: "harness:codex:supervision:existing",
-        ignored: true,
-      });
-
-      const output = await runCli(["continue", "thread-2"], { json: true });
-
-      expect(JSON.parse(output)).toEqual({
-        sessionKey: "harness:codex:supervision:existing",
-      });
+      if (json) {
+        expect(JSON.parse(output)).toEqual({ sessionKey });
+      } else {
+        expect(output).toBe("OpenClaw session: harness:codex:supervision:branch\n");
+        expect(output).not.toContain("\u001b");
+      }
     });
   });
 

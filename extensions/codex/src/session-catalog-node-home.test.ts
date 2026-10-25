@@ -131,10 +131,14 @@ function createHomeFixture(options: HomeWire = {}, entries: EntrySummary[] = [])
   };
 }
 
-it("keeps copied thread ids in different homes in separate chats with their own history", async () => {
+it("rejects stale locators and keeps copied ids in separate chats with their own history", async () => {
   const fixture = createHomeFixture();
   const first = await fixture.adopt(homeA);
   fixture.wire.sourceHomeId = homeB;
+  await expect(fixture.continueAt(homeA)).rejects.toThrow(/source/i);
+  expect(fixture.createSessionEntry).toHaveBeenCalledOnce();
+  expect(importHistory).toHaveBeenCalledOnce();
+  fixture.expectHome(first.sessionKey, homeA);
 
   const changed = await fixture.list();
   expect(changed[0]?.sessions[0]?.sessionKey).toBeUndefined();
@@ -162,18 +166,6 @@ it("keeps copied thread ids in different homes in separate chats with their own 
       sessionKey: adopted.sessionKey,
     });
   }
-});
-
-it("rejects a stale home locator before reusing or creating an adopted chat", async () => {
-  const fixture = createHomeFixture();
-  const adopted = await fixture.adopt(homeA);
-  fixture.wire.sourceHomeId = homeB;
-  fixture.createSessionEntry.mockClear();
-  importHistory.mockClear();
-
-  await expect(fixture.continueAt(homeA)).rejects.toThrow(/source/i);
-  fixture.expectNoAdoption();
-  fixture.expectHome(adopted.sessionKey, homeA);
 });
 
 it.each([
