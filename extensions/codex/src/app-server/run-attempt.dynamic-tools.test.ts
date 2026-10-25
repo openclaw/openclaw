@@ -572,4 +572,31 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       }),
     );
   });
+
+  it("suppresses channel-progress/tool-activity events for hidden dynamic tools while keeping the final result", async () => {
+    const hiddenTool = {
+      ...createRuntimeDynamicTool("hidden_plugin_tool"),
+      hideFromChannelProgress: true,
+    };
+    const onEvent = vi.fn<NonNullable<ReturnType<typeof createTestParams>["onAgentEvent"]>>();
+    const { harness, run } = await startTool(hiddenTool, {
+      onAgentEvent: onEvent,
+      verboseLevel: "full",
+    });
+    await harness.waitForMethod("turn/start");
+    await expect(callTool(harness, "hidden_plugin_tool", "call-hidden-1")).resolves.toMatchObject({
+      success: true,
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    // The channel-facing producer must not emit start/result tool-activity for a hidden tool.
+    const toolEventsForHidden = onEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "tool" && event.data?.toolCallId === "call-hidden-1");
+    expect(toolEventsForHidden).toHaveLength(0);
+
+    // Final delivery is retained: the tool still executed and returned its result.
+    expect(hiddenTool.execute).toHaveBeenCalled();
+  });
 });
