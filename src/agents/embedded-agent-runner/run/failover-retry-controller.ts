@@ -439,7 +439,11 @@ export function createEmbeddedRunFailoverRetryController(input: {
       } catch {
         log.warn("transient retry status callback failed; continuing retry");
       }
-      const closeRetryWait = params.onRetryWait?.(Date.now() + delayMs, params.abortSignal);
+      const closeRetryWait = params.onRetryWait?.(
+        Date.now() + delayMs,
+        params.abortSignal,
+        rateLimit ? { rateLimitRetries: retryCount } : undefined,
+      );
       let completed = false;
       try {
         // Provider floors can exceed one native timer; protect the whole wait.

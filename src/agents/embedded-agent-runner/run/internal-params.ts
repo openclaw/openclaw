@@ -96,6 +96,7 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   onRetryWait?: (
     deadlineAtMs: number,
     signal?: AbortSignal,
+    wait?: { rateLimitRetries?: number },
   ) => ((completed?: boolean) => void) | undefined;
 };
 

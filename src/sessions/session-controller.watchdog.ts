@@ -1,4 +1,6 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { renderRateLimitRecoveryStopped } from "../agents/failover/user-copy.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import {
   decideSessionWatchdog,
   SESSION_WATCHDOG_ABORT_FLOOR_MS,
@@ -12,7 +14,12 @@ import {
 } from "./session-controller.watchdog-state.js";
 
 type SessionWatchdogProgress = "semantic" | "transport" | "source_arrival" | "finalization";
-type OwnedWait = { kind: SessionWatchdogWaitKind; deadlineAtMs?: number; isCurrent: () => boolean };
+type OwnedWait = {
+  kind: SessionWatchdogWaitKind;
+  deadlineAtMs?: number;
+  rateLimitRetries?: number;
+  isCurrent: () => boolean;
+};
 type OwnedExecution = {
   deadlineAtMs?: number;
   getDeadlineAtMs?: () => number | undefined;
@@ -65,6 +72,7 @@ export type SessionControllerWatchdog = {
   progress(kind: SessionWatchdogProgress, reason?: string): boolean;
   beginWait(wait: OwnedWait): SessionWatchdogWait;
   attachAttempt(params: { assertCurrent: () => void }): SessionControllerWatchdogAttempt;
+  describeStop(): { staleReason: "no_activity" | "rate_limited"; error: Error };
   beginFinalization(): void;
   beginTerminal(deadlineAtMs?: number): void;
   beginExecution(
@@ -425,6 +433,19 @@ export function createSessionControllerWatchdog(params: {
     tick,
     progress,
     beginWait: (input) => beginWait(input),
+    describeStop() {
+      // A stop during a rate-limit backoff reports the limit, not a stall.
+      const retries = [...waits].find(
+        (wait) =>
+          wait.kind === "retry" && wait.rateLimitRetries !== undefined && live(wait.isCurrent),
+      )?.rateLimitRetries;
+      const message =
+        retries === undefined ? "Reply operation stalled" : renderRateLimitRecoveryStopped(retries);
+      return {
+        staleReason: retries === undefined ? "no_activity" : "rate_limited",
+        error: Object.assign(createAbortError(message), { code: "OPENCLAW_SESSION_WATCHDOG" }),
+      };
+    },
     beginFinalization: beginCleanup,
     beginTerminal(deadlineAtMs) {
       beginCleanup();

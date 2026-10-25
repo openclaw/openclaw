@@ -30,6 +30,7 @@ export function resolveCurrentDiagnosticOwner(
 export function beginDiagnosticRetryWait(params: {
   owner: DiagnosticEmbeddedRunOwner;
   deadlineAtMs: number;
+  rateLimitRetries?: number;
   signal: AbortSignal;
   assertCurrent: () => void;
 }): (completed?: boolean) => boolean {
@@ -40,6 +41,7 @@ export function beginDiagnosticRetryWait(params: {
   const ownedWait = params.owner.watchdogAttempt?.beginWait({
     kind: "retry",
     deadlineAtMs: params.deadlineAtMs,
+    rateLimitRetries: params.rateLimitRetries,
     isCurrent: () => {
       assertCurrent();
       return true;
