@@ -8,6 +8,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import type {
   PluginInstallRequest,
   PluginListResult,
@@ -142,14 +143,7 @@ it("flushes a pending config draft before enabling and refreshes afterward", asy
   const enabled = createPlugin({ enabled: true, state: "enabled" });
   const fixture = runtimeFixture({
     "config.get": () => {
-      return {
-        config,
-        sourceConfig: config,
-        raw: JSON.stringify(config),
-        hash,
-        valid: true,
-        issues: [],
-      };
+      return sourceConfigSnapshot(config, hash);
     },
     "config.set": (params) => {
       config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
