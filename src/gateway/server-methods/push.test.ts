@@ -120,46 +120,21 @@ function apnsRequest(params: Record<string, unknown> = { nodeId: "ios-node-1" })
   });
 }
 
-function webClient(options: { deviceId?: string; userProfileId?: string }) {
-  const client = pushClient(
-    options.userProfileId ?? "",
-    "push",
-    new AbortController().signal,
-    options.deviceId ?? "",
-    ["operator.read", "operator.write"],
-  );
-  if (!options.userProfileId) {
-    delete client.authenticatedUserProfile;
-  }
+function webClient(deviceId = "") {
+  const client = pushClient("", "push", new AbortController().signal, deviceId, [
+    "operator.read",
+    "operator.write",
+  ]);
+  delete client.authenticatedUserProfile;
   return client;
-}
-
-function subscribe(
-  options: {
-    deviceId?: string;
-    userProfileId?: string;
-    config?: Record<string, unknown>;
-  } = {},
-) {
-  return request(
-    "push.web.subscribe",
-    { endpoint, keys },
-    { getRuntimeConfig: () => options.config ?? {} },
-    webClient({ ...options, deviceId: options.deviceId || undefined }),
-  );
 }
 
 function boundRequest(
   method: "push.web.preferences.get" | "push.web.preferences.set" | "push.web.unsubscribe",
   params: Record<string, unknown> = {},
-  options: { deviceId?: string; userProfileId?: string } = {},
+  deviceId = "browser-device",
 ) {
-  return request(
-    method,
-    { endpoint, ...params },
-    { broadcastToConnIds: vi.fn() },
-    webClient({ ...options, deviceId: options.deviceId ?? "browser-device" }),
-  );
+  return request(method, { endpoint, ...params }, {}, webClient(deviceId));
 }
 
 function expectErrorResponse(respond: ReturnType<typeof vi.fn>, expectedMessagePart?: string) {
@@ -304,13 +279,21 @@ it("returns invalid request when no subscriptions are registered", async () => {
   expectErrorResponse(respond, "no web push subscriptions registered");
 });
 it.each([
-  { options: {}, error: "paired browser device identity required" },
+  { deviceId: undefined, config: {}, error: "paired browser device identity required" },
   {
-    options: { deviceId: "browser-device", config: { gateway: { roles: { definitions: {} } } } },
+    deviceId: "browser-device",
+    config: { gateway: { roles: { definitions: {} } } },
     error: "authenticated user profile",
   },
-])("rejects subscriptions missing $error", async ({ options, error }) => {
-  const respond = await subscribe(options);
+])("rejects subscriptions missing $error", async ({ deviceId, config, error }) => {
+  const respond = await request(
+    "push.web.subscribe",
+    { endpoint, keys },
+    {
+      getRuntimeConfig: () => config,
+    },
+    webClient(deviceId),
+  );
   expectErrorResponse(respond, error);
   expect(registerWebPushSubscription).not.toHaveBeenCalled();
 });
@@ -332,7 +315,7 @@ it.each(["push.web.preferences.get", "push.web.preferences.set", "push.web.unsub
 );
 
 it("rejects unsubscribe without a device identity", async () => {
-  const respond = await boundRequest("push.web.unsubscribe", {}, { deviceId: "" });
+  const respond = await boundRequest("push.web.unsubscribe", {}, "");
   expectErrorResponse(respond);
   expect(clearBoundWebPushSubscription).not.toHaveBeenCalled();
 });

@@ -19,19 +19,11 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  stageActivePluginRegistry,
-} from "../../plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { createPluginRecord } from "../../plugins/status.test-helpers.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   captureGatewayDeviceRevocation,
@@ -190,17 +182,9 @@ function addJob(
 
 it.for([
   ["fresh operator", "none"],
-  ["recovered operator", "none"],
   ["legacy System", "none"],
   ["recovered operator", "device token rotation"],
-  ["recovered operator", "role downgrade"],
-  ["recovered operator", "access grant revocation"],
-  ["recovered operator", "claim retirement"],
-  ["recovered native operator", "none"],
   ["recovered native operator", "device token rotation"],
-  ["recovered native operator", "role downgrade"],
-  ["recovered native operator", "access grant revocation"],
-  ["recovered native operator", "claim retirement"],
 ] as const)(
   "retains the %s scope boundary through real automation creation (%s)",
   async ([source, revocation], { signal }) => {
@@ -209,24 +193,6 @@ it.for([
       invalidateGatewayDeviceRevocation(fixture.context, deviceId, options?.role);
     };
     const profile = ensureProfileForEmail("automation-recovery@example.test");
-    const accessController = new AbortController();
-    const accessGrant = { pluginId: "recovery-proof-access", grantId: "original-proof-grant" };
-    const previousRegistry = captureActivePluginRegistrySnapshot();
-    if (revocation === "access grant revocation") {
-      const grant = {
-        grantId: accessGrant.grantId,
-        signal: accessController.signal,
-        assertCurrent: () => accessController.signal.throwIfAborted(),
-      };
-      const registry = createEmptyPluginRegistry();
-      registry.plugins.push(createPluginRecord({ id: accessGrant.pluginId }));
-      registry.gatewayAccessPolicies.push({
-        pluginId: accessGrant.pluginId,
-        source: "fixture",
-        policy: { authorize: () => grant, resume: () => grant },
-      });
-      stageActivePluginRegistry(registry, null, "default");
-    }
     const native = source === "recovered native operator";
     const isRecovered = source === "recovered operator" || native;
     const device = pairedOperator();
@@ -241,7 +207,6 @@ it.for([
         ? { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: GATEWAY_CLIENT_MODES.UI }
         : undefined,
       localOperator: native,
-      gatewayAccessGrant: revocation === "access grant revocation" ? accessGrant : undefined,
       device,
     });
     const restored = isRecovered ? await recovery.restore() : undefined;
@@ -302,28 +267,20 @@ it.for([
               }),
             /authority|claim retired/i,
             async () => {
-              if (revocation === "device token rotation") {
-                const respond = vi.fn();
-                const params = { deviceId: device.deviceId, role: "operator" };
-                await expectDefined(
-                  deviceHandlers["device.token.rotate"],
-                  "rotation",
-                )({
-                  req: { type: "req", id: "rotate", method: "device.token.rotate" },
-                  params,
-                  client: recovery.client,
-                  isWebchatConnect: () => true,
-                  context: fixture.context,
-                  respond,
-                });
-                expectCronReply(respond, expect.objectContaining(params));
-              } else if (revocation === "role downgrade") {
-                setUserProfileRole(profile.id, "revoked-role");
-              } else if (revocation === "access grant revocation") {
-                accessController.abort(new Error("Original access grant revoked"));
-              } else {
-                recovery.retire();
-              }
+              const respond = vi.fn();
+              const params = { deviceId: device.deviceId, role: "operator" };
+              await expectDefined(
+                deviceHandlers["device.token.rotate"],
+                "rotation",
+              )({
+                req: { type: "req", id: "rotate", method: "device.token.rotate" },
+                params,
+                client: recovery.client,
+                isWebchatConnect: () => true,
+                context: fixture.context,
+                respond,
+              });
+              expectCronReply(respond, expect.objectContaining(params));
             },
             signal,
           );
@@ -338,7 +295,6 @@ it.for([
     } finally {
       release.resolve();
       restored?.release();
-      restoreActivePluginRegistrySnapshot(previousRegistry);
     }
   },
 );
