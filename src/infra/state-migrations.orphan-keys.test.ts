@@ -126,16 +126,9 @@ describe("migrateOrphanedSessionKeys", () => {
       if (inode === undefined) {
         return stat;
       }
-      return new Proxy(stat, {
-        get(target, property, receiver) {
-          if (property === "dev") {
-            return useBigInt ? 2n : 2;
-          }
-          if (property === "ino") {
-            return useBigInt ? inode : Number(inode);
-          }
-          return Reflect.get(target, property, receiver);
-        },
+      return Object.assign(stat, {
+        dev: useBigInt ? 2n : 2,
+        ino: useBigInt ? inode : Number(inode),
       });
     }) as typeof fs.statSync);
 
@@ -205,19 +198,14 @@ describe("migrateOrphanedSessionKeys", () => {
     });
     const cfg = configuredStore(configuredStorePath);
     const realStatSync = fs.statSync.bind(fs);
-    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
+    using _ = vi.spyOn(fs, "statSync").mockImplementation((candidate) => {
       if (path.resolve(candidate.toString()) === configuredStorePath) {
         throw Object.assign(new Error("inaccessible store"), { code: "EACCES" });
       }
       return realStatSync(candidate);
     });
 
-    let result: Awaited<ReturnType<typeof migrateOrphanedSessionKeys>>;
-    try {
-      result = await migrateFixtureState(stateDir, cfg, ["voice"]);
-    } finally {
-      statSpy.mockRestore();
-    }
+    const result = await migrateFixtureState(stateDir, cfg, ["voice"]);
     expectDeferred(
       result,
       `Deferred session key migration for ${standardStorePath}; filesystem identity could not be established for every configured store path. Restore path access or configure one canonical session.store path, then rerun openclaw doctor --fix`,

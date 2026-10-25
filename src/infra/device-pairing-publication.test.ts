@@ -223,16 +223,12 @@ test.for([
     const generation = await generationFor();
     const binding = getPublishedPairedDeviceBinding("node", baseDir);
     if (change === "metadata after a failed read") {
-      const read = vi
+      using _ = vi
         .spyOn(stateReads, "executeExistingOpenClawStateRead")
         .mockRejectedValueOnce(new Error("pairing read unavailable"));
-      try {
-        await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
-          "pairing read unavailable",
-        );
-      } finally {
-        read.mockRestore();
-      }
+      await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
+        "pairing read unavailable",
+      );
     }
     const { entered: mutationQueued, release: releaseMutation, writer } = holdWorker();
     const mutation = changesFor("node", generation)[change]();

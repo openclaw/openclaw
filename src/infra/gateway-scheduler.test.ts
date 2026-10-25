@@ -216,46 +216,46 @@ describe("Gateway timed work", () => {
     expect(active.signal.aborted).toBe(true);
   });
 
-  it("joins replaced callbacks and tracked descendants after one-shot dispatch", async () => {
-    const { time, scheduler, job } = fixture();
-    const scope = scheduler.scope();
-    const first = createDeferredCore();
-    const second = createDeferredCore();
-    const run = vi.fn();
-    job(
-      "maintenance",
-      { delayMs: 0, everyMs: 100 },
-      () => {
+  it.each(["root", "scope"] as const)(
+    "joins %s descendants and replaced callbacks while unrelated jobs progress",
+    async (kind) => {
+      const { time, scheduler, job, at } = fixture();
+      const owner = kind === "root" ? scheduler : scheduler.scope();
+      const schedule = (timing: JobTiming, run: Job["run"]) =>
+        job("maintenance", timing, run, owner);
+      const first = createDeferredCore();
+      const second = createDeferredCore();
+      const run = vi.fn();
+      const firstRun = vi.fn(() => {
         void trackAsyncWork(() => first.promise);
-      },
-      scope,
-    );
-    const firstWake = time.wake();
-    job(
-      "maintenance",
-      { delayMs: 0 },
-      async () => {
+      });
+      schedule({ delayMs: 0, everyMs: 100 }, firstRun);
+      const firstWake = time.wake();
+      const other = job("other", { atMs: 1_100 });
+      await at(1_100, [other, 1], [firstRun, 1]);
+      schedule({ delayMs: 0 }, async () => {
         await second.promise;
-        scope.schedule({ id: "late", delayMs: 0, run });
-      },
-      scope,
-    );
-    const secondWake = time.wake();
-    job("waiting", { delayMs: 100 }, run, scope);
-    const stopped = vi.fn();
-    const stop = scope.stop().then(stopped);
-    expect(scope.signal.aborted).toBe(true);
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    second.resolve();
-    await secondWake;
-    expect(stopped).not.toHaveBeenCalled();
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    first.resolve();
-    await Promise.all([firstWake, stop, scope.stop()]);
-    expect(stopped).toHaveBeenCalledOnce();
-    expect(run).not.toHaveBeenCalled();
-    await scheduler.stop();
-  });
+        owner.schedule({ id: "late", delayMs: 0, run });
+      });
+      const secondWake = time.wake();
+      job("waiting", { delayMs: 100 }, run, owner);
+      const stopped = vi.fn();
+      const stop = owner.stop().then(stopped);
+      expect(owner.signal.aborted).toBe(true);
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      expect(time.armedAtMs).toBeNull();
+      expect(stopped).not.toHaveBeenCalled();
+      second.resolve();
+      await secondWake;
+      expect(stopped).not.toHaveBeenCalled();
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      first.resolve();
+      await Promise.all([firstWake, stop, owner.stop()]);
+      expectCalls([stopped, 1], [other, 1]);
+      expect(run).not.toHaveBeenCalled();
+      await scheduler.stop();
+    },
+  );
 
   it("fences scoped jobs when a due sibling closes their owner", async () => {
     const { time, scheduler } = fixture();
@@ -392,26 +392,6 @@ describe("Gateway timed work", () => {
     await time.advanceBy(500);
     expect(run).toHaveBeenCalledOnce();
     await scheduler.stop();
-  });
-
-  it("keeps unrelated jobs progressing and joins descendants before shutdown completes", async () => {
-    const { time, scheduler, job, at } = fixture();
-    const child = createDeferredCore();
-    const run = vi.fn(() => {
-      void trackAsyncWork(() => child.promise);
-    });
-    job("cleanup", { atMs: 1_000, everyMs: 100 }, run);
-    const firstWake = time.wake();
-    const other = job("other", { atMs: 1_100 });
-    await at(1_100, [other, 1], [run, 1]);
-    const stopped = vi.fn();
-    const stop = scheduler.stop().then(stopped);
-    expect(time.armedAtMs).toBeNull();
-    expect(stopped).not.toHaveBeenCalled();
-    job("late", { atMs: 1_100 }, other);
-    child.resolve();
-    await Promise.all([stop, firstWake]);
-    expectCalls([stopped, 1], [other, 1]);
   });
 
   it("preserves registration context and permits a deadline owner to rearm while running", async () => {

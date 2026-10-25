@@ -11,7 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
-  GATEWAY_CRASH_LOOP_BREAKER_REASON,
+  GATEWAY_CRASH_LOOP_BREAKER_REASON as BREAKER,
   completeGatewayBootLifecycle,
   formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreakerAsync,
@@ -21,7 +21,7 @@ import {
   recordGatewayCrashLoopRecovery,
   repairGatewayMaintenanceStartupFailures,
 } from "./gateway-boot-lifecycle.js";
-import { GATEWAY_CRASH_LOOP_RECOVERED_REASON } from "./gateway-boot-lifecycle.kernel.js";
+import { GATEWAY_CRASH_LOOP_RECOVERED_REASON as RECOVERED } from "./gateway-boot-lifecycle.kernel.js";
 import { gatewayBootOperations } from "./gateway-boot-lifecycle.worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
@@ -43,6 +43,11 @@ const bootRow = (
 
 const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
 const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
+
+type Decision = Awaited<ReturnType<typeof inspectGatewayCrashLoopBreakerAsync>>;
+function expectDecision(decision: Decision, uncleanBoots: number, extra: Partial<Decision> = {}) {
+  expect(decision).toMatchObject({ tripped: uncleanBoots >= 3, uncleanBoots, ...extra });
+}
 
 const tempDirs = createTempDirTracker();
 
@@ -126,9 +131,7 @@ describe("gateway crash-loop breaker", () => {
         const first = await lifecycle.begin(4_000);
         const firstId = first.id;
         expect(firstId).toBeDefined();
-        expect(first.decision).toMatchObject({
-          tripped: priorCrashes === 3,
-          uncleanBoots: priorCrashes,
+        expectDecision(first.decision, priorCrashes, {
           shouldWriteStabilityBundle: priorCrashes === 3,
         });
         await lifecycle.complete(firstId, "clean_stop", 5_000);
@@ -136,9 +139,7 @@ describe("gateway crash-loop breaker", () => {
         const nextId = next.id;
         expect(nextId).toBeDefined();
         expect(nextId).not.toBe(firstId);
-        expect(next.decision).toMatchObject({
-          tripped: priorCrashes === 3,
-          uncleanBoots: priorCrashes,
+        expectDecision(next.decision, priorCrashes, {
           shouldWriteStabilityBundle: false,
         });
         expect(sql.queries).toEqual([]);
@@ -149,7 +150,7 @@ describe("gateway crash-loop breaker", () => {
         readBootRows(lifecycle)
           .filter((row) => row.started_at_ms >= 4_000)
           .map((row) => row.startup_reason),
-      ).toEqual([priorCrashes === 3 ? GATEWAY_CRASH_LOOP_BREAKER_REASON : null, null]);
+      ).toEqual([priorCrashes === 3 ? BREAKER : null, null]);
     },
   );
 
@@ -215,10 +216,7 @@ describe("gateway crash-loop breaker", () => {
       expect(await readGatewayLastShutdownAsync(lifecycle.env)).toEqual(
         shutdown === "completed" ? { reason: "stop (SIGTERM)", completedAtMs: 4_000 } : undefined,
       );
-      expect(await lifecycle.inspect(4_001)).toMatchObject({
-        tripped: shutdown === "interrupted",
-        uncleanBoots: shutdown === "interrupted" ? 3 : 2,
-      });
+      expectDecision(await lifecycle.inspect(4_001), shutdown === "interrupted" ? 3 : 2);
     },
   );
 
@@ -245,7 +243,7 @@ describe("gateway crash-loop breaker", () => {
     });
     await lifecycle.complete(successor, "clean_stop", 5_000, { reason: "stop (SIGTERM)" });
     expect(await readGatewayLastInstallationReplacementAsync(lifecycle.env)).toBeUndefined();
-    expect(await lifecycle.inspect(5_001)).toMatchObject({ tripped: false, uncleanBoots: 1 });
+    expectDecision(await lifecycle.inspect(5_001), 1);
   });
 
   it.each(["SIGTERM", "SIGINT"])(
@@ -287,24 +285,17 @@ describe("gateway crash-loop breaker", () => {
       const bootId = (await lifecycle.begin(nowMs + index)).id;
       await lifecycle.complete(bootId, outcome, nowMs + index + 1, { startupReason, reason });
     }
-    expect(await lifecycle.inspect(nowMs + 4)).toMatchObject({
-      tripped: false,
-      uncleanBoots: 0,
-    });
+    expectDecision(await lifecycle.inspect(nowMs + 4), 0);
   });
 
   it("recovers after completed stopped-daemon failures but retains genuine crash protection", async () => {
     const lifecycle = createLifecycleDb();
     const nowMs = 1_000_000;
-    expect(await lifecycle.inspect(nowMs)).toMatchObject({
-      tripped: false,
-      uncleanBoots: 0,
-      recovered: false,
-    });
+    expectDecision(await lifecycle.inspect(nowMs), 0, { recovered: false });
     const safeModeBootId = "safe-mode-boot";
     insertBootRows(lifecycle, [
       bootRow(safeModeBootId, nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS - 1, {
-        startupReason: GATEWAY_CRASH_LOOP_BREAKER_REASON,
+        startupReason: BREAKER,
       }),
     ]);
     for (let index = 0; index < 3; index++) {
@@ -316,9 +307,7 @@ describe("gateway crash-loop breaker", () => {
       });
     }
     const recovered = await lifecycle.inspect(nowMs + 4);
-    expect(recovered).toMatchObject({
-      tripped: false,
-      uncleanBoots: 0,
+    expectDecision(recovered, 0, {
       recovered: true,
       recoveryPausedUntilMs: undefined,
     });
@@ -330,11 +319,7 @@ describe("gateway crash-loop breaker", () => {
     expect(recoveredBootId).toBeDefined();
     expect(
       readBootRows(lifecycle)
-        .filter(
-          ({ startup_reason }) =>
-            startup_reason === GATEWAY_CRASH_LOOP_BREAKER_REASON ||
-            startup_reason === GATEWAY_CRASH_LOOP_RECOVERED_REASON,
-        )
+        .filter(({ startup_reason }) => startup_reason === BREAKER || startup_reason === RECOVERED)
         .map(({ boot_id, completed_at_ms, outcome, startup_reason }) => [
           boot_id,
           completed_at_ms,
@@ -342,19 +327,12 @@ describe("gateway crash-loop breaker", () => {
           startup_reason,
         ]),
     ).toEqual([
-      [safeModeBootId, nowMs + 5, "safe_mode_stable", GATEWAY_CRASH_LOOP_BREAKER_REASON],
-      [recoveredBootId, null, null, GATEWAY_CRASH_LOOP_RECOVERED_REASON],
+      [safeModeBootId, nowMs + 5, "safe_mode_stable", BREAKER],
+      [recoveredBootId, null, null, RECOVERED],
     ]);
-    expect(await lifecycle.inspect(nowMs + 5)).toMatchObject({
-      recovered: false,
-      uncleanBoots: 1,
-    });
+    expectDecision(await lifecycle.inspect(nowMs + 5), 1, { recovered: false });
     await lifecycle.complete(recoveredBootId, "clean_stop", nowMs + 6);
-    expect(await lifecycle.inspect(nowMs + 7)).toMatchObject({
-      tripped: false,
-      uncleanBoots: 0,
-      recovered: false,
-    });
+    expectDecision(await lifecycle.inspect(nowMs + 7), 0, { recovered: false });
     insertBootRows(lifecycle, [
       bootRow("unclean-dependency", nowMs - 10, {
         startupReason: "gateway.tailscale_backend_stopped",
@@ -367,13 +345,11 @@ describe("gateway crash-loop breaker", () => {
         "startup_failed",
       ),
       completedBoot("new-breaker-marker", nowMs + 7, nowMs + 8, "safe_mode_stable", {
-        startupReason: GATEWAY_CRASH_LOOP_BREAKER_REASON,
+        startupReason: BREAKER,
       }),
     ]);
     const tripped = await lifecycle.inspect(nowMs + 9);
-    expect(tripped).toMatchObject({
-      tripped: true,
-      uncleanBoots: 3,
+    expectDecision(tripped, 3, {
       recoveryPausedUntilMs: nowMs - 7 + GATEWAY_BOOT_LOOP_WINDOW_MS + 1,
     });
   });
@@ -392,10 +368,7 @@ describe("gateway crash-loop breaker", () => {
     ]);
     expect(repairGatewayMaintenanceStartupFailures(lifecycle.env)).toBe(2);
     expect(repairGatewayMaintenanceStartupFailures(lifecycle.env)).toBe(0);
-    expect(await lifecycle.inspect(nowMs + 1)).toMatchObject({
-      tripped: false,
-      uncleanBoots: 1,
-    });
+    expectDecision(await lifecycle.inspect(nowMs + 1), 1);
     const rows = readBootRows(lifecycle)
       .map(({ boot_id, outcome }) => ({ boot_id, outcome }))
       .toSorted((a, b) => a.boot_id.localeCompare(b.boot_id));

@@ -38,8 +38,12 @@ describe("delivery queue pending terminal transition", () => {
     openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
   const status = (id: string, ownerQueue = queueName) =>
     getDeliveryQueueEntryStatus(ownerQueue, id, stateDir);
-  const seed = <T extends DeliveryQueueEntryState>(entry: T, ownerQueue = queueName) => {
-    seedDeliveryQueueEntry({ queueName: ownerQueue, entry, stateDir });
+  const seed = <T extends DeliveryQueueEntryState>(
+    entry: T,
+    ownerQueue = queueName,
+    storedStatus: "pending" | "failed" | "completed" = "pending",
+  ) => {
+    seedDeliveryQueueEntry({ queueName: ownerQueue, entry, status: storedStatus, stateDir });
     return entry;
   };
   const terminalize = (entry: DeliveryQueueEntryState, ownerQueue = queueName) =>
@@ -59,16 +63,13 @@ describe("delivery queue pending terminal transition", () => {
       .all(ownerQueue)
       .map((row) => row.id);
 
-  const boundedRetention = {
-    idPrefix: "terminal-bounded-",
-    maxAgeMs: 24 * 60 * 60_000,
-    maxEntries: 2,
-  } as const;
-  const terminalEntryRetention = {
-    idPrefix: "terminal-",
-    maxAgeMs: 60_000,
-    maxEntries: 2,
-  } as const;
+  const makeRetention = (idPrefix: string, maxAgeMs = 60_000, maxEntries = 2) => ({
+    idPrefix,
+    maxAgeMs,
+    maxEntries,
+  });
+  const boundedRetention = makeRetention("terminal-bounded-", 24 * 60 * 60_000);
+  const terminalEntryRetention = makeRetention("terminal-");
 
   function insertRetained(
     db: ReturnType<typeof requireNativeSqliteDatabase>,
@@ -134,12 +135,13 @@ describe("delivery queue pending terminal transition", () => {
     const producerRetention = { ...boundedRetention, idPrefix: "producer:" };
     const terminalReads: number[] = [];
     const fail = (
-      ownerQueue: string,
       id: string,
-      completionRetention: DeliveryQueueCompletionRetention,
+      time: number,
+      completionRetention: DeliveryQueueCompletionRetention = producerRetention,
     ) => {
+      vi.setSystemTime(time);
       const entry = { id, enqueuedAt: Date.now(), retryCount: 0, completionRetention };
-      seed(entry, ownerQueue);
+      seed(entry);
       const database = openTestDatabase();
       const reads = trackSqliteStatementExecutions(
         requireNativeSqliteDatabase(database.db),
@@ -150,28 +152,21 @@ describe("delivery queue pending terminal transition", () => {
             : null,
       );
       try {
-        expect(terminalizeInDatabase(entry, ownerQueue).status).toBe("terminalized");
+        expect(terminalizeInDatabase(entry).status).toBe("terminalized");
         terminalReads.push(reads.counts.queue);
       } finally {
         reads.restore();
       }
+      return id;
     };
-    const firstId = `${producerRetention.idPrefix}failed-a`;
-    const secondId = `${producerRetention.idPrefix}failed-b`;
-    const thirdId = `${producerRetention.idPrefix}failed-c`;
+    const firstId = fail("producer:failed-a", 1_000);
+    const secondId = fail("producer:failed-b", 2_000);
+    const thirdId = fail("producer:failed-c", 3_000);
     const triggerId = `${producerRetention.idPrefix}completed-d`;
     const siblingRetention = {
       ...producerRetention,
       idPrefix: "producer:child:",
     };
-    const siblingId = `${siblingRetention.idPrefix}failed`;
-    const permanentId = `${producerRetention.idPrefix}permanent`;
-    vi.setSystemTime(1_000);
-    fail(queueName, firstId, producerRetention);
-    vi.setSystemTime(2_000);
-    fail(queueName, secondId, producerRetention);
-    vi.setSystemTime(3_000);
-    fail(queueName, thirdId, producerRetention);
     expect(storedRow(firstId)).toBeUndefined();
     expect([status(firstId), status(secondId), status(thirdId)]).toEqual([
       undefined,
@@ -179,10 +174,8 @@ describe("delivery queue pending terminal transition", () => {
       "failed",
     ]);
 
-    vi.setSystemTime(3_100);
-    fail(queueName, siblingId, siblingRetention);
-    vi.setSystemTime(3_200);
-    fail(queueName, permanentId, "permanent");
+    const siblingId = fail("producer:child:failed", 3_100, siblingRetention);
+    const permanentId = fail("producer:permanent", 3_200, "permanent");
     expect(terminalReads).toEqual([0, 0, 0, 0, 0]);
     vi.setSystemTime(4_000);
     seed({
@@ -217,12 +210,11 @@ describe("delivery queue pending terminal transition", () => {
         insertRetained(db, ids[1], Date.now() + 1, policies[1], ownerQueue);
       }
       const ordinaryId = "ordinary-completed";
-      seedDeliveryQueueEntry({
-        queueName: otherQueue,
-        entry: { id: ordinaryId, enqueuedAt: Date.now() - 31 * 24 * 60 * 60_000, retryCount: 0 },
-        status: "completed",
-        stateDir,
-      });
+      seed(
+        { id: ordinaryId, enqueuedAt: Date.now() - 31 * 24 * 60 * 60_000, retryCount: 0 },
+        otherQueue,
+        "completed",
+      );
       const retainedIds = (ownerQueue: string) => rowIds(db, ownerQueue);
       // A missing-id lookup must stay on the primary-key path and leave the
       // backfilled over-cap group untouched.
@@ -259,22 +251,17 @@ describe("delivery queue pending terminal transition", () => {
   );
 
   it("keeps malformed, unsettled, pending, and permanent owners during maintenance", async () => {
-    const retention = { idPrefix: "health:", maxAgeMs: 60_000, maxEntries: 1 } as const;
+    const healthRetention = makeRetention("health:", 60_000, 1);
     const db = requireNativeSqliteDatabase(openTestDatabase().db);
-    insertRetained(db, "health:expired", Date.now() - 60_001, retention);
+    insertRetained(db, "health:expired", Date.now() - 60_001, healthRetention);
     insertRetained(db, "health:permanent", 1_000, "permanent");
-    insertRetained(db, "health:malformed", 1_000, retention, queueName, "{broken");
+    insertRetained(db, "health:malformed", 1_000, healthRetention, queueName, "{broken");
     for (const [id, rowStatus, recoveryState] of [
       ["health:completed-permanent", "completed", "completed_permanent"],
       ["health:pending", "pending", undefined],
       ["health:settlement", "failed", "settlement_pending"],
     ] as const) {
-      seedDeliveryQueueEntry({
-        queueName,
-        entry: { id, enqueuedAt: 1_000, retryCount: 0, recoveryState },
-        status: rowStatus,
-        stateDir,
-      });
+      seed({ id, enqueuedAt: 1_000, retryCount: 0, recoveryState }, queueName, rowStatus);
     }
 
     const retained = [
