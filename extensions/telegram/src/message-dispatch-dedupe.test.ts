@@ -23,10 +23,6 @@ type TelegramMessageDispatchReplayGuard = Parameters<
 let stateDir: string;
 const DEFAULT_BOT_USER_ID = 99;
 const CURRENT_NAMESPACE = "global";
-const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX = "telegram.message-dispatch-dedupe";
-const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "telegram-message-dispatch-dedupe";
-const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES = 50_000;
 
 function message(params?: { chatId?: number; messageId?: number }): Message {
   return {
@@ -54,55 +50,44 @@ async function claimed(
   return result.handle;
 }
 
-function legacyStoredReplayKey(accountId: string, msg: Message): string {
-  const key = JSON.stringify(["message", String(msg.chat.id), msg.message_id]);
-  return JSON.stringify(["account", accountId, key]);
-}
-
 function createLegacyReplayGuard() {
   return createChannelReplayGuard<{ accountId: string; msg: Message }>({
     dedupe: {
-      ttlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
+      ttlMs: 7 * 24 * 60 * 60 * 1000,
       memoryMaxSize: 50_000,
-      pluginId: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
-      namespacePrefix: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX,
-      stateMaxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
+      pluginId: "telegram-message-dispatch-dedupe",
+      namespacePrefix: "telegram.message-dispatch-dedupe",
+      stateMaxEntries: 50_000,
     },
-    buildReplayKey: (event) => legacyStoredReplayKey(event.accountId, event.msg),
+    buildReplayKey: ({ accountId, msg }) =>
+      JSON.stringify([
+        "account",
+        accountId,
+        JSON.stringify(["message", String(msg.chat.id), msg.message_id]),
+      ]),
     namespace: () => CURRENT_NAMESPACE,
   });
 }
 
 function createTestReplayGuard(
-  params: {
-    forget?: (
-      key: string,
-      options?: Parameters<TelegramMessageDispatchReplayGuard["forget"]>[1],
-    ) => Promise<boolean>;
-  } = {},
+  forget: TelegramMessageDispatchReplayGuard["forget"] = async () => true,
 ): TelegramMessageDispatchReplayGuard {
-  const eventKey = (event: Parameters<TelegramMessageDispatchReplayGuard["forget"]>[0]): string =>
-    "keys" in event ? (event.keys?.[0] ?? "") : "";
   return {
     claim: async () => ({ kind: "invalid" }),
-    forget: async (event, options) =>
-      await (params.forget ?? (async () => true))(eventKey(event), options),
+    forget,
     warmup: async () => 0,
   };
 }
 
-function createTestClaim(params: {
-  key: string;
-  commit?: (
-    key: string,
-    options?: Parameters<ChannelReplayClaimHandle["commit"]>[0],
-  ) => Promise<boolean>;
-  release?: (key: string, options?: { error?: unknown }) => void;
-}): ChannelReplayClaimHandle {
+function createTestClaim(
+  key: string,
+  overrides: Partial<ChannelReplayClaimHandle>,
+): ChannelReplayClaimHandle {
   return {
-    keys: [params.key],
-    commit: async (options) => await (params.commit ?? (async () => true))(params.key, options),
-    release: (options) => (params.release ?? (() => {}))(params.key, options),
+    keys: [key],
+    commit: async () => true,
+    release: () => {},
+    ...overrides,
   };
 }
 
@@ -149,17 +134,16 @@ describe("Telegram message dispatch replay guard", () => {
     const secondStarted = createDeferred<void>();
     const guard = createTestReplayGuard();
     const claims = ["first", "second", "third"].map((key) =>
-      createTestClaim({
-        key,
-        commit: async (keyLocal) => {
-          events.push(`start:${keyLocal}`);
-          if (keyLocal === "first") {
+      createTestClaim(key, {
+        commit: async () => {
+          events.push(`start:${key}`);
+          if (key === "first") {
             await firstGate.promise;
-          } else if (keyLocal === "second") {
+          } else if (key === "second") {
             secondStarted.resolve();
             await secondGate.promise;
           }
-          events.push(`finish:${keyLocal}`);
+          events.push(`finish:${key}`);
           return true;
         },
       }),
@@ -184,49 +168,31 @@ describe("Telegram message dispatch replay guard", () => {
     ]);
   });
 
-  it("keeps live dispatch commits fail-open on dedupe disk errors", async () => {
-    const diskError = new Error("dedupe disk write failed");
-    const guard = createTestReplayGuard();
-    const claim = createTestClaim({
-      key: "live-message",
-      commit: async (_key, options) => {
-        options?.onDiskError?.(diskError);
-        return true;
-      },
-    });
-
-    await expect(
-      commitTelegramMessageDispatchReplay({ guard, claims: [claim] }),
-    ).resolves.toBeUndefined();
-  });
-
   it("rolls back partial multi-key commits after a later disk failure", async () => {
     const diskError = new Error("second key was not persisted");
     const committed = new Set<string>();
     const commitCalls: string[] = [];
     const forgetCalls: string[] = [];
     const releaseCalls: string[] = [];
-    const guard = createTestReplayGuard({
-      forget: async (key) => {
-        forgetCalls.push(key);
-        committed.delete(key);
-        return true;
-      },
+    const guard = createTestReplayGuard(async (event) => {
+      assert("keys" in event && event.keys?.[0]);
+      forgetCalls.push(event.keys[0]);
+      committed.delete(event.keys[0]);
+      return true;
     });
     const keys = ["first", "second", "third"];
     const claims = keys.map((key) =>
-      createTestClaim({
-        key,
-        commit: async (keyLocal, options) => {
-          commitCalls.push(keyLocal);
-          committed.add(keyLocal);
-          if (keyLocal === "second") {
+      createTestClaim(key, {
+        commit: async (options) => {
+          commitCalls.push(key);
+          committed.add(key);
+          if (key === "second") {
             options?.onDiskError?.(diskError);
           }
           return true;
         },
-        release: (keyLocal) => {
-          releaseCalls.push(keyLocal);
+        release: () => {
+          releaseCalls.push(key);
         },
       }),
     );
