@@ -37,18 +37,38 @@ afterEach(async () => {
   await state?.cleanup();
 });
 
-function dispatch(method: string, profileId: string, scopes = ["operator.read"], params = {}) {
+function dispatchClient(
+  method: string,
+  client: ReturnType<typeof createOperatorClient>,
+  params = {},
+) {
   const respond = vi.fn<RespondFn>();
   const request = handleGatewayRequest({
-    req: { type: "req", id: profileId, method, params },
+    req: { type: "req", id: method, method, params },
     respond,
     context,
-    client: createOperatorClient({ profileId, scopes }),
+    client,
     isWebchatConnect: () => false,
     extraHandlers: usersHandlers,
   });
   return { respond, request };
 }
+
+function dispatch(method: string, profileId: string, scopes = ["operator.read"], params = {}) {
+  return dispatchClient(method, createOperatorClient({ profileId, scopes }), params);
+}
+
+async function rpc(method: string, profileId: string, scopes = ["operator.read"], params = {}) {
+  const { respond, request } = dispatch(method, profileId, scopes, params);
+  await request;
+  return respond;
+}
+
+const forbidden = [false, undefined, expect.objectContaining({ code: "FORBIDDEN" })];
+const profileEdits = [
+  ["users.setDisplayName", { displayName: "Current name" }, { displayName: "Current name" }],
+  ["users.setAvatar", { mime: "image/png", avatarBase64: "AQI=" }, { hasAvatar: true }],
+] as const;
 
 it("returns only the authenticated person's private emails from the shared users.self catalog", async () => {
   const people = ["alpha-private@example.test", "bravo-private@example.test"].map((email) => ({
@@ -61,13 +81,8 @@ it("returns only the authenticated person's private emails from the shared users
       profile: { ...profile, emails: [email], githubIdentity: null, hasAvatar: false },
     };
     for (const scopes of [["operator.read"], []]) {
-      const { respond, request } = dispatch("users.self", profile.id, scopes);
-      await request;
-      expect(respond.mock.calls).toEqual([
-        scopes.length
-          ? [true, expected]
-          : [false, undefined, expect.objectContaining({ code: "FORBIDDEN" })],
-      ]);
+      const respond = await rpc("users.self", profile.id, scopes);
+      expect(respond.mock.calls).toEqual([scopes.length ? [true, expected] : forbidden]);
     }
   }
 });
@@ -126,22 +141,14 @@ it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
     context.refreshConnectedUserProfile = refreshConnectedUserProfile;
     requireNodeSqlite();
     const calls = observeMainThreadSql();
-    for (const [method, params, expected] of [
-      ["users.setDisplayName", { displayName: "Current name" }, { displayName: "Current name" }],
-      ["users.setAvatar", { mime: "image/png", avatarBase64: "AQI=" }, { hasAvatar: true }],
-    ] as const) {
-      const denied = dispatch(method, person.id, [scope], { profileId: other.id, ...params });
-      await denied.request;
-      expect(denied.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
-      const { respond, request } = dispatch(method, person.id, [scope], {
+    for (const [method, params, expected] of profileEdits) {
+      expect(
+        await rpc(method, person.id, [scope], { profileId: other.id, ...params }),
+      ).toHaveBeenCalledWith(...forbidden);
+      const respond = await rpc(method, person.id, [scope], {
         profileId: person.id,
         ...params,
       });
-      await request;
       expect(respond).toHaveBeenCalledExactlyOnceWith(
         true,
         expect.objectContaining({
@@ -157,17 +164,9 @@ it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
       ["users.linkEmail", { email: "other@example.test", targetProfileId: person.id }],
       ["users.merge", { sourceProfileId: other.id, targetProfileId: person.id }],
     ] as const) {
-      const denied = dispatch(method, person.id, [scope], params);
-      await denied.request;
-      expect(denied.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
+      expect(await rpc(method, person.id, [scope], params)).toHaveBeenCalledWith(...forbidden);
     }
-    const saved = dispatch("users.self", person.id, [scope]);
-    await saved.request;
-    expect(saved.respond).toHaveBeenCalledWith(true, {
+    expect(await rpc("users.self", person.id, [scope])).toHaveBeenCalledWith(true, {
       profile: expect.objectContaining({ displayName: "Current name", hasAvatar: true }),
     });
     calls.expectIdle();
@@ -184,14 +183,7 @@ it.each(
     const person = ensureProfileForEmail("commit-owner@example.test");
     const replacement = ensureProfileForEmail("commit-replacement@example.test");
     catalog = await prepareUserProfileCatalog();
-    for (const [method, params, expected] of [
-      [
-        "users.setDisplayName",
-        { displayName: "Committed name" },
-        { displayName: "Committed name" },
-      ],
-      ["users.setAvatar", { mime: "image/png", avatarBase64: "AQI=" }, { hasAvatar: true }],
-    ] as const) {
+    for (const [method, params, expected] of profileEdits) {
       const before = getUserProfileListItem(person.id);
       const replacementBefore = getUserProfileListItem(replacement.id);
       const client = createOperatorClient({ profileId: person.id, scopes: [scope] });
@@ -218,15 +210,9 @@ it.each(
             admit(request, grant);
           }, attachment),
         );
-      const respond = vi.fn<RespondFn>();
-      await handleGatewayRequest({
-        req: { type: "req", id: method, method, params: { profileId: person.id, ...params } },
-        respond,
-        context,
-        client,
-        isWebchatConnect: () => false,
-        extraHandlers: usersHandlers,
-      });
+      const pending = dispatchClient(method, client, { profileId: person.id, ...params });
+      await pending.request;
+      const { respond } = pending;
       observation.mockRestore();
       expect(commitReached).toBeGreaterThan(0);
       if (change === "unchanged") {
@@ -275,32 +261,40 @@ it("enforces scoped, bounded users.list dispatch without filtering profiles or r
     ...Array.from({ length: 498 }, (_entry, index) => index + 1000),
     102,
   ];
-  const cases: [string, Record<string, unknown>, Parameters<RespondFn>, string[]?][] = [
-    ["ordinary response", {}, [true, { profiles }]],
-    ["empty selection", { githubAccountIds: [] }, [true, { profiles, githubProfiles: [] }]],
-    ["secondary identity only", { githubAccountIds: [1, 102, 999] }, [true, selected]],
-    ["500 IDs, match last", { githubAccountIds: maximumSelection }, [true, selected]],
-    ...[
-      ["501 account IDs", Array.from({ length: 501 }, (_entry, index) => index + 1)],
-      ["duplicate", [102, 102]],
-      ["zero", [0]],
-      ["negative", [-1]],
-      ["fractional", [1.5]],
-      ["unsafe", [Number.MAX_SAFE_INTEGER + 1]],
-    ].map(([name, githubAccountIds]): (typeof cases)[number] => [
-      String(name),
-      { githubAccountIds },
-      [
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringMatching(/^invalid users\.list params:/),
-        }),
-      ],
-    ]),
-    ...[[], ["operator.approvals"]].map((scopes): (typeof cases)[number] => [
-      `insufficient scopes: ${JSON.stringify(scopes)}`,
+  requireNodeSqlite();
+  const calls = observeMainThreadSql();
+  const check = async (
+    params: Record<string, unknown>,
+    expected: Parameters<RespondFn>,
+    scopes?: string[],
+  ) => {
+    const respond = await rpc("users.list", alpha.id, scopes, params);
+    expect(respond.mock.calls, JSON.stringify({ params, scopes })).toEqual([expected]);
+    calls.expectIdle();
+  };
+  await check({}, [true, { profiles }]);
+  await check({ githubAccountIds: [] }, [true, { profiles, githubProfiles: [] }]);
+  await check({ githubAccountIds: [1, 102, 999] }, [true, selected]);
+  await check({ githubAccountIds: maximumSelection }, [true, selected]);
+  for (const githubAccountIds of [
+    Array.from({ length: 501 }, (_entry, index) => index + 1),
+    [102, 102],
+    [0],
+    [-1],
+    [1.5],
+    [Number.MAX_SAFE_INTEGER + 1],
+  ]) {
+    await check({ githubAccountIds }, [
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringMatching(/^invalid users\.list params:/),
+      }),
+    ]);
+  }
+  for (const scopes of [[], ["operator.approvals"]]) {
+    await check(
       { githubAccountIds: [102, 999] },
       [
         false,
@@ -316,17 +310,9 @@ it("enforces scoped, bounded users.list dispatch without filtering profiles or r
         },
       ],
       scopes,
-    ]),
-    ["unchanged after reads and rejections", {}, [true, { profiles }]],
-  ];
-  requireNodeSqlite();
-  const calls = observeMainThreadSql();
-  for (const [name, params, expected, scopes] of cases) {
-    const { respond, request } = dispatch("users.list", alpha.id, scopes, params);
-    await request;
-    expect(respond.mock.calls, name).toEqual([expected]);
-    calls.expectIdle();
+    );
   }
+  await check({}, [true, { profiles }]);
 });
 
 it("observes native first-use role assignment after warming a legacy worker reader", async () => {

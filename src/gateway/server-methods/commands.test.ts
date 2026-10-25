@@ -82,12 +82,10 @@ vi.mock("../../plugins/command-specs.js", async (importOriginal) => ({
     if (provider === "whatsapp") {
       return mockPluginSpecs;
     }
-    if (provider === "discord") {
-      return mockPluginSpecs.map((entry) =>
-        Object.assign({}, entry, { nativeName: "discord_tts" }),
-      );
-    }
-    return mockPluginSpecs.map((entry) => Object.assign({}, entry, { nativeName: entry.name }));
+    return mockPluginSpecs.map((entry) => ({
+      ...entry,
+      nativeName: provider === "discord" ? "discord_tts" : entry.name,
+    }));
   }),
 }));
 // mock-isolation: command inventory comes from this suite's synthetic plugin registry.
@@ -168,11 +166,9 @@ async function callHandler(params: Record<string, unknown> = {}) {
   return { ok, payload, error };
 }
 
-type ListedCommand = CommandEntry;
-
-async function listCommands(params: Record<string, unknown> = {}): Promise<ListedCommand[]> {
+async function listCommands(params: Record<string, unknown> = {}): Promise<CommandEntry[]> {
   const { payload } = await callHandler(params);
-  return (payload as { commands: ListedCommand[] }).commands;
+  return (payload as { commands: CommandEntry[] }).commands;
 }
 
 function requireCommand<T extends { name: string }>(commands: T[], name: string): T {
@@ -182,13 +178,7 @@ function requireCommand<T extends { name: string }>(commands: T[], name: string)
   );
 }
 
-async function pluginCommand(
-  params: Record<string, unknown> = {},
-): Promise<ListedCommand | undefined> {
-  return (await listCommands(params)).find((command) => command.source === "plugin");
-}
-
-function expectCommand(commands: ListedCommand[], name: string, expected?: object) {
+function expectCommand(commands: CommandEntry[], name: string, expected?: object) {
   const command = commands.find((entry) => entry.name === name);
   if (expected) {
     expect(command).toMatchObject(expected);
@@ -207,9 +197,8 @@ function createCommandRegistry(commands: RuntimeCommandRegistration[]) {
   return registry;
 }
 
-function setGatewayRegistry(commands: RuntimeCommandRegistration[]): void {
+const setGatewayRegistry = (commands: RuntimeCommandRegistration[]) =>
   setActivePluginRegistry(createCommandRegistry(commands));
-}
 
 function registration(
   name: string,
@@ -329,7 +318,9 @@ describe("commands.list handler", () => {
       expect(
         commands.filter((command) => command.source === "plugin").map((command) => command.name),
       ).toEqual(empty ? [] : ["scoped"]);
-      expect((await pluginCommand({ scope: "text" }))?.name).toBe("ambient");
+      expect((await listCommands({ scope: "text" })).find((c) => c.source === "plugin")?.name).toBe(
+        "ambient",
+      );
     },
   );
 
@@ -340,7 +331,7 @@ describe("commands.list handler", () => {
     ]);
 
     const commands = await listCommands({ provider: "discord" });
-    const plugin = await pluginCommand({ provider: "discord" });
+    const plugin = commands.find((command) => command.source === "plugin");
 
     expect(plugin).toMatchObject({
       name: "discord_demo",
