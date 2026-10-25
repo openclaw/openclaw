@@ -1,8 +1,7 @@
 import { createEffect, createMemo, createSignal, isPending, onSettled } from "solid-js";
-import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { createDocumentVisibility, createMediaQuery } from "../lib/reactive/platform.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../lib/reactive/theme-branding.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { MascotAnimator } from "./mascot-animator.ts";
 import { drawMascot } from "./mascot-canvas.ts";
@@ -23,11 +22,7 @@ defineSolidBridge<Props>(
   "openclaw-mascot",
   (props, host) => {
     host.setAttribute("aria-hidden", "true");
-    const branding = projectSource(undefined, {
-      read: currentThemeBranding,
-      subscribe: (_, notify) => subscribeThemeBranding(notify),
-      equality: Object.is,
-    });
+    const branding = themeBrandingProjection;
     const [animationRequested, setAnimationRequested] = createSignal(false);
     const animation = createMemo(async () => {
       if (!animationRequested()) {

@@ -4,7 +4,6 @@ import type {
   ThemeMascot,
   ThemeWorkingIndicator,
 } from "../../../../../packages/gateway-protocol/src/theme.ts";
-import { currentThemeBranding, subscribeThemeBranding } from "../../../app/theme-branding.ts";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ThemeBrandIcon } from "../../../components/theme-brand-icon.tsx";
@@ -14,7 +13,7 @@ import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { projectSource } from "../../../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../../../lib/reactive/theme-branding.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { ChatRetryStatus } from "./chat-retry-status.tsx";
@@ -40,14 +39,6 @@ type ChatWorkingIndicatorOptions = {
 };
 
 type WorkingProps = { part: ReadingIndicator; options: ChatWorkingIndicatorOptions };
-
-function projectBranding() {
-  return projectSource(undefined, {
-    read: currentThemeBranding,
-    subscribe: (_, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
-}
 
 function BrandGlyph(props: { branding: ThemeBranding; claw: "claw" | "lobster" }) {
   return (
@@ -210,7 +201,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
 }
 
 export function ChatWorkingIndicator(props: WorkingProps) {
-  const branding = projectBranding();
+  const branding = themeBrandingProjection;
   const attention = () => props.options.waitingApproval || props.options.retryAt !== undefined;
   return (
     <Show
@@ -260,7 +251,7 @@ export function TurnRecapRow(props: {
   hideDuration?: boolean;
   presentation?: "standalone" | "continuation";
 }) {
-  const branding = projectBranding();
+  const branding = themeBrandingProjection;
   const duration = () =>
     formatDurationLong(Math.max(1, Math.round(props.recap.runtimeMs / 1_000)) * 1_000) ?? "";
   return (
