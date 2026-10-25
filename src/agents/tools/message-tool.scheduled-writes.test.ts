@@ -21,6 +21,11 @@ const identity = { agentId: "main", runId: "scheduled-message-run" };
 const sessionKey = "agent:main:cron:scheduled-message:run:fixture";
 const grants: string[] = [];
 const sessionDirs = useSessionStoreTempDirs(afterAll, "message-definition-binding-");
+const catalog = (channels: PreparedMessageToolCatalog["channels"]): PreparedMessageToolCatalog => ({
+  version: 1,
+  channels,
+  getChannel: (id) => channels.find((channel) => channel.id === id),
+});
 let registry: ReturnType<typeof plugins.captureActivePluginRegistrySnapshot>;
 beforeEach(() => {
   registry = plugins.captureActivePluginRegistrySnapshot();
@@ -90,11 +95,7 @@ it.each([true, false])(
     const tool = await createMessageToolAsync({
       ...toolOptions(config, capability),
       currentChannelProvider: scheduled ? "signal" : undefined,
-      preparedMessageToolCatalog: {
-        version: 1,
-        channels,
-        getChannel: (id) => channels.find((channel) => channel.id === id),
-      },
+      preparedMessageToolCatalog: catalog(channels),
     });
     expect(tool.parameters).toHaveProperty("properties.action.enum", [
       "broadcast",
@@ -111,11 +112,6 @@ it.each([true, false])(
 it("keeps non-default account capabilities in scheduled session definitions", async () => {
   const actions = resolveBundledChannelMessageToolDiscoveryAdapter("slack");
   const channels = [{ id: "slack", reconcilesUnknownSend: false, actions }];
-  const preparedMessageToolCatalog = {
-    version: 1,
-    channels,
-    getChannel: (id: string) => channels.find((channel) => channel.id === id),
-  };
   const config: OpenClawConfig = {
     channels: {
       slack: {
@@ -138,7 +134,7 @@ it("keeps non-default account capabilities in scheduled session definitions", as
       ownerAccountId: "ops",
       ownerOrigin: { kind: "local" as const },
     },
-    preparedMessageToolCatalog,
+    preparedMessageToolCatalog: catalog(channels),
   };
   const tool = await createMessageToolAsync(options);
   expect(
@@ -221,11 +217,7 @@ it.each([
       agentId: "main",
       agentSessionKey: key,
       sessionId: "bound-session",
-      preparedMessageToolCatalog: {
-        version: 1,
-        channels,
-        getChannel: (id: string) => channels.find((channel) => channel.id === id),
-      },
+      preparedMessageToolCatalog: catalog(channels),
     };
     const normal = await createTool({
       ...options,
