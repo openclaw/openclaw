@@ -411,6 +411,54 @@ describe("WizardSession", () => {
     expect(session.signal.aborted).toBe(true);
   });
 
+  test("restarts the idle window when a waiting client receives its step", async () => {
+    vi.useFakeTimers();
+    try {
+      const work = createDeferredCore();
+      const session = new WizardSession(
+        async (prompter) => {
+          await work.promise;
+          await prompter.text({ message: "Name" });
+        },
+        { idleTimeoutMs: 1_000 },
+      );
+
+      const waiting = session.next();
+      await vi.advanceTimersByTimeAsync(900);
+      work.resolve();
+      expect((await waiting).step?.type).toBe("text");
+
+      await vi.advanceTimersByTimeAsync(900);
+      expect(session.getStatus()).toBe("running");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(session.getStatus()).toBe("cancelled");
+      expect(session.wasExpired()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("idle expiry releases a session parked after its durable commit", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = new WizardSession(
+        async (prompter, _signal, owner) => {
+          owner.lockCancellation();
+          await prompter.outro("Channels updated.");
+        },
+        { idleTimeoutMs: 1_000 },
+      );
+
+      expect((await session.next()).step?.title).toBe("Done");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(session.isSettled()).toBe(true);
+      expect(session.getStatus()).toBe("cancelled");
+      expect(session.wasExpired()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("a cancelled runner stays cancelled on late commit", async () => {
     const gate = createDeferredCore();
     let committed = false;
