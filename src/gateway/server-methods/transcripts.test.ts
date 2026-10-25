@@ -41,7 +41,12 @@ import type { OperatorScope } from "../operator-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { transcriptsHandlers } from "./transcripts.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "./types.js";
 
 const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
@@ -54,11 +59,7 @@ const logGateway = { warn: vi.fn() };
 function client(profileId?: string, scopes = ["operator.read"]): GatewayClient {
   return {
     connect: gatewayConnect(scopes),
-    ...(profileId
-      ? {
-          authenticatedUserProfile: gatewayProfile(profileId),
-        }
-      : {}),
+    ...(profileId ? { authenticatedUserProfile: gatewayProfile(profileId) } : {}),
   };
 }
 function roles(
@@ -96,6 +97,35 @@ async function request(
   expect(respond).toHaveBeenCalledTimes(1);
   return respond.mock.calls[0]!;
 }
+async function directRequest(
+  method: string,
+  params: Record<string, unknown>,
+  options: Partial<GatewayRequestHandlerOptions> = {},
+) {
+  const respond = vi.fn();
+  await transcriptsHandlers[method]!({
+    req: { type: "req", id: "test", method },
+    params,
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context: { getRuntimeConfig: () => ({}), logGateway } as unknown as GatewayRequestContext,
+    ...options,
+  });
+  expect(respond).toHaveBeenCalledOnce();
+  return respond.mock.calls[0]!;
+}
+async function succeeds(...args: Parameters<typeof request>) {
+  const [ok, payload] = await request(...args);
+  expect(ok).toBe(true);
+  return payload;
+}
+async function fails(...args: Parameters<typeof request>) {
+  const [ok, payload, error] = await request(...args);
+  expect(ok).toBe(false);
+  expect(payload).toBeUndefined();
+  return error;
+}
 async function seed(stateDir: string) {
   const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
   const session = {
@@ -111,30 +141,13 @@ async function seed(stateDir: string) {
 
 describe("transcript Gateway read authorization and errors", () => {
   it("requires write scope and archive visibility to generate notes", async () => {
-    await withOpenClawTestState(profileState, async ({ stateDir }) => {
-      const { selector, store, session } = await seed(stateDir);
-      expect((await request("transcripts.summarize", { selector }))[0]).toBe(false);
-      expect(
-        (
-          await request(
-            "transcripts.summarize",
-            { selector },
-            roles("none"),
-            client(undefined, ["operator.write"]),
-          )
-        )[0],
-      ).toBe(false);
+    await withOpenClawTestState(profileState, async (state) => {
+      const { selector, store, session } = await seed(state.stateDir);
+      const writer = client(undefined, ["operator.write"]);
+      await fails("transcripts.summarize", { selector });
+      await fails("transcripts.summarize", { selector }, roles("none"), writer);
       expect((await store.readSummary(session)).summary).toBeUndefined();
-      expect(
-        (
-          await request(
-            "transcripts.summarize",
-            { selector },
-            {},
-            client(undefined, ["operator.write"]),
-          )
-        )[0],
-      ).toBe(true);
+      await succeeds("transcripts.summarize", { selector }, {}, writer);
       expect((await store.readSummary(session)).summary).toBeDefined();
     });
   });
@@ -165,10 +178,10 @@ describe("transcript Gateway read authorization and errors", () => {
           TRANSCRIPTS_EXPORT_MAX_BYTES,
         ],
       ] as const) {
-        const [ok, payload, error] = await request(method, params);
-        expect(ok).toBe(false);
-        expect(payload).toBeUndefined();
-        expect(error).toMatchObject({ code: "INVALID_REQUEST", details: { type, maxBytes } });
+        expect(await fails(method, params)).toMatchObject({
+          code: "INVALID_REQUEST",
+          details: { type, maxBytes },
+        });
       }
       expect(fs.existsSync(path.join(state.stateDir, "transcripts"))).toBe(false);
     });
@@ -204,8 +217,7 @@ describe("transcript Gateway read authorization and errors", () => {
           rawParams: { ...source, sessionId: "configured-capture" },
           configuredLifecycle: true,
         });
-        const [ok, payload] = await request("transcripts.status", {}, cfg);
-        expect(ok).toBe(true);
+        const payload = await succeeds("transcripts.status", {}, cfg);
         expect(payload).toMatchObject({
           configuredSources: [{ state: "armed" }],
           active: [{ source: { accountId: "default" }, activeSubscription: true }],
@@ -236,10 +248,9 @@ describe("transcript Gateway read authorization and errors", () => {
         ["transcripts.status", {}],
       ];
       for (const [method, params] of queries) {
-        const [ok, payload, error] = await request(method, params, cfg, client(profile.id));
-        expect(ok, method).toBe(false);
-        expect(payload).toBeUndefined();
-        expect(error).toMatchObject({ code: "FORBIDDEN" });
+        expect(await fails(method, params, cfg, client(profile.id))).toMatchObject({
+          code: "FORBIDDEN",
+        });
       }
       expect((await request("transcripts.list", {}, cfg, client()))[2]).toMatchObject({
         code: "FORBIDDEN",
@@ -254,34 +265,27 @@ describe("transcript Gateway read authorization and errors", () => {
       const profile = ensureProfileForEmail("transcript-reader@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const caller = client(profile.id);
-      const [ok, payload] = await request(
-        "transcripts.list",
-        { agentId: "ops" },
-        roles("view"),
-        caller,
-      );
-      expect(ok).toBe(true);
+      const cfg = roles("view");
+      const payload = await succeeds("transcripts.list", { agentId: "ops" }, cfg, caller);
       expect(payload).toMatchObject({
         sessions: [{ selector, agentId: "ops", utteranceCount: 1 }],
       });
-      expect((await request("transcripts.get", { selector }, roles("view"), caller))[0]).toBe(true);
+      await succeeds("transcripts.get", { selector }, cfg, caller);
+      const exported = await succeeds(
+        "transcripts.export",
+        { selector, format: "jsonl" },
+        cfg,
+        caller,
+      );
+      expect(exported).toMatchObject({ encoding: "base64", selector });
+      await succeeds(
+        "transcripts.list",
+        {},
+        roles("none", ["operator.admin"]),
+        client(profile.id, ["operator.admin"]),
+      );
       expect(
-        (
-          await request("transcripts.export", { selector, format: "jsonl" }, roles("view"), caller)
-        )[1],
-      ).toMatchObject({ encoding: "base64", selector });
-      expect(
-        (
-          await request(
-            "transcripts.list",
-            {},
-            roles("none", ["operator.admin"]),
-            client(profile.id, ["operator.admin"]),
-          )
-        )[0],
-      ).toBe(true);
-      expect(
-        (await request("transcripts.get", { selector, agentId: "main" }, roles("view"), caller))[2],
+        await fails("transcripts.get", { selector, agentId: "main" }, cfg, caller),
       ).toMatchObject({ code: "INVALID_REQUEST" });
       expect(fs.existsSync(path.join(state.stateDir, "transcripts"))).toBe(false);
     });
@@ -305,20 +309,16 @@ describe("transcript Gateway read authorization and errors", () => {
           message: "unauthorized role: node",
         });
       }
-      expect(
-        (await request("transcripts.start", {}, {}, client(undefined, ["operator.admin"])))[0],
-      ).toBe(false);
-      expect(
-        (await request("transcripts.list", {}, {}, client(undefined, ["operator.write"])))[0],
-      ).toBe(true);
+      await fails("transcripts.start", {}, {}, client(undefined, ["operator.admin"]));
+      await succeeds("transcripts.list", {}, {}, client(undefined, ["operator.write"]));
     });
   });
 
   it.each(["authority", "archive role", "cancellation"])(
     "refuses a public page after %s changes during its worker read",
     async (kind) => {
-      await withOpenClawTestState(profileState, async ({ stateDir }) => {
-        const { store } = await seed(stateDir);
+      await withOpenClawTestState(profileState, async (state) => {
+        const { store } = await seed(state.stateDir);
         const profile = ensureProfileForEmail("public-page-reader@example.test");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const cancellation = new AbortController();
@@ -339,27 +339,26 @@ describe("transcript Gateway read authorization and errors", () => {
               },
             }),
           );
-        const respond = vi.fn();
         try {
-          await transcriptsHandlers["transcripts.list"]!({
-            req: { type: "req", id: "revoked-list", method: "transcripts.list" },
-            params: {},
-            client: client(profile.id),
-            signal: cancellation.signal,
-            respond,
-            hasCurrentClientAuthority: () => kind !== "authority" || current,
-            isWebchatConnect: () => false,
-            context: {
-              getRuntimeConfig: () => (kind === "archive role" && !current ? roles("none") : cfg),
-              logGateway,
-            } as unknown as GatewayRequestContext,
-          });
+          const response = await directRequest(
+            "transcripts.list",
+            {},
+            {
+              client: client(profile.id),
+              signal: cancellation.signal,
+              hasCurrentClientAuthority: () => kind !== "authority" || current,
+              context: {
+                getRuntimeConfig: () => (kind === "archive role" && !current ? roles("none") : cfg),
+                logGateway,
+              } as unknown as GatewayRequestContext,
+            },
+          );
           expect(observer).toHaveBeenCalledOnce();
-          expect(respond).toHaveBeenCalledWith(
+          expect(response).toEqual([
             false,
             undefined,
             expect.objectContaining({ code: "UNAVAILABLE" }),
-          );
+          ]);
         } finally {
           observer.mockRestore();
         }
@@ -449,28 +448,6 @@ describe("meeting transcript RPC", () => {
 
   const selector = transcriptSessionSelector(session);
 
-  async function invoke(method: string, params: Record<string, unknown>) {
-    const respond = vi.fn();
-    const handler = transcriptsHandlers[method];
-    if (!handler) {
-      throw new Error(`missing handler: ${method}`);
-    }
-    await handler({
-      req: { type: "req", id: "test", method },
-      params,
-      respond,
-      client: null,
-      isWebchatConnect: () => false,
-      context: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
-    });
-    expect(respond).toHaveBeenCalledOnce();
-    const response = respond.mock.calls[0];
-    if (!response) {
-      throw new Error(`missing response: ${method}`);
-    }
-    return response;
-  }
-
   let state: OpenClawTestState;
   beforeEach(async () => {
     state = await createOpenClawTestState(profileState);
@@ -493,15 +470,15 @@ describe("meeting transcript RPC", () => {
     await store.appendUtteranceForSession(session, { text: "Decision: ship the meeting reader." });
     const writes = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
     const [first, second] = await Promise.all([
-      invoke("transcripts.summarize", { selector }),
-      invoke("transcripts.summarize", { selector }),
+      directRequest("transcripts.summarize", { selector }),
+      directRequest("transcripts.summarize", { selector }),
     ]);
     expect(first[0]).toBe(true);
     expect(second[0]).toBe(true);
     expect(first[1].summary.overview).toContain("ship the meeting reader");
     expect(second[1].summary).toEqual(first[1].summary);
     expect(writes).toHaveBeenCalledTimes(1);
-    expect((await invoke("transcripts.summarize", { selector }))[1].summary).toEqual(
+    expect((await directRequest("transcripts.summarize", { selector }))[1].summary).toEqual(
       first[1].summary,
     );
     expect(writes).toHaveBeenCalledTimes(1);
@@ -535,21 +512,18 @@ describe("meeting transcript RPC", () => {
           },
         );
       }
-      const respond = vi.fn();
-      await transcriptsHandlers["transcripts.summarize"]!({
-        req: { type: "req", id: "revoked", method: "transcripts.summarize" },
-        params: { selector },
-        client: null,
-        respond,
-        hasCurrentClientAuthority: () => current,
-        isWebchatConnect: () => false,
-        context: { getRuntimeConfig: () => ({}), logGateway } as unknown as GatewayRequestContext,
-      });
-      expect(respond).toHaveBeenCalledWith(
+      const response = await directRequest(
+        "transcripts.summarize",
+        { selector },
+        {
+          hasCurrentClientAuthority: () => current,
+        },
+      );
+      expect(response).toEqual([
         false,
         undefined,
         expect.objectContaining({ code: "UNAVAILABLE" }),
-      );
+      ]);
       if (phase === "snapshot") {
         expect((await store.readSummary(session)).summary).toBeUndefined();
       }
@@ -562,7 +536,7 @@ describe("meeting transcript RPC", () => {
       for (const text of texts) {
         await store.appendUtteranceForSession(session, { text });
       }
-      expect(await invoke("transcripts.summarize", { selector })).toMatchObject([
+      expect(await directRequest("transcripts.summarize", { selector })).toMatchObject([
         true,
         { session: { hasSummary: false, utteranceCount: texts.length } },
       ]);
@@ -599,7 +573,7 @@ describe("meeting transcript RPC", () => {
       releaseProvider: async () => {},
       phase: "active",
     });
-    const [ok, payload] = await invoke("transcripts.list", {});
+    const [ok, payload] = await directRequest("transcripts.list", {});
     expect(ok).toBe(true);
     expect(payload.sessions).toHaveLength(2);
     expect(payload.sessions[0]).toMatchObject({
@@ -622,8 +596,10 @@ describe("meeting transcript RPC", () => {
       active: false,
       hasSummary: false,
     });
-    expect((await invoke("transcripts.list", { limit: 1 }))[1].sessions).toHaveLength(1);
-    expect((await invoke("transcripts.list", { providerId: "absent" }))[1].sessions).toEqual([]);
+    expect((await directRequest("transcripts.list", { limit: 1 }))[1].sessions).toHaveLength(1);
+    expect((await directRequest("transcripts.list", { providerId: "absent" }))[1].sessions).toEqual(
+      [],
+    );
   });
 
   it("reads older stored notes without participant or model attribution fields", async () => {
@@ -642,7 +618,7 @@ describe("meeting transcript RPC", () => {
         .where("session_id", "=", session.sessionId)
         .where("session_started_at", "=", session.startedAt),
     );
-    const [ok, payload] = await invoke("transcripts.get", {
+    const [ok, payload] = await directRequest("transcripts.get", {
       selector: transcriptSessionSelector(session),
     });
     expect(ok).toBe(true);
