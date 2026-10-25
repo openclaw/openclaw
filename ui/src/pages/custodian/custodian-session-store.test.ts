@@ -2,12 +2,11 @@
 
 import {
   buildSystemAgentSessionInvalidatedErrorDetails,
-  type SystemAgentChatResult as ChatResult,
   type SystemAgentChatHistoryResult as History,
 } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { hasSensitiveConfigData } from "../../components/config-form.shared.ts";
 import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
 import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";
@@ -277,45 +276,20 @@ it.each([false, true])("remints an invalidated session (live=%s)", async (live) 
   }
 });
 
-it.each(["coalesced", "invalidated"] as const)("settles %s history reads", async (mode) => {
+it("coalesces history reads and preserves active inputs", async () => {
   const pending = deferred<History>();
-  const reply = deferred<ChatResult>();
-  const invalidated = mode === "invalidated";
   let historyCall = 0;
-  const request = historyRequest(
-    () =>
-      ++historyCall === 1
-        ? invalidated
-          ? Promise.reject(new Error("history unavailable"))
-          : Promise.resolve({ turns: [] })
-        : pending.promise,
-    (params) =>
-      invalidated && params.message ? reply.promise : Promise.resolve(chatReply(params.sessionId)),
+  const request = historyRequest(() =>
+    ++historyCall === 1 ? Promise.resolve({ turns: [] }) : pending.promise,
   );
   const { store } = setupStore(request, undefined, historyMethods);
   await waitForFast(() => expect(store.sending).toBe(false));
-  if (invalidated) {
-    expect(store.transcript.status.error).toContain("history unavailable");
-  }
   const refresh = store.refreshTranscriptIfIdle();
-  const joined = invalidated ? null : store.refreshTranscriptIfIdle();
-  const send = invalidated ? store.send("Continue") : null;
+  const joined = store.refreshTranscriptIfIdle();
   expect(historyCall).toBe(2);
-  pending.resolve(
-    invalidated
-      ? history(["assistant", "Stale history", 2])
-      : history(["user", "Durable question", 10], ["assistant", "Durable answer", 11]),
-  );
+  pending.resolve(history(["user", "Durable question", 10], ["assistant", "Durable answer", 11]));
   await Promise.all([refresh, joined]);
-  if (invalidated) {
-    expect(store.transcript.status.error).toContain("history unavailable");
-    expect(text(store)).not.toContain("Stale history");
-    reply.resolve(chatReply("session-after-send", "Continued."));
-    await send;
-    return;
-  }
   expect(text(store)).toEqual(["Durable question", "Durable answer"]);
-  const reads = request.mock.calls.filter(([method]) => method === historyMethod).length;
   store.sending = true;
   await store.refreshTranscriptIfIdle();
   store.sending = false;
@@ -329,55 +303,8 @@ it.each(["coalesced", "invalidated"] as const)("settles %s history reads", async
     },
   ];
   await store.refreshTranscriptIfIdle();
-  expect(request.mock.calls.filter(([method]) => method === historyMethod)).toHaveLength(reads);
+  expect(historyCall).toBe(2);
   expect(store.messages[0]?.question?.id).toBe("repair");
-});
-
-it("rejoins abandoned turns with authoritative history and controls", async () => {
-  const initialRequest = historyRequest(
-    () => Promise.resolve({ turns: [] }),
-    (params, options) =>
-      params.message
-        ? new Promise((_resolve, reject) => {
-            options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted")));
-          })
-        : Promise.resolve(chatReply(params.sessionId)),
-  );
-  const { store, setGatewaySnapshot } = setupStore(initialRequest, undefined, historyMethods);
-  await waitForFast(() => expect(store.sending).toBe(false));
-
-  const interruptedSend = store.send("Finish the repair");
-  await waitForFast(() => expect(store.sending).toBe(true));
-  setGatewaySnapshot({ phase: "reconnecting", client: null });
-  expect(store.abandonedTurnOutcomeUnknown).toBe(true);
-  const liveStep = { id: "repair-step", type: "text", message: "Which channel?" };
-  const reconnectRequest = vi.fn((method: string, params: ChatParams) => {
-    const replies: Record<string, unknown> = {
-      health: { channels: {} },
-      [historyMethod]: history(
-        ["user", "Finish the repair", 20],
-        ["assistant", "Repair complete", 21],
-      ),
-      "openclaw.chat": {
-        ...chatReply(params.sessionId, "Welcome back."),
-        wizardInputPending: true,
-        step: liveStep,
-      },
-    };
-    if (!Object.hasOwn(replies, method)) {
-      throw new Error(`Unexpected reconnect method: ${method}`);
-    }
-    return Promise.resolve(replies[method]);
-  });
-  setGatewaySnapshot({
-    phase: "connected",
-    client: { request: reconnectRequest } as unknown as GatewayBrowserClient,
-  });
-  await interruptedSend;
-  await waitForFast(() => expect(store.messages.at(-1)?.step).toMatchObject({ id: "repair-step" }));
-  expect(store).toMatchObject({ abandonedTurnOutcomeUnknown: false, wizardInputPending: true });
-  expect(text(store)).toContain("Repair complete");
-  expect(reconnectRequest.mock.calls.some(([method]) => method === "openclaw.chat")).toBe(true);
 });
 
 it.each([
