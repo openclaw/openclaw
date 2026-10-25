@@ -10,9 +10,19 @@ import {
   migrateConversationDeliveryTargetColumn,
 } from "./openclaw-agent-db-session-migrations.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { expectRow, expectRows } from "./openclaw-state-db-fixtures.test-support.js";
+import { expectRow, readRows } from "./openclaw-state-db-fixtures.test-support.js";
 
 const deliveryContext = (channel: string, to: string) => ({ channel, accountId: "default", to });
+function expectValues(
+  database: ReturnType<typeof conversationDatabase>,
+  sql: string,
+  expected: unknown,
+) {
+  expect(
+    readRows(database, sql).map((row) => Object.values(row)),
+    sql,
+  ).toEqual(expected);
+}
 
 function conversationDatabase(deliveryTarget = true) {
   const { DatabaseSync } = requireNodeSqlite();
@@ -93,11 +103,8 @@ describe("agent DB conversation migration", () => {
     database.exec(`
       PRAGMA user_version = 17;
       CREATE TABLE session_conversations (
-        session_id TEXT NOT NULL,
-        conversation_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        first_seen_at INTEGER NOT NULL,
-        last_seen_at INTEGER NOT NULL,
+        session_id TEXT NOT NULL, conversation_id TEXT NOT NULL, role TEXT NOT NULL,
+        first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
         PRIMARY KEY (session_id, conversation_id, role)
       ) STRICT;
       INSERT INTO session_conversations (
@@ -180,7 +187,7 @@ describe("agent DB conversation migration", () => {
 
     backfillSessionConversations(database);
 
-    expectRows(
+    expectValues(
       database,
       `SELECT sc.session_id, sc.role, c.kind, c.peer_id, c.delivery_target
            FROM session_conversations sc
@@ -194,13 +201,7 @@ describe("agent DB conversation migration", () => {
         ["shared", "participant", "direct", "peer-a", "reef:peer-a"],
         ["shared", "primary", "channel", "shared-ops", "channel:shared-ops"],
         ["thread-case", "primary", "channel", "ops-room", "channel:ops-room"],
-      ].map(([session_id, role, kind, peer_id, delivery_target]) => ({
-        session_id,
-        role,
-        kind,
-        peer_id,
-        delivery_target,
-      })),
+      ],
     );
     expectRow(
       database,
@@ -220,23 +221,15 @@ describe("agent DB conversation migration", () => {
         thread_id: "user-context",
       },
     );
-    expectRows(
+    expectValues(
       database,
       `SELECT s.session_id, s.primary_conversation_id, c.peer_id
            FROM sessions s
            JOIN conversations c ON c.conversation_id = s.primary_conversation_id
            WHERE s.session_id IN ('shared', 'dedicated') ORDER BY s.session_id`,
       [
-        {
-          session_id: "dedicated",
-          primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
-          peer_id: "peer-a",
-        },
-        {
-          session_id: "shared",
-          primary_conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
-          peer_id: "shared-ops",
-        },
+        ["dedicated", expect.stringMatching(/^conv_[a-f0-9]{32}$/u), "peer-a"],
+        ["shared", expect.stringMatching(/^conv_[a-f0-9]{32}$/u), "shared-ops"],
       ],
     );
   });
@@ -271,15 +264,10 @@ describe("agent DB conversation migration", () => {
     migrateConversationDeliveryTargetColumn(database);
     backfillSessionConversations(database);
 
-    expectRows(
+    expectValues(
       database,
       "SELECT conversation_id, delivery_target FROM conversations ORDER BY conversation_id",
-      [
-        {
-          conversation_id: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
-          delivery_target: "reef:peer-a",
-        },
-      ],
+      [[expect.stringMatching(/^conv_[a-f0-9]{32}$/u), "reef:peer-a"]],
     );
     expectRow(
       database,

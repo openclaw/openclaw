@@ -64,20 +64,16 @@ it("loads runtime registry rows off thread and observes committed registration c
   const options = createRegistry();
   const target = registration(options, "worker");
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  expect(await listAgentDbs(options)).toEqual([]);
-  expect(prepare).not.toHaveBeenCalled();
-
+  const check = async (expected: unknown[]) => {
+    prepare.mockClear();
+    expect(await listAgentDbs(options)).toMatchObject(expected);
+    expect(prepare).not.toHaveBeenCalled();
+  };
+  await check([]);
   registerAgentDb(target);
-  prepare.mockClear();
-  expect(await listAgentDbs(options)).toMatchObject([
-    { agentId: target.agentId, path: target.path },
-  ]);
-  expect(prepare).not.toHaveBeenCalled();
-
+  await check([{ agentId: target.agentId, path: target.path }]);
   unregisterAgentDb(target);
-  prepare.mockClear();
-  expect(await listAgentDbs(options)).toEqual([]);
-  expect(prepare).not.toHaveBeenCalled();
+  await check([]);
 });
 
 it("discovers the published registry across overlapping creation and deletion", async () => {
@@ -128,14 +124,17 @@ it("reuses registry admission across writes and unrelated pending migrations", (
   );
   using _ = { [Symbol.dispose]: () => probes.restore() };
 
-  expect(read(true)).toEqual([]);
-  expect(read()).toEqual([]);
-  expect(probes.counts).toMatchObject({
-    registryPrimaryKey: 0,
-    legacyWatches: 0,
-    auditSchema: 0,
-    registryCatalog: 0,
-  });
+  const checkBoth = (expected: unknown[]) => {
+    expect(read(true)).toEqual(expected);
+    expect(read()).toEqual(expected);
+    expect(probes.counts).toMatchObject({
+      registryPrimaryKey: 0,
+      legacyWatches: 0,
+      registryCatalog: 0,
+    });
+  };
+  checkBoth([]);
+  expect(probes.counts.auditSchema).toBe(0);
   db.exec(`INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at, size_bytes)
       VALUES ('worker', 'agents/worker/openclaw-agent.sqlite', 1, 10, NULL)`);
   const expectedRows = [
@@ -147,13 +146,7 @@ it("reuses registry admission across writes and unrelated pending migrations", (
       sizeBytes: null,
     },
   ];
-  expect(read()).toEqual(expectedRows);
-  expect(read(true)).toEqual(expectedRows);
-  expect(probes.counts).toMatchObject({
-    registryPrimaryKey: 0,
-    legacyWatches: 0,
-    registryCatalog: 0,
-  });
+  checkBoth(expectedRows);
 
   db.exec("ALTER TABLE session_watch_cursors DROP COLUMN provenance");
   expect(read(true)).toEqual(expectedRows);
