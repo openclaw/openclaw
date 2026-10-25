@@ -36,6 +36,7 @@ let runSessionEvent = vi.fn<NonNullable<StateDeps["runSessionEvent"]>>(async () 
   status: "ok",
 }));
 let states: ReturnType<typeof createCronServiceStateBase>[];
+const ok = { status: "ok" } as const;
 beforeEach(async () => {
   ({ storePath } = await makeStorePath());
   enqueueSystemEvent = vi.fn();
@@ -68,6 +69,8 @@ function createCronServiceState(
 const readJob = async () => (await loadCronStore(storePath)).jobs[0]!;
 const writeJobs = (...jobs: CronJob[]) => writeCronStoreSnapshot({ storePath, jobs });
 const findRun = (jobId: string) => findCronRunByBaseRunId(storePath, `cron:${jobId}:${now}`);
+const noRun = { ok: true, ran: false, reason: "not-due" };
+const ran = { ok: true, ran: true };
 
 function scriptFixture(
   outcome: Awaited<ReturnType<NonNullable<StateDeps["runScriptJob"]>>>,
@@ -114,12 +117,8 @@ describe("cron service timer seam coverage", () => {
       expect(job.state.startupCatchupAtMs).toBeUndefined();
       expect(job.state.pacedNextRunAtMs).toBeUndefined();
       expect(job.state.forcePreservedNextRunAtMs).toBeUndefined();
-      await expect(run(state, job.id, "due")).resolves.toEqual({
-        ok: true,
-        ran: false,
-        reason: "not-due",
-      });
-      await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+      await expect(run(state, job.id, "due")).resolves.toEqual(noRun);
+      await expect(run(state, job.id, "force")).resolves.toEqual(ran);
     }
     expect(runSessionEvent).toHaveBeenCalledTimes(2);
   });
@@ -177,9 +176,9 @@ describe("cron service timer seam coverage", () => {
       evaluationEntered.resolve();
       return evaluation.promise;
     });
-    const runCommandJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
-    const runScriptJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
-    const runIsolatedAgentJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
+    const runCommandJob = vi.fn(async () => ok);
+    const runScriptJob = vi.fn(async () => ok);
+    const runIsolatedAgentJob = vi.fn(async () => ok);
     const state = createCronServiceState({
       cronConfig: { triggers: { enabled: true } },
       evaluateCronTrigger,
@@ -241,12 +240,8 @@ describe("cron service timer seam coverage", () => {
       jobs: 1,
       nextWakeAtMs: null,
     });
-    await expect(run(state, job.id, "due")).resolves.toEqual({
-      ok: true,
-      ran: false,
-      reason: "not-due",
-    });
-    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    await expect(run(state, job.id, "due")).resolves.toEqual(noRun);
+    await expect(run(state, job.id, "force")).resolves.toEqual(ran);
     expect(runPayload).toHaveBeenCalledOnce();
   });
 
@@ -382,16 +377,19 @@ describe("cron service timer seam coverage", () => {
   });
 
   it("records current-bound cron metadata against the backing cron session", async () => {
-    const runIsolatedAgentJob = vi.fn(async () => ({
-      status: "ok" as const,
-      summary: "done",
+    const metadata = {
       sessionId: "session-run-1",
-      delivered: true,
-      sessionKey: "agent:finn:cron:isolated-agent-job:run:run-1",
       delivery: { intended: { channel: "telegram", to: "42" } },
       model: "gpt-test",
       provider: "openai",
       usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+    };
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      ...structuredClone(metadata),
+      status: "ok" as const,
+      summary: "done",
+      delivered: true,
+      sessionKey: "agent:finn:cron:isolated-agent-job:run:run-1",
     }));
 
     await writeJobs({
@@ -409,15 +407,11 @@ describe("cron service timer seam coverage", () => {
       status: "succeeded",
       summary: "done",
       detail: {
+        ...metadata,
         kind: "cron-run",
         status: "ok",
-        sessionId: "session-run-1",
         durationMs: 0,
         nextRunAtMs: now + 60_000,
-        delivery: { intended: { channel: "telegram", to: "42" } },
-        model: "gpt-test",
-        provider: "openai",
-        usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
       },
     });
   });
