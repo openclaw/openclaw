@@ -130,6 +130,7 @@ const gateway = spawn(
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   },
 );
+assert.ok(gateway.stdout && gateway.stderr, "Gateway output pipes are required");
 gateway.stdout.pipe(log);
 gateway.stderr.pipe(log);
 let client: ReturnType<typeof createGatewayWsClient> | undefined;
@@ -198,7 +199,11 @@ try {
           ? "plugin-enable"
           : "plugin-disable";
     setPhase(actionPhase);
-    const observed = await client.request("config.get", {}, 120_000);
+    const observed: Awaited<ReturnType<typeof client.request>> = await client.request(
+      "config.get",
+      {},
+      120_000,
+    );
     assert.ok(observed.ok, "Config observation failed");
     result.observations++;
     const payload = observed.payload as { hash: string };

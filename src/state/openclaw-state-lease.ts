@@ -175,15 +175,15 @@ async function runStateLeaseOwnerInScope<T>(
       throw leaseLost.signal.reason;
     }
   };
-  const assertCurrent = () => {
-    assertActive();
+  const assertOwnerCurrent = () => {
+    operationSignal.throwIfAborted();
     // Timer delivery can lag the persisted expiry; never admit an effect in that gap.
-    if (confirmedExpiresAt === undefined || Date.now() >= confirmedExpiresAt) {
+    if (closed || confirmedExpiresAt === undefined || Date.now() >= confirmedExpiresAt) {
       abortLost();
       throw leaseLost.signal.reason;
     }
   };
-  const assertWorkerCurrent = validated.heartbeat === "worker" ? assertActive : assertCurrent;
+  const assertWorkerCurrent = validated.heartbeat === "worker" ? assertActive : assertOwnerCurrent;
   function stopWorker() {
     void workerHeartbeat?.stop().catch(abortLost);
     void startingHeartbeat?.stop().catch(abortLost);
@@ -546,12 +546,11 @@ async function runStateLeaseOwnerInScope<T>(
       await workerOperations?.drain();
     };
 
-    const assertNativeCurrent =
+    const usesOwnerCurrent =
       validated.processBound &&
       validated.heartbeat !== "worker" &&
-      validated.database.schemaPolicy !== "existing"
-        ? assertCurrent
-        : assertOperationOwned;
+      validated.database.schemaPolicy !== "existing";
+    const assertNativeCurrent = usesOwnerCurrent ? assertWorkerCurrent : assertOperationOwned;
     let result: T;
     try {
       const execution = workerOperations;
@@ -610,7 +609,9 @@ async function runStateLeaseOwnerInScope<T>(
         assertNativeCurrent();
         const lease: OpenClawStateLeaseContext = {
           signal: operationSignal,
-          assertCurrent: assertNativeCurrent,
+          assertCurrent: usesOwnerCurrent
+            ? assertOwnerCurrent
+            : () => operationSignal.throwIfAborted(),
           renew: renewOperation,
           assertOwned: assertOperationOwned,
           ...(workerHeartbeat
