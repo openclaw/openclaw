@@ -30,165 +30,127 @@ const { installEmbeddedAttemptStreamGuards } =
 
 registerAgentSessionLoopTestLifecycle();
 
+function admissionCase(
+  name: string,
+  overrides: Partial<{
+    usage: number;
+    chars: number;
+    cap: number;
+    fits: boolean;
+    growSystem: boolean;
+    tweakSystem: boolean;
+    tweakTools: boolean;
+    opaque: boolean;
+    completionTokens: number;
+    assistantChars: number;
+    asyncFragments: boolean;
+    syntheticAssistant: boolean;
+    ownsCompaction: boolean;
+    oversizedAssembly: boolean;
+    compatibleBudget: boolean;
+    responseSchema: boolean;
+  }> = {},
+) {
+  return { name, usage: 15_000, chars: 12_000, cap: 16_000, fits: true, ...overrides };
+}
+
 describe("provider request admission", () => {
   it.each([
-    {
-      name: "measured compatible reasoning output budget",
+    admissionCase("measured compatible reasoning output budget", {
       usage: 1_500,
       chars: 15_500,
-      cap: 16_000,
-      fits: true,
       compatibleBudget: true,
-    },
-    {
-      name: "unchanged response schema is not charged twice on a tool continuation",
+    }),
+    admissionCase("unchanged response schema is not charged twice on a tool continuation", {
       usage: 24_000,
       chars: 100,
-      cap: 16_000,
-      fits: true,
       compatibleBudget: true,
       responseSchema: true,
-    },
-    {
-      name: "owning engine cannot submit oversized assembled history on its first request",
-      usage: 15_000,
-      chars: 12_000,
-      cap: 16_000,
+    }),
+    admissionCase("owning engine cannot submit oversized assembled history on its first request", {
       fits: false,
       ownsCompaction: true,
       oversizedAssembly: true,
-    },
-    {
-      name: "owning engine admits fitting requests despite an exaggerated engine estimate",
-      usage: 15_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: true,
+    }),
+    admissionCase("owning engine admits fitting requests despite an exaggerated engine estimate", {
       ownsCompaction: true,
-    },
-    {
-      name: "owning engine blocks an oversized measured continuation without opt-in",
+    }),
+    admissionCase("owning engine blocks an oversized measured continuation without opt-in", {
       usage: 23_000,
-      chars: 12_000,
-      cap: 16_000,
       fits: false,
       ownsCompaction: true,
-    },
-    { name: "measured unchanged prefix", usage: 15_000, chars: 12_000, cap: 16_000, fits: true },
-    {
-      name: "counts measured visible completion once",
-      usage: 15_000,
+    }),
+    admissionCase("measured unchanged prefix"),
+    admissionCase("counts measured visible completion once", {
       chars: 2_000,
-      cap: 16_000,
-      fits: true,
       completionTokens: 6_000,
       assistantChars: 24_000,
-    },
-    {
-      name: "counts visible completion once after a small system change",
-      usage: 15_000,
+    }),
+    admissionCase("counts visible completion once after a small system change", {
       chars: 2_000,
-      cap: 16_000,
-      fits: true,
       completionTokens: 5_000,
       assistantChars: 20_000,
       tweakSystem: true,
-    },
-    {
-      name: "counts visible completion once after tool definitions change",
-      usage: 15_000,
+    }),
+    admissionCase("counts visible completion once after tool definitions change", {
       chars: 2_000,
-      cap: 16_000,
-      fits: true,
       completionTokens: 5_000,
       assistantChars: 20_000,
       tweakTools: true,
-    },
-    {
-      name: "counts split visible completion once after a small system change",
-      usage: 15_000,
+    }),
+    admissionCase("counts split visible completion once after a small system change", {
       chars: 2_000,
-      cap: 16_000,
-      fits: true,
       completionTokens: 5_000,
       assistantChars: 20_000,
       asyncFragments: true,
       tweakSystem: true,
-    },
-    {
-      name: "counts async completion fragments once when the provider identity arrives late",
-      usage: 15_000,
+    }),
+    admissionCase(
+      "counts async completion fragments once when the provider identity arrives late",
+      {
+        chars: 2_000,
+        completionTokens: 6_000,
+        assistantChars: 24_000,
+        asyncFragments: true,
+      },
+    ),
+    admissionCase("counts an unrelated synthetic assistant appended after the measured prefix", {
       chars: 2_000,
-      cap: 16_000,
-      fits: true,
-      completionTokens: 6_000,
-      assistantChars: 24_000,
-      asyncFragments: true,
-    },
-    {
-      name: "counts an unrelated synthetic assistant appended after the measured prefix",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
       fits: false,
       syntheticAssistant: true,
-    },
-    {
-      name: "retains opaque reasoning occupancy",
-      usage: 15_000,
-      chars: 12_000,
-      cap: 16_000,
+    }),
+    admissionCase("retains opaque reasoning occupancy", {
       fits: false,
       opaque: true,
       completionTokens: 16_000,
-    },
-    {
-      name: "retains opaque reasoning after a small system change",
-      usage: 15_000,
+    }),
+    admissionCase("retains opaque reasoning after a small system change", {
       chars: 2_000,
-      cap: 16_000,
       fits: false,
       opaque: true,
       completionTokens: 16_000,
       tweakSystem: true,
-    },
-    {
-      name: "measured oversized tail after projection",
+    }),
+    admissionCase("measured oversized tail after projection", {
       usage: 14_000,
       chars: 100_000,
-      cap: 16_000,
-      fits: true,
-    },
-    {
-      name: "unavailable usage after projection",
+    }),
+    admissionCase("unavailable usage after projection", {
       usage: 0,
       chars: 100_000,
       cap: 2_000,
-      fits: true,
-    },
-    {
-      name: "genuinely oversized measured tail",
-      usage: 23_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-    },
-    {
-      name: "unavailable usage with oversized prompt",
+    }),
+    admissionCase("genuinely oversized measured tail", { usage: 23_000, fits: false }),
+    admissionCase("unavailable usage with oversized prompt", {
       usage: 0,
-      chars: 12_000,
-      cap: 16_000,
       fits: false,
       growSystem: true,
-    },
-    {
-      name: "changed system invalidates measured prefix",
+    }),
+    admissionCase("changed system invalidates measured prefix", {
       usage: 1_000,
-      chars: 12_000,
-      cap: 16_000,
       fits: false,
       growSystem: true,
-    },
+    }),
   ])(
     "$name",
     async ({
