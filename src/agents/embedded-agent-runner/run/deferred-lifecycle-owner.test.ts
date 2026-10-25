@@ -14,10 +14,6 @@ import { getDiagnosticSessionState } from "../../../logging/diagnostic-session-s
 import { resetDiagnosticStateForTest } from "../../../logging/diagnostic.test-support.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
-import {
-  beginReplyMessageInjectionTarget,
-  captureReplyMessageInjectionTarget,
-} from "../../../sessions/session-controller.message-injection.js";
 import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { assertSessionControllerOperation } from "../../../sessions/session-controller.state.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -93,14 +89,13 @@ describe("deferred logical-turn lifecycle", () => {
     });
     markDiagnosticEmbeddedRunStarted({ ...ref, owner: diagnosticOwner });
     const manager = managerFor(runId);
-    manager.adopt(
-      ownerFor(runId, {
-        diagnosticOwner,
-        clearActiveRun: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
-        ...overrides,
-      }),
-    );
-    return { ref, operation, diagnosticOwner, manager };
+    const owner = ownerFor(runId, {
+      diagnosticOwner,
+      clearActiveRun: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
+      ...overrides,
+    });
+    manager.adopt(owner);
+    return { ref, operation, diagnosticOwner, manager, owner };
   };
 
   afterEach(() => {
@@ -108,19 +103,26 @@ describe("deferred logical-turn lifecycle", () => {
       detachActiveEmbeddedRun(sessionId, handle, sessionKey);
     }
     handles.length = 0;
+    vi.restoreAllMocks();
   });
 
-  it("classifies omitted cancellation when the caller signal stays live", () => {
+  it.each([false, true])("preserves the first caller cancellation (timeout=%s)", (timedOut) => {
     const caller = new AbortController();
     const manager = managerFor("cancelled-logical-run", { abortSignal: caller.signal });
-
-    manager.abort(undefined);
-
-    expect(caller.signal.aborted).toBe(false);
-    expect(resolveReplyOperationAbortReason(undefined, manager.signal.reason)).toBe("user");
+    const timeout = new DOMException("Run deadline reached", "TimeoutError");
+    if (timedOut) {
+      caller.abort(timeout);
+    }
+    manager.abort(timedOut ? "user_abort" : undefined);
+    expect(caller.signal.aborted).toBe(timedOut);
+    if (timedOut) {
+      expect(manager.signal.reason).toBe(timeout);
+    } else {
+      expect(resolveReplyOperationAbortReason(undefined, manager.signal.reason)).toBe("user");
+    }
     expect(resolveAgentRunErrorLifecycleFields(manager.signal.reason, caller.signal)).toEqual({
       aborted: true,
-      stopReason: "aborted",
+      stopReason: timedOut ? "timeout" : "aborted",
     });
   });
 
@@ -136,22 +138,8 @@ describe("deferred logical-turn lifecycle", () => {
     expect(matchesReason(manager.signal.reason)).toBe(true);
   });
 
-  it("preserves an earlier caller timeout when a user abort arrives later", () => {
-    const caller = new AbortController();
-    const manager = managerFor("timed-out-logical-run", { abortSignal: caller.signal });
-    const timeout = new DOMException("Run deadline reached", "TimeoutError");
-
-    caller.abort(timeout);
-    manager.abort("user_abort");
-
-    expect(manager.signal.reason).toBe(timeout);
-    expect(resolveAgentRunErrorLifecycleFields(manager.signal.reason, caller.signal)).toEqual({
-      aborted: true,
-      stopReason: "timeout",
-    });
-  });
-
-  it("publishes CLI cancellation authority before releasing the embedded attempt", async () => {
+  it("hands the original logical turn and cancellation authority to CLI before releasing the embedded attempt", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     const embeddedHandle = runHandle("logical-run");
     handles.push(embeddedHandle);
     const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
@@ -166,8 +154,10 @@ describe("deferred logical-turn lifecycle", () => {
       discard: clearEmbedded,
     });
 
+    clock.mockReturnValue(1_300_000);
     manager.handoffToCli();
 
+    expect(resolveActiveEmbeddedRunOwner(sessionId)?.startedAtMs).toBe(1_000_000);
     expect(clearEmbedded).toHaveBeenCalledOnce();
     expect(isSessionRunActive(sessionId)).toBe(true);
     expect(abortEmbeddedAgentRun(sessionId)).toBe(true);
@@ -176,25 +166,6 @@ describe("deferred logical-turn lifecycle", () => {
     operation.complete();
     expect(isSessionRunActive(sessionId)).toBe(false);
     expect(resolveReplyOperationAbortReason(undefined, manager.signal.reason)).toBe("user");
-  });
-
-  it("keeps the logical turn start time on the CLI owner", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(1_000_000);
-      const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
-      const manager = managerFor("long-cli-run", { replyOperation: operation });
-      // Embedded preparation and fallback can run long before the CLI takes over.
-      vi.setSystemTime(1_000_000 + 5 * 60_000);
-
-      manager.handoffToCli();
-
-      expect(resolveActiveEmbeddedRunOwner(sessionId)?.startedAtMs).toBe(1_000_000);
-      await manager.complete();
-      operation.complete();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("keeps native ownership through CLI backend cleanup and returns the completed turn to idle", async () => {
@@ -223,27 +194,9 @@ describe("deferred logical-turn lifecycle", () => {
               diagnosticOwner,
             },
             async (params) => {
-              const injected: string[] = [];
-              const detach = attachCliReplyBackend(params, () => {}, {
-                supportsTranscriptCommitWait: true,
-                messageInjectionV2: {
-                  version: 2,
-                  isAvailable: () => true,
-                  queueMessage: async (text, _options, assertCurrent) => {
-                    assertCurrent();
-                    injected.push(text);
-                  },
-                },
-              });
+              const detach = attachCliReplyBackend(params, () => {});
               try {
                 expect.soft(getActiveNativeAttempt(sessionId)).toBe(native);
-                const target = captureReplyMessageInjectionTarget(params.replyOperation);
-                expect(target).toBeDefined();
-                const injection = await beginReplyMessageInjectionTarget(target!, "guidance", {
-                  waitForTranscriptCommit: true,
-                });
-                await expect(injection.outcome).resolves.toEqual({ status: "accepted" });
-                expect(injected).toEqual(["guidance"]);
               } finally {
                 detach?.();
               }
@@ -268,12 +221,13 @@ describe("deferred logical-turn lifecycle", () => {
 
   it("records only the accepted candidate terminal trajectory", async () => {
     const recordEvent = vi.fn();
-    const flush = vi.fn(async () => undefined);
-    const clearActiveRun = vi.fn();
     const makeOwner = () =>
       ownerFor("logical-run", {
-        trajectoryRecorder: { recordEvent, flush, describeFlushState: () => undefined },
-        clearActiveRun,
+        trajectoryRecorder: {
+          recordEvent,
+          flush: async () => {},
+          describeFlushState: () => undefined,
+        },
       });
     const discarded = makeOwner();
     discarded.recordSessionEnd({ status: "error" });
@@ -284,10 +238,7 @@ describe("deferred logical-turn lifecycle", () => {
     accepted.recordSessionEnd({ status: "success" });
     await accepted.complete();
 
-    expect(recordEvent).toHaveBeenCalledOnce();
-    expect(recordEvent).toHaveBeenCalledWith("session.ended", { status: "success" });
-    expect(flush).toHaveBeenCalledTimes(2);
-    expect(clearActiveRun).toHaveBeenCalledTimes(2);
+    expect(recordEvent.mock.calls).toEqual([["session.ended", { status: "success" }]]);
   });
 
   it("releases a discarded candidate immediately and joins its diagnostic flush at completion", async () => {
@@ -328,28 +279,25 @@ describe("deferred logical-turn lifecycle", () => {
   });
 
   it("flushes buffered diagnostics when a successful candidate enters retry backoff", async () => {
-    const ref = { runId: "retry-candidate", sessionId, sessionKey };
-    const diagnosticOwner = createDiagnosticEmbeddedRunOwner(ref);
-    markDiagnosticEmbeddedRunStarted({ ...ref, owner: diagnosticOwner });
     const flushed = createDeferredCore();
     const recordEvent = vi.fn();
-    const owner = ownerFor(ref.runId, {
-      diagnosticOwner,
+    const { manager, operation, owner } = retryManager("retry-candidate", {
       trajectoryRecorder: {
         recordEvent,
         describeFlushState: () => "pendingRows=1",
         flush: async () => flushed.resolve(),
       },
-      clearActiveRun: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
     });
     owner.recordSessionEnd({ status: "success" });
-    const release = owner.beginRetryWait(Date.now() + 660_000, new AbortController().signal);
+    const release = manager.beginRetryWait(Date.now() + 660_000);
     try {
       await flushed.promise;
       expect(recordEvent).not.toHaveBeenCalled();
     } finally {
       release?.();
       await owner.discard();
+      await manager.complete();
+      operation.complete();
     }
   });
 

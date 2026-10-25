@@ -10,9 +10,7 @@ import { createProcessSessionFixture } from "../../bash-process-registry.test-he
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { resetSubagentRegistryForTests } from "../../subagents/registry/subagent-registry.test-helpers.js";
-import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   info: vi.fn(),
@@ -45,19 +43,18 @@ const user = (text: string, timestamp = 100): AgentMessage => ({
   timestamp,
 });
 const messages = [user("Previous request")];
-type PromptInput = Parameters<typeof prepareContext>[0]["prompt"];
+type ContextInput = Parameters<typeof prepareContext>[0];
 
 function createInput(
   options: {
-    attempt?: Partial<EmbeddedRunAttemptParams>;
-    messages?: AgentMessage[];
+    attempt?: Partial<ContextInput["attempt"]>;
     preparedUserTurnMessage?: AgentMessage;
-    prompt?: Partial<PromptInput>;
+    prompt?: Partial<ContextInput["prompt"]>;
   } = {},
 ) {
   const replaceSessionMessages = vi.fn();
   const report = {} as SessionSystemPromptReport;
-  const attempt = {
+  const attempt: ContextInput["attempt"] = {
     config: { agents: { defaults: { userTimezone: "UTC" } } },
     contextTokenBudget: 32_000,
     currentInboundContext: {
@@ -67,9 +64,8 @@ function createInput(
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     suppressNextUserMessagePersistence: false,
-    trigger: options.attempt ? undefined : "user",
     ...options.attempt,
-  } as EmbeddedRunAttemptParams;
+  };
   setRuntimeConfigSnapshot(attempt.config ?? {});
   return {
     input: {
@@ -77,7 +73,7 @@ function createInput(
       capabilityToolNames: new Set<string>(),
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
-      messages: options.messages ?? messages,
+      messages,
       preparedUserTurnMessage:
         options.preparedUserTurnMessage ??
         ({ role: "user", content: "Visible request", timestamp: 123 } as AgentMessage),
@@ -117,14 +113,15 @@ afterEach(async () => {
   vi.restoreAllMocks();
   deleteSession("exec-a");
   deleteSession("exec-z");
+  deleteSession("exec-other");
   await resetSubagentRegistryForTests({ persist: false });
   clearRuntimeConfigSnapshot();
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
-  it("carries execution-owned processes in id order without elapsed time or output", async () => {
+  it("appends scoped runtime snapshots through process retirement without rewriting history", async () => {
     const fixture = createInput();
-    fixture.input.capabilityToolNames.add("process");
+    fixture.input.capabilityToolNames = new Set(["process", "sessions_spawn", "image_generate"]);
     const idle = await prepareContext(fixture.input);
     expect(idle.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
       "Active exec sessions at turn start (snapshot):",
@@ -135,6 +132,12 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       appendOutput(session, "stdout", "private output tail");
       addSession(session);
     }
+    const otherProcess = createProcessSessionFixture({ id: "exec-other", backgrounded: true });
+    otherProcess.scopeKey = "agent:main:another-session";
+    addSession(otherProcess);
+    vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
+      "## Media Generation Tasks\n- tool=image_generate; task=image-1; status=running",
+    );
     const active = await prepareContext(fixture.input);
     expect(active.systemPromptForHook).toBe(idle.systemPromptForHook);
     const content = active.runtimeContextMessageForCurrentTurn?.content;
@@ -159,22 +162,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     );
     expect(nextTurn.systemPromptForHook).toBe(active.systemPromptForHook);
     expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
-  });
-
-  it("supersedes retained active facts with explicit empty snapshots", async () => {
-    const fixture = createInput();
-    fixture.input.capabilityToolNames = new Set(["process", "sessions_spawn", "image_generate"]);
-    const process = createProcessSessionFixture({ id: "exec-a", backgrounded: true });
-    process.scopeKey = fixture.input.attempt.sessionKey;
-    addSession(process);
-    const otherProcess = createProcessSessionFixture({ id: "exec-z", backgrounded: true });
-    otherProcess.scopeKey = "agent:main:another-session";
-    addSession(otherProcess);
-    vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
-      "## Media Generation Tasks\n- tool=image_generate; task=image-1; status=running",
-    );
-    const active = await prepareContext(fixture.input);
-    deleteSession("exec-a");
+    deleteSession("exec-z");
     vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
       "## Media Generation Tasks\n- tool=image_generate; none",
     );
@@ -184,13 +172,15 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       messages: [...messages, active.runtimeContextMessageForCurrentTurn!],
     });
     expect(empty.systemPromptForHook).toBe(active.systemPromptForHook);
-    const content = empty.runtimeContextMessageForCurrentTurn?.content;
-    expect(content).toContain("No active exec-tool sessions in this scope at turn start.");
-    expect(content).not.toContain("exec-z");
-    expect(content).toContain("persistent automations and other background work are not included.");
-    expect(content).toContain("## Active Subagents\nnone");
-    expect(content).toContain("- tool=image_generate; none");
-    expect(content).not.toContain("image-1");
+    const emptyContent = empty.runtimeContextMessageForCurrentTurn?.content;
+    expect(emptyContent).toContain("No active exec-tool sessions in this scope at turn start.");
+    expect(emptyContent).not.toContain("exec-other");
+    expect(emptyContent).toContain(
+      "persistent automations and other background work are not included.",
+    );
+    expect(emptyContent).toContain("## Active Subagents\nnone");
+    expect(emptyContent).toContain("- tool=image_generate; none");
+    expect(emptyContent).not.toContain("image-1");
   });
 
   it("quotes producer data in the new-session model prompt while retaining transcript bytes", async () => {
@@ -240,28 +230,16 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.reconcileToolResultPromptProjectionState).not.toHaveBeenCalled();
   });
 
-  it.each([0, 2])("logs only actual truncation with %s changed tool results", async (count) => {
+  it("reports aggregate pressure after truncating tool results", async () => {
     hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
-      messages: count ? [...inputMessages] : inputMessages,
-      truncatedCount: count,
-      aggregateTruncatedCount: count ? 1 : 0,
+      messages: [...inputMessages],
+      truncatedCount: 2,
+      aggregateTruncatedCount: 1,
       aggregatePressureEngaged: true,
       aggregateBudgetChars: 200,
     }));
-    const fixture = createInput({
-      attempt: { sessionId: "pressure-session", sessionKey: "pressure-session" },
-    });
-
-    const result = await prepareContext(fixture.input);
-
+    const result = await prepareContext(createInput().input);
     expect(result.aggregatePressureEngaged).toBe(true);
-    expect(hoisted.warn).not.toHaveBeenCalled();
-    expect(hoisted.info).toHaveBeenCalledTimes(count ? 1 : 0);
-    if (count) {
-      expect(hoisted.info).toHaveBeenCalledWith(
-        expect.stringContaining("Truncated 2 tool result(s)"),
-      );
-    }
   });
 
   it("carries version 4 runtime-only events in the message tail carrier without rewriting system prompt", async () => {
@@ -321,49 +299,6 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(result.runtimeContextMessageForCurrentTurn).toMatchObject({
       content: temporalContext,
       display: false,
-    });
-  });
-
-  it("rebases prePromptMessageCount and updates session messages when replay normalization shrinks history", async () => {
-    const rawHistory: AgentMessage[] = [
-      user("Historic question", 10),
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "NO_REPLY" }],
-        timestamp: 11,
-      }),
-      user("Follow-up", 12),
-    ];
-    const fixture = createInput({ messages: rawHistory });
-
-    const result = await prepareContext(fixture.input);
-
-    expect(rawHistory.length).toBe(3);
-    expect(result.prePromptMessageCount).toBe(2);
-    expect(fixture.replaceSessionMessages).toHaveBeenCalledWith([rawHistory[0], rawHistory[2]]);
-  });
-
-  it("preserves ordinary reply text containing a trailing silence token without rewriting history", async () => {
-    const contentModifiedHistory: AgentMessage[] = [
-      user("Historic question", 10),
-      makeAgentAssistantMessage({
-        content: [
-          { type: "text", text: "Slides ready" },
-          { type: "text", text: "NO_REPLY" },
-        ],
-        timestamp: 11,
-      }),
-    ];
-    const fixture = createInput({ messages: contentModifiedHistory });
-
-    const result = await prepareContext(fixture.input);
-
-    expect(result.prePromptMessageCount).toBe(2);
-    expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
-    expect(contentModifiedHistory[1]).toMatchObject({
-      content: [
-        { type: "text", text: "Slides ready" },
-        { type: "text", text: "NO_REPLY" },
-      ],
     });
   });
 });

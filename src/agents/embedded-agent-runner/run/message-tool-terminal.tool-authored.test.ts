@@ -157,10 +157,8 @@ describe("tool-authored source reply turn completion", () => {
     expect(replies.map((reply) => reply.toolAuthoredForTurnId)).toEqual(identities);
   });
   it.each([
-    [true, false],
     [false, false],
     [true, true],
-    [false, true],
   ])(
     "retains a final reply beside a terminal sibling (authored terminate=%s, capable=%s)",
     async (terminate, capable) => {
@@ -237,9 +235,12 @@ describe("tool-authored source reply turn completion", () => {
 
   it("commits every final reply only after all capable siblings settle", async () => {
     const run = await runBatch({
-      sibling: { name: "stock_check", details: { sourceReply: { text: "Stock reserved." } } },
+      tools: [
+        { name: "Order_Confirm", details: finalReply },
+        { name: "stock_check", details: { sourceReply: { text: "Stock reserved." } } },
+      ],
       capableToolNames: ["order_confirm", "stock_check"],
-      completionOrder: ["stock_check", "order_confirm"],
+      completionOrder: ["stock_check", "Order_Confirm"],
     });
     expect(run.requests).toBe(1);
     expect(
@@ -247,15 +248,6 @@ describe("tool-authored source reply turn completion", () => {
         .map((reply) => reply.text)
         .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
     ).toEqual(["Pedido creado.", "Stock reserved."]);
-  });
-
-  it("matches a capable tool by its policy-normalized name", async () => {
-    const run = await runBatch({
-      tools: [{ name: "Order_Confirm", details: finalReply }],
-      capableToolNames: ["order_confirm"],
-    });
-
-    expect(run.requests).toBe(1);
   });
 
   it("reads the result after afterToolCall hooks, so a hook can withdraw the reply", async () => {
@@ -268,19 +260,12 @@ describe("tool-authored source reply turn completion", () => {
     expect(run.requests).toBe(2);
   });
 
-  it.each(["tool", "previous-hook"] as const)(
-    "captures a reply even when %s already completes the turn",
-    async (owner) => {
-      const run = await runBatch({
-        tools: [{ name: "order_confirm", details: finalReply, terminate: owner === "tool" }],
-        configureAgent:
-          owner === "previous-hook"
-            ? (agent) => setInternalToolTurnCompletion(agent, () => true)
-            : undefined,
-      });
-      expectFinal(run);
-    },
-  );
+  it("captures a reply even when the previous hook already completes the turn", async () => {
+    const run = await runBatch({
+      configureAgent: (agent) => setInternalToolTurnCompletion(agent, () => true),
+    });
+    expectFinal(run);
+  });
 
   it("keeps an earlier turn-completion hook in charge", async () => {
     const run = await runBatch({

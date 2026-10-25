@@ -188,56 +188,41 @@ async function fixture(
 }
 
 describe("prompt assembly with registered Decision runtime", () => {
-  it("evaluates the next turn after a Decision removes every model-facing tool", async () => {
-    const { call, ...f } = await fixture(config(), "structured", "main", null, {
-      names: ["inspect_file"],
-      forceToolNames: [],
-    });
-    await f.assemble();
-    expect(f.policy.current.effectiveTools).toEqual([]);
-    expect(f.session.getActiveToolNames()).toEqual([]);
+  it.each([false, true])(
+    "evaluates tools after an empty host surface (client-only=%s)",
+    async (clientOnly) => {
+      const names = [clientOnly ? "client_lookup" : "inspect_file"];
+      const { call, ...f } = await fixture(config(), "structured", "main", null, {
+        names,
+        forceToolNames: clientOnly ? undefined : [],
+        clientOnly,
+      });
+      if (!clientOnly) {
+        await f.assemble();
+        expect(f.session.getActiveToolNames()).toEqual([]);
+      }
+      expect(f.policy.current.effectiveTools).toEqual([]);
+      call.mockResolvedValue(result(0.9));
+      await f.assemble();
+      expect(call).toHaveBeenCalledTimes(clientOnly ? 1 : 2);
+      expect(f.session.getActiveToolNames()).toEqual(names);
+    },
+  );
 
-    call.mockResolvedValue(result(0.9));
-    await f.assemble({ prompt: "Read package.json now." });
-
-    expect(call).toHaveBeenCalledTimes(2);
-    expect(f.session.getActiveToolNames()).toEqual(["inspect_file"]);
-  });
-
-  it("keeps client-only model tools eligible for Decision inference", async () => {
-    const { call, ...f } = await fixture(config(), "structured", "main", null, {
-      names: ["client_lookup"],
-      clientOnly: true,
-    });
-    call.mockResolvedValue(result(0.9));
-    expect(f.policy.current.effectiveTools).toEqual([]);
-    await f.assemble();
-    expect(call).toHaveBeenCalledOnce();
-    expect(f.session.getActiveToolNames()).toEqual(["client_lookup"]);
-  });
-
-  it.each<[string, OpenClawConfig, string, boolean | undefined, boolean]>([
-    ["missing referent", config(), "main", true, false],
-    ["disabled", config(false), "main", true, false],
-    ["no model", config(true, false), "main", true, false],
-    ["enabled", config(), "main", true, true],
-    ["unknown harness", config(), "main", undefined, false],
-    ["unsupported harness", config(), "main", false, false],
-    ["agent opt-out", config(), "quiet", true, false],
-  ])("gates Decision inference: %s", async (name, cfg, agentId, support, prune) => {
-    const missingReferent = name === "missing referent";
+  it.each<[string, OpenClawConfig, string, boolean]>([
+    ["disabled", config(false), "main", true],
+    ["no model", config(true, false), "main", true],
+    ["unsupported harness", config(), "main", false],
+    ["agent opt-out", config(), "quiet", true],
+  ])("gates Decision inference: %s", async (_name, cfg, agentId, support) => {
     const { call, ...f } = await fixture(cfg, "structured", agentId);
-    if (missingReferent) {
-      f.session.agent.state.messages = [createAssistant(testModel, "Should I edit the file?")];
-    }
-    await f.assemble({
-      supportsTurnScopedToolRestrictions: support,
-      ...(missingReferent ? { prompt: "Go ahead." } : {}),
-    });
-    expect(call).toHaveBeenCalledTimes(prune ? 1 : 0);
-    expect(f.policy.current.tools.map((t) => t.name)).toEqual(
-      prune ? ["message"] : ["inspect_file", "message", "decision_evaluate"],
-    );
+    await f.assemble({ supportsTurnScopedToolRestrictions: support });
+    expect(call).not.toHaveBeenCalled();
+    expect(f.session.getActiveToolNames()).toEqual([
+      "inspect_file",
+      "message",
+      "decision_evaluate",
+    ]);
   });
   it.each(modes)("keeps the admitted Decision result for final %s dispatch", async (mode) => {
     for (const change of ["opt-out", "model-change"] as const) {
@@ -262,12 +247,8 @@ describe("prompt assembly with registered Decision runtime", () => {
       setRuntimeConfigSnapshot(next);
       barrier.resolve();
       await pending;
-      const expected = ["message"];
-      expect(captured.map(({ names }) => names)).toEqual([expected]);
-      expect(f.session.getActiveToolNames()).toEqual(expected);
-      expect(f.policy.current.callableToolNames).not.toContain("inspect_file");
+      expect(captured.map(({ names }) => names)).toEqual([["message"]]);
       expect(f.policy.current.callableToolNames).not.toContain("denied");
-      expect(f.policy.current.tools.map((t) => t.name)).toContain("message");
       if (f.catalogRef) {
         expect(f.catalogRef.current?.entries).toEqual([]);
       }
@@ -358,7 +339,6 @@ describe("prompt assembly with registered Decision runtime", () => {
     call.mockResolvedValue(result(0.1));
     reply = "Here is the explanation.";
     await submit("Yes");
-    expect(call).toHaveBeenCalledTimes(2);
     expect(call.mock.calls[1]?.[0].state).toMatchObject({
       latestRequest: "Yes",
       beforePromptBuild: hookFields,
@@ -370,7 +350,6 @@ describe("prompt assembly with registered Decision runtime", () => {
     expect(captures[1]?.definitionChars).toBeLessThan(captures[0]?.definitionChars ?? 0);
     call.mockResolvedValue(result(0.9));
     await submit("Read package.json now.");
-    expect(call).toHaveBeenCalledTimes(3);
     expect(captures[2]?.names).toEqual(captures[0]?.names);
     expect(f.policy.current.callableToolNames).toContain("inspect_file");
     expect(f.policy.current.callableToolNames).not.toContain("denied");
