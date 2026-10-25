@@ -53,13 +53,48 @@ function acpConfig(...agentIds: string[]) {
 
 function withAcpState(
   agentIds: string[],
-  run: (state: OpenClawTestState & { cfg: ReturnType<typeof acpConfig> }) => Promise<void>,
+  run: (state: OpenClawTestState & ReturnType<typeof acpHarness>) => Promise<void>,
+  shared = false,
 ) {
   return withOpenClawTestState({ scenario: "empty" }, async (state) => {
-    const cfg = acpConfig(...agentIds);
-    await state.writeConfig(cfg);
-    await run({ ...state, cfg });
+    const harness = acpHarness(
+      state.env,
+      agentIds,
+      shared ? state.statePath("shared.sqlite") : undefined,
+    );
+    await state.writeConfig(harness.cfg);
+    await run({ ...state, ...harness });
   });
+}
+
+function acpHarness(env: NodeJS.ProcessEnv, agentIds: string[], storePath?: string) {
+  const cfg = { ...acpConfig(...agentIds), session: storePath ? { store: storePath } : undefined };
+  const handoff = vi.fn<
+    NonNullable<Parameters<typeof runSessionStartupMigration>[0]["handoffDatabase"]>
+  >(async () => {});
+  return {
+    cfg,
+    handoff,
+    startup: (selectedAgents?: ReadonlySet<string>) =>
+      runSessionStartupMigration({
+        cfg,
+        env,
+        agentIds: selectedAgents,
+        log: { info() {}, warn() {} },
+        handoffDatabase: handoff,
+      }),
+    seed: (key: string, agentId = "main") => seedSession(env, key, agentId),
+  };
+}
+
+function seedSession(env: NodeJS.ProcessEnv, sessionKey: string, agentId: string) {
+  const entry = {
+    sessionId: `session-${sessionKey}`,
+    lifecycleRevision: `revision-${sessionKey}`,
+    updatedAt: 100,
+  };
+  replaceSessionEntrySync({ agentId, env, sessionKey }, entry);
+  return entry;
 }
 
 function seedMeta(
@@ -75,11 +110,8 @@ function seedMeta(
 it.each([false, true])(
   "inspects legacy keys while ACP inspection is pending, refusing handoff on ACP failure=%s",
   async (refuse) => {
-    await withAcpState(["main"], async ({ env, cfg }) => {
-      replaceSessionEntrySync(
-        { agentId: "main", env, sessionKey: "agent:main:main" },
-        { sessionId: "retained-session", updatedAt: 100 },
-      );
+    await withAcpState(["main"], async ({ env, cfg, startup, handoff, seed }) => {
+      seed("agent:main:main");
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const originalRead = stateReads.executeExistingOpenClawStateRead;
@@ -96,23 +128,17 @@ it.each([false, true])(
           return await originalRead(...args);
         });
       const inspectLegacy = vi.spyOn(legacyMainMigration, "migrateLegacyMainSessionKeys");
-      const handoffDatabase = vi.fn(async () => {});
-      const outcome = runSessionStartupMigration({
-        cfg,
-        env,
-        log: { info() {}, warn() {} },
-        handoffDatabase,
-      }).then(
+      const outcome = startup().then(
         () => undefined,
         (error: unknown) => error,
       );
       try {
         await entered.promise;
         expect(inspectLegacy).toHaveBeenCalledWith({ cfg, env, mode: "detect" });
-        expect(handoffDatabase).not.toHaveBeenCalled();
+        expect(handoff).not.toHaveBeenCalled();
         release.resolve();
         expect(await outcome).toEqual(refuse ? new Error("ACP inspection refused") : undefined);
-        expect(handoffDatabase).toHaveBeenCalledTimes(refuse ? 0 : 1);
+        expect(handoff).toHaveBeenCalledTimes(refuse ? 0 : 1);
       } finally {
         release.resolve();
         await outcome;
@@ -126,25 +152,19 @@ it.each([false, true])(
 it.each(["recorded", "ownerless", "literal"] as const)(
   "startup defers %s ACP bindings until their physical store is admitted",
   async (shape) => {
-    await withAcpState(["main", "deferred"], async ({ env, cfg }) => {
-      replaceSessionEntrySync(
-        { agentId: "main", env, sessionKey: "agent:main:main" },
-        { sessionId: "ready-session", updatedAt: 100 },
-      );
+    await withAcpState(["main", "deferred"], async ({ env, startup, handoff, seed }) => {
+      seed("agent:main:main");
       const sessionKey =
         shape === "recorded"
           ? "agent:deferred:acp:legacy"
           : shape === "ownerless"
             ? "global"
             : buildAcpDatabaseSessionKey("absent", "retired");
-      replaceSessionEntrySync(
-        { agentId: "deferred", env, sessionKey },
-        { sessionId: "deferred-session", lifecycleRevision: "deferred-revision", updatedAt: 100 },
-      );
+      const entry = seed(sessionKey, "deferred");
       seedMeta(
         env,
         sessionKey,
-        "deferred-revision",
+        entry.lifecycleRevision,
         migrationAcpMeta("deferred", "deferred-runtime"),
       );
       const deferredPath = resolveOpenClawAgentSqlitePath({ agentId: "deferred", env });
@@ -156,51 +176,35 @@ it.each(["recorded", "ownerless", "literal"] as const)(
         pending: true,
       });
       recordAgentDatabaseAdmissions([refusal], { env, source: "startup" });
-      const handedOff: string[] = [];
-      const startup = (agentIds?: ReadonlySet<string>) =>
-        runSessionStartupMigration({
-          cfg,
-          env,
-          agentIds,
-          log: { info() {}, warn() {} },
-          handoffDatabase: async ({ agentId }) => {
-            handedOff.push(agentId);
-          },
-        });
       await expect(startup()).resolves.toBeUndefined();
-      expect(handedOff).toEqual(["main"]);
+      expect(handoff.mock.calls.map(([target]) => target.agentId)).toEqual(["main"]);
       expect(readAgentDatabaseAdmissionRefusal("deferred", { env })).toBe(refusal);
-      handedOff.length = 0;
+      handoff.mockClear();
       await expect(
         preparePendingAgentDatabase(refusal, { env, assertCurrent() {} }, () =>
           startup(new Set(["deferred"])),
         ),
       ).rejects.toThrow("ACP metadata requires offline migration");
-      expect(handedOff).toEqual([]);
+      expect(handoff).not.toHaveBeenCalled();
       expect(readAgentDatabaseAdmissionRefusal("deferred", { env })).toBe(refusal);
     });
   },
 );
 
 it("startup refuses unresolved ACP ownership even without a discovered agent store", async () => {
-  await withAcpState(["main", "ops"], async ({ env, cfg }) => {
+  await withAcpState(["main", "ops"], async ({ env, startup }) => {
     seedMeta(
       env,
       "@agent:main:agent:ops:acp:legacy",
       "unresolved-revision",
       migrationAcpMeta("ops", "unresolved-runtime"),
     );
-    await expect(
-      runSessionStartupMigration({ cfg, env, log: { info() {}, warn() {} } }),
-    ).rejects.toThrow("unresolved shared ACP owner");
+    await expect(startup()).rejects.toThrow("unresolved shared ACP owner");
   });
 });
 
 it("startup requires offline ACP repair before handing restored stores to runtime", async () => {
-  await withAcpState(["main", "ops"], async ({ env, cfg }) => {
-    const handoffDatabase = vi.fn(async () => {});
-    const log = { info: vi.fn(), warn: vi.fn() };
-    const startup = () => runSessionStartupMigration({ cfg, env, log, handoffDatabase });
+  await withAcpState(["main", "ops"], async ({ env, cfg, startup, handoff }) => {
     const entry = {
       sessionId: "restored-acp-session",
       lifecycleRevision: "restored-revision",
@@ -227,7 +231,7 @@ it("startup requires offline ACP repair before handing restored stores to runtim
         buildAcpDatabaseSessionKey("MAIN", "main"),
       ],
     ] as const) {
-      handoffDatabase.mockClear();
+      handoff.mockClear();
       owners.add(agentId);
       const scope = { cfg, env, agentId, sessionKey };
       const currentEntry = {
@@ -263,7 +267,7 @@ it("startup requires offline ACP repair before handing restored stores to runtim
       } else {
         await expect(startup()).rejects.toThrow('run "openclaw doctor --fix"');
       }
-      expect(handoffDatabase).not.toHaveBeenCalled();
+      expect(handoff).not.toHaveBeenCalled();
       const warnings: string[] = [];
       await noteSessionTranscriptHealth({
         cfg,
@@ -275,7 +279,7 @@ it("startup requires offline ACP repair before handing restored stores to runtim
       expect(warnings).toEqual([]);
       expect(readAcpSessionEntry(scope)?.acp).toEqual(meta);
       await expect(startup()).resolves.toBeUndefined();
-      expect(handoffDatabase).toHaveBeenCalledTimes(owners.size);
+      expect(handoff).toHaveBeenCalledTimes(owners.size);
       expect(await repairAcpSessionMetaKeysForDoctor({ cfg, env, apply: false })).toMatchObject({
         found: 0,
         repaired: 0,
@@ -320,58 +324,43 @@ it("startup requires offline ACP repair before handing restored stores to runtim
 it.each([false, true])(
   "ownerless ACP refusal follows physical store scope (shared: %s)",
   async (shared) => {
-    await withOpenClawTestState({ scenario: "empty" }, async (state) => {
-      const storePath = shared ? state.statePath("shared.sqlite") : undefined;
-      const cfg = {
-        ...acpConfig("main", "ops"),
-        session: storePath ? { store: storePath } : undefined,
-      };
-      await state.writeConfig(cfg);
-      if (storePath) {
-        openOpenClawAgentDatabase({ agentId: "main", path: storePath, env: state.env });
-      }
-      for (const agentId of ["main", "ops"]) {
-        replaceSessionEntrySync(
-          { agentId, storePath, env: state.env, sessionKey: "global" },
-          {
-            sessionId: `scope-${agentId}`,
-            lifecycleRevision: `revision-${agentId}`,
-            updatedAt: 100,
-          },
-        );
-      }
-      seedMeta(state.env, "global", "revision-ops", migrationAcpMeta("ops", "ops-runtime"));
-      const handoffDatabase = vi.fn(async () => {});
-      const startup = (agentId: string) =>
-        runSessionStartupMigration({
-          cfg,
-          env: state.env,
-          agentIds: new Set([agentId]),
-          log: { info: vi.fn(), warn: vi.fn() },
-          handoffDatabase,
-        });
-      if (shared) {
-        await expect(startup("main")).rejects.toThrow('run "openclaw doctor --fix"');
-        expect(handoffDatabase).not.toHaveBeenCalled();
-      } else {
-        await expect(startup("main")).resolves.toBeUndefined();
-        expect(handoffDatabase).toHaveBeenCalledTimes(1);
-      }
-      handoffDatabase.mockClear();
-      await expect(startup("ops")).rejects.toThrow('run "openclaw doctor --fix"');
-      expect(handoffDatabase).not.toHaveBeenCalled();
-    });
+    await withAcpState(
+      ["main", "ops"],
+      async ({ env, cfg, startup, handoff }) => {
+        const storePath = cfg.session?.store;
+        if (storePath) {
+          openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
+        }
+        for (const agentId of ["main", "ops"]) {
+          replaceSessionEntrySync(
+            { agentId, storePath, env, sessionKey: "global" },
+            {
+              sessionId: `scope-${agentId}`,
+              lifecycleRevision: `revision-${agentId}`,
+              updatedAt: 100,
+            },
+          );
+        }
+        seedMeta(env, "global", "revision-ops", migrationAcpMeta("ops", "ops-runtime"));
+        if (shared) {
+          await expect(startup(new Set(["main"]))).rejects.toThrow('run "openclaw doctor --fix"');
+          expect(handoff).not.toHaveBeenCalled();
+        } else {
+          await expect(startup(new Set(["main"]))).resolves.toBeUndefined();
+          expect(handoff).toHaveBeenCalledTimes(1);
+        }
+        handoff.mockClear();
+        await expect(startup(new Set(["ops"]))).rejects.toThrow('run "openclaw doctor --fix"');
+        expect(handoff).not.toHaveBeenCalled();
+      },
+      shared,
+    );
   },
 );
 
 it("startup preserves unbound ACP rows retained by Doctor without serving their metadata", async () => {
-  await withAcpState(["main"], async ({ env, cfg }) => {
-    const entry = {
-      sessionId: "current-session",
-      lifecycleRevision: "current-revision",
-      updatedAt: 100,
-    };
-    replaceSessionEntrySync({ agentId: "main", env, sessionKey: "agent:main:main" }, entry);
+  await withAcpState(["main"], async ({ env, cfg, startup, handoff, seed }) => {
+    const entry = seed("agent:main:main");
     const staleKey = "agent:main:acp:stale";
     replaceSessionEntrySync({ agentId: "main", env, sessionKey: staleKey }, entry);
     const keys = [
@@ -400,16 +389,8 @@ it("startup preserves unbound ACP rows retained by Doctor without serving their 
     });
     expect(repair.repaired).toBe(0);
     expect(repair.warnings).toHaveLength(keys.length);
-    const handoffDatabase = vi.fn(async () => {});
-    await expect(
-      runSessionStartupMigration({
-        cfg,
-        env,
-        log: { info: vi.fn(), warn: vi.fn() },
-        handoffDatabase,
-      }),
-    ).resolves.toBeUndefined();
-    expect(handoffDatabase).toHaveBeenCalledTimes(1);
+    await expect(startup()).resolves.toBeUndefined();
+    expect(handoff).toHaveBeenCalledTimes(1);
     for (const sessionKey of keys) {
       expect(
         readAcpSessionEntry({

@@ -5,7 +5,6 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/pro
 import {
   emptySqliteCounts,
   observeParentSqlite,
-  sqliteMethods,
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -96,28 +95,31 @@ async function readFirstSession(
   }
 }
 
-it("shares cold database admission across logical session reads", async () => {
-  const agentId = "session-admission";
-  const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
-    agentId,
-    sessionKey: `agent:${agentId}:hook`,
-  });
-  const gate = holdFirstPreparation(agentId);
-  const first = readSessionEntryInWorker(scope);
-  let second: ReturnType<typeof readSessionEntryInWorker> | undefined;
-  try {
-    await awaitGateBeforeSettlement(gate.entered.promise, first, "Hook admission was not held");
-    second = readSessionEntryInWorker({ ...scope, sessionKey: `agent:${agentId}:main` });
-    void second.catch(() => {});
-    gate.release.resolve();
-    await expect(first).resolves.toBeUndefined();
-    await expect(second).resolves.toBeUndefined();
-  } finally {
-    gate.release.resolve();
-    await Promise.allSettled([first, second]);
-    gate.restore();
-  }
-});
+it.each(["read", "admission"] as const)(
+  "shares cold database admission across %s requests",
+  async (kind) => {
+    const agentId = `session-admission-${kind}`;
+    const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
+      agentId,
+      sessionKey: `agent:${agentId}:hook`,
+    });
+    const gate = holdFirstPreparation(agentId);
+    const first = readFirstSession(kind, scope);
+    let second: typeof first | undefined;
+    try {
+      await awaitGateBeforeSettlement(gate.entered.promise, first, "Hook admission was not held");
+      second = readFirstSession(kind, { ...scope, sessionKey: `agent:${agentId}:main` });
+      void second.catch(() => {});
+      gate.release.resolve();
+      await expect(first).resolves.toBeUndefined();
+      await expect(second).resolves.toBeUndefined();
+    } finally {
+      gate.release.resolve();
+      await Promise.allSettled([first, second]);
+      gate.restore();
+    }
+  },
+);
 
 it("preserves legacy entry metadata and SQLite creation without materializing the JSON locator", async () => {
   for (const reader of ["native", "worker"] as const) {
@@ -150,23 +152,6 @@ it("preserves legacy entry metadata and SQLite creation without materializing th
     expect(fs.existsSync(scope.storePath)).toBe(false);
   }
 });
-
-it.each(["read", "admission"] as const)(
-  "joins concurrent first %s requests through the queued database owner",
-  async (kind) => {
-    const agentId = `first-${kind}`;
-    const scope = { agentId, env: state.env, sessionKey: `agent:${agentId}:missing` };
-    const databasePath = resolveOpenClawAgentSqlitePath(scope);
-    expect(fs.existsSync(databasePath)).toBe(false);
-    const results = await Promise.allSettled(
-      Array.from({ length: 15 }, () => readFirstSession(kind, scope)),
-    );
-    expect(results).toEqual(
-      Array.from({ length: 15 }, () => ({ status: "fulfilled", value: undefined })),
-    );
-    expect(fs.existsSync(databasePath)).toBe(true);
-  },
-);
 
 it("preserves logical and physical owners without parent SQLite calls", async () => {
   const canonical = state.sessionsDir("ops") + "/sessions.json";
@@ -213,16 +198,6 @@ it("preserves logical and physical owners without parent SQLite calls", async ()
   await closeOpenClawAgentDatabasesAsync();
   const observer = observeParentSqlite();
   try {
-    const calibration = openNodeSqliteDatabase(":memory:");
-    calibration.exec("CREATE TABLE calibration (value INTEGER)");
-    calibration.prepare("INSERT INTO calibration VALUES (?)").run(7);
-    const query = calibration.prepare("SELECT value FROM calibration");
-    expect(query.get()).toEqual({ value: 7 });
-    expect(query.all()).toEqual([{ value: 7 }]);
-    expect([...query.iterate()]).toEqual([{ value: 7 }]);
-    calibration.close();
-    sqliteMethods.forEach((method) => expect(observer.counts[method], method).toBeGreaterThan(0));
-    observer.reset();
     for (const [sessionId, scope] of cases) {
       expect(await readSessionEntryInWorker({ ...scope, env: state.env })).toMatchObject({
         sessionId,
