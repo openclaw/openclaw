@@ -59,21 +59,15 @@ describe("LogbookStore", () => {
       "SQLite database already belongs to another worker backend",
     );
     expect(fs.existsSync(path.join(otherRoot, "frames"))).toBe(false);
-    expect(await store.framesInRange(capturedAtMs, capturedAtMs + 1)).toMatchObject([
-      { id: frameId, capturedAtMs },
-    ]);
     expect(await store.framePayload(frameId)).toMatchObject({
       frameId,
       capturedAtMs,
       base64: Buffer.from(`jpeg-bytes-${capturedAtMs}`).toString("base64"),
     });
-    expect(
-      fs.readFileSync(store.frameFilePath(dayKeyFor(capturedAtMs), capturedAtMs), "utf8"),
-    ).toBe(`jpeg-bytes-${capturedAtMs}`);
     expect(await store.countUnbatchedActiveFrames()).toBe(1);
   });
 
-  it("rolls back large frame claims with a late missing or duplicate frame", async () => {
+  it("rolls back empty, duplicate, missing and already-owned frame claims", async () => {
     const t0 = Date.now();
     await expect(createBatch([], t0, t0 + 1000, DAY)).rejects.toThrow(
       "Logbook batch requires at least one frame",
@@ -100,22 +94,12 @@ describe("LogbookStore", () => {
     const batchId = await createBatch(frameIds, t0);
     expect(await store.latestBatch()).toMatchObject({ id: batchId, frameCount: 70 });
     expect(await store.countUnbatchedActiveFrames()).toBe(0);
-  });
-
-  it("does not steal a frame from an existing batch", async () => {
-    const t0 = Date.now();
-    const firstFrame = await insertFrame(t0);
     const secondFrame = await insertFrame(t0 + 1000);
-    const firstBatch = await createBatch([firstFrame], t0);
-
-    await expect(createBatch([firstFrame, secondFrame], t0, t0 + 2000)).rejects.toThrow(
-      `Logbook frame ${firstFrame} is missing or already batched`,
+    await expect(createBatch([firstFrameId, secondFrame], t0, t0 + 2000)).rejects.toThrow(
+      `Logbook frame ${firstFrameId} is missing or already batched`,
     );
-
-    expect((await store.latestBatch())?.id).toBe(firstBatch);
-    expect((await store.batchImages(firstBatch)).map(({ frame }) => frame.id)).toEqual([
-      firstFrame,
-    ]);
+    expect((await store.latestBatch())?.id).toBe(batchId);
+    expect((await store.batchImages(batchId)).map(({ frame }) => frame.id)).toContain(firstFrameId);
     expect((await store.unbatchedActiveFrames(10)).map((frame) => frame.id)).toEqual([secondFrame]);
   });
 

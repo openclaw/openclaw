@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { logbookEngineSchema } from "./store-engine-schema.js";
 import { createLogbookDatabase } from "./store-schema-admission.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
+import { frameInput } from "./test-fixtures.test-support.js";
 import type { LogbookCardDraft } from "./types.js";
 
 // mock-isolation: Exercise the real SQL owner in-process; broker transport is covered separately.
@@ -108,42 +109,9 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
     }
   });
 
-  it("upgrades version 1 index ordering once while retaining standups and nullable indexes", async () => {
-    const { pathname, input, schema } = legacyStore(1, (db) => {
+  it.each([1, 2])("upgrades v%i indexes once without losing stored data", async (version) => {
+    const { pathname, input, schema } = legacyStore(version, (db) => {
       db.prepare("INSERT INTO standups VALUES (?, ?, ?)").run(DAY, "Retained standup", 1);
-    });
-    const indexes = async () =>
-      (
-        await observer.query(
-          `SELECT relname AS name, oid::text, pg_get_indexdef(oid) AS definition
-       FROM pg_class WHERE relnamespace = $1::regnamespace
-       AND relname IN ('idx_logbook_frames_captured_at', 'idx_logbook_frames_unbatched')
-       ORDER BY relname`,
-          [schema],
-        )
-      ).rows;
-    try {
-      const before = await indexes();
-      await upgrade(pathname, input);
-      const after = await indexes();
-      expect(after[0]!.definition).not.toContain("NULLS FIRST");
-      expect(after[0]!.oid).not.toBe(before[0]!.oid);
-      expect(after[1]).toEqual(before[1]);
-      expect(await query(schema, "SELECT text FROM $schema.standups")).toEqual([
-        { text: "Retained standup" },
-      ]);
-      expect(
-        await query(schema, "SELECT version::integer FROM $schema.openclaw_schema_meta"),
-      ).toEqual([{ version: 3 }]);
-      await upgrade(pathname, input);
-      expect(await indexes()).toEqual(after);
-    } finally {
-      await observer.query(`DROP SCHEMA "${schema}" CASCADE`);
-    }
-  });
-
-  it("upgrades version 2 by rebuilding only the two non-null partial indexes", async () => {
-    const { pathname, input, schema } = legacyStore(2, (db) => {
       db.prepare(
         "INSERT INTO batches (id, day, start_ms, end_ms, created_ms, updated_ms) VALUES (1, ?, 0, 1000, 1, 1)",
       ).run(DAY);
@@ -170,27 +138,37 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
     const changedNames = ["idx_logbook_cards_keyframe", "idx_logbook_frames_batch"];
     try {
       const before = await indexes();
-      // Genuine v2 has native NOT NULL keys but still gives these nullable keys NULLS FIRST.
-      expect(before.find((index) => index.name === "idx_logbook_frames_captured_at")?.options).toBe(
-        "0",
-      );
-      expect(
-        before.filter((index) => changedNames.includes(index.name)).map((index) => index.options),
-      ).toEqual(["2", "2 0"]);
+      const named = (rows: Awaited<ReturnType<typeof indexes>>, name: string) =>
+        rows.find((index) => index.name === name)!;
+      const partial = (rows: Awaited<ReturnType<typeof indexes>>) =>
+        rows.filter((index) => changedNames.includes(index.name));
+      if (version === 2) {
+        expect(named(before, "idx_logbook_frames_captured_at").options).toBe("0");
+        expect(partial(before).map((index) => index.options)).toEqual(["2", "2 0"]);
+      }
       await upgrade(pathname, input);
       const after = await indexes();
-      expect(after.map((index) => index.name)).toEqual(before.map((index) => index.name));
-      expect(
-        after
-          .filter((index) => index.oid !== before.find((prior) => prior.name === index.name)?.oid)
-          .map((index) => index.name),
-      ).toEqual(changedNames);
-      expect(
-        after.filter((index) => changedNames.includes(index.name)).map((index) => index.options),
-      ).toEqual(["0", "0 0"]);
-      expect(after.filter((index) => !changedNames.includes(index.name))).toEqual(
-        before.filter((index) => !changedNames.includes(index.name)),
-      );
+      if (version === 1) {
+        const captured = named(after, "idx_logbook_frames_captured_at");
+        expect(captured.options).toBe("0");
+        expect(captured.oid).not.toBe(named(before, captured.name).oid);
+        expect(named(after, "idx_logbook_frames_unbatched")).toEqual(
+          named(before, "idx_logbook_frames_unbatched"),
+        );
+      } else {
+        expect(
+          after
+            .filter((index) => index.oid !== named(before, index.name).oid)
+            .map((index) => index.name),
+        ).toEqual(changedNames);
+        expect(partial(after).map((index) => index.options)).toEqual(["0", "0 0"]);
+        expect(after.filter((index) => !changedNames.includes(index.name))).toEqual(
+          before.filter((index) => !changedNames.includes(index.name)),
+        );
+      }
+      expect(await query(schema, "SELECT text FROM $schema.standups")).toEqual([
+        { text: "Retained standup" },
+      ]);
       expect(
         await query(schema, "SELECT path, batch_id::integer FROM $schema.frames ORDER BY id"),
       ).toEqual([
@@ -222,15 +200,14 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
     writeFileSync(file, "synthetic-jpeg");
     const result = execute({
       type: "insertFrame",
-      input: {
+      input: frameInput({
         capturedAtMs,
         day,
         path: file,
-        screenIndex: 0,
         byteSize: 14,
         contentHash: `synthetic-${capturedAtMs}-${idle}`,
         idle,
-      },
+      }),
     });
     assert(typeof result === "number");
     return result;

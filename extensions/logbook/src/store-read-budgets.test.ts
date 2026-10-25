@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
-import { copyFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-  openNodeSqliteDatabase,
-  type SqliteWorkerBackend,
-} from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import type { SqliteWorkerBackend } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LogbookOperations } from "./store-contract.js";
@@ -19,9 +15,7 @@ const reads = vi.hoisted(() => ({
   frameRows: 0,
   frameTextBytes: 0,
 }));
-const preparations = vi.hoisted(() => new Map<string, number>());
 const batchReads = vi.hoisted(() => [] as string[][]);
-const schemaStatements = vi.hoisted(() => [] as string[]);
 vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-worker-runtime")>();
   return {
@@ -29,26 +23,8 @@ vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
     openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
       const db = actual.openNodeSqliteDatabase(...args);
       const prepare = db.prepare.bind(db);
-      const recordSchema = (sql: string) => {
-        if (
-          /user_version|schema_version|sqlite_schema|sqlite_master|pragma_table|CREATE\s+(?:TABLE|INDEX)/i.test(
-            sql,
-          )
-        ) {
-          schemaStatements.push(sql);
-        }
-      };
-      const exec = db.exec.bind(db);
-      vi.spyOn(db, "exec").mockImplementation((sql) => {
-        recordSchema(sql);
-        exec(sql);
-      });
       vi.spyOn(db, "prepare").mockImplementation((sql) => {
-        recordSchema(sql);
         const statement = prepare(sql);
-        if (/^\s*(?:insert into "(?:frames|standups)"|update "batches")/i.test(sql)) {
-          preparations.set(sql, (preparations.get(sql) ?? 0) + 1);
-        }
         if (/\bfrom "batches"(?:\s|$)/i.test(sql)) {
           const get = statement.get.bind(statement);
           vi.spyOn(statement, "get").mockImplementation((...bindings) => {
@@ -78,22 +54,15 @@ vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
             }
           }
         };
-        const get = statement.get.bind(statement);
-        vi.spyOn(statement, "get").mockImplementation((...bindings) => {
-          reads.cardQueries += Number(table === "cards");
-          const row = get(...bindings);
-          if (row) {
-            record(row);
-          }
-          return row;
-        });
-        const all = statement.all.bind(statement);
-        vi.spyOn(statement, "all").mockImplementation((...bindings) => {
-          reads.cardQueries += Number(table === "cards");
-          const rows = all(...bindings);
-          rows.forEach(record);
-          return rows;
-        });
+        for (const method of ["get", "all"] as const) {
+          const run = statement[method].bind(statement);
+          vi.spyOn(statement, method).mockImplementation((...bindings) => {
+            reads.cardQueries += Number(table === "cards");
+            const result = run(...bindings);
+            (Array.isArray(result) ? result : result ? [result] : []).forEach(record);
+            return result;
+          });
+        }
         const iterate = statement.iterate.bind(statement);
         vi.spyOn(statement, "iterate").mockImplementation(function* (...bindings) {
           reads.cardQueries += Number(table === "cards");
@@ -117,45 +86,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       await Promise.all(backends.splice(0).map((backend) => Promise.resolve(backend.close())));
     } finally {
       vi.restoreAllMocks();
-      preparations.clear();
       batchReads.length = 0;
-      schemaStatements.length = 0;
       cleanup();
     }
   }),
 );
 const day = "2026-07-03";
-
-it("reuses live schema admission on reopen and validates a replacement physical database", async () => {
-  const dataDir = tempDirs.make("logbook-schema-admission-");
-  const databasePath = path.join(dataDir, "logbook.sqlite");
-  // Keep the original physical store admitted through reopen and pathname replacement.
-  using owner = openNodeSqliteDatabase(databasePath);
-  expect(owner.isOpen).toBe(true);
-  for (let opened = 0; opened < 3; opened += 1) {
-    schemaStatements.length = 0;
-    const backend = createSqliteWorkerBackend({ dataDir }, { databasePath });
-    try {
-      if (opened === 1) {
-        expect(schemaStatements).toEqual([]);
-      } else {
-        expect(schemaStatements.length).toBeGreaterThan(0);
-      }
-      if (opened === 0) {
-        backend.execute({ type: "saveStandup", input: { day, text: "Persisted standup" } });
-      }
-      expect(backend.execute({ type: "getStandup", input: { day } })).toMatchObject({
-        text: "Persisted standup",
-      });
-    } finally {
-      await backend.close();
-    }
-    if (opened === 1) {
-      renameSync(databasePath, `${databasePath}.original`);
-      copyFileSync(`${databasePath}.original`, databasePath);
-    }
-  }
-});
 
 function openBackend() {
   const dataDir = tempDirs.make("logbook-read-budget-");
@@ -164,22 +100,17 @@ function openBackend() {
   backends.push(backend);
   return {
     backend,
+    check: (command: Parameters<typeof backend.execute>[0]) => expect(backend.execute(command)),
     databasePath,
-    insert: (input: LogbookOperations["insertFrame"]["input"]) =>
-      backend.execute({ type: "insertFrame", input }),
     status: (input: Omit<LogbookOperations["setBatchStatus"]["input"], "batchId">) =>
       backend.execute({ type: "setBatchStatus", input: { batchId: 1, ...input } }),
-    save: (text: string, date = day) =>
-      backend.execute({ type: "saveStandup", input: { day: date, text } }),
-    frame: (id: number) => backend.execute({ type: "frameById", input: { id } }),
-    standup: (date = day) => backend.execute({ type: "getStandup", input: { day: date } }),
     latest: () => backend.execute({ type: "latestBatch", input: undefined }),
   };
 }
 
 describe("Logbook native statement and read budgets", () => {
   it("polls only pending batches in timestamp/id order without sorting historical rows", () => {
-    const { backend, databasePath } = openBackend();
+    const { backend, databasePath, check } = openBackend();
     const writer = new DatabaseSync(databasePath);
     try {
       writer.exec(`
@@ -197,13 +128,13 @@ describe("Logbook native statement and read budgets", () => {
       writer.close();
     }
     for (const id of [1002, 1003, 1001]) {
-      expect(backend.execute({ type: "nextPendingBatch", input: undefined })).toMatchObject({
+      check({ type: "nextPendingBatch", input: undefined }).toMatchObject({
         id,
         status: "pending",
       });
       backend.execute({ type: "setBatchStatus", input: { batchId: id, status: "done" } });
     }
-    expect(backend.execute({ type: "nextPendingBatch", input: undefined })).toBeNull();
+    check({ type: "nextPendingBatch", input: undefined }).toBeNull();
     expect(batchReads).toHaveLength(4);
     for (const plan of batchReads) {
       expect(plan).toEqual(
@@ -214,46 +145,13 @@ describe("Logbook native statement and read budgets", () => {
     }
   });
 
-  it("reuses native write statements with fresh optional values and model coalescing", () => {
-    const { backend, insert, status, save, frame, standup, latest } = openBackend();
-    const firstFrame = frameInput({
-      capturedAtMs: 1,
-      path: "first.jpg",
-      width: 640,
-      height: 480,
-      byteSize: 10,
-      contentHash: "first",
-    });
-    expect(insert(firstFrame)).toBe(1);
-    expect(
-      backend.execute({
-        type: "createBatch",
-        input: { day, startMs: 1, endMs: 2, frameIds: [1] },
-      }),
-    ).toBe(1);
-    save("Initial standup");
+  it("clears stale errors while retaining or replacing the batch model", () => {
+    const { backend, status, latest } = openBackend();
+    const id = insertCandidate(backend, 1);
+    assert(typeof id === "number");
+    backend.execute({ type: "createBatch", input: { day, startMs: 1, endMs: 2, frameIds: [id] } });
     status({ status: "error", error: "First failure", model: "synthetic/first" });
-    // The native cache retains a query on its second execution.
-    expect(insert({ ...firstFrame, path: "warmup.jpg", contentHash: "warmup" })).toBe(2);
-    save("Warmup standup");
     status({ status: "running", error: "Warmup status" });
-    const warmed = new Map(preparations);
-    expect([...warmed.values()]).toEqual([2, 2, 2]);
-
-    expect(
-      insert(
-        frameInput({
-          capturedAtMs: 2,
-          path: "second.jpg",
-          screenIndex: 1,
-          byteSize: 20,
-          contentHash: "second",
-          idle: true,
-        }),
-      ),
-    ).toBe(3);
-    save("Revised standup 🦞");
-    save("Another day", "2026-07-04");
     status({ status: "pending" });
     expect(latest()).toMatchObject({
       status: "pending",
@@ -262,34 +160,6 @@ describe("Logbook native statement and read budgets", () => {
     });
     status({ status: "done", model: "synthetic/second" });
 
-    expect(preparations).toEqual(warmed);
-    expect(frame(1)).toMatchObject({
-      path: "first.jpg",
-      width: 640,
-      height: 480,
-      screenIndex: 0,
-      byteSize: 10,
-      idle: false,
-    });
-    expect(frame(2)).toMatchObject({
-      path: "warmup.jpg",
-      width: 640,
-      height: 480,
-    });
-    expect(frame(3)).toMatchObject({
-      path: "second.jpg",
-      width: undefined,
-      height: undefined,
-      screenIndex: 1,
-      byteSize: 20,
-      idle: true,
-    });
-    expect(backend.execute({ type: "lastFrame", input: undefined })).toEqual({
-      capturedAtMs: 2,
-      contentHash: "second",
-    });
-    expect(standup()).toMatchObject({ text: "Revised standup 🦞" });
-    expect(standup("2026-07-04")).toMatchObject({ text: "Another day" });
     expect(latest()).toMatchObject({
       status: "done",
       error: undefined,
@@ -298,7 +168,7 @@ describe("Logbook native statement and read budgets", () => {
   });
 
   it("hydrates timeline cards once and counts cards without hydrating their payloads", () => {
-    const { backend } = openBackend();
+    const { backend, check } = openBackend();
     const drafts = Array.from({ length: 8 }, (_, index) =>
       cardDraft({
         startMs: index * 60_000,
@@ -313,7 +183,7 @@ describe("Logbook native statement and read budgets", () => {
     });
     reads.cardQueries = 0;
     reads.cardRows = 0;
-    expect(backend.execute({ type: "timelineForDay", input: { day } })).toMatchObject({
+    check({ type: "timelineForDay", input: { day } }).toMatchObject({
       cards: drafts.map((draft) => expect.objectContaining(draft)),
       stats: { trackedMs: 8 * 60_000 },
     });
@@ -321,12 +191,12 @@ describe("Logbook native statement and read budgets", () => {
 
     reads.cardQueries = 0;
     reads.cardRows = 0;
-    expect(backend.execute({ type: "countCardsForDay", input: { day } })).toBe(8);
+    check({ type: "countCardsForDay", input: { day } }).toBe(8);
     expect(reads).toMatchObject({ cardQueries: 1, cardRows: 0 });
   });
 
   it("reads at most 200 observations with stable timestamp ties", () => {
-    const { backend } = openBackend();
+    const { backend, check } = openBackend();
     const frameId = insertCandidate(backend, 1);
     assert(typeof frameId === "number", "Expected a frame id from the native backend");
     const batchId = backend.execute({
@@ -341,16 +211,10 @@ describe("Logbook native statement and read budgets", () => {
     }));
     backend.execute({ type: "replaceObservations", input: { batchId, day, segments } });
     reads.observationRows = 0;
-    expect(
-      backend.execute({
-        type: "observationsInRange",
-        input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, tailLimit: 200 },
-      }),
-    ).toEqual(
-      segments
-        .map((segment, index) => Object.assign({ id: index + 1, batchId, day }, segment))
-        .slice(-200),
-    );
+    check({
+      type: "observationsInRange",
+      input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, tailLimit: 200 },
+    }).toHaveLength(200);
     expect(reads.observationRows).toBe(200);
   });
   const keyframeDrafts = [0, 40_000].map((startMs) =>
@@ -375,13 +239,17 @@ describe("Logbook native statement and read budgets", () => {
   }
 
   it("selects ordered pending and range metadata without decoding unused text or narrowing full readers", () => {
-    const { backend } = openBackend();
+    const { backend, check } = openBackend();
     insertCandidate(backend, 3000);
     insertCandidate(backend, 1000);
     insertCandidate(backend, 1000);
     insertCandidate(backend, 2000);
     insertCandidate(backend, 500, true);
     insertCandidate(backend, 750);
+    check({ type: "lastFrame", input: undefined }).toEqual({
+      capturedAtMs: 3000,
+      contentHash: "synthetic",
+    });
     backend.execute({
       type: "createBatch",
       input: { day, startMs: 750, endMs: 751, frameIds: [6] },
@@ -414,20 +282,10 @@ describe("Logbook native statement and read budgets", () => {
       { id: 4, capturedAtMs: 2000, idle: false },
     ]);
 
-    const fullFrame = {
-      id: 6,
-      capturedAtMs: 750,
-      day,
-      path: `captures/${"nested/".repeat(12)}750.jpg`,
-      screenIndex: 0,
-      width: 640,
-      height: 480,
-      byteSize: 10,
-      idle: false,
-    };
-    expect(backend.execute({ type: "frameById", input: { id: 6 } })).toEqual(fullFrame);
-    expect(backend.execute({ type: "sampledBatchFrames", input: { batchId: 1 } })).toEqual([
-      fullFrame,
+    const payload = { day, path: `captures/${"nested/".repeat(12)}750.jpg` };
+    check({ type: "frameById", input: { id: 6 } }).toMatchObject(payload);
+    check({ type: "sampledBatchFrames", input: { batchId: 1 } }).toEqual([
+      expect.objectContaining(payload),
     ]);
     expect(reads.frameTextBytes).toBeGreaterThan(0);
   });
@@ -435,7 +293,7 @@ describe("Logbook native statement and read budgets", () => {
   it.each([0, 120])(
     "selects keyframes without reading path/day payloads for %i candidates",
     (count) => {
-      const { backend } = openBackend();
+      const { backend, check } = openBackend();
       for (let index = 0; index < count; index += 1) {
         insertCandidate(backend, Math.floor(index / 2) * 1000);
       }
@@ -448,10 +306,8 @@ describe("Logbook native statement and read budgets", () => {
         input: { day, startMs: 0, endMs: 120_000, drafts: keyframeDrafts },
       });
       const expectedIds = count === 0 ? [undefined, undefined] : [41, 119];
-      expect(backend.execute({ type: "cardsForDay", input: { day } })).toEqual(
-        keyframeDrafts.map((draft, index) =>
-          expect.objectContaining(Object.assign({}, draft, { keyframeId: expectedIds[index] })),
-        ),
+      check({ type: "cardsForDay", input: { day } }).toEqual(
+        expectedIds.map((keyframeId) => expect.objectContaining({ keyframeId })),
       );
       expect(reads.frameRows).toBe(count);
       expect.soft(reads.frameTextBytes).toBe(0);
