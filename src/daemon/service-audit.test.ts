@@ -577,7 +577,9 @@ describe("managed service environment drift", () => {
           ...("systemd" in scenario ? { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" } : {}),
         },
         environmentValueSources:
-          "source" in scenario ? { TAVILY_API_KEY: scenario.source } : undefined,
+          "source" in scenario && scenario.source !== undefined
+            ? { TAVILY_API_KEY: scenario.source }
+            : undefined,
       },
       durableEnvironment: { TAVILY_API_KEY: scenario.durable },
       secretRefKeys: "secretRef" in scenario ? ["tavily_api_key"] : [],
