@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.TestCoroutineScheduler
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,11 +33,13 @@ class RealtimePlayoutTest {
   private val acknowledgements = mutableListOf<String>()
   private val failures = mutableListOf<String>()
   private val statusOwner = Any()
+  private var ducked = false
   private val playout =
     RealtimePlayout(
       scope = CoroutineScope(job + StandardTestDispatcher(scheduler)),
       dispatcher = StandardTestDispatcher(scheduler),
       sampleRate = 24_000,
+      ducked = { ducked },
     )
 
   private fun session(id: String) =
@@ -224,6 +227,23 @@ class RealtimePlayoutTest {
     scheduler.advanceTimeBy(20)
     scheduler.runCurrent()
     assertFalse(playout.isPlaying)
+    assertTrue(failures.isEmpty())
+  }
+
+  @Test
+  fun bufferedSpeechIsDuckedWhileAnotherAppHoldsFocusWithoutNewWrites() {
+    playout.audio(session, ByteArray(48_000), statusOwner)
+    scheduler.runCurrent()
+    assertNull(PlayoutAudioTrack.volume)
+    ducked = true
+    scheduler.advanceTimeBy(20)
+    scheduler.runCurrent()
+    assertEquals(RealtimePlayout.DUCKED_GAIN, PlayoutAudioTrack.volume)
+    ducked = false
+    scheduler.advanceTimeBy(20)
+    scheduler.runCurrent()
+    assertEquals(1f, PlayoutAudioTrack.volume)
+    assertTrue(playout.isPlaying)
     assertTrue(failures.isEmpty())
   }
 
@@ -432,9 +452,11 @@ class PlayoutAudioTrack : ShadowAudioTrack() {
     var timestampFrames: Long? = null
     var timestampNanos: Long? = null
     var track: AudioTrack? = null
+    var volume: Float? = null
     var writes = 0
 
     fun reset() {
+      volume = null
       result = null
       acceptedChunkBytes = null
       presentedFrames = null
@@ -458,6 +480,14 @@ class PlayoutAudioTrack : ShadowAudioTrack() {
     if (acceptedChunkBytes != null && writes > 0) ShadowSystemClock.advanceBy(Duration.ofMillis(100))
     writes += 1
     return result ?: super.native_write_byte(audioData, offsetInBytes, minOf(sizeInBytes, acceptedChunkBytes ?: sizeInBytes), format, isBlocking)
+  }
+
+  @Implementation
+  fun native_setVolume(
+    leftVolume: Float,
+    rightVolume: Float,
+  ) {
+    volume = leftVolume
   }
 
   @Implementation(minSdk = 31)

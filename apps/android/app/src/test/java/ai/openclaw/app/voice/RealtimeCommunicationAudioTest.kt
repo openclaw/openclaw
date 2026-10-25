@@ -1,7 +1,9 @@
 package ai.openclaw.app.voice
 
 import android.content.Context
+import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.MediaRecorder
 import android.os.Looper
 import kotlinx.coroutines.CancellationException
 import org.junit.After
@@ -108,7 +110,7 @@ class RealtimeCommunicationAudioTest {
     var losses = 0
     val session = RealtimeCommunicationAudio.open(manager, { current }, { losses++ }).also { sessions += it }
     val listener = shadowOf(manager).lastAudioFocusRequest.listener
-    listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK)
+    listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS)
     assertFalse(session.eligible)
     shadowOf(Looper.getMainLooper()).idle()
     assertEquals(1, losses)
@@ -116,5 +118,87 @@ class RealtimeCommunicationAudioTest {
     current = false
     shadowOf(Looper.getMainLooper()).idle()
     assertEquals(1, losses)
+  }
+
+  @Test
+  fun transientFocusLossOutsideACallInterruptsWithoutEndingTalk() {
+    var losses = 0
+    val session = RealtimeCommunicationAudio.open(manager, onFocusLost = { losses++ }).also { sessions += it }
+    val listener = shadowOf(manager).lastAudioFocusRequest.listener
+    for (change in listOf(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)) {
+      listener.onAudioFocusChange(change)
+      shadowOf(Looper.getMainLooper()).idle()
+      assertTrue(session.interrupted)
+      assertFalse(session.eligible)
+      assertEquals(0, losses)
+      listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+      assertFalse(session.interrupted)
+      assertTrue(session.eligible)
+    }
+  }
+
+  @Test
+  fun callModeBeforeTheFocusLossAlsoEndsTalk() {
+    var losses = 0
+    RealtimeCommunicationAudio.open(manager, onFocusLost = { losses++ }).also { sessions += it }
+    val listener = shadowOf(manager).lastAudioFocusRequest.listener
+    manager.mode = AudioManager.MODE_IN_CALL
+    shadowOf(Looper.getMainLooper()).idle()
+    assertEquals(0, losses)
+    listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+    shadowOf(Looper.getMainLooper()).idle()
+    assertEquals(1, losses)
+  }
+
+  @Test
+  fun transientFocusLossToAPhoneCallEndsTalkOnce() {
+    var losses = 0
+    RealtimeCommunicationAudio.open(manager, onFocusLost = { losses++ }).also { sessions += it }
+    val listener = shadowOf(manager).lastAudioFocusRequest.listener
+    listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+    manager.mode = AudioManager.MODE_RINGTONE
+    shadowOf(Looper.getMainLooper()).idle()
+    assertEquals(1, losses)
+    manager.mode = AudioManager.MODE_IN_CALL
+    listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+    shadowOf(Looper.getMainLooper()).idle()
+    assertEquals(1, losses)
+  }
+
+  @Test
+  fun aVoipCallEndsTalkWhenItsRingtoneOrCaptureStarts() {
+    for (signal in listOf("ringtone", "capture")) {
+      var losses = 0
+      val session = RealtimeCommunicationAudio.open(manager, onFocusLost = { losses++ }).also { sessions += it }
+      session.ownCaptureSessionId = 7
+      val audio = shadowOf(manager)
+      // Talk's own capture alone is not a call.
+      audio.setActiveRecordingConfigurations(
+        listOf(audio.createActiveRecordingConfiguration(7, MediaRecorder.AudioSource.VOICE_COMMUNICATION, "self")),
+        true,
+      )
+      audio.lastAudioFocusRequest.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+      shadowOf(Looper.getMainLooper()).idle()
+      assertEquals(0, losses)
+      when (signal) {
+        "ringtone" -> {
+          audio.setActivePlaybackConfigurationsFor(
+            listOf(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE).build()),
+            true,
+          )
+        }
+
+        "capture" -> {
+          audio.setActiveRecordingConfigurations(
+            listOf(audio.createActiveRecordingConfiguration(9, MediaRecorder.AudioSource.VOICE_COMMUNICATION, "voip")),
+            true,
+          )
+        }
+      }
+      shadowOf(Looper.getMainLooper()).idle()
+      assertEquals("VoIP $signal must end Talk once", 1, losses)
+      audio.setActivePlaybackConfigurationsFor(emptyList(), false)
+      audio.setActiveRecordingConfigurations(emptyList(), false)
+    }
   }
 }

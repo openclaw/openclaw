@@ -418,7 +418,7 @@ class TalkModeManager internal constructor(
   @Volatile private var realtimePlayoutSession: RealtimePlayout.Session? = null
   private val realtimePlayoutDelegate =
     lazy {
-      RealtimePlayout(scope, realtimePlaybackDispatcher, realtimeSampleRateHz)
+      RealtimePlayout(scope, realtimePlaybackDispatcher, realtimeSampleRateHz) { realtimeAudioInput?.focusInterrupted == true }
     }
   private val realtimePlayout by realtimePlayoutDelegate
 
@@ -1556,6 +1556,8 @@ class TalkModeManager internal constructor(
       pendingRealtimeOutputClear == null &&
       realtimeCapturePause == null &&
       !localMediaPlaybackActive &&
+      // A navigation prompt or notification sound must not reach the provider as user speech.
+      realtimeAudioInput?.focusInterrupted != true &&
       (!realtimePlayoutDelegate.isInitialized() || !realtimePlayout.isPlaying || realtimeAudioInput?.canCaptureDuringPlayback == true)
 
   // Playback retains the response that admitted it, even after newer work starts.

@@ -60,8 +60,13 @@ Watch background behavior. See [Watch setup and limits](/platforms/ios#standalon
   estimate playback completion when available. Routes without usable timestamps use
   approximate playback position plus the nominal PCM duration; this cannot
   guarantee that all acoustic output has drained on every device.
-- Losing audio focus or encountering a playback-device failure ends realtime
-  Talk with an error. Interruption clears queued output before capture resumes;
+- Permanently losing audio focus or encountering a playback-device failure ends
+  realtime Talk with an error. While another app holds transient focus, such as
+  a navigation prompt or notification sound, Talk stops sending microphone audio
+  and lowers its own speech until focus returns. A transient loss still ends Talk
+  when a call appears to take over: a phone call, a ringtone, or another app
+  capturing voice-communication audio, which most VoIP apps do during a call.
+  This is best effort; a VoIP app that uses neither signal only interrupts Talk. Interrupting a reply clears queued output before capture resumes;
   stopped sessions cannot acknowledge playback through a replacement Gateway.
 - Realtime **Thinking** follows provider response generation or an accepted
   OpenClaw consult, not input transcription, which may finish after the answer.

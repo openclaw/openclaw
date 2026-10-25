@@ -3351,6 +3351,22 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeAudioFramesPauseWhileAnotherAppHoldsTransientFocus() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val manager = createManager()
+    AndroidAudioInputSession.open(app, 24_000, 4_800, communication = true).use { input ->
+      setPrivateField(manager, "realtimeAudioInput", input)
+      val focus = shadowOf(app.getSystemService(AudioManager::class.java)).lastAudioFocusRequest.listener
+      focus.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+      assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+      focus.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+      assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+      setPrivateField(manager, "realtimeAudioInput", null)
+    }
+  }
+
+  @Test
   fun pushToTalkPauseWaitsForRealtimeCaptureJobs() =
     runTest {
       val manager = createManager()
