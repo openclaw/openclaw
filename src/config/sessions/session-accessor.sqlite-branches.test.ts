@@ -52,6 +52,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 import { maintenanceLane, rotateDatabaseWorkers } from "./session-transcript-worker-resources.js";
+import { messageEvent, timedMessageEvent } from "./transcript-message.test-support.js";
 
 const { tempDirs, createSession, createSiblingSession } = useSessionMessageCutFixtures();
 const diagnosticCleanups: Array<() => void> = [];
@@ -419,39 +420,31 @@ describe("SQLite session branches", () => {
     const events = [
       { type: "session", id: scope.sessionId, version: 3 },
       branchMessage("prompt", null, "prompt"),
-      {
-        type: "message",
-        id: "answer",
-        parentId: "prompt",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "commentary",
-              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
-            },
-            { type: "text", text: "legacy text" },
-            {
-              type: "output_text",
-              text: finalText,
-              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
-            },
-          ],
-          providerReplay: { opaque },
-        },
-      },
-      ...Array.from({ length: 8 }, (_, index) => ({
-        type: "message",
-        id: `tool-${index}`,
-        parentId: index === 0 ? "answer" : `tool-${index - 1}`,
-        message: {
+      messageEvent("answer", "prompt", {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "commentary",
+            textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+          },
+          { type: "text", text: "legacy text" },
+          {
+            type: "output_text",
+            text: finalText,
+            textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+          },
+        ],
+        providerReplay: { opaque },
+      }),
+      ...Array.from({ length: 8 }, (_, index) =>
+        messageEvent(`tool-${index}`, index === 0 ? "answer" : `tool-${index - 1}`, {
           role: "toolResult",
           toolCallId: `call-${index}`,
           content: opaque,
           details: { opaque },
-        },
-      })),
+        }),
+      ),
     ];
     await replaceTranscriptEvents(scope, events);
     await waitForSessionTranscriptProjection(scope);
@@ -568,13 +561,14 @@ describe("SQLite session branches", () => {
       }),
     ];
     for (let index = 1; index <= 12_554; index += 1) {
-      events.push({
-        type: "message",
-        id: `main-${index}`,
-        parentId: index === 1 ? null : `main-${index - 1}`,
-        timestamp: new Date(Date.UTC(2026, 7, 30, 0, 0, index)).toISOString(),
-        message: { role: index % 2 === 0 ? "assistant" : "user", content: `main ${index}` },
-      });
+      events.push(
+        timedMessageEvent(
+          `main-${index}`,
+          index === 1 ? null : `main-${index - 1}`,
+          new Date(Date.UTC(2026, 7, 30, 0, 0, index)).toISOString(),
+          { role: index % 2 === 0 ? "assistant" : "user", content: `main ${index}` },
+        ),
+      );
     }
     for (let index = 1; index <= 1_360; index += 1) {
       events.push({

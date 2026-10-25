@@ -35,6 +35,7 @@ import {
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { appendAbortedSessionTranscriptPartial } from "./session-accessor.sqlite-transcript-reports.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 import {
   createTranscriptEventInserter,
   createTranscriptPayloadUpdater,
@@ -60,12 +61,7 @@ const assistant = {
 };
 const selected = { customType: "status", content: body, details: { selected: true } };
 const header = { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION };
-const messageEvent = (id: string, parentId: string | null, message: unknown) => ({
-  type: "message",
-  id,
-  parentId,
-  message,
-});
+
 const statusReport = (content: string) => ({ customType: "status", content, display: true });
 const agentDatabase = () => openOpenClawAgentDatabase({ agentId: scope.agentId });
 const nativeDatabase = () => requireNativeSqliteDatabase(agentDatabase().db);

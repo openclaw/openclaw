@@ -40,16 +40,11 @@ import {
   getRpcSourceProjectSessionActive,
 } from "../sessions/session-controller.rpc-sources.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
 import { registerChatAbortController } from "./chat-abort.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
 import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { createSubscriptionTestParams } from "./server-runtime-subscriptions.params.test-support.js";
 
 export { waitForFast } from "../../test/helpers/vitest-wait.js";
 
@@ -70,25 +65,7 @@ export function createSubscriptionTestFixture() {
   return {
     log,
     warn,
-    createParams: (): Parameters<typeof startGatewayEventSubscriptions>[0] => {
-      const chatRunState = createChatRunState();
-      return {
-        scheduler: createTestGatewayScheduler(),
-        signal: new AbortController().signal,
-        log,
-        broadcast: vi.fn(),
-        broadcastToConnIds: vi.fn(),
-        nodeHasSessionSubscribers: () => false,
-        nodeSendToSession: vi.fn(),
-        agentRunSeq: new Map(),
-        chatRunState,
-        toolEventRecipients: chatRunState.toolEventRecipients,
-        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        restartRecoveryCandidates: new Map(),
-        refreshConnectedUserProfiles: vi.fn(),
-      };
-    },
+    createParams: () => createSubscriptionTestParams(log),
   };
 }
 

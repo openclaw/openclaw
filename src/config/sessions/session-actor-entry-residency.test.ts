@@ -39,6 +39,7 @@ import { readSessionTranscriptAccountingFromProjection } from "./session-transcr
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { timedMessageEvent, messageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -340,13 +341,10 @@ it("keeps transcript residency across entry patches without losing either owner'
           timestamp: "2026-01-01T00:00:00Z",
           cwd: "/synthetic",
         },
-        {
-          type: "message",
-          id: "before-patch",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01Z",
-          message: { role: "user", content: "retain this input" },
-        },
+        timedMessageEvent("before-patch", null, "2026-01-01T00:00:01Z", {
+          role: "user",
+          content: "retain this input",
+        }),
       ]),
     );
     f.writeEntry({
@@ -604,18 +602,8 @@ it.each(["entry", "target"] as const)(
   },
 );
 
-const question = {
-  type: "message",
-  id: "question",
-  parentId: null,
-  message: { role: "user", content: "A question about 🦞" },
-};
-const answer = {
-  type: "message",
-  id: "answer",
-  parentId: "question",
-  message: { role: "assistant", content: "An answer" },
-};
+const question = messageEvent("question", null, { role: "user", content: "A question about 🦞" });
+const answer = messageEvent("answer", "question", { role: "assistant", content: "An answer" });
 
 const storedBytes = (event: unknown) => Buffer.byteLength(JSON.stringify(event)) + 1;
 
@@ -786,12 +774,12 @@ it.each(["reset", "compaction", "leaf"] as const)(
 
 it("keeps exact accounting through appends and rewrites beyond the actor's resident window without rescanning", async () => {
   await withActor(async (f) => {
-    const events = Array.from({ length: 600 }, (_, index) => ({
-      type: "message",
-      id: `message-${index}`,
-      parentId: index === 0 ? null : `message-${index - 1}`,
-      message: { role: "user", content: "x" },
-    }));
+    const events = Array.from({ length: 600 }, (_, index) =>
+      messageEvent(`message-${index}`, index === 0 ? null : `message-${index - 1}`, {
+        role: "user",
+        content: "x",
+      }),
+    );
     runSqliteImmediateTransactionSync(f.database.db, () => {
       appendTranscriptEventsInTransaction(f.database, f.scope, events, {
         scheduleProjectionReconcile: false,
