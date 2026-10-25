@@ -5,11 +5,10 @@ import type {
   ModelChangeEntry,
   ThinkingLevelChangeEntry,
 } from "../../agents/sessions/session-manager-types.js";
-import { AsyncContext } from "../../shared/async-context.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { getCliHistoryWriter, runWithCliHistoryWriter } from "./cli-history-boundary.js";
+import { getCliHistoryWriter } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
@@ -41,6 +40,7 @@ import {
   sameSessionTranscriptTargetBinding,
   type SessionTranscriptTargetBinding,
 } from "./transcript-target-binding.js";
+import { ownedTranscriptWriteContext } from "./transcript-write-context-store.js";
 import type { SessionEntry } from "./types.js";
 
 export { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
@@ -108,15 +108,11 @@ type SessionTranscriptWriteRequest = Pick<
   "sessionFile" | "sessionKey" | "sessionTarget"
 >;
 
-type TranscriptSourcePublication = {
+export type TranscriptSourcePublication = {
   target: SessionTranscriptWriteTarget;
   claimed: boolean;
   publish?: (source: CapturedSessionEntryReadSource, entry: SessionEntry) => void;
 };
-
-const ownedTranscriptWriteContext = new AsyncContext<
-  OwnedSessionTranscriptWriteContext & { sourcePublication?: TranscriptSourcePublication }
->(Symbol("ownedTranscriptWriteContext"));
 
 /** Bind an initiating write's acknowledged source before fallible publication observers. */
 export async function withSessionTranscriptSourcePublication<T>(
@@ -479,11 +475,6 @@ export function withSessionTranscriptWriteAssertion<T>(
     },
     run,
   );
-}
-
-/** Runs detached work without retaining an attempt-owned transcript context. */
-export function runWithoutOwnedSessionTranscriptWrites<T>(run: () => T): T {
-  return ownedTranscriptWriteContext.exit(() => runWithCliHistoryWriter(undefined, run));
 }
 
 export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResult>(
