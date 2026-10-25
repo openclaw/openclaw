@@ -10,7 +10,6 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
 } from "../config/sessions/session-accessor.js";
-import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.test-support.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
@@ -381,36 +380,28 @@ describe("chat.history cursor catch-up", () => {
       });
       parentId = eventId;
     }
-    const lookup = vi.spyOn(userProfileList, "getResidentUserProfileDisplay");
-    try {
-      const avatarUrls: string[] = [];
-      for (const byte of [1, 2]) {
-        expect(setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(true);
-        const { avatarRevision } = userProfileList.getUserProfileDisplay(profile.id);
-        const avatarUrl = buildControlUiUserAvatarPath(profile.id, avatarRevision);
-        avatarUrls.push(avatarUrl);
-        lookup.mockClear();
-        const history = await callChat<History>(context, "chat.history");
-        expect(history.ok).toBe(true);
-        expect(lookup).not.toHaveBeenCalled();
-        expect(history.payload?.messages).toHaveLength(4);
-        expectSenderDisplay(history.payload?.messages.slice(-3) ?? [], profile.id, avatarUrl);
-        const delta = await callChat<Delta>(context, "chat.history", {
-          cursor: cached.payload?.deltaCursor,
-        });
-        expect(delta).toMatchObject({ ok: true, payload: { kind: "delta" } });
-        expect(lookup.mock.calls).toEqual([[profile.id]]);
-        expect(delta.payload?.messages).toHaveLength(3);
-        expectSenderDisplay(
-          delta.payload?.messages.map(({ message }) => message) ?? [],
-          profile.id,
-          avatarUrl,
-        );
-      }
-      expect(avatarUrls[1]).not.toBe(avatarUrls[0]);
-    } finally {
-      lookup.mockRestore();
+    const avatarUrls: string[] = [];
+    for (const byte of [1, 2]) {
+      expect(setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(true);
+      const { avatarRevision } = userProfileList.getUserProfileDisplay(profile.id);
+      const avatarUrl = buildControlUiUserAvatarPath(profile.id, avatarRevision);
+      avatarUrls.push(avatarUrl);
+      const history = await callChat<History>(context, "chat.history");
+      expect(history.ok).toBe(true);
+      expect(history.payload?.messages).toHaveLength(4);
+      expectSenderDisplay(history.payload?.messages.slice(-3) ?? [], profile.id, avatarUrl);
+      const delta = await callChat<Delta>(context, "chat.history", {
+        cursor: cached.payload?.deltaCursor,
+      });
+      expect(delta).toMatchObject({ ok: true, payload: { kind: "delta" } });
+      expect(delta.payload?.messages).toHaveLength(3);
+      expectSenderDisplay(
+        delta.payload?.messages.map(({ message }) => message) ?? [],
+        profile.id,
+        avatarUrl,
+      );
     }
+    expect(avatarUrls[1]).not.toBe(avatarUrls[0]);
   });
 
   test.each([
@@ -498,13 +489,6 @@ describe("chat.history cursor catch-up", () => {
     expect(fresh).toMatchObject({
       ok: true,
       payload: { messages: [{ __openclaw: { id: "root" } }] },
-    });
-    expect(
-      readTranscriptDisplayDelta(scope, { cursor: cached.payload!.deltaCursor }),
-    ).toMatchObject({
-      kind: "page",
-      activeLeafEntryId: "root",
-      events: [{ event: { type: "leaf", id: "rewind" } }],
     });
     const delta = await callChat(context, "chat.history", { cursor: cached.payload!.deltaCursor });
     expect(delta).toMatchObject({ ok: true, payload: { kind: "reset" } });

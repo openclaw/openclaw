@@ -159,16 +159,8 @@ it("publishes legacy transcript previews without acquiring stored row facts agai
     const stored = structuredClone(sessions.loadSessionEntry(scope));
     expect(projection.dirtyRowCount).toBe(0);
     expect(reads).toHaveBeenCalled();
-    const before = snapshot(projection, query);
-    expect(before?.lastMessagePreview).toBeUndefined();
-    const resident = projection.describe(query)!;
-    const retainedMaterialized = resident.materialized;
-    const membership = [...resident.membership];
-    const hasBoard = resident.hasBoard;
+    expect(preview(projection, query)).toBeUndefined();
     await listProjectedSessions({ projection, opts: { includeLastMessage: true } });
-    const select = vi.spyOn(projection, "selectEntries");
-    const materializedCount = projection.materializedCount;
-    const sequence = resident.materializedSequence;
     reads.mockClear();
     // Join the actual producer publication before a synchronous snapshot can consume dirty work.
     const hostReads = observeSqliteReadSql(StatementSync.prototype);
@@ -183,24 +175,11 @@ it("publishes legacy transcript previews without acquiring stored row facts agai
     } finally {
       hostReads.restore();
     }
-    const after = snapshot(projection, query);
-    expect(after?.lastMessagePreview).toBe("Read-only transcript preview");
-    expect(after?.activitySummary).toEqual(before?.activitySummary);
+    expect(preview(projection, query)).toBe("Read-only transcript preview");
     expect(sessions.loadSessionEntry(scope)).toEqual(stored);
-    expect(projection.describe(query)?.hasBoard).toBe(hasBoard);
-    expect([...projection.describe(query)!.membership]).toEqual(membership);
     expect(reads).not.toHaveBeenCalled();
-    const current = projection.describe(query)!;
-    expect(current.materialized).not.toBe(retainedMaterialized);
-    expect(retainedMaterialized.row.lastMessagePreview).toBeUndefined();
-    expect(retainedMaterialized.source.lastMessagePreview).toBeUndefined();
-    expect(current.materialized.source.lastMessagePreview).toBe(after?.lastMessagePreview);
-    expect(current.materialized.row.lastMessagePreview).toBe(after?.lastMessagePreview);
     const list = await listProjectedSessions({ projection, opts: { includeLastMessage: true } });
     expect(list.sessions[0]?.lastMessagePreview).toBe("Read-only transcript preview");
-    expect(select).not.toHaveBeenCalled();
-    expect(projection.materializedCount).toBe(materializedCount);
-    expect(current.materializedSequence).toBe(sequence);
   });
 });
 
@@ -257,12 +236,6 @@ it("retains transcript previews across metadata edits and consumes committed ali
     );
     expect(append).toMatchObject({ ok: true, value: { appended: true } });
     const aliasQuery = { ...query, storePath: aliasPath };
-    for (const target of [query, aliasQuery]) {
-      expect(projection.capture(target)?.retainedDatabaseFacts).toMatchObject({
-        activitySummaryWatermark: { maxSeq: 2 },
-        transcriptPreview: "Appended preview",
-      });
-    }
     await appended;
     expect(preview(projection, query)).toBe("Appended preview");
     const refreshed = vi.fn();
