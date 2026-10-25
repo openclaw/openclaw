@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createDarkDesktopControlUiContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,

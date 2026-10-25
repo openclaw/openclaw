@@ -1,10 +1,8 @@
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import {
-  createControlUiE2eSuite,
-  createDarkDesktopControlUiContextOptions,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cloud workspace conflict recovery",

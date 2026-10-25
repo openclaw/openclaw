@@ -23,10 +23,8 @@ import {
   sharedPublisher,
   showPublicationBranch,
 } from "./chat-github-publication.test-support.ts";
-import {
-  createControlUiE2eSuite,
-  createLightDesktopControlUiContextOptions,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI personal GitHub publication" });
 

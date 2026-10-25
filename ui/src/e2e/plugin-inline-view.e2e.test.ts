@@ -8,11 +8,9 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import {
-  prepareNativeControlUiPluginFixtures,
-  incidentPluginFixture,
-} from "../test-helpers/control-ui-plugin-fixture.ts";
+import { prepareNativeControlUiPluginFixtures } from "../test-helpers/control-ui-plugin-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { incidentPluginFixture } from "./incident-plugin.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native inline plugin views" });
 const sessionKey = "agent:main:incident-review";

@@ -13,10 +13,10 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
+import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
-  createLightDesktopControlUiContextOptions,
 } from "./control-ui-e2e-suite.test-support.ts";
 import {
   expectModifiedNavigation,

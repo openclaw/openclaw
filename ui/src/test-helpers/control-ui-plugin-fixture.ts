@@ -10,17 +10,6 @@ export type NativeControlUiPluginFixture = {
   inlineViews?: readonly { id: string; label: string; version: number }[];
 };
 
-export function incidentPluginFixture(
-  inlineViews: NativeControlUiPluginFixture["inlineViews"],
-): NativeControlUiPluginFixture {
-  return {
-    pluginId: "incident-tools",
-    rootDir: path.resolve("examples/inline-incident"),
-    source: "./control-ui.ts",
-    inlineViews,
-  };
-}
-
 const builds = new Map<string, Promise<PluginManifestControlUi>>();
 
 /** Browser proofs load the same self-contained assets the plugin authoring command produces. */
