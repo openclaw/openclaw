@@ -56,7 +56,7 @@ const config: OpenClawConfig = {
   gateway: {
     ...BASE_GATEWAY_BENCH_CONFIG.gateway,
     auth: { mode: "token", token },
-    reload: { mode: "hot", debounceMs: 10 },
+    reload: { mode: "hybrid" },
   },
   agents: {
     defaults: { skipBootstrap: true },
