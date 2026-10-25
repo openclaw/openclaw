@@ -119,7 +119,6 @@ it.each([
   "connection",
   "unmount",
   "source",
-  "destination",
   "policy",
   "auth",
   "runtime agent",
@@ -204,7 +203,7 @@ it.each([
       next.content = { ...file, path: "other.md" };
     } else if (change === "source") {
       next.content = { ...file, download: async () => null };
-    } else if (change === "session" || change === "destination") {
+    } else if (change === "session") {
       next.attachmentChat = { ...initial.attachmentChat!, sessionKey: "agent:main:other" };
     } else if (change === "connection") {
       next.attachmentRuntime = { ...initial.attachmentRuntime, connectionEpoch: 2 };
