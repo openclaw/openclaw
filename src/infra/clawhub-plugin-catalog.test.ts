@@ -94,7 +94,11 @@ it.each([false, true])(
         await expect(result).rejects.toThrow("fetch failed");
         expect(fetchImpl).toHaveBeenCalledOnce();
       }
-      const url = new URL(String(fetchImpl.mock.calls[0]?.[0]));
+      const input = fetchImpl.mock.calls[0]?.[0];
+      if (!input) {
+        throw new Error("Expected a catalog request");
+      }
+      const url = new URL(input instanceof Request ? input.url : input);
       expect(url.pathname).toBe("/api/v1/plugins/search");
       expect(Object.fromEntries(url.searchParams)).toEqual({
         q: "memory",
@@ -393,10 +397,10 @@ it.each([
   const joined = joinDetail(detail);
   expect(joined).toMatchObject({
     ...capabilities,
-    uiCapabilities: expected,
     mcpServers: ["memory", "legacy"],
     mcpServerDetails: mcpServers,
   });
+  expect(joined.uiCapabilities).toEqual(expected);
   expect(Value.Check(PluginDiscoveryDetailSchema, joined)).toBe(true);
 });
 

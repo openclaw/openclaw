@@ -128,7 +128,7 @@ function textAssistant(
 
 function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
   return [
-    { ...textToolResult("call-read", "read", "file contents", { isError: false }), timestamp: 1 },
+    { ...textToolResult("call-read", "read", "file contents"), isError: false, timestamp: 1 },
   ];
 }
 

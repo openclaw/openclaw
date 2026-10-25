@@ -42,16 +42,17 @@ afterAll(async () => {
 async function fixtureEventBeforeSettlement(
   file: string,
   operation: PromiseLike<void | { value: unknown } | { error: unknown }>,
+  message = `Worker did not reach ${path.basename(file)}`,
 ): Promise<void> {
   const settled = Promise.resolve(operation).then(async (result) => {
     await fs.access(file).catch((error: unknown) => {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
+      if (hasErrnoCode(error, "ENOENT")) {
+        if (result && "error" in result) {
+          throw result.error;
+        }
+        throw new Error(message);
       }
-      if (result && "error" in result) {
-        throw result.error;
-      }
-      throw new Error(`Worker did not reach ${path.basename(file)}`);
+      throw error;
     });
   });
   await Promise.race([receipts.waitFor(file, "ready"), settled]);
@@ -112,15 +113,16 @@ it.each([
   { mode: "snapshot", cleanup: "healthy", readError: true },
 ] as const)(
   "$mode: $cleanup cleanup with readError=$readError",
-  async ({ mode, cleanup, readError }) => {
-    const fixture = path.join(root, `${cleanup}-${readError}`);
+  async (scenario) => {
+    const { mode } = scenario;
+    const fixture = path.join(root, `${scenario.cleanup}-${scenario.readError}`);
     const stateDir = path.join(fixture, "source");
     const source = path.join(stateDir, "state", "openclaw.sqlite");
     const cache = path.join(fixture, "cache");
     const attemptsPath = path.join(fixture, "attempts.jsonl");
     await createDatabase(
       source,
-      `CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('source preserved'); ${readError && mode === "versions" ? "CREATE TABLE agent_databases (not_path TEXT);" : ""}`,
+      `CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('source preserved'); ${scenario.readError && mode === "versions" ? "CREATE TABLE agent_databases (not_path TEXT);" : ""}`,
     );
     await fs.mkdir(cache);
     const input = {
@@ -132,7 +134,7 @@ it.each([
     const stagingRoot = mode === "snapshot" ? input.targetStateDir : path.join(cache, "openclaw");
     const admitted =
       mode === "snapshot" ? await inventoryUpdateCandidateStateWorker(input) : undefined;
-    if (readError && mode === "snapshot") {
+    if (scenario.readError && mode === "snapshot") {
       // Inventory succeeds first; the instrumented snapshot owns the failed read and cleanup.
       await createDatabase(source, "CREATE TABLE agent_databases (not_path TEXT);");
     }
@@ -143,7 +145,7 @@ it.each([
     const preload = path.join(fixture, "deletion-fault.mjs");
     // Successful publication consumes the payload; its staging directory still needs retirement.
     // Versions and failed reads retain their payload-removal coverage.
-    const removeDirectory = mode === "snapshot" && !readError;
+    const removeDirectory = mode === "snapshot" && !scenario.readError;
     await fs.writeFile(
       preload,
       `
@@ -153,7 +155,7 @@ it.each([
       const removeAsync = fs.promises.rm;
       const stagingRoot = ${JSON.stringify(stagingRoot)};
       const attemptsPath = ${JSON.stringify(attemptsPath)};
-      const fault = ${JSON.stringify(cleanup)};
+      const fault = ${JSON.stringify(scenario.cleanup)};
       const removeDirectory = ${JSON.stringify(removeDirectory)};
       let attempts = 0;
       const prepareRemoval = (location) => {
@@ -208,13 +210,13 @@ it.each([
     const retained = (await fs.readdir(stagingRoot)).filter((name) =>
       name.startsWith("openclaw-sqlite-readonly-"),
     );
-    expect(attempts).toHaveLength(cleanup === "healthy" ? 1 : 2);
+    expect(attempts).toHaveLength(scenario.cleanup === "healthy" ? 1 : 2);
     expect(attempts.every((attempt) => attempt.before)).toBe(true);
-    expect(attempts.at(-1)?.after).toBe(cleanup === "persistent");
-    expect(retained).toHaveLength(cleanup === "persistent" ? 1 : 0);
+    expect(attempts.at(-1)?.after).toBe(scenario.cleanup === "persistent");
+    expect(retained).toHaveLength(scenario.cleanup === "persistent" ? 1 : 0);
     expect(result.code, result.stdout.toString()).toBe(1);
     expect(result.stdout.toString()).toBe("");
-    if (readError) {
+    if (scenario.readError) {
       expect(result.stderr.toString()).toContain('no such column: "path"');
       const [recorded] = updateRunStepsFromResultStep({
         name: "candidate snapshot",
@@ -226,7 +228,7 @@ it.each([
       );
       expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
     }
-    if (cleanup !== "healthy") {
+    if (scenario.cleanup !== "healthy") {
       expect(result.stderr.toString()).toContain("snapshot cleanup failed");
       expect(result.stderr.toString()).toContain(attempts[0]!.directory);
     }
@@ -564,6 +566,7 @@ it.for(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
       }
       // Snapshot failure joins requireProcessTreeExtinction before removing scratch.
       expect(isProcessAlive(child.pid)).toBe(false);
+      // Both cooperative and forced termination confirm this owned process tree is gone.
       await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readdir(root)).not.toContain("unowned-cache");
       const db = openNodeSqliteDatabase(source, { readOnly: true });

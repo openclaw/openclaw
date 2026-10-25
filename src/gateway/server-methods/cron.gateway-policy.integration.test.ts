@@ -44,7 +44,7 @@ vi.mock("../../agents/tools/gateway.js", async (importOriginal) => ({
   callGatewayTool: gatewayCall,
 }));
 
-const managed: OpenClawConfig = {
+const managed = {
   tools: {
     gatewayPolicy: {
       allow: ["automations"],
@@ -52,11 +52,11 @@ const managed: OpenClawConfig = {
       automations: { scope: "caller", allowCommandJobs: false },
     },
   },
-};
+} satisfies OpenClawConfig;
 const commandRestricted: OpenClawConfig = {
   tools: {
     gatewayPolicy: {
-      ...managed.tools?.gatewayPolicy,
+      ...managed.tools.gatewayPolicy,
       automations: { allowCommandJobs: false },
     },
   },

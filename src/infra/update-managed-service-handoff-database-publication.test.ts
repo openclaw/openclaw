@@ -421,8 +421,11 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
       kind: "update",
       ...(version === "9.7 exact" ? { mutationProtocol: "original-cancellation-v1" } : {}),
     };
-    const payloadFor = (actor = executor, nextAction = action, helper = actor) =>
-      JSON.stringify({ version: 2, helper, executor: actor, action: nextAction });
+    const payloadFor = (
+      actor = executor,
+      nextAction: ManagedHandoffLease["action"] = action,
+      helper = actor,
+    ) => JSON.stringify({ version: 2, helper, executor: actor, action: nextAction });
     withDatabase(true, (db) => {
       insertRow(db, root, "parent", payloadFor());
       if (spawnerKey !== root) {

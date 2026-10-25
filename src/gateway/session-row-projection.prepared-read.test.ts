@@ -532,9 +532,10 @@ it("consumes an incognito repository description without SQLite or resident priv
   });
 });
 
-it("keeps missing private reads absent and refuses unprepared keys", async () => {
+it("keeps missing private reads absent and refuses unprepared keys and asynchronous consumers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     using projection = await createTestProjection({ cfg });
+    let retained: SessionRowReadView | undefined;
     await projection.withPreparedExactRows(
       () => [query],
       (read) => {
@@ -544,6 +545,16 @@ it("keeps missing private reads absent and refuses unprepared keys", async () =>
         );
       },
     );
+    await expect(
+      projection.withPreparedExactRows(
+        () => [],
+        (read) => {
+          retained = read;
+          return Promise.resolve();
+        },
+      ),
+    ).rejects.toThrow("must remain synchronous");
+    expect(() => retained?.selectEntries({ key: query.key })).toThrow("no longer active");
     expect(projection.capture(query)).toBeUndefined();
     expect(projection.selectEntries()).toEqual([]);
   });

@@ -127,7 +127,7 @@ function placementGate(
     entered: entered.promise,
     resume: resume.resolve,
     uninstall,
-    close() {
+    close: () => {
       resume.resolve();
       uninstall();
     },
@@ -177,7 +177,7 @@ function blockQueue(queue: "session" | "global") {
       sources().filter((input) =>
         abortSessionControllerInput(input, new Error("source owner cancelled waiting work")),
       ).length,
-    release() {
+    release: () => {
       predecessor?.complete();
       if (queue === "global") {
         setCommandLaneConcurrency(GLOBAL_LANE, 1);

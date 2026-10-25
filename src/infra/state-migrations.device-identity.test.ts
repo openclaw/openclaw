@@ -378,6 +378,18 @@ describe("legacy device identity Doctor migration", () => {
     const result = await migrate({ detected });
     expectReplacement(result);
   });
+  it("requires mutation-time Doctor authority after canonical state becomes invalid", async () => {
+    seedCanonical(normalizedSwift());
+    const sourcePath = await writeLegacy();
+    const detected = detect();
+    expect(detected).toMatchObject({ hasLegacy: true, hasInvalidCanonical: false });
+    updateCanonical({ device_id: "0".repeat(64) });
+    const result = await migrate({ detected, doctorOnlyStateMigrations: false });
+    expect(result).toEqual({ changes: [], warnings: [] });
+    expect(identityRow()?.device_id).toBe("0".repeat(64));
+    expect(fs.existsSync(sourcePath)).toBe(true);
+  });
+
   it("does not generate an identity from a stale legacy-only detection", async () => {
     const sourcePath = await writeLegacy();
     const detected = detect();

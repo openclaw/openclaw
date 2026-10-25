@@ -349,9 +349,12 @@ it("keeps the new agent when another automation appears before rollback", async 
     list: vi.fn().mockResolvedValue([{ id: "user-job", agentId }]),
     removeAgentJobsTransactional: vi.fn(),
   });
-  const request = await applyThrough((input) => input.rollbackNewAgent!(agentId, {}, []), {
-    cron,
-  });
+  const request = await applyThrough(
+    (input) => input.rollbackNewAgent!(agentId, { id: agentId }, []),
+    {
+      cron,
+    },
+  );
 
   expect(request[0]?.[0]).toBe(false);
   expect(cron.removeAgentJobsTransactional).not.toHaveBeenCalled();
@@ -415,7 +418,10 @@ it("rechecks reviewed access at the plugin reload's persistent apply", async () 
     return { application: { status: "applied" } };
   });
   const request = await applyThrough(
-    (input) => input.reloadPlugins!(["workflow-plugin"], { commitGuard }),
+    (input) =>
+      input.reloadPlugins!([{ pluginId: "workflow-plugin", installHash: "fixture-install" }], {
+        commitGuard,
+      }),
     { applyPluginLifecycleChange: vi.fn() },
   );
 

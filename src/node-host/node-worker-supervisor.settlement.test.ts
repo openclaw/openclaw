@@ -237,7 +237,7 @@ describe("node worker persistence settlement lifetime", () => {
       expect(f.snapshots.at(-1)).toBe(0);
       expect(await f.supervisor.hasActiveWork()).toBe(true);
       await expect(f.supervisor.status(f.identity.launchId, { waitMs: 20_000 })).resolves.toEqual(
-        observed.mock.calls[0][0],
+        observed.mock.lastCall?.[0],
       );
       await expect(
         f.supervisor.status("unknown-turn", { waitMs: 20_000 }),
