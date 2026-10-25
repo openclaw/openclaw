@@ -55,16 +55,16 @@ function childFixture() {
   });
 }
 
-function availableFallbackUrl(issue: ReturnType<typeof prepareGithubIssue>): string {
-  expect(issue.browserFallback.status).toBe("available");
+function fallback(issue: ReturnType<typeof prepare>, reason: string) {
   if (issue.browserFallback.status !== "available") {
     throw new Error("expected an available browser fallback");
   }
-  return issue.browserFallback.url;
+  return { reason, status: "browser-fallback", url: issue.browserFallback.url };
 }
 
-function fallback(issue: ReturnType<typeof prepare>, reason: string) {
-  return { reason, status: "browser-fallback", url: availableFallbackUrl(issue) };
+function enableChildProcess() {
+  vi.stubEnv("VITEST", undefined);
+  vi.stubEnv("NODE_ENV", "production");
 }
 
 beforeEach(() => {
@@ -76,19 +76,35 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("does not expose raw process diagnostics through a transport failure", async () => {
-  const issue = prepare("private-failure");
-  const rawFailure = {
-    ...cliResult({ started: true, status: 4 }),
-    diagnostic: "gh auth login --with-token private-value",
-  };
-  const runGh = cli(rawFailure);
-
-  const result = await submitGithubIssue(issue, runGh);
-
-  expect(result).toEqual(fallback(issue, "authentication-unavailable"));
-  expect(JSON.stringify(result)).not.toContain("private-value");
-});
+it.each([
+  [
+    "authentication-unavailable",
+    [
+      {
+        ...cliResult({ started: true, status: 4 }),
+        diagnostic: "gh auth login --with-token private-value",
+      },
+    ],
+  ],
+  [
+    "transport-unavailable",
+    [
+      authSuccess,
+      cliOutput("HTTP/1.1 200 Connection established\r\n\r\nHTTP/2.0 403 Forbidden\r\n\r\n{}", 1),
+    ],
+  ],
+  ["cli-unavailable", [cliResult({ errorCode: "ENOENT" })]],
+] as const)(
+  "returns %s without exposing diagnostics or starting another request",
+  async (reason, results) => {
+    const issue = prepare(reason);
+    const runGh = cli(...results);
+    const result = await submitGithubIssue(issue, runGh);
+    expect(result).toEqual(fallback(issue, reason));
+    expect(JSON.stringify(result)).not.toContain("private-value");
+    expect(runGh).toHaveBeenCalledTimes(results.length);
+  },
+);
 
 it("returns a typed unavailable fallback while retaining the prepared body", async () => {
   const issue = prepareGithubIssue({ body: "&=?%".repeat(5_000), title: "Sanitized report" });
@@ -101,29 +117,6 @@ it("returns a typed unavailable fallback while retaining the prepared body", asy
   });
   expect(issue.body).toContain(`<!-- ${issue.marker} -->`);
   expect(issue.body).toContain("&=?%");
-  expect(runGh).toHaveBeenCalledOnce();
-});
-
-it("uses the final HTTP response block for a definitive request rejection", async () => {
-  const issue = prepare("permission-denied");
-  const runGh = cli(
-    authSuccess,
-    cliOutput("HTTP/1.1 200 Connection established\r\n\r\nHTTP/2.0 403 Forbidden\r\n\r\n{}", 1),
-  );
-
-  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(
-    fallback(issue, "transport-unavailable"),
-  );
-  expect(runGh).toHaveBeenCalledTimes(2);
-});
-
-it("prepares a browser fallback for a missing CLI without starting issue creation", async () => {
-  const issue = prepare("missing GitHub CLI");
-  const runGh = cli(cliResult({ errorCode: "ENOENT" }));
-
-  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(
-    fallback(issue, "cli-unavailable"),
-  );
   expect(runGh).toHaveBeenCalledOnce();
 });
 
@@ -189,8 +182,7 @@ it("deduplicates concurrent submissions with the same marker", async () => {
 
 it("bounds a stalled authentication preflight without exposing process diagnostics", async () => {
   vi.useFakeTimers();
-  vi.stubEnv("VITEST", undefined);
-  vi.stubEnv("NODE_ENV", "production");
+  enableChildProcess();
   const child = childFixture();
   child.stdin.end.mockImplementation(() => queueMicrotask(() => child.emit("spawn")));
   child.kill.mockReturnValue(false);
@@ -207,8 +199,7 @@ it("bounds a stalled authentication preflight without exposing process diagnosti
 });
 
 it.each([false, true])("checks child authority (retired=%s)", async (retire) => {
-  vi.stubEnv("VITEST", undefined);
-  vi.stubEnv("NODE_ENV", "production");
+  enableChildProcess();
   let current = true;
   let claimed = false;
   let authorityAtCreate: boolean | undefined;

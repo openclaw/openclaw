@@ -1,11 +1,10 @@
-// Covers approval initiating-surface detection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalKind } from "./approval-types.js";
 import {
-  describeNativeExecApprovalClientSetup,
-  describeNativePluginApprovalClientSetup,
-  resolveApprovalInitiatingSurfaceStateAsync,
-  resolveExecApprovalInitiatingSurfaceStateAsync,
+  describeNativeExecApprovalClientSetup as execSetup,
+  describeNativePluginApprovalClientSetup as pluginSetup,
+  resolveApprovalInitiatingSurfaceStateAsync as resolveApproval,
+  resolveExecApprovalInitiatingSurfaceStateAsync as resolveExec,
   supportsNativeExecApprovalClient,
 } from "./exec-approval-surface.js";
 
@@ -70,9 +69,7 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
     ["tui", "terminal UI"],
     ["web", "Web UI"],
   ] as const)("treats built-in initiating surface %j", async (channel, label) => {
-    expect(await resolveExecApprovalInitiatingSurfaceStateAsync({ channel })).toEqual(
-      surface("enabled", channel ?? undefined, label),
-    );
+    expect(await resolveExec({ channel })).toEqual(surface("enabled", channel ?? undefined, label));
   });
 
   it.each([
@@ -92,12 +89,16 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
       ({ approvalKind: kind }: { approvalKind?: ChannelApprovalKind }) =>
         kind === "plugin" ? { kind: "disabled" as const } : { kind: "enabled" as const },
     );
+    if (approvalKind === "exec") {
+      plugin(label, { native: {}, getExecInitiatingSurfaceState });
+      expect(supportsNativeExecApprovalClient(channel)).toBe(true);
+    }
     plugin(label, { native: {}, getExecInitiatingSurfaceState, getActionAvailabilityState });
     const params = { channel, accountId: "default" };
     const result =
       approvalKind === "exec"
-        ? await resolveExecApprovalInitiatingSurfaceStateAsync(params)
-        : await resolveApprovalInitiatingSurfaceStateAsync({ ...params, approvalKind, request });
+        ? await resolveExec(params)
+        : await resolveApproval({ ...params, approvalKind, request });
     expect(result).toEqual(surface("disabled", channel, label, "default"));
     const [called, unused] =
       approvalKind === "exec"
@@ -123,7 +124,7 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
       getActionAvailabilityState,
     });
 
-    const result = resolveExecApprovalInitiatingSurfaceStateAsync({
+    const result = resolveExec({
       channel: "matrix",
       accountId: "default",
     });
@@ -142,7 +143,7 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
     } as never;
 
     expect(
-      await resolveApprovalInitiatingSurfaceStateAsync({
+      await resolveApproval({
         channel: "slack",
         cfg,
         approvalKind: "plugin",
@@ -153,50 +154,29 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
 
   it("loads config lazily when cfg is omitted and marks unsupported channels", async () => {
     loadConfigMock.mockReturnValueOnce({ loaded: true });
+    const approvalCapability = {
+      getActionAvailabilityState: ({ approvalKind }: { approvalKind?: ChannelApprovalKind }) => ({
+        kind: approvalKind === "plugin" ? "enabled" : "disabled",
+      }),
+    };
     getChannelPluginMock.mockImplementation((channel: string) =>
-      channel === "telegram"
-        ? {
-            meta: { label: "Telegram" },
-            approvalCapability: {
-              getActionAvailabilityState: ({
-                approvalKind,
-              }: {
-                approvalKind?: ChannelApprovalKind;
-              }) =>
-                approvalKind === "plugin"
-                  ? { kind: "enabled" as const }
-                  : { kind: "disabled" as const },
-            },
-          }
-        : undefined,
+      channel === "telegram" ? { meta: { label: "Telegram" }, approvalCapability } : undefined,
     );
 
     expect(
-      await resolveExecApprovalInitiatingSurfaceStateAsync({
+      await resolveExec({
         channel: "telegram",
         accountId: "main",
       }),
     ).toEqual(surface("disabled", "telegram", "Telegram", "main"));
     expect(loadConfigMock).toHaveBeenCalledOnce();
-
-    expect(await resolveExecApprovalInitiatingSurfaceStateAsync({ channel: "signal" })).toEqual(
+    expect(await resolveExec({ channel: "signal" })).toEqual(
       surface("unsupported", "signal", "Signal"),
     );
   });
 
   it("treats deliverable chat channels without a custom adapter as enabled", async () => {
-    expect(await resolveExecApprovalInitiatingSurfaceStateAsync({ channel: "slack" })).toEqual(
-      surface("enabled", "slack", "Slack"),
-    );
-  });
-
-  it("treats exec-specific initiating-surface hooks as native exec client support", () => {
-    plugin("Matrix", {
-      native: {},
-      getExecInitiatingSurfaceState: () => ({ kind: "enabled" as const }),
-    });
-
-    expect(supportsNativeExecApprovalClient("matrix")).toBe(true);
+    expect(await resolveExec({ channel: "slack" })).toEqual(surface("enabled", "slack", "Slack"));
   });
 
   it("routes normalized setup parameters to the selected approval hook", () => {
@@ -205,7 +185,7 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
     plugin("Telegram", { describeExecApprovalSetup, describePluginApprovalSetup });
 
     expect(
-      describeNativeExecApprovalClientSetup({
+      execSetup({
         channel: " Telegram ",
         channelLabel: " Telegram Custom ",
         accountId: " primary ",
@@ -217,7 +197,7 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
       accountId: "primary",
     });
 
-    expect(describeNativePluginApprovalClientSetup({ channel: " TELEGRAM " })).toBe("plugin setup");
+    expect(pluginSetup({ channel: " TELEGRAM " })).toBe("plugin setup");
     expect(describePluginApprovalSetup).toHaveBeenCalledWith({
       channel: "telegram",
       channelLabel: "Telegram",
@@ -226,8 +206,8 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
   });
 
   it.each(["tui"])("suppresses setup guidance for %s", (channel) => {
-    expect(describeNativeExecApprovalClientSetup({ channel })).toBeNull();
-    expect(describeNativePluginApprovalClientSetup({ channel })).toBeNull();
+    expect(execSetup({ channel })).toBeNull();
+    expect(pluginSetup({ channel })).toBeNull();
     expect(getChannelPluginMock).not.toHaveBeenCalled();
   });
 
@@ -240,9 +220,9 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
         channel === "telegram" ? { describePluginApprovalSetup } : { describeExecApprovalSetup },
     }));
 
-    expect(describeNativeExecApprovalClientSetup({ channel: "telegram" })).toBeNull();
+    expect(execSetup({ channel: "telegram" })).toBeNull();
     expect(describePluginApprovalSetup).not.toHaveBeenCalled();
-    expect(describeNativePluginApprovalClientSetup({ channel: "matrix" })).toBeNull();
+    expect(pluginSetup({ channel: "matrix" })).toBeNull();
     expect(describeExecApprovalSetup).not.toHaveBeenCalled();
   });
 });

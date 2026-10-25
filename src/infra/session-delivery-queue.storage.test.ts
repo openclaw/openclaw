@@ -41,6 +41,7 @@ function systemEvent(idempotencyKey: string, permanent = false): Delivery {
     ...(permanent ? { completionRetention: "permanent" } : {}),
   };
 }
+const claimedPayload = (id: string) => agentTurn(id, { idempotencyKey: id });
 const mediaAttachments = {
   "/tmp/one.png": { type: "image" as const, path: "/tmp/one.png", mimeType: "image/png" },
   "/tmp/two.png": { type: "image" as const, path: "/tmp/two.png", mimeType: "image/png" },
@@ -48,21 +49,18 @@ const mediaAttachments = {
 const imageBlocks = (artifactId: string) => [{ type: "image" as const, artifactId }];
 
 describe("session-delivery queue storage", () => {
-  async function settleSessionDelivery(
-    id: string,
-    queueContext: OpenClawStateWorkerContext,
-  ): Promise<void> {
-    const entry = await loadPending(id, queueContext);
+  async function settle(id: string, ctx: OpenClawStateWorkerContext): Promise<void> {
+    const entry = await loadPending(id, ctx);
     if (!entry) {
       throw new Error(`Expected pending session delivery ${id}`);
     }
-    await markSettlement(entry, "recovered", queueContext);
-    await complete(id, queueContext);
+    await markSettlement(entry, "recovered", ctx);
+    await complete(id, ctx);
   }
 
-  function readSessionQueueStatus(tempDir: string, id: string): string | undefined {
+  function readStatus(dir: string, id: string): string | undefined {
     const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+      env: { ...process.env, OPENCLAW_STATE_DIR: dir },
     });
     const row = db
       .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'session' AND id = ?")
@@ -71,48 +69,30 @@ describe("session-delivery queue storage", () => {
   }
 
   it("grants one initial-attempt lease and releases it for recovery", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const payload = agentTurn("image:task-lease:agent-loop", {
-        idempotencyKey: "image:task-lease:agent-loop",
-      });
-      const first = await enqueueClaimed(payload, 60_000, queueContext);
-      const duplicate = await enqueueClaimed(payload, 60_000, queueContext);
+    await withSessionDeliveryQueue(async (_stateDir, ctx) => {
+      const payload = claimedPayload("image:task-lease:agent-loop");
+      const first = await enqueueClaimed(payload, 60_000, ctx);
+      const duplicate = await enqueueClaimed(payload, 60_000, ctx);
 
       expect(first.claimed).toBe(true);
       expect(duplicate).toEqual({ id: first.id, claimed: false, status: "pending" });
-      expect((await listPending(queueContext))[0]?.availableAt).toBeGreaterThan(Date.now());
+      expect((await listPending(ctx))[0]?.availableAt).toBeGreaterThan(Date.now());
 
-      await releaseClaim(first.id, queueContext);
-      expect((await listPending(queueContext))[0]?.availableAt).toBeLessThanOrEqual(Date.now());
-    });
-  });
-
-  it("reports a dead-letter conflict instead of claiming it as pending", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
-      const payload = agentTurn("image:task-dead-letter:agent-loop", {
-        idempotencyKey: "image:task-dead-letter:agent-loop",
-      });
-      const first = await enqueueClaimed(payload, 60_000, queueContext);
-      await moveToFailed(first.id, queueContext);
-
-      await expect(enqueueClaimed(payload, 60_000, queueContext)).resolves.toEqual({
-        id: first.id,
-        claimed: false,
-        status: "failed",
-      });
+      await releaseClaim(first.id, ctx);
+      expect((await listPending(ctx))[0]?.availableAt).toBeLessThanOrEqual(Date.now());
     });
   });
 
   it.each([false, true])(
     "revives a failure only without permanent retention: %s",
     async (permanent) => {
-      await withSessionDeliveryQueue(async (tempDir, queueContext) => {
+      await withSessionDeliveryQueue(async (dir, ctx) => {
         const payload = systemEvent("restart:failed", permanent);
-        const id = await enqueue(payload, queueContext);
-        await moveToFailed(id, queueContext);
-        expect(await enqueue(payload, queueContext)).toBe(id);
-        expect(readSessionQueueStatus(tempDir, id)).toBe(permanent ? "failed" : "pending");
-        const pending = await listPending(queueContext);
+        const id = await enqueue(payload, ctx);
+        await moveToFailed(id, ctx);
+        expect(await enqueue(payload, ctx)).toBe(id);
+        expect(readStatus(dir, id)).toBe(permanent ? "failed" : "pending");
+        const pending = await listPending(ctx);
         if (permanent) {
           expect(pending).toEqual([]);
         } else {
@@ -122,29 +102,29 @@ describe("session-delivery queue storage", () => {
     },
   );
 
-  it("reports a completed conflict after acknowledgement", async () => {
-    await withSessionDeliveryQueue(async (tempDir, queueContext) => {
-      const payload = agentTurn("image:task-completed:agent-loop", {
-        idempotencyKey: "image:task-completed:agent-loop",
-      });
-      const first = await enqueueClaimed(payload, 60_000, queueContext);
-      await settleSessionDelivery(first.id, queueContext);
+  it.each(["failed", "completed"] as const)("reports a %s claim conflict", async (status) => {
+    await withSessionDeliveryQueue(async (dir, ctx) => {
+      const payload = claimedPayload(`image:${status}:agent-loop`);
+      const first = await enqueueClaimed(payload, 60_000, ctx);
+      if (status === "failed") {
+        await moveToFailed(first.id, ctx);
+      } else {
+        await settle(first.id, ctx);
+        expect(await enqueue(payload, ctx)).toBe(first.id);
+      }
 
-      expect(await enqueue(payload, queueContext)).toBe(first.id);
-      expect(readSessionQueueStatus(tempDir, first.id)).toBe("completed");
-
-      await expect(enqueueClaimed(payload, 60_000, queueContext)).resolves.toEqual({
+      await expect(enqueueClaimed(payload, 60_000, ctx)).resolves.toEqual({
         id: first.id,
         claimed: false,
-        status: "completed",
+        status,
       });
-      expect(await listPending(queueContext)).toEqual([]);
-      expect(readSessionQueueStatus(tempDir, first.id)).toBe("completed");
+      expect(await listPending(ctx)).toEqual([]);
+      expect(readStatus(dir, first.id)).toBe(status);
     });
   });
 
   it("persists agent-loop routing and provenance for restart replay", async () => {
-    await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
+    await withSessionDeliveryQueue(async (_stateDir, ctx) => {
       await enqueue(
         agentTurn("image:task-1:agent-loop", {
           sessionKey: "agent:main:discord:channel:123",
@@ -163,10 +143,10 @@ describe("session-delivery queue storage", () => {
           sourceReplyDeliveryMode: "message_tool_only",
           expectedMediaUrls: ["/tmp/proof.png"],
         }),
-        queueContext,
+        ctx,
       );
 
-      expect(await listPending(queueContext)).toEqual([
+      expect(await listPending(ctx)).toEqual([
         expect.objectContaining({
           route: expect.objectContaining({ channel: "discord", to: "channel:123" }),
           inputProvenance: expect.objectContaining({ sourceTool: "image_generate" }),
@@ -182,28 +162,28 @@ describe("session-delivery queue storage", () => {
     requireNodeSqlite();
     const sqlCalls = observeMainThreadSql();
     try {
-      await withSessionDeliveryQueue(async (_stateDir, queueContext) => {
+      await withSessionDeliveryQueue(async (_stateDir, ctx) => {
         const id = await enqueue(
           agentTurn("image:task-retry:agent-loop", {
             message: "all generated media",
             expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
             expectedMediaAttachments: mediaAttachments,
           }),
-          queueContext,
+          ctx,
         );
 
-        await fail(id, "ambiguous timeout", queueContext);
-        await defer(id, 1_000, queueContext);
-        let [entry] = await listPending(queueContext);
+        await fail(id, "ambiguous timeout", ctx);
+        await defer(id, 1_000, ctx);
+        let [entry] = await listPending(ctx);
         expect(entry).toMatchObject({ retryCount: 1 });
         expect(entry?.agentRunAttempt).toBeUndefined();
         expect(entry?.availableAt).toBeGreaterThan(Date.now());
 
-        await mergePrepared(id, "/tmp/one.png", imageBlocks("artifact-one"), queueContext);
+        await mergePrepared(id, "/tmp/one.png", imageBlocks("artifact-one"), ctx);
         await expect(
-          mergePrepared(id, "/tmp/one.png", imageBlocks("replacement-must-not-win"), queueContext),
+          mergePrepared(id, "/tmp/one.png", imageBlocks("replacement-must-not-win"), ctx),
         ).resolves.toEqual(imageBlocks("artifact-one"));
-        await mergePrepared(id, "/tmp/two.png", imageBlocks("artifact-two"), queueContext);
+        await mergePrepared(id, "/tmp/two.png", imageBlocks("artifact-two"), ctx);
 
         await advanceRun(
           id,
@@ -211,9 +191,9 @@ describe("session-delivery queue storage", () => {
             message: "only missing media",
             expectedMediaUrls: ["/tmp/two.png"],
           },
-          queueContext,
+          ctx,
         );
-        [entry] = await listPending(queueContext);
+        [entry] = await listPending(ctx);
         expect(entry).toMatchObject({
           agentRunAttempt: 1,
           retryCount: 1,
@@ -225,8 +205,8 @@ describe("session-delivery queue storage", () => {
             "/tmp/two.png": imageBlocks("artifact-two"),
           },
         });
-        await fail(id, "fresh delivery failed", queueContext);
-        expect(await loadPending(id, queueContext)).toMatchObject({
+        await fail(id, "fresh delivery failed", ctx);
+        expect(await loadPending(id, ctx)).toMatchObject({
           retryCount: 2,
           agentRunAttempt: 1,
           lastChargedAgentRunAttempt: 1,
@@ -239,14 +219,14 @@ describe("session-delivery queue storage", () => {
   });
 
   it("retains a permanent completion receipt", async () => {
-    await withSessionDeliveryQueue(async (tempDir, queueContext) => {
+    await withSessionDeliveryQueue(async (dir, ctx) => {
       const payload = systemEvent("restart:permanent-completed", true);
-      const id = await enqueue(payload, queueContext);
-      await settleSessionDelivery(id, queueContext);
+      const id = await enqueue(payload, ctx);
+      await settle(id, ctx);
 
-      expect(await enqueue(payload, queueContext)).toBe(id);
-      expect(readSessionQueueStatus(tempDir, id)).toBe("completed");
-      expect(await listPending(queueContext)).toEqual([]);
+      expect(await enqueue(payload, ctx)).toBe(id);
+      expect(readStatus(dir, id)).toBe("completed");
+      expect(await listPending(ctx)).toEqual([]);
     });
   });
 });

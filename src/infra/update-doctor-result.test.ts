@@ -28,6 +28,12 @@ async function consume(file: string, expected: unknown) {
   await expect(fs.access(file)).rejects.toThrow();
 }
 
+async function consumeRaw(result: unknown, expected: unknown) {
+  const file = resultFile();
+  await fs.writeFile(file, JSON.stringify(result), { encoding: "utf8", mode: 0o600, flag: "wx" });
+  await consume(file, expected);
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -95,8 +101,7 @@ describe("post-install doctor result IPC", () => {
     expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toEqual(bounded);
     await consume(resultPath, bounded);
 
-    await fs.writeFile(resultPath, JSON.stringify({ status: "ok", warnings: repeatedWarnings }));
-    await consume(resultPath, bounded);
+    await consumeRaw({ status: "ok", warnings: repeatedWarnings }, bounded);
   });
 
   it("bounds warnings at complete sentences or fields instead of cutting recovery advice", () => {
@@ -121,22 +126,15 @@ describe("post-install doctor result IPC", () => {
     expect(normalizeUpdatePostInstallDoctorWarnings([warning])).toEqual([`${field} …`]);
   });
 
-  it.each(
-    [
-      "missing-array",
-      [" "],
-      Array.from({ length: 129 }, () => "core/doctor/example"),
-      [`core/doctor/${"x".repeat(256)}`],
-    ].map((ids) => ({ ids })),
-  )(
+  it.each([
+    { ids: "missing-array" },
+    { ids: [" "] },
+    { ids: Array.from({ length: 129 }, () => "core/doctor/example") },
+    { ids: [`core/doctor/${"x".repeat(256)}`] },
+  ])(
     "keeps malformed selector evidence unknown without changing Doctor status ($ids)",
     async ({ ids }) => {
-      const resultPath = resultFile();
-      await fs.writeFile(
-        resultPath,
-        JSON.stringify({ status: "ok", deferredInspectionCheckIds: ids }),
-      );
-      await consume(resultPath, { status: "ok" });
+      await consumeRaw({ status: "ok", deferredInspectionCheckIds: ids }, { status: "ok" });
     },
   );
 
@@ -225,10 +223,8 @@ describe("post-install doctor result IPC", () => {
   });
 
   it("rejects malformed advisory payloads and consumes the file", async () => {
-    const resultPath = resultFile();
-    await fs.writeFile(
-      resultPath,
-      JSON.stringify({
+    await consumeRaw(
+      {
         status: "advisory",
         advisory: {
           kind: "package-post-install-doctor",
@@ -236,10 +232,8 @@ describe("post-install doctor result IPC", () => {
           message: "forged advisory",
           details: [],
         },
-      }),
-      { encoding: "utf8", mode: 0o600, flag: "wx" },
+      },
+      null,
     );
-
-    await consume(resultPath, null);
   });
 });
