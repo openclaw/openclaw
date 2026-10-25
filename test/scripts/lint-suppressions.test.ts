@@ -229,6 +229,9 @@ describe("production lint suppressions", () => {
         // MCP owns callback properties; Node worker messages have no browser target origin.
         "src/mcp/tools-stdio-server.lifecycle.fixture.mjs|unicorn/prefer-add-event-listener|1",
         "src/mcp/tools-stdio-server.lifecycle.fixture.mjs|unicorn/require-post-message-target-origin|1",
+        // Media selection reorders only fresh filter/flatMap results, preserving caller arrays.
+        "src/media-understanding/attachments.select.ts|unicorn/no-array-reverse|1",
+        "src/media-understanding/provider-registry-metadata.ts|unicorn/no-array-sort|1",
         "src/node-host/invoke-payload.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
         "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
