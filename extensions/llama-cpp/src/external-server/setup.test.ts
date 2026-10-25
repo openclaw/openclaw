@@ -374,6 +374,9 @@ it.each([
   expect(configuredProvider(result)?.headers).toEqual(headers);
   expect(result.profiles).toEqual([]);
   if (useProfile) {
+    expect(runtimeApiKeyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: PROFILE_ID }),
+    );
     expectAuthUnchanged();
   } else {
     expect(runtimeApiKeyMock).not.toHaveBeenCalled();
@@ -464,6 +467,8 @@ it("propagates unreachable discovery during setup without changing auth", async 
   await expect(configure(ctx)).rejects.toThrow(
     "llama-server could not be reached at http://localhost:8080.",
   );
+  expect(ctx.runtime.error).not.toHaveBeenCalled();
+  expect(ctx.runtime.exit).not.toHaveBeenCalled();
   expectAuthUnchanged();
 });
 
@@ -472,4 +477,5 @@ it("rejects a requested model absent from discovery", async () => {
   await expect(validate(ctx)).rejects.toThrow(
     "llama-server model missing was not found. Available models: qwen/model:Q4_K_M",
   );
+  expect(ctx.runtime.exit).not.toHaveBeenCalled();
 });

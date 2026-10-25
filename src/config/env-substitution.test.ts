@@ -31,14 +31,24 @@ const templates: Array<[string, Record<string, string>, string, boolean?]> = [
   ["$${VAR:-x}", { VAR: "from-env" }, "${VAR:-x}", false],
   ["${A:-${B}}", { A: "a-value", B: "b-value" }, "${A:-b-value}"],
   ["${A:-${B:-c}}", {}, "${A:-c}"],
-  ...["$VAR", "${lowercase}", "${:-d}", '${A:-{"n":1}}', "${PRICE:-$5}", "no-refs-here", ""].map(
-    (literal): [string, Record<string, string>, string, boolean] => [
-      literal,
-      { VAR: "value", lowercase: "value" },
-      literal,
-      false,
-    ],
-  ),
+  ...[
+    "$VAR",
+    "${lowercase}",
+    "${:-d}",
+    '${A:-{"n":1}}',
+    "${PRICE:-$5}",
+    "${VAR:?m}",
+    "${VAR:=d}",
+    "${VAR:+a}",
+    "${VAR-d}",
+    "no-refs-here",
+    "",
+  ].map((literal): [string, Record<string, string>, string, boolean] => [
+    literal,
+    { VAR: "value", lowercase: "value" },
+    literal,
+    false,
+  ]),
 ];
 it("resolves string templates, escapes and defaults without warnings", () => {
   for (const [input, env, expected, hasReference = true] of templates) {
