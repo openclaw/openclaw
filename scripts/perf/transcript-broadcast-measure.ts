@@ -1,3 +1,4 @@
+// Add --list-filter-churn to --scenario memory-soak --mixed-rpc to rotate sidebar/search filters.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -260,8 +261,14 @@ const startupSourcePreload = values["startup-source-preload"]
     }
   : undefined;
 const retentionScenario = scenario === "attempt-retention";
-if (values["list-filter-churn"] && scenario !== "sessions.list") {
-  throw new Error("--list-filter-churn requires --scenario sessions.list");
+if (
+  values["list-filter-churn"] &&
+  scenario !== "sessions.list" &&
+  !(scenario === "memory-soak" && values["mixed-rpc"])
+) {
+  throw new Error(
+    "--list-filter-churn requires --scenario sessions.list or memory-soak --mixed-rpc",
+  );
 }
 const idleScenario = scenario === "session-idle-retention";
 const soakScenario = scenario === "memory-soak";
@@ -5305,7 +5312,12 @@ try {
                       {
                         rowMode,
                         limit,
-                        archived: "all",
+                        ...(values["list-filter-churn"]
+                          ? listFilterShapes[
+                              (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
+                                listFilterShapes.length
+                            ]
+                          : { archived: "all" }),
                         ...(values["list-profile-reference"]
                           ? { involvingProfileId: values["list-profile-reference"] }
                           : {}),
