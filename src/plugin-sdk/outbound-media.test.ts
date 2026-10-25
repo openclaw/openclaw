@@ -161,6 +161,32 @@ describe("createHostedOutboundMediaStore", () => {
     expect(await chunkStore.entries()).toEqual([]);
   });
 
+  it("stores hosted media chunks and reads them back through point reads", async () => {
+    loadWebMediaMock
+      .mockReset()
+      .mockResolvedValueOnce({ ...imageMedia(), fileName: "floor-plan.png" });
+    const { metadataStore, chunkStore } = createStores("point-read-media");
+    const store = createMediaStore({
+      metadataStore,
+      chunkStore: { ...chunkStore, lookupMany: undefined },
+    });
+
+    const url = await prepare(store);
+    const entry = await store.read(MEDIA_ID);
+
+    expect(url).toBe(
+      "https://gateway.example.com/hook/media/abc123abc123abc123abc123?token=token123",
+    );
+    expect(entry?.metadata).toMatchObject({
+      routePath: "/hook/media/",
+      token: "token123",
+      contentType: "image/png",
+      fileName: "floor-plan.png",
+      byteLength: Buffer.byteLength("image-bytes"),
+    });
+    expect(entry?.buffer.toString("utf8")).toBe("image-bytes");
+  });
+
   it("validates the loaded bytes before persisting a capability", async () => {
     const media = {
       buffer: Buffer.from("active-bytes"),
