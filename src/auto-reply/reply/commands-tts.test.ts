@@ -215,16 +215,14 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(audioReply.mediaUrl).toBe("/tmp/fallback.ogg");
 
     const statusReply = await reply("/tts status");
-    expect(statusReply.text).toContain(`Provider: ${FALLBACK_TTS_PROVIDER}`);
-    expect(statusReply.text).toContain(
+    for (const fragment of [
+      `Provider: ${FALLBACK_TTS_PROVIDER}`,
       `Fallback: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`,
-    );
-    expect(statusReply.text).toContain(
       `Attempts: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`,
-    );
-    expect(statusReply.text).toContain(
       `Attempt details: ${PRIMARY_TTS_PROVIDER}:failed(provider_error) 65ms, ${FALLBACK_TTS_PROVIDER}:success(ok) 175ms`,
-    );
+    ]) {
+      expect(statusReply.text).toContain(fragment);
+    }
   });
 
   it("keeps base status fields in display order", async () => {
