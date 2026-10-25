@@ -44,11 +44,12 @@ const { values } = parseArgs({
     output: { type: "string" },
     entry: { type: "string", default: "src/entry.ts" },
     port: { type: "string", default: "41731" },
-    samples: { type: "string", default: "10" },
+    samples: { type: "string" },
     warmup: { type: "string", default: "2" },
     "rtt-ms": { type: "string", default: "0" },
     "remote-ingress": { type: "boolean", default: false },
     "no-counters": { type: "boolean", default: false },
+    "cron-pages": { type: "boolean", default: false },
     providers: { type: "string", default: "10" },
     models: { type: "string", default: "100" },
     "history-key": { type: "string", default: "agent:main:team-shape-session-0" },
@@ -66,7 +67,8 @@ if (values.help) {
   --samples 10 --warmup 2           Serial requests; cold first, warmup and measured kept separate.
   --rtt-ms 0|100                    TCP proxy delays each direction by half the RTT.
   --remote-ingress                 Paired token auth through trusted loopback proxy attribution; asserts compression.
-  --no-counters                    Keep JSON/socket counters off except the separate first sample.
+  --no-counters                    Count JSON/socket operations only in separate first/counts samples.
+  --cron-pages                     Measure 50-job Cron pages across 1,000 seeded jobs; defaults to and requires >=20 samples.
   --providers 10 --models 100       Synthetic config catalog: models per provider; no credentials.
   --history-key <key> --history-limit 80  Existing 2,000-message fixture; protocol pagination retained.
   --method <case>                  Repeatable case filter (case names appear in result JSON).
@@ -93,7 +95,8 @@ assert(
 );
 const port = parsePositiveInt(values.port, 41731, "--port");
 assert(port >= 40000 && port < 65535, "isolated ports must be 40000..65534");
-const samples = parsePositiveInt(values.samples, 10, "--samples");
+const samples = parsePositiveInt(values.samples, values["cron-pages"] ? 20 : 10, "--samples");
+assert(!values["cron-pages"] || samples >= 20, "--cron-pages requires at least 20 samples");
 const warmup = parseNonNegativeInt(values.warmup, 2, "--warmup");
 const rttMs = parseNonNegativeInt(values["rtt-ms"], 0, "--rtt-ms");
 const remoteIngress = values["remote-ingress"];
@@ -118,6 +121,7 @@ assert(
 );
 const fixture = rawFixture;
 const cronJobCount = Number(fixture.cronJobs);
+assert(!values["cron-pages"] || cronJobCount >= 1000, "--cron-pages requires at least 1,000 jobs");
 assert(existsSync(entry), `Gateway CLI entry missing: ${entry}`);
 mkdirSync(output, { recursive: false });
 const token = "synthetic-gateway-rpc-benchmark-token";
@@ -198,6 +202,7 @@ type Sample = {
   ok: boolean;
   payloadBytes: number;
   arrayCounts?: Record<string, number>;
+  requestParams?: unknown;
   error?: unknown;
   server: Metrics;
 };
@@ -336,6 +341,7 @@ if (values.sync) {
             rttMs,
             remoteIngress,
             noCounters: values["no-counters"],
+            cronPages: values["cron-pages"],
             profile: values.profile,
             profileSamples,
             providerCount,
@@ -367,7 +373,27 @@ async function waitMarker(side: string, name: string) {
     await delay(50);
   }
 }
-async function measureCase(candidate: (typeof rpcCases)[number], phase: string, peer: Peer) {
+function requestParams(candidate: (typeof rpcCases)[number], phase: string, round: number) {
+  if (
+    !values["cron-pages"] ||
+    candidate.method !== "cron.list" ||
+    candidate.id === "cron.list.enabled"
+  ) {
+    return candidate.params;
+  }
+  return {
+    ...candidate.params,
+    limit: phase === "warmup" ? 1 : 50,
+    offset:
+      phase === "first" ? 1 : phase === "counts" ? 2 : phase === "warmup" ? 0 : 50 * (round % 20),
+  };
+}
+async function measureCase(
+  candidate: (typeof rpcCases)[number],
+  phase: string,
+  peer: Peer,
+  round = 0,
+) {
   if (candidate.method === "connect") {
     const pending = await connectPeer();
     try {
@@ -376,7 +402,13 @@ async function measureCase(candidate: (typeof rpcCases)[number], phase: string, 
       await closePeer(pending.peer);
     }
   } else {
-    await measure(candidate.id, candidate.method, candidate.params, peer, phase);
+    await measure(
+      candidate.id,
+      candidate.method,
+      requestParams(candidate, phase, round),
+      peer,
+      phase,
+    );
   }
 }
 async function control(action: string, extra: Record<string, unknown> = {}): Promise<Metrics> {
@@ -517,7 +549,9 @@ async function connectPeer(
   };
 }
 async function measure(id: string, method: string, params: unknown, peer: Peer, phase: string) {
-  await control("begin", { countOps: !values["no-counters"] || phase === "first" });
+  await control("begin", {
+    countOps: !values["no-counters"] || phase === "first" || phase === "counts",
+  });
   const started = performance.now();
   let response: Awaited<ReturnType<Peer["request"]>>;
   try {
@@ -529,6 +563,7 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
       roundTripMs: performance.now() - started,
       ok: false,
       payloadBytes: 0,
+      requestParams: method === "cron.list" ? params : undefined,
       error: String(error),
       server: await control("end"),
     });
@@ -542,6 +577,7 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
     roundTripMs,
     ok: response.ok,
     payloadBytes: Buffer.byteLength(JSON.stringify(response.payload ?? null)),
+    requestParams: method === "cron.list" ? params : undefined,
     arrayCounts: isRecord(response.payload)
       ? Object.fromEntries(
           Object.entries(response.payload).flatMap(([key, value]) =>
@@ -571,11 +607,12 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
   if (method === "cron.list" && id !== "cron.list.enabled") {
     const jobs = isRecord(response.payload) ? response.payload.jobs : undefined;
     const total = isRecord(response.payload) ? response.payload.total : undefined;
+    const expectedLimit = isRecord(params) && typeof params.limit === "number" ? params.limit : 50;
     assert(
       Array.isArray(jobs) &&
-        jobs.length === Math.min(50, cronJobCount) &&
+        jobs.length === Math.min(expectedLimit, cronJobCount) &&
         typeof total === "number" &&
-        total >= cronJobCount,
+        (values["cron-pages"] ? total === cronJobCount : total >= cronJobCount),
       `${id}: seeded cron rows missing; generate the fixture at this exact root instead of copying its path-keyed SQLite store`,
     );
   }
@@ -825,6 +862,13 @@ try {
       await measureCase(candidate, index === 0 ? "first" : "warmup", connected.peer);
     }
   }
+  if (values["cron-pages"]) {
+    for (const candidate of selected) {
+      if (candidate.method === "cron.list" && candidate.id !== "cron.list.enabled") {
+        await measureCase(candidate, "counts", connected.peer);
+      }
+    }
+  }
   assertWatcherHealthy();
   marker("setup");
   if (syncRoot) {
@@ -847,7 +891,7 @@ try {
           await waitMarker("head", `cell-${cell - 1}`);
         }
       }
-      await measureCase(candidate, "measured", connected.peer);
+      await measureCase(candidate, "measured", connected.peer, index);
       marker(`cell-${cell}`);
       cell++;
     }
@@ -871,7 +915,13 @@ try {
             }
           } else {
             assert(
-              (await connected.peer.request(candidate.method, candidate.params, timeoutMs)).ok,
+              (
+                await connected.peer.request(
+                  candidate.method,
+                  requestParams(candidate, "profile", index),
+                  timeoutMs,
+                )
+              ).ok,
             );
           }
         }
@@ -916,7 +966,12 @@ try {
       warmup,
       rttMs,
       remoteIngress,
-      operationCounters: values["no-counters"] ? "first-sample-only" : "every-timed-window",
+      cronPages: values["cron-pages"],
+      operationCounters: values["no-counters"]
+        ? values["cron-pages"]
+          ? "first-and-counts-only"
+          : "first-sample-only"
+        : "every-timed-window",
       profileSamples: values.profile ? profileSamples : 0,
       providerCount,
       modelsPerProvider,
@@ -933,7 +988,7 @@ try {
       cpuScope:
         "whole per-request IPC window, including event-loop work and worker CPU; not only the handler",
       jsonScope: values["no-counters"]
-        ? "first sample only; JSON/socket operation counters omitted from warm samples"
+        ? "first/counts samples only; native JSON/socket methods in warmup and measured samples"
         : "all synchronous main-isolate JSON.stringify calls in each request window, including shaping",
       framingScope:
         "socketWrite is native enqueue only; use CPU profiles for compression/header/segmentation attribution",
