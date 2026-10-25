@@ -45,6 +45,7 @@ const readHistory = vi.spyOn(SessionManager, "openModelContextAsync");
 beforeEach(() => {
   approvals.load.mockResolvedValue({ version: 1, agents: {} });
   readHistory.mockResolvedValue(SessionManager.inMemory());
+  vi.stubEnv("OPENCLAW_STATE_DIR", join(workspace, "state"));
 });
 
 let workspace: string;
