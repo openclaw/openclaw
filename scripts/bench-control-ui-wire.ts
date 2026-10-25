@@ -1426,7 +1426,9 @@ if (values.worker) {
         await (stopping ?? stopChild(child));
         ownedStops.delete(stop);
         notices?.close();
-        await new Promise<void>((resolve) => log.end(resolve));
+        await new Promise<void>((resolve) => {
+          log.end(resolve);
+        });
         if (failure) {
           throw failure;
         }
@@ -1526,6 +1528,7 @@ if (values.worker) {
   if (otherSource && persistentComparison) {
     const workers: Awaited<ReturnType<typeof startWorker>>[] = [];
     const restores: Array<() => Promise<void>> = [];
+    let cleanupFailure: PromiseRejectedResult | undefined;
     try {
       restores.push(await bindBundle(otherSource, otherBundle));
       if (ownSource !== otherSource) {
@@ -1562,11 +1565,10 @@ if (values.worker) {
     } finally {
       const closed = await Promise.allSettled(workers.map((worker) => worker.close()));
       const restored = await Promise.allSettled(restores.map((restore) => restore()));
-      for (const result of [...closed, ...restored]) {
-        if (result.status === "rejected") {
-          throw result.reason;
-        }
-      }
+      cleanupFailure = [...closed, ...restored].find((result) => result.status === "rejected");
+    }
+    if (cleanupFailure) {
+      throw cleanupFailure.reason;
     }
   } else if (otherSource) {
     for (let pair = 0; pair < pairs; pair++) {
