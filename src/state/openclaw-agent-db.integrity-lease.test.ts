@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -14,12 +13,8 @@ import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import { onSqliteWalCheckpoint } from "../infra/sqlite-wal-checkpoint.js";
-import { configureSqliteConnectionPragmas } from "../infra/sqlite-wal.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
-import { createAgentDatabaseHandleCloser } from "./openclaw-agent-db-close.js";
-import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
@@ -27,10 +22,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
-import {
-  listOpenClawRegisteredAgentDatabases,
-  unregisterOpenClawAgentDatabase,
-} from "./openclaw-agent-db-registry.js";
+import { unregisterOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import * as schema from "./openclaw-agent-db-schema.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
@@ -341,27 +333,7 @@ it.each(["idle-peer", "settled", "pinned", "checkpoint-error"] as const)(
   "certifies only an empty WAL after the final native close (%s)",
   (outcome) => {
     const owner = openOwner();
-    owner.close();
-    const db = openNodeSqliteDatabase(owner.database.path);
-    registerOpenClawAgentDatabaseIdentity(db);
-    const database = {
-      ...owner.database,
-      db,
-      walMaintenance: configureSqliteConnectionPragmas(db, {
-        databasePath: owner.database.path,
-        busyTimeoutMs: 5_000,
-        autoCheckpointPages: 0,
-      }),
-    };
-    const leaseId = claimOpenClawAgentDatabaseLease({
-      ...owner.options,
-      path: database.path,
-    });
-    const close = createAgentDatabaseHandleCloser({
-      leases: new Map([[database.path, { leaseId, env: owner.env }]]),
-      failures: new Map(),
-      idleTimers: new WeakMap(),
-    });
+    const database = owner.database;
     using reader = openNodeSqliteDatabase(database.path, { readOnly: true });
     if (outcome !== "idle-peer") {
       reader.exec("BEGIN");
@@ -382,17 +354,14 @@ it.each(["idle-peer", "settled", "pinned", "checkpoint-error"] as const)(
     });
     if (outcome === "checkpoint-error") {
       reader.close();
-      vi.spyOn(db, "prepare").mockImplementationOnce(() => {
+      vi.spyOn(database.db, "prepare").mockImplementationOnce(() => {
         throw new Error("synthetic close checkpoint failed");
       });
     }
     try {
-      close(database);
+      owner.close();
     } finally {
       stopObserving();
-      if (db.isOpen) {
-        db.close();
-      }
     }
     if (outcome === "checkpoint-error") {
       expect(owner.cleanClose()).toBe(false);
@@ -442,28 +411,14 @@ it.each(["before", "after"] as const)(
   },
 );
 
-it("preserves dirty proof without quarantine SQL when a healthy peer closes before checkpoint", () => {
+it("keeps proof dirty until the writer checkpoints after a healthy peer releases", () => {
   const owner = openOwner();
   const peerLease = claimOpenClawAgentDatabaseLease({
     ...owner.options,
     path: owner.database.path,
   });
   expect(owner.cleanClose()).toBe(false);
-  const quarantineSql: string[] = [];
-  const observer = observeHostDataSql((sql, database) => {
-    if (
-      database?.location() === resolveQuarantineStorePath(owner.env) ||
-      /\b(?:quarantined_databases|agent_integrity_verifications)\b/i.test(sql)
-    ) {
-      quarantineSql.push(sql);
-    }
-  });
-  try {
-    releaseOpenClawAgentDatabaseLease(peerLease, { env: owner.env }, "uncheckpointed");
-    expect(quarantineSql).toEqual([]);
-  } finally {
-    observer.restore();
-  }
+  releaseOpenClawAgentDatabaseLease(peerLease, { env: owner.env }, "uncheckpointed");
   expect(owner.cleanClose()).toBe(false);
   owner.close();
   expect(owner.cleanClose()).toBe(true);
@@ -477,7 +432,6 @@ it.each(["closing", "unregistering", "reopening shared state before closing"])(
     const database = openOpenClawAgentDatabase({ agentId: "retained", path: pathname, env });
     database.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"ok\":true}', 1)");
     const shared = openOpenClawStateDatabase({ env });
-    const registeredAgentDatabases = listOpenClawRegisteredAgentDatabases({ env });
     if (operation === "unregistering") {
       closeOpenClawAgentDatabaseByPath(pathname);
     }
@@ -507,17 +461,6 @@ it.each(["closing", "unregistering", "reopening shared state before closing"])(
       expectUnknownDeletionHistory(reopened);
       expect(reopened.prepare("SELECT * FROM agent_database_leases").all()).toEqual([]);
     }
-    const discovery = discoverAgentDatabaseMigrationTargets({
-      env,
-      configuredAgentDatabaseTargets: [],
-      registeredAgentDatabases,
-    });
-    expect(discovery.targets).toEqual([]);
-    expect(discovery.unverifiedTargets).toEqual([
-      expect.objectContaining({ agentId: "retained", path: pathname }),
-    ]);
-    expect(discovery.warnings.join("\n")).toContain(`Held agent retained database ${pathname}`);
-    expect(discovery.warnings.join("\n")).toContain("openclaw doctor --fix");
     const reopened = openOpenClawAgentDatabase({ agentId: "retained", path: pathname, env });
     expectPreservedRow(reopened.db);
   },

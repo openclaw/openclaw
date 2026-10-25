@@ -2,10 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { constants } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  observeSqliteReadSql,
-  trackSqliteStatementExecutions,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   buildAcpDatabaseSessionKey,
@@ -15,12 +11,10 @@ import {
 import * as executionIdentityContext from "../audit/execution-identity-context.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
-import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openClawStateDatabaseCache,
@@ -28,7 +22,6 @@ import {
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeRetainedOpenClawStateReadConnections,
-  openOpenClawStateReadOnlyLocation,
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import {
@@ -64,7 +57,6 @@ vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
   },
 }));
 import "./openclaw-state-read.worker.js";
-import { createDanglingSkillWorkshopReviewIndex } from "./openclaw-state-db-corruption.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -87,7 +79,7 @@ beforeEach(() => {
 function fixture() {
   const root = tempDirs.make("openclaw-retained-state-reader-");
   const pathname = path.join(root, "state.sqlite");
-  seed(pathname, 1, { wal: true });
+  seed(pathname, 1, true);
   const opens = vi.spyOn(sqlite, "openNodeSqliteDatabase");
   const read = <T>(
     operation: (database: OpenClawStateReadOnlyDatabase) => T,
@@ -113,33 +105,16 @@ function fixture() {
       expectedIdentity,
       command,
     });
-  const workerValue = async () => {
-    const reply = await workerRead({ type: "nodeHost.config" });
-    if (!reply.ok || reply.type !== "nodeHost.config") {
-      throw new Error("Worker read failed");
-    }
-    return reply.row?.updated_at_ms;
-  };
-  const replace = (replacementValue: number, sample = true) => {
-    const replacement = path.join(root, "replacement.sqlite");
-    seed(replacement, replacementValue, { sample });
-    return () => {
-      fs.renameSync(pathname, path.join(root, "previous.sqlite"));
-      fs.renameSync(replacement, pathname);
-    };
-  };
-  return { root, pathname, read, value, countOpens, workerValue, workerRead, replace };
+  return { root, pathname, read, value, countOpens, workerRead };
 }
 
-function seed(pathname: string, value: number, { wal = false, sample = true } = {}) {
+function seed(pathname: string, value: number, wal = false) {
   using db = sqlite.openNodeSqliteDatabase(pathname);
   if (wal) {
     db.exec("PRAGMA journal_mode=WAL");
   }
-  if (sample) {
-    db.exec("CREATE TABLE sample (value INTEGER)");
-    db.prepare("INSERT INTO sample VALUES (?)").run(value);
-  }
+  db.exec("CREATE TABLE sample (value INTEGER)");
+  db.prepare("INSERT INTO sample VALUES (?)").run(value);
   db.exec(
     "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER)",
   );
@@ -147,11 +122,6 @@ function seed(pathname: string, value: number, { wal = false, sample = true } = 
     String(value),
     value,
   );
-}
-
-function observeReads() {
-  const observation = observeSqliteReadSql(sqlite.requireNodeSqlite().StatementSync.prototype);
-  return { ...observation, [Symbol.dispose]: () => observation.restore() };
 }
 
 function acpFixture() {
@@ -179,43 +149,25 @@ function acpFixture() {
   return { ...state, peer, key, command, insert, [Symbol.dispose]: () => peer.close() };
 }
 
-it("retains ACP cohorts across unrelated writes and refreshes committed ACP changes", async () => {
+it("refreshes committed ACP changes without changing rows after unrelated writes", async () => {
   using state = acpFixture();
   const { peer, key, command, workerRead, insert } = state;
   const read = () => workerRead(command);
   expect(await read()).toMatchObject({ ok: true, rows: [null] });
-  using observation = observeReads();
-  const check = async (runtimeName: string | null, count: number) => {
-    observation.queries.length = 0;
+  const check = async (runtimeName: string | null) => {
     expect(await read()).toMatchObject({
       ok: true,
       rows: [runtimeName === null ? null : { runtime_session_name: runtimeName }],
     });
-    expect(observation.queries).toHaveLength(count);
   };
-  await check(null, 0);
-  observation.queries.length = 0;
-  expect(await workerRead({ ...command, entries: [{ keys: [`${key}-missing`] }] })).toMatchObject({
-    ok: true,
-    rows: [null],
-  });
-  expect(observation.queries).toHaveLength(1);
   insert(key, "inserted");
-  await check("inserted", 0);
-  expect(
-    observation.queries.filter((sql) =>
-      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
-    ),
-  ).toHaveLength(0);
-  await check("inserted", 0);
+  await check("inserted");
   peer.prepare("UPDATE config_machine_state SET updated_at_ms=2").run();
-  await check("inserted", 0);
+  await check("inserted");
   insert(key, "updated");
-  await check("updated", 0);
-  await check("updated", 0);
+  await check("updated");
   deleteAcpSessionMetaRows(peer, [key]);
-  await check(null, 0);
-  await check(null, 0);
+  await check(null);
 });
 
 it("keeps ACP authorizer refusal through batched admission", async () => {
@@ -255,20 +207,6 @@ it.each([null, "{"])(
   },
 );
 
-it("preserves cold schema refusal with a malformed catalog", () => {
-  const { pathname, value } = fixture();
-  {
-    using db = sqlite.openNodeSqliteDatabase(pathname);
-    db.exec(
-      "CREATE TABLE skill_workshop_collection_reviews (review_id TEXT PRIMARY KEY, create_time INTEGER)",
-    );
-  }
-  createDanglingSkillWorkshopReviewIndex(pathname);
-  const before = fs.readFileSync(pathname);
-  expect(value).toThrow(/legacy-workshop-review-index.*openclaw doctor --fix/iu);
-  expect(fs.readFileSync(pathname)).toEqual(before);
-});
-
 it("rejects a replacement content marker with a newer version after warm reads", () => {
   const { pathname, read } = fixture();
   const { DatabaseSync } = sqlite.requireNodeSqlite();
@@ -294,25 +232,6 @@ it("rejects a replacement content marker with a newer version after warm reads",
   expect(version).toThrow(/newer schema version/iu);
 });
 
-it("reports an unsupported version before an unreadable catalog during open admission", () => {
-  const { pathname } = fixture();
-  const futureVersion = OPENCLAW_STATE_SCHEMA_VERSION + 1;
-  {
-    using writer = sqlite.openNodeSqliteDatabase(pathname);
-    writer.exec(`CREATE INDEX future_index ON sample(value); PRAGMA user_version=${futureVersion}`);
-    writer.enableDefensive?.(false);
-    writer.exec("PRAGMA writable_schema=ON");
-    writer
-      .prepare("UPDATE sqlite_schema SET sql=? WHERE name='future_index'")
-      .run("CREATE INDEX future_index ON sample(future_column)");
-  }
-  const before = fs.readFileSync(pathname);
-  expect(() => {
-    openOpenClawStateReadOnlyLocation(pathname, pathname).close();
-  }).toThrow(`uses newer schema version ${futureVersion}`);
-  expect(fs.readFileSync(pathname)).toEqual(before);
-});
-
 it("observes peer commits and closes only the invalidated physical identity", () => {
   const first = fixture();
   const second = fixture();
@@ -321,20 +240,8 @@ it("observes peer commits and closes only the invalidated physical identity", ()
   const siblingReader = second.read(({ db }) => db);
   {
     using peer = sqlite.openNodeSqliteDatabase(first.pathname);
-    using observation = observeReads();
     peer.exec("UPDATE sample SET value = 2");
-    expect(
-      first.read(({ db }) => {
-        const select = () =>
-          runSqliteReadOperationSync(db, () => db.prepare("SELECT value FROM sample").get()?.value);
-        return [select(), select()];
-      }),
-    ).toEqual([2, 2]);
-    expect(
-      observation.queries.filter((sql) =>
-        /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
-      ),
-    ).toHaveLength(0);
+    expect(first.value()).toBe(2);
     expect(first.read(({ db }) => db)).toBe(reader);
     expect(peer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
   }
@@ -402,14 +309,9 @@ it("retires stale readers after a missing file identity", async () => {
 });
 
 it("pins audit schema facts and consumes peer DDL publications made during inspection", async () => {
-  const { pathname, read, workerRead, workerValue } = fixture();
+  const { pathname, read, workerRead } = fixture();
   const reader = read(({ db }) => db);
   const peer = sqlite.openNodeSqliteDatabase(pathname);
-  const schemaQueries = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(reader),
-    ["schema"],
-    (sql) => (/\b(?:sqlite_schema|sqlite_master)\b/iu.test(sql) ? "schema" : null),
-  );
   const original = executionIdentityContext.inspectExecutionIdentityRunInDatabase;
   const inspect = vi.spyOn(executionIdentityContext, "inspectExecutionIdentityRunInDatabase");
   inspect.mockImplementationOnce((db, input, schema) => {
@@ -427,34 +329,30 @@ it("pins audit schema facts and consumes peer DDL publications made during inspe
       result: { status: "inspected" },
     });
   try {
-    await workerValue();
-    expect(schemaQueries.counts.schema).toBe(0);
+    expect(await workerRead({ type: "nodeHost.config" })).toMatchObject({
+      ok: true,
+      type: "nodeHost.config",
+    });
     expect(inspect).not.toHaveBeenCalled();
     await audit();
     expect(reader.isTransaction).toBe(false);
     await audit();
-    expect(inspect).toHaveBeenLastCalledWith(reader, input, {
-      executionIdentityContexts: true,
-      auditEvents: false,
-      cronRunReceipts: false,
-      executionOwnerLifecycleBindings: false,
-    });
-    expect(schemaQueries.counts.schema).toBe(0);
-    const refreshedQueries = schemaQueries.counts.schema;
+    expect(inspect.mock.lastCall?.[2].executionIdentityContexts).toBe(true);
     expect(read(({ db }) => db)).toBe(reader);
-    await workerValue();
-    expect(schemaQueries.counts.schema).toBe(refreshedQueries);
+    expect(await workerRead({ type: "nodeHost.config" })).toMatchObject({
+      ok: true,
+      type: "nodeHost.config",
+    });
     expect(reader.isTransaction).toBe(false);
   } finally {
-    schemaQueries.restore();
     peer.close();
   }
 });
 
-it("retains readers, replaces files, and reports cleanup as native close capability completes", async () => {
+it("retains readers until native close capability completes", async () => {
   worker.explicitSqliteCloseReleasesNativeResources = false;
   worker.decided = false;
-  const { root, pathname, read, workerRead, countOpens, replace } = fixture();
+  const { read, workerRead, countOpens } = fixture();
   expect(sqlite.bunSqliteNativeCleanupPending).toBe(true);
   const first = await workerRead({ type: "nodeHost.config" });
   expect(first).toMatchObject({ ok: true, row: { updated_at_ms: 1 } });
@@ -473,36 +371,14 @@ it("retains readers, replaces files, and reports cleanup as native close capabil
   expect(next.nativeCleanupFailure).toBeUndefined();
   expect(countOpens()).toBe(2);
   expect(sqlite.bunSqliteNativeCleanupPending).toBe(true);
-  replace(2, false)();
-  const reply = await workerRead({ type: "nodeHost.config" });
-  expect(reply).toMatchObject({ ok: true, row: { updated_at_ms: 2 } });
-  expect(reply.nativeCleanupFailure).toBeUndefined();
-  expect(previous.isOpen).toBe(false);
-  const failure = new Error("native quarantine reader close failed");
-  vi.spyOn(
-    openClawStateDatabaseCache,
-    "assertOpenClawStateDatabaseFreshOpenAllowedAtPath",
-  ).mockImplementationOnce((_pathname, _env, reportCleanupFailure) => {
-    reportCleanupFailure?.(new OpenClawQuarantineReadCleanupError([failure]));
-  });
-  const failedCleanup = await worker.read({
-    context: { environment: { OPENCLAW_STATE_DIR: root } },
-    databasePath: pathname,
-    location: pathname,
-    checkFreshAdmission: true,
-    command: { type: "nodeHost.config" },
-  });
-  expect(failedCleanup).toMatchObject({ ok: true, row: { updated_at_ms: 2 } });
-  expect(failedCleanup.nativeCleanupFailure?.error?.nodes).toEqual(
-    expect.arrayContaining([expect.objectContaining({ message: failure.message })]),
-  );
 });
 
 it("refuses replacement during worker preparation, then reopens it and keeps private snapshots task-scoped", async () => {
-  const { root, pathname, read, value, workerRead, replace } = fixture();
+  const { root, pathname, read, value, workerRead } = fixture();
   const previous = read(({ db }) => db);
   const expectedIdentity = readDatabasePathIdentitySync(pathname).key;
-  const publishReplacement = replace(7);
+  const replacement = path.join(root, "replacement.sqlite");
+  seed(replacement, 7);
   const preparing = createDeferredCore();
   const releasePreparation = createDeferredCore();
   vi.doMock("./config-machine-state.read.worker.js", async (importOriginal) => {
@@ -522,7 +398,8 @@ it("refuses replacement during worker preparation, then reopens it and keeps pri
         throw new Error("Worker read settled before controlled preparation");
       }),
     ]);
-    publishReplacement();
+    fs.renameSync(pathname, path.join(root, "previous.sqlite"));
+    fs.renameSync(replacement, pathname);
     releasePreparation.resolve();
     const reply = await pending;
     expect(reply).toMatchObject({

@@ -37,8 +37,6 @@ import {
 import { prepareCurrentUserProfileAliases } from "./user-profile-reads.js";
 import {
   linkCanonicalUserProfileEmail,
-  mergeCanonicalUserProfiles,
-  setCanonicalUserProfileDisplayName,
   setCanonicalUserProfileRole,
 } from "./user-profile-writes.js";
 import {
@@ -154,54 +152,6 @@ it("does not create state or identity tables while resolving absent links", asyn
   expect(tableExists(db, "user_profile_identities")).toBe(false);
 });
 
-it("serves profile authority from committed catalog facts without another worker read", async () => {
-  const source = ensureProfileForEmail("source@example.test", options);
-  const target = ensureProfileForEmail("target@example.test", options);
-  await setRole(source.id, "admin");
-  await retainCatalog();
-  const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-  const original = await prepareRole(source.id, true);
-  expect(original).toMatchObject({
-    profileId: source.id,
-    role: "admin",
-    listItem: { emails: ["source@example.test"] },
-  });
-  const aliases = await prepareCurrentUserProfileAliases(source.id, options);
-  expect(aliases.aliases).toEqual(new Set([source.id]));
-  expect(original?.isCurrent()).toBe(true);
-  expect(reads).not.toHaveBeenCalled();
-
-  await setRole(source.id, "member");
-  await setCanonicalUserProfileDisplayName(source.id, "Current name", options);
-  expect(original?.isCurrent()).toBe(false);
-  reads.mockClear();
-  const current = await prepareRole(source.id);
-  expect(current).toMatchObject({
-    profileId: source.id,
-    role: "member",
-    display: { id: source.id, displayName: "Current name" },
-  });
-  expect(current?.isCurrent()).toBe(true);
-  expect(reads).not.toHaveBeenCalled();
-
-  await mergeCanonicalUserProfiles(source.id, target.id, options);
-  expect(current?.isCurrent()).toBe(false);
-  expect(() => aliases.assertCurrent()).toThrow();
-  reads.mockClear();
-  const merged = await prepareRole(source.id, true);
-  expect(merged).toMatchObject({
-    profileId: target.id,
-    aliases: [target.id, source.id],
-    display: { id: target.id },
-  });
-  expect(merged?.isCurrent()).toBe(true);
-  expect(merged?.listItem?.emails).toEqual(["source@example.test", "target@example.test"]);
-  expect((await prepareCurrentUserProfileAliases(source.id, options)).aliases).toEqual(
-    new Set([target.id, source.id]),
-  );
-  expect(reads).not.toHaveBeenCalled();
-});
-
 it("releases an expired commit fence before retrying a channel identity change", async () => {
   const profile = ensureProfileForEmail("owner@example.test", options);
   linkUserChannelIdentity(profile.id, identity, options);
@@ -296,6 +246,8 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
   const rolePolicy = await prepareUserProfileRolePolicyAuthority(ada.id, options);
   const selectedSource = await prepareUserProfileSelectionAuthority(ada.id, options);
   const selectedTarget = await prepareUserProfileSelectionAuthority(grace.id, options);
+  const aliases = await prepareCurrentUserProfileAliases(ada.id, options);
+  expect(aliases.aliases).toEqual(new Set([ada.id]));
   expect(admin?.role).toBe("admin");
   expect(rolePolicy).toMatchObject({ profileId: ada.id, role: "admin" });
   expectCurrent(true, rolePolicy, selectedSource, selectedTarget);
@@ -402,6 +354,18 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
     expect(linked.display.id).toBe(linked.profile.id);
     expect(getUserProfileDisplay(ada.id, options)).toEqual(linked.display);
     expect(getUserProfileDisplay(grace.id, options)).toEqual(linked.display);
+    expect(() => aliases.assertCurrent()).toThrow();
+    expect((await prepareCurrentUserProfileAliases(ada.id, options)).aliases).toEqual(
+      new Set([grace.id, ada.id]),
+    );
+    const merged = await prepareRole(ada.id, true);
+    expect(merged).toMatchObject({
+      profileId: grace.id,
+      aliases: [grace.id, ada.id],
+      display: { id: grace.id },
+      listItem: { emails: ["ada@example.test", "grace@example.test"] },
+    });
+    expectCurrent(true, merged);
   } finally {
     mutationAdmissionSpy.mockRestore();
     await Promise.allSettled([pendingRole, pendingSelection]);

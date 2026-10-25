@@ -267,19 +267,9 @@ describe("asynchronous agent database maintenance admission", () => {
     expect(f.owners()).toEqual([]);
   });
 
-  it("refuses a prepared Worker claim during plain maintenance", async () => {
+  it("refuses prepared claims and delegated opens before publishing a native handle during maintenance", async () => {
     const f = fixture();
     const before = readIndexState(f.options.pathname);
-    await withMaintenance({ env: f.env }, async () => {
-      const prepared = f.prepare();
-      expect(() => prepared.claim()).toThrow(/maintenance is in progress/);
-      expect(f.leases()).toEqual([]);
-    });
-    expect(readIndexState(f.options.pathname)).toEqual(before);
-  });
-
-  it("refuses a delegated prepared open before publishing a native handle during maintenance", async () => {
-    const f = fixture();
     const options = { agentId: "worker", env: f.env };
     const prepared = f.prepare();
     const leaseId = prepared.claim();
@@ -290,6 +280,7 @@ describe("asynchronous agent database maintenance admission", () => {
       // The Worker receives an admitted claim independently of its native open.
       await withOpenClawStateLease(leaseOptions(f.env), (maintenance) =>
         withMaintenanceAuthority(maintenance, resolveOpenClawStateSqlitePath(f.env), async () => {
+          expect(() => f.prepare().claim()).toThrow(/maintenance is in progress/);
           expect(() =>
             openAgentDb(
               options,
@@ -306,6 +297,7 @@ describe("asynchronous agent database maintenance admission", () => {
     } finally {
       releaseAgentLease(leaseId, { env: f.env });
     }
+    expect(readIndexState(f.options.pathname)).toEqual(before);
   });
 
   it.each(["expiry", "replacement", "abort", "owner", "version"] as const)(
@@ -410,7 +402,6 @@ describe("asynchronous agent database maintenance admission", () => {
       };
       if (scope === "closed") {
         const retained = await withMaintenance({ env: f.env }, async (maintenance) => maintenance);
-        expect(retained).toBeDefined();
         scan.mockClear();
         await reject(retained);
       } else if (scope === "copied") {

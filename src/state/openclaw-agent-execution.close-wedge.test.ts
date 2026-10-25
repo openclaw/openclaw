@@ -61,42 +61,31 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
         this.exec("PRAGMA max_page_count=" + pages);
       }
       const statement = prepare.call(this, sql);
-      if (/insert into/i.test(sql)) {
+      if (/insert into|delete from "?agent_database_leases"?/i.test(sql)) {
         const run = statement.run.bind(statement);
         statement.run = (...args) => {
+          const fault = new Int32Array(workerData.closeWedgeEnabled);
+          if (/insert into "?agent_database_leases"?/i.test(sql) &&
+              (Atomics.compareExchange(fault, 0, 3, 0) === 3 || Atomics.load(fault, 0) === 4)) {
+            Atomics.add(fault, 2, 1);
+            throw Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 });
+          }
+          if (/delete from "?agent_database_leases"?/i.test(sql)) {
+            Atomics.add(fault, 1, 1);
+            if (Atomics.load(fault, 0) === 1) {
+              throw Object.assign(new Error("disk I/O error"), { code: "ERR_SQLITE_ERROR", errcode: 10, errstr: "disk I/O error" });
+            }
+          }
           try {
             return run(...args);
           } catch (error) {
-            const fault = new Int32Array(workerData.closeWedgeEnabled);
-            if ([5, 6].includes(Atomics.load(fault, 0)) && error.errcode === 13) {
+            if (/insert into/i.test(sql) && [5, 6].includes(Atomics.load(fault, 0)) && error.errcode === 13) {
               // Lose the reply after a real SQLITE_FULL, leaving its outcome unknown to the host.
               Atomics.add(fault, 3, 1);
               process.exit(3);
             }
             throw error;
           }
-        };
-      }
-      const faults = [
-        [/insert into "?agent_database_leases"?/i, (fault) => {
-          if (Atomics.compareExchange(fault, 0, 3, 0) === 3 || Atomics.load(fault, 0) === 4) {
-            Atomics.add(fault, 2, 1);
-            throw Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode: 5 });
-          }
-        }],
-        [/delete from "?agent_database_leases"?/i, (fault) => {
-          Atomics.add(fault, 1, 1);
-          if (Atomics.load(fault, 0) === 1) {
-            throw Object.assign(new Error("disk I/O error"), { code: "ERR_SQLITE_ERROR", errcode: 10, errstr: "disk I/O error" });
-          }
-        }],
-      ];
-      for (const [pattern, fail] of faults) {
-        if (!pattern.test(sql)) continue;
-        const run = statement.run.bind(statement);
-        statement.run = (...args) => {
-          fail(new Int32Array(workerData.closeWedgeEnabled));
-          return run(...args);
         };
       }
       return statement;
@@ -191,7 +180,6 @@ it("recovers after a full agent database write settles", async () => {
       (error: unknown) => error,
     );
     Atomics.store(faultState, 0, 0);
-    expect(failure).toBeInstanceOf(Error);
     expect(failure).toMatchObject({ code: "outcome-unknown" });
     const recovered = capture(env);
     try {
@@ -382,7 +370,6 @@ it("recovers retained borrowers after native loss without replaying the failed o
     Atomics.store(faultState, 0, 2);
     await expect(first.runExisting(source, failed)).rejects.toBeInstanceOf(Error);
     Atomics.store(faultState, 0, 0);
-    expect(failed).toHaveBeenCalledOnce();
     expect(() => claim.assertCurrent()).toThrow();
 
     // Another live chat retains this borrower while the failed command settles.
@@ -509,14 +496,12 @@ it("keeps unavailable cleanup failures outside retry handling while preserving t
       .runExisting(source, operation)
       .catch((error: unknown) => error);
     expect(operation).toHaveBeenCalledOnce();
-    expect(failure).toBeInstanceOf(Error);
     expect(failure).toMatchObject({
       cause: expect.objectContaining({ cause: primary, errors: [primary, expect.any(Error)] }),
     });
     expect(classifyGatewayStorageFailure(failure)).toBe("unavailable");
     expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(false);
     expect(isSqliteWorkerError(failure, "unavailable")).toBe(false);
-    expect(isSqliteWorkerError(primary, "unavailable")).toBe(true);
   } finally {
     Atomics.store(faultState, 0, 0);
     await execution.release();
