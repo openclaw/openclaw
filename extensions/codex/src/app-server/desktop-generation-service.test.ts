@@ -24,6 +24,7 @@ vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
   watch: mocks.watch,
 }));
+// mock-isolation: use controlled generations without inspecting the installed macOS application.
 vi.mock("./desktop-generation-fingerprint.js", () => ({
   readMacOSDesktopGenerationFingerprint: mocks.read,
 }));

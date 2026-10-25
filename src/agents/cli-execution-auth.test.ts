@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForRuntimeAsync: async () => ({ version: 1, profiles: mocks.profiles }),
 }));
+// mock-isolation: fixture ordering avoids consulting runtime auth profile state.
 vi.mock("./auth-profiles/order.js", () => ({
   resolveAuthProfileOrderWithMetadata: () => ({ profileIds: mocks.order, hasExplicitOrder: false }),
 }));

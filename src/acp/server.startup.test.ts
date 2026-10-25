@@ -57,6 +57,7 @@ vi.mock("@openclaw/acp-core/session", async (original) => {
   };
 });
 
+// mock-isolation: drive connection callbacks without opening a real Gateway transport.
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: class {
     constructor(options: GatewayOptions) {
@@ -69,25 +70,32 @@ vi.mock("../gateway/client.js", () => ({
     }
   },
 }));
+// mock-isolation: bootstrap credentials and connection options belong to each startup scenario.
 vi.mock("../gateway/client-bootstrap.js", () => ({
   resolveGatewayClientBootstrap: state.bootstrap,
 }));
+// mock-isolation: startup uses fixture config without reading the operator's configuration.
 vi.mock("../config/config.js", () => {
   const loadConfig = () => ({ gateway: { mode: "local" } });
   return { getRuntimeConfig: loadConfig, loadConfig, resolveGatewayPort: () => 18_789 };
 });
+// mock-isolation: readiness is immediate so startup ordering does not depend on event-loop probes.
 vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: async () => ({ ready: true }),
 }));
+// mock-isolation: importing the server must not launch its executable entry point.
 vi.mock("../infra/is-main.js", () => ({ isMainModule: () => false }));
 vi.mock("../logging/console.js", async (original) => ({
   ...(await original<typeof import("../logging/console.js")>()),
   routeLogsToStderr: () => state.logs(),
 }));
+// mock-isolation: observe shutdown ownership without closing a real process-wide state database.
 vi.mock("../state/openclaw-state-db.js", () => ({
   closeOpenClawStateDatabaseAsync: () => state.closeDb(),
 }));
+// mock-isolation: startup wiring must not open a persistent SQLite event ledger.
 vi.mock("./event-ledger.js", () => ({ createSqliteAcpEventLedger: () => ({}) }));
+// mock-isolation: control translator events while exercising the real server framing and lifecycle.
 vi.mock("./translator.js", () => ({
   AcpGatewayAgent: class {
     constructor(
