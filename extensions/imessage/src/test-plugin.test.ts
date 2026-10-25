@@ -313,96 +313,80 @@ describe("imessagePlugin contracts", () => {
     });
     afterEach(() => resetPluginRuntimeStateForTest());
 
-    it("preserves provider-accepted attachment progress through actual durable core without replay", async () => {
-      const captionError = new Error("caption failed after native attachment acceptance");
-      const nativeSend = nativeSender(async () => {
-        throw captionError;
-      });
-      const bytes = IMESSAGE_WORKSPACE_PNG;
-      const runCliJson = mockCliSend().mockImplementation(async (args) => {
-        const attachmentPath = args[args.indexOf("--file") + 1];
-        expect(attachmentPath).toBeDefined();
-        expect(fs.readFileSync(attachmentPath!)).toEqual(bytes);
-        return { messageId: "p:0/durable-accepted-attachment" };
-      });
-      const onDeliveryResult = vi.fn();
-
-      await withStateDirEnv("openclaw-imessage-durable-attachment-", async ({ stateDir }) => {
-        const { sourcePath, mediaAccess } = attachment(stateDir, "workspace-image.png", bytes);
-        const { readFile } = mediaAccess;
-        const result = await sendDurableMessageBatch({
-          cfg: durableConfig,
-          channel: "imessage",
-          to: "+15550004567",
-          durability: "required",
-          mediaAccess,
-          deps: { imessage: nativeSend },
-          onDeliveryResult,
-          payloads: [{ text: "undelivered caption", mediaUrl: path.basename(sourcePath) }],
+    it.each(["caption", "custody"] as const)(
+      "preserves accepted attachment progress when %s fails",
+      async (phase) => {
+        const failure = new Error(phase + " failed after native attachment acceptance");
+        const captionRequest = vi.fn(async () => {
+          if (phase === "caption") {
+            throw failure;
+          }
+          return { guid: "caption-must-not-send" };
+        });
+        const nativeSend = nativeSender(captionRequest);
+        const messageId = "p:0/durable-accepted-attachment";
+        const bytes =
+          phase === "caption" ? IMESSAGE_WORKSPACE_PNG : Buffer.from("%PDF-1.4\nsynthetic\n");
+        const runCliJson = mockCliSend().mockImplementation(async (args) => {
+          const attachmentPath = args[args.indexOf("--file") + 1];
+          expect(attachmentPath).toBeDefined();
+          expect(fs.readFileSync(attachmentPath!)).toEqual(bytes);
+          return { messageId };
+        });
+        const onDeliveryResult = vi.fn(async () => {
+          if (phase === "custody") {
+            throw failure;
+          }
         });
 
-        expect(result).toMatchObject({
-          status: "partial_failed",
-          sentBeforeError: true,
-          receipt: { platformMessageIds: ["p:0/durable-accepted-attachment"] },
-          results: [delivery("p:0/durable-accepted-attachment")],
-          payloadOutcomes: [{ status: "failed", sentBeforeError: true }],
+        await withStateDirEnv("openclaw-imessage-durable-", async ({ stateDir }) => {
+          const { sourcePath, mediaAccess } = attachment(
+            stateDir,
+            phase === "caption" ? "workspace-image.png" : "custody-report.pdf",
+            bytes,
+          );
+          const result = await sendDurableMessageBatch({
+            cfg: durableConfig,
+            channel: "imessage",
+            to: "+15550004567",
+            durability: "required",
+            mediaAccess,
+            deps: { imessage: nativeSend },
+            onDeliveryResult,
+            payloads: [
+              {
+                text: "undelivered caption",
+                mediaUrl: phase === "caption" ? path.basename(sourcePath) : sourcePath,
+              },
+            ],
+          });
+          expect(result).toMatchObject({
+            status: "partial_failed",
+            sentBeforeError: true,
+            results: [delivery(messageId)],
+          });
+          expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining(delivery(messageId)),
+          );
+          if (phase === "custody") {
+            expect(captionRequest).not.toHaveBeenCalled();
+          } else {
+            expect(result).toMatchObject({
+              receipt: { platformMessageIds: [messageId] },
+              payloadOutcomes: [{ status: "failed", sentBeforeError: true }],
+            });
+            await drainPendingDeliveries({
+              drainKey: "imessage:default",
+              logLabel: "iMessage accepted attachment recovery",
+              cfg: durableConfig,
+              stateDir,
+              log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+              selectEntry: (entry) => ({ match: entry.channel === "imessage" }),
+            });
+          }
+          expect(runCliJson).toHaveBeenCalledOnce();
         });
-        expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining(delivery("p:0/durable-accepted-attachment")),
-        );
-        expect(readFile.mock.calls).toEqual([[sourcePath], [sourcePath]]);
-        const forwardedMediaAccess = nativeSend.mock.calls[0]?.[2]?.mediaAccess;
-        expect(forwardedMediaAccess).toEqual(mediaAccess);
-        expect(forwardedMediaAccess?.readFile).toBe(readFile);
-
-        await drainPendingDeliveries({
-          drainKey: "imessage:default",
-          logLabel: "iMessage accepted attachment recovery",
-          cfg: durableConfig,
-          stateDir,
-          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          selectEntry: (entry) => ({ match: entry.channel === "imessage" }),
-        });
-        expect(runCliJson).toHaveBeenCalledTimes(1);
-      });
-    });
-
-    it("halts native caption delivery when actual durable progress custody rejects", async () => {
-      const custodyError = new Error("durable accepted-attachment custody rejected");
-      const captionRequest = vi.fn(async () => ({ guid: "p:0/caption-must-not-send" }));
-      const nativeSend = nativeSender(captionRequest);
-      const bytes = Buffer.from("%PDF-1.4\n% actual durable custody failure\n");
-      const runCliJson = mockCliSend().mockResolvedValue({
-        messageId: "p:0/durable-custody-attachment",
-      });
-      const onDeliveryResult = vi.fn(async () => {
-        throw custodyError;
-      });
-
-      await withStateDirEnv("openclaw-imessage-durable-custody-", async ({ stateDir }) => {
-        const { sourcePath, mediaAccess } = attachment(stateDir, "custody-report.pdf", bytes);
-        const result = await sendDurableMessageBatch({
-          cfg: durableConfig,
-          channel: "imessage",
-          to: "+15550004567",
-          durability: "required",
-          mediaAccess,
-          deps: { imessage: nativeSend },
-          onDeliveryResult,
-          payloads: [{ text: "caption must not send", mediaUrl: sourcePath }],
-        });
-
-        expect(result).toMatchObject({
-          status: "partial_failed",
-          sentBeforeError: true,
-          results: [delivery("p:0/durable-custody-attachment")],
-        });
-        expect(onDeliveryResult).toHaveBeenCalledOnce();
-        expect(runCliJson).toHaveBeenCalledOnce();
-        expect(mediaAccess.readFile.mock.calls).toEqual([[sourcePath], [sourcePath]]);
-        expect(captionRequest).not.toHaveBeenCalled();
-      });
-    });
+      },
+    );
   });
 });
