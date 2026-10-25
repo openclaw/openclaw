@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw memory` (status/index/reset/search/forget/promote/promote-explain/rem-harness/rem-backfill/session-backfill)"
+summary: "CLI reference for `openclaw memory` (status/duplicates/index/reset/search/forget/promote/promote-explain/rem-harness/rem-backfill/session-backfill)"
 read_when:
   - You want to index or search semantic memory
   - You're debugging memory availability or indexing
@@ -123,6 +123,51 @@ Session eligibility excludes unindexed transcripts whose parsed content is
 entirely system-generated, matching the indexer's admission rules. These
 transcripts do not keep status dirty; later user content makes them eligible
 for indexing again.
+
+## `memory duplicates`
+
+Locate identical Markdown blocks before manually consolidating repeated memory:
+
+```bash
+openclaw memory duplicates [--agent <id>] [--min-chars <n>] [--max-groups <n>] [--json]
+```
+
+Scans the default agent's current `MEMORY.md`, `USER.md`, `memory/**/*.md`, and
+configured Markdown extra paths using Memory Core's file discovery and authorized
+reader. Use `--agent` for another configured agent, or when multiple agents are
+configured without an explicit default. Other memory plugins and
+session transcripts are not scanned. Like other offline memory commands, stop
+the local Gateway first.
+
+Remote workspace mappings are not supported by this offline diagnostic. It
+refuses configured `file-transfer` mappings (including another agent mapping the
+same directory) and declared remote Memory owners rather than inspecting an
+absent or stale Gateway-local copy. Before discovering files, it checks default
+memory roots and normalized extra paths for overlap with mapped remote workspaces,
+including nested workspaces and existing path aliases. Declared Memory ownership
+is checked at the workspace, scan roots, and their ancestors. An extra root that contains
+a remote workspace is refused even if its pattern would exclude that subtree;
+choose a narrower local root instead. Unscanned remote siblings do not block local
+memory. Run it on the workspace host with a
+local-workspace configuration instead. It does not connect to a remote node.
+
+The diagnostic uses the existing Markdown chunker with 400-token blocks,
+entry boundaries, and no overlap. It compares exact text after normalizing CRLF
+line endings and removing empty boundary lines. It does not find paraphrases or
+arbitrary matching substrings across different chunk boundaries. Short blocks
+are excluded by `--min-chars` (default 80 Unicode characters); lower it to inspect
+shorter notes.
+
+Output contains only source paths, line ranges, and counts, never block text or
+content hashes. Both repeats within one file and repeats across files are
+reported. Up to 20 groups are shown by default (`--max-groups`), with up to 20
+locations per group. JSON includes total group and occurrence counts plus
+`omittedGroups` and per-group `omittedLocations` so capped output is explicit.
+Paths can still be sensitive: review the report before sharing it.
+
+No files are deleted or rewritten, no index is opened or rebuilt, and no
+embedding provider is called. Results describe files read during this scan,
+not a transactional snapshot or the contents of an older persisted index.
 
 ## `memory index`
 

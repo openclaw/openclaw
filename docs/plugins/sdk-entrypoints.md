@@ -162,6 +162,14 @@ configured remote workspace during registration so callers cannot fall back to
 local files before its service starts. Register its bridge when ready and release
 it when the service stops. Callers keep their existing document authorization.
 
+File-only diagnostics can call `assertLocalAgentWorkspaceScanAccess(roots, capability?)`
+before discovery and again before reading discovered files. Each root has a `path`
+and an optional `recursive` flag. The guard rejects overlapping declared owners,
+including missing or empty remote descendants of recursive roots and symlink
+aliases. Capability filtering preserves local operations an adapter never owned;
+unstarted declarations remain unavailable. This admission does not grant a state
+lease or permission to read files.
+
 The bridge's optional `createFileExclusive` operation publishes a complete file
 only if its path does not exist, returning `"created"` or `"exists"`. It must use
 an atomic exclusive-create operation, never a separate existence check followed
@@ -360,6 +368,13 @@ The helper resolves the selected config's engines after acquiring offline owners
 before runtime config can write state, and retains that selection through resource
 settlement. Commands routed to a running Gateway use its engines and do not need
 the PostgreSQL credentials in the CLI process.
+
+File-only commands can instead set `databaseAccess: "none"`: they retain the
+exclusive offline lease without resolving database credentials or admitting any
+database access. When loading runtime configuration, use
+`captureRuntimeConfigAsyncReader({ observe: false })` from
+`openclaw/plugin-sdk/runtime-config-snapshot` to leave config health metadata
+untouched; ordinary readers keep their existing observation behavior.
 
 The helper routes to the local Gateway with its expected owner ID, or retains
 exclusive offline ownership through resource settlement. It never replays an

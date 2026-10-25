@@ -11,6 +11,7 @@ import type {
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   declareAgentWorkspaceAccess,
+  assertLocalAgentWorkspaceScanAccess,
   getAgentWorkspaceAccess,
   isWorkspaceAccessUnavailableError,
   WorkspaceAccessUnavailableError,
@@ -79,6 +80,37 @@ function bindWorkspace(access: Partial<AgentWorkspaceAccess> = {}) {
 }
 
 describe("host-owned workspace access", () => {
+  it("reserves declared descendants only for recursive local scans", () => {
+    declareAgentWorkspaceAccess(path.join(root, "remote"));
+    expect(() =>
+      assertLocalAgentWorkspaceScanAccess([{ path: root, recursive: true }], "memoryFiles"),
+    ).toThrow(WorkspaceAccessUnavailableError);
+    expect(() =>
+      assertLocalAgentWorkspaceScanAccess([{ path: root }], "memoryFiles"),
+    ).not.toThrow();
+    expect(() =>
+      assertLocalAgentWorkspaceScanAccess(
+        [{ path: `${root}-sibling`, recursive: true }],
+        "memoryFiles",
+      ),
+    ).not.toThrow();
+  });
+
+  it.each(["ready", "stopped"])(
+    "keeps %s adapters' unowned capabilities local without admitting their owned files",
+    (state) => {
+      const release = bindWorkspace({ prepareTurnAttachments: async () => undefined });
+      if (state === "stopped") {
+        release();
+      }
+      const scan = [{ path: root, recursive: true }];
+      expect(() => assertLocalAgentWorkspaceScanAccess(scan, "memoryFiles")).not.toThrow();
+      expect(() => assertLocalAgentWorkspaceScanAccess(scan, "prepareTurnAttachments")).toThrow(
+        WorkspaceAccessUnavailableError,
+      );
+    },
+  );
+
   it.each(["before", "after"])("preserves publication when revoked %s commit", async (when) => {
     const unexpected = async () => {
       throw new Error("Unexpected Memory operation");

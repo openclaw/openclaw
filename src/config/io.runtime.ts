@@ -118,20 +118,28 @@ export function captureRuntimeConfigAsyncReader(options: {
   assertCurrent?: () => void;
   capture: true;
   skipPluginValidation?: boolean;
+  observe?: false;
 }): RuntimeConfigAsyncReader<CapturedRuntimeConfigRead>;
 export function captureRuntimeConfigAsyncReader(options?: {
   assertCurrent?: () => void;
   capture?: false;
   skipPluginValidation?: boolean;
+  observe?: false;
 }): RuntimeConfigAsyncReader<OpenClawConfig>;
 export function captureRuntimeConfigAsyncReader(
-  options: { assertCurrent?: () => void; capture?: boolean; skipPluginValidation?: boolean } = {},
+  options: {
+    assertCurrent?: () => void;
+    capture?: boolean;
+    skipPluginValidation?: boolean;
+    observe?: false;
+  } = {},
 ): RuntimeConfigAsyncReader<OpenClawConfig | CapturedRuntimeConfigRead> {
   const cwd = tryProcessCwd();
   const stage = prepareConfigRuntimeEnvLoad({ previousConfig: {} });
   // Legacy cold IO chooses the root config path before dotenv changes the environment.
   const io = createConfigIO({
     env: stage.env,
+    ...(options.observe === false ? { observe: false } : {}),
     ...(options.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
   });
   const assertCurrent = () => options.assertCurrent?.();
