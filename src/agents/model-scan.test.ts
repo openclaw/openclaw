@@ -130,81 +130,73 @@ describe("scanOpenRouterModels", () => {
     });
   });
 
-  it("applies the scan timeout before the OpenRouter catalog responds", async () => {
-    vi.useFakeTimers();
-    const fetchImpl: typeof fetch = async () =>
-      await new Promise<Response>(() => {
-        // Deliberately ignore cancellation to prove the timeout race settles independently.
-      });
-
-    vi.stubGlobal("fetch", fetchImpl);
-    const pending = expect(scanOpenRouterModels({ probe: false, timeoutMs: 1 })).rejects.toThrow(
-      /OpenRouter model scan timed out/,
-    );
-
-    await vi.advanceTimersByTimeAsync(1);
-    await pending;
-  });
-
-  it("keeps the catalog timeout active while reading a streaming body", async () => {
-    vi.useFakeTimers();
-    const timeoutMs = 20;
-    const chunkIntervalMs = 5;
-    const encoder = new TextEncoder();
-    let chunkCount = 0;
-    let abortCount = 0;
-
-    const fetchImpl = withFetchPreconnect(async (_input, init) => {
-      const signal = typeof init === "object" && init ? init.signal : undefined;
-      if (!signal) {
-        throw new Error("Expected catalog request signal");
-      }
+  it.each(["headers", "streaming body"] as const)(
+    "keeps the scan deadline while awaiting %s",
+    async (stage) => {
+      vi.useFakeTimers();
+      let chunks = 0;
+      const aborted = vi.fn();
       let interval: ReturnType<typeof setInterval> | undefined;
-      let completionTimer: ReturnType<typeof setTimeout> | undefined;
+      let completion: ReturnType<typeof setTimeout> | undefined;
       const stop = () => {
         clearInterval(interval);
-        clearTimeout(completionTimer);
+        clearTimeout(completion);
       };
-      return jsonResponse(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(encoder.encode('{"data":['));
-            interval = setInterval(() => {
-              chunkCount += 1;
-              controller.enqueue(encoder.encode(" "));
-            }, chunkIntervalMs);
-            completionTimer = setTimeout(() => {
-              clearInterval(interval);
-              controller.enqueue(encoder.encode("]}"));
-              controller.close();
-            }, timeoutMs + chunkIntervalMs);
-            signal.addEventListener(
-              "abort",
-              () => {
-                abortCount += 1;
-                stop();
-                controller.error(signal.reason);
+      vi.stubGlobal(
+        "fetch",
+        withFetchPreconnect(async (_input, init) => {
+          if (stage === "headers") {
+            return await new Promise<Response>(() => {});
+          }
+          const signal = init?.signal;
+          if (!signal) {
+            throw new Error("Expected catalog request signal");
+          }
+          const encoder = new TextEncoder();
+          return jsonResponse(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(encoder.encode('{"data":['));
+                interval = setInterval(() => {
+                  chunks++;
+                  controller.enqueue(encoder.encode(" "));
+                }, 5);
+                completion = setTimeout(() => {
+                  stop();
+                  controller.enqueue(encoder.encode("]}"));
+                  controller.close();
+                }, 25);
+                signal.addEventListener(
+                  "abort",
+                  () => {
+                    aborted();
+                    stop();
+                    controller.error(signal.reason);
+                  },
+                  { once: true },
+                );
               },
-              { once: true },
-            );
-          },
-          cancel: stop,
+              cancel: stop,
+            }),
+          );
         }),
       );
-    });
-
-    vi.stubGlobal("fetch", fetchImpl);
-    const pending = expect(scanOpenRouterModels({ probe: false, timeoutMs })).rejects.toThrow(
-      /timed out/i,
-    );
-
-    await vi.advanceTimersByTimeAsync(timeoutMs - 1);
-    expect({ chunkCount, abortCount }).toEqual({ chunkCount: 3, abortCount: 0 });
-
-    await vi.advanceTimersByTimeAsync(chunkIntervalMs + 1);
-    await pending;
-    expect({ abortCount, timers: vi.getTimerCount() }).toEqual({ abortCount: 1, timers: 0 });
-  });
+      const pending = expect(scanOpenRouterModels({ probe: false, timeoutMs: 20 })).rejects.toThrow(
+        /timed out/i,
+      );
+      await vi.advanceTimersByTimeAsync(19);
+      if (stage === "streaming body") {
+        expect(chunks).toBe(3);
+        expect(aborted).not.toHaveBeenCalled();
+      }
+      await vi.advanceTimersByTimeAsync(6);
+      await pending;
+      if (stage === "streaming body") {
+        expect(aborted).toHaveBeenCalledOnce();
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it("does not match provider filters across provider id variants", async () => {
     const results = await scan(

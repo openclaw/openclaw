@@ -23,7 +23,7 @@ const NODE_ID = "mac-1";
 const TINY_JPEG_BASE64 =
   "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/ASP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/ASP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EFBABAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z";
 const JPG_PAYLOAD = { format: "jpg", base64: TINY_JPEG_BASE64, width: 1, height: 1 };
-const PHOTO = { ...JPG_PAYLOAD, format: "jpeg", createdAt: "2026-03-04T00:00:00Z" };
+const PHOTO = { ...JPG_PAYLOAD, format: "jpeg" };
 
 function executeNodes(
   input: Record<string, unknown>,
@@ -188,13 +188,8 @@ it("returns an explicit model-facing result when no photos are available", async
   expect(result.details).toStrictEqual([]);
 });
 
-it.each<[string, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>]>([
-  [
-    "device.status",
-    { action: "device_status" },
-    {},
-    { battery: { state: "charging", lowPowerModeEnabled: false } },
-  ],
+it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+  ["device.status", { action: "device_status" }, {}],
   [
     "notifications.actions",
     {
@@ -204,7 +199,6 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>, Record<string
       notificationReplyText: " On it ",
     },
     { key: "n1", action: "reply", replyText: "On it" },
-    { ok: true, key: "n1", action: "reply" },
   ],
   [
     "location.get",
@@ -215,11 +209,11 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>, Record<string
       locationTimeoutMs: 4_500,
     },
     { maxAgeMs: 12_000, desiredAccuracy: "balanced", timeoutMs: 4_500 },
-    { latitude: 37.3346, longitude: -122.009, accuracyMeters: 18, provider: "network" },
   ],
 ])(
   "routes %s with normalized parameters and returns its payload",
-  async (command, input, params, payload) => {
+  async (command, input, params) => {
+    const payload = { fixture: "node reply" };
     mockInvoke(command, params, payload, [command]);
     expect(JSON.parse(firstText(await executeNodes(input)))).toStrictEqual(payload);
   },
