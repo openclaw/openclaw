@@ -39,6 +39,18 @@ describe("Telegram send recovery conformance over HTTP", () => {
     requests.slice(start).map(({ fields }) => fields[key]);
   const expectMethods = (...methods: string[]) =>
     expect(requests.map(({ method }) => method)).toEqual(methods);
+  const expectFields = (fields: Record<string, unknown[]>, start = 0) => {
+    for (const [key, values] of Object.entries(fields)) {
+      expect(fieldValues(key, start), key).toEqual(values);
+    }
+  };
+  const mockAudio = (contentType: string, fileName = "clip") =>
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      buffer: Buffer.from("audio-bytes"),
+      kind: "audio",
+      contentType,
+      fileName,
+    });
   const configWith = <const T extends object>(overrides: T) => ({
     channels: { telegram: { ...cfg.channels.telegram, ...overrides } },
   });
@@ -96,18 +108,19 @@ describe("Telegram send recovery conformance over HTTP", () => {
       });
       expectMethods("sendRichMessage", "sendMessage", "sendMessage");
       expect(requests[0]!.fields.rich_message).toMatchObject({ skip_entity_detection: true });
-      expect(fieldValues("parse_mode", 1)).toEqual([undefined, undefined]);
-      expect(fieldValues("text", 1)).toEqual(["A".repeat(4000), "A".repeat(500)]);
-      expect(fieldValues("reply_parameters", 1)).toEqual(
-        entry === "direct"
-          ? [{ message_id: 7, quote: "quote", allow_sending_without_reply: true }, undefined]
-          : [undefined, undefined],
+      expectFields(
+        {
+          parse_mode: [undefined, undefined],
+          text: ["A".repeat(4000), "A".repeat(500)],
+          reply_parameters:
+            entry === "direct"
+              ? [{ message_id: 7, quote: "quote", allow_sending_without_reply: true }, undefined]
+              : [undefined, undefined],
+          reply_markup: [undefined, { inline_keyboard: buttons }],
+          link_preview_options: [{ is_disabled: true }, { is_disabled: true }],
+        },
+        1,
       );
-      expect(fieldValues("reply_markup", 1)).toEqual([undefined, { inline_keyboard: buttons }]);
-      expect(fieldValues("link_preview_options", 1)).toEqual([
-        { is_disabled: true },
-        { is_disabled: true },
-      ]);
       expect(result.receipt?.platformMessageIds).toEqual(["2", "3"]);
     },
   );
@@ -199,7 +212,6 @@ describe("Telegram send recovery conformance over HTTP", () => {
             });
       expectMethods("sendMediaGroup", "sendPhoto");
       const album = JSON.parse(String(requests[0]!.fields.media));
-      expect(album).toHaveLength(10);
       expect(album.map((item: { caption?: string }) => item.caption)).toEqual([
         "Album",
         ...Array(9).fill(undefined),
@@ -343,10 +355,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
     });
     const error = await sendThrough("public", "answer").catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-    expect(error).toMatchObject({
-      retryable: false,
-      message: expect.stringContaining("-100123"),
-    });
+    expect(error).toMatchObject({ retryable: false, message: expect.stringContaining("-100123") });
     expect(fieldValues("chat_id")).toEqual(["123"]);
   });
 
@@ -667,12 +676,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
   });
 
   it("sends WAV media requested as voice using sendAudio", async () => {
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      buffer: Buffer.from("audio-bytes"),
-      kind: "audio",
-      contentType: "audio/wav",
-      fileName: "note.wav",
-    });
+    mockAudio("audio/wav", "note.wav");
     await sendMessageTelegram("123", "Caption", {
       ...requestOptions(),
       mediaUrl: "https://example.com/audio",
@@ -693,12 +697,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
     "sends a rounded probed duration with $entry $method uploads",
     async ({ entry, method, contentType, asVoice }) => {
       vi.spyOn(mediaRuntime, "runFfprobe").mockResolvedValue("12.6\n");
-      vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-        buffer: Buffer.from("audio-bytes"),
-        kind: "audio",
-        contentType,
-        fileName: "clip",
-      });
+      mockAudio(contentType);
       const mediaUrl = "https://example.com/clip";
       if (entry === "durable") {
         await sendMessageTelegram("123", "", { cfg, api: bot.api, mediaUrl, asVoice });

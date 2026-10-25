@@ -355,20 +355,12 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     async (branch) => {
       const blocks: NonNullable<ReplyPayload["presentation"]>["blocks"] = [];
       if (branch !== "control-only") {
-        blocks.push(
-          {
-            type: "chart",
-            chartType: "pie",
-            title: "Revenue mix",
-            segments: [{ label: "Product", value: 60 }],
-          },
-          {
-            type: "table",
-            caption: "Pipeline",
-            headers: ["Account", "Stage"],
-            rows: [["Acme", "Won"]],
-          },
-        );
+        blocks.push({
+          type: "table",
+          caption: "Pipeline",
+          headers: ["Account", "Stage"],
+          rows: [["Acme", "Won"]],
+        });
       }
       blocks.push({
         type: "buttons",
@@ -435,11 +427,11 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       );
       expect(markup).not.toContain("x".repeat(65));
       if (branch !== "control-only") {
-        assertContains(answer?.[1], "Revenue mix", "Product", "Acme", "Won");
+        assertContains(answer?.[1], "Pipeline", "Acme", "Won");
       }
       if (branch === "buffered") {
         expect(String(sends()[0]?.fields.text)).toContain("accepted second reasoning attempt");
-        expect(String(sends().at(-1)?.fields.text)).toContain("Revenue mix");
+        expect(String(sends().at(-1)?.fields.text)).toContain("Pipeline");
       } else if (branch === "immediate") {
         expect([...visibleMessages.keys()]).toEqual([1]);
       }

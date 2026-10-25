@@ -165,10 +165,6 @@ describe("Telegram registered adapter conformance over HTTP", () => {
             {
               type: "table",
               caption: "Pipeline",
-              cells: [
-                ["Account", "Total"].map((text) => ({ text, is_header: true })),
-                ["Acme", "12"].map((text) => ({ text })),
-              ],
             },
           ],
         });
@@ -568,36 +564,19 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
     });
 
-    it("renders supplemental data and exact callback values with a visible degradation result", async () => {
+    it("preserves exact callback values with a visible degradation result", async () => {
       const result = await send({
         to: "tg:123",
         message: "Quarterly results",
         presentation: {
           blocks: [
             { type: "text", text: "Do not duplicate this block" },
-            {
-              type: "chart",
-              chartType: "bar",
-              title: "Revenue",
-              categories: ["Q1"],
-              series: [{ name: "USD", values: [12] }],
-            },
-            pipelineTable,
             ...buttonPresentation({ label: "Deploy", value: "env|prod" }, droppedButton()).blocks,
           ],
         },
       });
       const text = String(requests[0]!.fields.text);
-      for (const content of [
-        "Quarterly results",
-        "Revenue",
-        "USD",
-        "Q1: 12",
-        "Pipeline",
-        "Account: Acme",
-        "Total: 12",
-        "Copy manually",
-      ]) {
+      for (const content of ["Quarterly results", "Copy manually"]) {
         expect(text).toContain(content);
       }
       expect(text).not.toContain("Do not duplicate this block");

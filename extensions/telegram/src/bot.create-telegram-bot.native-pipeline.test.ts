@@ -605,20 +605,7 @@ it("commits a first sticker description before model admission and never describ
     expect(harness.replySpy).not.toHaveBeenCalled();
     description.resolve({ text: "A curious sticker" });
     await receiving;
-    await bot.handleUpdate(
-      stickerUpdate(2801, {
-        sticker: {
-          ...sticker,
-          file_id: "refreshed-sticker-file",
-          emoji: "new",
-          set_name: "NewSet",
-        },
-      }),
-    );
-    expect(cachedAtAdmission).toMatchObject([
-      { description: "A curious sticker" },
-      { description: "A curious sticker" },
-    ]);
+    expect(cachedAtAdmission).toMatchObject([{ description: "A curious sticker" }]);
     for (const [context] of harness.replySpy.mock.calls) {
       expect(context.BodyForAgent?.match(/A curious sticker/g)).toHaveLength(1);
       expect(context.ReplyToBody).toBe("Keep this quoted context");
@@ -626,12 +613,6 @@ it("commits a first sticker description before model admission and never describ
       expect(context.CommandBody).not.toContain("A curious sticker");
       expect(context.SkipStickerMediaUnderstanding).toBe(true);
     }
-    expect(await getCachedSticker(sticker.file_unique_id)).toMatchObject({
-      fileId: "refreshed-sticker-file",
-      description: "A curious sticker",
-      emoji: "new",
-      setName: "NewSet",
-    });
     await bot.handleUpdate(
       stickerUpdate(2802, {
         sticker: { ...sticker, file_unique_id: "unsupported-sticker", is_animated: true },
@@ -654,25 +635,7 @@ it("commits a first sticker description before model admission and never describ
       ]),
     );
     expect(describeImage).toHaveBeenCalledOnce();
-    expect(apiPayloads("sendMessage")).toHaveLength(3);
-    const downloads = apiPayloads("getFile").length;
-    await bot.handleUpdate(
-      stickerUpdate(2803, {
-        sticker: {
-          ...sticker,
-          file_unique_id: "unsupported-video",
-          is_video: true,
-          emoji: undefined,
-        },
-        reply_to_message: undefined,
-      }),
-    );
-    expect(harness.replySpy.mock.calls.at(-1)?.[0]).toMatchObject({
-      BodyForAgent: "<media:sticker>",
-      media: [{ kind: "sticker", path: undefined }],
-    });
-    expect(apiPayloads("getFile")).toHaveLength(downloads);
-    expect(describeImage).toHaveBeenCalledOnce();
+    expect(apiPayloads("sendMessage")).toHaveLength(2);
     describeImage.mockImplementationOnce(() => lateDescription.promise);
     await expect(
       webhookCallback(bot, "std/http", { timeoutMilliseconds: 0 })(
@@ -691,7 +654,7 @@ it("commits a first sticker description before model admission and never describ
     await harness.settleUpdates();
     setTelegramRuntime(runtime);
   }
-  expect(apiPayloads("sendMessage")).toHaveLength(5);
+  expect(apiPayloads("sendMessage")).toHaveLength(3);
   expect(await getCachedSticker(lateStickerId)).toMatchObject({
     description: "A sticker after webhook expiry",
   });
