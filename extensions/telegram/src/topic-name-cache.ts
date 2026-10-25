@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { ConversationLabelRefinementState } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 
 const TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES = 2_048;
@@ -14,6 +15,7 @@ type TopicEntry = {
   iconColor?: number;
   iconCustomEmojiId?: string;
   closed?: boolean;
+  refinement?: ConversationLabelRefinementState;
   updatedAt: number;
 };
 
@@ -143,6 +145,11 @@ export async function updateTopicName(
     ...(iconCustomEmojiId !== undefined ? { iconCustomEmojiId } : {}),
     ...(closed !== undefined ? { closed } : {}),
     ...(creatorUserId !== undefined ? { creatorUserId } : {}),
+    ...(patch.refinement
+      ? { refinement: patch.refinement }
+      : existing?.refinement && (!patch.name || patch.name === existing.name)
+        ? { refinement: existing.refinement }
+        : {}),
   };
   if (!merged.name) {
     return;
@@ -153,6 +160,16 @@ export async function updateTopicName(
   if (evictedKey) {
     await state.persistentStore.delete(evictedKey);
   }
+}
+
+export async function getTopicLabelRefinement(
+  chatId: number | string,
+  threadId: number | string,
+  scope: string,
+): Promise<ConversationLabelRefinementState | undefined> {
+  const state = getTopicStoreState(scope);
+  await hydrateTopicStoreState(state);
+  return state.store.get(cacheKey(chatId, threadId))?.refinement;
 }
 
 export async function getTopicName(

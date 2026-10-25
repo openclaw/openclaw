@@ -2,10 +2,7 @@ import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  generateConversationLabel as generateTopicLabel,
-  resolveChunkMode,
-} from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
@@ -29,6 +26,7 @@ import type {
   TelegramDispatchTurn,
   TelegramDispatchResult,
 } from "./bot-message-dispatch.types.js";
+import { updateTelegramTopicLabel } from "./bot-topic-label.js";
 import { getTelegramTextParts, resolveTelegramReplyId } from "./bot/helpers.js";
 import {
   addTelegramNativeQuoteCandidate,
@@ -424,8 +422,13 @@ export const dispatchTelegramMessage = async (
     return { kind: "completed" };
   }
 
-  const scheduleDmTopicLabel = () => {
-    if (!isDmTopic || !isFirstTurnInSession) {
+  const updateDmTopicLabel = async () => {
+    if (
+      !isDmTopic ||
+      isRoomEvent ||
+      !dispatchContext.ctxPayload.SessionKey ||
+      !dispatchContext.topicNameCacheScope
+    ) {
       return;
     }
     const userMessage = truncateUtf16Safe(
@@ -446,30 +449,27 @@ export const dispatchTelegramMessage = async (
     if (!autoTopicConfig) {
       return;
     }
-    const topicThreadId = dispatchContext.threadSpec.id!;
-    void (async () => {
-      try {
-        const label = await generateTopicLabel({
-          userMessage,
-          prompt: autoTopicConfig.prompt,
-          maxLength: 128,
-          cfg,
-          agentId: dispatchContext.route.agentId,
-          agentDir: resolveAgentDir(cfg, dispatchContext.route.agentId),
-        });
-        if (!label) {
-          logVerbose("auto-topic-label: LLM returned empty label");
-          return;
-        }
-        logVerbose(`auto-topic-label: generated label (len=${label.length})`);
-        await bot.api.editForumTopic(dispatchContext.chatId, topicThreadId, { name: label });
-        logVerbose(`auto-topic-label: renamed topic ${dispatchContext.chatId}/${topicThreadId}`);
-      } catch (err) {
-        logVerbose(`auto-topic-label: failed: ${String(err)}`);
-      }
-    })();
+    try {
+      await updateTelegramTopicLabel({
+        bot,
+        cfg,
+        agentId: dispatchContext.route.agentId,
+        topicNameCacheScope: dispatchContext.topicNameCacheScope,
+        sessionKey: dispatchContext.ctxPayload.SessionKey,
+        chatId: dispatchContext.chatId,
+        threadId: dispatchContext.threadSpec.id!,
+        userMessage,
+        prompt: autoTopicConfig.prompt,
+        skillFilter: dispatchContext.skillFilter,
+        firstTurn: isFirstTurnInSession,
+        loadFreshSessionEntry,
+        isSuperseded: isDispatchSuperseded,
+      });
+    } catch (err) {
+      logVerbose(`auto-topic-label: failed: ${String(err)}`);
+    }
   };
-  scheduleDmTopicLabel();
+  await updateDmTopicLabel();
   if (statusReactionController) {
     finalizeStatusInBackground(
       turn.agentRunFailed ||

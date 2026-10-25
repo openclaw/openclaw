@@ -480,6 +480,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/telegram/src/bot-message-dispatch.progress-lifecycle.telegram-http.test.ts",
   "extensions/telegram/src/bot-message-dispatch.recovery.telegram-http.test.ts",
   "extensions/telegram/src/bot-message-dispatch.reply-targets.telegram-http.test.ts",
+  "extensions/telegram/src/bot-message-dispatch.topic-label.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.concurrency.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.delivery.test.ts",
   "extensions/telegram/src/bot-native-command-dispatch.miniapp.test.ts",

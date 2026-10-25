@@ -94,6 +94,7 @@ export type TelegramMessageContext = {
   ackReactionPromise: Promise<boolean> | null;
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
+  topicNameCacheScope?: string;
 };
 
 export const buildTelegramMessageContext = async ({
@@ -147,6 +148,7 @@ export const buildTelegramMessageContext = async ({
       : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+  let directTopicNameCacheScope: string | undefined;
   const resolveTopicMetadata = async (threadId: number, direct = false) => {
     const topicRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntime);
     let scope = topicRuntime.resolveStorePath(cfg.session?.store, {
@@ -156,6 +158,7 @@ export const buildTelegramMessageContext = async ({
     });
     if (direct) {
       scope = resolveTelegramDirectTopicNameCacheScope(scope, account.accountId);
+      directTopicNameCacheScope = scope;
     }
     return resolveTelegramForumTopicMetadata({ msg, threadId, scope });
   };
@@ -561,5 +564,6 @@ export const buildTelegramMessageContext = async ({
     ackReactionPromise,
     statusReactionController,
     accountId: account.accountId,
+    topicNameCacheScope: directTopicNameCacheScope,
   };
 };

@@ -11,6 +11,7 @@ import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
+import { resolveTelegramDirectTopicNameCacheScope } from "./topic-name-cache.js";
 
 export type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotFixtureMocks["dispatchReplyWithBufferedBlockDispatcher"]
@@ -128,7 +129,7 @@ const getSessionEntry = getSessionEntryHoisted;
 export const loadSessionStore = loadSessionStoreHoisted;
 export const readLatestAssistantTextByIdentity = readLatestAssistantTextByIdentityHoisted;
 const resolveStorePath = resolveStorePathHoisted;
-const generateTopicLabel = generateTopicLabelHoisted;
+export const generateTopicLabel = generateTopicLabelHoisted;
 const describeStickerImage = describeStickerImageHoisted;
 const resolveAgentDir = resolveAgentDirHoisted;
 const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
@@ -286,6 +287,7 @@ vi.mock("./send.js", async () => ({
 vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-dispatch-runtime")>()),
   generateConversationLabel: generateTopicLabelHoisted,
+  readConversationLabelRefinementSource: vi.fn(async (_scope, message: string) => message),
   resolveChunkMode: resolveChunkModeHoisted,
 }));
 
@@ -381,6 +383,11 @@ vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) =>
 
 vi.mock("openclaw/plugin-sdk/skill-commands-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/skill-commands-runtime")>()),
+  prepareSkillCommandsForWorkspace: vi.fn(async (params: { skillFilter?: string[] }) =>
+    params.skillFilter && !params.skillFilter.includes("review")
+      ? []
+      : [{ name: "review", skillName: "review", description: "Review a task" }],
+  ),
   prepareSkillCommandsForAgents: (
     ...args: Parameters<TelegramBotFixtureMocks["prepareSkillCommandsForAgents"]>
   ) => telegramDepsForTest.prepareSkillCommandsForAgents(...args),
@@ -587,6 +594,10 @@ export function expectDeliveredReply(index: number, expected: Record<string, unk
 
 export function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {
   const base = {
+    topicNameCacheScope: resolveTelegramDirectTopicNameCacheScope(
+      testState.path("sessions.json"),
+      "default",
+    ),
     ctxPayload: { SessionKey: "agent:default:telegram:direct:123" },
     primaryCtx: { message: { chat: { id: 123, type: "private" } } },
     msg: {

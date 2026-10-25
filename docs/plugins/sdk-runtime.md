@@ -48,6 +48,15 @@ containment. The same ID is advertised in Gateway `hello-ok.features.capabilitie
 
 ## Module loading and host identity
 
+`openclaw/plugin-sdk/reply-dispatch-runtime` provides
+`advanceConversationLabelRefinement` and `readConversationLabelRefinementSource`
+for channels that refine generated names. The first consumes one task-bearing
+message only when the session identity and generated name still match. The second
+reads at most 40 recent messages and 32 KB, then builds bounded context using the
+same task classification as Dashboard naming. These helpers do not write state
+or call a model; the channel owns provenance, persistence before inference, and
+current-name and session checks before its transport edit.
+
 Declare plugin entries in `package.json` under `openclaw.extensions`, import
 documented `openclaw/plugin-sdk/*` subpaths, and declare `openclaw` as a peer
 dependency. The running host owns SDK classes, registries, and lifecycle state;

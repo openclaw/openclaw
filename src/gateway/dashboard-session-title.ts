@@ -498,7 +498,10 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     }
     refinementSource = task;
     // Claim before inference so concurrent follow-ups retain their own admission.
-    refinementName = await claimDashboardTitleRefinement(params);
+    refinementName = await claimDashboardTitleRefinement({
+      ...params,
+      skillCommands: preparedSkillCommands,
+    });
     if (!refinementName) {
       return false;
     }
