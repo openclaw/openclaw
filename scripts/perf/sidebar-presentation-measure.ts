@@ -1,6 +1,7 @@
 /**
  * Warm sessions.list owner benchmark, with real persisted synthetic rows and
  * recipient policy. No socket, model, or end-to-end Gateway latency claim.
+ * Optional projection backfill remains enabled throughout, including warmup.
  *
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/sidebar-presentation-measure.ts \
  *   --state-dir .local/sidebar/run-1 --output .local/sidebar/run-1.json
@@ -15,7 +16,7 @@
  * --repeats N reuses fixture setup, writing <output>.<1-based repeat>.json.
  * With --barrier-dir <fresh directory> --side base|fix, publish <side>.ready
  * after warmup and wait for <repeat>.<side>.go before each measured repeat.
- * A controller can alternate the two prepared processes without overlapping work.
+ * A controller can alternate the two prepared processes without overlapping measured reads.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -71,6 +72,7 @@ if (barrierDir) {
   mkdirSync(barrierDir, { recursive: true });
 }
 const pageSize = Math.min(100, sessions);
+const keyFor = (index: number) => `agent:main:sidebar-${index.toString().padStart(5, "0")}`;
 const root = path.resolve(values["state-dir"]);
 mkdirSync(root);
 for (const dir of ["home", "tmp"]) {
@@ -137,7 +139,6 @@ const [
   { prepareGatewayRecipientProfile },
   { createSessionRowProjection },
   { listProjectedSessions },
-  { retainSessionListForegroundWork },
   { serializeGatewayFrame },
   { createEmptyPluginRegistry },
   { setActivePluginRegistry },
@@ -151,7 +152,6 @@ const [
   import("../../src/gateway/expected-profile.js"),
   import("../../src/gateway/session-row-projection.js"),
   import("../../src/gateway/session-utils-list.js"),
-  import("../../src/gateway/session-projection-work.js"),
   import("../../src/gateway/serialized-json.js"),
   import("../../src/plugins/registry-empty.js"),
   import("../../src/plugins/runtime.js"),
@@ -191,7 +191,6 @@ const recipients: GatewayClient[] = Array.from({ length: clients }, (_, index) =
   return recipient;
 });
 let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
-const releaseForeground = retainSessionListForegroundWork();
 const inspector = new Session();
 let connected = false;
 const collections: { kind: number; ms: number }[] = [];
@@ -224,7 +223,7 @@ try {
   runOpenClawAgentWriteTransaction(
     (database) => {
       for (let index = 0; index < sessions; index++) {
-        writeSessionEntry(database, `agent:main:sidebar-${index.toString().padStart(5, "0")}`, {
+        writeSessionEntry(database, keyFor(index), {
           sessionId: `sidebar-${index}`,
           updatedAt: 1_800_000_000_000 + index,
           label: `Synthetic sidebar row ${index}`,
@@ -264,20 +263,40 @@ try {
     serializeGatewayFrame({ type: "res", id: "sidebar", ok: true, payload: result });
     return result;
   }
+  for (let index = 0; index < warmCalls; index++) {
+    await list(index);
+  }
+  // Only selected rows are materialized. Let their optional empty-transcript
+  // backfill acknowledge null before recording the stable warm response.
+  const pendingBackfill = new Set(
+    Array.from({ length: pageSize }, (_, index) => keyFor(sessions - 1 - index)),
+  );
+  const backfillDeadline = Date.now() + 120_000;
+  while (pendingBackfill.size) {
+    for (const key of pendingBackfill) {
+      if (
+        projection.capture({ agentId: "main", key })?.retainedDatabaseFacts
+          ?.transcriptAssistantMessage === null
+      ) {
+        pendingBackfill.delete(key);
+      }
+    }
+    assert(Date.now() < backfillDeadline, `Backfill unfinished for ${pendingBackfill.size} rows`);
+    if (pendingBackfill.size) {
+      await delay(100);
+    }
+  }
   const golden: string[] = [];
   for (let index = 0; index < clients; index++) {
     const result = await list(index, false);
     const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
     assert.equal(rows.length, pageSize);
-    assert.equal(rows[0]?.key, `agent:main:sidebar-${(sessions - 1).toString().padStart(5, "0")}`);
+    assert.equal(rows[0]?.key, keyFor(sessions - 1));
     assert.equal(
       rows[0]?.sharingRole,
       index % profiles.length === (sessions - 1) % profiles.length ? "owner" : "viewer",
     );
     golden.push(createHash("sha256").update(JSON.stringify(rows)).digest("hex"));
-  }
-  for (let index = 0; index < warmCalls; index++) {
-    assert.equal((await list(index)).rowsUnchanged, true);
   }
   if (values.allocations) {
     inspector.connect();
@@ -420,6 +439,7 @@ try {
       pageSize,
       operations,
       warmCalls,
+      preparedBackfillRows: pageSize,
       repeat,
       repeats,
       counts: {
@@ -464,7 +484,6 @@ try {
     inspector.disconnect();
   }
   projection?.dispose();
-  releaseForeground();
   catalog.release();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
