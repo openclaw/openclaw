@@ -15,6 +15,8 @@ import * as runtimeProcess from "../infra/runtime-process-url.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { writeSealedRuntimeProcessFixture } from "../test-utils/sealed-runtime-process-fixture.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import type {
   CodeModeExecutorContinuation,
   CodeModeExecutorResumeInput,
@@ -110,13 +112,20 @@ const guestTimeout = {
   failurePhase: "guest",
 };
 
-async function runNodeProbe(body: string): Promise<unknown> {
-  const probe = `
+async function runNodeProbe(
+  body: string,
+  workerUrl = runtimeProcess.resolveRuntimeProcessEntrypointUrl("codeModeNode"),
+): Promise<unknown> {
+  return withTempDir("code-mode-probe-", async (directory) => {
+    const bootstrap = await writeSealedRuntimeProcessFixture(directory, "worker", {
+      codeModeNode: workerUrl,
+    });
+    const probe = `
       import { nodeCodeModeExecutor } from ${JSON.stringify(new URL("./code-mode-node.ts", import.meta.url).href)};
-      import { registerSealedRuntimeProcessEntrypoint } from ${JSON.stringify(new URL("../infra/runtime-process-url.ts", import.meta.url).href)};
+      import { registerSealedRuntimeProcessEntrypoints } from ${JSON.stringify(new URL("../infra/runtime-process-url.ts", import.meta.url).href)};
       import { LegacyPluginSdkResourceHost } from ${JSON.stringify(new URL("../plugins/legacy-sdk-resource-host.ts", import.meta.url).href)};
       import { createTestGatewayScheduler } from ${JSON.stringify(new URL("../test-utils/gateway-scheduler-clock.ts", import.meta.url).href)};
-      registerSealedRuntimeProcessEntrypoint("codeModeNode", new URL(${JSON.stringify(runtimeProcess.resolveRuntimeProcessEntrypointUrl("codeModeNode").href)}));
+      registerSealedRuntimeProcessEntrypoints("worker", ${JSON.stringify(bootstrap)});
       const host = new LegacyPluginSdkResourceHost();
       const scheduler = createTestGatewayScheduler();
       host.bindScheduler(scheduler);
@@ -136,18 +145,19 @@ async function runNodeProbe(body: string): Promise<unknown> {
         await scheduler.stop();
       }
     `;
-  const { stdout } = await promisify(execFile)(
-    process.execPath,
-    [
-      "--import",
-      fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
-      "--input-type=module",
-      "-e",
-      probe,
-    ],
-    { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 25_000 },
-  );
-  return JSON.parse(stdout);
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+        "--input-type=module",
+        "-e",
+        probe,
+      ],
+      { env: { ...process.env, NODE_OPTIONS: "" }, timeout: 25_000 },
+    );
+    return JSON.parse(stdout);
+  });
 }
 
 it.each([
@@ -271,8 +281,8 @@ it.skipIf(Boolean(process.versions.bun))(
         await yield_control();
       }
     `;
-    const observed = await runNodeProbe(`
-        registerSealedRuntimeProcessEntrypoint("codeModeNode", new URL(${JSON.stringify(new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url).href)}));
+    const observed = await runNodeProbe(
+      `
         const pressureConfig = { ...config, timeoutMs: 10000, memoryLimitBytes: 128 * 1024 * 1024 };
         const lowPressure = await run(
           'const until = Date.now() + 1100; while (Date.now() < until) { collectGarbage(); await yield_control(); } return 1;',
@@ -284,7 +294,9 @@ it.skipIf(Boolean(process.versions.bun))(
         const pressureMs = performance.now() - pressureStarted;
         const afterPressure = await run("return 7");
         console.log(JSON.stringify({ pressure, pressureEndedQuickly: pressureMs < 5000, afterPressure, lowPressure }));
-      `);
+      `,
+      new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url),
+    );
     expect(observed).toMatchObject({
       lowPressure: { status: "completed", value: { json: "1" } },
       pressureEndedQuickly: true,

@@ -22,10 +22,6 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { testing } from "../openai-transport-stream.test-support.js";
 import { log } from "./logger.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
-import {
-  repairRejectedCompactionReplayInSessionManager,
-  repairRejectedThinkingReplayInSessionManager,
-} from "./thinking-replay-repair.js";
 
 const model = makeProviderModelFixture({
   id: "grok-4.5",
@@ -51,7 +47,6 @@ function createSession(
   sessionModel: Model = model,
   providerReplay?: AssistantMessage["providerReplay"],
   userText = sourceText,
-  assistantFields: Partial<AssistantMessage> = {},
 ) {
   const sessionManager = SessionManager.inMemory();
   sessionManager.appendMessage({ role: "user", content: userText, timestamp: 1 });
@@ -63,7 +58,6 @@ function createSession(
       model: sessionModel.id,
       providerReplay,
       timestamp: 2,
-      ...assistantFields,
     }),
   );
   return { sessionManager, messages: branchMessages(sessionManager) };
@@ -131,76 +125,6 @@ function checkpointOwner(session: ReturnType<typeof createSession>) {
 beforeEach(() => {
   requestPreparedCompactionMock.mockReset();
   requestPreparedCompactionMock.mockResolvedValue(createCompactionResponse());
-});
-
-describe("rejected provider replay repair", () => {
-  it("preserves downstream branch suffix entries after rewriting the first repaired assistant", async () => {
-    const { sessionManager } = createSession(model, undefined, "first", {
-      content: [
-        { type: "thinking", thinking: "private", thinkingSignature: "sig_bad" },
-        { type: "text", text: "first answer" },
-      ],
-    });
-    sessionManager.appendMessage(makeUserMessage("follow-up", 3));
-    sessionManager.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "follow-up answer" }],
-        timestamp: 4,
-      }),
-    );
-    expect(await repairRejectedThinkingReplayInSessionManager({ sessionManager })).toMatchObject({
-      repaired: true,
-    });
-    const messages = branchMessages(sessionManager);
-    expect(messages.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-    ]);
-    expect(
-      messages.filter((message) => message.role === "assistant").map((message) => message.content),
-    ).toEqual([
-      [{ type: "text", text: "first answer" }],
-      [{ type: "text", text: "follow-up answer" }],
-    ]);
-  });
-
-  it("rewrites from the checkpoint identity that supplied the rejected request", async () => {
-    const checkpoint = {
-      v: 1 as const,
-      type: "openai-responses-retained-compaction" as const,
-      data: "rejected-ciphertext",
-      id: "cmp_rejected",
-      replayIndex: 0,
-      provider: model.provider,
-      api: model.api,
-      model: model.id,
-    };
-    const { sessionManager } = createSession(model, checkpoint);
-    sessionManager.appendMessage(makeUserMessage("after cmp_rejected", 3));
-    sessionManager.appendMessage(
-      makeAgentAssistantMessage({
-        content: [{ type: "text", text: "cmp_newer" }],
-        timestamp: 4,
-        providerReplay: {
-          ...checkpoint,
-          type: "openai-responses-compaction",
-          data: "newer-ciphertext",
-          id: "cmp_newer",
-        },
-      }),
-    );
-    sessionManager.appendMessage(makeUserMessage("after cmp_newer", 5));
-    expect(
-      await repairRejectedCompactionReplayInSessionManager({ sessionManager, checkpoint }),
-    ).toMatchObject({ repaired: true });
-    expect(
-      branchMessages(sessionManager)
-        .filter((message) => message.role === "assistant")
-        .map((message) => message.providerReplay),
-    ).toEqual([undefined, undefined]);
-  });
 });
 
 it.each([

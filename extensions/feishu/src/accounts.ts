@@ -190,7 +190,7 @@ function buildResolvedFeishuAccount(params: {
   baseMode: FeishuCredentialResolutionMode;
   eventSecretMode: FeishuCredentialResolutionMode;
 }): ResolvedFeishuAccount {
-  const explicitAccountKey = params.accountId?.trim() ? params.accountId.trim() : undefined;
+  const explicitAccountKey = normalizeString(params.accountId);
   const accountId =
     explicitAccountKey !== undefined
       ? normalizeAccountId(explicitAccountKey)

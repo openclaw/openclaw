@@ -74,9 +74,14 @@ suite.define(() => {
       });
       await expect(overview).toContainText("embedding probe failed");
       await page.locator("#memory-tab-settings").click();
+      await waitForControlUiRoute(page, {
+        routeId: "memory",
+        pathname: "/settings/memory/settings",
+      });
       await expect(overview).toHaveCount(0);
       await expect(page.locator('link[href*="/assets/plugins/memory-core/"]')).toHaveCount(0);
       await page.locator("#memory-tab-overview").click();
+      await waitForControlUiRoute(page, { routeId: "memory", pathname: "/settings/memory" });
       await expect(overview).toContainText("embedding probe failed");
       expect(await gateway.getRequests("doctor.memory.status")).toHaveLength(3);
       await gateway.setOnline(false);

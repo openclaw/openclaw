@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { listConfiguredMcpServers, mcpConfigInternal } from "./mcp-config.js";
+import {
+  listConfiguredMcpServers,
+  mcpConfigInternal,
+  redactMcpServersForDisplay,
+} from "./mcp-config.js";
 import { REDACTED_SENTINEL } from "./redact-snapshot.js";
 
 const { set: setConfiguredMcpServer, unset: unsetConfiguredMcpServer } = mcpConfigInternal;
@@ -169,7 +173,7 @@ describe("config mcp config", () => {
     });
   });
 
-  it("restores redacted MCP secrets on set instead of writing the sentinel", async () => {
+  it("redacts MCP secrets for display and restores them on set", async () => {
     const billing = {
       command: "uvx",
       args: [
@@ -185,20 +189,25 @@ describe("config mcp config", () => {
       env: { BILLING_TOKEN: "real-env-secret" },
     };
     await withMcpServers({ billing }, async () => {
+      const redacted = redactMcpServersForDisplay({ billing }).billing;
+      expect(redacted).toEqual({
+        command: "uvx",
+        args: [
+          "billing-mcp",
+          "--api-key",
+          REDACTED_SENTINEL,
+          `--token=${REDACTED_SENTINEL}`,
+          REDACTED_SENTINEL,
+          "--region",
+          "us-east-1",
+        ],
+        headers: { Authorization: REDACTED_SENTINEL },
+        env: { BILLING_TOKEN: REDACTED_SENTINEL },
+      });
+      expect(billing.headers.Authorization).toBe("Bearer real-token");
       const setResult = await setConfiguredMcpServer({
         name: "billing",
-        server: {
-          ...billing,
-          args: billing.args.map((arg, index) =>
-            index === 2 || index === 4
-              ? REDACTED_SENTINEL
-              : index === 3
-                ? `--token=${REDACTED_SENTINEL}`
-                : arg,
-          ),
-          headers: { Authorization: REDACTED_SENTINEL },
-          env: { BILLING_TOKEN: REDACTED_SENTINEL },
-        },
+        server: redacted,
       });
 
       expect(setResult.ok).toBe(true);

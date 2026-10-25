@@ -9,6 +9,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { AssistantMessage, AssistantMessageEvent, Context } from "openclaw/plugin-sdk/llm";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
@@ -211,14 +212,7 @@ describe("Bedrock prompt cache ownership", () => {
     const previousAssistant = {
       ...replayAssistant(model.id, [textBlock("First answer")]),
       stopReason: "stop",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       timestamp: 1,
     } satisfies Context["messages"][number];
     const context: Context = {

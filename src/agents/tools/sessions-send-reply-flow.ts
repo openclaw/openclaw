@@ -14,13 +14,8 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
-import {
-  isTerminalAgentWaitTimeout,
-  readLatestAssistantReply,
-  waitForAgentRunReply,
-} from "../run-wait.js";
+import { isTerminalAgentWaitTimeout, waitForAgentRunReply } from "../run-wait.js";
 import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
 import {
@@ -32,7 +27,7 @@ import {
   runWithGatewayToolContinuationContext,
 } from "./in-process-gateway.js";
 import { recordSessionToolActionFact } from "./sessions-access.js";
-import { sendReplyResult } from "./sessions-send-helpers.js";
+import { resolveSessionsSendReply, sendReplyResult } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import type { SessionsSendStart } from "./sessions-send-tool.delivery.js";
 import type { AgentStepSession } from "./sessions-send-tool.types.js";
@@ -448,25 +443,14 @@ export async function finishSessionsSendReply(params: {
       ...watchField,
     });
   }
-  let { replyText } = result;
-  let replyTruncated: true | undefined;
-  // Whitespace trimming can shorten a truncated preview; its length is not evidence of completeness.
-  if (replyText?.endsWith("…")) {
-    const stored = await readLatestAssistantReply({
-      runId,
-      sessionKey: acceptedTargetSessionKey,
-      agentId: replyContext.targetAgentId,
-      callGateway: replyContext.callGateway,
-    }).catch(() => undefined);
-    const snapshot = stored === undefined ? undefined : sanitizeAgentRunTerminalReply(stored);
-    if (snapshot?.disposition === "visible" && snapshot.text === replyText) {
-      replyText = stored;
-    } else {
-      replyTruncated = true;
-    }
-  }
+  const reply = await resolveSessionsSendReply(result, {
+    runId,
+    sessionKey: acceptedTargetSessionKey,
+    agentId: replyContext.targetAgentId,
+    callGateway: replyContext.callGateway,
+  });
   return sendReplyResult(
     { runId, sessionKey: replyContext.displayKey, ...watchField },
-    { ...result, replyText, replyTruncated },
+    { ...result, ...reply },
   );
 }

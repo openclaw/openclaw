@@ -22,6 +22,7 @@ import { initializeSessionReadContext } from "./server-methods/sessions-read-cac
 import { sessionSuggestionHandlers } from "./server-methods/sessions-suggestions.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { getHealthVersion, incrementPresenceVersion } from "./server/health-state.js";
 import { createPresencePublisher } from "./server/presence-events.js";
@@ -301,13 +302,10 @@ describe("createGatewayRequestContext presence", () => {
             usesSharedGatewayAuth: false,
             presenceKey: `typing-presence-${tab}`,
             authenticatedUserId: "typing-presence@example.test",
-            authenticatedUserProfile: {
-              profileId: profile.id,
+            authenticatedUserProfile: dispatchProfile(profile.id, {
               displayName: "Typing Person",
-              avatarRevision: "1",
-              hasAvatar: false,
               updatedAt: started,
-            },
+            }),
             personPresence: { onlineSince: started - 2_000 + index * 1_000 },
           },
         ),

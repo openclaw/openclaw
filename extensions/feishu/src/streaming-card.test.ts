@@ -1,11 +1,15 @@
 // Feishu tests cover streaming card plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
-import { createStreamingSession, type StreamingFetchDeps } from "./streaming-card.test-support.js";
+import {
+  createStreamingSession,
+  createStreamingTokenPayload,
+  type StreamingFetchDeps,
+} from "./streaming-card.test-support.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 type FeishuStreamingFetch = typeof fetch;
@@ -115,13 +119,6 @@ function writeJson(res: ServerResponse, payload: unknown, status = 200): void {
   res.end(JSON.stringify(payload));
 }
 
-function jsonResponse(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
 function setStreamingSessionInternals(
   session: FeishuStreamingSession,
   values: {
@@ -193,12 +190,7 @@ describe("FeishuStreamingSession", () => {
     return createMemoryFetch((url, body) => {
       let status = 200;
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        return jsonResponse(createStreamingTokenPayload());
       }
       if (url.pathname.includes("/elements/content/content")) {
         const updateIndex = updateBodies.length;
@@ -259,12 +251,7 @@ describe("FeishuStreamingSession", () => {
     const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        return jsonResponse(createStreamingTokenPayload());
       }
       if (url.pathname.endsWith("/cardkit/v1/cards")) {
         return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_accepted" } });
@@ -535,12 +522,7 @@ describe("FeishuStreamingSession", () => {
     let clientClosed: Promise<void> | undefined;
     const deps = await createStreamingFetch(({ url, res }) => {
       if (url.pathname.includes("/auth/")) {
-        writeJson(res, {
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        writeJson(res, createStreamingTokenPayload());
         return;
       }
       clientClosed = writeOversizedJson(
@@ -605,12 +587,7 @@ describe("FeishuStreamingSession", () => {
     const updateBodies: string[] = [];
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        return jsonResponse(createStreamingTokenPayload());
       }
       if (url.pathname.includes("/elements/content/content")) {
         updateBodies.push(body);
@@ -714,12 +691,7 @@ describe("FeishuStreamingSession", () => {
     };
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        return jsonResponse(createStreamingTokenPayload());
       }
       if (url.pathname.endsWith("/elements/content")) {
         replaceBodies.push(body);
@@ -768,12 +740,7 @@ describe("FeishuStreamingSession", () => {
     const settingsBodies: string[] = [];
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
-        return jsonResponse({
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        return jsonResponse(createStreamingTokenPayload());
       }
       if (url.pathname.includes("/elements/note/content")) {
         noteBodies.push(body);
@@ -923,12 +890,7 @@ describe("FeishuStreamingSession", () => {
     const settingsBodies: string[] = [];
     const deps = await createStreamingFetch(({ url, body, res }) => {
       if (url.pathname.includes("/auth/")) {
-        writeJson(res, {
-          code: 0,
-          msg: "ok",
-          tenant_access_token: "token",
-          expire: 7200,
-        });
+        writeJson(res, createStreamingTokenPayload());
         return;
       }
       if (url.pathname.includes("/settings")) {
@@ -1109,4 +1071,3 @@ describe("mergeStreamingText", () => {
     expect(mergeStreamingText("abc", "cabc")).toBe("cabc");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

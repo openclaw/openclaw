@@ -45,6 +45,7 @@ import {
   createTestRuntimeSecretsActivator,
   makePreparedSecretsSnapshot,
 } from "./server-startup-config.test-support.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -105,13 +106,7 @@ it("commits model-only role changes without retiring permitted models or origina
     const close = vi.fn(() => connection.abort());
     const client = {
       ...createOperatorWsClient({ socket: { close }, scopes: ["operator.write"] }),
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        avatarRevision: "1",
-        updatedAt: 1,
-      },
+      authenticatedUserProfile: dispatchProfile(profile.id),
       authPolicy: captureGatewayAuthPolicy(initialConfig, null),
       connectionSignal: connection.signal,
     };
@@ -305,13 +300,7 @@ it.each(["scopes", "access policy"] as const)(
             socket: { close: vi.fn(() => connection.abort()) },
           }),
           {
-            authenticatedUserProfile: {
-              profileId: profile.id,
-              displayName: null,
-              hasAvatar: false,
-              avatarRevision: "1",
-              updatedAt: 1,
-            },
+            authenticatedUserProfile: dispatchProfile(profile.id),
             authPolicy: captureGatewayAuthPolicy(initialConfig, { role: "operator" }),
             connectionSignal: connection.signal,
           },

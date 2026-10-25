@@ -235,6 +235,9 @@ HTTP scope failures mirror the `MISSING_SCOPE` object under `error.details` and
 use HTTP status `403`.
 
 Side-effecting methods require idempotency keys (see schema).
+For `chat.send`, reconnect retries preserve the original submission key;
+recorded user messages and input receipts prevent duplicate dispatch even after
+cache expiry or restart. See [chat submission idempotency](/gateway/protocol/rpc-session-control).
 
 ### Profile binding
 

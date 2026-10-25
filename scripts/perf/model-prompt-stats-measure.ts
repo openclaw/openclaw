@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { PerformanceObserver, monitorEventLoopDelay } from "node:perf_hooks";
 import { mock } from "node:test";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { setTimeout as delay, setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json.js";
@@ -15,6 +17,8 @@ const { values } = parseArgs({
     ownership: { type: "string", default: "mutable" },
     mode: { type: "string", default: "profile" },
     owner: { type: "string" },
+    lifecycle: { type: "string" },
+    "start-file": { type: "string" },
   },
 });
 const {
@@ -63,20 +67,72 @@ const expected = {
   toolDefinitionsChars: 2,
   totalChars: JSON.stringify(messages).length + context.systemPrompt.length + 2,
 };
-const measure = createModelPromptStats();
+let measure = createModelPromptStats();
+let drain = async () => {};
+if (values.lifecycle) {
+  const {
+    createModelLifecycle,
+  }: typeof import("../../src/agents/embedded-agent-runner/run/attempt.model-diagnostic-lifecycle.js") =
+    await import(pathToFileURL(values.lifecycle).href);
+  const { createModelObserver } =
+    await import("../../src/agents/embedded-agent-runner/run/attempt.model-diagnostic-observation.js");
+  const { startDiagnosticRunActivityTracking } =
+    await import("../../src/logging/diagnostic-run-activity.js");
+  const { startDiagnosticStabilityRecorder } =
+    await import("../../src/logging/diagnostic-stability.js");
+  const { waitForDiagnosticEventsDrained } = await import("../../src/infra/diagnostic-events.js");
+  const { createDiagnosticTraceContext } =
+    await import("../../src/infra/diagnostic-trace-context.js");
+  startDiagnosticRunActivityTracking();
+  startDiagnosticStabilityRecorder();
+  drain = waitForDiagnosticEventsDrained;
+  let sequence = 0;
+  const trace = createDiagnosticTraceContext();
+  measure = (streamContext) => {
+    const callId = `synthetic-${sequence++}`;
+    const lifecycle = createModelLifecycle({
+      ctx: {
+        runId: callId,
+        provider: "synthetic",
+        model: "synthetic-model",
+        trace,
+        nextCallId: () => callId,
+        suppressPluginHooks: true,
+      },
+      options: undefined,
+      createObserver: (capturePromptStats: boolean, captureByteStats: boolean) =>
+        createModelObserver({
+          streamContext,
+          capturePromptStats,
+          captureByteStats,
+          suppressPluginHooks: true,
+        }),
+    });
+    lifecycle.emitCompleted();
+    return lifecycle.observer.promptStats;
+  };
+}
+function verifyStats(stats: ReturnType<typeof measure>) {
+  // Default listeners need lifecycle facts, not prompt sizes. Baseline still produces them.
+  if (stats !== undefined || !values.lifecycle) {
+    assert.deepEqual(stats, expected);
+  }
+}
 const coldCpu = process.cpuUsage();
 const coldStart = performance.now();
 const coldStats = measure(context);
 const coldMs = performance.now() - coldStart;
 const coldUsed = process.cpuUsage(coldCpu);
-assert.deepEqual(coldStats, expected);
-assert.deepEqual(measure(context), expected);
+verifyStats(coldStats);
+verifyStats(measure(context));
 
 // Count payload traversal independently of timing and allocation instrumentation.
 let payloadVisits = 0;
 const nativeStringify = JSON.stringify;
 const stringify = mock.method(JSON, "stringify", (value: unknown, replacer: unknown) => {
-  assert.equal(typeof replacer, "function");
+  if (typeof replacer !== "function") {
+    return nativeStringify(value);
+  }
   return nativeStringify(value, function (key, part: unknown) {
     if (key === "text") {
       payloadVisits++;
@@ -110,9 +166,9 @@ const set = mock.method(
 );
 let warmRecords: number;
 try {
-  assert.deepEqual(measure(context), expected);
+  verifyStats(measure(context));
   newRecords = 0;
-  assert.deepEqual(measure(context), expected);
+  verifyStats(measure(context));
   warmRecords = newRecords;
 } finally {
   set.mock.restore();
@@ -120,15 +176,52 @@ try {
 for (let index = 0; index < 50; index++) {
   measure(context);
 }
+await drain();
+console.log("WARM_READY");
+if (values["start-file"]) {
+  let startAt = 0;
+  while (!startAt) {
+    startAt = Number(await readFile(values["start-file"], "utf8").catch(() => "0"));
+    if (!startAt) {
+      await delay(20);
+    }
+  }
+  assert(startAt > Date.now(), "missed synchronized start");
+  await delay(startAt - Date.now());
+}
 if (values.mode === "timing") {
+  const pauses: Record<string, number[]> = {};
+  const gc = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      const kind = String(
+        (
+          entry as import("node:perf_hooks").PerformanceEntry & {
+            detail: { kind: number };
+          }
+        ).detail.kind,
+      );
+      (pauses[kind] ??= []).push(entry.duration);
+    }
+  });
+  gc.observe({ entryTypes: ["gc"] });
+  const loop = monitorEventLoopDelay({ resolution: 1 });
+  loop.enable();
   console.log("TIMING_START");
   const cpu = process.cpuUsage();
   const start = performance.now();
   for (let index = 0; index < calls; index++) {
     measure(context);
+    if (index % 10 === 9) {
+      await drain();
+      await nextTurn();
+    }
   }
+  await drain();
   const elapsedMs = performance.now() - start;
   const used = process.cpuUsage(cpu);
+  await nextTurn();
+  gc.disconnect();
+  loop.disable();
   console.log("TIMING_END");
   console.log(
     JSON.stringify({
@@ -140,6 +233,24 @@ if (values.mode === "timing") {
       payloadVisitsPerWarmCall: payloadVisits,
       coldMs,
       coldCpuMs: (coldUsed.user + coldUsed.system) / 1000,
+      naturalGc: Object.fromEntries(
+        Object.entries(pauses).map(([kind, samples]) => [
+          kind,
+          {
+            count: samples.length,
+            msPerCall: samples.reduce((sum, ms) => sum + ms, 0) / calls,
+            maxMs: Math.max(...samples),
+            p95Ms: samples.toSorted((a, b) => a - b)[Math.floor(samples.length * 0.95)],
+            p99Ms: samples.toSorted((a, b) => a - b)[Math.floor(samples.length * 0.99)],
+          },
+        ]),
+      ),
+      loop: {
+        count: loop.count,
+        p95Ms: loop.percentile(95) / 1e6,
+        p99Ms: loop.percentile(99) / 1e6,
+        maxMs: loop.max / 1e6,
+      },
       cpuMsPerCall: (used.user + used.system) / 1000 / calls,
       msPerCall: elapsedMs / calls,
     }),
@@ -165,7 +276,7 @@ function ownerBytes(node: HeapProfiler.SamplingHeapProfileNode, owned = false): 
 async function profile(includeCollected: boolean) {
   global.gc!();
   await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 512,
+    samplingInterval: values.lifecycle ? 16384 : 512,
     includeObjectsCollectedByMajorGC: includeCollected,
     includeObjectsCollectedByMinorGC: includeCollected,
   });
@@ -174,9 +285,11 @@ async function profile(includeCollected: boolean) {
   for (let index = 0; index < calls; index++) {
     measure(context);
     if (index % 100 === 99) {
+      await drain();
       await nextTurn();
     }
   }
+  await drain();
   const elapsedMs = performance.now() - start;
   console.log("PROFILE_END");
   if (!includeCollected) {
@@ -184,12 +297,12 @@ async function profile(includeCollected: boolean) {
     global.gc!();
   }
   const { profile: result } = await inspector.post("HeapProfiler.stopSampling");
-  return { bytesPerCall: ownerBytes(result.head) / calls, elapsedMs };
+  return { bytesPerCall: ownerBytes(result.head, Boolean(values.lifecycle)) / calls, elapsedMs };
 }
 const allocation = await profile(true);
 const retainedChurn = await profile(false);
 inspector.disconnect();
-assert.deepEqual(measure(context), expected);
+verifyStats(measure(context));
 console.log(
   JSON.stringify({
     node: process.version,

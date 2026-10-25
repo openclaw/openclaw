@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
 
@@ -38,11 +39,7 @@ export async function withClawRouterAudioFixture(
       await withServer(
         (req, res) => {
           void (async () => {
-            const chunks: Buffer[] = [];
-            for await (const chunk of req) {
-              chunks.push(Buffer.from(chunk));
-            }
-            const form = await new Response(Buffer.concat(chunks), {
+            const form = await new Response(await consumeBuffer(req), {
               headers: { "content-type": req.headers["content-type"] ?? "" },
             }).formData();
             requests.push({ url: req.url ?? "", authorization: req.headers.authorization, form });
@@ -78,3 +75,15 @@ export async function withClawRouterAudioFixture(
     { env: { CLAWROUTER_API_KEY: undefined, OPENAI_API_KEY: "fixture-upstream-never-router" } },
   );
 }
+
+export const respondPricingRequired = (res: ServerResponse) => {
+  res.statusCode = 400;
+  res.end(
+    JSON.stringify({
+      error: {
+        code: "pricing_required",
+        message: "No qualified arbitrary-file reserve bound",
+      },
+    }),
+  );
+};

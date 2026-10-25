@@ -409,7 +409,13 @@
 
 /* Menu-item check only. The branches trigger is a .chat-icon-btn in the header
    row, so it keeps the shared 18px action glyph from .btn--icon svg. */
-.chat-pane__branch-active svg {
+.chat-pane__branch-active svg,
+.chat-pane__versions-info svg,
+.chat-pane__branch-more svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-access-trigger svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-access-option svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-back svg {
   width: 16px;
   height: 16px;
 }
@@ -434,11 +440,6 @@
   min-width: var(--versions-icon-column);
   height: 28px;
   padding: 6px;
-}
-
-.chat-pane__versions-info svg {
-  width: 16px;
-  height: 16px;
 }
 
 .chat-pane__versions-help {
@@ -511,11 +512,6 @@
 /* Management remains deferred; this glyph does not introduce another action. */
 .chat-pane__branch-more {
   color: var(--muted);
-}
-
-.chat-pane__branch-more svg {
-  width: 16px;
-  height: 16px;
 }
 
 .chat-pane__workspace-chip:hover,
@@ -796,11 +792,6 @@
   gap: 6px;
 }
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger svg {
-  width: 16px;
-  height: 16px;
-}
-
 /* Preserve the button geometry while keeping the disclosure glyph secondary. */
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger .chat-pane__sharing-chevron {
   opacity: 0.8;
@@ -904,13 +895,6 @@
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-access-option[aria-checked="true"] {
   background: var(--menu-selected);
-}
-
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-access-trigger svg,
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-access-option svg,
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-back svg {
-  width: 16px;
-  height: 16px;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-back {

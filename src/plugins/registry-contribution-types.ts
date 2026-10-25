@@ -206,15 +206,11 @@ export type MemoryPromptPreparationRegistration = {
   prepare: MemoryPromptSectionPreparer;
 };
 
-/**
- * A file-persistence flush plan with its resolved timing. Its shape is unchanged from earlier
- * releases, so existing producers and readers keep compiling and behaving the same.
- */
+/** A file-persistence flush plan with its resolved timing. */
 export type MemoryFlushPlan = {
   softThresholdTokens: number;
   forceFlushTranscriptBytes: number;
   reserveTokensFloor: number;
-  model?: string;
   prompt: string;
   systemPrompt: string;
   relativePath: string;
@@ -228,17 +224,16 @@ type MemoryFlushPlanTiming = Pick<
 
 /**
  * A file plan as a resolver may return it: omitted timing fields are filled by the host, and
- * defined ones deliberately override it. A file plan without a model keeps the session's model.
+ * defined ones deliberately override it.
  */
 export type MemoryFlushFilePlanDraft = Omit<MemoryFlushPlan, keyof MemoryFlushPlanTiming> &
   Partial<MemoryFlushPlanTiming> & { persistenceToolNames?: never; lookupToolNames?: never };
 
 /**
- * Tool persistence for the selected memory slot owner. The host fills omitted timing and the
- * configured flush model; defined values deliberately override them.
+ * Tool persistence for the selected memory slot owner. The host fills omitted timing;
+ * defined values deliberately override it.
  */
 export type MemoryFlushToolsPlan = Partial<MemoryFlushPlanTiming> & {
-  model?: string;
   prompt: string;
   systemPrompt: string;
   /** Absent on every tools plan; a tools plan never names a workspace file. */
@@ -254,7 +249,7 @@ type MemoryFlushPlanResolverParams = {
   contextWindowTokens?: number;
 };
 
-/** Resolves a complete file flush plan; its contract is unchanged from earlier releases. */
+/** Resolves a complete file flush plan. */
 export type MemoryFlushPlanResolver = (
   params: MemoryFlushPlanResolverParams,
 ) => MemoryFlushPlan | null;

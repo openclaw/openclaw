@@ -35,12 +35,6 @@ import type { AgentSummary } from "./agents.config.js";
 import { buildAgentSummaries } from "./agents.config.js";
 import { requireValidConfig } from "./config-validation.js";
 
-type AgentsListOptions = {
-  json?: boolean;
-  bindings?: boolean;
-  tree?: boolean;
-};
-
 function formatSummaryHeader(summary: AgentSummary): string {
   const safe = sanitizeTerminalText;
   const defaultTag = `${summary.isDefault ? " (default)" : ""}${summary.status === "degraded" ? " (degraded)" : ""}`;
@@ -176,7 +170,11 @@ function formatMissingProviderEntry(params: {
   return `${label}: unknown`;
 }
 
-export async function agentsListCommand(opts: AgentsListOptions) {
+export async function agentsListCommand(opts: {
+  json?: boolean;
+  bindings?: boolean;
+  tree?: boolean;
+}) {
   const cfg = await requireValidConfig(runtime, { adoptPluginMetadata: true });
   if (!cfg) {
     return;

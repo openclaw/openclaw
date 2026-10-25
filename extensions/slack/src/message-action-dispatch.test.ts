@@ -247,7 +247,10 @@ describe("Slack action adapter", () => {
       );
       expect(firstAction(invoke)).toMatchObject({
         action: "editMessage",
-        content: paddedMarkdownTable,
+        content:
+          tables === "off"
+            ? paddedMarkdownTable
+            : Array.from({ length: 20 }, () => "*x*\n• Value: 2").join("\n\n"),
       });
     },
   );
@@ -467,7 +470,7 @@ describe("Slack action adapter", () => {
   );
 
   it.each([
-    { name: "Slack markdown rendering", text: `${"&".repeat(801)}${"x".repeat(2_200)}` },
+    { name: "native entity bytes", text: `${"&amp;".repeat(801)}${"x".repeat(2_200)}` },
     { name: "UTF-8 expansion", text: "😀".repeat(1_501) },
   ])("rejects presentation fallback edits that overflow after $name", async ({ text }) => {
     await expect(

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
+import type { Context } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -17,6 +17,7 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../../prepared-model-
 import type { StreamFn } from "../../runtime/index.js";
 import { completionModelDefinition } from "../../simple-completion.test-support.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import { ZERO_USAGE_FIXTURE } from "../../test-helpers/usage-fixtures.js";
 import { runEmbeddedAgent } from "../run.js";
 import { clearEmbeddedSessionPromptStates } from "../session-prompt-state.js";
@@ -78,16 +79,13 @@ it.each([
             : { stopReason: "stop", content: [{ type: "text", text: summary }] }),
       });
       requests.push(hasTools ? (file ? `write-${file}` : message.stopReason) : "summary");
-      const events = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        events.push({
+      return createQueuedAssistantStream((push) => {
+        push({
           type: "done",
           reason: message.stopReason as "stop" | "length" | "toolUse",
           message,
         });
-        events.end();
       });
-      return events;
     };
     const bridgeKey = `__finalization_fixture_${path.basename(state.root)}`;
     Object.defineProperty(globalThis, bridgeKey, { configurable: true, value: { stream } });

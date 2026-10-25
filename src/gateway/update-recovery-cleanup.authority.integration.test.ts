@@ -3,13 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { createGatewayTool } from "../agents/tools/gateway-tool.js";
 import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import {
@@ -19,13 +14,13 @@ import {
 import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import { createUpdateRunAsync, finishUpdateRunAsync } from "../infra/update-run-write.async.js";
-import type { UpdateStepResult } from "../infra/update-step-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
-import type { GatewayRequestOptions } from "./server-methods/types.js";
+import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
+import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -167,28 +162,18 @@ it(
             models: { catalogRefresh: { enabled: false } },
             cron: { enabled: false },
             update: { checkOnStart: false },
+            commands: { ownerAllowFrom: ["owner"], restart: false },
           },
         });
         const peers: Awaited<ReturnType<typeof connectGatewayClient>>[] = [];
         const pair = async (label: string, scopes: string[]) => {
-          const identity = loadOrCreateDeviceIdentity({
-            path: state.path(label, "client", "credentials.sqlite"),
-          });
-          const pending = await requestDevicePairing({
-            deviceId: identity.deviceId,
-            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+          const { identity, issued: token } = await pairOperatorDeviceFixture({
+            identityPath: state.path(label, "client", "credentials.sqlite"),
+            scopes,
+            tokenScopes: scopes,
             clientId: "test",
             clientMode: "backend",
-            role: "operator",
-            scopes,
-          });
-          await approveDevicePairing(pending.request.requestId, {
             callerScopes: ["operator.admin"],
-          });
-          const token = await rotateDeviceToken({
-            deviceId: identity.deviceId,
-            role: "operator",
-            scopes,
           });
           if (!token.ok) {
             throw new Error("Expected a paired test device");
@@ -208,8 +193,15 @@ it(
           const owner = captureGatewayStateOwner(resolveOpenClawStateSqlitePath(state.env));
           expect(owner?.ownerId).toBeTruthy();
           const params = { runId: current, expectedOwnerId: owner!.ownerId };
+          await expect(
+            client.request("update.recovery.cleanup", { ...params, dryRun: true }),
+          ).rejects.toThrow("invalid update.recovery.cleanup params");
           const originalBytes = captureBytes(oldCapture);
           const retainedBytes = captureBytes(currentCapture);
+          let gatewayContext: GatewayRequestContext | undefined;
+          observation.request = (request) => {
+            gatewayContext = request.context;
+          };
           const readOnly = await pair("read-only", ["operator.read"]);
           await expect(
             readOnly.connected.request("update.recovery.cleanup", params),
@@ -221,8 +213,42 @@ it(
           ).rejects.toThrow(/owner|requester/i);
           expect(captureBytes(oldCapture)).toEqual(originalBytes);
           expect(captureBytes(currentCapture)).toEqual(retainedBytes);
-          const allowed = await client.request<UpdateStepResult>("update.recovery.cleanup", params);
-          expect(allowed.advisory).toBeUndefined();
+          const tool = createGatewayTool({
+            senderIsOwner: true,
+            requesterSenderId: "owner",
+            allowConfigReads: false,
+          });
+          const invoke = (dryRun: boolean) =>
+            withGatewayToolCallerIdentity(
+              {
+                agentId: "main",
+                sessionKey: "agent:main:maintenance",
+                turnSourceChannel: "slack",
+                gatewayContextResolver: () => gatewayContext,
+              },
+              () =>
+                tool.execute("cleanup", {
+                  action: "update.cleanup",
+                  dryRun,
+                  gatewayUrl: "wss://wrong-gateway.invalid",
+                  expectedOwnerId: "forged",
+                }),
+            );
+          const refused = await createGatewayTool({ senderIsOwner: false }).execute("cleanup", {
+            action: "update.cleanup",
+            senderIsOwner: true,
+          });
+          expect(refused.details).toMatchObject({ ok: false, code: "owner_required" });
+          const preview = await invoke(true);
+          expect(preview.details).toMatchObject({ status: "preview", totals: { removedFiles: 0 } });
+          expect(captureBytes(oldCapture)).toEqual(originalBytes);
+          expect(captureBytes(currentCapture)).toEqual(retainedBytes);
+          const allowed = await invoke(false);
+          expect(allowed.details).toMatchObject({
+            status: "complete",
+            totals: { removedFiles: 1 },
+          });
+          expect(await client.request("health", {})).toBeTruthy();
           expect(fs.existsSync(oldCapture)).toBe(false);
           expect(fs.existsSync(currentCapture)).toBe(true);
 
@@ -284,6 +310,33 @@ it(
             "succeeded",
           );
           owner!.assertCurrent();
+          observation.beforeAdmission = () => {};
+          const latest = await createUpdateRunAsync({ trigger: "cli" }, { env: state.env });
+          const latestCapture = capture(state.stateDir, latest.runId);
+          const latestBytes = captureBytes(latestCapture);
+          await finishUpdateRunAsync(latest.runId, { status: "succeeded" }, { env: state.env });
+          const nextFiles = ["manifest.json", "original-a", "original-b"].map((name) =>
+            path.join(nextCapture, name),
+          );
+          let ownerRevoked = false;
+          const commands = gatewayContext!.getRuntimeConfig().commands!;
+          observation.beforeAdmission = () => {
+            if (!ownerRevoked && nextFiles.some((file) => !fs.existsSync(file))) {
+              ownerRevoked = true;
+              // Publish the synthetic config's revocation in place so only the
+              // real command-owner guard, not a config-reference check, can stop it.
+              commands.ownerAllowFrom = [];
+            }
+          };
+          try {
+            expect((await invoke(false)).details).toMatchObject({ status: "blocked" });
+            expect(ownerRevoked).toBe(true);
+            expect(nextFiles.filter((file) => !fs.existsSync(file))).toHaveLength(1);
+            expect(captureBytes(latestCapture)).toEqual(latestBytes);
+          } finally {
+            observation.beforeAdmission = () => {};
+            commands.ownerAllowFrom = ["owner"];
+          }
           console.info(
             "cleanup RPC proof: allowed deletion; non-admin and wrong owner denied; real device revocation after one removal prevented subsequent deletion; current capture and successful outcome retained",
           );

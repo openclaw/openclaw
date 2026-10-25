@@ -73,6 +73,9 @@ export interface ProviderResponse {
   headers: Record<string, string>;
 }
 
+/** Runtime header overrides; null preserves an SDK's default-header deletion sentinel. */
+export type ModelRequestHeaders = Record<string, string | null>;
+
 export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
@@ -151,7 +154,7 @@ export interface StreamOptions {
    * Merged with provider defaults; can override default headers.
    * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).
    */
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   /**
    * HTTP request timeout in milliseconds for providers/SDKs that support it.
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
@@ -834,7 +837,7 @@ export interface Model<TApi extends Api = Api> {
   maxTokens: number;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   /** Sends runtime credentials as Authorization: Bearer instead of provider-specific key headers. */
   authHeader?: boolean;
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */

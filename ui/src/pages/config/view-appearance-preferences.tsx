@@ -8,6 +8,7 @@ import {
   UI_APPEARANCE_DEFAULTS,
 } from "../../app/settings-contract.ts";
 import { Picker } from "../../components/select-picker.ts";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsDefaultDescription,
   SettingsRow,
@@ -360,8 +361,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
           }
           control={
             <>
-              <select
-                class="settings-select"
+              <SettingsSelect
                 data-settings-follow-up-mode
                 aria-label={t("chat.followUpMode")}
                 value={followUpSelection()}
@@ -372,19 +372,15 @@ export function ChatPreferencesSection(props: ConfigProps) {
                       value === "server" ? undefined : normalizeChatFollowUpMode(value),
                   });
                 }}
-              >
-                <option value="server" selected={followUpSelection() === "server"}>
-                  {t("chat.followUpModeServer", {
-                    mode: serverQueueMode(),
-                  })}
-                </option>
-                <option value="steer" selected={followUpSelection() === "steer"}>
-                  {t("chat.followUpModeSteer")}
-                </option>
-                <option value="queue" selected={followUpSelection() === "queue"}>
-                  {t("chat.followUpModeQueue")}
-                </option>
-              </select>
+                options={[
+                  {
+                    value: "server",
+                    label: t("chat.followUpModeServer", { mode: serverQueueMode() }),
+                  },
+                  { value: "steer", label: t("chat.followUpModeSteer") },
+                  { value: "queue", label: t("chat.followUpModeQueue") },
+                ]}
+              />
               {props.chatFollowUpModeOverridden ? (
                 <button
                   type="button"

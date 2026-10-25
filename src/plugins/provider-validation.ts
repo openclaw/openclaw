@@ -11,7 +11,6 @@ import type { PluginDiagnostic } from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
 type ProviderWizardSetup = NonNullable<NonNullable<ProviderPlugin["wizard"]>["setup"]>;
-type ProviderWizardModelPicker = NonNullable<NonNullable<ProviderPlugin["wizard"]>["modelPicker"]>;
 type ProviderWizardModelAllowlist = NonNullable<ProviderWizardSetup["modelAllowlist"]>;
 
 function normalizeTextList(values: string[] | undefined): string[] | undefined {
@@ -93,17 +92,6 @@ function buildNormalizedWizardSetup(
           ? setup.modelSelection.allowKeepCurrent
           : undefined,
     }),
-  });
-}
-
-function buildNormalizedModelPicker(
-  modelPicker: ProviderWizardModelPicker,
-  methodId: string | undefined,
-): ProviderWizardModelPicker {
-  return omitUndefinedFields({
-    label: normalizeOptionalString(modelPicker.label),
-    hint: normalizeOptionalString(modelPicker.hint),
-    methodId,
   });
 }
 
@@ -200,7 +188,12 @@ export function normalizeRegisteredProvider(params: {
   const modelPicker = normalizeWizardSurface(
     params.provider.wizard?.modelPicker,
     "model-picker",
-    buildNormalizedModelPicker,
+    (picker, methodId) =>
+      omitUndefinedFields({
+        label: normalizeOptionalString(picker.label),
+        hint: normalizeOptionalString(picker.hint),
+        methodId,
+      }),
     seenMethodIds,
   );
   const catalog = params.provider.catalog;

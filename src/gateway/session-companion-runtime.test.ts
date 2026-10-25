@@ -8,6 +8,7 @@ import {
 } from "../agents/admitted-run-context.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import * as internalSessions from "../agents/internal-session-effects.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
@@ -75,15 +76,9 @@ describe("Side chat with a published Gateway runtime", () => {
               api: "openai-completions",
               apiKey: "synthetic-test-key",
               baseUrl: "http://127.0.0.1:9/v1",
-              models: ["test-model", "utility-model"].map((id) => ({
-                id,
-                name: id,
-                reasoning: false,
-                input: ["text" as const],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 1024,
-              })),
+              models: ["test-model", "utility-model"].map((id) =>
+                modelDefinition(id, { reasoning: false, contextWindow: 8192, maxTokens: 1024 }),
+              ),
             },
           },
         },

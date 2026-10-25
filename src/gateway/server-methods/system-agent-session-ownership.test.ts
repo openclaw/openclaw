@@ -11,6 +11,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { SystemAgentWizardAnswerError } from "../../system-agent/chat-engine.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -115,12 +116,7 @@ function makeClient(params: {
     ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
     ...(params.profileId
       ? {
-          authenticatedUserProfile: {
-            profileId: params.profileId,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          authenticatedUserProfile: gatewayProfile(params.profileId),
         }
       : {}),
     ...(params.githubSyncPending
@@ -332,12 +328,7 @@ describe("openclaw.chat session ownership", () => {
     });
     expect(sessions.has("github-pending")).toBe(false);
 
-    pendingClient.authenticatedUserProfile = {
-      profileId: "profile-canonical",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 2,
-    };
+    pendingClient.authenticatedUserProfile = gatewayProfile("profile-canonical", null, 2);
     const attached = await callChat(context, { sessionId: "github-pending" }, pendingClient);
 
     expect(attached.ok).toBe(true);

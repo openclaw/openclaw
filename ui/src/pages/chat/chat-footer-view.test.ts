@@ -40,7 +40,7 @@ function expectFooterContext(container: Element, surface: Element) {
   expect(surface.compareDocumentPosition(input)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 }
 
-it("keeps delegated work with its launching turn and leaves the composer alone", async () => {
+it("leaves ordinary turn history and the draft intact without delegated-work rows", async () => {
   const sessionKey = "agent:main:parent";
   const childKey = "agent:main:subagent:worker";
   const groupId = "custom-review-batch";
@@ -130,7 +130,6 @@ it("keeps delegated work with its launching turn and leaves the composer alone",
     messages,
     showToolCalls: true,
     subagentSessions: sessions.slice(1),
-    swarm: { sessionKey, sessions },
     draft: "Keep the draft while progress arrives",
   };
   const container = renderChatView(props);
@@ -142,27 +141,29 @@ it("keeps delegated work with its launching turn and leaves the composer alone",
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
   textarea.focus();
   await vi.dynamicImportSettled();
-  const activity = await waitForSolid(() =>
-    requireElement(container, "[data-test-id=chat-delegation]", "inline delegated work"),
+  await waitForSolid(() => {
+    expect(container.textContent).toContain("The release notes are ready.");
+    expect(container.textContent).toContain("Now do something unrelated");
+  });
+  const thread = requireElement(container, ".chat-thread", "transcript");
+  expect(thread.querySelector("[data-test-id=chat-delegation]")).toBeNull();
+  expect(thread.querySelector(".chat-subagent-activity")).toBeNull();
+  expect(container.querySelector(".chat-footer [data-test-id=chat-swarm]")).toBeNull();
+  const answer = [...container.querySelectorAll(".chat-text")].find((node) =>
+    node.textContent?.includes("The release notes are ready."),
   );
-  expect(activity.closest(".chat-thread")).not.toBeNull();
-  expect(activity.closest(".chat-footer")).toBeNull();
-  expect(activity.textContent).toContain("Check release notes");
-  expect(activity.textContent).toContain("Completed");
   const later = [...container.querySelectorAll(".chat-text")].find((node) =>
     node.textContent?.includes("Now do something unrelated"),
   );
+  expect(answer).toBeDefined();
   expect(later).toBeDefined();
-  expect(activity.compareDocumentPosition(later!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-  expect(container.querySelector(".chat-footer [data-test-id=chat-swarm]")).toBeNull();
+  expect(answer!.compareDocumentPosition(later!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   renderChatInto(container, { ...props, runId: "later-run", runActive: true });
-  await waitForSolid(() =>
-    expect(container.querySelectorAll("[data-test-id=chat-delegation]")).toHaveLength(1),
-  );
-  expect(
-    requireElement(container, "[data-test-id=chat-delegation]", "inline delegated work")
-      .textContent,
-  ).not.toContain("processing");
+  await waitForSolid(() => {
+    expect(container.querySelector("[data-test-id=chat-delegation]")).toBeNull();
+    expect(container.querySelector(".chat-subagent-activity")).toBeNull();
+    expect(container.textContent).toContain("The release notes are ready.");
+  });
   expect(container.querySelector("textarea")).toBe(textarea);
   expect(textarea.value).toBe(props.draft);
   expect(document.activeElement).toBe(textarea);

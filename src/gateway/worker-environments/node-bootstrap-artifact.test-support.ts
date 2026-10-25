@@ -157,6 +157,7 @@ export function useNodeBootstrapArtifactFixtures() {
       "cli-invocation.mjs",
       "cli-parent-lifetime.mjs",
       "gateway-shutdown-budget.mjs",
+      "node-runtime-env.mjs",
     ]) {
       await fs.copyFile(filename, path.join(packageRoot, filename));
     }
@@ -165,7 +166,6 @@ export function useNodeBootstrapArtifactFixtures() {
       "node-sqlite.mjs": "export const probe = true;",
       "node-runtime-update.mjs": "export const update = true;",
       "node-runtime-recovery.mjs": "export const recovery = true;",
-      "node-runtime-env.mjs": "export {};",
       "cli-root-options.mjs": "export {};",
       "gateway-run-argv.mjs": "export {};",
       "node-host-launcher.mjs": "export const launcher = true;",

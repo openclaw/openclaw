@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
@@ -20,7 +19,7 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
-import { placementTurnOwner } from "./placement-record.js";
+import { makeClaimInput, WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -66,16 +65,9 @@ describe("worker placement restart recovery", () => {
           error,
         });
         if (scenario === "claimed turn" || scenario === "pending result") {
-          const claim = await placements.claimTurn({
-            ...REQUEST,
-            claimId: "retirement-claim",
-            runId: "retirement-run",
-            owner: {
-              kind: "worker",
-              environmentId: active.environmentId,
-              ownerEpoch: active.activeOwnerEpoch,
-            },
-          });
+          const claim = await placements.claimTurn(
+            makeClaimInput(active, "retirement-claim", "retirement-run"),
+          );
           if (scenario === "pending result") {
             await placements.markWorkspaceResultPending(claim);
             await placements.handoffWorkspaceResultRecovery(claim);
@@ -785,10 +777,7 @@ describe("worker placement restart recovery", () => {
     async (failure) => {
       const currentReceipt: WorkerAdmissionHandshake = {
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: [
-          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-        ],
+        protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
       };
       let currentBundle: WorkerInstallationArtifact = {
         ...support.BUNDLE_ARTIFACT,
@@ -898,12 +887,7 @@ describe("worker placement restart recovery", () => {
           expectedGeneration: active.generation,
         });
       }
-      const claimInput = {
-        ...REQUEST,
-        claimId: reclaim ? "reclaim-unchanged" : "unchanged-turn",
-        runId: reclaim ? "reclaim-unchanged" : "unchanged-turn",
-        owner: placementTurnOwner(active),
-      };
+      const claimInput = makeClaimInput(active, reclaim ? "reclaim-unchanged" : "unchanged-turn");
       const claim = reclaim
         ? await placementStore.claimReclaimWorkspaceResult(claimInput)
         : await placementStore.claimTurn(claimInput);

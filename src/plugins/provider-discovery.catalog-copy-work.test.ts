@@ -13,6 +13,7 @@ import {
 import { attachModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import {
   prepareProviderStaticCatalog,
@@ -26,15 +27,7 @@ vi.mock("./provider-discovery.runtime.js", () => ({
 }));
 
 function model(id: string, name: string): ModelDefinitionConfig {
-  return {
-    id,
-    name,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 32_000,
-    maxTokens: 2_048,
-  };
+  return buildCatalogModel(id, { name, contextWindow: 32_000, maxTokens: 2_048 });
 }
 
 function staticProvider(id: string, config: ModelProviderConfig, label = id) {

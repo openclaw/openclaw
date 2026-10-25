@@ -25,9 +25,11 @@ import { withSessionTurn } from "../../../sessions/session-controller.admission.
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import {
+  createSpawnTranscriptTarget,
   createSpawnOperatorSource,
+  holdSpawnCapacity,
   type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
@@ -45,24 +47,13 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
       contracts: { commandRuntimeCapabilities: ["subagents"] },
     });
     const failures: unknown[] = [];
-    const capacityStarted = createDeferred();
     const collectStarted = createDeferred();
     let collectFailure: unknown;
     let collectSettled = false;
-    enqueueSwarmRun({
-      groupId: JSON.stringify([
-        "main",
-        parentSessionKey,
-        "swarm:" + parentSessionKey + ":" + parentRunId,
-      ]),
-      runId: "command-capacity",
-      maxConcurrent: 1,
-      activeRunIds: [],
-      start: async () => {
-        capacityStarted.resolve();
-      },
-      onStartFailure: () => true,
-    });
+    const capacityStarted = holdSpawnCapacity(
+      JSON.stringify(["main", parentSessionKey, "swarm:" + parentSessionKey + ":" + parentRunId]),
+      "command-capacity",
+    );
     let childRunId: string | undefined;
     let retained: NativeSubagentRuntime | undefined;
     let commandRun = 0;
@@ -168,14 +159,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
       const adopt = vi.fn(async () => {});
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "/pstack-review" },
-        target: {
-          agentId: "main",
-          sessionKey: parentSessionKey,
-          sessionId: entry.sessionId,
-          sessionEntry: entry,
-          storePath: bound.storePath,
-          config: bound.cfg,
-        },
+        target: createSpawnTranscriptTarget(bound, entry),
         assertOriginalInputCommit: () => {
           expect(adopt).toHaveBeenCalled();
         },
@@ -241,7 +225,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
       );
     };
     try {
-      await capacityStarted.promise;
+      await capacityStarted;
       await withPluginRuntimeGatewayRequestScope(
         {
           context,

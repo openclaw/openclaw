@@ -6,6 +6,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createInstalledPluginIndexFixture } from "./gateway-startup.test-helpers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
 const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() =>
@@ -89,18 +90,12 @@ import {
 function withManifestLoadPaths(
   plugin: Pick<PluginManifestRecord, "id"> & Partial<PluginManifestRecord>,
 ): PluginManifestRecord {
-  return {
-    channels: [],
-    origin: "bundled",
-    providers: [],
-    cliBackends: [],
+  return createPluginManifestRecordFixture({
     rootDir: `/tmp/plugins/${plugin.id}`,
     source: `/tmp/plugins/${plugin.id}/index.ts`,
     manifestPath: `/tmp/plugins/${plugin.id}/openclaw.plugin.json`,
-    skills: [],
-    hooks: [],
     ...plugin,
-  };
+  });
 }
 
 function createManifestRegistryFixture(): PluginManifestRegistry {

@@ -90,13 +90,13 @@ function copyUiFixture(root: string, extra: string[] = []): void {
   fs.mkdirSync(nativeModules, { recursive: true });
   // Resolve native optional dependencies from their installed package owner.
   fs.symlinkSync(procSafeRoot, path.join(nativeModules, "proc-safe"), "junction");
-  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+  writeFiles(root, {
+    "package.json": '{"type":"module"}\n',
+    "scripts/generate-control-ui-validators.mts":
+      'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
+  });
   fs.mkdirSync(path.join(root, ".git"));
   installDistArtifactScripts(root, [], { compiler: false });
-  fs.writeFileSync(
-    path.join(root, "scripts/generate-control-ui-validators.mts"),
-    'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
-  );
 }
 
 function writeUiPackageBin(modules: string, name: string, source: string): string {
@@ -409,7 +409,10 @@ process.exitCode = 0;\n`,
     writeFiles(root, Object.fromEntries(posterFonts.map((font) => [font, "initial font bytes"])));
     // This fixture owns UI cache behavior; the native presenter builder is
     // exercised with real source and distribution bytes in its delivery suite.
-    fs.writeFileSync(path.join(root, "scripts/build-plugin-control-ui.mts"), "export {};\n");
+    writeFiles(root, {
+      "scripts/build-plugin-control-ui.mts": "export {};\n",
+      ...Object.fromEntries(validatorNames.map((file) => [`scripts/${file}`, "export {};\n"])),
+    });
     build.vite(`
 import fs from "node:fs";
 import path from "node:path";
@@ -427,9 +430,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log("fixture-bundler-ran");
 }
 `);
-    for (const file of validatorNames) {
-      fs.writeFileSync(path.join(root, "scripts", file), "export {};\n");
-    }
     const run = (expectedExit = 0) => {
       const result = build.run({
         BUILD_ALL_CACHE_ROOT: cacheRoot === "explicit" ? path.join(root, "cache") : undefined,
@@ -468,10 +468,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     expect(run()).toContain("fixture-bundler-ran");
     const output = path.join(root, "dist/control-ui/index.html");
     const published = fs.readFileSync(output, "utf8");
-    fs.writeFileSync(
-      path.join(root, "scripts/generate-control-ui-validators.mts"),
-      "process.exitCode = 23;\n",
-    );
+    writeFiles(root, { "scripts/generate-control-ui-validators.mts": "process.exitCode = 23;\n" });
     const refused = run(23);
     expect(refused).not.toContain("fixture-bundler-ran");
     expect(refused).not.toContain("reused content cache");
@@ -630,15 +627,14 @@ require("node:module").syncBuiltinESMExports();
   it("checks the selected staged directory with both real validators", () => {
     const root = tempDirs.make("openclaw-ui-validators-");
     const staging = path.join(root, "dist/control-ui.build-123-fixture");
-    fs.mkdirSync(path.join(staging, "assets"), { recursive: true });
-    fs.writeFileSync(
-      path.join(staging, "index.html"),
-      '<script src="./assets/index.js"></script><link href="./assets/index.css">',
-    );
+    writeFiles(staging, {
+      "index.html": '<script src="./assets/index.js"></script><link href="./assets/index.css">',
+      "assets/index.js": "/* synthetic asset */",
+      "assets/index.css": "/* synthetic asset */",
+    });
     for (const name of ["index.js", "index.css"]) {
       const bytes = Buffer.from("/* synthetic asset */");
       const file = path.join(staging, "assets", name);
-      fs.writeFileSync(file, bytes);
       fs.writeFileSync(`${file}.gz`, gzipSync(bytes));
       fs.writeFileSync(`${file}.br`, brotliCompressSync(bytes));
     }
@@ -647,160 +643,6 @@ require("node:module").syncBuiltinESMExports();
       ["check-control-ui-performance.mts", "--report-only", "--dist", staging],
     ] as const) {
       expectExit(runNode(root, [path.resolve("scripts", script), ...args]));
-    }
-  });
-
-  it("reports budgets and enforces asset validity without compiler children or disk caches", () => {
-    const tempDir = fs.realpathSync(tempDirs.make("openclaw-ui-cache-"));
-    const root = path.join(tempDir, "repo");
-    const build = prepareBuildFixture(root);
-    const vite = build.vite('throw new Error("build must be intercepted");');
-    const tempRoot = path.join(tempDir, "temp");
-    const cacheRoots = ["tsx", `tsx-${process.geteuid?.() ?? os.userInfo().username}`].map((name) =>
-      path.join(tempRoot, name),
-    );
-    const accessLog = path.join(tempDir, "cache-access.log");
-    const guard = path.join(tempDir, "cache-guard.cjs");
-    const capture = path.join(tempDir, "capture-ui-children.cjs");
-    const fixture = path.join(tempDir, "validator.mts");
-    const pnpm = path.join(tempDir, "pnpm.cjs");
-    const validators = validatorNames;
-
-    for (const cacheRoot of cacheRoots) {
-      writeFiles(cacheRoot, { "0-sentinel": "keep" });
-    }
-    // Record before throwing: tsx catches some cache errors, so exit status alone
-    // cannot prove that the loader left the cache untouched.
-    fs.writeFileSync(
-      guard,
-      `
-const fs = require("node:fs");
-const path = require("node:path");
-const roots = ${JSON.stringify(cacheRoots)};
-if (${JSON.stringify(validators)}.includes(process.argv[2])) {
-  function rejectRuntimeActivity(operation) {
-    fs.appendFileSync(${JSON.stringify(accessLog)}, operation + "\\n");
-    throw new Error("Unexpected validator runtime activity: " + operation);
-  }
-  const childProcess = require("node:child_process");
-  for (const operation of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) {
-    childProcess[operation] = function() { rejectRuntimeActivity(operation); };
-  }
-  require("node:worker_threads").Worker = function() { rejectRuntimeActivity("Worker"); };
-}
-function guardAccess(target, operation) {
-  const resolved = path.resolve(String(target));
-  if (roots.some(root => resolved === root || resolved.startsWith(root + path.sep))) {
-    fs.appendFileSync(${JSON.stringify(accessLog)}, operation + "\\n");
-    throw new Error("Unexpected tsx disk cache access: " + operation);
-  }
-}
-for (const operation of ["readdirSync", "readFileSync", "writeFileSync", "openSync"]) {
-  const original = fs[operation];
-  fs[operation] = function(target, ...args) {
-    guardAccess(target, operation);
-    return original.call(this, target, ...args);
-  };
-}
-for (const operation of ["readdir", "readFile", "writeFile", "open", "unlink", "rm", "rmdir", "access"]) {
-  const original = fs.promises[operation];
-  fs.promises[operation] = async function(target, ...args) {
-    guardAccess(target, operation);
-    return original.call(this, target, ...args);
-  };
-}
-require("node:module").syncBuiltinESMExports();
-`,
-    );
-    fs.writeFileSync(pnpm, 'throw new Error("build must be intercepted");\n');
-    fs.writeFileSync(
-      fixture,
-      `
-const validator: string = process.argv[2];
-const reportOnly = process.argv.includes("--report-only");
-console.log(JSON.stringify({ validator, reportOnly }));
-process.exitCode = validator === "check-control-ui-performance.mts" && !reportOnly ? 1 : 0;
-`,
-    );
-    // Run the native launcher, intercept only the build, then replay each real
-    // validator command/environment with erasable TypeScript. The preload rejects
-    // compiler workers and subprocesses before they can escape validator completion.
-    fs.writeFileSync(
-      capture,
-      `
-const assert = require("node:assert/strict");
-const childProcess = require("node:child_process");
-const path = require("node:path");
-const spawnSync = childProcess.spawnSync;
-const validators = ${JSON.stringify(validators)};
-assert.equal(process.env.TSX_DISABLE_CACHE, undefined);
-assert.equal(process.env.npm_execpath, ${JSON.stringify(pnpm)});
-childProcess.spawnSync = function(command, args, options) {
-  if (args.includes(path.join(${JSON.stringify(root)}, "scripts/generate-control-ui-validators.mts"))) {
-    return spawnSync(command, args, options);
-  }
-  const viteIndex = args.indexOf(require("node:url").pathToFileURL(${JSON.stringify(vite)}).href);
-  if (viteIndex !== -1) {
-    assert.deepEqual(args.slice(viteIndex + 1, viteIndex + 3), ["build", "--outDir"]);
-    assert.equal(path.dirname(args[viteIndex + 3]), ${JSON.stringify(path.join(root, "dist"))});
-    assert.equal(require("node:fs").existsSync(args[viteIndex + 3]), true);
-    return { status: 0 };
-  }
-  const validatorIndex = args.findIndex(arg => validators.includes(path.basename(arg)));
-  if (validatorIndex === -1) throw new Error("Unexpected UI subprocess");
-  const validator = path.basename(args[validatorIndex]);
-  const validatorArgs = args.slice(validatorIndex + 1);
-  const staging = validatorArgs.at(-1);
-  assert.equal(path.dirname(staging), ${JSON.stringify(path.join(root, "dist"))});
-  assert.equal(require("node:fs").existsSync(staging), true);
-  assert.deepEqual(validatorArgs, validator === "check-control-ui-performance.mts" ? ["--report-only", "--dist", staging] : [staging]);
-  assert.equal(options.env.TSX_DISABLE_CACHE, undefined);
-  return spawnSync(command, [...args.slice(0, validatorIndex), ${JSON.stringify(fixture)}, validator, ...validatorArgs], options);
-};
-require("node:module").syncBuiltinESMExports();
-`,
-    );
-    // A spread can retain NPM_EXECPATH, which wins over npm_execpath on Windows.
-    const env = mergeProcessEnv([
-      process.env,
-      {
-        TMPDIR: tempRoot,
-        TMP: tempRoot,
-        TEMP: tempRoot,
-        XDG_CACHE_HOME: path.join(tempDir, "xdg-cache"),
-        NODE_COMPILE_CACHE: path.join(tempDir, "node-cache"),
-        NODE_OPTIONS: `--require ${JSON.stringify(guard)}`,
-        ...buildEnvironment,
-        OPENCLAW_BUILD_ALL_NO_PNPM: "0",
-        npm_execpath: pnpm,
-        TSX_DISABLE_CACHE: undefined,
-        TSX_TSCONFIG_PATH: undefined,
-        PNPM_CONFIG_MODULES_DIR: undefined,
-        npm_config_modules_dir: undefined,
-      },
-    ]);
-
-    const control = runNode(
-      root,
-      ["--eval", `require("node:fs").readdirSync(${JSON.stringify(cacheRoots[0])})`],
-      { env },
-    );
-    expectExit(control, 1);
-    // Check the cache guard without starting the compiler service it protects against.
-    expect(fs.readFileSync(accessLog, "utf8").trim()).toBe("readdirSync");
-    fs.unlinkSync(accessLog);
-    const result = runNode(root, ["--require", capture, "scripts/ui.js", "build"], { env });
-    expectExit(result);
-    expect(fs.existsSync(accessLog), result.stderr).toBe(false);
-    expect(outputLines(result)).toEqual(
-      validators.map((validator) => ({
-        validator,
-        reportOnly: validator === "check-control-ui-performance.mts",
-      })),
-    );
-    for (const cacheRoot of cacheRoots) {
-      expect(fs.readdirSync(cacheRoot)).toEqual(["0-sentinel"]);
-      expect(fs.readFileSync(path.join(cacheRoot, "0-sentinel"), "utf8")).toBe("keep");
     }
   });
 

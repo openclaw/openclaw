@@ -27,6 +27,7 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
+  selectAutomationReplyPayloads,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -43,7 +44,6 @@ import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-
 import {
   resolveAutomationReplyState,
   retainAutomationReasoningWithFinal,
-  selectAutomationReplyPayloads,
 } from "./automation-reply-payloads.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";

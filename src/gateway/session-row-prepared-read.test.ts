@@ -24,6 +24,7 @@ import {
   withAgentDatabaseStartupAdmission,
 } from "../state/agent-database-startup.js";
 import * as deletionJournal from "../state/agent-deletion-journal.read.js";
+import { gatewayRequest } from "./request-frame.test-support.js";
 import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
 import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
@@ -166,12 +167,10 @@ it("refuses a new session's initial message without retaining a startup write", 
     });
     const respond = vi.fn();
     const request = handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "startup-write",
-        method: "sessions.create",
-        params: { agentId: "main", message: "hello" },
-      },
+      req: gatewayRequest("startup-write", "sessions.create", {
+        agentId: "main",
+        message: "hello",
+      }),
       context,
       client,
       respond,
@@ -516,12 +515,7 @@ it.each(["dispatch scopes", "private access"] as const)(
     if (boundary === "dispatch scopes") {
       const respond = vi.fn();
       await dispatch(
-        {
-          type: "req",
-          id: "revoked-description",
-          method: "sessions.describe",
-          params: { key: query.key },
-        },
+        gatewayRequest("revoked-description", "sessions.describe", { key: query.key }),
         respond,
       );
       expect(respond).toHaveBeenCalledExactlyOnceWith(
@@ -566,12 +560,9 @@ it.each(["operator.admin", "operator.read"])(
     const respond = vi.fn();
     try {
       await dispatch(
-        {
-          type: "req",
-          id: "cancelled-description",
-          method: "sessions.describe",
-          params: { key: "agent:main:cancelled-read" },
-        },
+        gatewayRequest("cancelled-description", "sessions.describe", {
+          key: "agent:main:cancelled-read",
+        }),
         respond,
       );
       expect(prepare).toHaveBeenCalledOnce();

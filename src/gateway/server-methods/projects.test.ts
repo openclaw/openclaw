@@ -7,6 +7,7 @@ import * as githubReadIdentity from "../../agents/github-read-identity.js";
 import * as runtimeOwnership from "../../agents/harness/session-runtime-ownership.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -796,19 +797,13 @@ test.each([
       if (reference === "live-worktree") {
         await insertRegistryWorktree(
           process.env,
-          {
-            id: reference,
-            name: reference,
+          makeWorktreeRecord(repo, reference, {
             repoFingerprint: fingerprint,
-            repoRoot: repo,
             path: path.join(state.stateDir, "worktrees", fingerprint, reference),
             branch: `openclaw/${reference}`,
             baseRef: "main",
-            ownerKind: "session",
             ownerId: "agent:main:session",
-            createdAt: 1,
-            lastActiveAt: 1,
-          },
+          }),
           { provisionedPaths: [] },
         );
       }

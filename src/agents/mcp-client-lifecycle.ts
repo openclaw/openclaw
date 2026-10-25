@@ -6,6 +6,7 @@ import {
   type Transport,
 } from "@modelcontextprotocol/client";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { logWarn } from "../logger.js";
 import { settlesWithin } from "../shared/settle-within.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { isMcpRequestTimeoutError } from "./mcp-error.js";
@@ -172,7 +173,14 @@ export async function disposeMcpClient(
   try {
     const graceful = (async () => {
       if (session.transportType === "streamable-http") {
-        await ignoreCloseFailure(() => session.transport.terminateSession?.());
+        // Remote DELETE is best effort; local close still owns replacement safety.
+        try {
+          await session.transport.terminateSession?.();
+        } catch {
+          logWarn(
+            "bundle-mcp: remote session termination was not confirmed; continuing local cleanup",
+          );
+        }
       }
       await ignoreCloseFailure(() => session.transport.close());
       await ignoreCloseFailure(() => session.client.close());
@@ -181,8 +189,7 @@ export async function disposeMcpClient(
     if (closed) {
       return failed ? "uncertain" : "closed";
     }
-    // Closing an HTTP transport aborts a hung DELETE. Stdio owns a process
-    // group, so force it dead before disposal can report completion.
+    // Stdio owns a process group; force it dead before reporting completion.
     const { transport } = session;
     const closeTransport =
       session.transportType === "stdio" && transport instanceof OpenClawStdioClientTransport

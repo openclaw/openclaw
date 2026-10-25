@@ -107,6 +107,7 @@ type GatewayRestartWaitOptions = {
   onProgress?: (phase: string) => void;
   onObservation?: (snapshot: GatewayRestartSnapshot) => void;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 };
 
 export async function waitForGatewayHealthyRestart(
@@ -249,6 +250,7 @@ export async function waitForGatewayHealthyRestart(
 
     for (let attempt = 0; ; attempt += 1) {
       snapshot = await inspectGatewayRestart({
+        assertCurrent: params.assertCurrent,
         service,
         port: params.port,
         env: params.env,

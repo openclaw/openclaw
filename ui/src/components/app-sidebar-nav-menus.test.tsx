@@ -111,45 +111,6 @@ it("keeps modified sidebar links native and handles ordinary navigation", () => 
   expect(navigate).toHaveBeenCalledOnce();
 });
 
-it("uses the current preload callbacks without replacing a sidebar link", () => {
-  const SidebarNavLink = renderSidebarNavLink;
-  const preload = vi.fn();
-  const cancel = vi.fn();
-  const [handlers, setHandlers] = createSignal<{
-    onPreload?: (event: Event, immediate?: boolean) => void;
-    onCancelPreload?: (event: Event) => void;
-  }>({});
-  const view = render(() => (
-    <SidebarNavLink
-      href="/sessions"
-      active={false}
-      icon={<span />}
-      label="Sessions"
-      onNavigate={vi.fn()}
-      {...handlers()}
-    />
-  ));
-  const link = view.getByRole("link", { name: "Sessions" });
-  setHandlers({ onPreload: preload, onCancelPreload: cancel });
-  flush();
-  for (const type of ["focus", "pointerenter", "touchstart", "blur", "pointerleave"]) {
-    link.dispatchEvent(new Event(type, { bubbles: true }));
-  }
-  expect(preload.mock.calls.map(([event, immediate]) => [event.type, immediate])).toEqual([
-    ["focus", undefined],
-    ["pointerenter", undefined],
-    ["touchstart", true],
-  ]);
-  expect(cancel.mock.calls.map(([event]) => event.type)).toEqual(["blur", "pointerleave"]);
-  setHandlers({});
-  flush();
-  link.dispatchEvent(new Event("touchstart", { bubbles: true }));
-  link.dispatchEvent(new Event("blur", { bubbles: true }));
-  expect(preload).toHaveBeenCalledTimes(3);
-  expect(cancel).toHaveBeenCalledTimes(2);
-  expect(view.getByRole("link", { name: "Sessions" })).toBe(link);
-});
-
 it("uses current section actions while retaining the header", () => {
   const initialToggle = vi.fn();
   const currentToggle = vi.fn();

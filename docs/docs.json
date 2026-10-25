@@ -1872,6 +1872,7 @@
                 "group": "Building plugins",
                 "pages": [
                   "plugins/building-plugins",
+                  "plugins/runtime-compatibility",
                   "plugins/feature-plugins",
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",

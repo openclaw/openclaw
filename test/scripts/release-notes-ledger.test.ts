@@ -124,55 +124,30 @@ describe("renderContributionRecordEntry", () => {
     );
   });
 
-  it("deduplicates resolved issues and retains seeded cross-repository references", () => {
-    expect(
-      renderContributionRecordEntry({
-        number: 124,
-        title: "Fix local openclaw/openclaw#45, #45, and OpenClaw/imsg#141",
-        externalReferences: ["openclaw/imsg#141"],
-        priorReferences: [67],
-        linkedIssues: [{ number: 45 }, { number: 67 }],
-        thanks: [],
-      }),
-    ).toBe("- **PR #124** Related #45, OpenClaw/imsg#141, #67.");
-  });
-
-  it("retains references and credits when a compact record is seeded again", () => {
-    const line = "- **PR #125** Related #45, openclaw/imsg#141. Thanks @alice and @bob.";
-    const record = contributionRecordFor({
-      source: recordSection(line),
+  it("rebuilds seeded references and credits without duplicating resolved issues", () => {
+    const related = "Related #45, OpenClaw/imsg#141, #67.";
+    const priorRecord = contributionRecordFor({
+      source: recordSection(
+        `- **PR #125** ${related.replace("OpenClaw", "openclaw")} Thanks @alice and @bob.`,
+      ),
     });
-    const seeded = record.pullRequests.get(125);
-
-    expect(seeded).toEqual({
+    expect(priorRecord.pullRequests.get(125)).toEqual({
       externalReferences: ["openclaw/imsg#141"],
-      references: [45],
+      references: [45, 67],
       thanks: ["alice", "bob"],
     });
-    expect(
-      renderContributionRecordEntry({
-        number: 125,
-        title: "Title changed after release",
-        priorReferences: seeded?.references,
-        externalReferences: seeded?.externalReferences,
-        linkedIssues: [{ number: 45 }],
-        thanks: seeded?.thanks ?? [],
-      }),
-    ).toBe(line);
-  });
-
-  it("retains seeded credits when the production ledger is rebuilt", () => {
-    const priorRecord = contributionRecordFor({
-      source: recordSection("- **PR #125** Thanks @alice and @bob."),
-    });
-    const nodes = new Map([
+    const nodes = new Map<number, Record<string, unknown>>([
       [
         125,
-        pullRequest("fix: keep release credits", {
+        pullRequest("fix: local openclaw/openclaw#45, #45, and OpenClaw/imsg#141", {
           author: { __typename: "User", login: "carol" },
           mergedAt: "2026-07-08T00:00:00Z",
         }),
       ],
+      ...[45, 67].map((number): [number, Record<string, unknown>] => [
+        number,
+        { __typename: "Issue", title: "Resolved issue" },
+      ]),
     ]);
 
     const result = contributionLedger({
@@ -183,7 +158,9 @@ describe("renderContributionRecordEntry", () => {
       now: "2026-07-09T00:00:00Z",
     });
 
-    expect(result.ledger).toContain("- **PR #125** Thanks @carol and @alice and @bob.");
+    const line = `- **PR #125** ${related} Thanks @carol and @alice and @bob.`;
+    expect(result.ledger).toContain(line);
+    expect(renderContributionRecordEntry(result.pullRequests[0])).toBe(line);
   });
 
   it("counts associated and reachable source PRs before retained seed-only rows", () => {

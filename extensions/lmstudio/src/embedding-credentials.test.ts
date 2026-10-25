@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import { createLmstudioEmbeddingProvider } from "./embedding-provider.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -18,18 +19,14 @@ it.each([
 
   await expect(
     createLmstudioEmbeddingProvider({
-      config: {
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: "http://127.0.0.1:19575/v1",
-              params: { preload: false },
-              models: [],
-              ...(source === "provider" ? { headers } : {}),
-            },
-          },
+      config: createModelProviderConfig({
+        lmstudio: {
+          baseUrl: "http://127.0.0.1:19575/v1",
+          params: { preload: false },
+          models: [],
+          ...(source === "provider" ? { headers } : {}),
         },
-      },
+      }),
       provider: "lmstudio",
       model: "text-embedding-nomic-embed-text-v1.5",
       fallback: "none",

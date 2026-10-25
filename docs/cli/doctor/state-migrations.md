@@ -14,6 +14,10 @@ and plugin inventory remain unchanged. If either changes or migrations remain
 unresolved, Doctor scans again without repeating preflight's detection notices
 or warnings.
 
+When an agent schema needs an upgrade, Doctor defers legacy session-entry
+inspection until its stopped-writer schema repair finishes. This applies to
+PostgreSQL as well as SQLite.
+
 Legacy text imports require valid UTF-8. If a source contains malformed bytes,
 Doctor warns and skips that source instead of storing replacement characters.
 Independent migrations continue. The original bytes remain in the source or its

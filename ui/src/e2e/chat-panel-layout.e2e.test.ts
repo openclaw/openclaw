@@ -255,8 +255,7 @@ suite.define(() => {
         // The mobile dock keeps the conversation available and retains the saved desktop layout.
         await page.setViewportSize({ width: 390, height: 844 });
         const mobileHeader = page.locator(".agent-chat__header--mobile");
-        await mobileHeader.locator(".chat-header-session-menu__trigger").click();
-        await page.getByRole("menuitem", { name: "Session dashboard", exact: true }).click();
+        await mobileHeader.getByRole("button", { name: "Session dashboard", exact: true }).click();
         const host = page.locator(".chat-mobile-host");
         await input.waitFor();
         expect(await composer.isVisible()).toBe(true);

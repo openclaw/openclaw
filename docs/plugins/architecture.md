@@ -164,6 +164,8 @@ Channel setup catalogs retain the requested workspace and load-path scope, inclu
 
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing an account or an agent's run workspace does not invalidate it. Explicit plugin lifecycle operations prepare a new inventory for installs, updates, removals, source or manifest edits, and discovery-root changes before publishing it to the running Gateway.
 
+Plugin enablement readers can pass `rootConfig` to `resolveEffectiveEnableState` without constructing a normalized `config` copy. The policy owner reuses the published runtime configuration's prepared policy and refreshes it on publication; an explicitly supplied normalized `config` still takes precedence. Public normalization helpers continue to return caller-owned mutable copies.
+
 Plugin inventory responses share prepared enablement and package-ownership facts between install-health diagnostics and catalog presentation. Those facts belong to one synchronous response preparation, after hosted catalog loading and before optional category loading; maintenance operations still prepare their own current ownership checks.
 
 Runs outside the agent's resolved workspace reuse the agent's prepared plugin generation instead of loading the plugins again. Rooted background runs, including skill workshop reviews and isolated cron jobs, qualify when their bootstrap workspace resolves to that agent's resolved workspace. In a Gateway, every other run workspace also qualifies because it resolves to the same boot inventory. Their execution directory and filesystem confinement remain at the task root, including during compaction. Hosts without that shared inventory, such as direct CLI runs in another workspace, retain their own workspace-scoped generation.
@@ -258,16 +260,13 @@ runtime-store slots. Non-bundled instances also own a captured source artifact.
 Package plugins capture their package inputs when the instance is created.
 Standalone files capture their entry and statically known inputs
 without copying the surrounding workspace. Bundled runtime and setup modules,
-including TypeScript source entries, share the host's code identity during ordinary
-inventory loading; each inventory owns its registered callbacks and cleanup.
-Explicit reload captures the selected plugin's code and plugin-only build chunks
-while retaining canonical host and SDK modules. Captured Workers reach shared
-host modules through links in their captured namespace, so their native imports
-preserve the same host selection without inheriting the parent's resolver hooks.
-If the filesystem denies file symlinks, ordinary parent resolution remains
-available; captured Workers that need these shared imports retain that limitation.
-Rebuild before reload when the
-installation loads compiled output. Changes to host or SDK code require a Gateway restart.
+including TypeScript source entries, share the host's code identity; each inventory
+owns its registered callbacks and cleanup. Explicit bundled reload refreshes those
+registrations and reports `restartRequired: true`. Restart the Gateway to load
+updated bundled, host, or SDK code, and
+rebuild first when the installation loads compiled output. Embedded executable code
+changes require a newly built executable. External on-disk plugins continue to
+capture updated source and dependencies on explicit reload.
 
 WebAssembly libraries remain ordinary captured assets even when they use a `.so`
 filename. Directory asset references reuse an active capture walk; filesystem
@@ -626,15 +625,26 @@ or a later dynamic import.
 Dynamic TypeScript imports preserve asynchronous CommonJS execution, including
 top-level await and `module.exports`, while source loaded from native JavaScript
 follows Node's module format. The first evaluation fixes that mode for the
-instance; resolving a module alone does not evaluate it. Source
+instance; resolving a module alone does not evaluate it. Compiler outputs are
+allocated on first resolution, not for every captured TypeScript file. A
+resolve-only call returns a stable existing path without compiling the module.
+Jiti-backed modules use Jiti's transformed runtime bindings for loader helpers,
+without a separate TypeScript analysis pass. Source
 `import.meta.resolve` retains Jiti's optional parent URL and resolution options,
 including custom conditions and `try`. The one-argument resolver uses the
 source's directory and package scope.
+Preparing a package module defers its capture resolver until an import or source
+inspection needs it. Explicit `JITI_TSCONFIG_PATHS` configuration still initializes
+the resolver at module preparation so later tsconfig edits cannot change the
+selected mapping. Preparation workers retain separate artifact isolation.
 Captures reuse resolution state for local TypeScript imports such as `./helper.js`
 when only `helper.ts` exists, avoiding repeated resolver setup and exception-based
 file probing. Existing JavaScript and Jiti's alternative filename precedence remain
 unchanged. Resolver state is released with its capture; new captures select
-current source inputs independently.
+current source inputs independently. Captured package manifests and sorted
+dependency declarations are reused for that capture's lifetime; new imports
+still resolve and validate dependency links. Native directory freshness checks
+continue to inspect current source metadata.
 Entries loaded from captured source retain evaluation failures for their instance
 instead of retrying through another loader. Core-shipped JavaScript and libraries
 loaded outside a captured plugin instance keep their existing native/Jiti loading

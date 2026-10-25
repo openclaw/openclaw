@@ -10,6 +10,7 @@ worker-heap-flag.mjs
 node-runtime-env.mjs
 node-sqlite.mjs
 node-version.mjs
+standalone-runtime-profile.mjs
 package.json
 packages/acp-core/package.json
 packages/acp-core/src/structured-auth-redaction.ts
@@ -25,21 +26,32 @@ packages/gateway-protocol/package.json
 packages/gateway-protocol/src/canvas-limits.ts
 packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
+packages/gateway-protocol/src/compiled/protocol.generated/predicates.js
+packages/gateway-protocol/src/compiled/protocol.generated/schema-presence.js
+packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-exec-approval.js
+packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-gateway-tool.js
 packages/gateway-protocol/src/compiled/sender-identity.js
 packages/gateway-protocol/src/failover-reasons.ts
 packages/gateway-protocol/src/plugin-ui-capabilities.ts
 packages/gateway-protocol/src/protocol-validator.ts
 packages/gateway-protocol/src/protocol-value-normalization.ts
 packages/gateway-protocol/src/schema/closed-object.ts
+packages/gateway-protocol/src/schema/cron-automation-result.ts
+packages/gateway-protocol/src/schema/cron-shared.ts
 packages/gateway-protocol/src/schema/failover-reason.ts
 packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts
+packages/gateway-protocol/src/schema/presence-activity.ts
 packages/gateway-protocol/src/schema/presence.ts
 packages/gateway-protocol/src/schema/primitives.ts
 packages/gateway-protocol/src/schema/session-placement-state.ts
 packages/gateway-protocol/src/schema/since.ts
+packages/gateway-protocol/src/schema/string-literal-union.ts
 packages/gateway-protocol/src/schema/user-profile-constants.ts
+packages/gateway-protocol/src/schema/validation-invariants.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts
+packages/gateway-protocol/src/schema/worker-exec-approval-schemas.ts
+packages/gateway-protocol/src/schema/worker-exec-approval.ts
 packages/gateway-protocol/src/schema/worker-gateway-tool.ts
 packages/gateway-protocol/src/schema/worker-inference.ts
 packages/gateway-protocol/src/schema/worker-protocol-constants.ts
@@ -66,6 +78,7 @@ packages/llm-core/src/usage-cost.ts
 packages/llm-core/src/utils/assistant-message-events.ts
 packages/llm-core/src/utils/diagnostics.ts
 packages/llm-core/src/utils/event-stream.ts
+packages/llm-core/src/utils/request-headers.ts
 packages/llm-core/src/validation.ts
 packages/media-core/src/constants.ts
 packages/media-core/src/file-name.ts
@@ -117,6 +130,7 @@ packages/normalization-core/src/home-dir.ts
 packages/normalization-core/src/index.ts
 packages/normalization-core/src/json-coercion.ts
 packages/normalization-core/src/json-schema.ts
+packages/normalization-core/src/json-schema-validator.ts
 packages/normalization-core/src/mountinfo-path.ts
 packages/normalization-core/src/node-crypto.ts
 packages/normalization-core/src/number-coercion.ts
@@ -252,7 +266,6 @@ scripts/watch-pr-ci.mjs
 scripts/watch-pr-ci.mts
 scripts/windows-cmd-helpers.mjs
 src/acp/event-ledger-bytes.ts
-src/agents/agent-activity-delegation.ts
 src/agents/agent-bundle-mcp-names.ts
 src/agents/agent-create-error.ts
 src/agents/agent-delete-session-store-safety.kernel.ts
@@ -291,6 +304,7 @@ src/agents/model-selection-alias-scope.ts
 src/agents/model-selection-config.ts
 src/agents/model-selection-normalize.ts
 src/agents/model-selection-shared.ts
+src/agents/model-selection-warnings.ts
 src/agents/openai-model-routes.ts
 src/agents/openai-routing.ts
 src/agents/owner-display.ts
@@ -694,6 +708,7 @@ src/config/sessions/session-entry-codec.ts
 src/config/sessions/session-entry-write-policy.ts
 src/config/sessions/session-entry-cohort.worker.ts
 src/config/sessions/session-entry-json.ts
+src/config/sessions/session-entry-numeric-snapshot.ts
 src/config/sessions/session-entry-snapshot-values.ts
 src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
@@ -815,6 +830,7 @@ src/config/zod-schema.session.ts
 src/config/zod-schema.storage.ts
 src/config/zod-schema.telemetry.ts
 src/config/zod-schema.ts
+src/cron/automation-result.ts
 src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
 src/cron/run-diagnostics-normalize.ts
@@ -942,6 +958,8 @@ src/infra/diagnostics-timeline.ts
 src/infra/diff-read-timing.ts
 src/infra/directory-durability.ts
 src/infra/directory-watch-host.ts
+src/infra/directory-watch-host.worker.ts
+src/infra/directory-watch-parent.worker.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
 src/infra/device-identity-store.ts
@@ -1077,6 +1095,7 @@ src/infra/package-update-activation-settlement.ts
 src/infra/package-update-activation-status.ts
 src/infra/package-update-filesystem.ts
 src/infra/package-update-integrity-hasher.ts
+src/infra/package-update-integrity-hasher.worker.ts
 src/infra/package-update-integrity.ts
 src/infra/package-update-publication-tree.ts
 src/infra/package-update-refusal.ts
@@ -1101,6 +1120,7 @@ src/infra/runtime-dependency-ownership.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
 src/infra/runtime-process-url.ts
+src/infra/runtime-profile.ts
 src/infra/runtime-worker-generation.ts
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
@@ -1558,7 +1578,6 @@ src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
-src/plugins/plugin-bundled-reload.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
@@ -1793,6 +1812,7 @@ src/shared/immutable-data.ts
 src/shared/import-specifier.ts
 src/shared/incognito-session-key.ts
 src/shared/json-schema-defaults.ts
+src/shared/json-schema-keywords.ts
 src/shared/lazy-promise.ts
 src/shared/lazy-runtime.ts
 src/shared/listeners.ts
@@ -2185,8 +2205,10 @@ src/config/sessions/session-transcript-worker.types.ts
 src/config/sessions/transcript-assistant-delivery-read.ts
 src/config/sessions/transcript-entry-anchor.ts
 src/config/sessions/transcript-header.ts
+src/config/sessions/transcript-json.ts
 src/config/sessions/transcript-message-identity.ts
 src/config/sessions/transcript-navigation-fields.ts
+src/config/sessions/transcript-snapshot.ts
 src/config/sessions/transcript-tree.ts
 src/shared/chat-message-content.ts
 src/shared/model-fallback-notice.ts
@@ -2560,6 +2582,7 @@ src/shared/text/escape-markdown.ts
 src/shared/text/final-tags.ts
 src/shared/text/glm-arg-key-payload.ts
 src/shared/text/model-special-tokens.ts
+src/shared/text/native-tool-marker.ts
 src/shared/text/reasoning-tags.ts
 src/shared/text/tag-name-probe.ts
 src/shared/text/text-projection.ts
@@ -2677,6 +2700,7 @@ src/plugins/inline-view.ts
 src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
+src/shared/owned-buffer.ts
 src/status/utility-model-warnings.ts
 src/infra/sqlite-integrity.worker.ts
 src/infra/sqlite-readonly-inspection.ts

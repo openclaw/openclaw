@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
@@ -27,15 +28,11 @@ function modelConfig(base: OpenClawConfig, provider: string): OpenClawConfig {
           api: "openai-completions",
           baseUrl: "https://model-cache.invalid/v1",
           models: [
-            {
-              id: "selected",
+            modelDefinition("selected", {
               name: "Synthetic policy model",
-              reasoning: true,
-              input: ["text"],
               contextWindow: 4096,
               maxTokens: 512,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
+            }),
           ],
         },
       },

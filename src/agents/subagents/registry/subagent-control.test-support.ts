@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
@@ -187,12 +188,7 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
     if (caseState === "active") {
       caseState = "failed";
     }
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Subagent control fixture cleanup failed");
-    }
+    throwCollectedErrors(failures, "Subagent control fixture cleanup failed");
   });
 
   afterAll(async () => {

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { createSessionGoalFixture } from "./session-goal.test-support.js";
 
 type SnapshotParams = Parameters<typeof buildGatewaySessionSnapshot>[0];
 type SessionRow = NonNullable<SnapshotParams["sessionRow"]>;
@@ -80,17 +81,7 @@ it("scopes the global goal to its resolved agent", () => {
     key: "global",
     kind: "global" as const,
     updatedAt: 6,
-    goal: {
-      schemaVersion: 1 as const,
-      id: "goal-1",
-      objective: "Scoped objective",
-      status: "active" as const,
-      createdAt: 1,
-      updatedAt: 2,
-      tokenStart: 0,
-      tokensUsed: 3,
-      continuationTurns: 0,
-    },
+    goal: createSessionGoalFixture("goal-1", "Scoped objective", { updatedAt: 2, tokensUsed: 3 }),
   };
   const unscoped = buildGatewaySessionSnapshot({ sessionRow });
   expect(unscoped).not.toHaveProperty("goal");

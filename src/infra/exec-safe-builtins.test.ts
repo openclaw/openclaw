@@ -158,35 +158,22 @@ describe.skipIf(process.platform === "win32")(
       expect(result.segmentSatisfiedBy[0]).toBe("safeBuiltins");
     });
 
-    it("'cd /tmp && git status' passes with allowlist plus safe builtin handling", async () => {
+    it.each([
+      [
+        "'cd /tmp && git status' passes with allowlist plus safe builtin handling",
+        "cd /tmp && git status",
+      ],
+      [
+        "'test -d /tmp && git status' passes with allowlist plus safe builtin handling",
+        "test -d /tmp && git status",
+      ],
+      [
+        "'[ -d /tmp ] && git status' passes with allowlist plus safe builtin handling",
+        "[ -d /tmp ] && git status",
+      ],
+    ] as const)("%s", async (_name, command) => {
       const result = await evaluateShellAllowlistWithAuthorization({
-        command: "cd /tmp && git status",
-        allowlist: gitAllowlist,
-        safeBins: new Set(),
-        cwd: "/tmp",
-      });
-      expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(true);
-      expect(result.segmentSatisfiedBy).toContain("safeBuiltins");
-      expect(result.segmentSatisfiedBy).toContain("allowlist");
-    });
-
-    it("'test -d /tmp && git status' passes with allowlist plus safe builtin handling", async () => {
-      const result = await evaluateShellAllowlistWithAuthorization({
-        command: "test -d /tmp && git status",
-        allowlist: gitAllowlist,
-        safeBins: new Set(),
-        cwd: "/tmp",
-      });
-      expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(true);
-      expect(result.segmentSatisfiedBy).toContain("safeBuiltins");
-      expect(result.segmentSatisfiedBy).toContain("allowlist");
-    });
-
-    it("'[ -d /tmp ] && git status' passes with allowlist plus safe builtin handling", async () => {
-      const result = await evaluateShellAllowlistWithAuthorization({
-        command: "[ -d /tmp ] && git status",
+        command,
         allowlist: gitAllowlist,
         safeBins: new Set(),
         cwd: "/tmp",

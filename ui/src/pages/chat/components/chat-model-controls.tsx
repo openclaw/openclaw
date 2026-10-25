@@ -527,7 +527,8 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       catalogState.hasSnapshot &&
       (catalogState.status === "ready" ||
         catalogState.status === "error" ||
-        catalogState.status === "loading") &&
+        catalogState.status === "loading" ||
+        catalogState.status === "offline") &&
       activeModelOption?.disabled !== true &&
       modelOptions.some((option) => !option.disabled);
     const busy = props.sending || Boolean(props.activeRunId) || props.stream !== null;

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as configJournal from "../config/config-journal-snapshot.js";
 import * as configAudit from "../config/io.audit.js";
 import { registerRuntimeConfigWriteListener } from "../config/runtime-snapshot.js";
@@ -69,6 +70,72 @@ async function admittedWrite(hash: string) {
   void application.result.then(settled);
   return { ...harness, application, settled };
 }
+
+it("bounds lease reads across config observation and application", async () => {
+  const { requireNodeSqlite } = await import("../infra/node-sqlite.js");
+  const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease").mockImplementation((options, run) =>
+    withLease(options, (lease) => {
+      reads.queries.length = 0;
+      return run(lease);
+    }),
+  );
+  const leaseReads = () => reads.queries.filter((sql) => /from "state_leases"/i.test(sql)).length;
+  const checkpoints: number[] = [];
+  const snapshot = makeZeroDebounceHookWrite("observation-lease").snapshot;
+  const harness = createReloaderHarness(
+    async () => {
+      checkpoints.push(leaseReads());
+      return snapshot;
+    },
+    {
+      readPluginInstallRecords: async () => {
+        checkpoints.push(leaseReads());
+        return {};
+      },
+    },
+  );
+  await harness.reloader.ready;
+  checkpoints.length = 0;
+  harness.watcher.emit("change");
+  await flushReload(harness.reloader);
+
+  expect(checkpoints).toEqual([0, 1]);
+  expect(harness.onHotReload).toHaveBeenCalledOnce();
+  expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
+  reads.restore();
+});
+
+it("rejects a lease that expires during observation before applying the config", async () => {
+  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease").mockImplementation((options, run) =>
+    withLease({ ...options, leaseMs: 1_000 }, run),
+  );
+  let expire = false;
+  const snapshot = makeZeroDebounceHookWrite("expired-observation").snapshot;
+  const readPluginInstallRecords = vi.fn(async () => ({}));
+  const harness = createReloaderHarness(
+    async () => {
+      if (expire) {
+        // Acquisition uses the worker's real clock; suspend without running the heartbeat.
+        vi.setSystemTime(vi.getRealSystemTime() + 60_000);
+      }
+      return snapshot;
+    },
+    { readPluginInstallRecords },
+  );
+  await harness.reloader.ready;
+  readPluginInstallRecords.mockClear();
+  expire = true;
+  harness.watcher.emit("change");
+  await flushReload(harness.reloader);
+
+  expect(readPluginInstallRecords).not.toHaveBeenCalled();
+  expect(harness.onHotReload).not.toHaveBeenCalled();
+  expect(harness.onConfigAccepted).not.toHaveBeenCalled();
+  expect(harness.log.error).toHaveBeenCalledWith(expect.stringContaining("lease"));
+});
 
 it("coalesces config writes after a delayed Gateway scheduler wake", async () => {
   const { clock, scheduler } = createConfigReloadTestClock();

@@ -61,12 +61,15 @@ const liveRow = {
   sandboxRequired: false,
 };
 
+function parentFixture(row: Parameters<typeof anonymizeParentRow>[0] = liveRow) {
+  const job = storedJob({ operatorSource });
+  return { job: anonymize(job, "ops", 1), parentRow: anonymizeParentRow(row, job) };
+}
+
 describe("cron context replay fixtures", () => {
   it("keeps an operator-source parent as the fixture's principal", () => {
-    const job = storedJob({ operatorSource });
-    const fixture = { job: anonymize(job, "ops", 1), parentRow: anonymizeParentRow(liveRow, job) };
+    const fixture = parentFixture();
 
-    expect(resolveScheduledRequester(fixture.job).kind).toBe("operator-source");
     expect(JSON.stringify(fixture)).not.toMatch(/private/);
     expect(replayScheduledContextFixture(fixture)).toMatchObject({
       status: "ready",
@@ -98,9 +101,7 @@ describe("cron context replay fixtures", () => {
   });
 
   it("keeps a changed lifecycle revision as a reset", () => {
-    const job = storedJob({ operatorSource });
-    const row = { ...liveRow, lifecycleRevision: "private-rev-2" };
-    const fixture = { job: anonymize(job, "ops", 1), parentRow: anonymizeParentRow(row, job) };
+    const fixture = parentFixture({ ...liveRow, lifecycleRevision: "private-rev-2" });
 
     expect(fixture.parentRow).toMatchObject({
       sessionId: "parent-session",
@@ -114,14 +115,11 @@ describe("cron context replay fixtures", () => {
 
   it("replaces script and system event bodies but keeps their tool caps", () => {
     const toolsAllow = ["write", "edit", "exec", "process", "web_search", "message"];
-    const script = storedJob({
-      payload: { kind: "script", script: "return 'private script'", toolsAllow },
-    });
-    const event = storedJob({
-      payload: { kind: "systemEvent", text: "private text", toolsAllow },
-    });
-
-    for (const job of [script, event]) {
+    for (const payload of [
+      { kind: "script", script: "return 'private script'", toolsAllow },
+      { kind: "systemEvent", text: "private text", toolsAllow },
+    ] as const) {
+      const job = storedJob({ payload });
       const fixture = anonymize(job, "ops", 1);
       expect(JSON.stringify(fixture)).not.toMatch(/private/);
       expect(fixture.payload.kind).toBe(job.payload.kind);
@@ -159,19 +157,16 @@ describe("cron context replay fixtures", () => {
     } as Partial<CronStoredJob>);
     const fixture = anonymize(job, "ops", 1);
 
-    expect(resolveCronRunToolsAllow(job)).toEqual(["read"]);
     expect(resolveCronRunToolsAllow(fixture)).toEqual(["read"]);
     expect(JSON.stringify(fixture)).not.toMatch(/private/);
   });
 
   it("keeps a missing worktree", () => {
-    const job = storedJob({ operatorSource });
-    const row = {
+    const fixture = parentFixture({
       ...liveRow,
       cwd: "/private/worktree",
       worktree: { path: "/private/worktree", exists: false },
-    };
-    const fixture = { job: anonymize(job, "ops", 1), parentRow: anonymizeParentRow(row, job) };
+    });
 
     expect(fixture.parentRow).toMatchObject({
       cwd: "/work/parent/worktree",

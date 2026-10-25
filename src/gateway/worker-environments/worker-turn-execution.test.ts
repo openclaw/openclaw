@@ -10,6 +10,7 @@ import {
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { SessionTranscriptMessageCommittedError } from "../../agents/sessions/session-manager-message-error.js";
@@ -897,16 +898,13 @@ describe("worker turn execution", () => {
                     api: "openai-completions",
                     apiKey: "synthetic-worker-api-key",
                     models: [
-                      {
-                        id: "plain",
+                      modelDefinition("plain", {
                         name: "Plain",
                         reasoning: testCase.reasoning,
                         thinkingLevelMap: testCase.thinkingLevelMap,
-                        input: ["text"],
                         contextWindow: 8192,
                         maxTokens: 2048,
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      },
+                      }),
                     ],
                   },
                 },
@@ -931,7 +929,7 @@ describe("worker turn execution", () => {
       expect(descriptor?.assignment.systemPrompt).not.toContain("Use `sessions_spawn`");
       expect(runLocal).not.toHaveBeenCalled();
       expect(descriptor?.assignment.toolAuthority).toMatchObject({
-        allowedToolNames: [],
+        allowedToolNames: ["exec", "process"],
         exec: { host: "gateway", security: "full", ask: "always" },
       });
     },

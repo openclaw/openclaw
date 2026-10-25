@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isProxy } from "node:util/types";
+import type { ModelRequestHeaders } from "@openclaw/llm-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
@@ -596,7 +597,7 @@ function evictReadyEntriesForCapacity(pendingBytes: number): void {
 type HttpContinuationIdentity = {
   apiKey: string;
   baseUrl: string;
-  headers: Record<string, string>;
+  headers: ModelRequestHeaders;
 };
 
 function connectionIdentity(params: HttpContinuationIdentity): string {

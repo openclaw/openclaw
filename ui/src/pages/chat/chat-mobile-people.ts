@@ -127,12 +127,12 @@ export function projectChatMobilePeople(input: ChatMobilePeopleInput): ChatMobil
   }
   const header = new Map<string, ChatMobilePerson>();
   for (const value of [creator, owner, ...participants.values(), ...currentViewers.values()]) {
-    if (value && (roleKeys.has(value.key) || value.viewing)) {
+    if (value?.viewing) {
       header.set(value.key, value);
     }
   }
   return {
-    header: [...header.values()],
+    header: currentViewers.size > 1 ? [...header.values()] : [],
     viewers: [...currentViewers.values()],
     creator: creator?.key === owner?.key ? undefined : creator,
     owner,

@@ -1,5 +1,3 @@
-@import "./delegation.css";
-
 openclaw-chat-page,
 openclaw-pending-session-create {
   display: flex;
@@ -119,7 +117,12 @@ openclaw-pending-session-create {
   height: 14px;
 }
 
-.chat-error__content[open] .chat-error__chevron {
+.chat-error__content[open] .chat-error__chevron,
+.chat-workspace-conflict-notice:not([open]) .chat-workspace-conflict-notice__chevron,
+.chat-pr__checks[open] .chat-pr__checks-chevron svg,
+.chat-ci__job[open] > summary .chat-ci__chevron,
+.chat-ci__skipped[open] > summary .chat-ci__chevron,
+.chat-pr__publication-status[open] .chat-pr__publication-chevron {
   transform: rotate(180deg);
 }
 
@@ -521,10 +524,6 @@ openclaw-pending-session-create {
   justify-content: center;
   color: var(--muted);
   transition: transform var(--duration-fast) var(--ease-out);
-}
-
-.chat-workspace-conflict-notice:not([open]) .chat-workspace-conflict-notice__chevron {
-  transform: rotate(180deg);
 }
 
 .chat-workspace-conflict-notice__content {
@@ -962,6 +961,7 @@ openclaw-pending-session-create {
   overflow-y: auto;
   padding: 14px;
   color: var(--popover-foreground);
+  font-variant-numeric: tabular-nums;
   animation: fade-in 150ms var(--ease-out);
 }
 
@@ -969,57 +969,237 @@ openclaw-pending-session-create {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 8px;
+  min-height: 20px;
 }
-
 .context-usage__context-value {
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
   white-space: nowrap;
 }
-
-.context-usage__bar {
-  height: 5px;
-  margin: 8px 0 10px;
-  overflow: hidden;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 22%, transparent);
+.context-usage__open {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
 }
-
-.context-usage__bar span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--ctx-color, var(--accent));
-  box-shadow: 0 0 12px color-mix(in srgb, var(--ctx-color, var(--accent)) 46%, transparent);
+.context-usage__open svg {
+  width: 11px;
+  height: 11px;
+  transition: transform 150ms var(--ease-out);
 }
-
-.context-usage__section-label {
-  padding-top: 14px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+.context-usage__open:hover:not(:disabled) {
+  color: var(--text);
 }
-
-.context-usage__plan-header {
+.context-usage__open:hover:not(:disabled) svg {
+  transform: translateX(2px);
+}
+.context-usage__separator {
+  height: 1px;
+  margin: 10px 0;
+  background: var(--details-separator);
+}
+.context-usage__latest {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-top: 14px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-height: 26px;
+  color: var(--muted);
+  font-size: 12px;
 }
-
-.context-usage__plan-link {
+.context-usage__stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin: 0 0 0 auto;
+  font-size: 12px;
+  div {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 3px;
+  }
+  div:not(:last-child)::after {
+    margin: 0 6px;
+    color: color-mix(in srgb, var(--muted) 50%, transparent);
+    content: "·";
+  }
+  dt {
+    color: var(--muted);
+  }
+  dd {
+    margin: 0;
+    color: var(--text);
+    font-weight: 650;
+  }
+}
+.context-usage__tray {
+  --tray: color-mix(in oklab, var(--text) 3.5%, var(--bg-elevated));
+  margin: 10px -14px -14px;
+  padding: 6px 14px 14px;
+  border-top: 1px solid var(--details-separator);
+  border-radius: 0 0 13px 13px;
+  background: var(--tray);
+}
+.context-usage__identity,
+.context-usage__skeleton-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  column-gap: 6px;
+  align-items: center;
+}
+.context-usage__identity {
+  height: 28px;
+  .provider-brand-icon {
+    width: 16px;
+    height: 16px;
+    justify-self: center;
+  }
+}
+.context-usage__account {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+.context-usage__account:dir(rtl) {
+  mask-image: linear-gradient(to left, black calc(100% - 24px), transparent);
+}
+.context-usage__plan-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 500;
+  text-decoration: none;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--muted) 40%, transparent);
+}
+.context-usage__plan-badge:hover {
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+.context-usage__limits {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.context-usage__limit {
+  position: relative;
+  height: 24px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+:root[data-theme-mode="dark"] .context-usage__limit {
+  background: color-mix(in oklab, var(--bg) 40%, var(--bg-elevated));
+}
+.context-usage__limit-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(
+    in oklab,
+    var(--accent) calc(var(--session-color-tint) * var(--quota-strength)),
+    var(--tray)
+  );
+}
+.context-usage__limit-tick {
+  position: absolute;
+  inset: 6px auto 6px 50%;
+  width: 1px;
+  background: color-mix(in oklab, var(--text) 28%, transparent);
+}
+.context-usage__limit-content {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 10px;
+}
+.context-usage__limit-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.context-usage__limit-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: color-mix(in oklab, var(--muted-strong) 50%, var(--text));
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  svg {
+    width: 10px;
+    height: 10px;
+  }
+}
+.context-usage__limit-value {
+  margin-inline-start: auto;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.context-usage__limit-value--warn {
+  color: color-mix(in oklab, var(--warn) 80%, var(--text));
+}
+.context-usage__limit-value--danger {
+  color: var(--danger);
+}
+.context-usage__report-skeleton {
+  margin-top: 10px;
+  height: 141px;
+}
+.context-usage__skeleton-bar {
+  height: 5px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+}
+.context-usage__skeleton-row {
+  height: 26px;
+  :is(i, span, b) {
+    height: 8px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--muted) 15%, transparent);
+  }
+  i {
+    width: 8px;
+    justify-self: center;
+  }
+  span {
+    width: 70%;
+  }
+  b {
+    width: 36px;
+  }
+}
+.context-usage__note {
+  margin: 10px 0 0;
+  font-size: 12px;
   color: var(--muted);
-  transition: color 150ms ease-out;
 }
-
-.context-usage__plan-link:hover {
-  color: var(--text);
-}
-
-.context-usage__plan-link svg,
 .task-suggestion__start svg,
 .chat-pr__checks-chevron svg,
 .chat-ci__chevron svg,
@@ -1027,139 +1207,6 @@ openclaw-pending-session-create {
 .chat-pr__publication-chevron svg {
   width: 12px;
   height: 12px;
-}
-
-.context-usage__plan-badge {
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
-  text-transform: none;
-}
-
-.context-usage__account {
-  overflow: hidden;
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-usage__limits {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-  margin-top: 12px;
-}
-
-.context-usage__limit-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.context-usage__limit-label {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 550;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-usage__limit-meta {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.context-usage__limit-meta strong {
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
-
-.context-usage__limit-bar {
-  height: 4px;
-  margin-top: 6px;
-  overflow: hidden;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 20%, transparent);
-}
-
-.context-usage__limit-bar span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-}
-
-.context-usage__limit-bar span.context-usage__limit-fill--warn {
-  background: var(--warn);
-}
-
-.context-usage__limit-bar span.context-usage__limit-fill--danger {
-  background: var(--danger);
-}
-
-.context-usage__stats {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 6px;
-  margin: 8px 0 0;
-  font-size: 12px;
-}
-
-.context-usage__stats div {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  min-width: 0;
-}
-
-/* Trailing separator: on flex-wrap the dot stays at the end of the previous
-   line instead of orphaned at the start of the next one. */
-.context-usage__stats div:not(:last-child)::after {
-  margin-left: 2px;
-  color: var(--muted);
-  content: "·";
-}
-
-.context-usage__stats dt {
-  color: var(--muted);
-}
-
-.context-usage__stats dd {
-  margin: 0;
-  color: var(--text);
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
-
-.context-usage__provenance {
-  display: block;
-  margin-top: 12px;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-usage__provenance + .context-usage__provenance {
-  margin-top: 3px;
-}
-
-.context-usage__provenance strong {
-  color: var(--text);
-  font-weight: 650;
 }
 
 openclaw-chat-audio-player,
@@ -2103,10 +2150,6 @@ button.chat-pr__diff {
   display: flex;
 }
 
-.chat-pr__checks[open] .chat-pr__checks-chevron svg {
-  transform: rotate(180deg);
-}
-
 .chat-pr__checks-dot {
   width: 7px;
   height: 7px;
@@ -2353,11 +2396,6 @@ openclaw-chat-ci-details {
   white-space: nowrap;
 }
 
-.chat-ci__job[open] > summary .chat-ci__chevron,
-.chat-ci__skipped[open] > summary .chat-ci__chevron {
-  transform: rotate(180deg);
-}
-
 .chat-ci__job-detail {
   padding: 0 24px 10px;
 }
@@ -2520,10 +2558,6 @@ openclaw-chat-ci-details {
 
 .chat-pr__publication-chevron {
   display: inline-flex;
-}
-
-.chat-pr__publication-status[open] .chat-pr__publication-chevron {
-  transform: rotate(180deg);
 }
 
 .chat-pr__publication-more {

@@ -142,7 +142,6 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       envFingerprint: undefined,
       defaultDiscoveryCompatible: false,
       compatibleConfigFingerprints: undefined,
-      revision: Symbol("plugin-metadata-snapshot"),
       configIdentities: new WeakSet(),
     },
     snapshots: new Map(),

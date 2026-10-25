@@ -388,7 +388,7 @@ describe("plugin setup registry artifact lifecycle", () => {
     { artifactRootName: "dist", computed: true },
     { artifactRootName: "dist-runtime", computed: false },
   ])(
-    "reloads bundled setup artifacts from $artifactRootName (computed: $computed)",
+    "retains bundled setup artifacts from $artifactRootName after metadata refresh (computed: $computed)",
     ({ artifactRootName, computed }) => {
       const packageRoot = fs.realpathSync(
         makeTrackedTempDir("openclaw-bundled-setup-lifecycle", tempDirs),
@@ -437,7 +437,7 @@ describe("plugin setup registry artifact lifecycle", () => {
       clearPluginMetadataLifecycleCaches();
 
       expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
-        "entry-after:dependency-after",
+        "entry-before:dependency-before",
       );
     },
   );

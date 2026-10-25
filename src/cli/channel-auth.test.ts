@@ -54,20 +54,18 @@ vi.mock("../channels/plugins/index.js", () => ({
 }));
 
 // mock-isolation: Channel auth exercises fixture reads and writes without loading host credentials.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.loadConfig,
-  loadConfig: mocks.loadConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.loadConfig>) =>
-    async () =>
-      mocks.loadConfig(...args),
-  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: async () => ({
-    snapshot: await mocks.readConfigFileSnapshot(),
-    writeOptions: {},
-  }),
-  replaceConfigFile: mocks.replaceConfigFile,
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "loadConfig"),
+    readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite: async () => ({
+      snapshot: await mocks.readConfigFileSnapshot(),
+      writeOptions: {},
+    }),
+    replaceConfigFile: mocks.replaceConfigFile,
+  };
+});
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,

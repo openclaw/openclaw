@@ -289,11 +289,18 @@ describe("embedded run retry dispatch", () => {
   it.each([
     {
       session: { execHost: "node", execNode: "session-node", execCwd: "/remote/default" },
-      expected: { host: "node", security: "full", ask: "off", node: "session-node", safeBins: [] },
+      expected: {
+        mode: "full",
+        host: "node",
+        security: "full",
+        ask: "off",
+        node: "session-node",
+        safeBins: [],
+      },
     },
     {
       session: { sandbox: "required" },
-      expected: { host: "sandbox", security: "deny", ask: "off", safeBins: [] },
+      expected: { mode: "deny", host: "sandbox", security: "deny", ask: "off", safeBins: [] },
     },
   ] satisfies Array<{
     session: ExecSessionDefaults;

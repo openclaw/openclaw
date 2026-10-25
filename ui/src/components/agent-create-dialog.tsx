@@ -116,7 +116,11 @@ export function AgentCreateDialog(props: {
   }
 
   return (
-    <openclaw-modal-dialog label={dialogTitle()} onModal-cancel={() => props.onCancel()}>
+    <openclaw-modal-dialog
+      class="agent-create-modal"
+      label={dialogTitle()}
+      onModal-cancel={() => props.onCancel()}
+    >
       <form
         class="agent-create-dialog"
         onSubmit={(event) => {

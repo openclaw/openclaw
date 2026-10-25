@@ -1165,6 +1165,11 @@ If a CLI runtime cannot enforce the required restart-safe tools, recovery keeps
 the cycle as a tombstone before refusing in-place continuation. The operator can
 then use **Resume in new session** without losing the interrupted transcript.
 
+Concurrent `sessions.recover` requests for that replacement return the same
+successor and continuation acknowledgment. Recovery serializes admission while
+preserving each caller's current authorization; it does not wait for the resumed
+model turn to finish.
+
 Definitive revocation of the original operator's authority remains terminal for
 that input: recovery records one visible interruption instead of retrying it.
 The same applies when a retained requester profile has no matching operator

@@ -236,6 +236,7 @@ class ChatController internal constructor(
     scope: CoroutineScope,
     session: GatewaySession,
     json: Json,
+    isGatewayReady: () -> Boolean = { true },
     transcriptCache: ChatTranscriptCache? = null,
     cacheScope: () -> ChatCacheScope? = { null },
     currentDefaultAgentId: () -> String? = { "main" },
@@ -251,8 +252,12 @@ class ChatController internal constructor(
   ) : this(
     scope = scope,
     json = json,
-    requestGateway = { method, paramsJson -> session.request(method, paramsJson) },
+    requestGateway = { method, paramsJson ->
+      if (!isGatewayReady()) throw GatewayRequestNotEnqueued("Agent discovery is not ready")
+      session.request(method, paramsJson)
+    },
     requestGatewayForGateway = { gatewayId, method, paramsJson ->
+      if (!isGatewayReady()) throw GatewayRequestNotEnqueued("Agent discovery is not ready")
       session.requestForEndpoint(gatewayId, method, paramsJson)
     },
     gatewayAdvertisesMethod = gatewayAdvertisesMethod,
@@ -260,7 +265,7 @@ class ChatController internal constructor(
     currentGatewayCatalogRevision = currentGatewayCatalogRevision,
     sessionRouting = { session.sessionRouting },
     captureRequestLease = { gatewayScope ->
-      session.captureRequestLease(gatewayScope?.gatewayId)
+      if (isGatewayReady()) session.captureRequestLease(gatewayScope?.gatewayId) else null
     },
     transcriptCache = transcriptCache,
     cacheScope = cacheScope,

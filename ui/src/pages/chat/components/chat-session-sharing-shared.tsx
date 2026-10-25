@@ -315,12 +315,12 @@ export function ChatSessionPublicIndicator(
         aria-label={t("chat.sessionSharing.worldReadable")}
         title={t("chat.sessionSharing.worldReadable")}
       >
+        <span aria-hidden="true">
+          <Icon name="globe" />
+        </span>
         <Show when={!props.mobile}>
-          <span aria-hidden="true">
-            <Icon name="globe" />
-          </span>
+          <span>{t("chat.sessionSharing.publicIndicator")}</span>
         </Show>
-        <span>{t("chat.sessionSharing.publicIndicator")}</span>
       </span>
     </Show>
   );

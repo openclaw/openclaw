@@ -443,11 +443,12 @@ export async function scanActualWorkspaceManifest(
   if (params.includePaths) {
     const includedParents = new Set<string>();
     const derivedOnlyDirectories = new Set<string>();
-    const paths = [...params.includePaths]
-      .map((relative) => ({ relative, depth: relative.split("/").length }))
-      .toSorted(
-        (left, right) => right.depth - left.depth || left.relative.localeCompare(right.relative),
-      );
+    const paths = Array.from(params.includePaths, (relative) => ({
+      relative,
+      depth: relative.split("/").length,
+    })).toSorted(
+      (left, right) => right.depth - left.depth || left.relative.localeCompare(right.relative),
+    );
     // Siblings are independent, but parent classification needs every deeper
     // membership result. Join each depth before admitting the next one.
     for (let start = 0; start < paths.length;) {

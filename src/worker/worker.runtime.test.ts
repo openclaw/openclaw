@@ -63,6 +63,7 @@ import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
+import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -99,6 +100,9 @@ import {
   createWorkerToolSurfaceForTest,
   createWorkerHelloForTest,
   createWorkerConnectionForTest,
+  buildWorkerExecToolCall,
+  WorkerExecApprovalFixture,
+  type WorkerExecFixtureOptions,
 } from "./worker-tool-surface.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -199,20 +203,10 @@ type InferenceOutput = {
   event: (event: WorkerInferenceEventFrame["payload"]["event"]) => void;
   finish: (outcome: WorkerInferenceTerminalOutcome) => void;
 };
-const USAGE = {
-  input: 2,
-  output: 3,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 5,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const USAGE = createUsageFixture(2, 3, 5);
 
-type FakeGatewayOptions = {
+type FakeGatewayOptions = WorkerExecFixtureOptions & {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
-  backgroundCommand?: string;
-  backgroundYieldMs?: number;
-  execCommand?: string;
   execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
@@ -246,7 +240,7 @@ function assistantMessage(
   };
 }
 
-class FakeWorkerGateway {
+class FakeWorkerGateway extends WorkerExecApprovalFixture {
   config?: OpenClawConfig;
   toolSurface!: () => WorkerToolSurface;
   private readonly httpServer: Server;
@@ -286,6 +280,7 @@ class FakeWorkerGateway {
   }
 
   constructor(private readonly options: FakeGatewayOptions = {}) {
+    super(options);
     this.httpServer = createServer();
     this.webSocketServer = new WebSocketServer({ server: this.httpServer });
     this.webSocketServer.on("connection", (socket) => this.accept(socket));
@@ -360,6 +355,9 @@ class FakeWorkerGateway {
       return this.handleInferenceCancel(socket, parsed);
     }
     if (isRecord(parsed) && parsed.type === "req" && typeof parsed.id === "string") {
+      if (this.handleExecApproval(parsed, (id, payload) => this.reply(socket, id, payload))) {
+        return;
+      }
       if (parsed.method === "worker.gatewayTool.cancel") {
         this.methods.push(parsed.method);
         this.send(socket, { type: "res", id: parsed.id, ok: true, payload: { cancelled: false } });
@@ -689,31 +687,7 @@ class FakeWorkerGateway {
     output: InferenceOutput,
     options: { background: boolean; safe: boolean },
   ): void {
-    const toolCallId = "local-exec-call";
-    const args = options.background
-      ? {
-          // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
-          command:
-            this.options.backgroundCommand ??
-            (process.platform === "win32"
-              ? `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
-                  "setInterval(() => undefined, 1000)",
-                )}`
-              : "exec sleep 60"),
-          ...(this.options.backgroundYieldMs === undefined
-            ? { background: true }
-            : { yieldMs: this.options.backgroundYieldMs }),
-        }
-      : {
-          command:
-            this.options.execCommand ??
-            (options.safe ? "wc -c" : "printf worker-local > local-proof.txt"),
-        };
-    this.sendToolCallTurn(output, {
-      args,
-      toolCallId,
-      toolName: "exec",
-    });
+    this.sendToolCallTurn(output, buildWorkerExecToolCall(this.options, options));
   }
 
   private sendToolCallTurn(output: InferenceOutput, tool: ToolCallPlan): void {

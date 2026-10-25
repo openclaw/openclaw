@@ -10,6 +10,7 @@ import {
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
@@ -48,15 +49,10 @@ export function gatewaySnapshot(
   methods: string[] = [],
   scopes = ["operator.read", "operator.pairing"],
 ): ApplicationGatewaySnapshot {
-  return {
+  return createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
     hello: {
       type: "hello-ok",
       protocol: 1,
@@ -64,7 +60,7 @@ export function gatewaySnapshot(
       features: { methods },
       snapshot: { presence: [gatewayPresence] },
     },
-  } as ApplicationGatewaySnapshot;
+  }) as ApplicationGatewaySnapshot;
 }
 
 export function gatewayFixture(initial: ApplicationGatewaySnapshot) {

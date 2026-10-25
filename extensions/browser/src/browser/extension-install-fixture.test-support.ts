@@ -61,6 +61,17 @@ export type InstallFixture = {
   };
 };
 
+export function withAdvancingInstallClock(deps: InstallFixture) {
+  let now = 0;
+  return {
+    ...deps,
+    now: () => now,
+    sleep: async (ms: number) => {
+      now += ms;
+    },
+  };
+}
+
 function selectFixture(fixture: InstallFixture = {}) {
   const restores: Array<() => void> = [];
   const setEnv = (key: string, value: string | undefined) => {

@@ -253,7 +253,13 @@ it.each(
         expect(host.chatRunLifecycleGeneration).toBe(runGeneration);
         expect(host.chatStream).toBe("The current answer is still streaming.");
         expect(host.chatQueue.map((item) => item.id)).toEqual(queuedIds);
-        expect(listStoredChatOutboxes(host)).toEqual(capturedOutboxes);
+        const expectedOutboxes = structuredClone(capturedOutboxes);
+        for (const outbox of expectedOutboxes) {
+          for (const item of outbox.queue) {
+            item.sessionId = "current-session";
+          }
+        }
+        expect(listStoredChatOutboxes(host)).toEqual(expectedOutboxes);
         return;
       }
       if (mainKeyChanged) {
@@ -734,16 +740,14 @@ it.each([false, true])(
     expect(payload).toMatchObject({
       sessionKey,
       message: "Keep this second message",
+      sessionId: "current-session",
     });
     if (switchPane) {
-      expect(payload).not.toHaveProperty("sessionId");
       expect(host.request).toHaveBeenCalledWith(
         "chat.history",
         expect.objectContaining({ sessionKey }),
         { timeoutMs: 30_000 },
       );
-    } else {
-      expect(payload.sessionId).toBe("current-session");
     }
     expect(payload).not.toHaveProperty("expectedLeafEntryId", "cached-leaf");
     expect(host.chatQueue).toEqual([]);

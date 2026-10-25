@@ -1,6 +1,9 @@
 import "../../agents/auth-profiles/external-auth.test-support.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
@@ -49,14 +52,7 @@ beforeEach(() => {
   );
   externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
   cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-      },
-    ],
+    resolveRuntimeCliBackends: createClaudeCliBackends,
     resolvePluginSetupCliBackend: () => undefined,
   });
 });

@@ -297,7 +297,6 @@ export function* loadOpenClawPluginsSteps(
       devSourceRoot: context.devSourceRoot,
       pluginSdkResolution: options.pluginSdkResolution,
       expectedSourceDigests: options.expectedSourceDigests,
-      replacePluginIds: options.replacePluginIds,
       ...overrides?.moduleLoader,
     });
     const borrowedSubagent = context.borrowedGatewayRuntime

@@ -1,19 +1,12 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { BrowserContextOptions, Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import type { BrowserContextOptions, Locator } from "playwright";
+import { expect, it } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
 } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import {
-  takeControlUiScreenshotFrame,
-  takeControlUiViewportScreenshot,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -39,16 +32,6 @@ const suite = createControlUiE2eSuite({
   trackBrowserContexts: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let publicationProofDir: string;
-let stackingProofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    publicationProofDir = createControlUiE2eArtifactDir("github-publication");
-    stackingProofDir = createControlUiE2eArtifactDir("pr-chip-stacking");
-  }
-});
-
 function newBrowserContext(options: BrowserContextOptions = {}) {
   return suite.newBrowserContext({
     colorScheme: "light",
@@ -142,16 +125,6 @@ function publicationRequestKey(params: unknown): string {
   return key;
 }
 
-async function capturePublication(page: Page, name: string) {
-  if (captureUiProof) {
-    await page.screenshot({
-      animations: "disabled",
-      fullPage: true,
-      path: path.join(publicationProofDir, name),
-    });
-  }
-}
-
 suite.define(() => {
   it("shows mobile publication only for an eligible branch or retained attempt", async () => {
     const { page, gateway, watchedKey } = await openPublicationChat(
@@ -164,15 +137,6 @@ suite.define(() => {
     const pill = page.locator('.activity-pill[data-family="publication"]');
     const empty = { pullRequests: [], rateLimited: false, status: "ready" };
     await emitPullRequests(gateway, watchedKey, empty);
-    if (captureUiProof) {
-      const frame = await takeControlUiScreenshotFrame(
-        page,
-        page.locator(".chat-main"),
-        [page.locator("textarea")],
-        { animations: "disabled" },
-      );
-      await writeFile(path.join(publicationProofDir, "empty-workspace.png"), frame.png);
-    }
     await pollCount(pill).toBe(0);
 
     // Branch discovery already establishes publishable work, including binary-only
@@ -207,9 +171,6 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     const watchedKey = await waitForWatchedSessionKey(gateway);
-    if (captureUiProof) {
-      await page.screenshot({ path: path.join(stackingProofDir, "before-pr-discovery.png") });
-    }
     await emitPullRequests(gateway, watchedKey, {
       pullRequests: [
         pullRequest(103469, {
@@ -261,9 +222,6 @@ suite.define(() => {
     await pollAttr(menu.getByRole("menuitem", { name: "Open checks on GitHub" }), "href").toBe(
       "https://github.com/openclaw/openclaw/pull/103469/checks",
     );
-    if (captureUiProof) {
-      await page.screenshot({ path: path.join(stackingProofDir, "ci-open.png") });
-    }
     await page.locator(".agent-chat__input textarea").click();
     await expect.poll(() => menu.isVisible()).toBe(false);
     await openChatDetails(page);
@@ -292,9 +250,6 @@ suite.define(() => {
     expect(detailsBox).not.toBeNull();
     expect(composerBox).not.toBeNull();
     expect(detailsBox!.y + detailsBox!.height).toBeLessThanOrEqual(composerBox!.y);
-    if (captureUiProof) {
-      await page.screenshot({ path: path.join(stackingProofDir, "after-pr-discovery.png") });
-    }
 
     await mergedChip
       .getByRole("button", {
@@ -375,12 +330,6 @@ suite.define(() => {
           expect(row.left).toBeCloseTo(bounds.stackLeft, 1);
           expect(row.width).toBeCloseTo(bounds.stackWidth, 1);
           previousBottom = row.bottom;
-        }
-        if (captureUiProof) {
-          await writeFile(
-            path.join(stackingProofDir, `pr-links-${width}-${theme}-${count}.png`),
-            await takeControlUiViewportScreenshot(page, stack, [chips.first()]),
-          );
         }
         for (let index = 0; index < count; index++) {
           const chip = chips.nth(index);
@@ -495,12 +444,6 @@ suite.define(() => {
         exact: true,
       });
       await page.locator(".chat").evaluate(finishElementAnimations);
-      if (captureUiProof) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(stackingProofDir, `${label}-branch-spacing.png`),
-        });
-      }
       await expect
         .poll(async () => {
           const rowBox = await row.boundingBox();
@@ -534,13 +477,7 @@ suite.define(() => {
   );
 
   it("publishes through the Gateway and renders the terminal pull request URL", async () => {
-    const { page, gateway, watchedKey } = await openPublicationChat(
-      {},
-      {},
-      captureUiProof
-        ? { recordVideo: { dir: publicationProofDir, size: { width: 1180, height: 800 } } }
-        : {},
-    );
+    const { page, gateway, watchedKey } = await openPublicationChat();
     await emitPullRequests(
       gateway,
       watchedKey,
@@ -573,14 +510,6 @@ suite.define(() => {
     await expect
       .poll(() => page.getByRole("button", { name: "Publishing…" }).isDisabled())
       .toBe(true);
-    if (captureUiProof) {
-      await writeFile(
-        path.join(publicationProofDir, "01-publication-pending.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-          page.getByRole("button", { name: "Publishing…" }),
-        ]),
-      );
-    }
 
     await gateway.resolveDeferred("sessions.github.publish", {
       requestId: "publication-1",
@@ -603,12 +532,6 @@ suite.define(() => {
     expect(await environment.locator(".chat-environment__branch-name").textContent()).toBe(
       "openclaw/reconciled-publication",
     );
-    if (captureUiProof) {
-      await writeFile(
-        path.join(publicationProofDir, "02-publication-published.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [open]),
-      );
-    }
 
     await emitPullRequests(gateway, watchedKey, {
       pullRequests: [
@@ -779,7 +702,6 @@ suite.define(() => {
         )
         .count(),
     ).toBe(0);
-    await capturePublication(page, "03-publication-failed.png");
   });
 
   it("reuses the publication key after an unknown outcome and rotates it after failure", async () => {
@@ -865,6 +787,5 @@ suite.define(() => {
     await pollText(page.locator(".chat-pr__publication-outcome")).toContain(
       "Publication requested after workspace reconciliation.",
     );
-    await capturePublication(page, "04-cloud-idle-guidance.png");
   });
 });

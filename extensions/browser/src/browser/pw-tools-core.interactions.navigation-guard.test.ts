@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { heldAction, managedDownload, withFakeTimers } from "./pw-tools-core.guard-test-support.js";
 import * as harness from "./pw-tools-core.test-harness.js";
@@ -199,22 +200,53 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
   });
 
-  it.each([false, true])("runs statement-body evaluate sources (ref=%s)", async (ref) => {
-    const source = ref
-      ? "const text = el.textContent; return text;"
-      : "const value = 41; return value + 1;";
-    const evaluate = ref
-      ? vi.fn(async (fn: (el: Element, args: unknown) => unknown, args: unknown) =>
-          fn({ textContent: "Ada" } as Element, args),
-        )
-      : vi.fn(async (fn: (args: unknown) => unknown, args: unknown) => fn(args));
-    install(
-      { url: vi.fn(() => localPageUrl), ...(!ref && { evaluate }) },
-      ref ? { evaluate } : undefined,
-    );
-    expect(
-      await mod.evaluateViaPlaywright({ ...target, ref: ref ? "1" : undefined, fn: source }),
-    ).toBe(ref ? "Ada" : 42);
+  it.each([false, true])(
+    "runs serialized evaluate callbacks without host compilation (ref=%s)",
+    async (ref) => {
+      const source = ref
+        ? "const text = el.textContent; return text;"
+        : "const value = 41; return value + 1;";
+      const evaluate = ref
+        ? vi.fn(async (fn: (el: Element, args: unknown) => unknown, args: unknown) =>
+            runInNewContext(`(${fn.toString()})(element, args)`, {
+              element: { textContent: "Ada" },
+              args,
+              setTimeout: () => 0,
+            }),
+          )
+        : vi.fn(async (fn: (args: unknown) => unknown, args: unknown) =>
+            runInNewContext(`(${fn.toString()})(args)`, { args, setTimeout: () => 0 }),
+          );
+      install(
+        { url: vi.fn(() => localPageUrl), ...(!ref && { evaluate }) },
+        ref ? { evaluate } : undefined,
+      );
+      const hostFunction = vi.spyOn(globalThis, "Function").mockImplementation(() => {
+        throw new EvalError("Host code generation is disabled");
+      });
+      try {
+        expect(
+          await mod.evaluateViaPlaywright({ ...target, ref: ref ? "1" : undefined, fn: source }),
+        ).toBe(ref ? "Ada" : 42);
+      } finally {
+        hostFunction.mockRestore();
+      }
+    },
+  );
+
+  it("preserves custom page-thrown message values", async () => {
+    install({
+      url: vi.fn(() => localPageUrl),
+      evaluate: vi.fn(async (fn: (args: unknown) => unknown, args: unknown) =>
+        runInNewContext(`(${fn.toString()})(args)`, { args }),
+      ),
+    });
+    await expect(
+      mod.evaluateViaPlaywright({
+        ...target,
+        fn: '() => { throw { message: { toString() { return "page detail"; } } }; }',
+      }),
+    ).rejects.toThrow("Invalid evaluate function: page detail");
   });
 
   it("propagates blocked delayed submit navigation instead of reporting type success", async () => {

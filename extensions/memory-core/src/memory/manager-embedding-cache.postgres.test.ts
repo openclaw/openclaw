@@ -79,7 +79,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
             embedding BYTEA NOT NULL, dims BIGINT, updated_at BIGINT NOT NULL,
             PRIMARY KEY (provider, model, provider_key, hash)
           ); CREATE INDEX idx_memory_embedding_cache_updated_at
-            ON memory_embedding_cache(updated_at);
+            ON memory_embedding_cache(updated_at ASC NULLS FIRST);
           CREATE TABLE memory_index_chunks (
             id TEXT PRIMARY KEY, hash TEXT NOT NULL, updated_at BIGINT NOT NULL
           );`,
@@ -201,6 +201,45 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     );
     expect(write(() => clearMemoryEmbeddingCacheIdentities(database, [identity]))).toBe(3);
     expect(withEngineStoreAdmission(() => countMemoryEmbeddingCache(database))).toBe(0);
+  });
+
+  it("walks the generated updated_at index for oldest-first eviction", () => {
+    write(() =>
+      db().exec(`INSERT INTO memory_embedding_cache
+          SELECT 'local', 'fixture', 'fixture', 'hash-' || i, '\\x00'::bytea, 2, i
+          FROM generate_series(1, 2000) AS i;
+        ANALYZE memory_embedding_cache`),
+    );
+    const query = db().query.bind(db());
+    const evictions: Array<Parameters<typeof query>> = [];
+    const spy = vi.spyOn(db(), "query").mockImplementation((sql, bindings) => {
+      if (/^delete from "memory_embedding_cache"/iu.test(sql)) {
+        evictions.push([sql, bindings]);
+      }
+      return query(sql, bindings);
+    });
+    try {
+      expect(
+        write(() => pruneMemoryEmbeddingCache(database, { size: 2000, exact: true }, 1990)),
+      ).toEqual({ size: 1990, exact: true });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(evictions).toHaveLength(1);
+    const [sql, bindings] = evictions[0]!;
+    const plan = withEngineStoreAdmission(() =>
+      db()
+        .query(`EXPLAIN ${sql}`, bindings)
+        .rows.map((row) => String(row["QUERY PLAN"]))
+        .join("\n"),
+    );
+    // A full-cache sort would run on every insertion batch once the cache is at its cap.
+    expect(plan).toContain("using idx_memory_embedding_cache_updated_at");
+    withEngineStoreAdmission(() => {
+      expect(
+        db().prepare("SELECT min(updated_at)::integer AS oldest FROM memory_embedding_cache").get(),
+      ).toEqual({ oldest: 11 });
+    });
   });
 
   function seedEviction(

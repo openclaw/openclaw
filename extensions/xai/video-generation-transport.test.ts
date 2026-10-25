@@ -1,5 +1,6 @@
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -27,18 +28,14 @@ function downloadVideo(
     provider: "xai",
     model: "grok-imagine-video",
     prompt: "Synthetic video",
-    cfg: {
-      models: {
-        providers: {
-          xai: {
-            baseUrl: "https://example.com/v1",
-            apiKey: "synthetic-key",
-            models: [],
-            request: { allowPrivateNetwork },
-          },
-        },
+    cfg: createModelProviderConfig({
+      xai: {
+        baseUrl: "https://example.com/v1",
+        apiKey: "synthetic-key",
+        models: [],
+        request: { allowPrivateNetwork },
       },
-    },
+    }),
     timeoutMs: 5_000,
   });
 }

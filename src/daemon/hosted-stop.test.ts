@@ -4,6 +4,7 @@ import { prepareHostedStopExecutor } from "./hosted-stop-executor.js";
 import { prepareHostedGatewayStop, type GatewayProcessOwner } from "./hosted-stop.js";
 import { probeLaunchAgentState } from "./launchd-runtime.js";
 import { execSystemctl } from "./systemd-exec.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 vi.mock("node:fs/promises", () => ({ default: { readFile: vi.fn() } }));
 vi.mock("./systemd-exec.js", () => ({ execSystemctl: vi.fn() }));
@@ -24,27 +25,25 @@ const executorPid = 4321;
 const execute = vi.fn<Awaited<ReturnType<typeof prepareHostedStopExecutor>>["execute"]>();
 const dispose = vi.fn<() => Promise<void>>();
 const processOwner: GatewayProcessOwner = { ownsProcessLifecycle: true, supervisor: "systemd" };
-const identityResult = (fields: Record<string, string> = {}) => ({
-  code: 0,
-  termination: "exit" as const,
-  stderr: "",
-  stdout: Object.entries({
-    Id: unit,
-    LoadState: "loaded",
-    ActiveState: "active",
-    SubState: "running",
-    MainPID: String(process.pid),
-    ControlGroup: cgroup,
-    InvocationID: "a".repeat(32),
-    ExecMainStartTimestampMonotonic: "100",
-    Job: "",
-    CanStop: "yes",
-    RefuseManualStop: "no",
-    ...fields,
-  })
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n"),
-});
+const identityResult = (fields: Record<string, string> = {}) =>
+  nativeExit(
+    Object.entries({
+      Id: unit,
+      LoadState: "loaded",
+      ActiveState: "active",
+      SubState: "running",
+      MainPID: String(process.pid),
+      ControlGroup: cgroup,
+      InvocationID: "a".repeat(32),
+      ExecMainStartTimestampMonotonic: "100",
+      Job: "",
+      CanStop: "yes",
+      RefuseManualStop: "no",
+      ...fields,
+    })
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\n"),
+  );
 const revoked = (message: string) => () => {
   throw new Error(message);
 };

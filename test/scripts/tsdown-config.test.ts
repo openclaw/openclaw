@@ -985,12 +985,24 @@ console.log("relocated session card renders with bundled fonts");
         readText: (file) => fs.readFileSync(path.join(root, file), "utf8"),
       });
       expect(collectPackageDistImportErrors({ files, imports })).toEqual([]);
-      const sealedAnchorEdge = {
-        importerPath: `dist/${relay}.${extension}`,
-        importedPath: `dist/${anchor}.mjs`,
-      };
       if (worker) {
-        expect(imports).toContainEqual(sealedAnchorEdge);
+        if (process.platform !== "win32") {
+          const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+            (resolve) => {
+              execFile(
+                testNodeExecPath,
+                [
+                  path.resolve("test/scripts/service-relay-artifact.test-support.mjs"),
+                  path.join(root, "dist", `${relay}.${extension}`),
+                ],
+                { timeout: 15_000 },
+                (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+              );
+            },
+          );
+          expect(result.error, result.stderr).toBeNull();
+          expect(result.stdout.trim()).toBe("emitted relay and anchor completed and retired");
+        }
       } else {
         // Each launch boots both helpers; shared chunks pull unrelated runtime
         // exports into startup before the durable worker gate can open.
@@ -1534,7 +1546,6 @@ console.log("relocated session card renders with bundled fonts");
     const {
       worker: workerConfig,
       receiver: receiverConfig,
-      "github-launcher": launcherConfig,
       "service-relay": relayConfig,
       "service-group-anchor": anchorConfig,
     } = workerConfigs;
@@ -1567,16 +1578,14 @@ console.log("relocated session card renders with bundled fonts");
       chunkFileNames: "worker/worker-chunk-[hash].mjs",
       assetFileNames: "worker/[name][extname]",
     });
-    for (const config of [receiverConfig, launcherConfig]) {
-      expect(config?.define).toBeUndefined();
-    }
+    expect(receiverConfig?.define).toBeUndefined();
     for (const config of [relayConfig, anchorConfig]) {
       expect(config?.define).toEqual({
         WORKER_DEPLOY_BUILD: "true",
         SEALED_RUNTIME_BUILD: "true",
       });
     }
-    for (const config of [receiverConfig, launcherConfig, relayConfig, anchorConfig]) {
+    for (const config of [receiverConfig, relayConfig, anchorConfig]) {
       expect(config?.alias).toBeUndefined();
       expect(config?.plugins).toBeUndefined();
       expect(config?.outputOptions).toEqual({ codeSplitting: false });

@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { GUEST_WELCOME_ENSURE_METHOD, type GuestWelcomeOptions } from "./guest-welcome-handle.ts";
-import { GUEST_WELCOME_PENDING_LIMIT_MS, GuestWelcome } from "./guest-welcome.ts";
+import { GuestWelcome } from "./guest-welcome.ts";
 
 const GUEST_AUTH = { role: "operator", scopes: ["operator.sessions.write"], sessionCap: "view" };
 const READY = { status: "ready", sessionKey: "agent:main:welcome-sam", agentId: "main" };
@@ -193,13 +193,15 @@ describe("GuestWelcome", () => {
     expect(openSession).toHaveBeenCalledOnce();
   });
 
-  it("turns setup that stays pending into a retryable failure", async () => {
+  it("turns setup that stays pending for three minutes into a retryable failure", async () => {
     const pending = { status: "pending", retryAfterMs: 5_000 };
     const { connect, owner, responses } = harness({
       responses: Array.from({ length: 40 }, () => pending),
     });
     const client = connect();
-    await vi.advanceTimersByTimeAsync(GUEST_WELCOME_PENDING_LIMIT_MS);
+    await vi.advanceTimersByTimeAsync(3 * 60_000 - 1);
+    expect(owner.presentation).toEqual({ kind: "pending" });
+    await vi.advanceTimersByTimeAsync(1);
     expect(owner.presentation).toEqual({ kind: "failed", message: null });
     const calls = client.request.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);

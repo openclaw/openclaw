@@ -30,7 +30,6 @@ function sidebarProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
     onRetryConnect: vi.fn(),
     onNavigate: vi.fn(),
     onSearchQueryChange: vi.fn(),
-    preloadTimers: new Map(),
     saveIndicator: saveIndicator(),
     ...overrides,
   };

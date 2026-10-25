@@ -187,6 +187,11 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   if (owners.live.get(owner.inputId) === owner) {
     owners.live.delete(owner.inputId);
   }
+  // Timers can retain this owner through their async frame after settlement.
+  // Keep replay facts, but release the admission and staging closures.
+  owner.assertCurrent = assertPendingInputOwnerActive.bind(undefined, owner);
+  owner.finish = () => {};
+  owner.authority = undefined;
 }
 
 export function assertRegisteredSessionPendingInputOwner(owner: SessionPendingInputOwner): void {

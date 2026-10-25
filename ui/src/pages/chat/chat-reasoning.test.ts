@@ -483,7 +483,7 @@ it("keeps persisted tool-step reasoning visible until its run finishes", async (
   expect(worked()).toHaveLength(1);
   worked()[0]!.click();
   show();
-  expect(rawDetails().getAttribute("aria-expanded")).toBe("false");
+  await waitForSolid(() => expect(rawDetails()?.getAttribute("aria-expanded")).toBe("false"));
   await waitForSolid(expectSteps);
   worked()[0]!.click();
   show();
@@ -528,7 +528,7 @@ it.each([false, true])(
   },
 );
 
-it("uses the producer run in the receipt when Gateway remaps the live client run", () => {
+it("uses the producer run in the receipt when Gateway remaps the live client run", async () => {
   thinking("A remapped source occurrence.");
   receipt("source-answer", "thinking-1", 2, "source-run");
   applyMessage(
@@ -547,5 +547,6 @@ it("uses the producer run in the receipt when Gateway remaps the live client run
     messageId: "source-answer",
     persisted: true,
   });
-  showReasoning(1);
+  show();
+  await waitForSolid(() => expect(thinkingNodes()).toHaveLength(1));
 });

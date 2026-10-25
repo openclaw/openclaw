@@ -40,6 +40,7 @@ import { abortChatRunById } from "./chat-abort.js";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
+import { fixedStoreOwnershipConfig } from "./server-methods/sessions-fixed-store.test-support.js";
 import {
   registerActivitySummaryPublicationTests,
   registerActivitySummaryRunTests,
@@ -474,17 +475,9 @@ describe("startGatewayEventSubscriptions", () => {
     "uses the persisted bare-key owner in the prepared %s",
     async (physicalStore) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        runtimeConfigState.value = {
-          session: {
-            scope: "global",
-            store: resolveSessionStorePathCore(undefined, { agentId: "ops" }),
-          },
-          agents: {
-            ownership: "explicit",
-            defaults: { sessionStore: { agentId: "ops" } },
-            entries: { ops: {}, research: {} },
-          },
-        };
+        runtimeConfigState.value = fixedStoreOwnershipConfig(
+          resolveSessionStorePathCore(undefined, { agentId: "ops" }),
+        );
         const handler = Object.assign(vi.fn(), { dispose: vi.fn() });
         agentEventHandlerMocks.create.mockReturnValue(handler);
         const params = createParams();

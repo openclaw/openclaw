@@ -4,7 +4,6 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
-import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
@@ -60,6 +59,8 @@ import {
   withPluginSubagentTestState,
 } from "./agent.spawned-child.test-support.js";
 import {
+  createElevatedExecApprovalFixture,
+  mockTelegramSessionEntry,
   getAgentTestMocks,
   operatorWriteCliClient,
   makeContext,
@@ -175,24 +176,11 @@ describe("gateway agent handler", () => {
   });
 
   it("does not restore elevated defaults from idempotency key suffixes", async () => {
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-    const registration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "req-elevated-75832",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated,
-    });
+    const { registration } = createElevatedExecApprovalFixture("req-elevated-75832");
     if (!registration) {
       throw new Error("expected runtime handoff id");
     }
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
-    });
+    mockTelegramSessionEntry();
     mockSuccessfulAgentCommand();
 
     await invokeAgent(

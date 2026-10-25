@@ -1548,6 +1548,28 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-claim-repair-copy.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["copySessionClaimForRepair"],
+        evidence:
+          "Extracted from legacy-main-session-migration-operations.ts:copyClaimCrossStore. Its only callers are processIdenticalClaims after doctor-fix admission and doctor-relative-session-store.ts under exclusive Doctor maintenance; detect mode returns before copying. Source claims are rechecked inside the destination write transaction.",
+      },
+    ],
+  ],
+  [
+    "src/config/sessions/session-accessor.sqlite-delivery-repair.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["copySessionDeliveriesForRepair", "readSessionDeliveryRepairInventory"],
+        evidence:
+          "Copy extracted from the reviewed copySqliteSessionOwnedStateForRepair operation in canonical-repair.ts; its other caller is Doctor-only copySessionClaimForRepair. Inventory is called only by doctor-relative-session-store-preservation.ts for offline pre-copy verification and completion fingerprints. No Gateway runtime caller.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
     [
       {
@@ -3443,7 +3465,7 @@ const workerModules = new Set([
   "src/config/sessions/session-accessor.sqlite-entry-identity.ts", // Only reaction (agent execution worker), suggestion (sharing/transcript workers), and sharing native (sharing worker; host imports are types) kernels call this reader.
   "extensions/memory-core/src/memory/manager-publication-postgres.ts", // Only manager-publication.worker.ts binds this adapter to the admitted agent execution worker connection.
   "src/infra/database-engine/postgres-vector.ts", // Accepts only an admitted PostgresSqlConnection; the shared executor dispatches through PostgresSyncConnection to postgres-sync/bridge.worker.ts, never native SQLite.
-  "src/infra/database-engine/port-descriptor.ts", // SQL entry points run only in port-command.worker.ts, port.worker.ts, and database-backup.ts's worker-only capture handler.
+  "src/infra/database-engine/port-descriptor.ts", // SQL entry points run only in port-command.entry.worker.ts, port.worker.ts, and database-backup.operations.ts in its dedicated worker.
   "src/plugin-state/plugin-state.worker.ts", // Only openclaw-state.worker.ts imports and calls this command dispatcher; its nested callbacks share that worker ownership.
   "src/config/sessions/session-suggestion-store.kernel.ts", // session-sharing-store.worker.ts owns add/claim/release/finalize; session-transcript.worker.ts owns list. The host read facade imports only its type.
   "src/config/sessions/session-cold-storage-inventory.ts", // Only session-cold-storage-worker.ts calls readSessionColdStorageInventory, dispatched by session-transcript.worker.ts.

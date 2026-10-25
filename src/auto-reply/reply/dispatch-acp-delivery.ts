@@ -10,7 +10,6 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,
-  isCaptionedFinalTextPayload,
   mergeDeferredFinalText,
 } from "../../tts/captioned-final.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
@@ -18,6 +17,7 @@ import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import {
   copyReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -390,7 +390,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         shouldTreatDeliveredTextAsVisible({ channel, kind: sendKind, text: ttsPayload.text });
       const isAnswerBearingFinal =
         sendKind === "final" &&
-        (isCaptionedFinalTextPayload(outgoingPayload) ||
+        (isReplyPayloadTerminalContent(outgoingPayload) ||
           (hasFinalTtsMedia && Boolean(ttsPayload.text?.trim())));
 
       const recordVisibleBlock = (tracksVisibleText: boolean, confirmed: boolean) => {

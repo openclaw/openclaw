@@ -7,6 +7,7 @@ import {
   upsertPresence,
 } from "../../infra/system-presence.js";
 import { buildAuthenticatedPresenceUser } from "../authenticated-presence-user.js";
+import { gatewayConnect } from "./client-fixtures.test-support.js";
 import { startWorkerHumanPresence } from "./client-human-presence.js";
 import {
   recordClientPresenceActivity,
@@ -115,18 +116,10 @@ describe("live person presence timing", () => {
       connId: handler.connId,
       presenceKey: handler.connId,
       usesSharedGatewayAuth: false,
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: options.scope ? [options.scope] : undefined,
-        client: {
-          id: options.nativeClient ?? "openclaw-control-ui",
-          version: "test",
-          platform: "test",
-          mode: options.nativeClient ? "ui" : "webchat",
-        },
-      },
+      connect: gatewayConnect(options.scope ? [options.scope] : undefined, {
+        id: options.nativeClient ?? "openclaw-control-ui",
+        mode: options.nativeClient ? "ui" : "webchat",
+      }),
       internal: options.scope ? { authenticatedControlUi: true } : undefined,
       authenticatedUserId: email,
       authenticatedUserProfile: options.raw

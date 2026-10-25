@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { typeCheckSources } from "../../../test/helpers/typescript.js";
 import { projectAgentHistoryActivity } from "../../infra/agent-activity-events.js";
-import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import {
+  createNestedToolActivity,
+  readNestedToolActivity,
+} from "../../sessions/nested-tool-activity.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "../code-mode.js";
@@ -385,14 +388,19 @@ describe("agents_wait", () => {
     const history = projectAgentHistoryActivity([
       { messageId: "persisted-wait", message: JSON.parse(persisted) },
     ]);
-    expect(history[0]?.items[0]?.delegation).toEqual([
-      {
-        runId: "failed",
-        childSessionKey: "agent:worker:subagent:failed",
-        runtimeMs: 75,
-        status: "failed",
-      },
-    ]);
+    expect(history[0]?.items[0]).toMatchObject({ name: "agents_wait", status: "completed" });
+    expect(readNestedToolActivity(JSON.parse(persisted))?.details.result.details).toMatchObject({
+      completed: [
+        {
+          runId: "failed",
+          sessionKey: "agent:worker:subagent:failed",
+          runtimeMs: 75,
+          status: "failed",
+          error: "provider failed after tool output",
+        },
+      ],
+      pending: ["pending"],
+    });
   });
 
   it.each([-60_000, 60_000])(

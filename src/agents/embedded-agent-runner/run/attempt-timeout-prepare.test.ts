@@ -156,6 +156,10 @@ describe("prepareEmbeddedAttemptTimeout", () => {
 
   it("pauses exactly the original run budget until all scoped approvals resolve", async () => {
     const harness = createTimeoutHarness();
+    const observed: Array<number | undefined> = [];
+    const unsubscribe = harness.timeout.onRunAbortDeadlineChanged(() => {
+      observed.push(harness.timeout.getRunAbortDeadlineAtMs());
+    });
 
     await vi.advanceTimersByTimeAsync(30);
     emitApproval("waiting-approval", "first");
@@ -175,12 +179,15 @@ describe("prepareEmbeddedAttemptTimeout", () => {
     emitApproval("approval-resolved", "second");
     expect(harness.timeout.getRunAbortDeadlineAtMs()).toBe(700);
     expectDeadlines(harness, 100, null, 700);
+    expect(observed).toEqual([undefined, 700]);
+    unsubscribe();
     await vi.advanceTimersByTimeAsync(69);
     expect(harness.abortRun).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
 
     expect(harness.markTimedOutByRunBudget).toHaveBeenCalledOnce();
     expect(harness.abortRun).toHaveBeenCalledWith(true);
+    expect(observed).toEqual([undefined, 700]);
   });
 
   it("pauses only the unused compaction grace budget during inline approval", async () => {

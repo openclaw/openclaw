@@ -2,19 +2,21 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { createSlackActions } from "./channel-actions.js";
-import { createInvokeSpy } from "./message-action-dispatch.test-support.js";
+import {
+  createDisabledSlackActions,
+  createInvokeSpy,
+} from "./message-action-dispatch.test-support.js";
 import { listSlackMessageActions } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
+
+const schemasFor = (discovery: ReturnType<typeof describeSlackMessageTool>) =>
+  Array.isArray(discovery.schema) ? discovery.schema : discovery.schema ? [discovery.schema] : [];
 
 function requireSchemaProperty(
   discovery: ReturnType<typeof describeSlackMessageTool>,
   property: string,
 ) {
-  const schemas = Array.isArray(discovery.schema)
-    ? discovery.schema
-    : discovery.schema
-      ? [discovery.schema]
-      : [];
+  const schemas = schemasFor(discovery);
   const schema = schemas.find((entry) => property in entry.properties);
   if (!schema) {
     throw new Error(`Missing schema property ${property}`);
@@ -300,25 +302,11 @@ describe("Slack message tools", () => {
       channels: {
         slack: {
           botToken: "xoxb-root",
-          actions: {
-            channels: false,
-            reactions: false,
-            messages: false,
-            pins: false,
-            memberInfo: false,
-            emojiList: false,
-          },
+          actions: createDisabledSlackActions(),
           accounts: {
             default: {
               botToken: "xoxb-default",
-              actions: {
-                channels: false,
-                reactions: false,
-                messages: false,
-                pins: false,
-                memberInfo: false,
-                emojiList: false,
-              },
+              actions: createDisabledSlackActions(),
             },
             work: {
               botToken: "xoxb-work",
@@ -417,11 +405,7 @@ describe("Slack message tools", () => {
       } as OpenClawConfig,
     });
 
-    const schemas = Array.isArray(discovery.schema)
-      ? discovery.schema
-      : discovery.schema
-        ? [discovery.schema]
-        : [];
+    const schemas = schemasFor(discovery);
     const propertyNames = schemas.flatMap((entry) => Object.keys(entry.properties));
     expect(propertyNames).not.toContain("emoji");
   });
@@ -454,25 +438,14 @@ describe("Slack message tools", () => {
         channels: {
           slack: {
             botToken: "xoxb-test",
-            actions: {
-              channels: false,
-              reactions: false,
-              messages: false,
-              pins: false,
-              memberInfo: false,
-              emojiList: false,
-            },
+            actions: createDisabledSlackActions(),
           },
         },
       } as OpenClawConfig,
     });
 
     expect(discovery.actions).toEqual(["send"]);
-    const schemas = Array.isArray(discovery.schema)
-      ? discovery.schema
-      : discovery.schema
-        ? [discovery.schema]
-        : [];
+    const schemas = schemasFor(discovery);
     const propertyNames = schemas.flatMap((entry) => Object.keys(entry.properties));
     expect(propertyNames).not.toContain("fileId");
     expect(propertyNames).not.toContain("messageId");

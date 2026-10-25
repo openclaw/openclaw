@@ -4,6 +4,7 @@ import type { WizardPrompter } from "../api.js";
 import { getAccountConfig } from "./config.js";
 import { checkTwitchMessageThroughMonitor } from "./monitor-access.test-support.js";
 import { setTwitchAccount, twitchSetupPlugin, twitchSetupWizard } from "./setup-surface.js";
+import { makeTwitchChannelTestConfig } from "./test-fixtures.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 const mockPromptText = vi.fn<WizardPrompter["text"]>();
@@ -62,7 +63,7 @@ function configWithAccounts(
   accounts: TwitchConfig["accounts"],
   extra: TwitchConfig = {},
 ): SetupConfig {
-  return { channels: { twitch: { ...extra, accounts } } };
+  return makeTwitchChannelTestConfig({ ...extra, accounts });
 }
 
 function answerText(...answers: string[]) {
@@ -249,15 +250,11 @@ describe("setup surface helpers", () => {
 
   it("updates the whitespace-username base account without mutating other accounts", () => {
     const account = { ...mockAccount, enabled: false, allowFrom: ["123456"] };
-    const cfg = {
-      channels: {
-        twitch: {
-          ...account,
-          username: " ",
-          accounts: { default: account, secondary: account, untouched: mockRefreshAccount },
-        },
-      },
-    };
+    const cfg = makeTwitchChannelTestConfig({
+      ...account,
+      username: " ",
+      accounts: { default: account, secondary: account, untouched: mockRefreshAccount },
+    });
     const before = structuredClone(cfg);
     const patch = { allowFrom: [], allowedRoles: [], requireMention: true };
     const result = groupAccess.setPolicy({ cfg, accountId: "default", policy: "disabled" });
@@ -295,12 +292,9 @@ describe("setup surface helpers", () => {
         allowFrom: allowFrom ? [...allowFrom] : undefined,
         allowedRoles: ["all"],
       };
-      let cfg: Parameters<typeof groupAccess.setPolicy>[0]["cfg"] = {
-        channels: {
-          twitch:
-            accountId === "default" ? initialAccount : { accounts: { secondary: initialAccount } },
-        },
-      };
+      let cfg: Parameters<typeof groupAccess.setPolicy>[0]["cfg"] = makeTwitchChannelTestConfig(
+        accountId === "default" ? initialAccount : { accounts: { secondary: initialAccount } },
+      );
       for (const policy of policies) {
         cfg = groupAccess.setPolicy({ cfg, accountId, policy });
       }

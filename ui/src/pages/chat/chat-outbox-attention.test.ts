@@ -48,7 +48,6 @@ it("projects only actionable submissions, without message or diagnostic content"
     "sending",
     "submitting",
     "failed",
-    "unconfirmed",
     "held",
   ] as const) {
     const row = { ...item(String(state), state), sendError: "private diagnostic" };
@@ -61,9 +60,9 @@ it("projects only actionable submissions, without message or diagnostic content"
     ).toBe("admitted");
   }
   const attention = listChatOutboxAttention(host);
-  expect(attention.map((row) => row.id)).toEqual(["failed", "unconfirmed", "held"]);
+  expect(attention.map((row) => row.id)).toEqual(["failed", "held"]);
   expect(JSON.stringify(attention)).not.toMatch(/Private message|private diagnostic/);
-  expect(attention[1]).toMatchObject({ unconfirmed: true, command: false, ...scope });
+  expect(attention[1]).toMatchObject({ held: true, command: false, ...scope });
   expect(listChatOutboxAttention({ ...host, settings: { gatewayUrl: "ws://other.test" } })).toEqual(
     [],
   );
@@ -122,7 +121,7 @@ it.each(["selected", "background"])(
 
 it("retains incidents through failed removal and clears them only after canonical retirement", () => {
   const host = hostFor();
-  const input = item("review", "unconfirmed");
+  const input = item("review", "failed");
   expect(
     admitStoredChatComposerQueueItemResult(
       host,
@@ -153,7 +152,7 @@ it("retains incidents through failed removal and clears them only after canonica
 it("preserves existing attachment ownership and remembered offline access without claiming text isolation", () => {
   const host = hostFor();
   const attachment = {
-    ...item("attachment", "unconfirmed"),
+    ...item("attachment", "failed"),
     attachmentPayload: { key: "payload-a", tabId: "tab-a", recoveryScope: "owner-a" },
     attachments: [{ id: "file", mimeType: "text/plain", fileName: "private.txt" }],
   };

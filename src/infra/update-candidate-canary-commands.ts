@@ -2,15 +2,17 @@ import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.j
 import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
+export type UpdateCanaryTarget = { kind: "cli"; entryPath: string } | { kind: "worker"; url: URL };
+
 export type UpdateCanaryCommand = {
   phase: "doctor" | "lint" | "config" | "plugins" | "runtime";
   name: string;
   args: string[];
-  entry?: string;
+  target?: UpdateCanaryTarget;
 };
 
 export function buildUpdateCanaryCommands(params: {
-  continuationEntry: string;
+  continuationEntry: URL;
   migrationPolicy?: "rehearse" | "startup-only";
   fullIntegrityCheck?: boolean;
 }): UpdateCanaryCommand[] {
@@ -19,7 +21,7 @@ export function buildUpdateCanaryCommands(params: {
     name: "candidate-recovery",
     // After a schema bump only a fresh candidate may finalize the run;
     // prove its full recovery import graph before live state changes.
-    entry: params.continuationEntry,
+    target: { kind: "worker", url: params.continuationEntry },
     args: ["--check"],
   };
   if (params.migrationPolicy === "startup-only") {

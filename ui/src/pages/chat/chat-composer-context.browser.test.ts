@@ -87,9 +87,9 @@ it("paints the complete readout outside a clipped short split pane and dismisses
   expect(readout().map((element) => element.textContent?.trim())).toEqual([
     "Context window",
     "20.3k / 200k · 10%",
-    "Input",
+    "In",
     "19.6k",
-    "Output",
+    "Out",
     "126",
   ]);
   const readoutPainted = () => readout().length === 6 && readout().every(isPainted);

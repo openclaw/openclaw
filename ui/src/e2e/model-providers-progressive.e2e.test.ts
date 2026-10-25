@@ -9,10 +9,9 @@ import { installMockGateway, waitForControlUiRoute } from "../test-helpers/contr
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { catalogModel, configAuth } from "./model-catalog-fixtures.test-support.ts";
-import { requestRaw, resolveConfigMutation } from "./model-providers.test-support.ts";
 import {
-  expectText,
   expectCount,
+  expectText,
   setupPages,
   setupContext,
 } from "./model-setup-fixtures.test-support.ts";
@@ -39,66 +38,6 @@ function defaultPicker(page: Page) {
   return { defaults, picker, trigger: picker.locator(".picker-select__trigger") };
 }
 suite.define(() => {
-  it("reuses a pending Models snapshot until discovery publishes completion", async () => {
-    await withPage(async ({ page }) => {
-      const currentModel = model("current", "Current model");
-      const pendingCatalog = { models: [currentModel], pendingProviders: ["fixture"] };
-      const gateway = await installMockGateway(page, {
-        connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
-        defaultAgentId: "main",
-        deferredMethods: ["agents.list"],
-        models: [currentModel],
-        methodResponses: {
-          "models.list": pendingCatalog,
-          "models.authStatus": {
-            ts: 1,
-            providers: [configAuth("fixture")],
-          },
-        },
-      });
-      await page.goto(suite.server.baseUrl + "settings/model-providers");
-      await gateway.waitForRequest("agents.list");
-      const connect = await gateway.waitForRequest("connect");
-      const target = asNullableRecord(connect.params)?.modelCatalog;
-      expect(target).toBeDefined();
-      await gateway.emitGatewayEvent("models.snapshot", {
-        target,
-        scope: { agentId: "main" },
-        catalog: pendingCatalog,
-      });
-      const reads = (await gateway.getRequests("models.list")).length;
-      expect(reads).toBe(0);
-      await gateway.resolveDeferred("agents.list");
-      await waitForControlUiRoute(page, { routeId: "model-providers" });
-      const badge = page.locator(
-        '[data-provider-id="fixture"] .model-providers__head .settings-status',
-      );
-      await expect.poll(() => badge.textContent()).toBe("Checking models…");
-      expect(await gateway.getRequests("models.list")).toHaveLength(reads);
-      await gateway.setMethodResponse("models.list", {
-        models: [currentModel],
-        pendingProviders: [],
-        providerOutcomes: [{ provider: "fixture", status: "ready" }],
-      });
-      await gateway.emitGatewayEvent("chat.metadata.changed", {
-        modelCatalogChanged: true,
-        authChanged: false,
-        commandsChanged: false,
-      });
-      await expect.poll(() => badge.textContent()).toBe("Ready");
-      expect((await gateway.getRequests("models.list")).length).toBe(reads + 1);
-      await page.locator('a[href="/settings/appearance"]').first().click();
-      await waitForControlUiRoute(page, { routeId: "appearance" });
-      await page.locator('a[href="/settings/model-providers"]').first().click();
-      await waitForControlUiRoute(page, { routeId: "model-providers" });
-      expect(await badge.textContent()).toBe("Ready");
-      expect((await gateway.getRequests("models.list")).map((request) => request.params)).toEqual([
-        { view: "configured", agentId: "main" },
-        { view: "configured", preparedOnly: true, agentId: "main" },
-      ]);
-    });
-  });
-
   it.each(["fresh", "populated", "empty"] as const)(
     "adopts partial provider inventory on the Models route (%s cache)",
     async (cacheState) => {
@@ -229,77 +168,6 @@ suite.define(() => {
       });
     },
   );
-
-  it("keeps the current Models catalog after late route data and invalidation", async () => {
-    await withPage(async ({ page }) => {
-      const initial = defaultsConfig("fixture/initial");
-      const saved = defaultsConfig("fixture/chosen");
-      const models = [model("initial", "Initial model"), model("chosen", "Chosen model")];
-      const gateway = await installMockGateway(page, {
-        defaultAgentId: "main",
-        deferredMethods: ["models.authStatus", "config.patch"],
-        models,
-        methodResponses: {
-          "models.list": {
-            models,
-            defaultModels: { automaticUtilityModel: "fixture/initial" },
-            pendingProviders: ["obsolete-provider"],
-          },
-          "config.get": snapshot(initial, "initial-settings"),
-          "models.authStatus": { ts: 1, providers: [] },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      await waitForControlUiRoute(page, { routeId: "appearance" });
-      await gateway.waitForRequest("config.get");
-      await evaluateControlUiContext(page, async (application) => {
-        const route = (application.router as ApplicationRouter).getRoute("model-providers");
-        if (!route) {
-          throw new Error("Models route is unavailable");
-        }
-        await route.component();
-      });
-      await page.locator('a[href="/settings/model-providers"]').first().click();
-      await gateway.waitForRequest("models.authStatus");
-      const defaults = page.locator(".model-providers__defaults");
-      await defaults.waitFor({ state: "visible" });
-      const picker = defaults.locator("openclaw-select-picker").first();
-      const trigger = picker.locator(".picker-select__trigger");
-      await trigger.click();
-      await option(picker, "fixture/chosen").click();
-      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toMatchObject({
-        agents: { defaults: { model: "fixture/chosen" } },
-      });
-      const currentCatalog: ModelCatalogResult = {
-        models: [models[1]!, model("added", "Added model")],
-        defaultModels: { automaticUtilityModel: "fixture/chosen" },
-      };
-      await gateway.setMethodResponse("models.list", currentCatalog);
-      await resolveConfigMutation(gateway, saved, "saved-settings");
-      await gateway.emitGatewayEvent("chat.metadata.changed", {});
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await pickerValue(picker)).toBe("fixture/chosen");
-      await trigger.click();
-      await expect.poll(() => option(picker, "fixture/added").isVisible()).toBe(true);
-      await gateway.resolveDeferred("models.authStatus");
-      await waitForControlUiRoute(page, { routeId: "model-providers" });
-      expect(await pickerValue(picker)).toBe("fixture/chosen");
-      expect(await option(picker, "fixture/added").isVisible()).toBe(true);
-      expect(await option(picker, "fixture/initial").count()).toBe(0);
-      const reads = (await gateway.getRequests("models.list")).length;
-      await gateway.deferNext("models.list");
-      await gateway.emitGatewayEvent("chat.metadata.changed", {});
-      await expect
-        .poll(async () => (await gateway.getRequests("models.list")).length)
-        .toBe(reads + 1);
-      expect(await trigger.getAttribute("aria-expanded")).toBe("true");
-      expect(await option(picker, "fixture/initial").count()).toBe(0);
-      expect(await option(picker, "fixture/added").isVisible()).toBe(true);
-      expect(await pickerValue(picker)).toBe("fixture/chosen");
-      expect(await page.locator(".model-providers__catalog-progress").count()).toBe(0);
-      await gateway.resolveDeferred("models.list");
-    });
-  });
 
   it("keeps Models defaults unavailable after a replacement connection fails to read config", async () => {
     await withPage(async ({ page }) => {

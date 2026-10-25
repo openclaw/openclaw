@@ -139,7 +139,7 @@ export async function runDiscordGatewayLifecycle(params: {
     pollConnected();
     if (!readyTimeoutId) {
       readyPollId = setInterval(pollConnected, DISCORD_GATEWAY_READY_POLL_MS);
-      readyPollId.unref?.();
+      readyPollId.unref();
       readyTimeoutId = setTimeout(() => {
         clearReadyWatch();
         if (shouldStop() || gateway.isConnected) {
@@ -153,7 +153,7 @@ export async function runDiscordGatewayLifecycle(params: {
         observerRuntime.error?.(danger(error.message));
         triggerForceStop(error);
       }, gatewayRuntimeReadyTimeoutMs);
-      readyTimeoutId.unref?.();
+      readyTimeoutId.unref();
     }
   };
 
@@ -218,8 +218,7 @@ export async function runDiscordGatewayLifecycle(params: {
           return "timeout";
         }
         await new Promise<void>((resolve) => {
-          const timeout = setTimeout(resolve, DISCORD_GATEWAY_READY_POLL_MS);
-          timeout.unref?.();
+          setTimeout(resolve, DISCORD_GATEWAY_READY_POLL_MS).unref();
         });
       }
     };

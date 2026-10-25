@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
@@ -525,14 +526,8 @@ describe("executeAgentTurn: CLI session routing", () => {
       }),
     );
 
-    let releaseAdmission!: () => void;
-    const admissionGate = new Promise<void>((resolve) => {
-      releaseAdmission = resolve;
-    });
-    let notifyAdmissionWait!: () => void;
-    const admissionWait = new Promise<void>((resolve) => {
-      notifyAdmissionWait = resolve;
-    });
+    const { resolve: releaseAdmission, promise: admissionGate } = createDeferred();
+    const { resolve: notifyAdmissionWait, promise: admissionWait } = createDeferred();
     const restoreAdmission = installSessionPlacementAdmissionProvider({
       assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => {

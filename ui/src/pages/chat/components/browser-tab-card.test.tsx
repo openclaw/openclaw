@@ -19,6 +19,7 @@ import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { ActivityGroup } from "./chat-message-group-view.tsx";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 
 const hosts: HTMLElement[] = [];
 type ActivityProps = Parameters<typeof ActivityGroup>[0];
@@ -33,7 +34,7 @@ const cards = new Map<
   }
 >();
 
-function drawGroup(host: HTMLElement, props: ActivityProps, context?: ApplicationContext) {
+async function drawGroup(host: HTMLElement, props: ActivityProps, context?: ApplicationContext) {
   const view = activityGroups.get(host);
   if (view) {
     view.update(props);
@@ -54,6 +55,7 @@ function drawGroup(host: HTMLElement, props: ActivityProps, context?: Applicatio
       ),
     );
   }
+  await waitForSolid(() => expect(host.querySelector("openclaw-browser-tab-card")).not.toBeNull());
 }
 
 function updateCard(element: HTMLElement, patch: Partial<CardProps>) {
@@ -198,7 +200,7 @@ async function drawActivity(
     timestamp: 1,
     messages: messageEntries(messages),
   };
-  drawGroup(
+  await drawGroup(
     host,
     {
       groups: [group],
@@ -237,6 +239,51 @@ async function card(
 }
 
 describe("browser tab card", () => {
+  it("keeps completed-work text visible while media access gates its browser preview", async () => {
+    const gateway = gatewayContext();
+    type Props = Parameters<typeof WorkGroupSummary>[0];
+    const props: Props = {
+      item: { key: "completed-work", durationMs: 1000, groups: [] },
+      options: {
+        expanded: false,
+        onToggle: () => {},
+        mediaReadAllowed: false,
+        browserTabPreviews: [
+          {
+            preview: {
+              kind: "browser-tab",
+              target: "host",
+              profile: "managed",
+              targetId: "tab-1",
+              url: "https://example.com/page",
+            },
+            latest: true,
+          },
+        ],
+      },
+    };
+    const view = mountSolid(
+      (current: Props) => (
+        <ApplicationProvider value={gateway.context}>
+          <WorkGroupSummary {...current} />
+        </ApplicationProvider>
+      ),
+      props,
+      container(),
+    );
+    expect(view.container.textContent).toContain("Worked for");
+    expect(view.container.querySelector("openclaw-browser-tab-card")).toBeNull();
+    view.update({ ...props, options: { ...props.options, mediaReadAllowed: true } });
+    await waitForSolid(() =>
+      expect(view.container.querySelector("openclaw-browser-tab-card")).not.toBeNull(),
+    );
+    view.update(props);
+    await waitForSolid(() =>
+      expect(view.container.querySelector("openclaw-browser-tab-card")).toBeNull(),
+    );
+    expect(view.container.textContent).toContain("Worked for");
+  });
+
   it("retains browser-title post text when metadata only supplies the author", async () => {
     vi.useFakeTimers();
     const gateway = gatewayContext([], ["operator.read"], true);
@@ -741,7 +788,7 @@ describe("browser tab card", () => {
       timestamp: 1,
       messages: messageEntries(messages),
     };
-    drawGroup(host, {
+    await drawGroup(host, {
       groups: [group],
       options: { showReasoning: false },
       presentation: "standalone",
@@ -757,7 +804,7 @@ describe("browser tab card", () => {
     ),
   )(
     "preserves ambiguous URL prefixes ($length units, history: $history)",
-    ({ length, history }) => {
+    async ({ length, history }) => {
       const prefix = "https://example.com/blog?value=".padEnd(length, "x");
       const messages = ["first", "second"].map((targetId) => {
         const url =
@@ -783,7 +830,7 @@ describe("browser tab card", () => {
         messages: messageEntries(messages),
       };
       const host = container();
-      drawGroup(host, {
+      await drawGroup(host, {
         groups: [group],
         options: { showReasoning: false },
         presentation: "standalone",

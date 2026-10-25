@@ -12,6 +12,7 @@ import {
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { makeUserMessage } from "../../../test-support/message-fixtures.test-support.js";
 import {
   HOST_KEY,
   HOST_MODEL,
@@ -720,11 +721,7 @@ async function runSummary(
   for (let index = 0; index < priorCount; index += 1) {
     await appendSessionTranscriptMessageByIdentity({
       ...transcriptTarget(params),
-      message: {
-        role: "user",
-        content: `Earlier synthetic request ${index}.`,
-        timestamp: index + 1,
-      },
+      message: makeUserMessage(`Earlier synthetic request ${index}.`, index + 1),
     });
   }
   fixture.setPhase("action");

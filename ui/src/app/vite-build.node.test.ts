@@ -224,6 +224,8 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
   const secondStyle = styles.find(({ source }) => source.includes(".second-page"))!;
   expect(new Set([initial.name, firstStyle.name, secondStyle.name]).size).toBe(3);
   expect(html).toContain(initial.name);
+  expect(html).toMatch(/<link[^>]*rel="preload"[^>]*as="style"[^>]*>/u);
+  expect(html).toMatch(/<link[^>]*id="openclaw-boot-styles"[^>]*media="print"[^>]*>/u);
   expect(html).not.toContain(firstStyle.name);
   expect(html).not.toContain(secondStyle.name);
   const scripts = (await readAssets(names, ".js")).map(({ source }) => source).join("\n");

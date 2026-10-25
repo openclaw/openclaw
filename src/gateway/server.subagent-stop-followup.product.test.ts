@@ -613,8 +613,11 @@ it.each([
         // confirmation decides delivery inside this test.
         await waitForRun(child.runId, (row) => row.killReconciliation !== undefined);
         await mutateSubagentRuns([child.runId], (rows) => {
-          const row = structuredClone(rows.get(child.runId)!);
-          row.killReconciliation!.killedAt -= PROVISIONAL_KILL_RECONCILIATION_MS;
+          const row = structuredClone(rows.get(child.runId));
+          if (!row?.killReconciliation) {
+            return { value: undefined };
+          }
+          row.killReconciliation.killedAt -= PROVISIONAL_KILL_RECONCILIATION_MS;
           return { value: undefined, postimages: new Map([[row.runId, row]]) };
         });
         await subagentRegistryTesting.sweepOnceForTests();

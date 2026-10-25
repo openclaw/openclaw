@@ -23,7 +23,7 @@ export function listChatOutboxAttention(host: ChatComposerScope) {
         id: item.id,
         sessionKey: outbox.sessionKey,
         agentId: outbox.agentId,
-        unconfirmed: item.sendState === "unconfirmed" || item.sendState === "held",
+        held: item.sendState === "held",
         command: Boolean(item.localCommandName),
       })),
   );

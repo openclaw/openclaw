@@ -3,10 +3,7 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  listSessionEntriesCore,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -18,6 +15,7 @@ import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { registrationFixture } from "../registry-registration.test-support.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../runtime.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
+import { seedPluginSessionEntry } from "./test-helpers/session-entry.js";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -49,17 +47,6 @@ function loadSessionStore(
       entry,
     ]),
   );
-}
-
-async function updateSessionStore(
-  storePath: string,
-  update: (store: Record<string, SessionEntry>) => void,
-): Promise<void> {
-  const store: Record<string, SessionEntry> = {};
-  update(store);
-  for (const [sessionKey, entry] of Object.entries(store)) {
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
-  }
 }
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-host-hooks-slot-");
@@ -125,12 +112,7 @@ describe("plugin session extension SessionEntry projection", () => {
     setActivePluginRegistry(registry);
 
     await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
-      });
+      await seedPluginSessionEntry(storePath);
 
       const patchResult = await patchPluginSessionExtension({
         cfg: tempConfig as never,
@@ -183,12 +165,7 @@ describe("plugin session extension SessionEntry projection", () => {
     setActivePluginRegistry(registry);
 
     await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
-      });
+      await seedPluginSessionEntry(storePath);
 
       await expectOkResult(
         patchPluginSessionExtension({
@@ -387,12 +364,7 @@ describe("plugin session extension SessionEntry projection", () => {
     setActivePluginRegistry(registry);
 
     await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
-      });
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
         patchPluginSessionExtension({
           cfg: tempConfig as never,
@@ -433,12 +405,7 @@ describe("plugin session extension SessionEntry projection", () => {
     setActivePluginRegistry(registry);
 
     await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
-      });
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
         patchPluginSessionExtension({
           cfg: tempConfig as never,
@@ -485,12 +452,7 @@ describe("plugin session extension SessionEntry projection", () => {
     setActivePluginRegistry(previousFixture.registry);
 
     await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
-      });
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
         patchPluginSessionExtension({
           cfg: tempConfig as never,
@@ -552,12 +514,7 @@ describe("plugin session extension SessionEntry projection", () => {
     setActivePluginRegistry(previousFixture.registry);
 
     await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
-      });
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
         patchPluginSessionExtension({
           cfg: tempConfig as never,
@@ -626,12 +583,7 @@ describe("plugin session extension SessionEntry projection", () => {
     setActivePluginRegistry(previousFixture.registry);
 
     await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
-      });
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
         patchPluginSessionExtension({
           cfg: tempConfig as never,
@@ -671,22 +623,18 @@ describe("plugin session extension SessionEntry projection", () => {
   it("clears persisted promoted slots when registry metadata is unavailable", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-          pluginExtensions: {
-            "removed-promoted-plugin": {
-              workflow: { state: "stale" },
-            },
+      await seedPluginSessionEntry(storePath, {
+        pluginExtensions: {
+          "removed-promoted-plugin": {
+            workflow: { state: "stale" },
           },
-          pluginExtensionSlotKeys: {
-            "removed-promoted-plugin": {
-              workflow: "approvalSnapshot",
-            },
+        },
+        pluginExtensionSlotKeys: {
+          "removed-promoted-plugin": {
+            workflow: "approvalSnapshot",
           },
-          approvalSnapshot: { state: "stale" },
-        } as unknown as SessionEntry;
+        },
+        approvalSnapshot: { state: "stale" },
       });
 
       await expectNoCleanupFailures(
@@ -741,12 +689,7 @@ describe("plugin session extension SessionEntry projection", () => {
     setActivePluginRegistry(registry);
 
     await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
-      });
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
         patchPluginSessionExtension({
           cfg: tempConfig as never,
@@ -812,12 +755,7 @@ describe("plugin session extension SessionEntry projection", () => {
     setActivePluginRegistry(registry);
 
     await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
-      });
+      await seedPluginSessionEntry(storePath);
       const result = await patchPluginSessionExtension({
         cfg: tempConfig as never,
         sessionKey: "agent:main:main",

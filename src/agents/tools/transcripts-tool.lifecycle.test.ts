@@ -6,9 +6,9 @@ import { startTranscripts } from "../../transcripts/capture.js";
 import type { TranscriptStartRequest } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
+import { createEnteredGate as captureGate } from "../entered-gate.test-support.js";
 import {
   captureFixture,
-  captureGate,
   type CaptureStart,
 } from "./transcripts-tool.capture-fixture.test-support.js";
 import {

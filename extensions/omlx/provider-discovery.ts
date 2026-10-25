@@ -1,3 +1,4 @@
+import type { ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import type {
   ModelProviderConfig,
   ProviderPlugin,
@@ -6,8 +7,12 @@ import { OMLX_API_KEY_ENV_VAR, OMLX_LOCAL_API_KEY, OMLX_PROVIDER_ID } from "./de
 
 function hasOmlxAuthorization(
   providerConfig: ModelProviderConfig | undefined,
-  modelHeaders: Record<string, string> | undefined,
-  request: ModelProviderConfig["request"],
+  modelHeaders: ModelRequestHeaders | undefined,
+  request:
+    | ModelProviderConfig["request"]
+    | ReturnType<
+        typeof import("openclaw/plugin-sdk/agent-harness-runtime").getModelProviderRequestTransport
+      >,
 ): boolean {
   const auth = request?.auth;
   if (auth?.mode === "authorization-bearer") {

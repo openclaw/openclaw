@@ -30,6 +30,7 @@ import {
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import {
   sameSessionTranscriptTargetBinding,
   captureSessionTranscriptTargetBinding,
@@ -65,7 +66,6 @@ import {
 } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import { openSessionManagerBoundedView } from "./session-manager-reload.js";
-import { cloneTranscriptView } from "./session-manager-snapshot.js";
 import type {
   SessionLeafControl,
   AppendPersistenceOptions,

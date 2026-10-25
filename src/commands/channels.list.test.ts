@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { makeCatalogEntry, makeMeta } from "../flows/channel-setup.test-helpers.js";
 import type { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -86,13 +87,7 @@ function createMockChannelPlugin(overrides: {
   const id = overrides.id ?? "telegram";
   return {
     id,
-    meta: {
-      id,
-      label: overrides.label ?? "Telegram",
-      selectionLabel: overrides.label ?? "Telegram",
-      docsPath: `/channels/${id}`,
-      blurb: overrides.label ?? "Telegram",
-    },
+    meta: makeMeta(id, overrides.label ?? "Telegram", { blurb: overrides.label ?? "Telegram" }),
     capabilities: { chatTypes: ["direct"] },
     config: {
       listAccountIds: () => overrides.accountIds ?? [],
@@ -102,18 +97,10 @@ function createMockChannelPlugin(overrides: {
 }
 
 function createCatalogEntry(id: string, label: string): ChannelPluginCatalogEntry {
-  return {
-    id,
+  return makeCatalogEntry(id, label, {
     pluginId: `@openclaw/${id}`,
-    meta: {
-      id,
-      label,
-      selectionLabel: label,
-      docsPath: `/channels/${id}`,
-      blurb: label,
-    },
-    install: { npmSpec: `@openclaw/${id}` },
-  };
+    meta: makeMeta(id, label, { blurb: label }),
+  });
 }
 
 function loggedText(runtime: ReturnType<typeof createTestRuntime>): string {

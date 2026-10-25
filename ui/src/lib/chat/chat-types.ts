@@ -199,7 +199,6 @@ export type ChatQueueItem = {
     | "executing-command"
     | "sending"
     | "waiting-reconnect"
-    | "unconfirmed"
     // Provider review requires a new operator decision even if delivery has prior attempts.
     | "held"
     | "failed";
@@ -239,6 +238,8 @@ export type ChatItem =
       /** A background skill review's changes; rendered as a native row instead of `text`. */
       skillChanges?: SkillWorkshopChangeNotice;
       runError?: RunFailureNotice;
+      /** Total identical failures represented by the latest display notice. */
+      repeatCount?: number;
       permissionMissing?: NodePermissionRequest;
     }
   | {

@@ -13,12 +13,30 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Recovered operator runs retain validated profile facts until the bound catalog's
+profile row changes. Each policy check still verifies the original catalog's
+lifetime, mutation settlement, canonical identity, and required email bindings,
+including after access-policy callbacks. An unchanged row avoids rebuilding the
+same facts; pending or uncertain mutations and retired owners still refuse use.
+
+Transcript reads capture scalar anchor and turn-admission fields before yielding,
+including whether an optional idempotency key is present. These private copies
+keep later caller mutations out of the read. Message payloads retain separate
+deep-copy isolation, and captured identities never replace the live owner checks
+before accepting a result or committing a write. Queued transcript context and
+recorders remain non-enumerable symbol properties, consumed before serialization.
+
 ## Rules for code changes
 
 - Kysely for ordinary SQLite; raw SQL only for schema, migrations, bootstrap, justified primitives. Write transactions synchronous: plan async work first, reread authoritative rows, then write; no Promise or `await` in transaction callbacks.
 - Database access: worker threads (read-only worker scope, SQLite writer broker), never Gateway main thread; main thread only awaits results and installs published facts. Exceptions: boot admission, migrations, Doctor/CLI one-shots, lock primitives. Existing main-thread access = legacy: never add more; migrate what you touch.
 - SQLite format/schema/integrity/index/table checks: once per physical DB per process load, shared across workers/handles; never add repeats, remove when touched. Clean-close seals skip startup validation; Doctor/explicit verification keep checks. [Lifecycle](/reference/database-schemas/integrity-and-recovery#integrity-checks).
 - Gateway owns every DB/state; writer receipts invalidate caches, uncovered reads stay direct. No foreign-commit probes; remove when touched. Outside writers use Gateway or exclusive offline custody. Keep live authority/snapshots; [contract](/reference/database-schemas/integrity-and-recovery#gateway-database-ownership).
+
+Released session sharing, entry-predicate, and generation authorities drop their
+decoded rows even when a caller retains the inactive handle. Predicate comparison
+baselines last only until release; a late acknowledgement cannot restore them.
+Active authorities retain their existing publication and final-effect checks.
 
 ## Choose the execution owner
 
@@ -47,6 +65,12 @@ includes its shared revision cells; later publications send only new or replaced
 facts, session scopes, and reference cells. Existing cells carry invalidation
 directly, so changing one fact does not resend every session's shared buffer.
 A new worker or database generation receives a complete snapshot.
+Worker exit republishes only databases that held that worker's reference; an
+unrelated exit does not rescan retained session scopes. Interrupted-write
+settlement and shared reference revocation still precede publication.
+Reference and fact publications reuse the last complete scope sweep while its
+shared revision remains current. Importing scope cells invalidates that result;
+keyed publication never certifies that unrelated remote retirements were swept.
 
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
@@ -166,8 +190,10 @@ transaction. Placement and journal reads retain their multi-statement snapshots.
 
 Gateway startup binds existing auth-file observers to its read-only scope and
 spawn broker, including observations retained across an in-process restart.
-New observers capture those resources when admitting a directory. File scans
-publish through the current binding, including scans spanning a restart.
+New observers reuse that binding even when a temporary request admits their
+directory later. Without a Gateway binding, observers capture their caller's
+resources. File scans publish through the current binding, including scans
+spanning a restart.
 Filesystem notifications retire physical replacements and changed legacy sources;
 ordinary database and WAL contents changes do not reload auth rows. Scope retirement
 stops change publications, and the next Gateway generation rebinds retained observers
@@ -472,6 +498,11 @@ outcomes return reads to the canonical worker. Bounded transcript payload reads
 remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
+
+Inside the durable worker, hot state and its stored entry row share one owned
+decoded entry. Mutations replace that entry instead of editing it in place;
+transaction forks retain the previous entry for rollback. Incoming postimages
+and outgoing public reads remain detached from the resident state.
 
 Replica lookups resolve configured path spellings through the existing admission
 registry: SQLite uses the admitted physical identity and birthtime; PostgreSQL
@@ -6647,7 +6678,7 @@ the existing commit receipts. Manager ordering, live write authority, and commit
 view adoption remain unchanged. Released synchronous persistence methods retain
 their separate native adapter.
 
-Transcript rewrite preparation and publication copy mutable view containers while
+Transcript hydration residency, rewrite preparation, and publication copy mutable view containers while
 retaining already-owned string values, so old tool results and image payloads do
 not require another full byte copy on the main thread. Prepared views remain
 independently mutable. Opaque structured-cloneable SDK data retains native snapshot
