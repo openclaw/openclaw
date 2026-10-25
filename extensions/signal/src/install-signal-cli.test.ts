@@ -9,12 +9,8 @@ import {
   createStreamingResponse,
 } from "../../test-support/streaming-error-response.js";
 
-type CapturedArchiveLimits = NonNullable<
-  Parameters<typeof import("openclaw/plugin-sdk/setup-tools").extractArchive>[0]["limits"]
->;
-
-const { limits, fetchMock, brewMock, runMock, downloads } = vi.hoisted(() => ({
-  limits: [] as CapturedArchiveLimits[],
+const { extractMock, fetchMock, brewMock, runMock, downloads } = vi.hoisted(() => ({
+  extractMock: vi.fn<typeof import("openclaw/plugin-sdk/setup-tools").extractArchive>(),
   fetchMock: vi.fn(),
   brewMock: vi.fn(),
   runMock: vi.fn(),
@@ -28,10 +24,7 @@ vi.mock("openclaw/plugin-sdk/setup-tools", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/setup-tools")>();
   return {
     ...actual,
-    extractArchive: async (params: Parameters<typeof actual.extractArchive>[0]) => {
-      limits.push(params.limits ?? {});
-      return await actual.extractArchive(params);
-    },
+    extractArchive: extractMock.mockImplementation(actual.extractArchive),
     resolveBrewExecutable: brewMock,
   };
 });
@@ -43,17 +36,12 @@ vi.mock("openclaw/plugin-sdk/run-command", () => ({
 
 vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>();
-  return {
-    ...actual,
-    withTempDownloadPath: async (
-      params: { prefix: string; fileName?: string; tmpDir?: string },
-      run: (tmpPath: string) => Promise<unknown>,
-    ) =>
-      await actual.withTempDownloadPath(params, async (tmpPath) => {
-        downloads.push(tmpPath);
-        return await run(tmpPath);
-      }),
-  };
+  const withTempDownloadPath: typeof actual.withTempDownloadPath = (params, run) =>
+    actual.withTempDownloadPath(params, async (tmpPath) => {
+      downloads.push(tmpPath);
+      return await run(tmpPath);
+    });
+  return { ...actual, withTempDownloadPath };
 });
 
 const { downloadToFile, installSignalCli } = await import("./install-signal-cli.js");
@@ -96,10 +84,10 @@ function setProcessPlatform(platform: NodeJS.Platform, arch = "x64") {
 beforeEach(async () => {
   workDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-install-"));
   filePath = path.join(workDir, "signal-cli.tgz");
-  limits.length = 0;
-  fetchMock.mockReset();
-  brewMock.mockReset();
-  runMock.mockReset();
+  extractMock.mockClear();
+  for (const mock of [fetchMock, brewMock, runMock]) {
+    mock.mockReset();
+  }
   downloads.length = 0;
 });
 
@@ -254,7 +242,7 @@ it("removes the download temp dir on the success path too", async () => {
   expect(installedStat.isFile()).toBe(true);
   expect(installedStat.mode & 0o111).not.toBe(0);
   await expectTempDownloadDirMissing();
-  expect(limits).toEqual([
+  expect(extractMock.mock.calls.map(([params]) => params.limits)).toEqual([
     {
       maxArchiveBytes: 256 * 1024 * 1024,
       maxEntries: 32,

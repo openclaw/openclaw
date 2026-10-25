@@ -247,38 +247,31 @@ describe("spawnSignalDaemon", () => {
     expect(log.mock.calls).toEqual(logs.map((line) => [`signal-cli: ${line}`]));
   });
 
-  it("falls back to SIGKILL when the daemon does not exit after SIGTERM", async () => {
-    vi.useFakeTimers();
-    const handle = startDaemon();
-    const stopPromise = handle.stop();
-    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-    await vi.runOnlyPendingTimersAsync();
-    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
-    child.emit("exit", null, "SIGKILL");
-    await stopPromise;
-  });
-
-  it("reuses the in-flight stop promise across repeated calls", async () => {
-    const handle = startDaemon();
-    const firstStop = handle.stop();
-    const secondStop = handle.stop();
-    expect(firstStop).toBe(secondStop);
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    child.emit("exit", 0, null);
-    await Promise.all([firstStop, secondStop]);
-  });
-
-  it("does not treat a post-spawn signaling error as process exit", async () => {
-    const handle = startDaemon();
-    let resolved = false;
-    const stopPromise = handle.stop().then(() => {
-      resolved = true;
-    });
-    child.emit("error", new Error("kill EPERM"));
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-    child.emit("exit", 0, null);
-    await stopPromise;
-    expect(resolved).toBe(true);
-  });
+  it.each(["forced", "repeated", "signaling-error"])(
+    "waits for actual exit: %s stop",
+    async (mode) => {
+      vi.useFakeTimers();
+      const handle = startDaemon();
+      let resolved = false;
+      const stopPromise = handle.stop();
+      const settled = stopPromise.then(() => {
+        resolved = true;
+      });
+      if (mode === "forced") {
+        expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+        await vi.runOnlyPendingTimersAsync();
+        expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+      } else if (mode === "repeated") {
+        expect(handle.stop()).toBe(stopPromise);
+        expect(child.kill).toHaveBeenCalledTimes(1);
+      } else {
+        child.emit("error", new Error("kill EPERM"));
+        await Promise.resolve();
+        expect(resolved).toBe(false);
+      }
+      child.emit("exit", mode === "forced" ? null : 0, mode === "forced" ? "SIGKILL" : null);
+      await settled;
+      expect(resolved).toBe(true);
+    },
+  );
 });

@@ -116,22 +116,17 @@ describe("monitorSignalProvider autostart", () => {
     "does not spawn when monitoring aborts with a %s probe",
     async (phase) => {
       const controller = new AbortController();
-      const started = Promise.withResolvers<void>();
       probeEndpoint.mockImplementationOnce(
         async ({ abortSignal }: { abortSignal: AbortSignal }) => {
           if (phase === "completed") {
             controller.abort();
-          }
-          started.resolve();
-          if (phase === "pending") {
+          } else {
+            queueMicrotask(() => controller.abort());
             await rejectOnAbort(abortSignal);
           }
         },
       );
-      const monitorPromise = runMonitor({ abortSignal: controller.signal });
-      await started.promise;
-      controller.abort();
-      await expect(monitorPromise).resolves.toBeUndefined();
+      await expect(runMonitor({ abortSignal: controller.signal })).resolves.toBeUndefined();
       expect(spawnDaemon).not.toHaveBeenCalled();
     },
   );
@@ -177,13 +172,7 @@ describe("monitorSignalProvider autostart", () => {
     waitUntilReady.mockImplementationOnce(({ abortSignal }: { abortSignal?: AbortSignal | null }) =>
       rejectOnAbort(abortSignal),
     );
-    await expect(
-      runMonitor({
-        autoStart: true,
-        baseUrl: SIGNAL_BASE_URL,
-        statusSink,
-      }),
-    ).rejects.toThrow(/signal daemon exited/i);
+    await expect(runMonitor({ statusSink })).rejects.toThrow(/signal daemon exited/i);
     expectOptions(statusSink, { lifecycle: "recovering", connected: false });
   });
 

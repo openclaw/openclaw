@@ -60,6 +60,8 @@ const splitConfig = signalConfig({
 const local = (port = 8080) => `http://127.0.0.1:${port}`;
 const prepared = (httpPort: number, httpHost = "127.0.0.1", endpoint = local(httpPort)) =>
   native({ url: endpoint, httpHost, httpPort });
+const updateWork = (input: SetupInput, transport?: Transport) =>
+  apply(input, transport ? workTransport(transport) : {}, "work")?.accounts?.work?.transport;
 
 const detectSignalTransportMock = vi.hoisted(() => vi.fn());
 
@@ -120,26 +122,28 @@ it("skips setup-time detection for an explicit transport kind", async () => {
   expect(detectSignalTransportMock).not.toHaveBeenCalled();
 });
 
-it("realigns an existing managed connection URL after an IPv6 bind update", () => {
-  const cfg = workTransport(prepared(8181));
-  expect(
-    apply({ httpHost: "::1", httpPort: "8282" }, cfg, "work")?.accounts?.work?.transport,
-  ).toMatchObject(prepared(8282, "::1", "http://[::1]:8282"));
+const managed = native({
+  cliPath: "/old",
+  configPath: "/state",
+  httpHost: "127.0.0.2",
+  httpPort: 8181,
+  receiveMode: "manual",
+  ignoreStories: true,
 });
-
-it("preserves managed transport options during a partial setup update", () => {
-  const transport = native({
-    cliPath: "/opt/old-signal-cli",
-    configPath: "/var/lib/signal-work",
-    httpHost: "127.0.0.2",
-    httpPort: 8181,
-    receiveMode: "manual",
-    ignoreStories: true,
-  });
-  expect(
-    apply({ cliPath: "/opt/new-signal-cli" }, workTransport(transport), "work")?.accounts?.work
-      ?.transport,
-  ).toEqual({ ...transport, cliPath: "/opt/new-signal-cli" });
+it.each<[SetupInput, Transport | undefined, Transport]>([
+  [
+    { httpHost: "::1", httpPort: "8282" },
+    prepared(8181),
+    prepared(8282, "::1", "http://[::1]:8282"),
+  ],
+  [{ cliPath: "/new" }, managed, { ...managed, cliPath: "/new" }],
+  [
+    { signalNumber: workPhone, httpUrl: "signal-native:8080" },
+    undefined,
+    external("http://signal-native:8080"),
+  ],
+])("applies transport update %j", (input, previous, expected) => {
+  expect(updateWork(input, previous)).toEqual(expected);
 });
 
 it("makes a new default transport update authoritative over accounts.default", () => {
@@ -149,11 +153,6 @@ it("makes a new default transport update authoritative over accounts.default", (
     native({ cliPath: "/opt/new-signal-cli", httpHost: "127.0.0.1", httpPort: 8080 }),
   );
   expect(next?.accounts?.default).not.toHaveProperty("transport");
-});
-
-it("keeps bare HTTP URLs on the historical external-native transport", () => {
-  const next = apply({ signalNumber: "+15555550124", httpUrl: "signal-native:8080" }, {}, "work");
-  expect(next?.accounts?.work?.transport).toEqual(external("http://signal-native:8080"));
 });
 
 it.each([

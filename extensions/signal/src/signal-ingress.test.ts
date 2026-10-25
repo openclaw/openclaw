@@ -88,19 +88,33 @@ describe("Signal durable ingress", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it("recovers an uncompleted append with a fresh drain and dispatches exactly once", async () => {
-    const event = signalEvent();
+  it("persists independent conversation lanes and recovers each raw event exactly once", async () => {
+    const direct = signalEvent({ sourceUuid: "123e4567-e89b-12d3-a456-426614174000" });
+    const group = signalEvent(
+      { timestamp: 1_700_000_000_002 },
+      { groupInfo: { groupId: "group-123" } },
+    );
     const interrupted = await start(defer);
-    await receive(interrupted, event);
-    expect(await queue.listClaims()).toHaveLength(1);
+    await receive(interrupted, direct, group);
+    expect(
+      (await queue.listClaims()).map(({ laneKey, payload }) => [laneKey, payload.event]),
+    ).toEqual(
+      expect.arrayContaining([
+        ["direct:uuid:123e4567-e89b-12d3-a456-426614174000", direct],
+        ["group:group-123", group],
+      ]),
+    );
     await interrupted.stop();
     monitors.delete(interrupted);
-
-    const recoveredDispatch = vi.fn().mockResolvedValue(undefined);
-    const recovered = await start(recoveredDispatch);
-    await recovered.waitForIdle();
-    expect(recoveredDispatch).toHaveBeenCalledTimes(1);
-    expect(recoveredDispatch.mock.calls[0]?.slice(0, 2)).toEqual([event, expect.any(Object)]);
+    const dispatch = vi.fn().mockResolvedValue(undefined);
+    await (await start(dispatch)).waitForIdle();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls.map((call) => call.slice(0, 2))).toEqual(
+      expect.arrayContaining([
+        [direct, expect.any(Object)],
+        [group, expect.any(Object)],
+      ]),
+    );
   });
 
   it("completes only when deferred dispatch adoption becomes durable", async () => {
@@ -162,24 +176,6 @@ describe("Signal durable ingress", () => {
       "first",
       "second",
     ]);
-  });
-
-  it("uses a direct-sender or group-conversation lane and stores the raw event", async () => {
-    const direct = signalEvent({ sourceUuid: "123e4567-e89b-12d3-a456-426614174000" });
-    const group = signalEvent(
-      { timestamp: 1_700_000_000_002 },
-      { groupInfo: { groupId: "group-123" } },
-    );
-    const started = await start(defer);
-    await receive(started, direct, group);
-    expect(
-      (await queue.listClaims()).map(({ laneKey, payload }) => [laneKey, payload.event]),
-    ).toEqual(
-      expect.arrayContaining([
-        ["direct:uuid:123e4567-e89b-12d3-a456-426614174000", direct],
-        ["group:group-123", group],
-      ]),
-    );
   });
 
   it.each([

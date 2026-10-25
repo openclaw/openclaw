@@ -140,9 +140,23 @@ describe("Signal approval reactions", () => {
     });
   });
 
-  it("does not register metadata-only approval payloads without visible reaction hints", async () => {
-    const payload = approvalPayload("exec-hidden-reaction", sessionIdentity);
-    expect(await registerDelivery(payload)).toBe(false);
+  it.each([
+    { name: "visible reaction hints", hint: false, cfg: targetConfig, metadata: sessionIdentity },
+    {
+      name: "explicit approvers",
+      hint: true,
+      cfg: { ...targetConfig, channels: { signal: {} } },
+      metadata: {},
+    },
+  ])("does not register delivered payloads without $name", async ({ hint, cfg, metadata }) => {
+    const payload = approvalPayload("exec-1", metadata);
+    if (hint) {
+      payload.text = addApprovalReactionHintToText({
+        text: payload.text,
+        allowedDecisions: ["allow-once", "deny"],
+      });
+    }
+    expect(await registerDelivery(payload, undefined, cfg)).toBe(false);
     await expect(lookup()).resolves.toBeNull();
   });
 
@@ -227,24 +241,6 @@ describe("Signal approval reactions", () => {
     await expect(lookup({ conversationKey: "me" })).resolves.toBeNull();
   });
 
-  it("does not register delivered structured approval payloads without explicit approvers", async () => {
-    const payload = approvalPayload("exec-no-approvers", { approvalSlug: "exec-no" });
-    const deliveredPayload = {
-      ...payload,
-      text: addApprovalReactionHintToText({
-        text: payload.text ?? "",
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    };
-
-    expect(
-      await registerDelivery(deliveredPayload, undefined, {
-        ...targetConfig,
-        channels: { signal: {} },
-      }),
-    ).toBe(false);
-  });
-
   it("rejects reaction registration with an undefined approval kind", async () => {
     expect(
       await registerTarget({
@@ -255,24 +251,19 @@ describe("Signal approval reactions", () => {
     ).toBeNull();
   });
 
-  it("does not match timestamp-only bindings when the inbound conversation id differs", async () => {
-    await registerTarget({ conversationKey: "username:kevin" });
-
-    await expect(lookup()).resolves.toBeNull();
-  });
-
-  it("requires the reaction target author to match the outbound bot identity", async () => {
-    await registerTarget({ allowedDecisions: ["allow-once"] });
-
-    await expect(lookup({ targetAuthor: "+15550008888" })).resolves.toBeNull();
-
-    await expect(lookup()).resolves.toEqual({
-      approvalId: "exec-1",
-      approvalKind: "exec",
-      decision: "allow-once",
-      route: approvalRoute,
-    });
-  });
+  it.each([{ conversationKey: "username:kevin" }, { targetAuthor: "+15550008888" }])(
+    "binds reactions to their conversation and bot identity: %j",
+    async (overrides) => {
+      await registerTarget({ allowedDecisions: ["allow-once"] });
+      await expect(lookup(overrides)).resolves.toBeNull();
+      await expect(lookup()).resolves.toEqual({
+        approvalId: "exec-1",
+        approvalKind: "exec",
+        decision: "allow-once",
+        route: approvalRoute,
+      });
+    },
+  );
 
   it("authorizes system-agent reactions using Signal approval approvers", async () => {
     const approvalKind = "system-agent";

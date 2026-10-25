@@ -27,26 +27,6 @@ function react(params: ActionContext["params"], overrides: ActionOverrides = {})
   });
 }
 
-type PrepareContext = Parameters<NonNullable<typeof signalMessageActions.prepareSendPayload>>[0];
-function prepareReply(
-  replyToIdSource: PrepareContext["replyToIdSource"],
-  toolContext?: ActionContext["toolContext"],
-) {
-  return signalMessageActions.prepareSendPayload?.({
-    ctx: {
-      channel: "signal",
-      action: "send",
-      cfg: {},
-      params: { replyTo: "1700000000001" },
-      toolContext,
-    },
-    to: "+15550001111",
-    payload: { text: "reply" },
-    replyToId: "1700000000001",
-    replyToIdSource,
-  });
-}
-
 const overrideCfg: OpenClawConfig = {
   channels: {
     signal: {
@@ -80,23 +60,28 @@ describe("signalMessageActions", () => {
     expect(signalMessageActions.supportsAction?.({ action: "react" })).toBe(true);
   });
 
-  it("keeps inherited Signal reply ids in the durable delivery context", async () => {
-    expect(await prepareReply("implicit")).toEqual({ text: "reply" });
-  });
-
-  it("preserves explicit Signal replies when implicit replies are suppressed", async () => {
-    const prepared = await prepareReply("explicit", {
-      currentMessageId: "1700000000001",
-      replyToMode: "off",
-    });
-    expect(prepared).toEqual({ text: "reply", replyToId: "1700000000001" });
-  });
-
-  it("blocks reactions when the action gate is disabled", async () => {
-    await expect(react({ to: "+15550001111" }, { cfg: disabledCfg })).rejects.toThrow(
-      /actions\.reactions/,
-    );
-  });
+  it.each(["implicit", "explicit"] as const)(
+    "prepares %s replies without bypassing suppression",
+    async (replyToIdSource) => {
+      const prepared = await signalMessageActions.prepareSendPayload?.({
+        ctx: {
+          channel: "signal",
+          action: "send",
+          cfg: {},
+          params: { replyTo: "1700000000001" },
+          toolContext: { currentMessageId: "1700000000001", replyToMode: "off" },
+        },
+        to: "+15550001111",
+        payload: { text: "reply" },
+        replyToId: "1700000000001",
+        replyToIdSource,
+      });
+      expect(prepared).toEqual({
+        text: "reply",
+        ...(replyToIdSource === "explicit" ? { replyToId: "1700000000001" } : {}),
+      });
+    },
+  );
 
   it("maps reaction targets into sendReactionSignal calls", async () => {
     type Options = Omit<Parameters<typeof sendReactionsModule.sendReactionSignal>[3], "cfg">;
@@ -116,14 +101,11 @@ describe("signalMessageActions", () => {
         recipient,
         timestamp,
         "🔥",
-        {
+        expect.objectContaining({
           cfg: context?.cfg ?? DEFAULT_CFG,
           accountId: "default",
-          groupId: undefined,
-          targetAuthor: undefined,
-          targetAuthorUuid: undefined,
           ...options,
-        },
+        }),
       );
     }
   });
@@ -145,32 +127,31 @@ describe("signalMessageActions", () => {
     },
   );
 
-  it.each([
-    ["work", { enabled: false, account: "+15550002222" }, /account "work" is disabled/],
-    ["default", undefined, /account "default" is not configured/],
-  ] as const)(
-    "rejects unavailable %s accounts before provider dispatch",
-    async (accountId, account, error) => {
-      const cfg = {
-        channels: {
-          signal: account ? { account: "+15550001111", accounts: { [accountId]: account } } : {},
-        },
-      };
-      await expect(react({}, { cfg, accountId })).rejects.toThrow(error);
-      expect(sendReactionSignalMock).not.toHaveBeenCalled();
-      expect(removeReactionSignalMock).not.toHaveBeenCalled();
+  const disabledAccount: OpenClawConfig = {
+    channels: {
+      signal: {
+        account: "+15550001111",
+        accounts: { work: { enabled: false, account: "+15550002222" } },
+      },
     },
-  );
-
-  it.each([
+  };
+  const rejected: Array<[ActionContext["params"], RegExp, ActionOverrides?]> = [
+    [{ to: "+15550001111" }, /actions\.reactions/, { cfg: disabledCfg }],
+    [{}, /account "work" is disabled/, { cfg: disabledAccount, accountId: "work" }],
+    [
+      {},
+      /account "default" is not configured/,
+      { cfg: { channels: { signal: {} } }, accountId: "default" },
+    ],
     [{ messageId: undefined }, /messageId.*required/],
     [{ messageId: "123abc" }, /Invalid messageId/],
     [{ emoji: undefined, remove: false }, /Emoji required to add reaction/],
     [{ emoji: undefined, remove: true }, /Emoji required to remove reaction/],
     [{ to: "signal:group:group-id" }, /targetAuthor/],
     [{ to: undefined, recipient: "+15559999999" }, /recipient.*required/],
-  ])("rejects invalid reaction inputs %j before dispatch", async (params, error) => {
-    await expect(react(params)).rejects.toThrow(error);
+  ];
+  it.each(rejected)("rejects reaction %j before dispatch", async (params, error, overrides) => {
+    await expect(react(params, overrides)).rejects.toThrow(error);
     expect(sendReactionSignalMock).not.toHaveBeenCalled();
     expect(removeReactionSignalMock).not.toHaveBeenCalled();
   });

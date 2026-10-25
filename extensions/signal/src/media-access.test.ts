@@ -130,7 +130,7 @@ describe("Signal host-owned outbound media access", () => {
   }
 
   it.each(SIGNAL_MEDIA_ADAPTERS)(
-    "delivers approved workspace bytes through the real $name and preserves native quotes",
+    "sends approved media with quotes via $name",
     async ({ deliver }) => {
       const sourcePath = path.join(state.workspaceDir, "chart.png");
       const conflictingRoot = state.path("conflicting-root");
@@ -196,14 +196,11 @@ describe("Signal host-owned outbound media access", () => {
     }
   });
 
-  it.each(SIGNAL_MEDIA_ADAPTERS)(
-    "checks the current caller after preparation for $name text delivery",
-    async ({ text: send }) => {
-      const delivery = send(textContext());
-      close();
-      await rejectedBeforeSend(delivery);
-    },
-  );
+  it.each(SIGNAL_MEDIA_ADAPTERS)("gates prepared $name text", async ({ text: send }) => {
+    const delivery = send(textContext());
+    close();
+    await rejectedBeforeSend(delivery);
+  });
 
   it.each([false, true])("keeps quote fallback on the same caller (closed=%s)", async (closed) => {
     const send = requireAdapter(signalPlugin.message?.send?.text);
@@ -264,28 +261,25 @@ describe("Signal host-owned outbound media access", () => {
     );
   });
 
-  it.each(SIGNAL_MEDIA_ADAPTERS)(
-    "rejects traversal before reading or contacting Signal through the $name",
-    async ({ deliver }) => {
-      await fs.writeFile(state.path("outside.png"), SIGNAL_IMAGE);
-      const approvedReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
-      const conflictingReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
+  it.each(SIGNAL_MEDIA_ADAPTERS)("rejects traversal before I/O via $name", async ({ deliver }) => {
+    await fs.writeFile(state.path("outside.png"), SIGNAL_IMAGE);
+    const approvedReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
+    const conflictingReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
 
-      const delivery = deliver(
-        createContext({
-          mediaUrl: "../outside.png",
-          mediaLocalRoots: [state.root],
-          mediaReadFile: conflictingReader,
-          mediaAccess: workspaceAccess(approvedReader),
-        }),
-      );
-      await expect(delivery).rejects.toMatchObject({ code: "path-not-allowed" });
+    const delivery = deliver(
+      createContext({
+        mediaUrl: "../outside.png",
+        mediaLocalRoots: [state.root],
+        mediaReadFile: conflictingReader,
+        mediaAccess: workspaceAccess(approvedReader),
+      }),
+    );
+    await expect(delivery).rejects.toMatchObject({ code: "path-not-allowed" });
 
-      expect(approvedReader).not.toHaveBeenCalled();
-      expect(conflictingReader).not.toHaveBeenCalled();
-      expect(requests).toHaveLength(0);
-    },
-  );
+    expect(approvedReader).not.toHaveBeenCalled();
+    expect(conflictingReader).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(0);
+  });
 
   it("propagates host-reader failures without contacting Signal", async () => {
     const deniedReader = vi.fn(async (): Promise<Buffer> => {

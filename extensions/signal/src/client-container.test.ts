@@ -1,5 +1,4 @@
 import { writeFile } from "node:fs/promises";
-import type http from "node:http";
 import { join } from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
@@ -112,6 +111,11 @@ describe("container mocked responses", () => {
     { status: 500, text: "x".repeat(20_000), error: `Signal REST 500: ${"x".repeat(16 * 1024)}` },
     { status: 500, text: "", error: "Signal REST 500: Internal Server Error" },
     { status: 200, text: "not-valid-json", error: "Signal REST returned malformed JSON" },
+    {
+      status: 200,
+      text: '{"timestamp":"0x18bcfe56800"}',
+      error: "Signal REST send returned invalid timestamp",
+    },
   ])("bounds and reports REST response %#", async ({ status, text, error }) => {
     respondBody(text, { status, statusText: "Internal Server Error" });
     await expect(rpc("send")).rejects.toThrow(error);
@@ -164,12 +168,6 @@ describe("container mocked responses", () => {
       }),
   );
 
-  it("rejects a non-decimal send timestamp", async () => {
-    respond({ timestamp: "0x18bcfe56800" });
-    await expect(send({ message: "Hello" })).rejects.toThrow(
-      "Signal REST send returned invalid timestamp",
-    );
-  });
   it.each([
     {
       name: "styled text with literal markers and backslashes",
@@ -287,10 +285,6 @@ describe("container REST real server", () => {
   const startServer = useSignalHttpServer();
   const params = { account: "+15550001111", recipient: ["+15551234567"], message: "Photo" };
   afterEach(() => vi.restoreAllMocks());
-  function accept(res: http.ServerResponse) {
-    res.writeHead(201, { "content-type": "application/json" });
-    res.end(JSON.stringify({ timestamp: "1735689600000" }));
-  }
   it("rejects malformed UTF-8 before JSON parsing", async () => {
     const baseUrl = await startServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
@@ -324,15 +318,16 @@ describe("container REST real server", () => {
   });
   it("posts a provider-safe original attachment filename and intact bytes", async () => {
     let received: unknown;
-    const baseUrl = await startServer((req, res) => {
+    const baseUrl = await startServer(async (req, res) => {
       expect(req.method).toBe("POST");
       expect(req.url).toBe("/v2/send");
       const chunks: Buffer[] = [];
-      req.on("data", (chunk: Buffer) => chunks.push(chunk));
-      req.on("end", () => {
-        received = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-        accept(res);
-      });
+      for await (const chunk of req) {
+        chunks.push(chunk);
+      }
+      received = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      res.writeHead(201, { "content-type": "application/json" });
+      res.end('{"timestamp":"1735689600000"}');
     });
     const content = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
     const file = join(
