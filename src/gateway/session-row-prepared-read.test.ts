@@ -62,6 +62,11 @@ function describeFixture() {
     context,
     methodRegistry: createRequestGatewayMethodRegistry(),
   };
+  const authorize = (
+    method = request.method,
+    requestParams: unknown = request.requestParams,
+    options: Pick<Parameters<typeof authorizeGatewayRequestPreDispatch>[0], "signal"> = {},
+  ) => authorizeGatewayRequestPreDispatch({ ...request, method, requestParams, ...options });
   const dispatch = (
     req: Parameters<typeof handleGatewayRequest>[0]["req"],
     respond: Parameters<typeof handleGatewayRequest>[0]["respond"],
@@ -75,7 +80,7 @@ function describeFixture() {
       isWebchatConnect: () => false,
       extraHandlers,
     });
-  return { projection, context, client, request, dispatch };
+  return { projection, context, client, request, authorize, dispatch };
 }
 
 async function withPendingStartupInspection(
@@ -198,21 +203,17 @@ it("refuses a new session's initial message without retaining a startup write", 
 it.each(["before", "after refusal"] as const)(
   "preserves terminal inspection failure %s write authorization",
   async (when) => {
-    await withPendingStartupInspection(async ({ request, fail, admission }) => {
-      const authorize = () =>
-        authorizeGatewayRequestPreDispatch({
-          ...request,
-          method: "sessions.send",
-          requestParams: { key: "agent:main:startup", message: "hello" },
-        });
+    await withPendingStartupInspection(async ({ authorize, fail, admission }) => {
+      const write = () =>
+        authorize("sessions.send", { key: "agent:main:startup", message: "hello" });
       if (when === "after refusal") {
-        await expect(authorize()).resolves.toMatchObject({
+        await expect(write()).resolves.toMatchObject({
           error: { code: "UNAVAILABLE", retryable: true },
         });
       }
       fail(new Error("synthetic failed inspection"));
       await admission.pendingPreparation;
-      await expect(authorize()).resolves.toMatchObject({
+      await expect(write()).resolves.toMatchObject({
         error: {
           code: "UNAVAILABLE",
           message: expect.stringContaining("synthetic failed inspection"),
@@ -224,14 +225,10 @@ it.each(["before", "after refusal"] as const)(
 );
 
 it("admits an unrelated agent's write while startup preparation continues", async () => {
-  await withPendingStartupInspection(async ({ request, context }) => {
+  await withPendingStartupInspection(async ({ authorize, context }) => {
     context.getRuntimeConfig = () => ({ agents: { entries: { main: {}, ready: {} } } });
     await expect(
-      authorizeGatewayRequestPreDispatch({
-        ...request,
-        method: "sessions.create",
-        requestParams: { agentId: "ready", message: "hello" },
-      }),
+      authorize("sessions.create", { agentId: "ready", message: "hello" }),
     ).resolves.toMatchObject({ error: null });
     expect(readAgentDatabaseAdmissionRefusal("main")?.code).toBe(
       "agent-database-inspection-pending",
@@ -241,15 +238,10 @@ it("admits an unrelated agent's write while startup preparation continues", asyn
 
 it("refuses a write while its logical agent's physical shared-store owner is pending", async () => {
   await withPendingStartupInspection(
-    async ({ request, context, databasePath, complete, admission }) => {
+    async ({ authorize, context, databasePath, complete, admission }) => {
       useSharedStore(context, databasePath);
-      const authorize = () =>
-        authorizeGatewayRequestPreDispatch({
-          ...request,
-          method: "sessions.create",
-          requestParams: { agentId: "ops", message: "hello" },
-        });
-      await expect(authorize()).resolves.toMatchObject({
+      const write = () => authorize("sessions.create", { agentId: "ops", message: "hello" });
+      await expect(write()).resolves.toMatchObject({
         error: {
           code: "UNAVAILABLE",
           retryable: true,
@@ -259,7 +251,7 @@ it("refuses a write while its logical agent's physical shared-store owner is pen
       expect(() => assertAgentDatabaseAdmitted("ops")).not.toThrow();
       complete();
       await admission.pendingPreparation;
-      await expect(authorize()).resolves.toMatchObject({ error: null });
+      await expect(write()).resolves.toMatchObject({ error: null });
     },
   );
 });
@@ -315,14 +307,10 @@ it("dispatches broad lists while an agent remains in startup preparation", async
 });
 
 it("holds a logical agent's read for the physical shared-store owner", async () => {
-  await withPendingStartupInspection(async ({ request, context, databasePath, complete }) => {
+  await withPendingStartupInspection(async ({ authorize, context, databasePath, complete }) => {
     useSharedStore(context, databasePath);
     let settled = false;
-    const reading = authorizeGatewayRequestPreDispatch({
-      ...request,
-      method: "sessions.list",
-      requestParams: { agentId: "ops" },
-    }).then((result) => {
+    const reading = authorize("sessions.list", { agentId: "ops" }).then((result) => {
       settled = true;
       return result;
     });
@@ -339,7 +327,7 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
   "settles startup discovery after %s before dispatch",
   async (outcome) => {
     await withPendingStartupInspection(
-      async ({ request, context, client, databasePath, complete }) => {
+      async ({ authorize, context, client, databasePath, complete }) => {
         let liveConfig: OpenClawConfig = cfg;
         context.getRuntimeConfig = () => liveConfig;
         const discovery =
@@ -357,12 +345,11 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
             return racePromiseWithAbortSignal(discovery.promise, signal);
           });
         const controller = new AbortController();
-        const reading = authorizeGatewayRequestPreDispatch({
-          ...request,
-          method: "sessions.list",
-          requestParams: { agentId: "healthy" },
-          signal: controller.signal,
-        });
+        const reading = authorize(
+          "sessions.list",
+          { agentId: "healthy" },
+          { signal: controller.signal },
+        );
         const cancelled =
           outcome === "cancelled"
             ? expect(reading).rejects.toMatchObject({ name: "AbortError" })
@@ -401,16 +388,12 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
 );
 
 it("rechecks scopes after startup admission", async () => {
-  await withPendingStartupInspection(async ({ request, client, complete }) => {
-    const read = authorizeGatewayRequestPreDispatch(request);
+  await withPendingStartupInspection(async ({ authorize, client, complete }) => {
+    const read = authorize();
     await vi.advanceTimersByTimeAsync(0);
-    await expect(
-      authorizeGatewayRequestPreDispatch({
-        ...request,
-        method: "sessions.list",
-        requestParams: { agentId: "healthy" },
-      }),
-    ).resolves.toMatchObject({ error: null });
+    await expect(authorize("sessions.list", { agentId: "healthy" })).resolves.toMatchObject({
+      error: null,
+    });
     client.connect.scopes = [];
     complete();
     await expect(read).resolves.toMatchObject({ error: { code: "FORBIDDEN" } });
@@ -420,8 +403,8 @@ it("rechecks scopes after startup admission", async () => {
 it.each(["current", "revoked"] as const)(
   "bounds startup reads with %s authority without cancelling preparation or granting writes",
   async (authority) => {
-    await withPendingStartupInspection(async ({ request, client, complete, admission }) => {
-      const read = authorizeGatewayRequestPreDispatch(request);
+    await withPendingStartupInspection(async ({ authorize, client, complete, admission }) => {
+      const read = authorize();
       await vi.advanceTimersByTimeAsync(0);
       if (authority === "revoked") {
         client.connect.scopes = [];
@@ -450,19 +433,14 @@ it.each(["current", "revoked"] as const)(
 it.each(["request", "connection", "observation"] as const)(
   "cancels startup waiting when the %s ends without stopping preparation",
   async (source) => {
-    await withPendingStartupInspection(async ({ request, client, admission }) => {
+    await withPendingStartupInspection(async ({ authorize, client, admission }) => {
       const controller = new AbortController();
       const scope = new AsyncWorkScope();
       if (source === "connection") {
         client.connectionSignal = controller.signal;
       }
       const read = scope.run(() =>
-        authorizeGatewayRequestPreDispatch({
-          ...request,
-          method: "models.list",
-          requestParams: {},
-          ...(source === "request" ? { signal: controller.signal } : {}),
-        }),
+        authorize("models.list", {}, source === "request" ? { signal: controller.signal } : {}),
       );
       const cancelled = expect(read).rejects.toMatchObject({ name: "AbortError" });
       await vi.advanceTimersByTimeAsync(0);

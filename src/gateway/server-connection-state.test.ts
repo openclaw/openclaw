@@ -84,6 +84,26 @@ function payload(
   return JSON.parse(String(peer.send.mock.calls[index]?.[0])).payload;
 }
 
+function expectSent(peers: Peer[], count: number) {
+  for (const peer of peers) {
+    expect(peer.send).toHaveBeenCalledTimes(count);
+  }
+}
+
+const sessionScope = (sessionKey: string) => ({ sessionKeys: [sessionKey], agentId: "main" });
+
+function broadcastChanged(
+  state: State,
+  sessionKey: string,
+  options: Parameters<State["broadcast"]>[2] = {},
+) {
+  state.broadcast(
+    "sessions.changed",
+    { sessionKey, agentId: "main", reason: "metadata" },
+    { ...sessionScope(sessionKey), ...options },
+  );
+}
+
 function identify(
   client: GatewayWsClient,
   profileId: string,
@@ -112,7 +132,7 @@ function withoutSql(run: () => void) {
   const sql = observeHostDataSql();
   try {
     run();
-    expect(sql.calls.every((call) => call.mock.calls.length === 0)).toBe(true);
+    expect(sql.queries).toEqual([]);
   } finally {
     sql.restore();
   }
@@ -207,10 +227,7 @@ describe("gateway connection state", () => {
         state.broadcast(
           "sessions.changed",
           { sessionKey: scope.sessionKey, reason: "metadata" },
-          {
-            sessionKeys: [scope.sessionKey],
-            agentId: scope.agentId,
-          },
+          sessionScope(scope.sessionKey),
         );
         expect([first, second].map((peer) => payload(peer).session.hasActiveRun)).toEqual([
           hasActiveRun,
@@ -274,7 +291,7 @@ describe("gateway connection state", () => {
       const publish = (stage: string, visibleKeys: string[]) => {
         peer.send.mockClear();
         for (const sessionKey of [ownKey, foreignKey]) {
-          const scope = { sessionKeys: [sessionKey], agentId: "main" };
+          const scope = sessionScope(sessionKey);
           state.broadcast("sessions.changed", { sessionKey, reason: "metadata" }, scope);
           state.broadcast(
             "chat",
@@ -334,25 +351,14 @@ describe("gateway connection state", () => {
           () => [{ key: ownKey, agentId: "main" }],
           (read) => {
             beforePublish();
-            state.broadcast(
-              "sessions.changed",
-              {
-                sessionKey: ownKey,
-                agentId: "main",
-                reason: "metadata",
-              },
-              {
-                sessionKeys: [ownKey],
-                agentId: "main",
-                prepareSessionProjection: prepareSessionEventProjection(projection, read),
-              },
-            );
+            broadcastChanged(state, ownKey, {
+              prepareSessionProjection: prepareSessionEventProjection(projection, read),
+            });
           },
           { includeAncestors: true },
         );
       await publishPrepared();
-      expect(peer.send).toHaveBeenCalledOnce();
-      expect(later.send).toHaveBeenCalledOnce();
+      expectSent([peer, later], 1);
       expect(payload(peer)).toMatchObject({
         session: { key: ownKey },
         ancestorSessions: [{ key: foreignKey }],
@@ -374,15 +380,9 @@ describe("gateway connection state", () => {
         await publishPrepared(() => {
           detachReplacement = state.attachSessionRowProjection(replacement);
         });
-        expect(peer.send).not.toHaveBeenCalled();
-        expect(later.send).not.toHaveBeenCalled();
-        state.broadcast(
-          "sessions.changed",
-          { sessionKey: ownKey, agentId: "main", reason: "metadata" },
-          { sessionKeys: [ownKey], agentId: "main" },
-        );
-        expect(peer.send).toHaveBeenCalledOnce();
-        expect(later.send).toHaveBeenCalledOnce();
+        expectSent([peer, later], 0);
+        broadcastChanged(state, ownKey);
+        expectSent([peer, later], 1);
       } finally {
         detachReplacement?.();
       }
@@ -476,7 +476,7 @@ describe("gateway connection state", () => {
       const expectDeliveryWithoutSql = (count: number) =>
         withoutSql(() => {
           broadcast();
-          expect(peers.every((peer) => peer.send.mock.calls.length === count)).toBe(true);
+          expectSent(peers, count);
         });
       try {
         await projection.ensureMaterialized();
@@ -487,7 +487,7 @@ describe("gateway connection state", () => {
         expectDeliveryWithoutSql(1);
         addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 2 });
         broadcast();
-        expect(peers.every((peer) => peer.send.mock.calls.length === 2)).toBe(true);
+        expectSent(peers, 2);
         const replace = (visibility: "suggest" | "draft" | "shared", updatedAt: number) =>
           replaceSessionEntrySync(
             scope,
@@ -499,37 +499,26 @@ describe("gateway connection state", () => {
         expect(
           projection.describe({ agentId: scope.agentId, key: scope.sessionKey })?.membership.size,
         ).toBe(0);
-        const publicationReads: number[] = [];
         const publicationDirtyRows: number[] = [];
-        broadcastDuringPublication = () => {
-          const publicationSql = observeHostDataSql();
-          try {
+        broadcastDuringPublication = () =>
+          withoutSql(() => {
             publicationDirtyRows.push(projection.dirtyRowCount);
             state.broadcastToConnIds(
               "task",
               { action: "upserted", task: { id: "task" } },
               targets,
-              {
-                sessionKeys: [scope.sessionKey],
-                agentId: scope.agentId,
-              },
+              sessionScope(scope.sessionKey),
             );
-            publicationReads.push(
-              publicationSql.calls.reduce((count, call) => count + call.mock.calls.length, 0),
-            );
-          } finally {
-            publicationSql.restore();
-          }
-        };
+          });
         for (const [visibility, deliveries] of [
           ["draft", 2],
           ["shared", 3],
           ["draft", 3],
         ] as const) {
           replace(visibility, 3);
-          expect(peers.every((peer) => peer.send.mock.calls.length === deliveries)).toBe(true);
+          expectSent(peers, deliveries);
         }
-        expect(publicationReads).toEqual([0, 0, 0]);
+        expect(publicationDirtyRows).toHaveLength(3);
         expect(publicationDirtyRows.every((count) => count > 0)).toBe(true);
       } finally {
         stopPublication();
@@ -587,8 +576,7 @@ describe("gateway connection state", () => {
         sessionChanges.emit(scope);
         const verify = (sharedVisible: boolean) => {
           expect(projection.dirtyRowCount).toBeGreaterThan(0);
-          const sql = observeHostDataSql();
-          try {
+          withoutSql(() => {
             peers.forEach(({ send }) => send.mockClear());
             state.broadcast("presence", { presence: listSystemPresence() });
             for (const [index, peer] of peers.entries()) {
@@ -623,10 +611,7 @@ describe("gateway connection state", () => {
                 }).presence,
               ).toEqual(expected);
             }
-            expect(sql.queries).toEqual([]);
-          } finally {
-            sql.restore();
-          }
+          });
         };
         verify(true);
         replaceSessionEntrySync(scope, humanEntry(sharedKey, "draft", "other-owner", 2));
