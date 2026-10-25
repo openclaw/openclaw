@@ -106,20 +106,14 @@ function createTempCommandDir(name: string): string {
   writeCommand(dir, name, true);
   return dir;
 }
-
-type ShellConfig = ReturnType<typeof getBashShellConfig>;
+function expectBashConfig(shell: string, args: string[], commandTransport = "argv") {
+  expect(getBashShellConfig()).toEqual({ shell, args, commandTransport });
+}
 
 describe("getShellConfig", () => {
   if (isWin) {
-    it("uses PowerShell on Windows", () => {
-      expect(getShellConfig()).toMatchObject({
-        shell: expect.stringMatching(/powershell|pwsh/i),
-        args: ["-NoProfile", "-NonInteractive", "-Command"],
-      });
-    });
     return;
   }
-
   it.each([
     { envShell: "/usr/bin/fish", binary: "bash", args: ["--noprofile", "--norc", "-c"] },
     { envShell: "/usr/bin/fish", binary: "sh", args: ["-c"] },
@@ -176,11 +170,7 @@ describe.skipIf(isWin)("getBashShellConfig POSIX discovery", () => {
       candidate === "/bin/bash" ? false : existsSync(candidate),
     );
 
-    expect(getBashShellConfig()).toEqual({
-      shell: path.join(root, "sh"),
-      args: ["-c"],
-      commandTransport: "argv",
-    });
+    expectBashConfig(path.join(root, "sh"), ["-c"]);
     expect(spawnSync).not.toHaveBeenCalled();
   });
 });
@@ -197,11 +187,7 @@ describe("getBashShellConfig", () => {
     process.env.ProgramFiles = programFiles;
     process.env.PATH = "";
 
-    expect(getBashShellConfig()).toEqual({
-      shell: bashPath,
-      args: ["-c"],
-      commandTransport: "argv",
-    });
+    expectBashConfig(bashPath, ["-c"]);
   });
 
   it.each(["bin", "usr/bin"])("prepends coreutils for Git Bash installed in %s", (shellDir) => {
@@ -243,29 +229,18 @@ describe("getBashShellConfig", () => {
       vi.stubEnv("ProgramFiles(x86)", "");
       vi.stubEnv("PATH", path.dirname(shellPath));
 
-      expect(getBashShellConfig()).toEqual({
-        shell: shellPath,
-        args: ["-s"],
-        commandTransport: "stdin",
-      });
+      expectBashConfig(shellPath, ["-s"], "stdin");
     },
   );
 
-  it.each<{ config: ShellConfig; expected: ReturnType<typeof buildShellCommandInvocation> }>([
-    {
-      config: { shell: "C:\\Windows\\System32\\bash.exe", args: ["-s"], commandTransport: "stdin" },
-      expected: {
-        argv: ["C:\\Windows\\System32\\bash.exe", "-s"],
-        input: "printf ready",
-        stdin: "pipe",
-      },
-    },
-    {
-      config: { shell: "/bin/bash", args: ["-c"], commandTransport: "argv" },
-      expected: { argv: ["/bin/bash", "-c", "printf ready"], stdin: "ignore" },
-    },
-  ])("builds a $config.commandTransport invocation", ({ config, expected }) => {
-    expect(buildShellCommandInvocation("printf ready", config)).toEqual(expected);
+  it.each(["stdin", "argv"] as const)("builds a %s invocation", (commandTransport) => {
+    const shell = commandTransport === "stdin" ? "C:\\Windows\\System32\\bash.exe" : "/bin/bash";
+    const args = commandTransport === "stdin" ? ["-s"] : ["-c"];
+    expect(buildShellCommandInvocation("printf ready", { shell, args, commandTransport })).toEqual(
+      commandTransport === "stdin"
+        ? { argv: [shell, "-s"], input: "printf ready", stdin: "pipe" }
+        : { argv: [shell, "-c", "printf ready"], stdin: "ignore" },
+    );
   });
 });
 
@@ -340,60 +315,45 @@ it.each<[Record<string, string>, string | undefined]>([
 
 const ps51 = "System32/WindowsPowerShell/v1.0/powershell.exe";
 it.each([
-  {
-    name: "ProgramFiles",
-    files: ["pfiles/PowerShell/7/pwsh.exe"],
-    expected: "pfiles/PowerShell/7/pwsh.exe",
-  },
-  {
-    name: "ProgramW6432",
-    files: ["pw6432/PowerShell/7/pwsh.exe"],
-    expected: "pw6432/PowerShell/7/pwsh.exe",
-  },
-  { name: "PATH", files: ["bin/pwsh"], expected: "bin/pwsh" },
-  {
-    name: "native executable before shims, batch wrappers, and PowerShell 5.1",
-    files: ["shims/pwsh", "bin/pwsh.exe", "bin/pwsh.cmd", ps51],
-    expected: "bin/pwsh.exe",
-  },
-  { name: "PowerShell 5.1 fallback", files: [ps51], expected: ps51 },
-  {
-    name: "native PATH executable after an inaccessible app-execution alias",
-    files: ["aliases/pwsh.exe", "bin/pwsh.exe", ps51],
-    expected: "bin/pwsh.exe",
-    inaccessibleAlias: true,
-  },
-  {
-    name: "PowerShell 5.1 instead of an inaccessible app-execution alias",
-    files: ["aliases/pwsh.exe", ps51],
-    expected: ps51,
-    inaccessibleAlias: true,
-  },
-])("getShellConfig on Windows selects $name", ({ files, expected, inaccessibleAlias }) => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-  const root = tempDirs.make("openclaw-powershell-");
-  for (const file of files) {
-    writeCommand(root, file, /^(?:aliases|shims|bin)\//.test(file));
-  }
-  if (inaccessibleAlias) {
-    const alias = path.join(root, "aliases/pwsh.exe");
-    // Windows AppExecLinks pass access(X_OK), but stat fails with EACCES and
-    // activating the alias from S4U can fail while its app runs in another session.
-    fs.accessSync(alias, fs.constants.X_OK);
-    const statSync = fs.statSync;
-    vi.spyOn(fs, "statSync").mockImplementation((candidate, options) => {
-      if (String(candidate) === alias) {
-        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-      }
-      return statSync(candidate, options);
+  ["pfiles/PowerShell/7/pwsh.exe", ["pfiles/PowerShell/7/pwsh.exe"]],
+  ["pw6432/PowerShell/7/pwsh.exe", ["pw6432/PowerShell/7/pwsh.exe"]],
+  ["bin/pwsh", ["bin/pwsh"]],
+  ["bin/pwsh.exe", ["shims/pwsh", "bin/pwsh.exe", "bin/pwsh.cmd", ps51]],
+  [ps51, [ps51]],
+  ["bin/pwsh.exe", ["aliases/pwsh.exe", "bin/pwsh.exe", ps51], true],
+  [ps51, ["aliases/pwsh.exe", ps51], true],
+] as const)(
+  "getShellConfig on Windows selects %s from %j",
+  (expected, files, inaccessibleAlias) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const root = tempDirs.make("openclaw-powershell-");
+    for (const file of files) {
+      writeCommand(root, file, /^(?:aliases|shims|bin)\//.test(file));
+    }
+    if (inaccessibleAlias) {
+      const alias = path.join(root, "aliases/pwsh.exe");
+      // Windows AppExecLinks pass access(X_OK), but stat fails with EACCES and
+      // activating the alias from S4U can fail while its app runs in another session.
+      fs.accessSync(alias, fs.constants.X_OK);
+      const statSync = fs.statSync;
+      vi.spyOn(fs, "statSync").mockImplementation((candidate, options) => {
+        if (String(candidate) === alias) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+        return statSync(candidate, options);
+      });
+    }
+    process.env.ProgramFiles = path.join(root, "pfiles");
+    process.env.ProgramW6432 = path.join(root, "pw6432");
+    process.env.SystemRoot = root;
+    delete process.env.WINDIR;
+    process.env.PATH = ["aliases", "shims", "bin"]
+      .map((dir) => path.join(root, dir))
+      .join(path.delimiter);
+    expect(getShellConfig()).toEqual({
+      shell: path.join(root, expected),
+      args: ["-NoProfile", "-NonInteractive", "-Command"],
+      commandTransport: "argv",
     });
-  }
-  process.env.ProgramFiles = path.join(root, "pfiles");
-  process.env.ProgramW6432 = path.join(root, "pw6432");
-  process.env.SystemRoot = root;
-  delete process.env.WINDIR;
-  process.env.PATH = ["aliases", "shims", "bin"]
-    .map((dir) => path.join(root, dir))
-    .join(path.delimiter);
-  expect(getShellConfig().shell).toBe(path.join(root, expected));
-});
+  },
+);

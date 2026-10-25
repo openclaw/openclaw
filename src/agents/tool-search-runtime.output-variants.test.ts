@@ -45,6 +45,19 @@ async function expectContractFailure(result: Promise<unknown>, code = "output_co
   expect(getToolContractFailureCode(await result.catch((error: unknown) => error))).toBe(code);
 }
 
+function operationSchema(
+  variants: Parameters<typeof defineToolOutputSchema>[0]["variants"] = {
+    list: Type.Object({ records: Type.Array(Type.String()) }),
+    remove: Type.Object({ removed: Type.Boolean() }),
+  },
+) {
+  return defineToolOutputSchema({ inputProperty: "operation", variants });
+}
+
+async function expectResult(runtime: ToolSearchRuntime, operation: string, output: unknown) {
+  await expect(runtime.callValue("records", { operation })).resolves.toEqual(output);
+}
+
 function createFixture(
   options: {
     validateInput?: boolean;
@@ -63,15 +76,7 @@ function createFixture(
     label: "Records",
     description: "List or remove records",
     parameters: Type.Object({ operation: Type.String() }),
-    outputSchema:
-      options.outputSchema ??
-      defineToolOutputSchema({
-        inputProperty: "operation",
-        variants: {
-          list: Type.Object({ records: Type.Array(Type.String()) }),
-          remove: Type.Object({ removed: Type.Boolean() }),
-        },
-      }),
+    outputSchema: options.outputSchema ?? operationSchema(),
     prepareBeforeToolCallParams: options.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: options.finalizeBeforeToolCallParams,
     execute,
@@ -90,13 +95,7 @@ describe("Tool Search input-dependent output contracts", () => {
   it("admits each immutable catalog/action schema once without sharing different contracts", async () => {
     const fixtures = ["first", "second"].map((owner) => {
       const outputSchema = freezeJsonSnapshot({
-        ...defineToolOutputSchema({
-          inputProperty: "operation",
-          variants: {
-            list: Type.Object({ records: Type.Array(Type.String()) }),
-            remove: Type.Object({ removed: Type.Boolean() }),
-          },
-        }),
+        ...operationSchema(),
         title: `immutable-output-${owner}`,
         type: "object",
         properties: { owner: { const: owner } },
@@ -115,7 +114,7 @@ describe("Tool Search input-dependent output contracts", () => {
               ...(operation === "list" ? { records: [] } : { removed: true }),
             };
             execute.mockResolvedValueOnce(jsonResult(output));
-            await expect(runtime.callValue("records", { operation })).resolves.toEqual(output);
+            await expectResult(runtime, operation, output);
           }
         }
       }
@@ -146,27 +145,19 @@ describe("Tool Search input-dependent output contracts", () => {
     };
     execute.mockResolvedValueOnce(failure);
 
-    await expect(runtime.callValue("records", { operation: "remove" })).resolves.toEqual(
-      failure.details,
-    );
+    await expectResult(runtime, "remove", failure.details);
     expect(execute).toHaveBeenCalledOnce();
   });
 
   it("observes mutable descendants of a shallow-frozen output schema", async () => {
     const branch = Type.Object({ removed: { ...Type.Boolean(), const: true } });
-    const outputSchema = Object.freeze(
-      defineToolOutputSchema({ inputProperty: "operation", variants: { remove: branch } }),
-    );
+    const outputSchema = Object.freeze(operationSchema({ remove: branch }));
     const { runtime, execute } = createFixture({ outputSchema });
-    await expect(runtime.callValue("records", { operation: "remove" })).resolves.toEqual({
-      removed: true,
-    });
+    await expectResult(runtime, "remove", { removed: true });
     branch.properties.removed.const = false;
     await expectContractFailure(runtime.callValue("records", { operation: "remove" }));
     execute.mockResolvedValueOnce(jsonResult({ removed: false }));
-    await expect(runtime.callValue("records", { operation: "remove" })).resolves.toEqual({
-      removed: false,
-    });
+    await expectResult(runtime, "remove", { removed: false });
   });
 
   it.each([
@@ -195,15 +186,10 @@ describe("Tool Search input-dependent output contracts", () => {
     rewriteOperation();
     const removal = Type.Object({ removed: Type.Boolean() });
     const { runtime, execute } = createFixture({
-      outputSchema: defineToolOutputSchema({
-        inputProperty: "operation",
-        variants: { remove: removal, delete: removal },
-      }),
+      outputSchema: operationSchema({ remove: removal, delete: removal }),
     });
 
-    await expect(runtime.callValue("records", { operation: "delete" })).resolves.toEqual({
-      removed: true,
-    });
+    await expectResult(runtime, "delete", { removed: true });
     expect(execute).toHaveBeenCalledOnce();
     expect(execute.mock.calls[0]?.[1]).toEqual({ operation: "remove" });
   });
@@ -355,19 +341,16 @@ describe("Tool Search input-dependent output contracts", () => {
       } as never,
     });
 
-    await expect(runtime.callValue("records", { operation: "node" })).resolves.toEqual(output);
+    await expectResult(runtime, "node", output);
     expect(execute).toHaveBeenCalledOnce();
   });
 
   it.each(["$dynamicRef", "$recursiveRef"])(
     "retains the exact umbrella schema when a schema position contains %s",
     (reference) => {
-      const schema = defineToolOutputSchema({
-        inputProperty: "operation",
-        variants: {
-          list: Type.Object({ records: Type.Array(Type.String()) }),
-          remove: Type.Object({ child: { [reference]: "#" } as never }),
-        },
+      const schema = operationSchema({
+        list: Type.Object({ records: Type.Array(Type.String()) }),
+        remove: Type.Object({ child: { [reference]: "#" } as never }),
       });
 
       expect(readToolOutputSchemaVariants(schema)?.canNarrow).toBe(false);
@@ -376,15 +359,12 @@ describe("Tool Search input-dependent output contracts", () => {
   );
 
   it("does not treat property names or annotation data as schema references", () => {
-    const schema = defineToolOutputSchema({
-      inputProperty: "operation",
-      variants: {
-        list: Type.Object(
-          { $ref: Type.String() },
-          { default: { $ref: "#" }, examples: [{ $dynamicRef: "#" }] },
-        ),
-        remove: Type.Object({ removed: Type.Boolean() }),
-      },
+    const schema = operationSchema({
+      list: Type.Object(
+        { $ref: Type.String() },
+        { default: { $ref: "#" }, examples: [{ $dynamicRef: "#" }] },
+      ),
+      remove: Type.Object({ removed: Type.Boolean() }),
     });
 
     expect(readToolOutputSchemaVariants(schema)?.canNarrow).toBe(true);
@@ -395,10 +375,7 @@ describe("Tool Search input-dependent output contracts", () => {
     "keeps the original schema when reference inspection cannot safely finish a %s graph",
     (shape) => {
       const schema: Record<string, unknown> = {
-        ...defineToolOutputSchema({
-          inputProperty: "operation",
-          variants: { list: Type.String(), remove: Type.Boolean() },
-        }),
+        ...operationSchema({ list: Type.String(), remove: Type.Boolean() }),
       };
       if (shape === "cyclic") {
         schema.not = schema;
