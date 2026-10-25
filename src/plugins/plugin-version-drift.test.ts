@@ -52,12 +52,6 @@ function firstDrift(report: ReturnType<typeof detectDrift>) {
   return expectDefined(report.drifts[0], "detected plugin drift");
 }
 
-function npmRecords(ids: string[]) {
-  return Object.fromEntries(
-    ids.map((id) => [id, npmRecord("2026.5.3", { resolvedName: `@openclaw/${id}` })]),
-  );
-}
-
 function expectRegistryLookup(name = "@openclaw/whatsapp") {
   expect(fetchClawHubPackageDetail).toHaveBeenCalledWith({ name, baseUrl: "https://clawhub.ai" });
 }
@@ -72,65 +66,31 @@ function expectNoRepair(entry: ReturnType<typeof firstDrift>) {
   expect(fetchClawHubPackageDetail).not.toHaveBeenCalled();
 }
 
-const driftCases: Array<
-  Omit<Parameters<typeof detectDrift>[0], "gatewayVersion"> & {
-    name: string;
-    gatewayVersion?: string;
-    expected: unknown[];
-  }
-> = [
-  {
-    name: "treats build qualifiers as matching",
+it("reports only active, unpinned cohort mismatches in plugin order", () => {
+  const report = detectDrift({
     gatewayVersion: "2026.5.4-1",
     installRecords: {
       whatsapp: npmRecord("2026.5.4"),
       discord: npmRecord("2026.5.4-1", { resolvedName: "@openclaw/discord" }),
-    },
-    expected: [],
-  },
-  {
-    name: "ignores exact catalog pins",
-    gatewayVersion: "2026.5.7",
-    installRecords: {
+      slack: npmRecord("2026.5.3", {
+        resolvedName: "@openclaw/slack",
+        resolvedVersion: undefined,
+        version: "2026.5.3",
+      }),
+      matrix: npmRecord("2026.5.3", { resolvedName: "@openclaw/matrix" }),
+      telegram: npmRecord("2026.5.3", { resolvedName: "@openclaw/telegram" }),
+      brave: { source: "npm", spec: "@openclaw/brave-plugin@latest" },
       "wecom-openclaw-plugin": npmRecord("2026.5.6", {
         resolvedName: "@wecom/wecom-openclaw-plugin",
         spec: "@wecom/wecom-openclaw-plugin@2026.5.6",
       }),
     },
-    expected: [],
-  },
-  {
-    name: "falls back to version when resolvedVersion is absent",
-    installRecords: {
-      whatsapp: npmRecord("2026.5.3", { resolvedVersion: undefined, version: "2026.5.3" }),
-    },
-    expected: [expect.objectContaining({ installedVersion: "2026.5.3" })],
-  },
-  {
-    name: "skips plugins with no recorded version",
-    installRecords: {
-      whatsapp: { source: "npm", spec: "@openclaw/whatsapp@latest" } satisfies InstallRecord,
-    },
-    expected: [],
-  },
-  {
-    name: "skips explicitly disabled plugins",
-    installRecords: npmRecords(["whatsapp", "discord"]),
-    config: {
-      plugins: { entries: { whatsapp: { enabled: false }, discord: { enabled: true } } },
-    },
-    expected: [expect.objectContaining({ pluginId: "discord" })],
-  },
-  {
-    name: "sorts drifts by pluginId",
-    installRecords: npmRecords(["whatsapp", "discord", "matrix"]),
-    expected: ["discord", "matrix", "whatsapp"].map((pluginId) =>
-      expect.objectContaining({ pluginId }),
-    ),
-  },
-];
-it.each(driftCases)("detectPluginVersionDrift: $name", ({ expected, ...input }) => {
-  expect(detectDrift({ gatewayVersion: "2026.5.4", ...input }).drifts).toEqual(expected);
+    config: { plugins: { entries: { telegram: { enabled: false }, slack: { enabled: true } } } },
+  });
+  expect(report.drifts).toEqual([
+    expect.objectContaining({ pluginId: "matrix", installedVersion: "2026.5.3" }),
+    expect.objectContaining({ pluginId: "slack", installedVersion: "2026.5.3" }),
+  ]);
 });
 describe("resolvePluginVersionDriftTargets", () => {
   beforeEach(() => vi.mocked(fetchNpmPackageTargetStatus).mockReset());

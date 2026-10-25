@@ -283,42 +283,31 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     ).href;
     const probePath = writeFile(
       path.join(root, "probe.mjs"),
-      [
-        'import fs from "node:fs";',
-        'import Module from "node:module";',
-        'import path from "node:path";',
-        'import { pathToFileURL } from "node:url";',
-        `import { installOpenClawInternalCorePackageNativeResolver, installOpenClawPluginSdkNativeResolver } from ${JSON.stringify(resolverModuleUrl)};`,
-        `const root = ${JSON.stringify(root)};`,
-        `const loaderModulePath = ${JSON.stringify(loaderModulePath)};`,
-        `const aliasFreeLoaderPath = ${JSON.stringify(aliasFreeLoaderPath)};`,
-        `const aiToolSchemaPath = ${JSON.stringify(aiToolSchemaPath)};`,
-        `const coreEntryPath = ${JSON.stringify(coreEntryPath)};`,
-        `const entryPath = ${JSON.stringify(entryPath)};`,
-        "const originalResolver = Module._resolveFilename;",
-        "installOpenClawInternalCorePackageNativeResolver({ moduleUrl: pathToFileURL(aliasFreeLoaderPath).href });",
-        "installOpenClawPluginSdkNativeResolver({ moduleUrl: pathToFileURL(aliasFreeLoaderPath).href });",
-        "const aliasFreeUnchanged = Module._resolveFilename === originalResolver;",
-        "installOpenClawPluginSdkNativeResolver({",
-        "  moduleUrl: pathToFileURL(loaderModulePath).href,",
-        "  pluginModulePath: entryPath,",
-        '  pluginSdkResolution: "dist",',
-        "});",
-        "const module = await import(pathToFileURL(entryPath).href);",
-        "const lazy = await module.loadLazy();",
-        "const core = await import(pathToFileURL(coreEntryPath).href);",
-        "const workerRuntime = module.workerRuntime;",
-        'for (const [key, entry] of [["poolSource", "index"], ["workerSource", "worker"], ["lifecycleSource", "lifecycle"]]) {',
-        '  if (workerRuntime[key] !== pathToFileURL(fs.realpathSync(path.join(root, "packages", "worker-runtime", "src", `${entry}.ts`))).href) {',
-        '    throw new Error("Worker runtime alias did not resolve to host source");',
-        "  }",
-        "}",
-        "if (core.schemaSource !== pathToFileURL(fs.realpathSync(aiToolSchemaPath)).href) {",
-        '  throw new Error("Internal AI tool-schema alias did not resolve to host source");',
-        "}",
-        "console.log(JSON.stringify({ aliasFreeUnchanged, eager: module.eager, lazy: lazy.lazy }));",
-        "",
-      ].join("\n"),
+      `import assert from "node:assert/strict";
+import fs from "node:fs";
+import Module from "node:module";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { installOpenClawInternalCorePackageNativeResolver, installOpenClawPluginSdkNativeResolver } from ${JSON.stringify(resolverModuleUrl)};
+const { root, loaderModulePath, aliasFreeLoaderPath, aiToolSchemaPath, coreEntryPath, entryPath } = ${JSON.stringify({ root, loaderModulePath, aliasFreeLoaderPath, aiToolSchemaPath, coreEntryPath, entryPath })};
+const originalResolver = Module._resolveFilename;
+installOpenClawInternalCorePackageNativeResolver({ moduleUrl: pathToFileURL(aliasFreeLoaderPath).href });
+installOpenClawPluginSdkNativeResolver({ moduleUrl: pathToFileURL(aliasFreeLoaderPath).href });
+const aliasFreeUnchanged = Module._resolveFilename === originalResolver;
+installOpenClawPluginSdkNativeResolver({
+  moduleUrl: pathToFileURL(loaderModulePath).href,
+  pluginModulePath: entryPath,
+  pluginSdkResolution: "dist",
+});
+const module = await import(pathToFileURL(entryPath).href);
+const lazy = await module.loadLazy();
+const core = await import(pathToFileURL(coreEntryPath).href);
+for (const [key, entry] of [["poolSource", "index"], ["workerSource", "worker"], ["lifecycleSource", "lifecycle"]]) {
+  assert.equal(module.workerRuntime[key], pathToFileURL(fs.realpathSync(path.join(root, "packages", "worker-runtime", "src", entry + ".ts"))).href);
+}
+assert.equal(core.schemaSource, pathToFileURL(fs.realpathSync(aiToolSchemaPath)).href);
+console.log(JSON.stringify({ aliasFreeUnchanged, eager: module.eager, lazy: lazy.lazy }));
+`,
     );
 
     // Under Bun, tsx's Node hooks redirect SDK aliases before the native plugin can resolve them.
