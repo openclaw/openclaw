@@ -310,9 +310,8 @@ function buildCommonServiceEnvironment(
 ): Record<string, string | undefined> {
   const env = omitSecretEgressProxyEnvironment(invocationEnv, platform);
   const tmpDir = resolveServiceTmpDir(env, platform);
-  // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
-  // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
-  // works correctly when running as a LaunchAgent without extra user configuration.
+  // On macOS, launchd services don't inherit the shell environment, so default
+  // NODE_USE_SYSTEM_CA to read the macOS trust store when running as a LaunchAgent.
   // On Linux, nvm-installed Node may need the host CA bundle injected before startup.
   const startupTlsEnv = resolveNodeStartupTlsEnvironment({
     env,
