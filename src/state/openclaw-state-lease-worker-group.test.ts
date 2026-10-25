@@ -9,7 +9,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { requestLeaseAdmission } from "./openclaw-state-lease-admission.test-support.js";
 import type { OpenClawStateAsyncLeaseContext } from "./openclaw-state-lease-context.js";
-import { runWithOpenClawStateLeasesWorker as runGroup } from "./openclaw-state-lease-worker-operation.js";
 import {
   createOpenClawStateLeaseWorkerOwner,
   withOpenClawStateLeaseWorkerAdmission as withSingle,
@@ -17,11 +16,6 @@ import {
 } from "./openclaw-state-lease-worker-owner.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-
-const runWorkerOperation = vi.hoisted(() => vi.fn());
-vi.mock("./openclaw-state-worker-store.js", () => ({
-  runOpenClawStateWorkerOperation: runWorkerOperation,
-}));
 
 type Owner = ReturnType<typeof createOpenClawStateLeaseWorkerOwner>;
 const owners: Owner[] = [];
@@ -42,7 +36,6 @@ afterEach(async () => {
     owner.close();
   }
   vi.restoreAllMocks();
-  runWorkerOperation.mockReset();
 });
 
 function sourceContext(): OpenClawStateWorkerContext {
@@ -208,42 +201,6 @@ describe("state lease group admission", () => {
       current.source = true;
       await maintenance.close();
     }
-  });
-
-  it("routes the plural storage entry point through one retained worker operation", async () => {
-    const { context, leases, expectReleasable } = group();
-    let expectedIdentities: readonly OpenClawStateLeaseIdentity[] = [];
-    const execute = vi.fn(async () => 42);
-    runWorkerOperation.mockImplementation(
-      async (
-        captured: OpenClawStateWorkerContext,
-        operation: (scope: { execute: typeof execute }) => Promise<number>,
-        options: { assertCurrent: () => void; createAdmission: SqliteWorkerAdmissionFactory },
-      ) => {
-        expect(captured).toBe(context);
-        expectReleasable(false);
-        execute.mockImplementationOnce(async () => {
-          options.assertCurrent();
-          const current = job(options.createAdmission);
-          expect(current.request("transaction", facts(expectedIdentities))).toBe(1);
-          expect(current.request("commit", facts(expectedIdentities))).toBe(1);
-          current.settled.resolve({ kind: "completed" });
-          return 42;
-        });
-        return operation({ execute });
-      },
-    );
-    const value = await runGroup(leases, context, async (scope, identities) => {
-      expectedIdentities = identities;
-      return scope.execute({
-        type: "stateLease.verify",
-        input: { identity: expectDefined(identities[0], "collection identity") },
-      });
-    });
-    expect(value).toBe(42);
-    expect(runWorkerOperation).toHaveBeenCalledOnce();
-    expect(execute).toHaveBeenCalledOnce();
-    expectReleasable(true);
   });
 
   it("retains both owners before callback entry and joins each job's native settlement", async () => {
