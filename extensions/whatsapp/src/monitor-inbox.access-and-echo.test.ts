@@ -50,7 +50,7 @@ function emitText(
 
 function expectInbound(onMessage: ReturnType<typeof vi.fn>, shape: object) {
   expect(onMessage).toHaveBeenCalled();
-  expect(onMessage.mock.calls[0][0]).toMatchObject(shape);
+  expect(onMessage.mock.calls[0]?.[0]).toMatchObject(shape);
 }
 
 async function openInboxMonitor(onMessage = vi.fn()) {

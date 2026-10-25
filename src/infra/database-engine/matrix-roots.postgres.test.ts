@@ -375,9 +375,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         sqliteRows(capturedGlobal!.sourcePath, "SELECT agent_id, path FROM agent_databases"),
       ).toEqual([{ agent_id: "retained", path: agentPath }]);
       for (const [index, file] of files.entries()) {
-        expect(backupRows(`${file}.postgres/database.sqlite`, selectEntries)).toEqual(
-          expected[index],
-        );
+        expect(sqliteEntries(`${file}.postgres/database.sqlite`)).toEqual(expected[index]);
         const local = resolveClientCredentialStorePath({
           ...state.env,
           OPENCLAW_STATE_DIR: path.dirname(path.dirname(file)),

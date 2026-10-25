@@ -399,6 +399,9 @@ describe("same-root local mutation routing", () => {
       (await service.listRegistryRecords()).find((candidate) => candidate.id === record.id);
     if (kind === "exact-remove") {
       const head = await git(record.path, "rev-parse", "HEAD");
+      await git(record.path, "checkout", "--detach", "HEAD");
+      await fs.writeFile(path.join(record.path, "README.md"), "staged\n");
+      await git(record.path, "add", "README.md");
       await fs.writeFile(path.join(record.path, "README.md"), "working\n");
       const index = await fs.readFile(
         path.resolve(record.path, await git(record.path, "rev-parse", "--git-path", "index")),

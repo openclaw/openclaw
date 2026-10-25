@@ -76,8 +76,6 @@ describe
         sessionId: "cold-history",
         storePath: database.path,
       };
-      const run = { __openclaw: { runId: "worker-run" } };
-      const steer = (steerTargetRunId: string) => ({ __openclaw: { steerTargetRunId } });
       const input: Array<[string, string, string, Record<string, unknown>]> = [
         [
           "hidden-input",
@@ -92,11 +90,21 @@ describe
             },
           },
         ],
-        ["hidden-answer", "assistant", "Internal answer", run],
-        ["other-steer", "user", "Another run", steer("other-run")],
-        ["still-hidden", "assistant", "Still internal", run],
-        ["human-steer", "user", "Show progress", steer("worker-run")],
-        ["visible-answer", "assistant", "Visible progress", run],
+        ["hidden-answer", "assistant", "Internal answer", { __openclaw: { runId: "worker-run" } }],
+        ["other-steer", "user", "Another run", { __openclaw: { steerTargetRunId: "other-run" } }],
+        ["still-hidden", "assistant", "Still internal", { __openclaw: { runId: "worker-run" } }],
+        [
+          "human-steer",
+          "user",
+          "Show progress",
+          { __openclaw: { steerTargetRunId: "worker-run" } },
+        ],
+        [
+          "visible-answer",
+          "assistant",
+          "Visible progress",
+          { __openclaw: { runId: "worker-run" } },
+        ],
       ];
       await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       await appendTranscriptEvent(scope, { type: "session", version: 3, id: scope.sessionId });
@@ -131,10 +139,9 @@ describe
             entryValidationKey: scope.sessionKey,
           });
           const page = reader.readHistoryEventPage({ maxMessages: 20, offset: 0 });
-          expect(page.events.map(({ event }) => event.id)).toEqual([
-            ...input.map(([id]) => id),
-            type,
-          ]);
+          expect(page.events.map(({ event }) => event)).toEqual(
+            [...input.map(([id]) => id), type].map((id) => expect.objectContaining({ id })),
+          );
           const visibility = reader.subagentCoordination;
           expect(visibility.isSubagentRunMessage("worker-run", 2)).toBe(true);
           expect(visibility.isSubagentRunMessage("worker-run", 4)).toBe(true);
@@ -224,6 +231,9 @@ describe
       try {
         const appended = await first.append("first input", true);
         expect(appended.failure).toBeUndefined();
+        expect(appended).toMatchObject({
+          committed: { kind: "message", value: { snapshot: { ok: true } } },
+        });
         const initial = first.actor.snapshot(authority);
         assert(initial);
         expect(initial.entry?.sessionId).toBe(sessionId);
@@ -263,6 +273,19 @@ describe
         assert(firstMessageId);
         const metadata = await first.appendInitialMetadata("initial-model");
         expect(metadata.failure).toBeUndefined();
+        expect(metadata.committed).toMatchObject({
+          kind: "metadata",
+          value: {
+            initialModelParentId: firstMessageId,
+            snapshot: {
+              ok: true,
+              value: {
+                before: afterRefusal.transcript.version,
+                result: { appended: true, effectiveParentId: "initial-model" },
+              },
+            },
+          },
+        });
         const rowsBeforePartialPair = readRows();
         expect(rowsBeforePartialPair.slice(-2).map((row) => JSON.parse(row.eventJson))).toEqual([
           {
@@ -353,6 +376,14 @@ describe
         expect(transcript.before).toEqual(beforeFusion.transcript.version);
         expect(transcript.after.rawSeq).toBe((transcript.before.rawSeq ?? -1) + 1);
         expect(transcript.after.generation).not.toBe(transcript.before.generation);
+        expect(transcript.append?.modelPromptProjection?.result.message).toMatchObject({
+          role: "user",
+          content: "first input",
+          __openclaw: { modelPromptProjection: { version: 1, text: "Captured input" } },
+        });
+        expect(transcript.appendedEvents?.map(({ event }) => event)).toMatchObject([
+          { id: "runtime-context", parentId: "initial-thinking" },
+        ]);
         const finalAuthority = transcript.authorityReceipts?.[0]?.facts.get(sessionKey);
         expect(finalAuthority).toMatchObject({
           kind: "postimage",
