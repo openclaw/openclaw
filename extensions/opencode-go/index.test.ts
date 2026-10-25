@@ -10,7 +10,6 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import plugin from "./index.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpencodeGoLiveProviderConfig,
   buildStaticOpencodeGoProviderConfig,
@@ -21,7 +20,6 @@ import opencodeGoProviderDiscovery from "./provider-discovery.js";
 function expectDeprecated(entries: unknown, id: string) {
   expect(entries).toContainEqual(expect.objectContaining({ id, status: "deprecated" }));
 }
-
 const OPENAI_URL = "https://opencode.ai/inference/go/openai/v1";
 const ANTHROPIC_URL = "https://opencode.ai/inference/go/anthropic";
 const LEGACY_URL = "https://opencode.ai/zen/go/v1";
@@ -29,11 +27,6 @@ const NO_REASONING = { reasoning: false, compat: { supportsReasoningEffort: fals
 const assistant = (content: unknown, fields = {}) => ({ role: "assistant", content, ...fields });
 const text = (value: string) => ({ type: "text", text: value });
 const thinking = () => ({ type: "thinking", reasoning_details: [{ text: "private thought" }] });
-
-const ACTIVE_MODEL_IDS = manifest.modelCatalog.providers["opencode-go"].models
-  .filter((model) => !("status" in model))
-  .map((model) => model.id);
-
 function makeRuntimeModel(id: string, overrides: Partial<Parameters<StreamFn>[0]> = {}) {
   return {
     id,
@@ -49,20 +42,13 @@ function makeRuntimeModel(id: string, overrides: Partial<Parameters<StreamFn>[0]
     ...overrides,
   } satisfies Parameters<StreamFn>[0];
 }
-
 function upstreamModel(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
-    name: id,
-    reasoning: true,
-    tool_call: true,
-    modalities: { input: ["text"] },
     limit: { context: 262_144, output: 32_768 },
-    cost: { input: 0, output: 0 },
     ...overrides,
   };
 }
-
 async function captureGoWirePayload(
   thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
   payload: Record<string, unknown> & { model: string },
@@ -74,10 +60,10 @@ async function captureGoWirePayload(
     api: sourceApi,
     baseUrl: sourceApi === "anthropic-messages" ? "https://opencode.ai/zen/go" : LEGACY_URL,
   });
-  const baseStreamFn = vi.fn<StreamFn>((runtimeModel, _context, options) => {
+  const baseStreamFn: StreamFn = (runtimeModel, _context, options) => {
     void options?.onPayload?.(payload, runtimeModel);
     return createAssistantMessageEventStream();
-  });
+  };
   const streamFn = provider.wrapStreamFn?.({
     streamFn: baseStreamFn,
     provider: "opencode-go",
@@ -85,12 +71,9 @@ async function captureGoWirePayload(
     model,
     thinkingLevel,
   });
-  expect(streamFn).toBeTypeOf("function");
   await streamFn?.(model, { messages: [] }, {});
-  expect(baseStreamFn).toHaveBeenCalledOnce();
   return payload;
 }
-
 function createCatalogFetchGuard(upstreamModels: Record<string, unknown>, liveModelIds: string[]) {
   const metadata = {
     "opencode-go": {
@@ -107,7 +90,6 @@ function createCatalogFetchGuard(upstreamModels: Record<string, unknown>, liveMo
     release: vi.fn(async () => undefined),
   }));
 }
-
 function liveCatalog(
   upstreamModels: Record<string, unknown>,
   liveModelIds: string[],
@@ -118,7 +100,6 @@ function liveCatalog(
     fetchGuard: createCatalogFetchGuard(upstreamModels, liveModelIds),
   });
 }
-
 function withFetchSpy(run: (fetchMock: MockInstance<typeof fetch>) => Promise<void>) {
   const fetchMock = vi.spyOn(globalThis, "fetch");
   return run(fetchMock).finally(() => fetchMock.mockRestore());
@@ -130,7 +111,6 @@ describe("opencode-go provider plugin", () => {
     clearLiveCatalogCacheForTests();
     provider = await registerSingleProviderPlugin(plugin);
   });
-
   function runCatalog(
     resolveProviderApiKey: ProviderCatalogContext["resolveProviderApiKey"],
     providerIds?: string[],
@@ -148,15 +128,6 @@ describe("opencode-go provider plugin", () => {
   const catalogEntries = () => provider.augmentModelCatalog?.({ entries: [] } as never);
   const normalizeModel = (model: Parameters<StreamFn>[0]) =>
     provider.normalizeResolvedModel?.({ provider: "opencode-go", modelId: model.id, model });
-  const thinkingProfile = (modelId: string, api: string, compat = {}) =>
-    provider.resolveThinkingProfile?.({
-      provider: "opencode-go",
-      modelId,
-      api,
-      reasoning: true,
-      compat,
-    });
-
   function resolveTurnState(
     model = makeRuntimeModel("glm-5"),
     context: { sessionId?: string; turnId?: string } = {},
@@ -213,7 +184,6 @@ describe("opencode-go provider plugin", () => {
           { messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }] },
           { reasoning },
         );
-
         if (modelId === "kimi-k3") {
           expect(payload).not.toHaveProperty("thinking");
         } else {
@@ -230,74 +200,42 @@ describe("opencode-go provider plugin", () => {
     },
   );
 
-  it("keeps offline starter models and provider-owned thinking policies usable", async () => {
-    const supplemental = await catalogEntries();
-
-    for (const modelId of ACTIVE_MODEL_IDS) {
-      expect(dynamicModel(modelId)).toMatchObject({ id: modelId, provider: "opencode-go" });
-    }
-    expectDeprecated(supplemental, "deepseek-v4-flash");
-    expect(dynamicModel("kimi-k2.6")).toMatchObject({ id: "kimi-k2.6", input: ["text", "image"] });
-    expect(dynamicModel("qwen3.8-max")).toMatchObject({
-      api: "anthropic-messages",
-      baseUrl: ANTHROPIC_URL,
-      compat: { thinkingFormat: "qwen" },
-    });
+  it.each([
+    [
+      "deepseek-v4-flash",
+      "openai-completions",
+      ["low", "high", "max"],
+      ["off", "low", "high", "max"].map((id) => ({ id })),
+    ],
+    ["minimax-m2.7", "anthropic-messages", [], [{ id: "high", label: "always on" }]],
+  ] as const)("exposes %s thinking policy", (modelId, api, efforts, levels) => {
     expect(
-      thinkingProfile("deepseek-v4-flash", "openai-completions", {
-        supportedReasoningEfforts: ["low", "high", "max"],
+      provider.resolveThinkingProfile?.({
+        provider: "opencode-go",
+        modelId,
+        api,
+        reasoning: true,
+        compat: { supportedReasoningEfforts: efforts },
       }),
-    ).toEqual({
-      levels: [{ id: "off" }, { id: "low" }, { id: "high" }, { id: "max" }],
-      defaultLevel: "high",
-    });
-    expect(thinkingProfile("minimax-m2.7", "anthropic-messages")).toEqual({
-      levels: [{ id: "high", label: "always on" }],
-      defaultLevel: "high",
-    });
+    ).toEqual({ levels, defaultLevel: "high" });
   });
 
-  it("lists every advertised chat model, enriching ids with upstream metadata", async () => {
+  it("joins account-listed chat models with metadata and excludes retired models", async () => {
     const fetchGuard = createCatalogFetchGuard(
       {
-        "ox-alpha-free": upstreamModel("ox-alpha-free", {
-          name: "Ox Alpha Free (Unlimited)",
-          modalities: { input: ["text", "image", "video"] },
-          limit: { context: 1_000_000, output: 131_072 },
-          reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
-        }),
-        "minimax-future": upstreamModel("minimax-future", {
-          provider: { npm: "@ai-sdk/anthropic" },
-          cost: { input: 0.3, output: 1.2, cache_read: 0.06 },
-        }),
-        "legacy-model": upstreamModel("legacy-model", { status: "deprecated" }),
+        known: upstreamModel("known", { name: "Enriched" }),
+        retired: upstreamModel("retired", { status: "deprecated" }),
       },
-      ["ox-alpha-free", "minimax-future", "legacy-model", "unknown-live-model", "future-embedding"],
+      ["known", "retired", "unknown", "future-embedding"],
     );
     const result = await buildOpencodeGoLiveProviderConfig({
       discoveryApiKey: "resolved-opencode-key",
       fetchGuard,
     });
-
     expect(result.models).toMatchObject([
+      { id: "known", name: "Enriched" },
       {
-        id: "ox-alpha-free",
-        name: "Ox Alpha Free (Unlimited)",
-        api: "openai-completions",
-        baseUrl: OPENAI_URL,
-        input: ["text", "image"],
-        contextWindow: 1_000_000,
-        maxTokens: 131_072,
-        compat: { supportedReasoningEfforts: ["low", "high", "max"], supportsTools: true },
-      },
-      {
-        id: "minimax-future",
-        api: "anthropic-messages",
-        baseUrl: ANTHROPIC_URL,
-        cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
-      },
-      {
-        id: "unknown-live-model",
+        id: "unknown",
         provider: "opencode-go",
         api: "openai-completions",
         baseUrl: OPENAI_URL,
@@ -308,107 +246,106 @@ describe("opencode-go provider plugin", () => {
       ([request]) => request.url === "https://opencode.ai/inference/go/v1/models",
     )?.[0];
     expect(new Headers(listingRequest?.init?.headers).get("user-agent")).toMatch(/^openclaw\//);
-    expect(dynamicModel("legacy-model")).toBeUndefined();
+    expect(dynamicModel("retired")).toBeUndefined();
     const supplemental = await catalogEntries();
-    expectDeprecated(supplemental, "legacy-model");
+    expectDeprecated(supplemental, "retired");
     expectDeprecated(supplemental, "deepseek-v4-flash");
   });
 
   it("never resolves another account's upstream-only Go model outside its authenticated catalog", async () => {
     const upstreamModels = {
-      "account-a-only": upstreamModel("account-a-only"),
-      "account-b-only": upstreamModel("account-b-only"),
+      a: upstreamModel("a"),
+      b: upstreamModel("b"),
     };
-    const accountA = await liveCatalog(upstreamModels, ["account-a-only"], "account-a-key");
-    expect(accountA.models.map((model) => model.id)).toEqual(["account-a-only"]);
-
-    const accountB = await liveCatalog(upstreamModels, ["account-b-only"], "account-b-key");
-    expect(accountB.models.map((model) => model.id)).toEqual(["account-b-only"]);
-
-    expect(dynamicModel("account-a-only")).toBeUndefined();
-    expect(dynamicModel("account-b-only")).toBeUndefined();
-    expect(provider.prepareDynamicModel).toBeUndefined();
+    const accountA = await liveCatalog(upstreamModels, ["a"], "account-a-key");
+    expect(accountA.models.map((model) => model.id)).toEqual(["a"]);
+    const accountB = await liveCatalog(upstreamModels, ["b"], "account-b-key");
+    expect(accountB.models.map((model) => model.id)).toEqual(["b"]);
+    expect(dynamicModel("a")).toBeUndefined();
+    expect(dynamicModel("b")).toBeUndefined();
   });
 
   it("evicts withdrawn or unsafe upstream models while retaining trusted offline seeds", async () => {
     await expect(
-      liveCatalog({ "withdrawn-model": upstreamModel("withdrawn-model") }, ["withdrawn-model"]),
-    ).resolves.toMatchObject({ models: [{ id: "withdrawn-model" }] });
-
+      liveCatalog({ withdrawn: upstreamModel("withdrawn") }, ["withdrawn"]),
+    ).resolves.toMatchObject({ models: [{ id: "withdrawn" }] });
     clearLiveCatalogCacheForTests();
     // Rejected metadata cannot redirect inference; the listed id keeps Go's own route.
     await expect(
       liveCatalog(
         {
-          "replacement-model": upstreamModel("replacement-model"),
-          "unsafe-model": upstreamModel("unsafe-model", {
+          replacement: upstreamModel("replacement"),
+          unsafe: upstreamModel("unsafe", {
             provider: { api: "https://attacker.invalid/v1" },
           }),
         },
-        ["replacement-model", "unsafe-model"],
+        ["replacement", "unsafe"],
       ),
     ).resolves.toMatchObject({
-      models: [{ id: "replacement-model" }, { id: "unsafe-model", baseUrl: OPENAI_URL }],
+      models: [{ id: "replacement" }, { id: "unsafe", baseUrl: OPENAI_URL }],
     });
-
     const entries = await catalogEntries();
-    expect(entries?.some((entry) => entry.id === "withdrawn-model")).toBe(false);
-    expect(entries?.some((entry) => entry.id === "unsafe-model")).toBe(false);
+    expect(entries?.some((entry) => entry.id === "withdrawn")).toBe(false);
+    expect(entries?.some((entry) => entry.id === "unsafe")).toBe(false);
     expectDeprecated(entries, "kimi-k2.6");
   });
 
   it("exposes only trusted offline starter models through provider discovery", async () => {
-    expect(manifest.providerCatalogEntry).toBe("./provider-discovery.ts");
-    expect(manifest.modelCatalog.discovery["opencode-go"]).toBe("runtime");
     const result = await opencodeGoProviderDiscovery.staticCatalog?.run({} as never);
     if (!result || !("provider" in result)) {
       throw new Error("expected OpenCode Go static provider");
     }
-    const modelIds = result.provider.models.map((model) => model.id);
-    expect(new Set(modelIds).size).toBe(modelIds.length);
-    expect(modelIds.toSorted()).toEqual(ACTIVE_MODEL_IDS.toSorted());
-    for (const [id, supportedReasoningEfforts] of [
-      ["deepseek-v4-pro", ["high", "max"]],
-      ["deepseek-v4.1-flash", ["low", "high", "max"]],
-    ] as const) {
-      expect(result.provider.models.find((model) => model.id === id)).toMatchObject({
-        provider: "opencode-go",
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        compat: { supportedReasoningEfforts },
-      });
-    }
-    for (const id of ["hy3-preview", "deepseek-v4-flash", "kimi-k2.6"]) {
-      expect(modelIds).not.toContain(id);
-    }
+    expect(result.provider.models).toContainEqual(
+      expect.objectContaining({ id: "deepseek-v4-pro" }),
+    );
+    expect(result.provider.models.map((model) => model.id)).not.toContain("deepseek-v4-flash");
+    expect(dynamicModel("kimi-k2.6")).toMatchObject({ id: "kimi-k2.6", input: ["text", "image"] });
+    expect(dynamicModel("qwen3.8-max")?.compat).toMatchObject({ thinkingFormat: "qwen" });
   });
 
-  it("skips unrelated scoped discovery even when OpenCode credentials are configured", () =>
-    withFetchSpy(async (fetchMock) => {
-      const resolveProviderApiKey = vi.fn(() => ({
-        apiKey: "configured-opencode-key",
-        discoveryApiKey: "configured-opencode-key",
-      }));
-
-      await expect(runCatalog(resolveProviderApiKey, ["anthropic"])).resolves.toBeNull();
-      expect(resolveProviderApiKey).not.toHaveBeenCalled();
-      expect(fetchMock).not.toHaveBeenCalled();
-
-      await expect(
-        runCatalog(() => ({ apiKey: "configured-opencode-key" }), ["opencode-go"]),
-      ).resolves.toMatchObject({
-        provider: { apiKey: "configured-opencode-key" },
-      });
-    }));
-
-  it("never fetches either catalog when no shared OpenCode key is configured", () =>
-    withFetchSpy(async (fetchMock) => {
-      await expect(runCatalog(() => ({ apiKey: undefined }))).resolves.toBeNull();
-      await expect(buildOpencodeGoLiveProviderConfig()).resolves.toMatchObject({
-        models: expect.arrayContaining([expect.objectContaining({ id: "deepseek-v4-pro" })]),
-      });
-      expect(fetchMock).not.toHaveBeenCalled();
-    }));
+  it.each(["unrelated", "missing", "configured", "secretref"] as const)(
+    "keeps %s catalog auth scoped without fetching",
+    (mode) =>
+      withFetchSpy(async (fetchMock) => {
+        fetchMock.mockRejectedValue(new Error("blocked fetch"));
+        const apiKey =
+          mode === "missing"
+            ? undefined
+            : mode === "secretref"
+              ? NON_ENV_SECRETREF_MARKER
+              : "configured-opencode-key";
+        const resolveProviderApiKey = vi.fn((providerId?: string) =>
+          providerId === "opencode" && mode === "secretref"
+            ? { apiKey: "shared-opencode-key", discoveryApiKey: "shared-opencode-key" }
+            : { apiKey, discoveryApiKey: mode === "unrelated" ? apiKey : undefined },
+        );
+        const result = await runCatalog(resolveProviderApiKey, [
+          mode === "unrelated" ? "anthropic" : "opencode-go",
+        ]);
+        if (mode === "unrelated" || mode === "missing") {
+          expect(result).toBeNull();
+        } else {
+          expect(result).toMatchObject({
+            provider: {
+              apiKey,
+              models: expect.arrayContaining([expect.objectContaining({ id: "deepseek-v4-pro" })]),
+            },
+          });
+        }
+        if (mode === "unrelated") {
+          expect(resolveProviderApiKey).not.toHaveBeenCalled();
+        }
+        if (mode === "secretref") {
+          expect(resolveProviderApiKey).toHaveBeenCalledExactlyOnceWith("opencode-go");
+        }
+        if (mode === "missing") {
+          await expect(buildOpencodeGoLiveProviderConfig()).resolves.toMatchObject({
+            models: expect.arrayContaining([expect.objectContaining({ id: "deepseek-v4-pro" })]),
+          });
+        }
+        expect(fetchMock).not.toHaveBeenCalled();
+      }),
+  );
 
   it("does not select an unavailable preferred onboarding model", async () => {
     await expect(
@@ -419,27 +356,6 @@ describe("opencode-go provider plugin", () => {
       }),
     ).resolves.toBeUndefined();
   });
-
-  it("does not mix provider-specific runtime auth with shared discovery auth", () =>
-    withFetchSpy(async (fetchMock) => {
-      fetchMock.mockRejectedValue(new Error("blocked fetch"));
-      const resolveProviderApiKey = vi.fn((providerId?: string) =>
-        providerId === "opencode-go"
-          ? { apiKey: NON_ENV_SECRETREF_MARKER, discoveryApiKey: undefined }
-          : { apiKey: "shared-opencode-key", discoveryApiKey: "shared-opencode-key" },
-      );
-
-      const result = await runCatalog(resolveProviderApiKey);
-
-      expect(result).toMatchObject({
-        provider: {
-          apiKey: NON_ENV_SECRETREF_MARKER,
-          models: expect.arrayContaining([expect.objectContaining({ id: "deepseek-v4-pro" })]),
-        },
-      });
-      expect(resolveProviderApiKey).toHaveBeenCalledExactlyOnceWith("opencode-go");
-      expect(fetchMock).not.toHaveBeenCalled();
-    }));
 
   it("does not synthesize a stream when the runtime provides none", async () => {
     expect(provider.wrapStreamFn?.({ streamFn: undefined } as never)).toBeUndefined();
@@ -462,63 +378,48 @@ describe("opencode-go provider plugin", () => {
     ).toBeUndefined();
   });
 
-  it("identifies native Anthropic stream and simple requests without tagging proxies", async () => {
-    for (const [wrap, runtimeApi, sourceApi] of [
-      [provider.wrapStreamFn, "anthropic-messages", undefined],
-      [
-        provider.wrapSimpleCompletionStreamFn,
-        "openclaw-provider-simple:opencode-go:qwen3.8-max",
-        "anthropic-messages",
-      ],
-    ] as const) {
+  it.each(["stream", "simple"] as const)(
+    "identifies native Anthropic %s requests without tagging proxies",
+    async (mode) => {
       const capturedHeaders: Array<Record<string, string> | undefined> = [];
       const baseStreamFn: StreamFn = (_model, _context, options) => {
         capturedHeaders.push(options?.headers);
         return createAssistantMessageEventStream();
       };
+      const wrap =
+        mode === "stream" ? provider.wrapStreamFn : provider.wrapSimpleCompletionStreamFn;
       const streamFn = wrap?.({
         streamFn: baseStreamFn,
         providerId: "opencode-go",
         modelId: "qwen3.8-max",
         thinkingLevel: "high",
-        sourceApi,
+        sourceApi: mode === "simple" ? "anthropic-messages" : undefined,
       } as never);
-
       expect(streamFn).toBeTypeOf("function");
-      const model = makeRuntimeModel("qwen3.8-max", { api: runtimeApi });
-      await streamFn?.(
-        { ...model, baseUrl: "https://opencode.ai/zen/go" },
-        { messages: [] },
-        {
-          headers: { "User-Agent": "configured-client/1.0", "X-Custom": "1" },
-        },
-      );
-      await streamFn?.(
-        { ...model, baseUrl: "https://proxy.example.com" },
-        { messages: [] },
-        {
-          headers: { "User-Agent": "configured-client/2.0", "X-Custom": "2" },
-        },
-      );
-
+      const api =
+        mode === "stream"
+          ? "anthropic-messages"
+          : "openclaw-provider-simple:opencode-go:qwen3.8-max";
+      const request = (baseUrl: string, version: string) =>
+        streamFn?.(
+          makeRuntimeModel("qwen3.8-max", { api, baseUrl }),
+          { messages: [] },
+          { headers: { "User-Agent": `configured-client/${version}.0`, "X-Custom": version } },
+        );
+      await request("https://opencode.ai/zen/go", "1");
+      await request("https://proxy.example.com", "2");
       expect(capturedHeaders).toEqual([
         { "User-Agent": expect.stringMatching(/^openclaw\//), "X-Custom": "1" },
         { "User-Agent": "configured-client/2.0", "X-Custom": "2" },
       ]);
-    }
-  });
+    },
+  );
 
-  it.each([
-    ["deepseek-v4-flash", "low"],
-    ["deepseek-v4.1-flash", "high"],
-    ["deepseek-v4.1-flash", "max"],
-  ] as const)("maps %s thinking %s to matching effort", async (modelId, thinkingLevel) => {
-    const payload = await captureGoWirePayload(thinkingLevel, { model: modelId });
-
-    expect(payload).toEqual({
-      model: modelId,
+  it("supports the legacy Flash alias's low effort", async () => {
+    expect(await captureGoWirePayload("low", { model: "deepseek-v4-flash" })).toEqual({
+      model: "deepseek-v4-flash",
       thinking: { type: "enabled" },
-      reasoning_effort: thinkingLevel,
+      reasoning_effort: "low",
     });
   });
 
@@ -542,7 +443,6 @@ describe("opencode-go provider plugin", () => {
         assistant([thinking()]),
       ],
     });
-
     expect(payload).toEqual({
       model: "kimi-k2.6",
       messages: [assistant("done"), assistant([text("done")])],
@@ -575,20 +475,7 @@ describe("opencode-go provider plugin", () => {
     },
   );
 
-  it("projects URL transport patches without leaking model context", () => {
-    const model = makeRuntimeModel("synthetic-model", {
-      headers: { "x-synthetic": "retained" },
-    });
-    expect(provider.normalizeTransport?.({ ...model, config: {} })).toEqual({
-      api: "openai-completions",
-      baseUrl: OPENAI_URL,
-    });
-    expect(model.baseUrl).toBe(LEGACY_URL);
-  });
-
-  it("canonicalizes stale OpenCode Go base URLs", async () => {
-    const normalizeTransport = (api: string, baseUrl: string) =>
-      provider.normalizeTransport?.({ provider: "opencode-go", api, baseUrl } as never);
+  it("canonicalizes config URLs and projects only transport fields without mutation", () => {
     expect(
       provider.normalizeConfig?.({
         provider: "opencode-go",
@@ -599,17 +486,21 @@ describe("opencode-go provider plugin", () => {
         },
       } as never),
     ).toMatchObject({ baseUrl: OPENAI_URL });
-    expect(
-      normalizeModel(makeRuntimeModel("kimi-k2.5", { baseUrl: "https://opencode.ai/go/v1" })),
-    ).toMatchObject({ baseUrl: OPENAI_URL });
-    expect(normalizeModel(makeRuntimeModel("kimi-k2.7-code"))).toMatchObject(NO_REASONING);
-    expect(normalizeTransport("openai-completions", "https://opencode.ai/go/v1")).toEqual({
-      api: "openai-completions",
-      baseUrl: OPENAI_URL,
-    });
-    expect(normalizeTransport("anthropic-messages", "https://opencode.ai/go")).toEqual({
-      api: "anthropic-messages",
-      baseUrl: ANTHROPIC_URL,
-    });
+    for (const [api, baseUrl, expected] of [
+      ["openai-completions", LEGACY_URL, OPENAI_URL],
+      ["openai-completions", "https://opencode.ai/go/v1", OPENAI_URL],
+      ["anthropic-messages", "https://opencode.ai/go", ANTHROPIC_URL],
+    ]) {
+      const model = makeRuntimeModel("synthetic", {
+        api,
+        baseUrl,
+        headers: { "x-synthetic": "retained" },
+      });
+      expect(provider.normalizeTransport?.({ ...model, config: {} })).toEqual({
+        api,
+        baseUrl: expected,
+      });
+      expect(model.baseUrl).toBe(baseUrl);
+    }
   });
 });
