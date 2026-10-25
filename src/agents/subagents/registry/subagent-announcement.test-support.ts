@@ -25,7 +25,7 @@ import { registerSubagentRun } from "./subagent-registry.js";
 import { writeChildSession } from "./subagent-registry.persistence.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export const registrationDefaults = {
+const registrationDefaults = {
   childAgentId: "main",
   requesterSessionKey: "agent:main:main",
   requesterAgentId: "main",

@@ -67,7 +67,7 @@ export function adoptTalkRealtimeRelaySession(
     "voiceSessionId" | "connId" | "sessionTarget"
   >,
 ): void {
-  session.cleanupTimer.unref?.();
+  session.cleanupTimer.unref();
   relaySessions.set(session.id, session);
   registerTalkConnectionCleanup(session.connId, "realtime-relay", () =>
     closeTalkRealtimeRelaySessionsForConnection(session.connId),

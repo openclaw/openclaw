@@ -38,12 +38,9 @@ suite.define(() => {
     const message = (seq: number) => ({
       __openclaw: { id: `recall-${seq}`, seq },
       role: prompts[seq] ? "user" : "assistant",
-      content: [
-        {
-          type: "text",
-          text: prompts[seq] ?? `History entry ${seq}. ${"History detail. ".repeat(20)}`,
-        },
-      ],
+      content: textContent(
+        prompts[seq] ?? `History entry ${seq}. ${"History detail. ".repeat(20)}`,
+      ),
       timestamp: 1_800_000_000_000 + seq,
     });
     const gateway = await installMockGateway(page, {

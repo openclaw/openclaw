@@ -9,7 +9,10 @@ import {
   settleCliSessionResult,
 } from "../../agents/cli-session-store.js";
 import { shouldClearFailedCliSessionBinding } from "../../agents/cli-session.js";
-import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
+import {
+  isFallbackAttempt,
+  resolveDelegationCapability,
+} from "../../agents/delegation-capability.js";
 import { withAdmittedCliCandidate } from "../../agents/embedded-agent-runner/run-entry-cli.js";
 import type { CompactionAccountingTarget } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
@@ -433,12 +436,11 @@ export async function runCliFallbackCandidate(
               turn.followupRun.currentInboundEventKind !== "room_event" &&
               turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,
             storePath: turn.storePath,
-            // Candidate zero is the primary attempt; later candidates are
-            // fallbacks. Carry the runner-owned fact instead of inferring from
-            // this shared dispatch path, or primary CLI runs lose delegation.
+            // Carry the runner-owned facts instead of inferring from this shared
+            // dispatch path, or primary CLI runs lose delegation.
             ...buildCliMcpDelegationCapabilityBinding(
               resolveDelegationCapability({
-                fallbackActive: params.isFallbackRetry,
+                fallbackActive: isFallbackAttempt(params),
                 inputProvenance: turn.followupRun.run.inputProvenance,
                 disableTools: turn.opts?.disableTools,
                 toolsAllow: turn.opts?.toolsAllow,

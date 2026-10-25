@@ -169,6 +169,15 @@ If only one path is available, the other runs alone. Keyword boosts stay bounded
 without clipping distinct lexical scores to the same maximum, so relevance
 continues to influence ranking when dated notes decay.
 
+When both paths return results, the builtin engine scales each query's keyword
+scores before weighting them. The strongest keyword match earns at most the best
+semantic score, and every other keyword match earns a share in proportion to its
+BM25 relevance, never more than its own keyword score. A match much weaker than
+the query's best keyword match adds little, so sharing a common word rarely
+outweighs a note that is closer in meaning. This matters most for questions
+asked in a different language than the notes. `minScore` applies to the weighted
+sum of the cosine similarity and the scaled keyword score.
+
 The builtin engine then applies fixed ranking rules:
 
 ```text

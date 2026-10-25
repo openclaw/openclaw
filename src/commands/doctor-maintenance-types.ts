@@ -18,5 +18,7 @@ export type DoctorMaintenanceParams = {
   assertCurrent?: () => void;
   databaseGenerations?: UpdateDatabaseGenerations;
   databasePluginOwners?: import("../infra/database-engine/port-descriptor.js").DatabasePortPluginOwners;
+  /** Parent Doctor phase deadline for nested managed-service inspection. */
+  serviceInspectionDeadlineAtMs?: number;
   beforeStateMutation?: (context: { env: NodeJS.ProcessEnv; signal: AbortSignal }) => Promise<void>;
 };

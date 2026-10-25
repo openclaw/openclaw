@@ -166,10 +166,12 @@ function stageSupportRuntime({ runtimeRoot, outputRoot, bunExecutable, omittedDi
 /**
  * Compile both flavors from one frozen module graph before publishing either.
  * @param {{runtimeRoot: string, outputRoot: string, destination: string, supportDestination?: string, mode: BuildInfo["mode"], compileFlags: string[],
+ * aotCompileOptions?: import("./bun-standalone-contract.mjs").StandaloneAotCompileOptions,
  * compileRoot: string, compileCwd: string, mainEntry: string, compiledEntries: string[], compileEntries: Set<string>, external: string[],
  * bunExecutable: string, bun: BuildInfo["bun"], openclaw: BuildInfo["openclaw"], plugins: NonNullable<BuildInfo["plugins"]> & {omittedDirs: string[]},
  * nativeModules: NativeModules, sqlite: {path?: string},
- * resourcePlan: {files: {source: string, destination: string}[], directories: Iterable<string>}}} options
+ * resourcePlan: {files: {source: string, destination: string}[], directories: Iterable<string>}, sourceGraphSha256?: string,
+ * compileAot?: (options: {outfile: string, buildInfo: object}) => Promise<void>}} options
  * @returns {Promise<CompiledArtifact[]>}
  */
 export async function compileStandaloneArtifacts({
@@ -179,6 +181,7 @@ export async function compileStandaloneArtifacts({
   supportDestination,
   mode,
   compileFlags,
+  aotCompileOptions,
   compileRoot,
   compileCwd,
   mainEntry,
@@ -192,6 +195,8 @@ export async function compileStandaloneArtifacts({
   nativeModules,
   sqlite,
   resourcePlan,
+  sourceGraphSha256,
+  compileAot,
 }) {
   const provenance = {
     pluginSetSha256: standalonePluginSetSha256(plugins.embedded),
@@ -213,6 +218,7 @@ export async function compileStandaloneArtifacts({
     .update(
       JSON.stringify({
         ...provenance,
+        ...(sourceGraphSha256 ? { sourceGraphSha256 } : {}),
         bun,
         openclaw,
         target: { platform: process.platform, arch: process.arch },
@@ -272,32 +278,50 @@ export async function compileStandaloneArtifacts({
     };
     const restoreStamp = stampStandaloneBuild(compiledEntries, buildInfo);
     try {
-      const compiled = spawnSync(
-        bunExecutable,
-        [
-          "build",
-          "--compile",
-          "--splitting",
-          "--format=esm",
-          `--root=${compileRoot}`,
-          "--compile-autoload-package-json",
-          "--no-compile-autoload-dotenv",
-          "--no-compile-autoload-bunfig",
-          ...artifact.compileFlags,
-          ...external.map((specifier) => `--external=${specifier}`),
-          path.relative(compileCwd, mainEntry),
-          ...compiledEntries
-            .filter((entry) => entry !== mainEntry && compileEntries.has(entry))
-            .map((entry) => path.relative(compileCwd, entry)),
-          `--outfile=${path.join(artifact.outputRoot, "openclaw")}`,
-        ],
-        { stdio: "inherit", cwd: compileCwd },
-      );
-      if (compiled.error) {
-        throw compiled.error;
-      }
-      if (compiled.status !== 0) {
-        throw new Error(`Standalone ${artifact.flavor} compilation failed (${compiled.status})`);
+      if (artifact.mode === "aot" && compileAot) {
+        await compileAot({ outfile: path.join(artifact.outputRoot, "openclaw"), buildInfo });
+      } else {
+        // Keep the module inventory out of argv and native compilation in a child process.
+        const driver = path.join(artifact.outputRoot, "compile-standalone.mjs");
+        const options = {
+          entrypoints: [
+            mainEntry,
+            ...compiledEntries.filter((entry) => entry !== mainEntry && compileEntries.has(entry)),
+          ].map((entry) => path.relative(compileCwd, entry)),
+          root: compileRoot,
+          target: "bun",
+          splitting: true,
+          format: "esm",
+          external,
+          ...(artifact.mode === "bytecode" ? { bytecode: true } : {}),
+          compile: {
+            outfile: path.join(artifact.outputRoot, "openclaw"),
+            ...(artifact.mode === "aot" ? { aot: true, ...aotCompileOptions } : {}),
+            autoloadPackageJson: true,
+            autoloadDotenv: false,
+            autoloadBunfig: false,
+          },
+        };
+        fs.writeFileSync(
+          driver,
+          `const result = await Bun.build(${JSON.stringify(options)});\nfor (const log of result.logs) console.error(log);\nif (!result.success) process.exit(1);\n`,
+        );
+        try {
+          const compiled = spawnSync(bunExecutable, [driver], {
+            stdio: "inherit",
+            cwd: compileCwd,
+          });
+          if (compiled.error) {
+            throw compiled.error;
+          }
+          if (compiled.status !== 0) {
+            throw new Error(
+              `Standalone ${artifact.flavor} compilation failed (${compiled.status})`,
+            );
+          }
+        } finally {
+          fs.unlinkSync(driver);
+        }
       }
       if (artifact.flavor === "support") {
         const bootstrap = `import { fileURLToPath } from "node:url";

@@ -22,8 +22,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     { ok: true as const, payload: { messages: [{ role: "assistant", content: "initial" }] } },
     { ok: false as const, error: { code: "UNAVAILABLE", message: "history unavailable" } },
   ])("keeps an initial history outcome with its acquiring viewer ($ok)", async (initialHistory) => {
-    const { client, request } = createClient(async () => ({ key: "main", initialHistory }));
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    const { coordinator, request } = createClient(async () => ({ key: "main", initialHistory }));
     const first = await coordinator.acquire("main", {
       initialHistory: { limit: 80, cursor: "first" },
     });
@@ -82,10 +81,9 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     "coalesces $name aliases before the first canonical acknowledgment",
     async ({ requestedKey, canonicalKey }) => {
       const acknowledgement = createDeferred<unknown>();
-      const { client, request } = createClient(async (method) =>
+      const { coordinator, request } = createClient(async (method) =>
         method === "sessions.messages.subscribe" ? await acknowledgement.promise : {},
       );
-      const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
 
       const requested = coordinator.acquire(requestedKey);
       const canonical = coordinator.acquire(canonicalKey);
@@ -123,7 +121,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
   it("upgrades a provisional canonical alias without creating a competing plain observer", async () => {
     const acknowledgement = createDeferred<unknown>();
     const replay = { approvals: [{ id: "approval-after-ack" }] };
-    const { client, request } = createClient(async (method, params) => {
+    const { coordinator, request } = createClient(async (method, params) => {
       if (method === "sessions.messages.unsubscribe") {
         return {};
       }
@@ -132,7 +130,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       }
       return await acknowledgement.promise;
     });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
 
     const requested = coordinator.acquire("main");
     const approval = coordinator.acquire("agent:main:main", { includeApprovals: true });
@@ -166,10 +163,9 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
   it("keeps unacknowledged subscriptions isolated by canonical agent", async () => {
     const acknowledgement = createDeferred<unknown>();
-    const { client, request } = createClient(async (_method, params) =>
+    const { coordinator, request } = createClient(async (_method, params) =>
       params.agentId === "main" ? await acknowledgement.promise : { key: params.key },
     );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
 
     const main = coordinator.acquire("global", { agentId: "main" });
     const research = await coordinator.acquire("global", { agentId: "research" });
@@ -244,8 +240,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       requestSent: false,
     }),
   ])("shares an observer when the failed unsubscribe did not commit: %s", async (error) => {
-    const { client, request } = createClient();
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    const { coordinator, request } = createClient();
     const original = await coordinator.acquire("main");
     request.mockRejectedValueOnce(error);
     await expect(coordinator.release(original)).rejects.toBe(error);
@@ -258,10 +253,9 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
   it("coalesces concurrent releases of the final lease", async () => {
     const unsubscribe = createDeferred<unknown>();
-    const { client, request } = createClient(async (method, params) =>
+    const { coordinator, request } = createClient(async (method, params) =>
       method === "sessions.messages.subscribe" ? { key: params.key } : await unsubscribe.promise,
     );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
     const subscription = await coordinator.acquire("main");
 
     const first = coordinator.release(subscription);
@@ -275,10 +269,9 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
   it("waits for a closing observer before acquiring its replacement", async () => {
     const unsubscribe = createDeferred<unknown>();
-    const { client, request } = createClient(async (method, params) =>
+    const { coordinator, request } = createClient(async (method, params) =>
       method === "sessions.messages.subscribe" ? { key: params.key } : await unsubscribe.promise,
     );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
     const first = await coordinator.acquire("main");
 
     const release = coordinator.release(first);
@@ -298,12 +291,11 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
   it("upgrades an existing plain observer once and never downgrades approvals", async () => {
     const replay = { approvals: [{ id: "approval-2" }] };
-    const { client, request } = createClient(async (method, params) =>
+    const { coordinator, request } = createClient(async (method, params) =>
       method === "sessions.messages.subscribe"
         ? { key: params.key, ...(params.includeApprovals ? { approvalReplay: replay } : {}) }
         : {},
     );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
 
     const plain = await coordinator.acquire("main");
     const [firstApproval, secondApproval] = await Promise.all([
@@ -343,12 +335,11 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     },
   ])("refreshes pending approvals when $name", async (scenario) => {
     let replay = { approvals: scenario.before.map((id) => ({ id })) };
-    const { client, request } = createClient(async (method, params) =>
+    const { coordinator, request } = createClient(async (method, params) =>
       method === "sessions.messages.subscribe"
         ? { key: params.key, ...(params.includeApprovals ? { approvalReplay: replay } : {}) }
         : {},
     );
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
     const retained = await coordinator.acquire("main", {
       includeApprovals: scenario.initialApprovals,
     });
@@ -376,7 +367,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
   it("preserves the plain observer when an approval upgrade is unauthorized", async () => {
     let rejectApproval = true;
-    const { client, request } = createClient(async (method, params) => {
+    const { coordinator, request } = createClient(async (method, params) => {
       if (method === "sessions.messages.unsubscribe") {
         return {};
       }
@@ -388,7 +379,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
         ...(params.includeApprovals ? { approvalReplay: { approvals: [] } } : {}),
       };
     });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
     const plain = await coordinator.acquire("main");
 
     await expect(coordinator.acquire("main", { includeApprovals: true })).rejects.toThrow(
@@ -411,7 +401,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
   it("lets concurrent plain observers recover when the first approval request is unauthorized", async () => {
     const approval = createDeferred<unknown>();
-    const { client, request } = createClient(async (method, params) => {
+    const { coordinator, request } = createClient(async (method, params) => {
       if (method === "sessions.messages.unsubscribe") {
         return {};
       }
@@ -420,7 +410,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       }
       return { key: params.key };
     });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
 
     const denied = coordinator.acquire("main", { includeApprovals: true });
     const firstPlain = coordinator.acquire("main");
@@ -446,7 +435,7 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
   it("releases the last plain owner after its provisional approval upgrade fails", async () => {
     const approval = createDeferred<unknown>();
-    const { client, request } = createClient(async (method, params) => {
+    const { coordinator, request } = createClient(async (method, params) => {
       if (method === "sessions.messages.unsubscribe") {
         return {};
       }
@@ -455,7 +444,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       }
       return { key: params.key };
     });
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
     const plain = await coordinator.acquire("main");
 
     const pendingApproval = coordinator.acquire("main", { includeApprovals: true });

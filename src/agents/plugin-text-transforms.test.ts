@@ -64,25 +64,15 @@ async function collectEvents(stream: AsyncIterable<AssistantMessageEvent>) {
 }
 
 it("merges registered transform groups in order", () => {
-  const merged = mergePluginTextTransforms(
-    { input: [{ from: /red basket/g, to: "blue basket" }] },
-    { output: [{ from: /blue basket/g, to: "red basket" }] },
-    {
-      input: [
-        { from: /paper ticket/g, to: "digital ticket" },
-        { from: "digital ticket", to: "counter receipt" },
-      ],
-    },
-  );
-
-  expect(merged).toStrictEqual({
-    input: [
-      { from: /red basket/g, to: "blue basket" },
-      { from: /paper ticket/g, to: "digital ticket" },
-      { from: "digital ticket", to: "counter receipt" },
-    ],
-    output: [{ from: /blue basket/g, to: "red basket" }],
-  });
+  const first = { from: /red basket/g, to: "blue basket" };
+  const output = [{ from: /blue basket/g, to: "red basket" }];
+  const rest = [
+    { from: /paper ticket/g, to: "digital ticket" },
+    { from: "digital ticket", to: "counter receipt" },
+  ];
+  const expected = structuredClone({ input: [first, ...rest], output });
+  const merged = mergePluginTextTransforms({ input: [first] }, { output }, { input: rest });
+  expect(merged).toStrictEqual(expected);
   expect(applyPluginTextReplacements("red basket paper ticket", merged?.input)).toBe(
     "blue basket counter receipt",
   );

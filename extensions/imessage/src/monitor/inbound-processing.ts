@@ -56,8 +56,6 @@ import { detectReflectedContent } from "./reflection-guard.js";
 import type { SelfChatCache } from "./self-chat-cache.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 
-export { resolveIMessageReactionContext };
-
 type IMessageReactionNotificationMode = "off" | "own" | "all";
 
 type IMessageReplyContext = {
@@ -317,7 +315,7 @@ export async function resolveIMessageInboundDecision(params: {
   allowLegacyConversationAllowFromForGroup?: boolean;
   groupPolicy: string;
   dmPolicy: string;
-  storeAllowFrom: string[];
+  readStoreAllowFrom: () => Promise<string[]>;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   echoCache?: IMessageEchoCache;
@@ -449,12 +447,13 @@ export async function resolveIMessageInboundDecision(params: {
     sender,
     chatId,
   });
+  let storeAllowFrom: Promise<string[]> | undefined;
   const ingressResolver = getIMessageRuntime().channel.inbound.ingress.createResolver({
     channelId: "imessage",
     accountId: params.accountId,
     identity: imessageIngressIdentity,
     cfg: params.cfg,
-    readStoreAllowFrom: async () => params.storeAllowFrom,
+    readStoreAllowFrom: () => (storeAllowFrom ??= params.readStoreAllowFrom()),
   });
   const resolveChannelIngress = (contextBinding?: ChannelIngressContextBinding) =>
     ingressResolver.message({

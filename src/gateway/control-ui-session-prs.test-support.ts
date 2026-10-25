@@ -109,19 +109,16 @@ export function mockPrCheckout(options: {
           return options.resolve(operation.input.root);
         }
         break;
-      case "pull-request.branch-facts":
-        return options.emptyFacts && !options.additions
-          ? undefined
-          : {
-              creatable: true,
-              stats: options.additions
-                ? {
-                    additions: options.additions(operation.input.root),
-                    deletions: 0,
-                    changedFiles: 1,
-                  }
-                : null,
-            };
+      case "pull-request.branch-facts": {
+        if (options.emptyFacts && !options.additions) {
+          return undefined;
+        }
+        const additions = options.additions?.(operation.input.root);
+        return {
+          creatable: true,
+          stats: additions === undefined ? null : { additions, deletions: 0, changedFiles: 1 },
+        };
+      }
       default:
         break;
     }

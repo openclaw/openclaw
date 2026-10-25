@@ -64,6 +64,7 @@ const withProfileLease = <T>(profileId: string, run: (assertOwned: () => void) =
       database: { scope: "shared" },
       leaseMs: 60000,
       waitMs: 30000,
+      heartbeat: "worker",
     },
     async (lease) => await run(() => lease.assertOwned()),
   );

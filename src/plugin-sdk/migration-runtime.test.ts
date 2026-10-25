@@ -205,12 +205,25 @@ describe("copyMigrationFileItem", () => {
   });
 });
 
+function memoryCopyFixture() {
+  const root = tempDirs.make("openclaw-memory-copy-");
+  const workspaceDir = path.join(root, "workspace");
+  const source = path.join(root, "source", "MEMORY.md");
+  const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
+  const createItem = () =>
+    createMigrationItem({
+      id: "memory:codex:MEMORY.md",
+      kind: "memory",
+      action: "copy",
+      source,
+      target,
+    });
+  return { root, workspaceDir, source, target, createItem };
+}
+
 describe("copyMemoryMigrationFileItem", () => {
   it("rejects source bytes that changed after the reviewed plan", async () => {
-    const root = tempDirs.make("openclaw-memory-copy-");
-    const workspaceDir = path.join(root, "workspace");
-    const source = path.join(root, "source", "MEMORY.md");
-    const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
+    const { root, workspaceDir, source, target } = memoryCopyFixture();
     await writeFile(source, "reviewed memory");
     const item = createMigrationItem({
       id: "memory:codex:MEMORY.md",
@@ -224,15 +237,7 @@ describe("copyMemoryMigrationFileItem", () => {
       providerId: "codex",
       source: path.dirname(source),
       target: workspaceDir,
-      summary: {
-        total: 1,
-        planned: 1,
-        migrated: 0,
-        skipped: 0,
-        conflicts: 0,
-        errors: 0,
-        sensitive: 0,
-      },
+      summary: summarizeMigrationItems([item]),
       items: [item],
     });
     expect(bound.items[0]?.details?.sourceSha256).toBe("provider-owned");
@@ -251,27 +256,16 @@ describe("copyMemoryMigrationFileItem", () => {
   it.runIf(process.platform !== "win32")(
     "rejects a hardlinked memory source without creating the destination",
     async () => {
-      const root = tempDirs.make("openclaw-memory-copy-");
-      const workspaceDir = path.join(root, "workspace");
+      const { root, workspaceDir, source, target, createItem } = memoryCopyFixture();
       const outside = path.join(root, "outside", "outside.md");
-      const source = path.join(root, "source", "MEMORY.md");
-      const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
       await writeFile(outside, "outside bytes");
       await fs.mkdir(path.dirname(source), { recursive: true });
       await fs.link(outside, source);
       expect((await fs.stat(source)).nlink).toBeGreaterThan(1);
 
-      const result = await copyMemoryMigrationFileItem(
-        createMigrationItem({
-          id: "memory:codex:MEMORY.md",
-          kind: "memory",
-          action: "copy",
-          source,
-          target,
-        }),
-        path.join(root, "report"),
-        { workspaceDir },
-      );
+      const result = await copyMemoryMigrationFileItem(createItem(), path.join(root, "report"), {
+        workspaceDir,
+      });
 
       expect(result.status).toBe("error");
       expect(result.reason).toContain("hardlink");
@@ -293,15 +287,7 @@ describe("copyMemoryMigrationFileItem", () => {
     const bound = await bindMemoryMigrationPlanSources({
       providerId: "codex",
       source: path.dirname(missingSource),
-      summary: {
-        total: 1,
-        planned: 0,
-        migrated: 0,
-        skipped: 1,
-        conflicts: 0,
-        errors: 0,
-        sensitive: 0,
-      },
+      summary: summarizeMigrationItems([item]),
       items: [item],
     });
 
@@ -312,27 +298,17 @@ describe("copyMemoryMigrationFileItem", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = tempDirs.make("openclaw-memory-copy-");
-    const workspaceDir = path.join(root, "workspace");
+    const { root, workspaceDir, source, createItem } = memoryCopyFixture();
     const outsideDir = path.join(root, "outside");
-    const source = path.join(root, "source", "MEMORY.md");
-    const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
     await writeFile(source, "source memory");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.mkdir(outsideDir, { recursive: true });
     await fs.symlink(outsideDir, path.join(workspaceDir, "memory"));
 
-    const result = await copyMemoryMigrationFileItem(
-      createMigrationItem({
-        id: "memory:codex:MEMORY.md",
-        kind: "memory",
-        action: "copy",
-        source,
-        target,
-      }),
-      path.join(root, "report"),
-      { workspaceDir, overwrite: true },
-    );
+    const result = await copyMemoryMigrationFileItem(createItem(), path.join(root, "report"), {
+      workspaceDir,
+      overwrite: true,
+    });
 
     expect(result.status).toBe("error");
     await expect(
@@ -341,27 +317,17 @@ describe("copyMemoryMigrationFileItem", () => {
   });
 
   it("backs up and replaces an existing memory file within the workspace root", async () => {
-    const root = tempDirs.make("openclaw-memory-copy-");
-    const workspaceDir = path.join(root, "workspace");
-    const source = path.join(root, "source", "MEMORY.md");
-    const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
+    const { root, workspaceDir, source, target, createItem } = memoryCopyFixture();
     await writeFile(source, "new memory");
     await writeFile(target, "old memory");
     if (process.platform !== "win32") {
       await fs.chmod(target, 0o644);
     }
 
-    const result = await copyMemoryMigrationFileItem(
-      createMigrationItem({
-        id: "memory:codex:MEMORY.md",
-        kind: "memory",
-        action: "copy",
-        source,
-        target,
-      }),
-      path.join(root, "report"),
-      { workspaceDir, overwrite: true },
-    );
+    const result = await copyMemoryMigrationFileItem(createItem(), path.join(root, "report"), {
+      workspaceDir,
+      overwrite: true,
+    });
 
     expect(result.status).toBe("migrated");
     await expect(fs.readFile(target, "utf8")).resolves.toBe("new memory");
@@ -379,24 +345,13 @@ describe("copyMemoryMigrationFileItem", () => {
   });
 
   it("does not clobber an existing memory file when replacement is disabled", async () => {
-    const root = tempDirs.make("openclaw-memory-copy-");
-    const workspaceDir = path.join(root, "workspace");
-    const source = path.join(root, "source", "MEMORY.md");
-    const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
+    const { root, workspaceDir, source, target, createItem } = memoryCopyFixture();
     await writeFile(source, "new memory");
     await writeFile(target, "concurrent memory");
 
-    const result = await copyMemoryMigrationFileItem(
-      createMigrationItem({
-        id: "memory:codex:MEMORY.md",
-        kind: "memory",
-        action: "copy",
-        source,
-        target,
-      }),
-      path.join(root, "report"),
-      { workspaceDir },
-    );
+    const result = await copyMemoryMigrationFileItem(createItem(), path.join(root, "report"), {
+      workspaceDir,
+    });
 
     expect(result.status).toBe("conflict");
     await expect(fs.readFile(target, "utf8")).resolves.toBe("concurrent memory");

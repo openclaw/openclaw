@@ -324,12 +324,12 @@ describe("bedrock mantle discovery", () => {
   });
 
   it.each([
-    { region: "ap-northeast-1", env: { AWS_REGION: "ap-northeast-1" } },
-    { region: "us-east-1", env: {} },
-  ])("resolves the explicit bearer provider in $region", async ({ region, env }) => {
+    { region: "ap-northeast-1", env: { AWS_REGION: "ap-northeast-1" }, modelId: "openai.gpt-5.5" },
+    { region: "us-east-1", env: {}, modelId: "openai.gpt-5.6-luna" },
+  ])("resolves the explicit bearer provider in $region", async ({ region, env, modelId }) => {
     // This catalog includes the promotional contract before the September pricing cutover.
     vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 7, 31));
-    const fetchFn = modelFetch("anthropic.claude-sonnet-4-6");
+    const fetchFn = modelFetch("anthropic.claude-sonnet-4-6", modelId, "openai.gpt-oss-120b");
     const provider = await resolveProvider({
       env: { ...env, AWS_BEARER_TOKEN_BEDROCK: "my-token" },
       fetchFn,
@@ -345,7 +345,14 @@ describe("bedrock mantle discovery", () => {
       `https://bedrock-mantle.${region}.api.aws/v1/models`,
       expect.any(Object),
     );
-    expect(provider?.models).toHaveLength(6);
+    expect(provider?.models).toHaveLength(8);
+    expect(provider?.models.find((model) => model.id === modelId)).toMatchObject({
+      api: "openai-responses",
+      baseUrl: `https://bedrock-mantle.${region}.api.aws/openai/v1`,
+    });
+    const oss = provider?.models.find((model) => model.id === "openai.gpt-oss-120b");
+    expect(oss?.api ?? provider?.api).toBe("openai-completions");
+    expect(oss).not.toHaveProperty("baseUrl");
     function expectClaude(id: string, metadata: object = {}) {
       expect(provider?.models?.find((model) => model.id === `anthropic.${id}`)).toMatchObject({
         api: "anthropic-messages",

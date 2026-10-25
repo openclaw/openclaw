@@ -131,6 +131,7 @@ function createRecoveryRuntime(options: {
         .filter((placement) => placement.environmentId === environmentId)
         .map((placement) => placement.sessionId),
     reclaim: vi.fn(),
+    subscribeOrphanWorkspaceChanges: () => () => {},
     reconcile: vi.fn(async () => await options.startup?.(placements, publishPlacementChange)),
     reconcileActive: vi.fn(async () => await options.sweep?.(placements, publishPlacementChange)),
   }));

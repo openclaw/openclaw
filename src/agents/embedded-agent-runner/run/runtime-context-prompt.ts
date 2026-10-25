@@ -8,6 +8,10 @@ import {
   type Context,
 } from "../../../llm/types.js";
 import {
+  memoizeFrozenPlainDataProjection,
+  isDeeplyFrozenPlainData,
+} from "../../../shared/immutable-data.js";
+import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   STEERING_RUNTIME_CONTEXT,
   SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
@@ -161,15 +165,34 @@ export function resolveRuntimeContextPromptParts(params: {
   };
 }
 
+const retainedRuntimeContexts = [undefined, false, true].map((retained) =>
+  memoizeFrozenPlainDataProjection((message: Context["messages"][number]) => {
+    if (!isRuntimeContextMessage(message)) {
+      return message;
+    }
+    const projected = { ...message };
+    setRuntimeContextRetention(projected, retained);
+    return projected;
+  }),
+);
+
 export function applyRuntimeContextCarrierRetention(
   messages: Context["messages"],
   appendOnlyRuntimeContext: boolean | undefined,
 ): void {
-  for (const message of messages) {
+  messages.forEach((message, index) => {
     if (isRuntimeContextMessage(message)) {
-      setRuntimeContextRetention(message, appendOnlyRuntimeContext);
+      if (isDeeplyFrozenPlainData(message)) {
+        const project =
+          retainedRuntimeContexts[
+            appendOnlyRuntimeContext === undefined ? 0 : appendOnlyRuntimeContext ? 2 : 1
+          ]!;
+        messages[index] = project(message);
+      } else {
+        setRuntimeContextRetention(message, appendOnlyRuntimeContext);
+      }
     }
-  }
+  });
 }
 
 export function buildRuntimeContextCustomMessage(

@@ -165,14 +165,23 @@ it("keeps a forwarded stream open until final while collapsing prior messages", 
   group.messages = group.messages.slice(0, 2);
   group.isStreaming = true;
   draw();
-  const bubbles = host.querySelectorAll(".chat-bubble");
-  expect(bubbles[0]!.querySelector(".chat-message-disclosure")).not.toBeNull();
-  expect(bubbles[1]!.querySelector(".chat-message-disclosure")).toBeNull();
+  await expect
+    .poll(() =>
+      Array.from(
+        host.querySelectorAll(".chat-bubble"),
+        (bubble) => bubble.querySelector(".chat-message-disclosure") !== null,
+      ),
+    )
+    .toEqual([true, false]);
   group.isStreaming = false;
   draw();
   await expect
-    .poll(() => bubbles[1]!.querySelector("button[aria-expanded='false']") !== null)
-    .toBe(true);
+    .poll(
+      () =>
+        host.querySelectorAll(".chat-bubble")[1]?.querySelector("button[aria-expanded='false']") ??
+        null,
+    )
+    .not.toBeNull();
 });
 
 it("rechecks retained content when the transcript width or message text changes", async () => {

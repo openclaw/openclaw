@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isValidBase64 } from "@openclaw/media-core/base64";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveNativeModelPrimary } from "../agents/agent-scope.js";
@@ -17,7 +18,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -27,14 +28,20 @@ import {
 } from "../sessions/session-title-source.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import type { ChatAttachment } from "./chat-attachments.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import {
   hasExplicitSessionName,
+  matchesGeneratedSessionTitle,
   resolveExplicitSessionName,
   sessionTitleRequests,
 } from "./session-title-state.js";
+import {
+  readSessionTranscriptBoundedMessageTailPageAsync,
+  type SessionTranscriptReadScope,
+} from "./session-transcript-readers.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
 
 type DashboardSessionTitleModelEntry = Pick<
@@ -48,6 +55,29 @@ type DashboardSessionTitleModelEntry = Pick<
   | "modelSelectionLocked"
   | "providerOverride"
 >;
+
+async function readDashboardRefinementSource(
+  scope: SessionTranscriptReadScope,
+  currentMessage: string,
+  skillCommands: SkillCommandSpec[],
+): Promise<string> {
+  const page = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
+    maxMessages: 40,
+    maxBytes: 32_000,
+    offset: 0,
+  });
+  const messages = page.events.flatMap(({ event }) => {
+    const message = asOptionalRecord(asOptionalRecord(event)?.message);
+    const text = message?.role === "user" ? extractFirstTextBlock(message) : undefined;
+    const source = text ? resolveSessionTitleSource(text, skillCommands) : undefined;
+    return source ? [source] : [];
+  });
+  // The accepted current turn may not have reached transcript storage yet.
+  return truncateUtf16Safe(
+    ["Latest task:", currentMessage, "Recent context:", ...messages.slice(-6)].join("\n"),
+    SESSION_TITLE_SOURCE_MAX_CHARS,
+  );
+}
 
 const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
 const WORKTREE_SESSION_TITLE_WAIT_MS = 30_000;
@@ -117,6 +147,9 @@ type SessionTitleParams = {
   commitGuard?: SessionSourceAssertion;
   withSource?: WorktreeSourceStage;
   retryFailedJoin?: boolean;
+  /** Creation/worktree naming runs before the opening user message. */
+  initialMessagePending?: boolean;
+  refineGeneratedTitle?: boolean;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Settles with the turn this title overlapped; a failed label retries once after it. */
   retryAfter?: Promise<void>;
@@ -286,6 +319,7 @@ async function generateDashboardSessionTitle(params: {
   entry?: DashboardSessionTitleModelEntry;
   sourceText: string;
   utilityOnly?: boolean;
+  keepExistingTitle?: boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -356,7 +390,7 @@ async function generateDashboardSessionTitle(params: {
   }
   // Speculative utility-only naming must not persist a provisional title that
   // would skip the healthy primary-model pass after send.
-  if (params.utilityOnly) {
+  if (params.utilityOnly || params.keepExistingTitle) {
     return null;
   }
   // Saved titles also name Git branches; never persist raw prompt text as a fallback.
@@ -403,7 +437,7 @@ export async function generateWorktreeSessionTitle(
     sessionKey: resolveStoredSessionKeyForAgentStore(params),
     storePath: params.storePath,
   };
-  const request = maybeGenerateSessionTitle(params);
+  const request = maybeGenerateSessionTitle({ ...params, initialMessagePending: true });
   try {
     await withTimeout(request, WORKTREE_SESSION_TITLE_WAIT_MS, "worktree title generation");
   } catch (error) {
@@ -429,10 +463,14 @@ export async function generateWorktreeSessionTitle(
 export async function maybeGenerateDashboardSessionTitle(
   params: SessionTitleParams,
 ): Promise<boolean> {
-  return (
-    isDashboardSessionTitleCandidate(params) &&
-    (await maybeGenerateSessionTitle({ ...params, retryFailedJoin: true }))
-  );
+  if (!isDashboardSessionTitleCandidate(params)) {
+    return false;
+  }
+  return await maybeGenerateSessionTitle({
+    ...params,
+    retryFailedJoin: true,
+    refineGeneratedTitle: !params.initialMessagePending,
+  });
 }
 
 /** Joins existing work; only the caller that persists a title returns true. */
@@ -453,6 +491,69 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     memory?.binding?.actor.assertReadable();
     memory?.authority.assertCurrent();
   };
+  const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
+  if (entry?.sessionId !== params.sessionId) {
+    return false;
+  }
+  const skillParams = {
+    cfg: params.cfg,
+    agentId: params.agentId,
+    entry,
+    sessionKey,
+    assertCurrent: assertMemoryCurrent,
+  };
+  let preparedSkillCommands: SkillCommandSpec[] | undefined;
+  let refinementSource = params.userMessage;
+  let refinementName: string | undefined;
+  if (hasExplicitSessionName(entry)) {
+    const state = entry.titleRefinement;
+    if (
+      !params.refineGeneratedTitle ||
+      !parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") ||
+      !state ||
+      state.remainingMessages <= 0 ||
+      !matchesGeneratedSessionTitle(entry, state.generatedName)
+    ) {
+      return false;
+    }
+    preparedSkillCommands = await prepareTitleSkillCommands(skillParams);
+    const task = resolveSessionTitleSource(params.userMessage, preparedSkillCommands);
+    if (!task) {
+      return false;
+    }
+    refinementSource = task;
+    // Claim before inference so concurrent follow-ups retain their own admission.
+    await patchSessionEntryCore(
+      {
+        agentId: params.agentId,
+        storePath: params.storePath,
+        sessionKey: resolveStoredSessionKeyForAgentStore(params),
+      },
+      (current) => {
+        refinementName = undefined;
+        const refinementState = current.titleRefinement;
+        if (
+          current.sessionId !== params.sessionId ||
+          !refinementState ||
+          refinementState.remainingMessages <= 0 ||
+          !matchesGeneratedSessionTitle(current, refinementState.generatedName)
+        ) {
+          return null;
+        }
+        const remainingMessages = refinementState.remainingMessages - 1;
+        // Claim before inference; a failed attempt leaves the existing name and is not retried.
+        if (!remainingMessages) {
+          refinementName = refinementState.generatedName;
+        }
+        return { titleRefinement: { ...refinementState, remainingMessages } };
+      },
+      { requireWriteSuccess: true, ...sessionEntryCommitGuardOptions(params.commitGuard) },
+    );
+    if (!refinementName) {
+      return false;
+    }
+  }
+
   const requestTarget = {
     ...scope,
     sessionId: params.sessionId,
@@ -485,11 +586,27 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       await patchSessionEntryCore(
         scope,
         (current) => {
-          if (current.sessionId !== params.sessionId || hasExplicitSessionName(current)) {
+          if (
+            current.sessionId !== params.sessionId ||
+            (refinementName
+              ? !matchesGeneratedSessionTitle(current, refinementName)
+              : hasExplicitSessionName(current))
+          ) {
             return null;
           }
           persisted = true;
-          return { displayName };
+          return {
+            displayName,
+            ...(parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:")
+              ? {
+                  titleRefinement: {
+                    sessionId: params.sessionId,
+                    generatedName: displayName,
+                    remainingMessages: refinementName ? 0 : params.initialMessagePending ? 7 : 6,
+                  },
+                }
+              : {}),
+          };
         },
         {
           requireWriteSuccess: true,
@@ -504,20 +621,9 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
   };
 
   const run = async () => {
-    const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
-    if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
-      return false;
-    }
-
     // Select the first usable task, not an earlier control-only turn. Carry the
     // same prepared command metadata through history selection and generation.
-    const skillCommands = await prepareTitleSkillCommands({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      entry,
-      sessionKey,
-      assertCurrent: assertMemoryCurrent,
-    });
+    const skillCommands = preparedSkillCommands ?? (await prepareTitleSkillCommands(skillParams));
     const transcriptScope = {
       agentId: params.agentId,
       sessionEntry: entry,
@@ -525,19 +631,21 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       sessionKey,
       storePath: params.storePath,
     };
-    const transcriptSource = (
-      await readSessionTitleFieldsFromTranscriptAsync(transcriptScope, { skillCommands })
-    ).firstUserMessage;
+    const transcriptSource = refinementName
+      ? null
+      : (await readSessionTitleFieldsFromTranscriptAsync(transcriptScope, { skillCommands }))
+          .firstUserMessage;
     assertMemoryCurrent();
     const transcriptText = transcriptSource ?? "";
     const currentText = resolveSessionTitleSource(params.currentUserMessage ?? "", skillCommands);
     // A first-turn transcript may win the persistence race before title work starts.
     // When it is the current turn, retain the supplied attachment-enriched source.
-    const sourceText =
-      resolveSessionTitleSource(entry.pendingWorktree?.titleSource ?? "", skillCommands) ??
-      (!transcriptText || (currentText && currentText === transcriptText)
-        ? resolveSessionTitleSource(params.userMessage, skillCommands)
-        : transcriptText);
+    const sourceText = refinementName
+      ? await readDashboardRefinementSource(transcriptScope, refinementSource, skillCommands)
+      : (resolveSessionTitleSource(entry.pendingWorktree?.titleSource ?? "", skillCommands) ??
+        (!transcriptText || (currentText && currentText === transcriptText)
+          ? resolveSessionTitleSource(params.userMessage, skillCommands)
+          : transcriptText));
     if (!sourceText) {
       return false;
     }
@@ -548,6 +656,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
         agentId: params.agentId,
         entry: params.entry ?? entry,
         sourceText,
+        ...(refinementName ? { keepExistingTitle: true } : {}),
         operatorAuthority: params.operatorAuthority,
         ...(abortSignal ? { abortSignal } : {}),
         ...(params.retryAfter ? { retryAfter: params.retryAfter } : {}),

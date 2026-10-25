@@ -4,6 +4,7 @@ import path from "node:path";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockClaudeManagedSettings } from "../../../test/helpers/claude-managed-settings.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
@@ -57,6 +58,7 @@ describe("native CLI login owner", () => {
       : new Response("{}", { status: 401 });
   });
   beforeEach(() => {
+    mockClaudeManagedSettings(sessionDirs.make());
     profile.mockClear();
     vi.stubGlobal("fetch", profile);
   });

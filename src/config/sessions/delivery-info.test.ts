@@ -246,6 +246,7 @@ describe("extractDeliveryInfoBatch", () => {
       ["agent:main:missing", undefined],
       [healthyKey, telegramDelivery],
     ]);
+    expect(storeState.readSessionEntriesFromStoreInWorker).toHaveBeenCalledTimes(4);
   });
 
   it("keeps global owners and ordered routable stores separate within one batch", async () => {

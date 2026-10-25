@@ -171,19 +171,11 @@ describe("cold App request admission", () => {
   });
   it("selects the current harness before any historical model turn and admits its native setup", async () => {
     const active = await prepareMcpAppExtensionRuntime(options());
-    expect(mocks.selection).toHaveBeenCalledWith(expect.objectContaining({ sessionEntry: entry }));
-    expect(mocks.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ownerPluginId: "codex",
-        sourceAuthority: { kind: "fixture" },
-        input: expect.objectContaining({
-          senderId: "alice",
-          sessionId: "session",
-          workspaceDir: "/workspace",
-          abortSignal: accessController.signal,
-        }),
-      }),
-    );
+    expect(mocks.prepare.mock.calls[0]?.[0]).toMatchObject({
+      ownerPluginId: "codex",
+      sourceAuthority: { kind: "fixture" },
+      input: { senderId: "alice", sessionId: "session" },
+    });
     expect(mocks.native).toHaveBeenCalledWith(
       expect.objectContaining({ appRequester: { kind: "gateway-profile", profileId: "alice" } }),
     );

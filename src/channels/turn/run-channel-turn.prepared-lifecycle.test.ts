@@ -1,9 +1,12 @@
-import { AsyncResource } from "node:async_hooks";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  InvocationFrame,
+  runWithPluginExecutionFrame,
+} from "../../plugins/plugin-instance-invocation.js";
 import { withPluginServiceScheduler } from "../../plugins/service-scheduler-binding.js";
 import { createPluginServiceScheduler } from "../../plugins/service-scheduler.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -13,7 +16,6 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
-import { enterAgentInputRecoveryContext } from "../../state/agent-input-recovery-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { OpenClawDatabaseSchemaPreflight as Preflight } from "../../state/openclaw-database-preflight.types.js";
 import {
@@ -152,23 +154,25 @@ it.each([
     });
     const healthy = createTurn();
     const withRecovery = <T>(run: () => T) =>
-      new AsyncResource("TestAgentInputRecovery").runInAsyncScope(() => {
-        enterAgentInputRecoveryContext({
-          resolveGatewayContext: () => ({
-            inputRecovery: {
-              isPending: (agentId) => agentId === "qa",
-              waitForAgentInputRecovery: (agentId, options) => {
-                if (agentId !== "qa") {
-                  return undefined;
-                }
-                waiting.resolve();
-                return racePromiseWithAbortSignal(recovery.promise, options?.signal);
+      runWithPluginExecutionFrame(
+        new InvocationFrame({
+          inputRecoveryContext: {
+            resolveGatewayContext: () => ({
+              inputRecovery: {
+                isPending: (agentId) => agentId === "qa",
+                waitForAgentInputRecovery: (agentId, options) => {
+                  if (agentId !== "qa") {
+                    return undefined;
+                  }
+                  waiting.resolve();
+                  return racePromiseWithAbortSignal(recovery.promise, options?.signal);
+                },
               },
-            },
-          }),
-        });
-        return run();
-      });
+            }),
+          },
+        }),
+        run,
+      );
     const turn = withRecovery(() =>
       withPluginServiceScheduler(scheduler, () => runPreparedChannelTurn(pending.turn)),
     );

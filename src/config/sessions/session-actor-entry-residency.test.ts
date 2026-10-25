@@ -40,6 +40,7 @@ import { readSessionTranscriptAccountingFromProjection } from "./session-transcr
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 import { timedMessageEvent, messageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
@@ -374,6 +375,13 @@ it("keeps transcript residency across entry patches without losing either owner'
           requiredEnv: [`SYNTHETIC_${index}`],
         })),
       },
+      systemPromptReport: promptReport(10, 100, 80),
+      sessionDiffBaseline: {
+        version: 1,
+        sessionId: f.scope.sessionId,
+        root: "/synthetic",
+        files: [{ path: "README.md", fingerprint: "initial" }],
+      },
       activitySummary: {
         version: 1,
         text: "Retained input",
@@ -407,14 +415,19 @@ it("keeps transcript residency across entry patches without losing either owner'
         preserveActivity: true,
         shouldCommitIf,
       });
-    const reads = trackSqliteStatementExecutions(f.database.db, ["select", "watermark"], (sql) =>
-      sql.startsWith("select coalesce(") &&
-      sql.includes('as "max_seq"') &&
-      sql.includes('"session_transcript_cold_archives"')
-        ? "watermark"
-        : /^select\b/iu.test(sql)
-          ? "select"
-          : null,
+    const reads = trackSqliteStatementExecutions(
+      f.database.db,
+      ["select", "watermark", "snapshotWrite"],
+      (sql) =>
+        /^(?:insert into|update|delete from) "session_entry_snapshots"/iu.test(sql)
+          ? "snapshotWrite"
+          : sql.startsWith("select coalesce(") &&
+              sql.includes('as "max_seq"') &&
+              sql.includes('"session_transcript_cold_archives"')
+            ? "watermark"
+            : /^select\b/iu.test(sql)
+              ? "select"
+              : null,
     );
     try {
       let candidate: SessionEntryPatchCommitted | undefined;
@@ -451,6 +464,8 @@ it("keeps transcript residency across entry patches without losing either owner'
       const after = f.read();
       expect(after.entry?.label).toBe("entry owner committed");
       expect(after.entry?.model).toBe("updated-model");
+      expect(after.entry?.systemPromptReport).toEqual(before.entry?.systemPromptReport);
+      expect(after.entry?.sessionDiffBaseline).toEqual(before.entry?.sessionDiffBaseline);
       expect(after.hasBoard).toBe(true);
       expect(after.participants).toMatchObject([
         { identity: { id: "peer" }, contributionCount: 1 },
@@ -506,6 +521,7 @@ it("keeps transcript residency across entry patches without losing either owner'
       expect(f.read().entry?.label).toBe("entry owner committed");
       entryPatch({ label: "entry owner committed" }, { ...predicate, leafEntryId: "after-patch" });
       expect(reads.counts.watermark).toBe(0);
+      expect(reads.counts.snapshotWrite).toBe(0);
     } finally {
       reads.restore();
     }
@@ -534,6 +550,10 @@ it("keeps transcript residency across entry patches without losing either owner'
     expect(replaced.entry?.lifecycleRevision).toBe("new-lifecycle");
     expect(replaced.entry?.model).toBe("updated-model");
     expect(replaced.hasBoard).toBe(true);
+    f.restartActor();
+    await f.reopenDatabase();
+    expect(f.read().entry).toEqual(replaced.entry);
+    expect(f.nativeEntry()).toEqual(replaced.entry);
   });
 });
 
@@ -1014,5 +1034,44 @@ it("evicts ordinary actors under byte pressure while keeping the oversized worki
     expect(f.read().version).toEqual(oversizedVersion);
     expect(f.read(ordinary).version.epoch).not.toBe(ordinaryVersion.epoch);
     expect(f.read().version).toEqual(oversizedVersion);
+  });
+});
+
+it("keeps decoded snapshot working sets resident across hydration and committed replacements", async () => {
+  await withActor((f) => {
+    const targets = Array.from({ length: 3 }, (_, index) => ({
+      ...f.target,
+      sessionKey: `agent:main:snapshot-resident-${index}`,
+    }));
+    const skillsSnapshot = { prompt: "s".repeat(1536 * 1024), skills: [] };
+    for (const target of targets) {
+      f.writeEntry(
+        { sessionId: target.sessionKey, updatedAt: 1, skillsSnapshot },
+        target.sessionKey,
+      );
+    }
+    const cold = targets.map((target) => f.read(target));
+    // The decoded working set fits in 8 MiB; retaining its raw JSON a second time does not.
+    for (const [index, target] of targets.entries()) {
+      expect(f.read(target).version).toEqual(cold[index]!.version);
+    }
+    const replacement = { ...skillsSnapshot, prompt: "r".repeat(1536 * 1024) };
+    const committed = [];
+    for (const target of targets) {
+      f.patchEntry({
+        selection: { kind: "entry", sessionKey: target.sessionKey, exact: true },
+        sessionKey: target.sessionKey,
+        operation: { kind: "fields", patch: { skillsSnapshot: replacement } },
+        operationLabel: "session-entry.patch",
+        validateCanonicalKeys: false,
+        preserveActivity: true,
+      });
+      committed.push(f.read(target).version);
+    }
+    for (const [index, target] of targets.entries()) {
+      const current = f.read(target);
+      expect(current.version).toEqual(committed[index]);
+      expect(current.entry?.skillsSnapshot?.prompt === replacement.prompt).toBe(true);
+    }
   });
 });

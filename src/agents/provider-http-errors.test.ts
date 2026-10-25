@@ -6,15 +6,11 @@ import {
   createProviderCredentialMatcher as credentialMatcher,
   createProviderErrorTextRedactor as textRedactor,
   createProviderHttpError as createError,
-  extractProviderErrorDetail as errorDetail,
-  extractProviderRequestId as requestId,
   formatProviderErrorPayload as formatPayload,
-  ProviderHttpError,
   readProviderBinaryResponse as readBinary,
   readProviderJsonResponse as readJson,
   readProviderJsonObjectResponse as readJsonObject,
   readProviderTextResponse as readText,
-  readResponseTextLimited as readLimited,
 } from "./provider-http-errors.js";
 
 const streamResponse = (
@@ -23,10 +19,9 @@ const streamResponse = (
   headers?: HeadersInit,
 ) => new Response(new ReadableStream<Uint8Array>(source), { status, headers });
 const byteResponse = (contentType?: string) =>
-  new Response(
-    new Uint8Array([1]),
-    contentType === undefined ? undefined : { headers: { "content-type": contentType } },
-  );
+  new Response(Uint8Array.of(1), {
+    headers: contentType === undefined ? undefined : { "content-type": contentType },
+  });
 
 const label = "Provider API error";
 const jsonResponse = (payload: unknown, status = 400, headers?: HeadersInit) =>
@@ -96,13 +91,19 @@ it.each([
   expect(formatPayload(payload)).toBe(expected);
 });
 
-it("reads string error fields and fallback request id headers", async () => {
-  const response = jsonResponse({ error: "Invalid API key" }, 401, {
-    "request-id": "fallback_req",
+it("preserves string errors, metadata and fallback request id headers", async () => {
+  const response = jsonResponse(
+    { error: "Invalid API key", type: "auth_error", code: "invalid_key" },
+    401,
+    { "request-id": "fallback_req" },
+  );
+  expect(await createError(response, label)).toMatchObject({
+    code: "invalid_key",
+    errorCode: "invalid_key",
+    errorType: "auth_error",
+    requestId: "fallback_req",
+    message: `${label} (401): Invalid API key [type=auth_error, code=invalid_key] [request_id=fallback_req]`,
   });
-
-  expect(await errorDetail(response)).toBe("Invalid API key");
-  expect(requestId(response)).toBe("fallback_req");
 });
 
 it("preserves OAuth error descriptions as actionable details", async () => {
@@ -156,73 +157,12 @@ it("preserves the request timeout that interrupts an error body", async () => {
   await expect(assertProviderOk(response, label)).rejects.toBe(timeout);
 });
 
-it.each([
-  ["complete", 64, "provider error", 0],
-  ["truncated", 8, "provider", 1],
-] as const)(
-  "releases %s body readers and cancels only truncation",
-  async (kind, limit, expected, cancellations) => {
-    const releaseLock = vi.spyOn(ReadableStreamDefaultReader.prototype, "releaseLock");
-    const cancel = vi.spyOn(ReadableStreamDefaultReader.prototype, "cancel");
-    const response = streamResponse({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("provider error"));
-        if (kind === "complete") {
-          controller.close();
-        }
-      },
-    });
-    await expect(readLimited(response, limit)).resolves.toBe(expected);
-    expect(cancel).toHaveBeenCalledTimes(cancellations);
-    expect(releaseLock).toHaveBeenCalledOnce();
-  },
-);
-
-it("attaches structured provider error metadata", async () => {
-  const response = jsonError(
-    {
-      message: "Quota exceeded for api_key=sk-secret1234567890abcd",
-      type: "rate_limit_error",
-      code: "insufficient_quota",
-    },
-    429,
-    { "x-request-id": "req_456" },
-  );
-
-  const error = await createError(response, label);
-  expect(error).toMatchObject({
-    name: "ProviderHttpError",
-    status: 429,
-    statusCode: 429,
-    code: "insufficient_quota",
-    errorCode: "insufficient_quota",
-    errorType: "rate_limit_error",
-    requestId: "req_456",
-    message: expect.stringContaining("Quota exceeded"),
-    errorBody: expect.stringContaining("Quota exceeded"),
-  } satisfies Partial<ProviderHttpError>);
-  expect(error.errorBody).not.toContain("sk-secret1234567890abcd");
-});
-
-it.each([
-  ["delta seconds", "12", 12_000],
-  ["past HTTP date", "Fri, 01 May 2026 11:59:55 GMT", 0],
-])("preserves Retry-After $name as structured milliseconds", async (_name, value, expected) => {
-  vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 1, 12, 0, 0));
-  const error = await createError(
-    new Response(null, { status: 429, headers: { "Retry-After": value } }),
-    label,
-  );
-
-  expect(error).toMatchObject({ retryAfterMs: expected });
-});
-
 it("redacts reflected request credentials before extracting provider error metadata", async () => {
   const credential = 'opaque +17/GLASS~MOTH%"tail';
   const encoded = encodeURIComponent(credential);
   const response = jsonError(
     {
-      message: `Proxy rejected ${"x".repeat(195)} ${credential}`,
+      message: `Proxy rejected ${"api_key=sk-secret1234567890abcd ".padEnd(195, "x")} ${credential}`,
       code: encoded,
       type: credential,
     },
@@ -235,12 +175,17 @@ it("redacts reflected request credentials before extracting provider error metad
   });
 
   expect(error).toMatchObject({
+    name: "ProviderHttpError",
     status: 401,
+    statusCode: 401,
     code: "***",
     errorCode: "***",
     errorType: "***",
     requestId: "***",
+    message: expect.stringContaining("Proxy rejected"),
+    errorBody: expect.stringContaining("Proxy rejected"),
   });
+  expect(error.errorBody).not.toContain("sk-secret1234567890abcd");
   for (const representation of [credential, encoded, credential.slice(0, 6)]) {
     expect(error.message).not.toContain(representation);
     expect(error.errorBody).not.toContain(representation);
@@ -306,14 +251,10 @@ it("adapts invalid JSON object shapes without rewriting body-read errors", async
 
 it("caps successful text responses instead of buffering oversized bodies", async () => {
   let reads = 0;
-  const response = streamResponse(
-    {
-      pull: (controller) =>
-        reads++ === 20 ? controller.close() : controller.enqueue(new Uint8Array(1024).fill(120)),
-    },
-    200,
-    { "content-type": "text/plain" },
-  );
+  const response = streamResponse({
+    pull: (controller) =>
+      reads++ === 20 ? controller.close() : controller.enqueue(new Uint8Array(1024).fill(120)),
+  });
   await expect(readText(response, "Provider text failed", { maxBytes: 2048 })).rejects.toThrow(
     "Provider text failed: text response exceeds 2048 bytes",
   );

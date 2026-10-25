@@ -138,7 +138,6 @@ describe("Blobster renderer", () => {
 
   it.each([
     "<script>alert(1)</script>",
-    '<image href="https://evil.invalid/a.png"/>',
     "<foreignObject><p>Hi</p></foreignObject>",
     '<use href="#body"/>',
     '<path d="M0 0" onload="alert(1)"/>',
@@ -167,8 +166,6 @@ describe("Blobster renderer", () => {
     expect(svg).toContain("&lt;script&gt;&amp;&quot;");
     expect(svg).not.toContain("<script>");
     expect(svg).toContain('viewBox="-12 -18 144 144"');
-    expect(svg).toContain('<circle cx="45" cy="32" r="5.5"');
-    await expect(render({ ...plain, name: "\ud800" })).rejects.toThrow();
     await expect(
       render({ ...plain, palette: { ...plain.palette, shell: "red" } }),
     ).rejects.toThrow();

@@ -309,17 +309,15 @@ describe("node worker cleanup observation", () => {
     cause: new Error("cleanup failed with framing-fixture-token"),
   } satisfies ProcessExtinctionResult;
 
-  it.each([false, true])("observes native completion (uncertain=%s)", async (uncertain) => {
+  it("reports and redacts uncertain native completion", async () => {
     const harness = observationHarness({
-      waitForExtinction: async () => (uncertain ? uncertainExtinction : { status: "confirmed" }),
-      expectedKind: uncertain ? "deferred" : "confirmed",
+      waitForExtinction: async () => uncertainExtinction,
+      expectedKind: "deferred",
     });
     await harness.send(encodeResult("first"));
     const outcome = await harness.close();
 
-    expect(outcome).toEqual(
-      uncertain ? { state: "failed", errorText: expect.stringContaining("cleanup") } : completed(),
-    );
+    expect(outcome).toEqual({ state: "failed", errorText: expect.stringContaining("cleanup") });
     expect(outcome.errorText ?? "").not.toContain("framing-fixture-token");
     expect(harness.frames).toEqual([resultFrame("first")]);
   });

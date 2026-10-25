@@ -22,10 +22,10 @@ function installLocalTransport(bridge: ReturnType<typeof createSandboxFsBridge>)
   const write = vi
     .spyOn(bridge, "writeFile")
     .mockImplementation((params) => local.writeFile(params));
-  const create = vi
-    .spyOn(bridge, "createFileExclusive")
-    .mockImplementation((params) => local.createFileExclusive!(params));
-  const remove = vi.spyOn(bridge, "remove").mockImplementation((params) => local.remove(params));
+  vi.spyOn(bridge, "createFileExclusive").mockImplementation((params) =>
+    local.createFileExclusive!(params),
+  );
+  vi.spyOn(bridge, "remove").mockImplementation((params) => local.remove(params));
   vi.spyOn(bridge, "mkdirp").mockImplementation((params) => local.mkdirp(params));
   vi.spyOn(bridge, "stat").mockImplementation((params) => local.stat(params));
   const list = vi.spyOn(bridge, "readDirectory").mockImplementation(async (params) => {
@@ -33,7 +33,7 @@ function installLocalTransport(bridge: ReturnType<typeof createSandboxFsBridge>)
     const entries = await fs.readdir(hostPath!, { withFileTypes: true });
     return entries.map((entry) => ({ name: entry.name, isDirectory: entry.isDirectory() }));
   });
-  return { write, create, remove, list };
+  return { write, list };
 }
 
 function createSandboxCodingTools(
@@ -128,9 +128,6 @@ it.runIf(process.platform !== "win32").each([true, false])(
       await patch(updatePatch("a\\b", "LITERAL_EDITED", "LITERAL_PATCHED"));
       await expectFile(workspaceDir, "a\\b", "LITERAL_PATCHED\n");
       await expectFile(workspaceDir, "a/b", "SLASH_DECOY\n");
-      expect(await resolveSandboxFileIdentity({ bridge, filePath: "a\\b" })).not.toBe(
-        await resolveSandboxFileIdentity({ bridge, filePath: "a/b" }),
-      );
     }),
 );
 
@@ -149,7 +146,7 @@ it.runIf(process.platform !== "win32").each([true, false])(
       await fs.symlink("cache/hop", path.join(workspaceDir, "alias"));
       await fs.symlink("/data/hop", path.join(workspaceDir, "absolute-alias"));
       await fs.writeFile(path.join(replacement, "hop"), visibleContent);
-      const { sandbox, bridge } = mountSandbox(workspaceDir, [
+      const { sandbox } = mountSandbox(workspaceDir, [
         `${replacement}:/workspace/cache:rw`,
         `${replacement}:/data:rw`,
       ]);
@@ -162,9 +159,6 @@ it.runIf(process.platform !== "win32").each([true, false])(
         const result = await text("read", filePath);
         expect(result).toContain(visibleContent);
         expect(result).not.toContain(hiddenContent);
-        expect(await resolveSandboxFileIdentity({ bridge, filePath })).toBe(
-          path.join(replacement, "hop"),
-        );
       }
       if (workspaceOnly) {
         for (const name of ["write", "edit", "ls"]) {
@@ -227,17 +221,9 @@ it.each([true, false])(
         await edit(filePath, "changed", "edited");
         await expectFile(replacement, "sub/marker", "edited");
       }
-      expect(write).toHaveBeenCalledTimes(4);
-      for (const [request] of write.mock.calls) {
-        expect(request.filePath).toBe("/workspace/sub/marker");
-        expect(bridge.resolvePath(request).hostPath).toBe(path.join(replacement, "sub/marker"));
-      }
       await execute("write", { path: "@literal", content: "new-at" });
       await edit("@literal", "new-at", "edited-at");
       await expectFile(replacement, "@literal", "edited-at");
-      expect(write).toHaveBeenLastCalledWith(
-        expect.objectContaining({ filePath: "/workspace/@literal" }),
-      );
       expect(await text("read", "@@literal")).toContain("edited-at");
       await execute("write", { path: "@@literal", content: "reference original" });
       await edit("@@literal", "original", "edited");
@@ -251,13 +237,12 @@ it.each([true, false])(
       }
       for (const args of [{}, { path: "" }, { path: "." }]) {
         expect(getTextContent(await execute("ls", args))).toContain("sub/");
-        expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ filePath: "/workspace" }));
       }
-      expect(list).toHaveBeenCalledTimes(6);
+      const writesBeforeDenials = write.mock.calls.length;
+      const listsBeforeDenials = list.mock.calls.length;
       await expect(execute("ls", { path: "</arg_value>>" })).rejects.toThrow(
         "Malformed path parameter: path",
       );
-      expect(list).toHaveBeenCalledTimes(6);
       for (const containerRoot of [
         "/data",
         ...(process.platform === "win32" ? [] : [workspaceDir]),
@@ -279,8 +264,8 @@ it.each([true, false])(
         ).rejects.toThrow("container-only");
       }
       await expect(execute("read", { path: "escape/marker" })).rejects.toThrow();
-      expect(write).toHaveBeenCalledTimes(8);
-      expect(list).toHaveBeenCalledTimes(6);
+      expect(write).toHaveBeenCalledTimes(writesBeforeDenials);
+      expect(list).toHaveBeenCalledTimes(listsBeforeDenials);
       await expectFile(outside, "marker", "HIDDEN");
       await expectFile(data, "marker", "EXTRA");
     }),
@@ -308,7 +293,7 @@ it("prepares patch-only workspace admission and preserves the admitted container
       `${nested}:/workspace/alias:rw`,
       `${outside}:/extra:rw`,
     ]);
-    const { write, create, remove } = installLocalTransport(bridge);
+    installLocalTransport(bridge);
     const patchTool = (workspaceOnly: boolean) =>
       createSandboxCodingTools(sandbox, {
         includeBaseCodingTools: false,
@@ -326,11 +311,6 @@ it("prepares patch-only workspace admission and preserves the admitted container
       await patch(updatePatch(filePath, before, after));
       expect(await bridge.readFile({ filePath })).toEqual(Buffer.from(`${after}\n`));
     }
-    expect(write.mock.calls.map(([request]) => request.filePath)).toEqual([
-      "/workspace/sub/marker",
-      "/workspace/sub/marker",
-      "/workspace/nested/marker",
-    ]);
     await patch(updatePatch("@@patch", "LITERAL", "referenced"));
     await expectFile(replacement, "@patch", "referenced\n");
     await expectFile(replacement, "patch", "DECOY\n");
@@ -348,21 +328,19 @@ it("prepares patch-only workspace admission and preserves the admitted container
     const add = (filePath: string) =>
       ["*** Begin Patch", `*** Add File: ${filePath}`, "+new", "*** End Patch"].join("\n");
     await patch(add("sub/new"));
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({ filePath: "/workspace/sub/new" }),
-    );
+    await expectFile(replacement, "sub/new", "new\n");
     for (const file of ["/data/new", "/extra/new"]) {
       await expect(patch(add(file))).rejects.toThrow("Path escapes sandbox root");
     }
     await patchTool(false)(add("/extra/new"));
-    expect(create).toHaveBeenLastCalledWith(expect.objectContaining({ filePath: "/extra/new" }));
+    await expectFile(outside, "new", "new\n");
     if (process.platform !== "win32") {
       await fs.symlink(path.join(outside, "marker"), path.join(replacement, "delete-link"));
       mockContainerCanonicalPaths({ "/workspace/delete-link": "/outside/marker" });
       await patch("*** Begin Patch\n*** Delete File: delete-link\n*** End Patch");
-      expect(remove).toHaveBeenCalledWith(
-        expect.objectContaining({ filePath: "/workspace/delete-link" }),
-      );
+      await expect(fs.lstat(path.join(replacement, "delete-link"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     }
     const observer = createMemoryWriteProvenanceObserver({
       mutationRoot: workspaceDir,

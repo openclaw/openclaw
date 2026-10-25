@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import type { SessionEvent } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
@@ -588,7 +588,9 @@ describe("Copilot attempt transcript journal", () => {
     expect(journal.snapshot().messagesSnapshot.map((message) => message.role)).toEqual(
       rows.map((row) => row.message.role),
     );
-    const files = await fs.readdir(tempDir, { recursive: true });
+    const files = (await listDirectoryTreeStrict(tempDir)).map(
+      (walkEntry) => walkEntry.relativePath,
+    );
     expect(files.some((file) => file.endsWith(".jsonl"))).toBe(false);
   });
 
