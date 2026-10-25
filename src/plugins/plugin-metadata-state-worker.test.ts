@@ -110,6 +110,23 @@ async function seed(env: NodeJS.ProcessEnv, value: InstalledPluginIndex) {
   return database.path;
 }
 
+function readFreshIndex(env: NodeJS.ProcessEnv) {
+  return withPluginCache(createPluginCache(), () => readPersistedInstalledPluginIndex({ env }));
+}
+
+function indexPlugin(pluginId: string, rootDir: string): InstalledPluginIndex["plugins"][number] {
+  return {
+    pluginId,
+    rootDir,
+    manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+    manifestHash: "synthetic-manifest",
+    origin: "global",
+    enabled: true,
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
+    compat: [],
+  };
+}
+
 function familyHashes(databasePath: string) {
   return ["", "-wal", "-shm", "-journal"].map((suffix) => {
     const file = `${databasePath}${suffix}`;
@@ -321,11 +338,7 @@ it("refreshes current package facts in pinned install roots without parent SQL o
   const rootDir = path.join(roots.extensionsDir, "fixture");
   fs.mkdirSync(rootDir, { recursive: true });
   const fixture = createColdPluginFixture({ rootDir, pluginId: "refresh-fixture" });
-  const config = {
-    plugins: {
-      entries: { [fixture.pluginId]: { enabled: true } },
-    },
-  };
+  const config = { plugins: { entries: { [fixture.pluginId]: { enabled: true } } } };
   await seed(env, index());
   const refresh = () =>
     withPluginLifecycleLease({ env }, async (lease) => {
@@ -353,17 +366,14 @@ it("refreshes current package facts in pinned install roots without parent SQL o
   createColdPluginFixture({ rootDir, pluginId: fixture.pluginId, packageVersion: "2.0.0" });
   await refresh();
   await withoutMainThreadSql(async () => {
-    await withPluginCache(createPluginCache(), async () => {
-      const persisted = await readPersistedInstalledPluginIndex({ env });
-      expect(persisted?.plugins).toContainEqual(
-        expect.objectContaining({
-          pluginId: fixture.pluginId,
-          packageVersion: "2.0.0",
-          enabled: true,
-          sourceAdmissions: { [rootDir]: admission },
-        }),
-      );
-    });
+    expect((await readFreshIndex(env))?.plugins).toContainEqual(
+      expect.objectContaining({
+        pluginId: fixture.pluginId,
+        packageVersion: "2.0.0",
+        enabled: true,
+        sourceAdmissions: { [rootDir]: admission },
+      }),
+    );
   });
   expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
 });
@@ -371,18 +381,18 @@ it("refreshes current package facts in pinned install roots without parent SQL o
 it("merges source admissions into the current install without main-thread SQL or stale-owner writes", async () => {
   const env = environment();
   const plugin = {
-    pluginId: "native-demo",
-    rootDir: "/plugins/native-demo",
+    ...indexPlugin("native-demo", "/plugins/native-demo"),
     installRecordHash: "current-install",
-    manifestPath: "/plugins/native-demo/openclaw.plugin.json",
-    manifestHash: "manifest",
-    origin: "global",
-    enabled: true,
-    startup: { sidecar: false, memory: false, agentHarnesses: [] },
-    compat: [],
-  } satisfies InstalledPluginIndex["plugins"][number];
+  };
   const current = { ...index("current inventory"), plugins: [plugin] };
   await seed(env, current);
+  const identity = {
+    sourceIdentity: "1:2:3:4:5:6",
+    capturedIdentity: "1:7:3:4:5:6",
+    contentHash: "b".repeat(64),
+    sizeBytes: 4,
+  };
+  const namespace = "/captures/namespace";
   const publication = {
     pluginId: plugin.pluginId,
     rootDir: plugin.rootDir,
@@ -393,27 +403,21 @@ it("merges source admissions into the current install without main-thread SQL or
       sourceDigest: "a".repeat(64),
       nativeArtifacts: {
         "native-tool": {
-          sourceIdentity: "1:2:3:4:5:6",
-          contentHash: "b".repeat(64),
-          sizeBytes: 4,
-          capturedPath: "/captures/namespace/content/native-tool",
-          namespace: "/captures/namespace",
-          capturedIdentity: "1:7:3:4:5:6",
+          ...identity,
+          capturedPath: namespace + "/content/native-tool",
+          namespace,
         },
       },
       nativeNamespaces: {
-        "/captures/namespace": {
+        [namespace]: {
           sourceDirectory: plugin.rootDir,
-          capturedRoot: "/captures/namespace",
+          capturedRoot: namespace,
           managed: false,
           members: {
             "native-tool": {
               source: plugin.rootDir + "/native-tool",
-              sourceIdentity: "1:2:3:4:5:6",
-              capturedIdentity: "1:7:3:4:5:6",
+              ...identity,
               boundaryChecked: false,
-              contentHash: "b".repeat(64),
-              sizeBytes: 4,
             },
           },
         },
@@ -429,12 +433,10 @@ it("merges source admissions into the current install without main-thread SQL or
     );
     expect(await publish(publication)).toBe(true);
     const committed = await metadataWorker.readPluginMetadataStateRow("installed-index", { env });
-    await withPluginCache(createPluginCache(), async () => {
-      const loaded = await readPersistedInstalledPluginIndex({ env });
-      expect(loaded?.diagnostics).toEqual(current.diagnostics);
-      expect(loaded?.plugins[0]?.sourceAdmissions).toEqual({
-        [publication.key]: publication.receipt,
-      });
+    const loaded = await readFreshIndex(env);
+    expect(loaded?.diagnostics).toEqual(current.diagnostics);
+    expect(loaded?.plugins[0]?.sourceAdmissions).toEqual({
+      [publication.key]: publication.receipt,
     });
     expect(await publish(publication)).toBe(true);
     expect(await publish({ ...publication, rootDir: "/replaced/plugin" })).toBe(false);
@@ -455,16 +457,9 @@ it("preserves database-family bytes during ambient artifact-preserving async ins
   const env = environment();
   const databasePath = await seed(env, index());
   const before = familyHashes(databasePath);
-  const inspect = () =>
-    withPluginCache(createPluginCache(), async () => {
-      expect(
-        (
-          await readPersistedInstalledPluginIndex({
-            env,
-          })
-        )?.diagnostics,
-      ).toEqual([{ level: "warn", message: "synthetic index" }]);
-    });
+  const inspect = async () => {
+    expect((await readFreshIndex(env))?.diagnostics).toEqual(index().diagnostics);
+  };
   await withoutMainThreadSql(() => withArtifactPreservingStateReads(inspect));
   await closeOpenClawStateDatabaseAsync();
   expect(familyHashes(databasePath)).toEqual(before);
@@ -545,13 +540,9 @@ it("reads committed live metadata without space for a database snapshot", async 
         writer.send({ revision: 1, index: index(message) });
         expect((await committed)[0]).toBe("committed");
         await withoutMainThreadSql(() =>
-          withArtifactPreservingStateReads(() =>
-            withPluginCache(createPluginCache(), async () => {
-              expect((await readPersistedInstalledPluginIndex({ env }))?.diagnostics).toEqual([
-                { level: "warn", message },
-              ]);
-            }),
-          ),
+          withArtifactPreservingStateReads(async () => {
+            expect((await readFreshIndex(env))?.diagnostics).toEqual(index(message).diagnostics);
+          }),
         );
       }
     });
@@ -559,9 +550,7 @@ it("reads committed live metadata without space for a database snapshot", async 
     writer.send("newer-schema");
     expect((await committed)[0]).toBe("committed");
     await expect(
-      withArtifactPreservingStateReads(() =>
-        withPluginCache(createPluginCache(), () => readPersistedInstalledPluginIndex({ env })),
-      ),
+      withArtifactPreservingStateReads(() => readFreshIndex(env)),
     ).rejects.toBeInstanceOf(SqliteSchemaVersionError);
   } finally {
     if (writer.connected) {
@@ -702,28 +691,19 @@ it("returns persisted bundled recovery locations through its existing async cons
   const env = environment();
   const rootDir = path.join(env.OPENCLAW_STATE_DIR, "previous", "extensions", "fixture");
   const stored = index();
-  stored.plugins = [
-    ...stored.plugins,
-    {
-      pluginId: "fixture",
-      manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-      manifestHash: "synthetic-manifest",
-      rootDir,
-      origin: "bundled",
-      enabled: true,
-      startup: { sidecar: false, memory: false, agentHarnesses: [] },
-      compat: [],
-    },
-  ];
+  stored.plugins = [{ ...indexPlugin("fixture", rootDir), origin: "bundled" }];
   await seed(env, stored);
   await withoutMainThreadSql(async () => {
     await using cache = createPluginCache();
     const recovered = await withPluginCache(cache, () =>
       listPersistedBundledPluginRecoveryLocations({ env }),
     );
-    expect(recovered).toHaveLength(1);
-    expect(recovered[0]?.pluginId).toBe("fixture");
-    expect(recovered[0]?.loadPaths).toContain(rootDir);
+    expect(recovered).toEqual([
+      expect.objectContaining({
+        pluginId: "fixture",
+        loadPaths: expect.arrayContaining([rootDir]),
+      }),
+    ]);
   });
 });
 

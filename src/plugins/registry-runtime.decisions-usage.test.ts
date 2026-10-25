@@ -89,6 +89,17 @@ function accepted(costUsd?: number): Extract<ProviderDecisionOutcomeV2, { status
   };
 }
 
+function listenForUsage(listener: () => void) {
+  const stop = onTrustedInternalDiagnosticEvent(
+    markTrustedOtelDiagnosticListener((event) => {
+      if (event.type === "model.usage") {
+        listener();
+      }
+    }),
+  );
+  onTestFinished(stop);
+}
+
 function registered(evaluate: DecisionProviderV2["evaluate"], selectedConfig = config) {
   preparation.billing = {
     unit: "tokens",
@@ -353,9 +364,14 @@ it.each(entries)("records exactly one accepted observation at %s", async (entry)
 
 const directEntries = ["core-v1", "core-v2", "registry-v1", "registry-v2"] as const;
 
-it.each(directEntries)(
-  "keeps admitted cancellation and exactly-once accounting after %s replaces its signal",
-  async (entry) => {
+it.each(
+  directEntries.flatMap((entry) => [
+    { entry, cancelAdmitted: false },
+    { entry, cancelAdmitted: true },
+  ]),
+)(
+  "$entry signal replacement (cancel admitted: $cancelAdmitted)",
+  async ({ entry, cancelAdmitted }) => {
     const host = pendingDecision();
     const { started, release, evaluate } = host;
     const admitted = new AbortController();
@@ -367,50 +383,27 @@ it.each(directEntries)(
       agentId: "operation-owner",
     };
     const pending = invoke(entry, host, options);
+    const rejected = cancelAdmitted
+      ? expect(pending).rejects.toThrow("admitted cancelled")
+      : undefined;
     try {
       await started.promise;
       options.signal = replacement.signal;
-      replacement.abort(new Error("replacement cancelled"));
+      (cancelAdmitted ? admitted : replacement).abort(
+        new Error(cancelAdmitted ? "admitted cancelled" : "replacement cancelled"),
+      );
       expect(host.events).toEqual([]);
       release.resolve();
-      await expect(pending).resolves.toMatchObject({ status: "ok", result: accepted().result });
-      expect(host.events).toEqual([
-        {
-          trusted: true,
-          hostPluginId: undefined,
-          event: usageEvent(0.0002, "operation-owner"),
-        },
-      ]);
+      if (cancelAdmitted) {
+        await rejected;
+        expect(host.events).toEqual([]);
+      } else {
+        await expect(pending).resolves.toMatchObject({ status: "ok", result: accepted().result });
+        expect(host.events).toEqual([
+          { trusted: true, hostPluginId: undefined, event: usageEvent(0.0002, "operation-owner") },
+        ]);
+      }
       expect(evaluate).toHaveBeenCalledOnce();
-      expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pending]);
-    }
-  },
-);
-
-it.each(directEntries)(
-  "still cancels %s under its admitted signal after replacement with a live signal",
-  async (entry) => {
-    const host = pendingDecision();
-    const { started, release, evaluate } = host;
-    const admitted = new AbortController();
-    const options = {
-      ...operationOptions,
-      purpose: "signal-replacement",
-      signal: admitted.signal,
-    };
-    const pending = invoke(entry, host, options);
-    const rejected = expect(pending).rejects.toThrow("admitted cancelled");
-    try {
-      await started.promise;
-      options.signal = new AbortController().signal;
-      admitted.abort(new Error("admitted cancelled"));
-      release.resolve();
-      await rejected;
-      expect(evaluate).toHaveBeenCalledOnce();
-      expect(host.events).toEqual([]);
       expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
     } finally {
       release.resolve();
@@ -545,20 +538,10 @@ it.each(["plugin-v1", "plugin-v2", "tool", "prefilter"] as const)(
   async (entry) => {
     const host = ready(entry);
     const controller = new AbortController();
-    const stop = onTrustedInternalDiagnosticEvent(
-      markTrustedOtelDiagnosticListener((event) => {
-        if (event.type === "model.usage") {
-          queueMicrotask(() => controller.abort(new Error("after acceptance")));
-        }
-      }),
-    );
-    try {
-      await invoke(entry, host, controller.signal);
-      expect(controller.signal.aborted).toBe(true);
-      expect(host.events).toHaveLength(1);
-    } finally {
-      stop();
-    }
+    listenForUsage(() => queueMicrotask(() => controller.abort(new Error("after acceptance"))));
+    await invoke(entry, host, controller.signal);
+    expect(controller.signal.aborted).toBe(true);
+    expect(host.events).toHaveLength(1);
   },
 );
 
@@ -569,13 +552,9 @@ it.each(["plugin-v1", "plugin-v2"] as const)(
     let disposal:
       | ReturnType<NonNullable<ReturnType<typeof getPluginInstance>>["dispose"]>
       | undefined;
-    const stop = onTrustedInternalDiagnosticEvent(
-      markTrustedOtelDiagnosticListener((event) => {
-        if (event.type === "model.usage") {
-          queueMicrotask(() => {
-            disposal = getPluginInstance(host.consumer)!.dispose();
-          });
-        }
+    listenForUsage(() =>
+      queueMicrotask(() => {
+        disposal = getPluginInstance(host.consumer)!.dispose();
       }),
     );
     try {
@@ -583,7 +562,6 @@ it.each(["plugin-v1", "plugin-v2"] as const)(
       expect(disposal).toBeDefined();
       expect(host.events).toHaveLength(1);
     } finally {
-      stop();
       await disposal;
     }
   },
