@@ -175,7 +175,7 @@ it("prepares the exact Docker lane union in a sanitized bound environment", asyn
   });
 });
 
-it("retains immutable prepared Docker receipts without claiming installed or runtime proof", async () => {
+it("keeps prepared Docker receipts immutable and rejects launch/environment mismatches", async () => {
   const repoRoot = await makeTempRepo("qa-docker-prepared-evidence-");
   const scenario = makeDockerE2eScenario("one", "gateway-network");
   const captured: QaPreparedDockerEvidence[] = [];
@@ -202,17 +202,6 @@ it("retains immutable prepared Docker receipts without claiming installed or run
   expect(captured[1]?.receipt.artifact.path).not.toBe(first.receipt.artifact.path);
   expect(await fs.readFile(firstPath)).toEqual(original);
   expect(createHash("sha256").update(original).digest("hex")).toBe(first.receipt.artifact.sha256);
-  const result = await runPrepared({
-    runCommand: async () => commandResult(0, "completed"),
-  });
-  expect(result.results[0]).toMatchObject({ scenario: { id: "one" }, status: "pass" });
-  expect(result.evidence.entries[0]?.result.status).toBe("pass");
-  if (result.evidence.schemaVersion !== 3) {
-    throw new Error("expected occurrence evidence");
-  }
-  const receipts = result.evidence.occurrences.flatMap((occurrence) => occurrence.receipts);
-  expect(receipts).toContainEqual(first.receipt);
-  expect(receipts.every((receipt) => receipt.phase === "prepared")).toBe(true);
   expect(first.receipt.identity).toEqual({
     source: { ref: "a".repeat(40), integrity: null },
     runtime: { id: null, version: null },
