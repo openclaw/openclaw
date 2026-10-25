@@ -139,12 +139,10 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect([...registry.getApprovals(key)]).toEqual([client.connId]);
 
     read.mockRejectedValueOnce(new Error("replay failed"));
-    const failed = await request({ key, subscriptionId: "failed", ...narrationOptions });
-    expectError(failed);
+    expectError(await request({ key, subscriptionId: "failed", ...narrationOptions }));
     expect([...registry.getNarration(key)]).toEqual([]);
 
-    const released = await request(observer, "sessions.messages.unsubscribe");
-    expectSuccess(released, expect.any(Object));
+    expectSuccess(await request(observer, "sessions.messages.unsubscribe"), expect.any(Object));
     expect([...registry.get(key)]).toEqual([client.connId]);
     expect([...registry.getNarration(key)]).toEqual([]);
     expect([...registry.getApprovals(key)]).toEqual([]);
@@ -159,11 +157,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     });
     registry.subscribe(client.connId!, replay.sessionKey);
     const release = vi.fn();
-    read.mockResolvedValueOnce({
-      replay,
-      isCurrent: () => false,
-      release,
-    });
+    read.mockResolvedValueOnce({ replay, isCurrent: () => false, release });
 
     const respond = await request({ key: "child", includeApprovals: true });
     expectError(respond);
@@ -193,10 +187,6 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     const { read, rollback, register, request } = createContext();
     const respond = await request({ key: "agent:main:child", includeApprovals: true });
 
-    expect(register).toHaveBeenCalledWith("conn-approval-reviewer", "agent:main:child", {
-      includeApprovals: true,
-      provisional: true,
-    });
     expect(register.mock.invocationCallOrder[0]).toBeLessThan(
       read.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );

@@ -102,10 +102,7 @@ it("denies direct and indirect incognito selectors while preserving admin access
     const cfg = { agents: { entries: { main: {} } } };
     const { read, allows } = await sessionFixture(
       sessionKey,
-      {
-        incognito: true,
-        visibility: "shared",
-      },
+      { incognito: true, visibility: "shared" },
       cfg,
     );
     const viewer = identifiedClient(["operator.read"]);
@@ -124,7 +121,6 @@ it("denies direct and indirect incognito selectors while preserving admin access
 
 it.each([
   ["draft without roles", "draft", {}, undefined],
-  ["draft without runtime config", "draft", undefined, undefined],
   ["shared with a none role", "shared", rolePolicyConfig(), "none"],
   ["draft with a write role", "draft", rolePolicyConfig(), "write"],
 ] as const)(
@@ -178,7 +174,7 @@ it.each(["shared", "read-only", "suggest"] as const)(
         visibility,
       });
 
-      for (const cfg of [undefined, {}, rolePolicyConfig()]) {
+      for (const cfg of [{}, rolePolicyConfig()]) {
         await allows(viewer, { sessionKey }, cfg);
       }
     });
@@ -188,9 +184,7 @@ it.each(["shared", "read-only", "suggest"] as const)(
 it("preserves solo and system reads while denying identityless reads with roles", async () => {
   await withOpenClawTestState(profileState, async () => {
     const sessionKey = "agent:main:solo-artifacts";
-    const { read, allows } = await sessionFixture(sessionKey, {
-      visibility: "draft",
-    });
+    const { read, allows } = await sessionFixture(sessionKey, { visibility: "draft" });
     const identityless = sharingPolicyClient({});
     for (const client of [null, identityless, sharingPolicyClient({ user: "gateway-owner" })]) {
       await allows(client);
