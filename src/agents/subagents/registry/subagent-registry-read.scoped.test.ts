@@ -147,6 +147,12 @@ describe("subagent registry scoped reads", () => {
         child("other-agent", { requesterAgentId: "other" }),
       ];
       publishLive(...runs);
+      const index = buildScopedSubagentRunReadIndexFromRuns(
+        mocks.liveRuns,
+        root,
+        "main",
+        storePath,
+      );
       expect(
         mod
           .listSubagentRunsForRequester(root, {
@@ -155,22 +161,8 @@ describe("subagent registry scoped reads", () => {
           })
           .map((run) => run.runId),
       ).toEqual(ids);
-      expect(
-        buildScopedSubagentRunReadIndexFromRuns(
-          mocks.liveRuns,
-          root,
-          "main",
-          storePath,
-        ).countActiveDescendantRuns(root),
-      ).toBe(1);
-      expect(
-        buildScopedSubagentRunReadIndexFromRuns(
-          mocks.liveRuns,
-          root,
-          "main",
-          storePath,
-        ).hasDescendantRunAwaitingSettle(root, excluded),
-      ).toBe(false);
+      expect(index.countActiveDescendantRuns(root)).toBe(1);
+      expect(index.hasDescendantRunAwaitingSettle(root, excluded)).toBe(false);
     },
   );
 
