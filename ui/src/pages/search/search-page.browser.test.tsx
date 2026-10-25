@@ -1,6 +1,9 @@
 import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import type { WebSearchStatusResult } from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
+import type {
+  WebSearchStatusResult,
+  WebSearchTestResult,
+} from "../../../../packages/gateway-protocol/src/schema/web-search.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
@@ -20,6 +23,12 @@ import {
 
 const providerPath = pathForProvider("searxng");
 const ready = searchStatus("searxng", "SearXNG", { hint: "Self-hosted search" });
+const searchResult = (overrides: Partial<WebSearchTestResult>): WebSearchTestResult => ({
+  provider: "searxng",
+  status: "ok",
+  latencyMs: 1,
+  ...overrides,
+});
 
 async function mount(
   options: {
@@ -33,14 +42,14 @@ async function mount(
   let result = options.result ?? ready;
   let statusResponse: Promise<WebSearchStatusResult> | undefined;
   const statusRequested = createDeferred();
-  let testResponse: Promise<unknown> = Promise.resolve({
-    provider: "searxng",
-    status: "ok",
-    latencyMs: 12,
-    results: [
-      { title: "Documentation", url: "https://example.com/docs", snippet: "Search result" },
-    ],
-  });
+  let testResponse: Promise<unknown> = Promise.resolve(
+    searchResult({
+      latencyMs: 12,
+      results: [
+        { title: "Documentation", url: "https://example.com/docs", snippet: "Search result" },
+      ],
+    }),
+  );
   const fixture = await mountSearch({
     hello: gatewayHelloForMethods(
       [],
@@ -116,7 +125,7 @@ describe("Search settings", () => {
     expect(fixture.button("Refresh search status").disabled).toBe(true);
     expect(fixture.button("Test search").disabled).toBe(true);
     expect(fixture.input("Search query")).toBe(query);
-    expect(fixture.element.textContent).toContain(i18n.t("searchPage.loading"));
+    fixture.expectText(i18n.t("searchPage.loading"));
     expect(fixture.element.querySelector(".settings-loading-skeleton")).toBeNull();
 
     refresh.reject(new Error("Search status unavailable"));
@@ -225,15 +234,15 @@ describe("Search settings", () => {
       expect(statuses[0]?.[1]).toEqual({ agentId: outcome === "success" ? "scout" : "main" });
       expect(fixture.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
       expect(fixture.element.querySelector(".settings-loading-skeleton")).toBeNull();
-      expect(fixture.element.textContent).toContain("Configured");
+      fixture.expectText("Configured");
     },
   );
 
   it("keeps configured separate from tested and writes explicit and automatic selection through the config owner", async () => {
     const fixture = await mount();
     expect(fixture.element.querySelector(".page-title")?.textContent).toBe("Search");
-    expect(fixture.element.textContent).toContain("Configured");
-    expect(fixture.statuses()).toContainEqual(expect.stringContaining("Not tested"));
+    fixture.expectText("Configured");
+    fixture.expectStatus("Not tested");
     fixture.select("Search provider", "searxng");
     await fixture.settle();
     expect(fixture.runtime.patchForm).toHaveBeenCalledWith([...searchPath, "provider"], "searxng");
@@ -242,7 +251,7 @@ describe("Search settings", () => {
     expect(fixture.runtime.removeFormValue).toHaveBeenCalledWith([...searchPath, "provider"]);
     fixture.click("Test search");
     await fixture.settle();
-    expect(fixture.statuses()).toContainEqual(expect.stringContaining("Search succeeded"));
+    fixture.expectStatus("Search succeeded");
     expect(fixture.element.querySelector('a[href="https://example.com/docs"]')?.textContent).toBe(
       "Documentation",
     );
@@ -333,9 +342,7 @@ describe("Search settings", () => {
       const old = createDeferred<unknown>();
       fixture.setTestResponse(old.promise);
       fixture.click("Test search");
-      await waitForSolid(() =>
-        expect(fixture.statuses()).toContainEqual(expect.stringContaining("Searching…")),
-      );
+      await waitForSolid(() => fixture.expectStatus("Searching…"));
       if (change === "agent") {
         fixture.setResult({
           ...ready,
@@ -348,20 +355,12 @@ describe("Search settings", () => {
         fixture.gateway.publish(fixture.snapshot);
       }
       try {
-        await waitForSolid(() =>
-          expect(fixture.statuses()).toContainEqual(expect.stringContaining("Not tested")),
-        );
+        await waitForSolid(() => fixture.expectStatus("Not tested"));
       } finally {
-        old.resolve({
-          provider: "searxng",
-          status: "ok",
-          latencyMs: 1,
-          content: "Obsolete success",
-        });
+        old.resolve(searchResult({ content: "Obsolete success" }));
       }
       await fixture.settle();
-      expect(fixture.element.textContent).not.toContain("Obsolete success");
-      expect(fixture.element.textContent).not.toContain("Search succeeded");
+      fixture.expectNoText("Obsolete success", "Search succeeded");
     },
   );
 
@@ -370,6 +369,7 @@ describe("Search settings", () => {
     async (outcome) => {
       const fixture = await mount();
       const query = fixture.input("Search query");
+      const button = fixture.button("Test search");
       editInput(query, "Query A", false);
       const pending = createDeferred<unknown>();
       fixture.setTestResponse(pending.promise);
@@ -387,68 +387,56 @@ describe("Search settings", () => {
         if (outcome === "request error") {
           pending.reject(new Error("Previous transport error"));
         } else {
-          pending.resolve({
-            provider: "searxng",
-            latencyMs: 1,
-            ...(outcome === "success"
-              ? {
-                  status: "ok",
-                  content: "Previous answer",
-                  results: [{ title: "Previous source", url: "https://example.com/previous" }],
-                }
-              : { status: "error", error: "Previous provider error" }),
-          });
+          pending.resolve(
+            searchResult(
+              outcome === "success"
+                ? {
+                    status: "ok",
+                    content: "Previous answer",
+                    results: [{ title: "Previous source", url: "https://example.com/previous" }],
+                  }
+                : { status: "error", error: "Previous provider error" },
+            ),
+          );
         }
       }
       await fixture.settle();
-      expect(fixture.element.textContent).toContain(
-        outcome === "success" ? "Search succeeded" : "Search failed",
-      );
+      fixture.expectText(outcome === "success" ? "Search succeeded" : "Search failed");
       expect(query.disabled).toBe(false);
       expect(fixture.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: "Query A" });
       if (outcome === "success") {
-        expect(fixture.element.textContent).toContain("Previous answer");
+        fixture.expectText("Previous answer");
+      }
+      if (outcome === "request error") {
+        fixture.expectText("Previous transport error");
+        const retry = createDeferred<unknown>();
+        fixture.setTestResponse(retry.promise);
+        button.click();
+        try {
+          await waitForSolid(() => {
+            fixture.expectNoText("Previous transport error");
+            fixture.expectStatus("Searching…");
+            expect(fixture.input("Search query")).toBe(query);
+            expect(query.disabled).toBe(true);
+            expect(fixture.button("Searching…")).toBe(button);
+          });
+        } finally {
+          retry.resolve(searchResult({ content: "Previous retry" }));
+        }
+        await waitForSolid(() => {
+          fixture.expectText("Previous retry");
+          fixture.expectStatus("Search succeeded");
+          expect(fixture.button("Test search")).toBe(button);
+          expect(query.disabled).toBe(false);
+        });
       }
       editInput(query, "Query B", false);
       flush();
-      expect(fixture.element.textContent).toContain("Not tested");
-      expect(fixture.element.textContent).not.toContain("Previous");
+      fixture.expectText("Not tested");
+      fixture.expectNoText("Previous");
       expect(fixture.element.querySelector('a[href="https://example.com/previous"]')).toBeNull();
     },
   );
-
-  it("clears rejected test feedback during retry without replacing the controls", async () => {
-    const fixture = await mount();
-    const query = fixture.input("Search query");
-    const button = fixture.button("Test search");
-    fixture.setTestResponse(Promise.reject(new Error("Search transport unavailable")));
-    button.click();
-    await waitForSolid(() => {
-      expect(fixture.element.textContent).toContain("Search transport unavailable");
-      expect(fixture.statuses()).toContainEqual(expect.stringContaining("Search failed"));
-    });
-
-    const retry = createDeferred<unknown>();
-    fixture.setTestResponse(retry.promise);
-    button.click();
-    try {
-      await waitForSolid(() => {
-        expect(fixture.element.textContent).not.toContain("Search transport unavailable");
-        expect(fixture.statuses()).toContainEqual(expect.stringContaining("Searching…"));
-        expect(fixture.input("Search query")).toBe(query);
-        expect(query.disabled).toBe(true);
-        expect(fixture.button("Searching…")).toBe(button);
-      });
-    } finally {
-      retry.resolve({ provider: "searxng", status: "ok", latencyMs: 1, content: "Retry answer" });
-    }
-    await waitForSolid(() => {
-      expect(fixture.element.textContent).toContain("Retry answer");
-      expect(fixture.statuses()).toContainEqual(expect.stringContaining("Search succeeded"));
-      expect(fixture.button("Test search")).toBe(button);
-      expect(query.disabled).toBe(false);
-    });
-  });
 
   it("runs a test search on Enter but not on the Enter that confirms IME input", async () => {
     const fixture = await mount();
@@ -485,11 +473,8 @@ describe("Search settings", () => {
             ? { provider: "searxng", testProvider: { id: "searxng", label: "SearXNG" } }
             : {}),
           route: {
+            ...ready.route,
             kind,
-            label: external ? "External harness" : "Native search",
-            reason: external
-              ? "Check native search in chat."
-              : "Test through the active model in chat.",
             testable: false,
           },
         },
@@ -501,8 +486,7 @@ describe("Search settings", () => {
           providerId: "searxng",
           agentId: "main",
         });
-        expect(fixture.element.textContent).toContain("Search succeeded");
-        expect(fixture.element.textContent).toContain("Check in chat");
+        fixture.expectText("Search succeeded", "Check in chat");
         return;
       }
       expect(fixture.input("Search query")).toBeNull();
@@ -525,17 +509,16 @@ describe("Search settings", () => {
   it("renders search output as text and does not make script citations clickable", async () => {
     const fixture = await mount();
     fixture.setTestResponse(
-      Promise.resolve({
-        provider: "searxng",
-        status: "ok",
-        latencyMs: 1,
-        content: '<img src=x onerror="alert(1)">',
-        citations: [{ title: "Unsafe", url: "javascript:alert(1)" }],
-      }),
+      Promise.resolve(
+        searchResult({
+          content: '<img src=x onerror="alert(1)">',
+          citations: [{ title: "Unsafe", url: "javascript:alert(1)" }],
+        }),
+      ),
     );
     fixture.click("Test search");
     await fixture.settle();
-    expect(fixture.element.textContent).toContain('<img src=x onerror="alert(1)">');
+    fixture.expectText('<img src=x onerror="alert(1)">');
     expect(fixture.element.querySelector('a[href^="javascript:"]')).toBeNull();
     expect(fixture.element.querySelector("img")).toBeNull();
   });

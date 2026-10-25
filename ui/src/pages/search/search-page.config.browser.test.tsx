@@ -39,12 +39,12 @@ const ready = searchStatus(
   },
   { provider: "example", model: { provider: "example", id: "local", runtime: "openclaw" } },
 );
-const testResult: WebSearchTestResult = {
+const testResult = {
   status: "ok",
   provider: "example",
   latencyMs: 1,
   content: "Health from the original configuration",
-};
+} satisfies WebSearchTestResult;
 
 beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
 afterEach(() => vi.useRealTimers());
@@ -117,17 +117,7 @@ async function mount(
       }
       return respond(params);
     },
-    hello: gatewayHelloForMethods([
-      "config.get",
-      "config.schema",
-      "config.set",
-      "config.apply",
-      "config.patch",
-      "models.list",
-      "webSearch.status",
-      "webSearch.test",
-      "plugins.credentials.inspect",
-    ]),
+    hello: gatewayHelloForMethods([...Object.keys(responses), "config.apply", "config.patch"]),
     agents: ["main"],
     waitForRefresh: true,
     runtime: async (gateway) => {
@@ -244,7 +234,7 @@ describe("Search configuration lifecycle", () => {
           expect(field).toMatchObject({ isConnected: true, disabled: false });
           expect(fixture.input(label)).toBe(field);
         });
-        expect(fixture.element.textContent).toContain("Synthetic save rejected");
+        fixture.expectText("Synthetic save rejected");
         expect(fixture.button("Retry")).toBeDefined();
       }
     } finally {
@@ -259,11 +249,11 @@ describe("Search configuration lifecycle", () => {
     const fixture = await mount();
     fixture.testButton().click();
     await fixture.settle(true);
-    expect(fixture.element.textContent).toContain(testResult.content);
+    fixture.expectText(testResult.content);
 
     fixture.runtime.patchForm(endpointPath, "https://draft.example.test");
     flush();
-    expect(fixture.element.textContent).not.toContain(testResult.content);
+    fixture.expectNoText(testResult.content);
     expect(fixture.testButton().disabled).toBe(true);
   });
 
@@ -277,9 +267,7 @@ describe("Search configuration lifecycle", () => {
         await waitForSolid(() => expect(fixture.input("Search query").disabled).toBe(true));
         expect(fixture.calls("webSearch.test")).toHaveLength(1);
         fixture.runtime.patchForm(endpointPath, "https://draft.example.test");
-        await waitForSolid(() =>
-          expect(fixture.statuses()).toContainEqual(expect.stringContaining("Not tested")),
-        );
+        await waitForSolid(() => fixture.expectStatus("Not tested"));
       } finally {
         if (outcome === "success") {
           pending.resolve(testResult);
@@ -288,9 +276,8 @@ describe("Search configuration lifecycle", () => {
         }
       }
       await fixture.settle(true);
-      expect(fixture.element.textContent).not.toContain(testResult.content);
-      expect(fixture.element.textContent).not.toContain("Retired search request failed");
-      expect(fixture.statuses()).toContainEqual(expect.stringContaining("Not tested"));
+      fixture.expectNoText(testResult.content, "Retired search request failed");
+      fixture.expectStatus("Not tested");
       expect(fixture.testButton().disabled).toBe(true);
     },
   );
@@ -322,9 +309,8 @@ describe("Search configuration lifecycle", () => {
       }
       await fixture.settle();
       await waitForSolid(() => expect(fixture.calls("webSearch.status")).toHaveLength(3));
-      expect(fixture.element.textContent).toContain("Runtime revision-2");
-      expect(fixture.element.textContent).not.toContain("Retired route");
-      expect(fixture.element.textContent).not.toContain("Retired status failed");
+      fixture.expectText("Runtime revision-2");
+      fixture.expectNoText("Retired route", "Retired status failed");
       expect(fixture.calls("webSearch.test")).toHaveLength(0);
     },
   );
@@ -349,7 +335,7 @@ describe("Search configuration lifecycle", () => {
     await fixture.settle();
     expect(fixture.runtime.state).toMatchObject({ configFormDirty: false, configNeedsApply: true });
     expect(fixture.testButton().disabled).toBe(true);
-    expect(fixture.element.textContent).toContain("Runtime revision-1");
+    fixture.expectText("Runtime revision-1");
     const before = fixture.calls("webSearch.status").length;
     const savedHash = fixture.runtime.state.configSnapshot?.hash;
     fixture.setStored({ ...fixture.stored(), appliedConfigHash: "revision-2" });
@@ -358,7 +344,7 @@ describe("Search configuration lifecycle", () => {
     expect(fixture.runtime.state.configSnapshot?.hash).toBe(savedHash);
     expect(fixture.runtime.state.configNeedsApply).toBe(false);
     expect(fixture.calls("webSearch.status").length).toBeGreaterThan(before);
-    expect(fixture.element.textContent).toContain("Runtime revision-2");
+    fixture.expectText("Runtime revision-2");
     expect(fixture.testButton().disabled).toBe(false);
   });
 });

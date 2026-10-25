@@ -144,6 +144,10 @@ export async function mountSearch<R>(options: {
   };
   const input = (label: string) =>
     element.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+  const expectStatus = (text: string) =>
+    expect(
+      [...element.querySelectorAll('[role="status"]')].map((node) => node.textContent),
+    ).toContainEqual(expect.stringContaining(text));
   onTestFinished(() => {
     view.unmount();
     options.cleanup?.(runtime);
@@ -175,6 +179,17 @@ export async function mountSearch<R>(options: {
     gateway: connection,
     button,
     input,
+    expectStatus,
+    expectText: (...texts: string[]) => {
+      for (const text of texts) {
+        expect(element.textContent).toContain(text);
+      }
+    },
+    expectNoText: (...texts: string[]) => {
+      for (const text of texts) {
+        expect(element.textContent).not.toContain(text);
+      }
+    },
     setAgent,
     settle,
     click: (label: string) => button(label).click(),
@@ -191,8 +206,6 @@ export async function mountSearch<R>(options: {
       field.dispatchEvent(new Event("change", { bubbles: true }));
     },
     calls: (method: string) => request.mock.calls.filter(([name]) => name === method),
-    statuses: () =>
-      [...element.querySelectorAll('[role="status"]')].map((region) => region.textContent),
     dispose: () => view.unmount(),
     replaceConnection: () => {
       client = createTestGatewayClient(request);
