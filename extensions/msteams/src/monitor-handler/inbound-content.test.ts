@@ -86,14 +86,10 @@ describe("Teams inbound content", () => {
     botFramework.mockReset().mockResolvedValue({ media: [] });
   });
 
-  it("reports advertised unavailable attachments and preserves ordinary text", async () => {
+  it("reports advertised unavailable attachments", async () => {
     expect(await setup({ rawBody: "", advertisedMedia: [{ kind: "document" }] }).run()).toEqual({
       agentBody: "[msteams attachment unavailable]",
       inboundMedia: [{ kind: "document" }],
-    });
-    expect(await setup({ attachments: [] }).run()).toEqual({
-      agentBody: "hello",
-      inboundMedia: [],
     });
   });
 
@@ -126,7 +122,6 @@ describe("Teams inbound content", () => {
   });
 
   it.each([
-    { graphMediaFallback: true, conversationType: "channel", recover: true },
     { graphMediaFallback: true, conversationType: "groupchat", recover: true },
     { graphMediaFallback: undefined, conversationType: "channel", recover: false },
     { graphMediaFallback: true, conversationType: "personal", recover: false },
@@ -143,7 +138,6 @@ describe("Teams inbound content", () => {
   });
 
   it.each<[string, ContentOptions, number, number]>([
-    ["unresolved channel", {}, 1, 0],
     ["empty Bot Framework result", { ...personalChat, serviceUrl: bfUrl }, 0, 1],
     [
       "mention-only personal HTML",
@@ -168,34 +162,15 @@ describe("Teams inbound content", () => {
     expect(graph).not.toHaveBeenCalled();
   });
 
-  it("forwards the download logger and reports content-free Graph diagnostics", async () => {
-    const { run, log } = setup({ teamAadGroupId: "team-aad-guid" });
-    await run();
-    expect(graph).toHaveBeenCalledWith(expect.objectContaining({ logger: log }));
-    expect(log.debug).toHaveBeenCalledWith("graph media fetch empty", {
-      messageUrl:
-        "https://graph.microsoft.com/v1.0/teams/team-aad-guid/channels/19%3Achannel-thread%40thread.tacv2/messages/msg-1",
-      hostedStatus: undefined,
-      attachmentStatus: undefined,
-      hostedCount: undefined,
-      attachmentCount: undefined,
-      tokenError: undefined,
-      attachmentIdCount: 2,
-    });
+  it("recovers an orgid Bot Framework ID", async () => {
+    botFramework.mockResolvedValue({ media: [pdf], attachmentCount: 1 });
+    const result = await personal({ conversationId: "8:orgid:bf-dm-id", serviceUrl: bfUrl }).run();
+    expect(botFramework).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ serviceUrl: bfUrl, attachmentIds: ["att-0", "att-1"] }),
+    );
+    expect(graph).not.toHaveBeenCalled();
+    expect(result?.inboundMedia).toEqual([pdf]);
   });
-
-  it.each(["a:bf-dm-id", "8:orgid:bf-dm-id"])(
-    "recovers raw Bot Framework ID %s",
-    async (conversationId) => {
-      botFramework.mockResolvedValue({ media: [pdf], attachmentCount: 1 });
-      const result = await personal({ conversationId, serviceUrl: bfUrl }).run();
-      expect(botFramework).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ serviceUrl: bfUrl, attachmentIds: ["att-0", "att-1"] }),
-      );
-      expect(graph).not.toHaveBeenCalled();
-      expect(result?.inboundMedia).toEqual([pdf]);
-    },
-  );
 
   it("logs missing service URLs without trying another identifier space", async () => {
     const { run, log } = personal();

@@ -1,4 +1,3 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   enqueueSystemEvent,
@@ -6,71 +5,32 @@ import {
 } from "openclaw/plugin-sdk/system-event-runtime";
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
-import { setMSTeamsRuntime } from "../runtime.js";
+import type { OpenClawConfig } from "../../runtime-api.js";
+import { getMSTeamsRuntime } from "../runtime.js";
+import { createMessageHandlerDeps, createTurnContext } from "./message-handler.test-support.js";
 import { createMSTeamsReactionHandler } from "./reaction-handler.js";
-
-function buildMockRuntime(production = false): PluginRuntime {
-  return {
-    logging: { shouldLogVerbose: () => false },
-    channel: {
-      inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
-      routing: {
-        resolveAgentRoute: production
-          ? resolveAgentRoute
-          : vi.fn(() => ({
-              sessionKey: "test-session",
-              agentId: "agent1",
-              accountId: "default",
-            })),
-      },
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(async () => null),
-      },
-    },
-    system: {
-      enqueueSystemEvent: production ? enqueueSystemEvent : vi.fn(),
-    },
-  } as unknown as PluginRuntime;
-}
-
-function buildDeps(cfg: OpenClawConfig): MSTeamsMessageHandlerDeps {
-  return {
-    cfg,
-    runtime: { error: vi.fn() } as unknown as MSTeamsMessageHandlerDeps["runtime"],
-    accountId: "default",
-    appId: "test-app",
-    app: {} as MSTeamsMessageHandlerDeps["app"],
-    tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-    textLimit: 4000,
-    mediaMaxBytes: 1024 * 1024,
-    conversationStore: {
-      upsert: vi.fn(async () => undefined),
-    } as unknown as MSTeamsMessageHandlerDeps["conversationStore"],
-    pollStore: {
-      recordVote: vi.fn(async () => null),
-    } as unknown as MSTeamsMessageHandlerDeps["pollStore"],
-    log: {
-      info: vi.fn(),
-      debug: vi.fn(),
-      error: vi.fn(),
-      warn: vi.fn(),
-    } as unknown as MSTeamsMessageHandlerDeps["log"],
-  };
-}
 
 const defaultConfig: OpenClawConfig = {
   channels: { msteams: { allowFrom: ["allowed-aad"], groupPolicy: "open" } },
 };
 const allowedSender = { id: "u1", aadObjectId: "allowed-aad", name: "User" };
-function createReactionTestHarness(cfg = defaultConfig, mockRuntime = buildMockRuntime()) {
-  setMSTeamsRuntime(mockRuntime);
-  const handler = createMSTeamsReactionHandler(buildDeps(cfg));
-  const enqueue = mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>;
-  const resolveRoute = mockRuntime.channel.routing.resolveAgentRoute as ReturnType<typeof vi.fn>;
-  return { handler, enqueue, resolveRoute };
+function createReactionTestHarness(cfg = defaultConfig, production = false) {
+  const resolveRoute = vi.fn(() => ({
+    sessionKey: "test-session",
+    agentId: "agent1",
+    accountId: "default",
+  }));
+  const fixture = createMessageHandlerDeps(cfg, { resolveAgentRoute: resolveRoute });
+  if (production) {
+    const runtime = getMSTeamsRuntime();
+    runtime.channel.routing.resolveAgentRoute = resolveAgentRoute;
+    runtime.system.enqueueSystemEvent = enqueueSystemEvent;
+  }
+  return {
+    handler: createMSTeamsReactionHandler(fixture.deps),
+    enqueue: fixture.enqueueSystemEvent,
+    resolveRoute,
+  };
 }
 
 async function invokeReactionEvent(
@@ -79,17 +39,14 @@ async function invokeReactionEvent(
   direction: "added" | "removed" = "added",
 ) {
   await handler(
-    {
-      activity: {
-        type: "messageReaction",
-        conversation: { id: "dm-conv", conversationType: "personal" },
-        reactionsAdded: [{ type: "like" }],
-        from: allowedSender,
-        replyToId: "msg-1",
-        ...activity,
-      },
-      sendActivity: vi.fn(async () => undefined),
-    } as never,
+    createTurnContext({
+      type: "messageReaction",
+      conversation: { id: "dm-conv", conversationType: "personal" },
+      reactionsAdded: [{ type: "like" }],
+      from: allowedSender,
+      replyToId: "msg-1",
+      ...activity,
+    }),
     direction,
   );
 }
@@ -113,21 +70,6 @@ describe("createMSTeamsReactionHandler", () => {
     );
   });
 
-  it.each([
-    { name: "empty reactions", activity: { reactionsAdded: [], replyToId: "msg-3" } },
-    { name: "missing sender ID", activity: { from: {}, replyToId: "msg-4" } },
-    {
-      name: "non-allowlisted DM sender",
-      activity: {
-        from: { id: "bad-user", aadObjectId: "not-allowed", name: "Attacker" },
-        replyToId: "msg-5",
-      },
-    },
-  ])("skips $name", async ({ activity }) => {
-    const { handler, enqueue } = createReactionTestHarness();
-    await invokeReactionEvent(handler, activity);
-    expect(enqueue).not.toHaveBeenCalled();
-  });
   const routeCfg = {
     channels: {
       msteams: {
@@ -158,40 +100,43 @@ describe("createMSTeamsReactionHandler", () => {
     });
   }
 
-  it("drops a removed reaction from a team/channel outside the configured allowlist", async () => {
-    const { handler, enqueue } = createReactionTestHarness(routeCfg);
-    const reaction = reactionFrom(
-      { id: "19:excluded-channel@thread.tacv2", conversationType: "channel" },
-      "excludedTeam",
-    );
-    await invokeReactionEvent(
-      handler,
-      { ...reaction, reactionsAdded: undefined, reactionsRemoved: [{ type: "like" }] },
-      "removed",
-    );
-
-    expect(enqueue).not.toHaveBeenCalled();
-  });
-
-  it("drops a personal reaction with contradictory channel metadata", async () => {
-    const { handler, enqueue, resolveRoute } = createReactionTestHarness(routeCfg);
-    await invokeReactionEvent(
-      handler,
+  it.each<[string, Record<string, unknown>, "added" | "removed"]>([
+    ["empty reactions", { reactionsAdded: [] }, "added"],
+    ["missing sender ID", { from: {} }, "added"],
+    [
+      "non-allowlisted DM sender",
+      { from: { id: "bad-user", aadObjectId: "not-allowed" } },
+      "added",
+    ],
+    [
+      "unlisted team/channel",
       {
-        from: { id: "teams-user", aadObjectId: "allowed-aad", name: "Allowed Sender" },
+        ...reactionFrom(
+          { id: "19:excluded-channel@thread.tacv2", conversationType: "channel" },
+          "excludedTeam",
+        ),
+        reactionsAdded: undefined,
+        reactionsRemoved: [{ type: "like" }],
+      },
+      "removed",
+    ],
+    [
+      "contradictory channel metadata",
+      {
         conversation: { id: "19:excluded-channel@thread.tacv2", conversationType: "personal" },
         channelData: { channel: { id: "19:excluded-channel@thread.tacv2" } },
-        replyToId: "target-message",
       },
       "added",
-    );
-
+    ],
+  ])("skips %s before routing", async (_name, activity, direction) => {
+    const { handler, enqueue, resolveRoute } = createReactionTestHarness(routeCfg);
+    await invokeReactionEvent(handler, activity, direction);
     expect(resolveRoute).not.toHaveBeenCalled();
     expect(enqueue).not.toHaveBeenCalled();
   });
 
   it("enforces reaction admission at the production route and session-event queue", async () => {
-    const { handler } = createReactionTestHarness(routeCfg, buildMockRuntime(true));
+    const { handler } = createReactionTestHarness(routeCfg, true);
     const allowedConversation = {
       id: "19:trusted-channel@thread.tacv2",
       conversationType: "channel",
@@ -252,27 +197,13 @@ describe("createMSTeamsReactionHandler", () => {
     expect(peekSystemEventEntries(forbiddenDirectRoute.sessionKey)).toEqual([]);
   });
   it("allows reaction from static access group DM sender", async () => {
-    const cfg: OpenClawConfig = {
+    const { handler, enqueue } = createReactionTestHarness({
       accessGroups: {
-        operators: {
-          type: "message.senders",
-          members: { msteams: ["allowed-aad"] },
-        },
+        operators: { type: "message.senders", members: { msteams: ["allowed-aad"] } },
       },
-      channels: {
-        msteams: {
-          dmPolicy: "allowlist",
-          allowFrom: ["accessGroup:operators"],
-        },
-      },
-    };
-    const { handler, enqueue } = createReactionTestHarness(cfg);
-
-    await invokeReactionEvent(handler, {
-      from: { id: "good-user", aadObjectId: "allowed-aad", name: "Alice" },
-      replyToId: "msg-7",
+      channels: { msteams: { dmPolicy: "allowlist", allowFrom: ["accessGroup:operators"] } },
     });
-
+    await invokeReactionEvent(handler, {});
     expect(enqueue).toHaveBeenCalledOnce();
   });
 });

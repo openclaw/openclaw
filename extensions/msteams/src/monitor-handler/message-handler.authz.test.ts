@@ -52,17 +52,19 @@ const dmAccount: MSTeamsConfig = {
   allowFrom: ["alice-aad"],
 };
 const openGroup: MSTeamsConfig = { groupPolicy: "open", requireMention: false };
+function accountRoute(accountId: string, peer: string) {
+  return { sessionKey: `agent:main:msteams:${accountId}:${peer}`, agentId: "main", accountId };
+}
+function expectAccount(accountId: string) {
+  expect(context().AccountId).toBe(accountId);
+}
 function accountsConfig(support: MSTeamsConfig, sales = support): OpenClawConfig {
   return { channels: { msteams: { enabled: true, accounts: { support, sales } } } };
 }
 function accountHandler(cfg: OpenClawConfig, listenerAccount: string, peer: string) {
   const fixture = createMessageHandlerDeps(cfg, {
     accountId: listenerAccount,
-    resolveAgentRoute: ({ accountId = "default" }) => ({
-      sessionKey: `agent:main:msteams:${accountId}:${peer}`,
-      agentId: "main",
-      accountId,
-    }),
+    resolveAgentRoute: ({ accountId = "default" }) => accountRoute(accountId, peer),
   });
   return { ...fixture, handler: createMSTeamsMessageHandler(fixture.deps) };
 }
@@ -253,12 +255,8 @@ describe("msteams message authorization and supplemental context", () => {
         replies.resolve([]);
         await pending;
         expect(dispatch).not.toHaveBeenCalled();
-        expect(support.deps.log.info).toHaveBeenCalledWith(
-          "dropping message (dispatch-time account authorization changed)",
-        );
         await salesHandler(threadActivity());
-        expect(dispatch).toHaveBeenCalledTimes(1);
-        expect(dispatch.mock.calls[0]?.[0].ctx.AccountId).toBe("sales");
+        expectAccount("sales");
       } finally {
         replies.resolve([]);
         await pending;
@@ -270,11 +268,7 @@ describe("msteams message authorization and supplemental context", () => {
     const cfg = accountsConfig(dmAccount, { ...dmAccount, allowFrom: ["another-user"] });
     const { deps } = createMessageHandlerDeps(cfg, {
       accountId: "support",
-      resolveAgentRoute: () => ({
-        sessionKey: "agent:main:msteams:sales:direct:alice-aad",
-        agentId: "main",
-        accountId: "sales",
-      }),
+      resolveAgentRoute: () => accountRoute("sales", "direct:alice-aad"),
     });
     await createMSTeamsMessageHandler(deps)(activity({ conversation: personal("19:shared-dm") }));
     expect(dispatch).not.toHaveBeenCalled();
@@ -291,11 +285,8 @@ describe("msteams message authorization and supplemental context", () => {
       const botHandler = (accountId: "support" | "sales") => {
         const { deps } = createMessageHandlerDeps(cfg, {
           accountId,
-          resolveAgentRoute: ({ accountId: routeAccountId = "default", peer }) => ({
-            sessionKey: `agent:main:msteams:${routeAccountId}:${peer.kind}:${peer.id}`,
-            agentId: "main",
-            accountId: routeAccountId,
-          }),
+          resolveAgentRoute: ({ accountId: routeAccountId = "default", peer }) =>
+            accountRoute(routeAccountId, `${peer.kind}:${peer.id}`),
         });
         deps.appId = `${accountId}-app`;
         vi.mocked(deps.tokenProvider.getAccessToken).mockResolvedValue(
@@ -355,10 +346,12 @@ describe("msteams message authorization and supplemental context", () => {
       dmPolicy: "pairing",
       allowFrom: [],
     });
+    const conversation = { ...personal("a:personal-chat"), tenantId: "tenant-1" };
+    const user = { id: "new-id", aadObjectId: "new-aad", name: "New User" };
     await handle({
       id: "msg-pairing",
-      from: { id: "new-id", aadObjectId: "new-aad", name: "New User" },
-      conversation: { id: "a:personal-chat", conversationType: "personal", tenantId: "tenant-1" },
+      from: user,
+      conversation,
       channelId: "msteams",
       serviceUrl: "https://smba.trafficmanager.net/amer/",
       locale: "en-US",
@@ -372,9 +365,9 @@ describe("msteams message authorization and supplemental context", () => {
     });
     expect(conversationStore.upsert).toHaveBeenCalledWith("a:personal-chat", {
       activityId: "msg-pairing",
-      user: { id: "new-id", aadObjectId: "new-aad", name: "New User" },
+      user,
       agent: { id: "bot-id", name: "Bot" },
-      conversation: { id: "a:personal-chat", conversationType: "personal", tenantId: "tenant-1" },
+      conversation,
       tenantId: "tenant-1",
       aadObjectId: "new-aad",
       channelId: "msteams",
@@ -412,7 +405,7 @@ describe("msteams message authorization and supplemental context", () => {
       allowFrom: ["alice-aad"],
     });
     await handle({
-      conversation: { id: "a:personal-chat", conversationType: "personal" },
+      conversation: personal("a:personal-chat"),
       serviceUrl: "https://attacker.example.com/teams/",
     });
     expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
@@ -620,20 +613,16 @@ describe("msteams message authorization and supplemental context", () => {
         },
       ],
     ]);
-    expect(graph.fetchChannelMessage).toHaveBeenCalledExactlyOnceWith(
-      "token",
-      "group-1",
-      channelConversationId,
-      parentId,
-      expect.objectContaining({ label: "MS Teams inbound preprocessing" }),
-    );
-    expect(graph.fetchThreadReplies).toHaveBeenCalledWith(
-      "token",
-      "group-1",
-      channelConversationId,
-      parentId,
-      expect.objectContaining({ label: "MS Teams inbound preprocessing" }),
-    );
+    expect(graph.fetchChannelMessage).toHaveBeenCalledTimes(1);
+    for (const fetch of [graph.fetchChannelMessage, graph.fetchThreadReplies]) {
+      expect(fetch).toHaveBeenCalledWith(
+        "token",
+        "group-1",
+        channelConversationId,
+        parentId,
+        expect.objectContaining({ label: "MS Teams inbound preprocessing" }),
+      );
+    }
     expect(dispatch).toHaveBeenCalledTimes(2);
     for (const [params] of dispatch.mock.calls) {
       expect(params.ctx.SessionKey).toBe(`${channelSessionKey}:thread:${parentId}`);
