@@ -51,7 +51,6 @@ export function createInspectionFixture(options?: {
     read?: unknown;
     abortCleanup?: Promise<void>;
     abortRead?: unknown;
-    tracker?: ReturnType<typeof captureAsyncWorkTracker>;
   } = {};
   const state = {
     connections,
@@ -129,7 +128,7 @@ module.exports = {
     if (captureMode) {
       state.captured.registrationSignal = state.getAsyncWorkSignal();
       const dispose = lifecycle.dispose.bind(lifecycle);
-      const track = state.captured.tracker = state.captureAsyncWorkTracker();
+      const track = state.captureAsyncWorkTracker();
       lifecycle.dispose = captureMode === "async-context"
         ? require("node:async_hooks").AsyncLocalStorage.bind(() => state.trackAsyncWork(dispose))
         : () => track(dispose);

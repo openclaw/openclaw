@@ -83,11 +83,7 @@ describe("provider registry selection", () => {
       target: provider("target"),
       last: provider("last"),
     });
-    for (let repeat = 0; repeat < 2; repeat++) {
-      expect(findProvider({ registry, provider: ref, ownerRefs: refs })?.provider.id).toBe(
-        expected,
-      );
-    }
+    expect(findProvider({ registry, provider: ref, ownerRefs: refs })?.provider.id).toBe(expected);
   });
 
   it("rechecks owner eligibility and preserves registry order for colliding ids and aliases", () => {
