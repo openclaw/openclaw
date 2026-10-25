@@ -353,7 +353,9 @@ try {
         ]);
         return true;
       } catch (error) {
-        if ((error as { status?: number }).status === 1) return false;
+        if ((error as { status?: number }).status === 1) {
+          return false;
+        }
         throw error;
       }
     };

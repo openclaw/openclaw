@@ -62,11 +62,13 @@ try {
       throw new Error("Orphan recovery needs a no-binding and an absent-entry placement");
     }
     // listAsync orders session IDs lexically; skip the three warm retry batches.
-    const index = Array.from({ length: placements }, (_, value) => value).sort((left, right) => {
-      const leftId = `polling-${left}`;
-      const rightId = `polling-${right}`;
-      return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
-    })[25];
+    const index = Array.from({ length: placements }, (_, value) => value).toSorted(
+      (left, right) => {
+        const leftId = `polling-${left}`;
+        const rightId = `polling-${right}`;
+        return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+      },
+    )[25];
     if (index === undefined || index < bound || index === placements - 1) {
       throw new Error("Orphan recovery needs a no-binding session at lexical position 25");
     }
