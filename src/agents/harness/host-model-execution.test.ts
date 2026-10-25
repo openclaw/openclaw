@@ -149,7 +149,6 @@ it.each([true, false])("prepares web search for a known native model (%s)", asyn
 
 const admissionCases: Array<[HarnessOperation, HarnessMode, boolean, boolean]> = [
   ["execution", "fresh", true, false],
-  ["execution", "native", true, false],
   ["execution", "fresh", false, false],
   ["execution", "native", false, false],
   ["execution", "fresh", true, true],

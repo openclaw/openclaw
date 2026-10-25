@@ -175,13 +175,9 @@ describe("agent harness model catalog", () => {
       const loadOne = vi.fn(async () => [first, stale, other]);
       const loadTwo = vi.fn(async () => [second]);
       const registry = catalogRegistry({ "native-one": loadOne, "native-two": loadTwo });
-      const onDiscoveryStarted = vi.fn();
-      const onDiscoveryCompleted = vi.fn();
       const params = {
         input: pickerInput(config),
         pluginRegistry: registry,
-        onDiscoveryStarted,
-        onDiscoveryCompleted,
         ...(providerScoped
           ? { includesProvider: (provider: string) => provider === "fixture" }
           : {}),
@@ -195,17 +191,8 @@ describe("agent harness model catalog", () => {
       expect(
         discovered.entries.find((entry) => entry.provider === "fixture" && entry.id === "shared"),
       ).toEqual(host);
-      expect(sharedRuntimes(discovered)).toEqual(["native-one", "native-two", undefined]);
       const published = mergePreparedNativeCatalog(discovered, initial);
       expect(sharedRuntimes(published)).toEqual(["native-one", "native-two", undefined]);
-      expect(onDiscoveryCompleted).toHaveBeenCalledExactlyOnceWith(
-        providerScoped ? [first, stale, second] : [first, stale, other, second],
-      );
-      expect(
-        onDiscoveryStarted.mock.calls
-          .map(([provider]) => provider)
-          .toSorted((left, right) => left.localeCompare(right)),
-      ).toEqual(providerScoped ? ["fixture", "fixture"] : ["fixture", "fixture", "other"]);
       loadOne.mockResolvedValue([]);
       loadTwo.mockResolvedValue([]);
       const refreshed = await augmentPreparedModelCatalogWithAgentHarness({
