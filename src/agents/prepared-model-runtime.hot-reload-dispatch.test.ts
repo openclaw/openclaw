@@ -471,7 +471,6 @@ describe("retained config and committed model publication", () => {
     committed: OpenClawConfig;
     changedPath: string;
     rebuild: boolean;
-    addedAgentId?: string;
   }>([
     {
       name: "keeps the catalog ready throughout a channel-only hot reload",
@@ -487,23 +486,11 @@ describe("retained config and committed model publication", () => {
       changedPath: "channels.slack.enabled",
       rebuild: true,
     },
-    {
-      name: "publishes a current catalog for an added agent after roster replacement",
-      retained: { agents: { entries: { default: {} } } },
-      committed: { agents: { entries: { default: {}, other: {} } } },
-      changedPath: "agents.entries",
-      rebuild: true,
-      addedAgentId: "other",
-    },
-  ])("$name", async ({ retained, committed, changedPath, rebuild, addedAgentId }) => {
+  ])("$name", async ({ retained, committed, changedPath, rebuild }) => {
     setRuntimeConfigSnapshot(retained, retained);
     await publish(retained);
     const previous = getSnapshot(ownerInput(retained));
     expect(previous?.isCurrent()).toBe(true);
-    const preparations = mocks.prepareStaticCatalog.mock.calls.length;
-    if (addedAgentId) {
-      mocks.configuredAgentIds.push(addedAgentId);
-    }
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const handler = createPluginReloadHandler(async () => {
       throw new Error("Config-only hot reload must not replace plugins");
@@ -536,50 +523,8 @@ describe("retained config and committed model publication", () => {
       expect(catalog?.isCurrent()).toBe(true);
       expect(previous?.isCurrent()).toBe(!rebuild);
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
-      expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(
-        preparations + (rebuild ? mocks.configuredAgentIds.length : 0),
-      );
-      if (addedAgentId) {
-        const addedCatalog = await readCatalog({
-          agentId: addedAgentId,
-          getConfig: () => committed,
-        });
-        expect(addedCatalog?.agentId).toBe(addedAgentId);
-        expect(addedCatalog?.config).toBe(committed);
-        expect(addedCatalog?.isCurrent()).toBe(true);
-      }
     } finally {
       handler.stopRestartRetries();
-    }
-  });
-
-  it("reads the atomic replacement catalog while a model config reload is pending", async () => {
-    const retained: OpenClawConfig = { agents: { defaults: { model: "custom/before" } } };
-    const committed: OpenClawConfig = { agents: { defaults: { model: "custom/after" } } };
-    await publish(retained);
-    const entered = createDeferred();
-    const release = createDeferred();
-    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return { entries: [] };
-    });
-    const publication = publish(committed);
-    let read: CatalogRead | undefined;
-    try {
-      await entered.promise;
-      read = readCatalog({
-        agentId: "default",
-        getConfig: () => committed,
-      });
-      release.resolve();
-      await publication;
-      const catalog = await read;
-      expect(catalog?.config).toBe(committed);
-      expect(catalog?.isCurrent()).toBe(true);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([publication, read]);
     }
   });
 

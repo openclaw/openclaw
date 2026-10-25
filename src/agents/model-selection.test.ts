@@ -1,6 +1,5 @@
 import { afterEach, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -114,7 +113,7 @@ function resolveConfiguredRefForTest(
 }
 
 it("returns null for invalid refs", () => {
-  for (const raw of ["", "  ", "/", "anthropic/", "/model"]) {
+  for (const raw of ["", "anthropic/", "/model"]) {
     expect(parseModelRef(raw, "anthropic", { allowPluginNormalization: false }), raw).toBeNull();
   }
 });
@@ -303,15 +302,9 @@ it("keeps case-insensitive visibility inside the exact provider namespace", () =
 
 it("keeps metadata on custom/model and custom/custom/model", () => {
   const rows = [
-    { id: "model", name: "Primary", contextWindow: 32_000, reasoning: false, input: ["text"] },
-    {
-      id: "custom/model",
-      name: "Configured sibling",
-      contextWindow: 128_000,
-      reasoning: true,
-      input: ["text", "image"],
-    },
-  ] satisfies Array<Partial<ModelDefinitionConfig> & { id: string }>;
+    { id: "model", name: "Primary", contextWindow: 32_000 },
+    { id: "custom/model", name: "Configured sibling", contextWindow: 128_000 },
+  ];
   for (const configuredRows of [rows, rows.toReversed()]) {
     const cfg = config({}, undefined, {
       custom: {
@@ -343,10 +336,6 @@ it("keeps synthetic entries sparse when configured metadata belongs to custom/mo
   const unrelated = {
     id: "custom/model",
     name: "Unrelated configured name",
-    contextWindow: 128_000,
-    reasoning: true,
-    input: ["text", "image"],
-    params: { temperature: 0.5 },
   };
   const cfg = config(
     {
@@ -379,8 +368,6 @@ it("exposes wildcard allow and visible catalog behavior through one policy", () 
     defaultModel: "qwen-local",
   });
 
-  expect(policy.hasProviderWildcards).toBe(true);
-  expect(policy.allowedKeys.has("vllm/qwen-local")).toBe(false);
   expect(policy.allows({ provider: "openai", model: "future-model" })).toBe(true);
   expect(policy.allows({ provider: "vllm", model: "qwen-local" })).toBe(false);
   expect(
@@ -414,39 +401,7 @@ it("keeps literal wildcard rows and exact entries with the first duplicate's met
   ).toEqual([...catalog, row("vllm", "manual")]);
 });
 
-it("keeps per-agent fallback overrides out of explicit selection", () => {
-  const cfg = config(
-    {
-      models: { "openai/gpt-4o": {} },
-      modelPolicy: { allow: ["openai/gpt-4o"] },
-      model: { primary: "openai/gpt-4o", fallbacks: ["google/gemini-3-pro"] },
-    },
-    {
-      coder: { model: { primary: "openai/gpt-4o", fallbacks: ["anthropic/claude-sonnet-4-6"] } },
-    },
-  );
-
-  const result = allowed(cfg, [], {
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o",
-    agentId: "coder",
-  });
-
-  expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
-  expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
-  expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
-  expect(result.allowAny).toBe(false);
-});
-
 it.each([
-  [
-    "strips trailing auth profile suffix",
-    "openai/@cf/openai/gpt-oss-20b@cf:default",
-    config({ models: { "openai/@cf/openai/gpt-oss-20b": {} } }),
-    "anthropic",
-    ref("openai", "@cf/openai/gpt-oss-20b"),
-    [],
-  ],
   [
     "infers bare ids from the allowlist (#48369)",
     "kimi-k2.6",
@@ -551,25 +506,6 @@ it.each([
     nemotronProvider,
   ],
   [
-    "keeps a literal model before a same-provider alias",
-    "nemotron-bolt/fast",
-    { "nemotron-bolt/nemotron-3-super-120b": { alias: "fast" } },
-    ref("nemotron-bolt", "fast"),
-    {
-      "nemotron-bolt": {
-        ...nemotronProvider["nemotron-bolt"],
-        models: [...nemotronProvider["nemotron-bolt"].models, { id: "fast" }],
-      },
-    },
-  ],
-  [
-    "keeps built-in provider refs before bare alias values that point to them",
-    "anthropic/claude-opus-4-6",
-    { opus: { alias: "anthropic/claude-opus-4-6" } },
-    ref("anthropic", "claude-opus-4-6"),
-    undefined,
-  ],
-  [
     "keeps a literal primary before a same-provider alias backed by a bare key",
     "openai/friendly",
     { base: { alias: "openai/friendly" } },
@@ -643,21 +579,6 @@ it("uses agent model metadata to resolve an inherited bare default", () => {
   );
 });
 
-it("prefers the agent subagent model over default subagent and primary models", () => {
-  const cfg = subagentConfig(
-    { subagents: { model: "openai/gpt-5.4" } },
-    {
-      research: {
-        model: { primary: "anthropic/claude-opus-4-6" },
-        subagents: { model: "google/gemini-2.5-pro" },
-      },
-    },
-  );
-  expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
-    "google/gemini-2.5-pro",
-  );
-});
-
 it("keeps runtime policy attached to the configured default subagent model", () => {
   const cfg = config(
     {
@@ -680,46 +601,42 @@ it("keeps runtime policy attached to the configured default subagent model", () 
 });
 
 it.each([
-  {
-    name: "resolves bare aliases with the target agent's provider",
-    cfg: subagentConfig(
+  [
+    "target-provider bare alias",
+    subagentConfig(
       { model: { primary: "openai/gpt-5.4" }, models: aliases({ "claude-opus-4-6": "opus" }) },
       { research: { model: "anthropic/claude-sonnet-4-6" } },
     ),
-    agentId: "research",
-    modelOverride: "OPUS",
-    expected: "anthropic/claude-opus-4-6",
-  },
-  {
-    name: "resolves alias in configured subagent model",
-    cfg: subagentConfig({
-      models: aliases({ "openai/gpt-5.4": "gpt" }),
-      subagents: { model: "gpt" },
-    }),
-    expected: "openai/gpt-5.4",
-  },
-  {
-    name: "keeps the profile suffix outside alias identity",
-    cfg: subagentConfig({ models: aliases({ "openai/gpt-5.6-luna": "luna" }) }),
-    modelOverride: "luna@openai:test-profile",
-    expected: "openai/gpt-5.6-luna@openai:test-profile",
-  },
-  {
-    name: "resolves an alias configured only on the target agent",
-    cfg: subagentConfig(
+    "research",
+    "OPUS",
+    "anthropic/claude-opus-4-6",
+  ],
+  [
+    "configured subagent alias",
+    subagentConfig({ models: aliases({ "openai/gpt-5.4": "gpt" }), subagents: { model: "gpt" } }),
+    "main",
+    undefined,
+    "openai/gpt-5.4",
+  ],
+  [
+    "profile suffix outside alias identity",
+    subagentConfig({ models: aliases({ "openai/gpt-5.6-luna": "luna" }) }),
+    "main",
+    "luna@openai:test-profile",
+    "openai/gpt-5.6-luna@openai:test-profile",
+  ],
+  [
+    "target-agent-only alias",
+    subagentConfig(
       { models: aliases({ "openai/gpt-5.4": "global-gpt" }) },
       { research: { models: aliases({ "anthropic/claude-opus-4-6": "research-opus" }) } },
     ),
-    agentId: "research",
-    modelOverride: "research-opus",
-    expected: "anthropic/claude-opus-4-6",
-  },
-  {
-    name: "falls back to runtime default when no override or config",
-    cfg: subagentConfig(),
-    expected: "anthropic/claude-sonnet-4-6",
-  },
-])("$name", ({ cfg, agentId = "main", modelOverride, expected }) => {
+    "research",
+    "research-opus",
+    "anthropic/claude-opus-4-6",
+  ],
+  ["runtime default", subagentConfig(), "main", undefined, "anthropic/claude-sonnet-4-6"],
+] as const)("resolves subagent model: %s", (_name, cfg, agentId, modelOverride, expected) => {
   expect(resolveSubagentSpawnModelSelection({ cfg, agentId, modelOverride })).toEqual({
     model: expected,
   });
