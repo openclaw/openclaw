@@ -1532,7 +1532,7 @@ existing restart delivery and continuation behavior.
   separate development-mode suppression. Gateway logs look like:
   `channel autostart suppressed by crash-loop breaker; refusing automatic
   start for <channel>… Start a channel manually with: openclaw gateway call
-  channels.start --params '{"channel":"<id>"}'`
+  channels start --channel <id>`
 
   Safe mode also pauses main-session restart recovery. Interrupted entries and
   transcripts stay unchanged: the pause does not charge an attempt, settle a
@@ -1556,7 +1556,7 @@ existing restart delivery and continuation behavior.
   4. Manually start a channel while suppression is active:
 
      ```bash
-     openclaw gateway call channels.start --params '{"channel":"<id>"}'
+     openclaw channels start --channel <id>
      # optional: {"channel":"<id>","accountId":"<account>"}
      ```
 
