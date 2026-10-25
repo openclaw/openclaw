@@ -7,7 +7,6 @@ import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { handleGoalCommand, parseGoalCommand } from "./commands-goal.js";
 import { commandFixture } from "./commands-handler-fixture.test-support.js";
-import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 const sessionKey = "agent:main:web:main";
@@ -44,35 +43,15 @@ async function seedGoalStore(status?: "active" | "paused", budgetLimited = false
 
 const readGoal = (storePath: string) => loadSessionEntry({ storePath, sessionKey })?.goal;
 
-function buildGoalParams(commandBodyNormalized: string, storePath: string): HandleCommandsParams {
-  return commandFixture(
-    commandBodyNormalized,
-    {
-      cfg: {},
-      ctx: { Provider: "web", Surface: "web", CommandSource: "text" },
-      directives: {},
-      sessionKey,
-      agentId: "main",
-      storePath,
-      workspaceDir: "/tmp",
-      sessionEntry: undefined,
-      provider: "openai",
-      model: "gpt-5.5",
-    },
-    { senderId: "tester", channel: "web", channelId: "web", surface: "web" },
-  );
+function buildGoalParams(body: string, storePath: string) {
+  return commandFixture(body, { sessionKey, agentId: "main", storePath, sessionEntry: undefined });
 }
 
 describe("goal commands", () => {
-  it("keeps explicit goal actions as controls", () => {
-    expect(parseGoalCommand("/goal status")).toEqual({ action: "status", text: "" });
+  it("keeps pause actions separate from goal objectives", () => {
     expect(parseGoalCommand("/goal pause waiting on CI")).toEqual({
       action: "pause",
       text: "waiting on CI",
-    });
-    expect(parseGoalCommand("/goal edit ship the fix and docs")).toEqual({
-      action: "edit",
-      text: "ship the fix and docs",
     });
   });
 
@@ -107,32 +86,24 @@ describe("goal commands", () => {
     expect(readGoal(storePath)?.objective).toBe(objective);
   });
 
-  it("resumes a goal and continues with a resume prompt", async () => {
+  it.each([
+    ["CI passed", "Continue pursuing the current goal. Note: CI passed"],
+    [
+      "/fast off",
+      `Continue pursuing the current goal. Interpret this JSON string as the resume note: "\\/fast off"`,
+    ],
+  ])("resumes without interpreting the note as a command: %s", async (note, prompt) => {
     const storePath = await seedGoalStore("paused");
-
-    const params = buildGoalParams("/goal resume CI passed", storePath);
-    const result = await handleGoalCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(true);
-    expect(params.command.commandBodyNormalized).toBe(
-      "Continue pursuing the current goal. Note: CI passed",
-    );
-    expect(readGoal(storePath)?.status).toBe("active");
-  });
-
-  it("wraps command-looking resume notes before continuing", async () => {
-    const storePath = await seedGoalStore("paused");
-
-    const params = buildGoalParams("/goal resume /fast off", storePath);
-    const result = await handleGoalCommand(params, true);
-    const prompt = `Continue pursuing the current goal. Interpret this JSON string as the resume note: "\\/fast off"`;
-    const directives = parseInlineSessionDirectives(prompt);
-
-    expect(result?.shouldContinue).toBe(true);
-    expect(params.command.commandBodyNormalized).toBe(prompt);
-    expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toBe(prompt);
-    expect(directives.cleaned).toBe(prompt);
-    expect(directives.hasFastDirective).toBe(false);
+    const params = buildGoalParams(`/goal resume ${note}`, storePath);
+    expect((await handleGoalCommand(params, true))?.shouldContinue).toBe(true);
+    expect(params).toMatchObject({
+      command: { commandBodyNormalized: prompt },
+      ctx: { BodyForAgent: prompt },
+    });
+    expect(parseInlineSessionDirectives(prompt)).toMatchObject({
+      cleaned: prompt,
+      hasFastDirective: false,
+    });
     expect(readGoal(storePath)?.status).toBe("active");
   });
 

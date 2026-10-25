@@ -1,11 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
-import {
   admitModelTurn,
   completionConfig,
 } from "../../agents/bash-tools.lifecycle.test-support.js";
@@ -38,10 +33,6 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
-import {
-  captureSessionEventTargetForHost,
-  enqueueSessionEventForHost,
-} from "./session-event-handoff.js";
 
 // mock-isolation: Only model decisions are synthetic; tool, controller and storage owners stay real.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -56,23 +47,21 @@ await Promise.all([
   ),
 ]);
 
+// Queue/readmission is covered by session-event-config-readmission.test.ts's
+// queued Gmail and scheduled destination cases; result settlement is admission-independent.
 it.for([
-  { admission: "immediate", result: "progress" },
-  { admission: "queued", result: "progress" },
-  { admission: "immediate", result: "no_change" },
-  { admission: "queued", result: "no_change" },
-  { admission: "queued", result: "failed" },
-  { admission: "immediate", result: "progress", notification: "none" },
-  { admission: "immediate", result: "progress", messageTool: true },
-  { admission: "immediate", result: "progress", messageTool: "mirror" },
+  { result: "progress" },
+  { result: "no_change" },
+  { result: "failed" },
+  { result: "progress", notification: "none" },
+  { result: "progress", messageTool: true },
+  { result: "progress", messageTool: "mirror" },
 ] as const)(
-  "settles a $admission automation $result ($notification/$messageTool) through its shared session owner",
+  "settles automation $result ($notification/$messageTool) through its shared session owner",
   async (scenario, { signal }) => {
     const progress = scenario.result === "progress";
     const failed = scenario.result === "failed";
     const result = progress ? { outcome: "progress", summary } : { outcome: "no_change" };
-    const waitForGate = (gate: Promise<void>, settled: Promise<unknown>, message: string) =>
-      withinTest(awaitGateBeforeSettlement(gate, settled, message), signal);
     await withOpenClawTestState(
       { label: "automation-shared-result", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
@@ -133,22 +122,9 @@ it.for([
             includeReasoning: true,
           },
         });
-        const firstStarted = createDeferred();
-        const releaseFirst = createDeferred();
-        const queued = createDeferred();
-        let nativeCalls = 0;
         let automationRunId: string | undefined;
         model.mockReset().mockImplementation(async (params) => {
           await admitModelTurn(params);
-          nativeCalls++;
-          if (scenario.admission === "queued" && nativeCalls === 1) {
-            firstStarted.resolve();
-            await releaseFirst.promise;
-            return {
-              payloads: [],
-              meta: { durationMs: 1, terminalReply: { disposition: "silent" } },
-            };
-          }
           automationRunId = expectDefined(params.runId, "automation run id");
           await params.onBlockReply?.({
             text: "Unsettled reasoning must stay private.",
@@ -192,23 +168,8 @@ it.for([
               : {}),
           };
         });
-        let first: ReturnType<typeof enqueueSessionEventForHost> | undefined;
-        let scheduled: ReturnType<typeof runCronSessionTurn> | undefined;
         try {
-          if (scenario.admission === "queued") {
-            first = enqueueSessionEventForHost("Hold this session until the automation queues.", {
-              ...scope,
-              source: "task",
-              expectedTarget: await captureSessionEventTargetForHost(
-                scope.agentId,
-                scope.sessionKey,
-              ),
-              abortSignal: signal,
-              deliver: false,
-            });
-            await waitForGate(firstStarted.promise, first.settled, "holding turn never started");
-          }
-          scheduled = runCronSessionTurn({
+          const outcome = await runCronSessionTurn({
             occurrence: TEST_SCHEDULED_OCCURRENCE,
             ...scope,
             cfg,
@@ -218,26 +179,13 @@ it.for([
             deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
             abortSignal: signal,
             assertCurrent() {},
-            onLaneWait(info) {
-              if (info?.waiting) {
-                queued.resolve();
-              }
-            },
           });
-          if (first) {
-            await waitForGate(queued.promise, scheduled, "automation never entered the queue");
-            expect(automationRunId).toBeUndefined();
-            releaseFirst.resolve();
-            await expect(first.settled).resolves.toMatchObject({ status: "completed" });
-          }
-          const outcome = await scheduled;
           expect(outcome, outcome.error).toMatchObject({
             status: failed ? "error" : "ok",
             executionStarted: true,
             ...(failed ? { error: failure } : {}),
           });
           expect(outcome.result).toEqual(result);
-          expect(nativeCalls).toBe(scenario.admission === "queued" ? 2 : 1);
           const settled = expectDefined(
             await readSessionEntryInWorker(scope),
             "settled shared session",
@@ -274,9 +222,6 @@ it.for([
             expect(sendText.mock.calls.some(([sent]) => sent.text.includes(failure))).toBe(true);
           }
         } finally {
-          releaseFirst.resolve();
-          first?.cancel();
-          await Promise.allSettled([first?.settled, scheduled]);
           await drainGlobalSingletonLifecycleState("restart");
           resetSystemEventsForTest();
           restoreActivePluginRegistrySnapshot(registry);
