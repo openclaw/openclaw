@@ -42,9 +42,14 @@ The required options are:
 | `pollIntervalMs`                 | Schedules abandoned-claim and external-enqueue recovery sweeps, with a minimum interval of five minutes. Admissions and retry deadlines wake the drain directly.                                                                                                                                                 |
 | `retention`                      | Supplies the prune cadence and completed/failed TTL and entry caps.                                                                                                                                                                                                                                              |
 
-Startup recovery runs immediately. External enqueues and dead-owner claims can wait
-up to the recovery interval plus execution time; live claims retain their existing
-lease before becoming eligible for stale-claim recovery.
+Startup recovery runs immediately. External queue writes, including
+`openclaw channels dead-letters resubmit`, do not signal the running monitor.
+External enqueues and dead-owner claims can wait up to the recovery interval plus
+scheduling and execution time. An unrefreshed claim from a still-live remote process
+first expires its lease: with the default 30-minute lease and minimum five-minute
+sweep, that bound is 35 minutes from the last refresh, plus scheduling and execution time. A larger
+`pollIntervalMs` increases the bound. Active local claims keep their existing
+protection, including claims held after a settlement write fails.
 
 The monitor serializes admissions so append backoff cannot invert a lane. The
 default bounded append delays are `0`, `100`, and `300` ms; exhaustion rejects
