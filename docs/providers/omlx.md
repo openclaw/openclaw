@@ -153,6 +153,8 @@ Configure the embedding model separately under `memory.search`.
   `/v1/models`, not a chat model or its `omlx/` chat reference.
 - **Index identity warning after switching models:** run
   `openclaw memory index --force` to rebuild with the new embeddings.
+- **Compaction fails with a Metal threadgroup error:** the MLX server raises it,
+  not OpenClaw. Try [llmman](/providers/llmman) as the local server.
 
 ## Related
 
