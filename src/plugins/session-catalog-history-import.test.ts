@@ -38,15 +38,6 @@ async function initializeStore(scope: ReturnType<typeof catalogStore>["scope"]) 
   await upsertSessionEntry({ ...scope, entry: { sessionId: scope.sessionId, updatedAt: 1 } });
 }
 
-function incidentResult(incidentId: string, summary: string) {
-  return bindPluginInlineViewInvocation(
-    createPluginInlineViewResult("incidents", "incident", { incidentId }, { version: 3, summary }),
-    "incidents",
-    "show_incident",
-    "call-1",
-  );
-}
-
 it("imports and deduplicates in the supplied config store without polluting runtime or default stores", async () => {
   await withTempHome(
     async (home) => {
@@ -94,15 +85,24 @@ it("imports and deduplicates in the supplied config store without polluting runt
         expect(commitGuard).toHaveBeenCalledTimes(guardedWrites);
 
         const imported = await readMessages(supplied);
-        expect(imported.map(({ message }) => [message.role, message.content])).toEqual([
-          ["user", "Imported prompt"],
-          ["assistant", [{ type: "text", text: "Imported answer" }]],
-          ["assistant", [{ type: "text", text: "Copied snapshot; using openai/gpt-5.6-sol." }]],
+        expect(imported).toMatchObject([
+          {
+            idempotencyKey: "fixture-catalog-catalog:source-thread:prompt",
+            message: { role: "user", content: "Imported prompt" },
+          },
+          {
+            idempotencyKey: "fixture-catalog-catalog:source-thread:answer",
+            message: { role: "assistant", content: [{ type: "text", text: "Imported answer" }] },
+          },
+          {
+            idempotencyKey: "fixture-catalog-catalog:source-thread:continuation-notice",
+            message: {
+              provider: "openclaw",
+              model: "session-catalog",
+              content: [{ type: "text", text: "Copied snapshot; using openai/gpt-5.6-sol." }],
+            },
+          },
         ]);
-        expect(imported.at(-1)?.message).toMatchObject({
-          provider: "openclaw",
-          model: "session-catalog",
-        });
         commitGuard.mockImplementation(() => {
           throw new Error("Catalog source revoked");
         });
@@ -233,7 +233,17 @@ it("preserves inline fallback through native storage, text catalog and untrusted
     setRuntimeConfigSnapshot(config);
     try {
       await initializeStore(scope);
-      const result = incidentResult("INC-42", "INC-42 is investigating.");
+      const result = bindPluginInlineViewInvocation(
+        createPluginInlineViewResult(
+          "incidents",
+          "incident",
+          { incidentId: "INC-42" },
+          { version: 3, summary: "INC-42 is investigating." },
+        ),
+        "incidents",
+        "show_incident",
+        "call-1",
+      );
       await appendTranscriptMessage(scope, {
         message: {
           role: "toolResult",
@@ -244,6 +254,17 @@ it("preserves inline fallback through native storage, text catalog and untrusted
           timestamp: 1000,
         },
       });
+      const nested = bindPluginInlineViewInvocation(
+        createPluginInlineViewResult(
+          "incidents",
+          "incident",
+          { incidentId: "INC-43" },
+          { version: 3, summary: "INC-43 is resolved." },
+        ),
+        "incidents",
+        "show_incident",
+        "call-1",
+      );
       await appendTranscriptMessage(scope, {
         message: createNestedToolActivity({
           runId: "run-2",
@@ -254,7 +275,7 @@ it("preserves inline fallback through native storage, text catalog and untrusted
           toolCallId: "call-1",
           toolName: "show_incident",
           input: {},
-          result: incidentResult("INC-43", "INC-43 is resolved."),
+          result: nested,
           isError: false,
           startedAt: 2000,
           timestamp: 2100,

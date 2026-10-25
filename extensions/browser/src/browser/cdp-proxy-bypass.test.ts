@@ -73,9 +73,9 @@ describe("cdp-proxy-bypass", () => {
   it.each(["first", "second"] as const)(
     "restores concurrent leases when %s caller exits first",
     async (firstExit) => {
-      const enter = [createDeferred<void>(), createDeferred<void>()];
-      const release = [createDeferred<void>(), createDeferred<void>()];
-      const start = (index: number) =>
+      const enter = [createDeferred<void>(), createDeferred<void>()] as const;
+      const release = [createDeferred<void>(), createDeferred<void>()] as const;
+      const start = (index: 0 | 1) =>
         withNoProxyForCdpUrl(cdpUrl, async () => {
           expect(process.env.NO_PROXY).toContain("localhost");
           expect(process.env.NO_PROXY).toContain("[::1]");
@@ -88,12 +88,13 @@ describe("cdp-proxy-bypass", () => {
       const b = start(1);
       await enter[1].promise;
       const first = firstExit === "first" ? 0 : 1;
-      const calls = [a, b];
+      const last = first === 0 ? 1 : 0;
+      const calls = [a, b] as const;
       release[first].resolve();
       expect(await calls[first]).toBe(first);
       expect(process.env.NO_PROXY).toContain("localhost");
-      release[1 - first].resolve();
-      expect(await calls[1 - first]).toBe(1 - first);
+      release[last].resolve();
+      expect(await calls[last]).toBe(last);
       expectBypass(undefined);
     },
   );
@@ -121,9 +122,9 @@ describe("cdp-proxy-bypass", () => {
 });
 
 describe("withManagedProxyForCdpUrl", () => {
-  let release: ReturnType<typeof vi.fn>;
+  let release = vi.fn<() => void>();
   beforeEach(() => {
-    release = vi.fn();
+    release = vi.fn<() => void>();
     registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
   });
   it("registers the exact CDP URL and releases after the operation", () => {

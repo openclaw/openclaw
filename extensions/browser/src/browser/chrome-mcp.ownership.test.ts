@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSessionStub,
   pagesResult,
+  resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
   textResult,
   type ToolCall,

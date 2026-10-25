@@ -49,7 +49,7 @@ async function whisperCommand() {
   return root;
 }
 
-function mockPlatform(platform: NodeJS.Platform, arch: string) {
+function mockPlatform(platform: NodeJS.Platform, arch: NodeJS.Architecture) {
   vi.spyOn(process, "platform", "get").mockReturnValue(platform);
   vi.spyOn(process, "arch", "get").mockReturnValue(arch);
 }

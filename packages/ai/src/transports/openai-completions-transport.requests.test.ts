@@ -134,10 +134,11 @@ describe("openai completions transport requests", () => {
             [false, true, true, true],
           ] as const) {
             includeTools = tools;
+            options.streaming = option;
             const stream = await createStream(
               { ...model, params: { streaming: param } },
               replyContext("Reply live-ok"),
-              { ...options, streaming: option },
+              options,
             );
             const { result: final, events } = await collectStream(stream);
             const eventTypes = events.map((event) => event.type);
@@ -177,10 +178,11 @@ describe("openai completions transport requests", () => {
             );
           }
           oversized = true;
+          options.streaming = false;
           const oversizedStream = await createStream(
             model,
             { messages: replyContext().messages },
-            { ...options, streaming: false },
+            options,
           );
           expect(await oversizedStream.result()).toMatchObject({
             stopReason: "error",
