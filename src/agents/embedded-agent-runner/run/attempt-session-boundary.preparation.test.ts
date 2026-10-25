@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as pendingInputs from "../../../config/sessions/session-accessor.pending-inputs.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
 import { prepareForeignPendingUserTurns } from "./pre-persisted-user-turn.js";
 
 it("freezes foreign input exclusion across reload and provider conversion", async () => {
@@ -16,7 +16,7 @@ it("freezes foreign input exclusion across reload and provider conversion", asyn
   const prepared = vi
     .spyOn(pendingInputs, "prepareForeignLiveSessionPendingInputEntries")
     .mockResolvedValueOnce(reads);
-  const foreign: AgentMessage = {
+  const foreign: PersistedUserTurnMessage = {
     role: "user",
     content: "accepted foreign input",
     timestamp: 1,
