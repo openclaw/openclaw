@@ -1221,6 +1221,8 @@ const config = {
         "solid-js",
         "playwright-core",
         "partial-json",
+        // The bundled AI runtime loads Bun proxy support through a computed import.
+        "proxy-from-env",
         // The native Canvas bundle falls back without optional Markdown support.
         "sqlite-vec",
         "tree-sitter-bash",
@@ -1310,6 +1312,8 @@ const config = {
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/ai": {
+      // Computed to preserve the browser build boundary.
+      ignoreDependencies: ["proxy-from-env"],
       // Mirror the published export map so knip sees every dist entry point.
       entry: [
         // The JSON compiler models the shared build's external runtime consumers.
