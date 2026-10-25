@@ -64,7 +64,9 @@ Unknown targets retain a default weight. Inspect any assignment with
 runs as the suite changes. The latest two file samples track recent workload
 changes; configuration and preparation costs use observed medians. These are
 estimates, including inferred import/hook costs from verbose logs, not exact
-per-file profiler measurements. Rebalancing adds no jobs or per-job setup.
+per-file profiler measurements. Refresh weights when adding expensive files:
+the unknown-target default preserves coverage but can underestimate their cost
+enough to unbalance a shard. Rebalancing adds no jobs or per-job setup.
 The combined inventory matches the local full suite; a failure in one shard leaves
 the others running and fails the aggregate gate.
 

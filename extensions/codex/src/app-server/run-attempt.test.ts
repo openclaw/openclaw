@@ -1887,7 +1887,6 @@ describe("runCodexAppServerAttempt", () => {
       return originalParse(text, reviver);
     });
     const originalClone = structuredClone;
-    let historyClones = 0;
     let privateCloneBytes = 0;
     const cloneSpy = vi
       .spyOn(globalThis, "structuredClone")
@@ -1901,15 +1900,6 @@ describe("runCodexAppServerAttempt", () => {
             return;
           }
           seen.add(node);
-          if (
-            "role" in node &&
-            node.role === "user" &&
-            "content" in node &&
-            Array.isArray(node.content) &&
-            node.content[0]?.text === "previous visible request"
-          ) {
-            historyClones += 1;
-          }
           for (const child of Object.values(node)) {
             visit(child);
           }
@@ -1923,8 +1913,11 @@ describe("runCodexAppServerAttempt", () => {
       await finishRun(run, harness);
       expect(privateParseBytes).toBe(0);
       expect(privateCloneBytes).toBe(0);
-      expect(historyClones).toBeGreaterThan(0);
-      expect(hook).toHaveBeenCalled();
+      // Hook isolation copies only unowned fields, so assert what the authorized hook receives.
+      const [event] = mockCall(hook, "before_prompt_build");
+      const hookInput = JSON.stringify(event);
+      expect(hookInput).toContain("previous visible request");
+      expect(hookInput).not.toContain(marker);
     } finally {
       parseSpy.mockRestore();
       cloneSpy.mockRestore();
