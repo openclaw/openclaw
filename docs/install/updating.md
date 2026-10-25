@@ -234,6 +234,11 @@ Run `openclaw channels status --probe` to investigate channel warnings. This
 requires the repaired installed updater; a new candidate cannot change the
 checks of an updater already running.
 
+Before post-core plugin work, the updater releases its temporary Doctor database
+ownership before rechecking profile-backed requester authority. Service custody
+remains with the updater; the next Doctor acquires its own database ownership.
+This avoids refusing the updater's own policy reads during its maintenance window.
+
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
 Doctor exits unsuccessfully. The next parent access admits the resulting schema

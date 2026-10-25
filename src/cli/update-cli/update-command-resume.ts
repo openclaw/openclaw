@@ -340,9 +340,10 @@ async function resumePostCoreUpdateInternal(
           runtime: { ...defaultRuntime, log: defaultRuntime.error },
           ...(params.opts.run ? { assertCurrent } : {}),
         });
-        assertCurrent?.();
-        // Each fresh Doctor holds its own database fences after admission.
+        // Each fresh Doctor holds its own database fences after admission. Release
+        // this scope before unscoped requester policy reads reopen shared state.
         await maintenance?.releaseState();
+        assertCurrent?.();
         await completeSourceUpdateRuntime({
           root: params.root,
           sourceRuntimePrepared: params.opts.sourceRuntimePrepared,
