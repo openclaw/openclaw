@@ -1017,8 +1017,8 @@ ${readFileSync(gitShim, "utf8")}
   );
 
   it.each(
-    ["missing", "malformed", "inherited", "mismatched", "noncommit"].flatMap((fault) =>
-      (fault === "mismatched" ? (["main", "pr"] as const) : (["pr"] as const)).map((mode) => ({
+    (["main", "pr"] as const).flatMap((mode) =>
+      ["missing", "malformed", "inherited", "mismatched", "noncommit"].map((fault) => ({
         mode,
         fault,
       })),
