@@ -405,7 +405,7 @@ export const runtimeProcessHelperManifest = {
   },
 } as const;
 
-export const runtimeProcessStandaloneModules = [
+const runtimeProcessStandaloneModules = [
   "../openclaw.mjs",
   "../node-compile-cache.mjs",
   "tooling/managed-memory-launcher.js",
@@ -443,12 +443,3 @@ export function createStandaloneRuntimeProcessEntrypoints(
     ),
   };
 }
-
-// Script assets execute in their destination runtime rather than a worker thread.
-export const runtimeProcessScriptEntrypoints = {
-  workspaceQuiescence: {
-    sourceModule: "src/gateway/worker-environments/workspace-quiescence-scripts.ts",
-    export: "workspaceQuiescenceArgv",
-    kind: "argv",
-  },
-} as const;
