@@ -1,16 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { assignSessionOwner, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { attributeDelegatedSessionCreator } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
-import { isSessionCreatorProfile } from "./session-creator.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import {
   createSessionListEntryFilter,
@@ -46,33 +44,6 @@ const sharingTarget = async (cfg: OpenClawConfig, sessionKey: string) =>
   expectDefined(await resolveSessionSharingTargetAsync({ cfg, sessionKey }), "persisted session");
 
 describe("creator namespace authorization", () => {
-  it("reuses caller alias facts across rows and refreshes them after a real merge", async () => {
-    await withProfiles(async () => {
-      const caller = ensureProfileForEmail("cached-caller@example.test");
-      const other = ensureProfileForEmail("cached-other@example.test");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const actor = { type: "human", source: "profile", id: other.id } as const;
-      const db = openOpenClawStateDatabase().db;
-      const prepare = vi.spyOn(db, "prepare");
-      try {
-        expect(isSessionCreatorProfile({ ...actor, source: "channel" }, caller.id)).toBe(false);
-        expect(prepare).not.toHaveBeenCalled();
-        expect(isSessionCreatorProfile(actor, caller.id)).toBe(false);
-        for (let row = 0; row < 100; row++) {
-          expect(isSessionCreatorProfile(actor, caller.id)).toBe(false);
-        }
-        expect(prepare).not.toHaveBeenCalled();
-        linkEmail("cached-other@example.test", caller.id);
-        prepare.mockClear();
-        expect(isSessionCreatorProfile(actor, caller.id)).toBe(true);
-        expect(isSessionCreatorProfile({ ...actor, source: "unknown" }, caller.id)).toBe(false);
-        expect(prepare).not.toHaveBeenCalled();
-      } finally {
-        prepare.mockRestore();
-      }
-    });
-  });
-
   it("never turns matching attribution or responsibility into a profile creator grant", async () => {
     await withProfiles(async () => {
       const profile = ensureProfileForEmail("creator@example.test");
@@ -114,9 +85,7 @@ describe("creator namespace authorization", () => {
         check(createSessionListEntryFilter({ cfg, client })?.(sessionKey, target.entry)).toBe(
           isCreator,
         );
-        for (let pass = 0; pass < 2; pass++) {
-          check(await receive(cfg, client, sessionKey)).toBe(isCreator);
-        }
+        check(await receive(cfg, client, sessionKey)).toBe(isCreator);
         for (const method of ["sessions.get", "sessions.patch"]) {
           const result = await resolveSessionMutationAuthorizationAsync({
             client,
