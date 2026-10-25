@@ -57,6 +57,12 @@ async function runScript(script: string, timeoutMs = 60_000, execArgv: string[] 
 }
 
 it("releases decoded tree entries while their encoded worker operation is pending", async () => {
+  const input = {
+    inputPath: "/synthetic/snapshot-input",
+    ref: "refs/heads/snapshot",
+    source: { root: "/synthetic" },
+    entries: [{ path: "file.txt", type: "file", mode: 0o644, size: 0, sha256: "a".repeat(64) }],
+  };
   const result = await runScript(
     `
       import { setImmediate } from "node:timers/promises";
@@ -76,12 +82,7 @@ it("releases decoded tree entries while their encoded worker operation is pendin
       let inputRef;
       let entriesRef;
       const operation = (() => {
-        const input = {
-          inputPath: "/synthetic/snapshot-input",
-          ref: "refs/heads/snapshot",
-          source: { root: "/synthetic" },
-          entries: [{ path: "file.txt", type: "file", mode: 420, size: 0, sha256: "a".repeat(64) }],
-        };
+        const input = ${JSON.stringify(input)};
         inputRef = new WeakRef(input);
         entriesRef = new WeakRef(input.entries);
         return prepareWorkspaceTreeInput(input);
@@ -108,12 +109,7 @@ it("releases decoded tree entries while their encoded worker operation is pendin
   expect(result).toEqual({
     retained: { input: false, entries: false },
     pending: true,
-    submitted: {
-      inputPath: "/synthetic/snapshot-input",
-      ref: "refs/heads/snapshot",
-      source: { root: "/synthetic" },
-      entries: [{ path: "file.txt", type: "file", mode: 0o644, size: 0, sha256: "a".repeat(64) }],
-    },
+    submitted: input,
     failure: "worker failed",
   });
 });
@@ -217,30 +213,21 @@ it("captures eligible files outside the Gateway thread and returns the canonical
   });
   const memo = new Map<string, string>();
   const metrics = { contentHashCount: 0, memoHitCount: 0 };
-  const capture = () =>
-    withWorkspaceHashMemo(memo, () => captureWorkspaceManifest(selection), metrics);
-  const first = await capture();
+  const capture = <T>(operation: (params: typeof selection) => Promise<T>) =>
+    withWorkspaceHashMemo(memo, () => operation(selection), metrics);
+  const first = await capture(captureWorkspaceManifest);
   expect(first.manifest.entries).toEqual([workspaceFile("input.txt", content)]);
   expect(first.manifest.directories).toEqual(["preserved"]);
   expect(Object.hasOwn(first, "rawManifest")).toBe(false);
-  const snapshot = await withWorkspaceHashMemo(
-    memo,
-    () => captureWorkspaceSnapshot(selection),
-    metrics,
-  );
+  const snapshot = await capture(captureWorkspaceSnapshot);
   expect({ manifest: snapshot.manifest, manifestRef: snapshot.manifestRef }).toEqual(first);
   expect(snapshot.manifestRef).toBe(`sha256:${digest(snapshot.rawManifest)}`);
-  const document = await withWorkspaceHashMemo(
-    memo,
-    () => captureWorkspaceManifestDocument(selection),
-    metrics,
-  );
+  const document = await capture(captureWorkspaceManifestDocument);
   expect(document).toEqual({
     manifestRef: snapshot.manifestRef,
     rawManifest: snapshot.rawManifest,
   });
-  const reference = () =>
-    withWorkspaceHashMemo(memo, () => captureWorkspaceManifestReference(selection), metrics);
+  const reference = () => capture(captureWorkspaceManifestReference);
   expect(await reference()).toBe(first.manifestRef);
   const empty = await captureWorkspaceManifest({ ...selection, includePaths: new Set<string>() });
   expect(empty.manifest).toMatchObject({ entries: [], directories: [] });
