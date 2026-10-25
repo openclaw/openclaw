@@ -29,6 +29,11 @@ import {
 } from "./state.test-support.js";
 
 const eventTypes = (entries: readonly AuditEntry[]) => entries.map((entry) => entry.event.type);
+const keyedOptions = (namespace: string, maxEntries = 1) => ({
+  namespace,
+  maxEntries,
+  overflowPolicy: "reject-new" as const,
+});
 
 describe("Reef SQLite audit state", () => {
   let stateDir = "";
@@ -37,11 +42,7 @@ describe("Reef SQLite audit state", () => {
   const open = (maxEntries = 2, signal?: AbortSignal) =>
     openReefAuditStore(runtime, key, maxEntries, signal);
   const heads = () =>
-    runtime.state.openSyncKeyedStore<ReefAuditHeadRecord>({
-      namespace: REEF_AUDIT_HEAD_NAMESPACE,
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-    });
+    runtime.state.openSyncKeyedStore<ReefAuditHeadRecord>(keyedOptions(REEF_AUDIT_HEAD_NAMESPACE));
   beforeEach(() => {
     stateDir = createStateTestDirectory();
     runtime = createRuntime(stateDir);
@@ -108,11 +109,9 @@ describe("Reef SQLite audit state", () => {
       hash: initial.entryHash,
       seq: 1,
     });
-    const raw = runtime.state.openSyncKeyedStore<ReefAuditStateRecord>({
-      namespace: REEF_AUDIT_NAMESPACE,
-      maxEntries: 3,
-      overflowPolicy: "reject-new",
-    });
+    const raw = runtime.state.openSyncKeyedStore<ReefAuditStateRecord>(
+      keyedOptions(REEF_AUDIT_NAMESPACE, 3),
+    );
     const initialKey = reefAuditEntryKey(initial.entryHash);
     const staleKey = reefAuditEntryKey(stale.entryHash);
     const staged = { kind: "entry" as const, entry: stale };
@@ -193,11 +192,9 @@ describe("Reef SQLite audit state", () => {
   });
 
   it("rechecks a foreign audit migration marker before committing prepared rows", async () => {
-    const migration = runtime.state.openKeyedStoreV2<{ pending: true }>({
-      namespace: REEF_AUDIT_MIGRATION_NAMESPACE,
-      maxEntries: 1,
-      overflowPolicy: "reject-new",
-    });
+    const migration = runtime.state.openKeyedStoreV2<{ pending: true }>(
+      keyedOptions(REEF_AUDIT_MIGRATION_NAMESPACE),
+    );
     beforeNextStateOperation(runtime, () =>
       migration.register(REEF_AUDIT_MIGRATION_KEY, { pending: true }),
     );

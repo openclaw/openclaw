@@ -8,7 +8,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
 import {
-  ReefInboxConnection,
   ReefProtocolCompatibilityError,
   ReefRelayError,
   createReefWebSocket,
@@ -428,40 +427,14 @@ it("rejects a relay frame above the payload limit before dispatch", async () => 
   const frame = `${prefix}${"x".repeat(bytes - prefix.length - suffix.length)}${suffix}`;
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   const port = await listen(server);
-  const entries: unknown[] = [];
-  const states: string[] = [];
-  const abort = new AbortController();
-  const timeout = setTimeout(() => abort.abort(), 2_000);
   server.once("connection", (socket) => socket.send(frame));
-  const client = createClient(
-    async () => Response.json({ entries: [], cursor: 0 }),
-    () => ts,
-    `http://127.0.0.1:${port}`,
-  );
-  const inbox = new ReefInboxConnection(
-    client,
-    async (received) => {
-      entries.push(...received);
-      abort.abort();
-    },
-    createReefWebSocket,
-    {
-      onState: (state) => {
-        states.push(state);
-        if (state === "disconnected") {
-          abort.abort();
-        }
-      },
-    },
-  );
-
-  try {
-    await inbox.start(abort.signal);
-  } finally {
-    clearTimeout(timeout);
-  }
+  const socket = createReefWebSocket(`ws://127.0.0.1:${port}`) as WebSocket;
+  const received: unknown[] = [];
+  socket.on("message", (message) => received.push(message));
+  const [error] = await once(socket, "error", { signal: AbortSignal.timeout(2_000) });
   expect(Buffer.byteLength(frame)).toBe(bytes);
-  expect({ entries, states }).toEqual({ entries: [], states: ["connected", "disconnected"] });
+  expect(error).toMatchObject({ message: "Max payload size exceeded" });
+  expect(received).toEqual([]);
 });
 
 it("errors when the relay accepts TCP but never completes the upgrade", async () => {

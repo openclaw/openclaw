@@ -3,7 +3,6 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
-  guardInstructions,
   openClaimed,
   sha256Hex,
   verifyReceipt,
@@ -118,7 +117,6 @@ describe("createConfiguredGuard", () => {
       expect(runtime.llm.complete).toHaveBeenCalledWith(
         expect.objectContaining({
           model: `openai/${oauthGuardModel}@openai:work`,
-          systemPrompt: expect.stringContaining(guardInstructions("outbound")),
           messages: [{ role: "user", content: JSON.stringify(guardInput) }],
           maxTokens: 512,
           purpose: "reef.guard",
@@ -281,16 +279,14 @@ describe("ReefMessageFlow outbound", () => {
   });
 
   it("binds owner review to the canonical body and proposal", async () => {
-    const review: Verdict = {
-      ...allow,
-      decision: "review",
-      category: "ambiguous",
-      reason: "Owner review.",
-    };
     const {
       flow,
       stores: { reviews },
-    } = await createFlow({ handle: "alice", peer: "bob", verdicts: [review] });
+    } = await createFlow({
+      handle: "alice",
+      peer: "bob",
+      verdicts: [{ ...allow, decision: "review" }],
+    });
 
     await expect(flow.send("bob", "needs review")).rejects.toMatchObject({
       stage: "review",

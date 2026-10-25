@@ -42,6 +42,12 @@ function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
   const openStore = runtime.state.openKeyedStoreV2;
   const store = openStore<ReefReplayRecord>(options);
   const raw = runtime.state.openSyncKeyedStore<ReefReplayRecord>(options);
+  const compare = store.compareAndApply!;
+  const beforeCompare = vi.fn<(...args: Parameters<typeof compare>) => Promise<void> | void>();
+  store.compareAndApply = async (...args) => {
+    await beforeCompare(...args);
+    return compare(...args);
+  };
   runtime.state.openKeyedStoreV2 = <T>(opts: OpenAsyncKeyedStoreOptions) => {
     if (opts.retention === "retained" || opts.namespace !== REEF_REPLAY_NAMESPACE) {
       return openStore<T>(opts);
@@ -56,7 +62,7 @@ function fixture(maxEntries = REEF_REPLAY_MAX_ENTRIES) {
     { id, bodyHash: "b".repeat(64), auditHead: "c".repeat(64), status: "accepted" },
     identity.signing.secretKey,
   );
-  return { store, raw, open, receipt };
+  return { store, raw, open, receipt, beforeCompare };
 }
 
 describe("Reef replay worker ownership", () => {
@@ -93,15 +99,10 @@ describe("Reef replay worker ownership", () => {
     const f = fixture();
     const started = createDeferred<void>();
     const finish = createDeferred<void>();
-    const compare = f.store.compareAndApply!;
-    let calls = 0;
-    f.store.compareAndApply = async (...args) => {
-      if (++calls === 1) {
-        started.resolve();
-        await finish.promise;
-      }
-      return compare(...args);
-    };
+    f.beforeCompare.mockImplementationOnce(async () => {
+      started.resolve();
+      await finish.promise;
+    });
     const replay = f.open();
     const first = replay.claim("alice", id, hash);
     await started.promise;
@@ -109,7 +110,7 @@ describe("Reef replay worker ownership", () => {
     const next = replay.claim("alice", id, hash);
     const refresh = replay.refresh!("alice", id);
     await Promise.resolve();
-    expect(calls).toBe(1);
+    expect(f.beforeCompare).toHaveBeenCalledTimes(1);
     finish.resolve();
     await expect(first).resolves.toBe("new");
     await release;
@@ -122,20 +123,12 @@ describe("Reef replay worker ownership", () => {
   it("rejects stale completion and cleanup after a conflicting successor takes ownership", async () => {
     const f = fixture();
     const successor = f.open();
-    const compare = f.store.compareAndApply!;
-    let takeover = false;
-    f.store.compareAndApply = async (...args) => {
-      if (takeover) {
-        takeover = false;
-        await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
-        await successor.claim("alice", id, hash);
-      }
-      return compare(...args);
-    };
-    // A fresh handle captures the instrumented worker method but owns its own claim.
     const stale = f.open();
     await stale.claim("alice", id, hash);
-    takeover = true;
+    f.beforeCompare.mockImplementationOnce(async () => {
+      await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: Date.now() - 1 });
+      await successor.claim("alice", id, hash);
+    });
     await expect(stale.complete("alice", id, f.receipt, { text: "stale" })).rejects.toThrow(
       "replay claim is not in flight",
     );
@@ -163,17 +156,11 @@ describe("Reef replay worker ownership", () => {
       claimExpiresAt: deadline,
     });
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const compare = f.store.compareAndApply!;
-    let changed = false;
-    f.store.compareAndApply = async (...args) => {
-      if (!changed) {
-        changed = true;
-        expect(args[2]).toMatchObject({ action: "set", value: { claimOwner: "previous" } });
-        await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: deadline + 1 });
-        clock.mockReturnValue(deadline + 2);
-      }
-      return compare(...args);
-    };
+    f.beforeCompare.mockImplementationOnce(async (...args) => {
+      expect(args[2]).toMatchObject({ action: "set", value: { claimOwner: "previous" } });
+      await f.store.register(key, { ...f.raw.lookup(key)!, claimExpiresAt: deadline + 1 });
+      clock.mockReturnValue(deadline + 2);
+    });
     const replay = f.open();
     await expect(replay.claim("alice", id, hash)).resolves.toBe("new");
     expect(f.raw.lookup(key)?.claimExpiresAt).toBe(now + 5 * 60_000);
@@ -199,9 +186,8 @@ describe("Reef replay worker ownership", () => {
 
   it("reuses encrypted bytes across a renewal conflict", async () => {
     const f = fixture();
-    const compare = f.store.compareAndApply!;
     const ciphertexts: string[] = [];
-    f.store.compareAndApply = async (entryKey, comparison, intent) => {
+    f.beforeCompare.mockImplementation(async (entryKey, _comparison, intent) => {
       if (intent.action === "set" && intent.value.state === "completed") {
         ciphertexts.push(intent.value.body!.enc);
         if (ciphertexts.length === 1) {
@@ -212,8 +198,7 @@ describe("Reef replay worker ownership", () => {
           });
         }
       }
-      return compare(entryKey, comparison, intent);
-    };
+    });
     const rng = vi.mocked(randomBytes).mockClear();
     const replay = f.open();
     await replay.claim("alice", id, hash);
