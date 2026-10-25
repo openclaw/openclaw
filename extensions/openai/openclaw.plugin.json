@@ -51,7 +51,7 @@
       "openai": {
         "baseUrl": "https://api.openai.com/v1",
         "api": "openai-responses",
-        "defaultUtilityModel": "gpt-5.6-luna",
+        "defaultUtilityModel": "gpt-6-luna",
         "family": "openai",
         "models": [
           {

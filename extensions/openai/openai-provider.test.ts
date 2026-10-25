@@ -143,6 +143,14 @@ describe("buildOpenAIProvider", () => {
 
   registerOpenAIFailoverTests();
 
+  it("declares GPT-6 Luna as the automatic utility model with chat support", () => {
+    const catalog = manifest.modelCatalog.providers.openai;
+    expect(catalog.defaultUtilityModel).toBe("gpt-6-luna");
+    expect(catalog.models.find((model) => model.id === catalog.defaultUtilityModel)).toMatchObject({
+      inference: { chat: true },
+    });
+  });
+
   it("does not hardcode transport routing on static catalog entries (#91710)", () => {
     const openaiModels = manifest.modelCatalog.providers.openai.models as Array<
       Record<string, unknown>

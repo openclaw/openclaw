@@ -118,7 +118,7 @@ describe("resolveConfiguredSetupModelForAgent", () => {
 
 describe("resolveUtilityModelRefForAgent", () => {
   const metadataSnapshot = snapshotWithDefaults({
-    openai: "gpt-5.6-luna",
+    openai: "gpt-6-luna",
     anthropic: "claude-haiku-4-5",
   });
   type Scenario = {
@@ -135,6 +135,11 @@ describe("resolveUtilityModelRefForAgent", () => {
       cfg: { agents: { defaults: { utilityModel: " openrouter/mistralai/mistral-small " } } },
       expected: "openrouter/mistralai/mistral-small",
     },
+    {
+      name: "explicit older OpenAI utility model",
+      cfg: { agents: { defaults: { utilityModel: "openai/gpt-5.6-luna" } } },
+      expected: "openai/gpt-5.6-luna",
+    },
     { name: "disabled", cfg: { agents: { defaults: { utilityModel: "   " } } } },
     {
       name: "provider default",
@@ -144,7 +149,7 @@ describe("resolveUtilityModelRefForAgent", () => {
     {
       name: "native auth profile",
       cfg: { agents: { defaults: { model: "openai/gpt-5.5@work" }, entries: { main: {} } } },
-      expected: "openai/gpt-5.6-luna@work",
+      expected: "openai/gpt-6-luna@work",
     },
     {
       name: "ACP preserves native auth profile",
@@ -154,14 +159,14 @@ describe("resolveUtilityModelRefForAgent", () => {
           entries: { main: { model: "harness-only@harness-profile", runtime: { type: "acp" } } },
         },
       },
-      expected: "openai/gpt-5.6-luna@work",
+      expected: "openai/gpt-6-luna@work",
     },
     {
       name: "session auth overrides primary",
       cfg: { agents: { defaults: { model: "anthropic/claude-fable-5@personal" } } },
       primaryProvider: "OpenAI",
       primaryModelRef: "openai/gpt-5.5@work",
-      expected: "openai/gpt-5.6-luna@work",
+      expected: "openai/gpt-6-luna@work",
     },
     { name: "no provider default", cfg: { agents: { defaults: { model: "ollama/llama-4-70b" } } } },
     {
