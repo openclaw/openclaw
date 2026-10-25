@@ -38,8 +38,9 @@ vi.mock("./send.js", async (importOriginal) => ({
 import { slackPlugin } from "./channel.js";
 import { deliverReplies } from "./monitor/replies.js";
 import { slackOutbound } from "./outbound-adapter.js";
+import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 import { prepareSlackReply } from "./reply-blocks.js";
-import { sendMessageSlack } from "./send.js";
+import { sendMessageSlack, type SlackSendResult } from "./send.js";
 
 function jsonRoundTrip<T>(value: T): T {
   // oxlint-disable-next-line unicorn/prefer-structured-clone -- This test exercises JSON transport.
@@ -141,6 +142,7 @@ function questionPayload(
 function fallbackQuestionPayload() {
   return questionPayload(
     [
+      { type: "text", text: "Before" },
       { type: "table", caption: "Choices", headers: ["Label"], rows: [["A useful answer"]] },
       questionButtons(),
       { type: "text", text: "Trailing context intentionally arrives after the question card." },
@@ -243,7 +245,7 @@ describe("Slack question finalization", () => {
 
   it("matches the current question and preserves unrelated controls in both delivery paths", async () => {
     const foreignQuestionId = "ask_abcdef0123456789abcdef0123456789";
-    const callback = button("openclaw:callback_button:1:1", "refresh", "Refresh");
+    const callback = button("openclaw:callback_button:1:1", "private-value", "Refresh");
     const foreign = button("openclaw:question_button:2:1", `slq1:${foreignQuestionId}:0`, "Other");
     const current = button("openclaw:question_button:3:1", `slq1:${questionId}:0`, "One");
     const callbackRow = { type: "actions" as const, block_id: "callback", elements: [callback] };
@@ -265,6 +267,9 @@ describe("Slack question finalization", () => {
           const sendSlack: typeof sendMessageSlack = async (to, text, options) =>
             await sendMessageSlack(to, text, { ...options, client, token: "xoxb-test" });
           await capture(rendered, await deliverGeneric(rendered, sendSlack));
+        }
+        for (const [post] of client.chat.postMessage.mock.calls) {
+          expect(post.text).not.toMatch(/private-value|openclaw:question_|slq1:/u);
         }
       };
 
@@ -360,17 +365,27 @@ describe("Slack question finalization", () => {
     setActivePluginRegistry(createTestRegistry(plugins));
 
     const { client, accepted } = fallbackClient();
+    const questionSends: Array<{ result: SlackSendResult; progress: SlackSendResult[] }> = [];
     const sendSlack: typeof sendMessageSlack = async (to, text, options) => {
+      const progress: SlackSendResult[] = [];
       const sendOptions = {
         ...options,
         cfg,
         token: "xoxb-test",
         client,
         textLimit: 72,
+        onDeliveryResult: async (result: SlackSendResult) => {
+          progress.push(result);
+          await options.onDeliveryResult?.(result);
+        },
       };
       // This presentation test uses method mocks rather than the real request boundary.
       delete sendOptions.assertDirectAdapterHandoff;
-      return await sendMessageSlack(to, text, sendOptions);
+      const result = await sendMessageSlack(to, text, sendOptions);
+      if (result.meta) {
+        questionSends.push({ result, progress });
+      }
+      return result;
     };
 
     const batch = await sendDurableMessageBatch({
@@ -388,6 +403,40 @@ describe("Slack question finalization", () => {
         : new Error("Expected the Slack question fallback to be delivered");
     }
     expectAcceptedQuestion(accepted);
+    expect(questionSends).toHaveLength(1);
+    const { result: aggregate, progress } = questionSends[0]!;
+    const questionDelivery = progress.find((result) => result.meta);
+    expect(progress.length).toBeGreaterThan(1);
+    expect(progress.filter((result) => result.meta)).toEqual([
+      expect.objectContaining({
+        meta: expect.objectContaining({
+          slackQuestionActionIds: ["openclaw:question_button:1:1"],
+        }),
+      }),
+    ]);
+    expect(
+      progress.some((result) => result.receipt.parts[0]?.kind === "card" && !result.meta),
+    ).toBe(true);
+    expect(aggregate.receipt.parts).toMatchObject(
+      progress.map((result, index) => ({
+        platformMessageId: result.messageId,
+        kind: result.receipt.parts[0]?.kind,
+        index,
+      })),
+    );
+    expect(questionDelivery?.messageId).not.toBe(aggregate.messageId);
+    expect(jsonRoundTrip(aggregate.meta)).toEqual({
+      slackQuestionActionIds: ["openclaw:question_button:1:1"],
+      slackQuestionMessageId: questionDelivery?.messageId,
+    });
+    expect(aggregate.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]).toBe(
+      questionDelivery?.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS],
+    );
+    expect(
+      aggregate.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]?.some(
+        (block) => block.type === "data_table",
+      ),
+    ).toBe(false);
     expect(batch.results).toHaveLength(1);
     expect(batch.results[0]).toMatchObject({
       messageId: accepted.trailingMessageId,

@@ -10,7 +10,6 @@ import {
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -25,16 +24,7 @@ import type { sendMessageSlack } from "./send.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
-type SlackProviderMonitor = (params: {
-  scheduler: PluginServiceSchedulerV1;
-  botToken: string;
-  appToken: string;
-  abortSignal: AbortSignal;
-  config?: Record<string, unknown>;
-  channelRuntime?: ChannelRuntimeSurface;
-  runtime?: RuntimeEnv;
-  setStatus?: (next: Record<string, unknown>) => void;
-}) => Promise<unknown>;
+type SlackProviderMonitor = typeof import("./monitor/provider.js").monitorSlackProvider;
 type SlackStartupAuthClientFactory = typeof import("./client.js").createSlackStartupAuthClient;
 
 const createSlackTestEvent = vi.hoisted(() => () => {

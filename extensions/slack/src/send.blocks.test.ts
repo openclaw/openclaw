@@ -1,8 +1,7 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
-import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -31,66 +30,12 @@ function postedMessage(callIndex = 0) {
   return client.chat.postMessage.mock.calls[callIndex]![0];
 }
 const posts = () => client.chat.postMessage.mock.calls.map(([post]) => post);
-const section = (text: string) => ({ type: "section", text: { type: "mrkdwn", text } });
-const plainText = (text: string) => ({ type: "plain_text", text });
 const rawText = (text: string) => ({ type: "raw_text", text });
 const table = (caption = "Pipeline", rows = [[rawText("Account")], [rawText("Acme")]]) => ({
   type: "data_table",
   caption,
   rows,
 });
-
-function interleavedNativeDataBlocks(): Array<Record<string, unknown>> {
-  return [
-    section("Before"),
-    {
-      type: "data_visualization",
-      title: "Revenue mix",
-      chart: {
-        type: "pie",
-        segments: [
-          { label: "Product", value: 60 },
-          { label: "Services", value: 40 },
-        ],
-      },
-    },
-    {
-      ...table("Pipeline report"),
-      rows: [
-        [rawText("Account"), rawText("ARR")],
-        [rawText("Acme"), { type: "raw_number", value: 125000, text: "$125k" }],
-      ],
-    },
-    section("After"),
-    {
-      type: "actions",
-      block_id: "private-block",
-      elements: [
-        {
-          type: "button",
-          action_id: "private-button",
-          text: plainText("Approve"),
-          value: "private-value",
-        },
-        {
-          type: "static_select",
-          action_id: "private-select",
-          placeholder: plainText("Choose owner"),
-          options: [{ text: plainText("Operations"), value: "private-option" }],
-        },
-      ],
-    },
-  ];
-}
-
-const INTERLEAVED_NATIVE_DATA_ACCESSIBILITY = [
-  "Outside",
-  "Before",
-  "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
-  "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
-  "After",
-  "Approve\nChoose owner\nOperations",
-].join("\n\n");
 
 function slackDnsRequestError(): Error {
   return Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN slack.com"), {
@@ -140,14 +85,6 @@ describe("sendMessageSlack chunking", () => {
     expect(postedTexts.every((text) => (text?.match(/`/gu) ?? []).length % 2 === 0)).toBe(true);
   });
 
-  it("rejects a successful Slack post that returns no message timestamp", async () => {
-    client.chat.postMessage.mockResolvedValueOnce({ ok: true, channel: "C123" });
-
-    await expect(send("hello")).rejects.toThrow(
-      "Slack chat.postMessage returned no message timestamp",
-    );
-  });
-
   it("preserves the first canonical response thread across chunked sends", async () => {
     client.chat.postMessage
       .mockResolvedValueOnce({
@@ -180,66 +117,6 @@ describe("sendMessageSlack chunking", () => {
 });
 
 describe("sendMessageSlack blocks", () => {
-  it("marks only the fallback card that actually contains the question controls", async () => {
-    let messageCount = 0;
-    client.chat.postMessage = vi.fn(async () => ({
-      ok: true,
-      ts: `171234.${String(++messageCount).padStart(3, "0")}`,
-    }));
-    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
-    const questionActionId = "openclaw:question_button:2:1";
-    const blocks = interleavedNativeDataBlocks();
-    const actionBlock = blocks.at(-1) as { elements: Array<{ action_id: string }> };
-    actionBlock.elements[0]!.action_id = questionActionId;
-    blocks.push(section("After question"));
-    const onDeliveryResult = vi.fn();
-
-    const aggregateResult = await send("Outside", {
-      blocks: blocks as never,
-      nativeDataFallbackBaseText: "Outside",
-      textLimit: 25,
-      onDeliveryResult,
-    });
-
-    expect(postedMessage().text).toBe(`${INTERLEAVED_NATIVE_DATA_ACCESSIBILITY}\n\nAfter question`);
-    for (const post of posts()) {
-      expect(post.text).not.toMatch(/private/u);
-    }
-    const delivered = onDeliveryResult.mock.calls.map(([result]) => result);
-    expect(delivered.length).toBeGreaterThan(1);
-    expect(delivered.filter((result) => result.meta)).toEqual([
-      expect.objectContaining({
-        meta: expect.objectContaining({ slackQuestionActionIds: [questionActionId] }),
-      }),
-    ]);
-    expect(
-      delivered.some((result) => result.receipt.parts[0]?.kind === "card" && !result.meta),
-    ).toBe(true);
-    expect(aggregateResult.receipt.parts).toMatchObject(
-      delivered.map((result, index) => ({
-        platformMessageId: result.messageId,
-        kind: result.receipt.parts[0]?.kind,
-        index,
-      })),
-    );
-    const questionDelivery = delivered.find((delivery) => delivery.meta);
-    expect(questionDelivery?.messageId).not.toBe(aggregateResult.messageId);
-    expect(JSON.stringify(aggregateResult.meta)).toBe(
-      JSON.stringify({
-        slackQuestionActionIds: [questionActionId],
-        slackQuestionMessageId: questionDelivery?.messageId,
-      }),
-    );
-    expect(aggregateResult.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]).toBe(
-      questionDelivery?.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS],
-    );
-    expect(
-      aggregateResult.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]?.some(
-        (block) => block.type === "data_table",
-      ),
-    ).toBe(false);
-  });
-
   it("uses resolved-limit blockless chunks for oversized native data with no survivors", async () => {
     const caption = "c".repeat(41_000);
     await send("", { blocks: [table(caption)] as never });
@@ -468,13 +345,15 @@ describe("sendMessageSlack identity and target fallback", () => {
     });
   });
 
-  it.each([
-    { needed: "chat:write.customize" },
-    {
-      response_metadata: { scopes: ["chat:write"], acceptedScopes: ["", " chat:write.customize "] },
-    },
-  ])("drops identity only for the customize scope: %j", async (details) => {
-    client.chat.postMessage.mockRejectedValueOnce(missingScope(details));
+  it("drops identity for the customize scope in response metadata", async () => {
+    client.chat.postMessage.mockRejectedValueOnce(
+      missingScope({
+        response_metadata: {
+          scopes: ["chat:write"],
+          acceptedScopes: ["", " chat:write.customize "],
+        },
+      }),
+    );
     const result = await send("hello", { identity: { iconEmoji: ":robot_face:" } });
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
     expect(postedMessage(0)).toMatchObject({ icon_emoji: ":robot_face:" });

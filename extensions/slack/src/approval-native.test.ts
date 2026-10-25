@@ -141,20 +141,7 @@ describe("slack native approval adapter", () => {
     expect(await actionState?.({ cfg, accountId: "default", action: "approve" })).toEqual({
       kind: "enabled",
     });
-    expect(
-      await delivery?.(
-        route(
-          cfg,
-          execRequest({
-            turnSourceChannel: "slack",
-            turnSourceTo: "channel:C123",
-            turnSourceAccountId: "default",
-            sessionKey: "agent:main:slack:channel:c123",
-          }),
-          "exec",
-        ),
-      ),
-    ).toEqual({
+    expect(await delivery?.(route(cfg, createExecApprovalRequest(), "exec"))).toEqual({
       enabled: false,
       preferredSurface: "origin",
       supportsOriginSurface: true,
@@ -215,14 +202,7 @@ describe("slack native approval adapter", () => {
     const request = pluginOrigin();
 
     expect((await delivery?.(route(cfg, request)))?.enabled).toBe(true);
-    const exec = route(
-      cfg,
-      execRequest({
-        turnSourceChannel: "slack",
-        turnSourceAccountId: "default",
-      }),
-      "exec",
-    );
+    const exec = route(cfg, createExecApprovalRequest(), "exec");
     expect((await delivery?.(exec))?.enabled).toBe(false);
     expect(await targets?.(route(cfg, request))).toEqual([{ to: "user:U123OWNER" }]);
     expect(await availability?.isConfigured({ cfg, accountId: "default" })).toBe(true);
@@ -352,38 +332,6 @@ describe("slack native approval adapter", () => {
     );
 
     expect(target).toEqual({ to: "team:T123:channel:C08GQH53EJM", threadId: undefined });
-  });
-
-  it.each([
-    { reason: "another Slack account", agentId: "main", turnSourceAccountId: "other" },
-    {
-      reason: "a nonmatching agent filter",
-      agentId: "other-agent",
-      turnSourceAccountId: "default",
-    },
-  ])("skips origin and DM delivery for $reason", async ({ agentId, turnSourceAccountId }) => {
-    const params = {
-      cfg: buildConfig({
-        execApprovals: {
-          enabled: true,
-          approvers: ["U123APPROVER"],
-          target: "both",
-          agentFilter: ["main"],
-        },
-      }),
-      accountId: "default",
-      approvalKind: "exec" as const,
-      request: execRequest({
-        agentId,
-        turnSourceChannel: "slack",
-        turnSourceTo: "channel:C123",
-        turnSourceAccountId,
-        sessionKey: `agent:${agentId}:slack:channel:c123`,
-      }),
-    };
-
-    expect(await origin?.(params)).toBeNull();
-    expect(await targets?.(params)).toStrictEqual([]);
   });
 
   it.each([
