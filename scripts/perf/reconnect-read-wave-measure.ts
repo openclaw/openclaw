@@ -1033,7 +1033,7 @@ async function runController() {
         assert(completed < 200, "search must start while writer remains active");
         const before = completed;
         const roundAt = performance.now() - at;
-        await runSessionRowChurnListRound(peers, rpc, label, round, values["list-mix"] === true);
+        await runSessionRowChurnListRound(peers, rpc, label, round, values["list-mix"]);
         rounds.push({
           round: round + 1,
           startedAtMs: roundAt,
