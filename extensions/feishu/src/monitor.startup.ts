@@ -61,7 +61,7 @@ export async function fetchBotIdentityForMonitor(
         botName: result.botName,
       });
     } catch {
-      options.runtime?.log?.(
+      options.runtime?.log(
         `feishu[${account.accountId}]: bot identity cache write failed; continuing startup`,
       );
     }
@@ -100,12 +100,12 @@ export async function fetchBotIdentityForMonitor(
     if (!cached) {
       return {};
     }
-    options.runtime?.log?.(
+    options.runtime?.log(
       `feishu[${account.accountId}]: using cached provider-verified bot identity while the fresh check is unavailable`,
     );
     return { botOpenId: cached.botOpenId, source: "cache" };
   } catch {
-    options.runtime?.log?.(
+    options.runtime?.log(
       `feishu[${account.accountId}]: bot identity cache read failed; continuing without cached identity`,
     );
     return {};
