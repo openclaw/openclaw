@@ -24,6 +24,7 @@ const context = {
   messages: [{ role: "user" as const, content: "Hello", timestamp: 1 }],
 };
 const options = { apiKey: "synthetic-radius-token" };
+const headers = { "content-type": "text/event-stream", "x-request-id": "synthetic-request" };
 
 function response(events: readonly unknown[], open = false) {
   const { promise: cancelled, resolve } = Promise.withResolvers<void>();
@@ -45,34 +46,27 @@ function response(events: readonly unknown[], open = false) {
         },
         cancel,
       }),
-      { headers: { "content-type": "text/event-stream", "x-request-id": "synthetic-request" } },
+      { headers },
     ),
   };
 }
 
-const toolStart = (contentIndex = 0, toolName = "lookup") => ({
-  type: "toolcall_start",
+const contentEvent = (type: string, contentIndex: number, fields = {}) => ({
+  type,
   contentIndex,
-  id: "call-1",
-  toolName,
+  ...fields,
 });
+const toolStart = (index = 0) =>
+  contentEvent("toolcall_start", index, { id: "call-1", toolName: "lookup" });
 const toolCall = (arguments_: unknown, name = "lookup") => ({
   type: "toolCall",
   id: "call-1",
   name,
   arguments: arguments_,
 });
-const toolEnd = (call: ReturnType<typeof toolCall>, contentIndex = 0) => ({
-  type: "toolcall_end",
-  contentIndex,
-  toolCall: call,
-});
+const toolEnd = (call: ReturnType<typeof toolCall>, index = 0) =>
+  contentEvent("toolcall_end", index, { toolCall: call });
 const done = (reason = "stop") => ({ type: "done", reason, usage });
-const contentEvent = (type: string, contentIndex: number, fields = {}) => ({
-  type,
-  contentIndex,
-  ...fields,
-});
 const run = (extra: Parameters<ReturnType<typeof createRadiusStreamFn>>[2] = {}) =>
   createRadiusStreamFn()(model, context, { ...options, ...extra });
 const requestBody = () => new Response(fetchMock.mock.calls[0]![1]?.body).json();
@@ -84,49 +78,6 @@ beforeEach(() => {
   vi.mocked(parseStreamingJson).mockClear();
 });
 
-it("omits disabled reasoning from Pi requests without changing the output cap", async () => {
-  mockEvents([done()]);
-  await run({ reasoning: "off", maxTokens: 1024 }).result();
-  expect(await requestBody()).toEqual({
-    model: model.id,
-    context,
-    options: { maxTokens: 1024 },
-  });
-});
-
-it("bounds large-tool preview work while emitting every delta and the final arguments", async () => {
-  const toolArguments = { content: "a".repeat(100_000) };
-  const json = JSON.stringify(toolArguments);
-  const deltas = Array.from({ length: Math.ceil(json.length / 1000) }, (_, index) =>
-    json.slice(index * 1000, (index + 1) * 1000),
-  );
-  mockEvents([
-    { type: "start" },
-    toolStart(0, "write"),
-    ...deltas.map((delta) => ({ type: "toolcall_delta", contentIndex: 0, delta })),
-    toolEnd(toolCall(toolArguments, "write")),
-    done("toolUse"),
-  ]);
-  const stream = run();
-  const observed: string[] = [];
-  for await (const event of stream) {
-    if (event.type === "toolcall_delta") {
-      observed.push(event.delta);
-      expect(event.partial.content[event.contentIndex]).toMatchObject({
-        partialJson: observed.join(""),
-      });
-    }
-  }
-  expect(observed).toEqual(deltas);
-  expect(parseStreamingJson).toHaveBeenCalled();
-  expect(vi.mocked(parseStreamingJson).mock.calls.length).toBeLessThan(deltas.length / 4);
-  expect(await stream.result()).toMatchObject({
-    stopReason: "toolUse",
-    content: [{ type: "toolCall", arguments: toolArguments }],
-  });
-  expect((await stream.result()).content[0]).not.toHaveProperty("partialJson");
-});
-
 it.each(["\n\n", ""])("rejects oversized frame delimiter %j", async (delimiter) => {
   const oversized = JSON.stringify({ type: "start", padding: "a".repeat(16 * 1024 * 1024) });
   fetchMock.mockResolvedValue(new Response(`data: ${oversized}${delimiter}`));
@@ -136,28 +87,32 @@ it.each(["\n\n", ""])("rejects oversized frame delimiter %j", async (delimiter) 
   });
 });
 
-it("preserves signed content, authoritative tool calls and usage across fragmented SSE", async () => {
-  const signedTool = { ...toolCall({ city: "Vienna" }), thoughtSignature: "tool-signature" };
-  mockEvents([
+it("preserves signed content, bounded tool previews and accounting across fragmented SSE", async () => {
+  const previewArguments = { content: "a".repeat(100_000) };
+  const toolArguments = { ...previewArguments, complete: true };
+  const json = JSON.stringify(previewArguments);
+  const deltas = Array.from({ length: Math.ceil(json.length / 1000) }, (_, index) =>
+    json.slice(index * 1000, (index + 1) * 1000),
+  );
+  const signedTool = { ...toolCall(toolArguments), thoughtSignature: "s" };
+  const input = [
     { type: "start" },
     contentEvent("thinking_start", 0),
-    contentEvent("thinking_delta", 0, { delta: "Consider" }),
+    contentEvent("thinking_delta", 0, { delta: "th" }),
     contentEvent("thinking_end", 0, {
-      content: "Consider the result",
-      contentSignature: "thinking-signature",
+      content: "thought",
+      contentSignature: "s",
       redacted: true,
     }),
     contentEvent("text_start", 1),
-    contentEvent("text_delta", 1, { delta: "Héllo" }),
-    contentEvent("text_end", 1, {
-      content: "Héllo!",
-      contentSignature: "text-signature",
-    }),
+    contentEvent("text_delta", 1, { delta: "é" }),
+    contentEvent("text_end", 1, { content: "é!", contentSignature: "s" }),
     toolStart(2),
-    { type: "toolcall_delta", contentIndex: 2, delta: '{"city":"Vie' },
+    ...deltas.map((delta) => contentEvent("toolcall_delta", 2, { delta })),
     toolEnd(signedTool, 2),
-    { ...done("toolUse"), responseId: "response-1" },
-  ]);
+    { ...done("toolUse"), responseId: "r" },
+  ];
+  mockEvents(input);
   const requestOptions = {
     reasoning: "high",
     maxTokens: 512,
@@ -166,24 +121,33 @@ it("preserves signed content, authoritative tool calls and usage across fragment
     cacheRetention: "long",
     toolChoice: "required",
   } as const;
-  const stream = run(requestOptions);
-  expect(await Array.fromAsync(stream, (event) => event.type)).toEqual(
-    "start thinking_start thinking_delta thinking_end text_start text_delta text_end toolcall_start toolcall_delta toolcall_end done".split(
-      " ",
-    ),
-  );
+  const onResponse = vi.fn();
+  const stream = run({ ...requestOptions, onResponse });
+  const observed: string[] = [],
+    types: string[] = [];
+  for await (const event of stream) {
+    expect(onResponse).toHaveBeenCalledOnce();
+    types.push(event.type);
+    if (event.type === "toolcall_delta") {
+      observed.push(event.delta);
+      expect(event.partial.content[event.contentIndex]).toMatchObject({
+        partialJson: observed.join(""),
+      });
+    }
+  }
+  expect(types).toEqual(input.map(({ type }) => type));
+  expect(onResponse).toHaveBeenCalledWith({ status: 200, headers }, model);
+  expect(observed).toEqual(deltas);
+  expect(parseStreamingJson).toHaveBeenCalled();
+  expect(vi.mocked(parseStreamingJson).mock.calls.length).toBeLessThan(deltas.length / 4);
+  expect((await stream.result()).content[2]).not.toHaveProperty("partialJson");
   expect(await stream.result()).toMatchObject({
     stopReason: "toolUse",
-    responseId: "response-1",
+    responseId: "r",
     usage,
     content: [
-      {
-        type: "thinking",
-        thinking: "Consider the result",
-        thinkingSignature: "thinking-signature",
-        redacted: true,
-      },
-      { type: "text", text: "Héllo!", textSignature: "text-signature" },
+      { type: "thinking", thinking: "thought", thinkingSignature: "s", redacted: true },
+      { type: "text", text: "é!", textSignature: "s" },
       signedTool,
     ],
   });
@@ -193,32 +157,35 @@ it("preserves signed content, authoritative tool calls and usage across fragment
   expect(await requestBody()).toEqual({ model: model.id, context, options: requestOptions });
 });
 
-it.each([200, 429])(
-  "reports HTTP %s metadata before events and applies payload replacements",
-  async (status) => {
-    const headers = { "content-type": "text/event-stream", "x-request-id": "synthetic-request" };
-    fetchMock.mockResolvedValue(
-      new Response(
-        status === 200 ? sse([done()]) : JSON.stringify({ error: { message: "Quota exceeded" } }),
-        { status, headers },
-      ),
-    );
-    const onResponse = vi.fn();
-    const replacement = { model: "claude-sonnet-4", context: { messages: [] }, options: {} };
-    const stream = run({ onPayload: () => replacement, onResponse });
-    for await (const event of stream) {
-      expect(onResponse).toHaveBeenCalledOnce();
-      expect(event.type).toBe(status === 200 ? "done" : "error");
-    }
-    expect(onResponse).toHaveBeenCalledWith({ status, headers }, model);
-    expect(await requestBody()).toEqual(replacement);
-    expect(await stream.result()).toMatchObject(
-      status === 200
-        ? { stopReason: "stop" }
-        : { stopReason: "error", errorMessage: expect.stringContaining("429") },
-    );
-  },
-);
+it("reports HTTP errors after payload preparation and response notification", async () => {
+  fetchMock.mockResolvedValue(
+    new Response(JSON.stringify({ error: { message: "Quota exceeded" } }), {
+      status: 429,
+      headers,
+    }),
+  );
+  const onResponse = vi.fn();
+  const replacement = { model: "claude-sonnet-4", context: { messages: [] }, options: {} };
+  const stream = run({
+    reasoning: "off",
+    maxTokens: 1024,
+    onPayload: (payload) => {
+      expect(payload).toEqual({ model: model.id, context, options: { maxTokens: 1024 } });
+      return replacement;
+    },
+    onResponse,
+  });
+  for await (const event of stream) {
+    expect(onResponse).toHaveBeenCalledOnce();
+    expect(event.type).toBe("error");
+  }
+  expect(onResponse).toHaveBeenCalledWith({ status: 429, headers }, model);
+  expect(await requestBody()).toEqual(replacement);
+  expect(await stream.result()).toMatchObject({
+    stopReason: "error",
+    errorMessage: expect.stringContaining("429"),
+  });
+});
 
 it.each(["error", "aborted"])("preserves %s terminal accounting", async (reason) => {
   mockEvents([
@@ -280,9 +247,7 @@ it("does not dispatch after cancellation during payload preparation", async () =
   const controller = new AbortController();
   const result = await run({
     signal: controller.signal,
-    onPayload: async () => {
-      controller.abort();
-    },
+    onPayload: async () => controller.abort(),
   }).result();
   expect(result.stopReason).toBe("aborted");
   expect(fetchMock).not.toHaveBeenCalled();

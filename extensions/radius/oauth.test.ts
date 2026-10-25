@@ -24,7 +24,9 @@ const token = (overrides: Record<string, unknown> = {}) => reply({ ...tokenPaylo
 
 const formAt = (index: number) => Object.fromEntries(requestAt(index).init.body);
 const expectForm = (index: number, form: string) =>
-  expect(formAt(index)).toEqual(Object.fromEntries(new URLSearchParams(form)));
+  expect(formAt(index)).toEqual(
+    Object.fromEntries(new URLSearchParams(`client_id=pi-gateway&${form}`)),
+  );
 let defaults: ReturnType<typeof context>;
 
 async function rejectLogin(message: string, ms = 1_000, ctx = defaults.ctx) {
@@ -43,22 +45,8 @@ beforeEach(() => {
 
 afterEach(() => vi.useRealTimers());
 
-it("accepts the fractional polling interval returned by the live Radius service", async () => {
+it("pairs with fractional polling intervals and slows subsequent polls after slow_down", async () => {
   device({ interval: 0.1 });
-  token();
-  const result = loginRadiusOAuth(defaults.ctx).then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
-  await vi.advanceTimersByTimeAsync(99);
-  expect(guardedFetch).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(1);
-  await expect(result).resolves.toMatchObject({ value: { access: "access-test" } });
-  expect(guardedFetch).toHaveBeenCalledTimes(2);
-});
-
-it("pairs through the native device grant and slows subsequent polls after slow_down", async () => {
-  device();
   reply({ error: "authorization_pending" }, 400);
   reply({ error: "slow_down" }, 400);
   token();
@@ -71,11 +59,16 @@ it("pairs through the native device grant and slows subsequent polls after slow_
     "Radius sign-in",
   );
   expect(ctx.openUrl).toHaveBeenCalledWith("https://radius.earendil.com/device");
-  expect(guardedFetch).toHaveBeenCalledTimes(1);
-  await vi.advanceTimersByTimeAsync(2_000);
-  expect(guardedFetch).toHaveBeenCalledTimes(3);
-  await vi.advanceTimersByTimeAsync(5_999);
-  expect(guardedFetch).toHaveBeenCalledTimes(3);
+  for (const [elapsed, calls] of [
+    [0, 1],
+    [99, 1],
+    [1, 2],
+    [100, 3],
+    [5_099, 3],
+  ]) {
+    await vi.advanceTimersByTimeAsync(elapsed);
+    expect(guardedFetch).toHaveBeenCalledTimes(calls);
+  }
   await vi.advanceTimersByTimeAsync(1);
   await expect(result).resolves.toEqual({
     access: "access-test",
@@ -87,11 +80,11 @@ it("pairs through the native device grant and slows subsequent polls after slow_
     requireHttps: true,
     policy: { hostnameAllowlist: ["radius.pi.dev"] },
   });
-  expectForm(0, "client_id=pi-gateway&scope=gateway+offline_access");
+  expectForm(0, "scope=gateway+offline_access");
   expect(requestAt(1).url).toBe("https://radius.pi.dev/v1/oauth/token");
   expectForm(
     1,
-    "client_id=pi-gateway&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=device-secret",
+    "grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=device-secret",
   );
   expect(release).toHaveBeenCalledTimes(4);
   expect(progress.stop).toHaveBeenCalledWith("Radius sign-in complete");
@@ -163,18 +156,26 @@ it.each(["note", "device", "token"])("rechecks authority at %s", async (boundary
 });
 
 it.each([
-  { device_code: "" },
-  { expires_in: -1 },
-  { interval: 0 },
-  { verification_uri: "javascript:alert(1)" },
-  { verification_uri: "https://example.com/device" },
-])("rejects malformed pairing data before browser effects: %j", async (invalid) => {
-  device(invalid);
+  ["device", { device_code: "" }],
+  ["device", { expires_in: -1 }],
+  ["device", { interval: 0 }],
+  ["device", { verification_uri: "javascript:alert(1)" }],
+  ["device", { verification_uri: "https://example.com/device" }],
+  ["token", { access_token: "" }],
+  ["token", { refresh_token: "" }],
+  ["token", { expires_in: "invalid" }],
+] as const)("rejects malformed %s data: %j", async (phase, invalid) => {
+  device(phase === "device" ? invalid : {});
+  if (phase === "token") {
+    token(invalid);
+  }
   const { ctx } = defaults;
-  await expect(loginRadiusOAuth(ctx)).rejects.toThrow(/invalid/);
-  expect(ctx.openUrl).not.toHaveBeenCalled();
-  expect(ctx.prompter.note).not.toHaveBeenCalled();
-  expect(release).toHaveBeenCalledTimes(1);
+  await rejectLogin(phase === "device" ? "invalid" : "invalid credentials");
+  if (phase === "device") {
+    expect(ctx.openUrl).not.toHaveBeenCalled();
+    expect(ctx.prompter.note).not.toHaveBeenCalled();
+  }
+  expect(release).toHaveBeenCalledTimes(phase === "device" ? 1 : 2);
 });
 
 it.each([undefined, "rotated-refresh"])("refresh rotation: %s", async (refreshToken) => {
@@ -193,16 +194,6 @@ it.each([undefined, "rotated-refresh"])("refresh rotation: %s", async (refreshTo
     refresh: refreshToken ?? "old-refresh",
     expires: Date.now() + 3_540_000,
   });
-  expectForm(0, "client_id=pi-gateway&grant_type=refresh_token&refresh_token=old-refresh");
+  expectForm(0, "grant_type=refresh_token&refresh_token=old-refresh");
   expect(release).toHaveBeenCalledTimes(1);
 });
-
-it.each([{ access_token: "" }, { refresh_token: "" }, { expires_in: "invalid" }])(
-  "rejects malformed token data: %j",
-  async (invalid) => {
-    device();
-    token(invalid);
-    await rejectLogin("invalid credentials");
-    expect(release).toHaveBeenCalledTimes(2);
-  },
-);
