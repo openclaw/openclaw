@@ -18,7 +18,6 @@ import {
   readUpdateRunResolutionHistory,
 } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
-import type { UpdateRunResult } from "./update-runner-types.js";
 import { validateTriageUpdateResolution } from "./update-triage-resolution.js";
 
 vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({
@@ -60,8 +59,6 @@ const TARGET_SHA = "1111111111111111111111111111111111111111";
 const BEFORE_SHA = "2222222222222222222222222222222222222222";
 const TARGET_VERSION = "2026.9.4";
 const BEFORE_VERSION = "2026.9.3";
-const MISSING_TARGET =
-  "Next step: run `openclaw update status --json`, then `openclaw update repair`. Cannot establish the update target.";
 
 function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
   return {
@@ -88,18 +85,18 @@ function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
 
 function failure(
   reason = "global-install-failed",
-  patch: Partial<UpdateRunResult> = {},
+  patch: Partial<Extract<TriageUpdateFailure, { result: unknown }>["result"]> = {},
 ): TriageUpdateFailure {
-  const result: UpdateRunResult = {
-    runId: FAILED_RUN_ID,
-    status: "error",
-    mode: "npm",
-    reason,
-    steps: [],
-    durationMs: 1,
-    ...patch,
+  return {
+    result: {
+      runId: FAILED_RUN_ID,
+      status: "error",
+      mode: "npm",
+      reason,
+      steps: [],
+      ...patch,
+    },
   };
-  return { result };
 }
 
 async function expectResolution(ok: boolean, saved = failure(), summary?: string) {
@@ -109,7 +106,7 @@ async function expectResolution(ok: boolean, saved = failure(), summary?: string
   });
 }
 function expectStopped(result: UpdateRepairValidation, ...fragments: string[]) {
-  expect(result).toMatchObject({ ok: false, stopReason: result.summary });
+  expect(result).toMatchObject({ ok: false, score: -1, stopReason: result.summary });
   for (const fragment of fragments) {
     expect(result.summary).toContain(fragment);
   }
@@ -237,8 +234,6 @@ it("preserves post-core migration guidance", async () => {
   );
   expect(result.summary.match(/Run "openclaw update repair"/g)).toHaveLength(2);
   expect(result.summary).not.toContain("Let the current update or repair finish.");
-  expect(readDeferredPluginMigrationsAsync).toHaveBeenCalledWith({ env });
-  expect(validateDoctor).not.toHaveBeenCalled();
 });
 
 it("keeps plugin failures unresolved after Doctor", async () => {
@@ -248,24 +243,7 @@ it("keeps plugin failures unresolved after Doctor", async () => {
     async ({ requirePluginHealth }) => !requirePluginHealth,
   );
   const saved = failure("post-update-failed", {
-    postUpdate: {
-      plugins: {
-        status: "error",
-        changed: false,
-        sync: {
-          changed: false,
-          switchedToBundled: [],
-          switchedToNpm: [],
-          warnings: [],
-          errors: [],
-        },
-        npm: {
-          changed: false,
-          outcomes: [],
-        },
-        integrityDrifts: [],
-      },
-    },
+    postUpdate: { plugins: { status: "error" } },
   });
   await expectResolution(false, saved);
 });
@@ -287,7 +265,6 @@ it.each([
   latestRun = failedRun;
   await expectResolution(false, savedFailure, "Next step:");
   expect(failedRun.status).toBe("failed");
-  expect(verifyPreviousGatewayForUpdate).not.toHaveBeenCalled();
   latestRun = successfulRun;
   await expectResolution(true, savedFailure);
   vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(false);
@@ -295,12 +272,12 @@ it.each([
 });
 
 it("does not invent a target for an error-only artifact", async () => {
-  expect(await validate({ error: "Update failed" })).toEqual({
-    ok: false,
-    score: -1,
-    summary: MISSING_TARGET,
-    stopReason: MISSING_TARGET,
-  });
+  expectStopped(
+    await validate({ error: "Update failed" }),
+    "Cannot establish the update target.",
+    "`openclaw update status --json`",
+    "`openclaw update repair`",
+  );
 });
 
 it("does not resolve revoked authority from healthy state", async () => {

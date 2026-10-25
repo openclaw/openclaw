@@ -12,7 +12,6 @@ import {
   untrack,
 } from "solid-js";
 import "../../styles/lobster-pet.css";
-import { ConfigForm } from "../../components/config-form.render.tsx";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
 import { HighlightedJson } from "../../components/solid/highlighted-json.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
@@ -26,10 +25,9 @@ import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
-import { NotificationsSection } from "./notifications-section.tsx";
-import { SetupSection } from "./setup.tsx";
 import { AppearanceSection } from "./view-appearance.tsx";
 import { computeRawDiff, formatConfigDiffPath, renderRawDiffValue } from "./view-diff.ts";
+import { ConfigForm, NotificationsSection, SetupSection } from "./view-lazy.ts";
 import {
   CATEGORISED_KEYS,
   ConfigAccordionNav,

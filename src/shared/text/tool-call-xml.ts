@@ -90,7 +90,32 @@ export function toolCallXmlTextFilter(
                 }
               }
             }
-            codeRegions ??= findCodeRegions(text);
+            if (!codeRegions) {
+              const parsed =
+                protectionScan.structuralUnknown && /[`~\t]| {4}/u.test(text)
+                  ? findCodeOwnership(text)
+                  : undefined;
+              codeRegions = parsed?.regions ?? findCodeRegions(text);
+              if (parsed) {
+                const block = parsed.regions.at(-1);
+                if (
+                  block?.block &&
+                  block.start === parsed.retainStart &&
+                  block.end === text.length
+                ) {
+                  const lineStart = text.lastIndexOf("\n", block.start - 1) + 1;
+                  if (/^ {0,3}$/.test(text.slice(lineStart, block.start))) {
+                    // The canonical retained block can restore known fence state after
+                    // earlier ambiguous syntax; containers and references retain earlier source.
+                    const recovered = createProtectionScanState();
+                    advanceProtectionScanState(recovered, text.slice(block.start));
+                    if (recovered.fenceChar && !recovered.structuralUnknown) {
+                      Object.assign(protectionScan, recovered);
+                    }
+                  }
+                }
+              }
+            }
             const protectedBlock = isInsideSettledBlockCode(start, text, codeRegions);
             if (!protectedBlock && quickCandidate) {
               active = true;
