@@ -4,7 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
-import { compareStressRuns, type StressRun } from "../../scripts/perf/team-shape-stress-report.ts";
+import {
+  compareStressRuns,
+  summarizeStressRun,
+  type StressRun,
+} from "../../scripts/perf/team-shape-stress-report.ts";
 import { parseStressOptions } from "../../scripts/perf/team-shape-stress.ts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -166,4 +170,73 @@ it("compares matched pairs in swapped launch order without averaging tiny-base p
     pairs: 0,
     context: "inconclusive: missing paired metric",
   });
+});
+
+it("keeps partial worker evidence without comparing incomplete heap totals", () => {
+  const capture = (side: StressRun["side"], reason?: string) => {
+    const resultDir = temporary.make("team-stress-worker-census-");
+    const workerMemoryMissing = reason ? [{ script: "fixture-worker", threadId: 2, reason }] : [];
+    const workers = {
+      workerCount: 2,
+      workerHeapSampledCount: reason ? 1 : 2,
+      workerHeapUsedBytes: (reason ? 1 : 10) * 1024 ** 2,
+      workerArrayBuffersSampledCount: 1,
+      workerMemoryCoverage: "partial",
+      workerMemoryMissing,
+    };
+    fs.writeFileSync(
+      path.join(resultDir, "result.json"),
+      JSON.stringify({
+        completedTurns: 1,
+        teamStress: { committedWrites: 1, prometheusScrapes: 1, rpcMinutes: [] },
+        memorySamples: [{ collectedGarbage: false, resources: { workers } }],
+        samples: [
+          {
+            toolCalls: 1,
+            toolResults: 1,
+            rpc: Object.fromEntries(
+              [
+                "sessions.list",
+                "chat.history",
+                "chat.startup",
+                "sessions.diff",
+                "connect",
+                "chat.inject",
+              ].map((method) => [method, { latenciesMs: [1] }]),
+            ),
+          },
+        ],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(resultDir, "stress-telemetry.json"),
+      JSON.stringify({
+        mode: "untraced-timing",
+        durationMs: 600_000,
+        mainThreadCpuPercent: 1,
+        sampledAllocatedBytesPerSecond: null,
+        gc: {},
+        eventLoop: { count: 1, p95Ms: 1, p99Ms: 1, maxMs: 1 },
+        stalls: { count: 0, totalMs: 0, maxMs: 0 },
+        lastSample: { memory: { rss: 1024 ** 2, heapUsed: 1024 ** 2 } },
+      }),
+    );
+    return summarizeStressRun({ resultDir, side, pair: 1, mode: "timing", smoke: false });
+  };
+  const base = capture("base");
+  expect(base.metrics.workerHeapMiB).toBe(10);
+  for (const reason of ["pending", "stale", "unavailable"]) {
+    const candidate = capture("candidate", reason);
+    expect(candidate.workerHeaps?.workerHeapUsedBytes).toBe(1024 ** 2);
+    expect(candidate.metrics.workerMemoryMissing).toBe(1);
+    expect(candidate.metrics.workerHeapMiB).toBeNull();
+    expect(
+      compareStressRuns([base, candidate]).find((row) => row.metric === "workerHeapMiB"),
+    ).toMatchObject({
+      absolute: null,
+      percent: null,
+      pairs: 0,
+      context: "inconclusive: missing paired metric",
+    });
+  }
 });

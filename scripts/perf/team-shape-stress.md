@@ -119,6 +119,10 @@ durations. Every percentile includes its sample count: p99 below 1,000 samples,
 p95 below 200, and major-GC tails below 50 collections are context. No automatic
 performance rejection is inferred from tiny or noisy baselines.
 
+Worker heap comparisons require a complete heap census. Missing workers make
+that comparison metric unavailable; partial totals and reasons remain in raw evidence.
+Missing array-buffer details alone do not invalidate a complete heap census.
+
 For production-shape calibration, use an authorized read-only Prometheus query.
 Compare achieved
 RPC rates, operator connections, main-thread GC seconds/minute, retained heap,

@@ -187,7 +187,9 @@ export function summarizeStressRun(options: RunOptions): StressRun {
       oldGenerationAfterGcMiB: nativeOldGeneration == null ? null : nativeOldGeneration / MIB,
       settledOldGenerationMiB: oldGeneration === undefined ? null : oldGeneration / MIB,
       workerHeapMiB:
-        workers?.workerHeapUsedBytes === undefined ? null : workers.workerHeapUsedBytes / MIB,
+        workers?.workerHeapUsedBytes === undefined || workers.workerMemoryMissing.length > 0
+          ? null
+          : workers.workerHeapUsedBytes / MIB,
       workerHeapCount: workers?.workerHeapSampledCount ?? null,
       workerMemoryMissing: workers?.workerMemoryMissing.length ?? null,
       turns: result.completedTurns,
