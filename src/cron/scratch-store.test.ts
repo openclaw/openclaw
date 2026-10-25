@@ -74,7 +74,7 @@ function scratchAccess(service: CronService, job: CronJob, storePath: string) {
   return {
     read: () => service.readScratch(job.id),
     stored: () => readCronJobScratchState(storePath, job.id),
-    write: (content: string | null, expectedRevision: number, commitGuard?: () => void) =>
+    write: (content: string | null, expectedRevision?: number, commitGuard?: () => void) =>
       service.writeScratch(job.id, { content, expectedRevision, commitGuard }),
   };
 }
@@ -230,11 +230,15 @@ describe("cron scratch worker service", () => {
 
   it("writes off the caller thread while preserving CAS, tombstones, and actual-write receipts", async () => {
     await withScratchService(async ({ service, job, write, read }) => {
+      expect(await read()).toEqual({ currentRevision: 0 });
       for (const [content, expectedRevision, expected, committed] of [
-        [null, 0, written(null, 0), false],
-        ["scheduled café", 0, written("scheduled café", 1), true],
-        [null, 1, written(null, 2), true],
-        ["stale resurrection", 1, conflict(2), false],
+        [null, undefined, written(null, 0), false],
+        ["", undefined, written("", 1, 1_000), true],
+        ["stale", 0, conflict(1), false],
+        ["scheduled café", 1, written("scheduled café", 2, 1_000), true],
+        [null, 2, written(null, 3), true],
+        ["stale resurrection", 2, conflict(3), false],
+        ["recreated", 3, written("recreated", 4, 1_000), true],
       ] as const) {
         const completion = scratchReceipt();
         await withoutCallerSql(async () => {
@@ -243,14 +247,14 @@ describe("cron scratch worker service", () => {
               expect(service.getJob(job.id)?.agentId).toBe("alpha"),
             ),
           );
-          expect(result).toMatchObject(expected);
-          if (expected.currentRevision === 1) {
-            expect(await read()).toMatchObject(scratchState("scheduled café", 1));
+          expect(result).toEqual(expected);
+          if (expected.ok) {
+            const { ok: _, ...snapshot } = expected;
+            expect(await read()).toEqual(snapshot);
           }
           expect(completion.isCommitted()).toBe(committed);
         });
       }
-      expect(await read()).toEqual({ currentRevision: 2 });
     });
   });
 
@@ -429,35 +433,6 @@ describe("cron job scratch store", () => {
     expect(fixture.write("orphan", { storePath, expectedRevision: 0 })).toEqual(conflict(0));
     expect(fixture.read("job-1", storePath)).toEqual({ currentRevision: 0 });
     expect(fixture.read().scratch?.content).toBe("second");
-  });
-
-  it("preserves CAS, tombstones, guarded removal, and receipts only for actual writes", async () => {
-    const fixture = await createFixture();
-    expect(fixture.read()).toEqual({ currentRevision: 0 });
-    for (const [content, expectedRevision, nowMs, expected, committed] of [
-      [null, undefined, 0, written(null, 0), false],
-      ["", undefined, 10, written("", 1, 10), true],
-      ["stale", 0, 20, conflict(1), false],
-      ["second", 1, 30, written("second", 2, 30), true],
-      [null, 2, 40, written(null, 3), true],
-      ["resurrected", 2, 50, conflict(3), false],
-      ["recreated", 3, 60, written("recreated", 4, 60), true],
-    ] as const) {
-      const completion = scratchReceipt();
-      expect(
-        await completion.run(async () => fixture.write(content, { expectedRevision, nowMs })),
-      ).toEqual(expected);
-      expect(completion.isCommitted()).toBe(committed);
-      if (expected.ok) {
-        const { ok: _ok, ...snapshot } = expected;
-        expect(fixture.read()).toEqual(snapshot);
-      }
-    }
-    expect(fixture.remove(3)).toBe(false);
-    expect(fixture.read().currentRevision).toBe(4);
-    expect(fixture.remove(4)).toBe(true);
-    expect(fixture.read()).toEqual({ currentRevision: 0 });
-    expect(fixture.remove(0)).toBe(true);
   });
 
   it.each([

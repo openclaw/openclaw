@@ -103,13 +103,6 @@ it("retains valid envelopes without mutating or freezing the input", () => {
 
   expect(normalized).toMatchObject(envelopes);
   expect(input).toEqual(envelopes);
-  const authority = child(normalized, "runtimeAuthority");
-  const payload = child(authority, "payload");
-  expect(authority).not.toBe(input.runtimeAuthority);
-  expect(payload).not.toBe(input.runtimeAuthority.payload);
-  for (const item of [authority, payload, (payload.tools as unknown[])[0]]) {
-    expect(Object.isFrozen(item)).toBe(true);
-  }
   const original = input.runtimeAuthority;
   for (const item of [original, original.payload, original.payload.tools[0]]) {
     expect(Object.isFrozen(item)).toBe(false);

@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
+import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
@@ -13,9 +15,9 @@ import { refreshSessionPatchQueuedSelection } from "../gateway/server-methods/se
 import "../llm/ai-transport-host.js";
 import { resetSessionControllerStateForTest } from "../sessions/session-lifecycle-admission.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "./session-run.js";
-import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
 const admission = vi.hoisted(() => ({
@@ -76,31 +78,14 @@ const providerUrls = {
 const namedSessionKey = "agent:main:scheduled-pin";
 
 function completedResponse(model: string): Response {
-  const item = {
-    id: "msg_synthetic",
-    type: "message",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text: "answered", annotations: [] }],
-  };
-  const response = { id: "resp_synthetic", model, status: "in_progress", output: [] };
-  const events = [
-    { type: "response.created", response },
-    { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        ...response,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ];
-  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-    headers: { "content-type": "text/event-stream" },
-  });
+  return providerResponse({
+    api: "openai-responses",
+    model,
+    id: "resp_synthetic",
+    messageId: "msg_synthetic",
+    text: "answered",
+    calls: [],
+  }).response;
 }
 
 function stubProvider(baseUrl: string, model: string) {
@@ -108,17 +93,7 @@ function stubProvider(baseUrl: string, model: string) {
     api: "openai-responses" as const,
     baseUrl,
     agentRuntime: { id: "openclaw" },
-    models: [
-      {
-        id: model,
-        name: model,
-        reasoning: false,
-        input: ["text" as const],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 1024,
-      },
-    ],
+    models: [modelDefinition(model, { reasoning: false, contextWindow: 128_000, maxTokens: 1024 })],
   };
 }
 
@@ -231,14 +206,12 @@ describe("stored session model selections in scheduled session turns", () => {
         params.target === "main"
           ? resolveAgentMainSessionKey({ cfg, agentId: "main" })
           : namedSessionKey;
-      const stored: CronStoredJob = {
+      const stored: CronStoredJob = makeCronJob({
         id: "session-turn-model",
         name: "Session turn model",
         agentId: "main",
-        enabled: true,
         createdAtMs: 1,
         updatedAtMs: 1,
-        schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: params.target === "main" ? "main" : `session:${sessionKey}`,
         wakeMode: "now",
         delivery: { mode: "none" },
@@ -246,8 +219,7 @@ describe("stored session model selections in scheduled session turns", () => {
           params.payloadKind === "systemEvent"
             ? { kind: "systemEvent", text: "Reply." }
             : { kind: "agentTurn", message: "Reply.", ...params.payload },
-        state: {},
-      };
+      });
       const conversation = {
         sessionId: "pinned-conversation",
         updatedAt: Date.now(),
@@ -264,13 +236,7 @@ describe("stored session model selections in scheduled session turns", () => {
               ...params.storedSelection,
             },
       );
-      const storePath = state.statePath("cron", "jobs.json");
       const activeJob: CronStoredJob = { ...stored, id: "active-turn", name: "Active turn" };
-      await saveCronJobsStore(storePath, {
-        version: 1,
-        jobs: activeTurn ? [stored, activeJob] : [stored],
-      });
-      const [job, loadedActiveJob] = (await loadCronJobsStore(storePath)).jobs;
       const runTurn = (scheduled: CronStoredJob) =>
         runCronSessionTurn({
           occurrence: TEST_SCHEDULED_OCCURRENCE,
@@ -284,7 +250,7 @@ describe("stored session model selections in scheduled session turns", () => {
           assertCurrent() {},
         });
       if (!activeTurn) {
-        return { result: await runTurn(job!), requests };
+        return { result: await runTurn(stored), requests };
       }
       let retargeted = false;
       admission.whileQueuedAdmissionWaits = async (admittedSessionKey) => {
@@ -319,11 +285,11 @@ describe("stored session model selections in scheduled session turns", () => {
       const settledEarly = (turn: string) => (outcome: unknown) => {
         throw new Error(`${turn} turn settled early: ${JSON.stringify(outcome)}`);
       };
-      const activeResult = runTurn(loadedActiveJob!);
+      const activeResult = runTurn(activeJob);
       let pending: ReturnType<typeof runTurn> | undefined;
       try {
         await Promise.race([activeTurn.started.promise, activeResult.then(settledEarly("active"))]);
-        pending = runTurn(job!);
+        pending = runTurn(stored);
         await Promise.race([queued.promise, pending.then(settledEarly("scheduled"))]);
       } finally {
         activeTurn.release.resolve();

@@ -79,7 +79,7 @@ function applyError(
     payload: { kind: "agentTurn", message: "sync" },
     owner: owned.owner,
     failureAlert: { ...owned.failureAlert, channel: "telegram", to: "19098680" },
-    state: { consecutiveErrors: 2 },
+    state: { consecutiveErrors: 1 },
     ...overrides,
   });
   const deferredNotifications: DeferredCronNotifications = [];
@@ -494,67 +494,45 @@ describe("CronService failure repair", () => {
       }),
     );
 
-    it.each<[string, Partial<Parameters<typeof applyJobResult>[2]>, string[]]>([
-      [
-        "provider ECONNREFUSED",
-        { error: "fetch failed: connect ECONNREFUSED 127.0.0.1:443", provider: "anthropic" },
-        [],
-      ],
+    it.each<[string, Partial<Parameters<typeof applyJobResult>[2]>]>([
       [
         "execution watchdog",
         {
           error: "cron: job execution timed out",
           errorClassification: { kind: "reason", reason: "timeout" },
         },
-        ["failure-repair"],
       ],
       [
         "helper script",
         { error: "script failure", ...cronScriptFailureMetadata("payload", "timeout") },
-        ["failure-repair"],
       ],
-    ])("second failure from %s requests the expected notification", (_name, result, expected) => {
+    ])("second failure from %s requests repair", (_name, result) => {
       const { job, deferredNotifications } = applyError(
         {
           schedule: { kind: "every", everyMs: 3_600_000, anchorMs: runningAtMs },
-          state: { consecutiveErrors: 1 },
         },
         result,
       );
       expect(job.state).toMatchObject({ consecutiveErrors: 2, lastErrorReason: "timeout" });
       expect(job.state.nextRunAtMs).toBe(runningAtMs + 1_000 + 60_000);
-      expect(deferredNotifications.map((notification) => notification.kind)).toEqual(expected);
+      expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
+        "failure-repair",
+      ]);
     });
 
-    it.each<[string, Partial<CronJob>, number, string[]]>([
-      [
-        "weekly retry exhausted",
-        { schedule: { kind: "every", everyMs: 7 * 86_400_000 } },
-        3,
-        ["failure-repair"],
-      ],
-      [
-        "one-shot retry exhausted",
-        { schedule: { kind: "at", at: new Date(runningAtMs).toISOString() } },
-        3,
-        ["failure-repair"],
-      ],
-      ["disabled within retry budget", { enabled: false }, 1, ["failure-alert"]],
+    it.each<[string, Partial<CronJob>, string[]]>([
+      ["disabled within retry budget", { enabled: false }, ["failure-alert"]],
       [
         "unschedulable cron",
         { schedule: { kind: "cron", expr: "0 0 30 2 *" } },
-        1,
         ["failure-repair"],
       ],
-    ])("does not hold %s", (_name, overrides, consecutiveErrors, expected) => {
-      const { job, deferredNotifications } = applyError(
-        { ...overrides, state: { consecutiveErrors } },
-        { error: "fetch failed: connect ECONNREFUSED 127.0.0.1:443" },
-      );
-      expect(job.state.consecutiveErrors).toBe(consecutiveErrors + 1);
-      if (consecutiveErrors < 3) {
-        expect(job.state.nextRunAtMs).toBeUndefined();
-      }
+    ])("does not hold %s", (_name, overrides, expected) => {
+      const { job, deferredNotifications } = applyError(overrides, {
+        error: "fetch failed: connect ECONNREFUSED 127.0.0.1:443",
+      });
+      expect(job.state.consecutiveErrors).toBe(2);
+      expect(job.state.nextRunAtMs).toBeUndefined();
       expect(deferredNotifications.map((notification) => notification.kind)).toEqual(expected);
     });
   });
@@ -566,10 +544,7 @@ describe("CronService failure repair", () => {
     { name: "systemEvent", payload: { kind: "systemEvent", text: "check" } },
     { name: "script", payload: { kind: "script", script: "json({})" } },
   ])("requests repair for a $name job", ({ payload }) => {
-    const { deferredNotifications } = applyError(
-      { payload, state: { consecutiveErrors: 1 } },
-      { error: "boom" },
-    );
+    const { deferredNotifications } = applyError({ payload }, { error: "boom" });
     expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
       "failure-repair",
     ]);

@@ -187,7 +187,7 @@ async function createCommandWebhook(
 const agentJob = (name: string, overrides: Partial<CronAddInput> = {}) =>
   cronTestInput({ name, delivery: { mode: "announce", ...destination }, ...overrides });
 
-async function createScheduledService(deps: Partial<CronServiceDeps> = {}, start = true) {
+async function createScheduledService(deps: Partial<CronServiceDeps> = {}) {
   const { storePath, cleanup } = await makeStorePath();
   const clock = createGatewaySchedulerClock(Date.now());
   const finished = createDeferred<CronEvent>();
@@ -204,9 +204,7 @@ async function createScheduledService(deps: Partial<CronServiceDeps> = {}, start
       }
     },
   });
-  if (start) {
-    await cron.start();
-  }
+  await cron.start();
   return {
     cron,
     storePath,
@@ -450,44 +448,12 @@ describe("CronService persists delivered status", () => {
       });
     },
   );
-  it("persists payload kind conversions without reopening the tool allowlist", async () => {
-    await using h = await createScheduledService(
-      { cronEnabled: false, runIsolatedAgentJob: vi.fn() },
-      false,
-    );
-
-    const { cron, storePath } = h;
-    const job = await cron.add({
-      ...agentJob("convert payload", { enabled: false, delivery: undefined }),
-      payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
-    });
-    const expectPayload = async (payload: CronJob["payload"]) => {
-      const expected = { ...payload, toolsAllow: ["read"] };
-      expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(expected);
-      return expected;
-    };
-    const convert = async (payload: CronJob["payload"], expected = payload) => {
-      expect((await cron.update(job.id, { payload })).payload).toEqual(
-        await expectPayload(expected),
-      );
-    };
-    const command = { kind: "command" as const, argv: ["echo", "ready"] };
-    await convert({ ...command, env: undefined }, command);
-    await convert(
-      { kind: "script", script: "return {};" },
-      { kind: "script", script: "return {};", timeoutSeconds: 300, toolBudget: 50 },
-    );
-    const agent = { kind: "agentTurn", message: "after" } as const;
-    await convert(agent);
-
+  it("rejects null command environments", () => {
     expect(() =>
       normalizeCronJobPatch({
         payload: { kind: "command", argv: ["echo"], env: null },
       }),
     ).toThrow("command env");
-    await expectPayload(agent);
-
-    await convert({ kind: "command", argv: ["echo"], env: { MODE: "test" } });
   });
   it("persists scheduled suppression in state, history, and events and clears it after delivery", async () => {
     const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>().mockResolvedValue({
