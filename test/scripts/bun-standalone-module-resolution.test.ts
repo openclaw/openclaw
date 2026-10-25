@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -56,6 +57,74 @@ export function loadFactory(value) {
 }
 
 describe("standalone conditional module resolution", () => {
+  it("retains shared-loader builtins without initializing them before the first require", () => {
+    const { root, write } = fixture();
+    write(
+      path.join(root, "shared.mjs"),
+      'import { createRequire } from "node:module"; export const load = createRequire(import.meta.url);',
+    );
+    write(
+      path.join(root, "entry.mjs"),
+      `import { load } from "./shared.mjs";
+const selected = "node:vm";
+export const read = () => load(selected).runInNewContext("6 * 7");
+export const spawn = () => load("node:child_process");
+export const overridden = () => load("node:path");
+const hidden = "node:crypto";
+function shadow(hidden) { return load(hidden); }
+report("bun:unknown");
+report("node:unknown");`,
+    );
+    write(path.join(root, "plain.cjs"), 'module.exports = { value: "ordinary-file" };');
+    const native = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    native.discover(["shared.mjs", "entry.mjs"]);
+    expect(native.builtinModules).toEqual([
+      "node:child_process",
+      "node:module",
+      "node:path",
+      "node:vm",
+    ]);
+    const override = path.join(root, "override.cjs");
+    write(override, 'module.exports = { value: "embedded-alias" };');
+    const adapter = createStandaloneRequireAdapter({
+      runtimeRoot: root,
+      embeddedPaths: { "node:path": override },
+    });
+    const replacement = adapter.finalize(native.builtinModules);
+    write(
+      path.join(root, "probe.mjs"),
+      `import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+const root = ${JSON.stringify(root)};
+const loaded = [];
+const nativeRequire = createRequire(import.meta.url);
+import.meta.require = (specifier) => { loaded.push(specifier); return nativeRequire(specifier); };
+const embedded = (specifier) => specifier === "node:path" ? ${JSON.stringify(override)} : undefined;
+const commonJsEntries = new Set();
+globalThis.__openclawStandaloneNativeResolve = () => undefined;
+${adapter.bootstrap.replace(replacement.search, replacement.replacement)}
+const load = globalThis.__openclawStandaloneCreateRequire(createRequire, import.meta.url);
+const before = loaded.slice();
+const answer = load("node:vm").runInNewContext("6 * 7");
+const file = load("./plain.cjs").value;
+const alias = load("node:path").value;
+console.log(JSON.stringify({ before, answer, file, alias, loaded }));`,
+    );
+    const result = spawnSync(process.execPath, [path.join(root, "probe.mjs")], {
+      encoding: "utf8",
+    });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      before: [],
+      answer: 42,
+      file: "ordinary-file",
+      alias: "embedded-alias",
+      loaded: ["node:vm"],
+    });
+  });
+
   it("loads the require export lazily after pruning and relocation without package-manager paths", () => {
     const { root, library, filename, source, write } = fixture();
     const image = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-module-image-"));

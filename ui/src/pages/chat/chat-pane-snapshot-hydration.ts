@@ -55,6 +55,36 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       connected: this.context.gateway.snapshot.phase === "connected",
       promise: reading
         .then(async (storedSnapshot) => {
+          // Keep cache rendering out of connect preparation. The subscription can
+          // adopt ready rows synchronously after dispatch, before reading their cursor.
+          hydration.adoptReadySnapshot = () => {
+            delete hydration.adoptReadySnapshot;
+            if (!isCurrent()) {
+              return;
+            }
+            const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
+            if (requests.acceptedHistory || !snapshot) {
+              return;
+            }
+            // A sibling can fill the shared cache while this pane still needs its
+            // own transcript. Adopt those messages before revalidating their cursor.
+            applyChatCacheSnapshot(state, snapshot);
+            const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
+            cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
+            if (snapshot.progressCard !== undefined) {
+              const progressTarget = this.resolveChatReadTarget();
+              if (progressTarget) {
+                this.progressCards.hydrate(progressTarget, snapshot.progressCard);
+              }
+            }
+          };
+          const gateway = this.context.gateway.snapshot;
+          if (
+            gateway.client &&
+            (gateway.phase === "connecting" || gateway.phase === "reconnecting")
+          ) {
+            await gateway.client.connectSent;
+          }
           // Let the initial composer commit before the saved rows do their layout work.
           if (!hydration.connected && storedSnapshot && !storedSnapshot.board) {
             await new Promise<void>((resolve) => {
@@ -66,23 +96,8 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
           if (!isCurrent()) {
             return;
           }
-          const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
-          const boardRestored = restoreBoard(snapshot?.board);
-          if (requests.acceptedHistory || !snapshot) {
-            return boardRestored;
-          }
-          // A sibling can fill the shared cache while this pane still needs its
-          // own transcript. Adopt those messages before revalidating their cursor.
-          applyChatCacheSnapshot(state, snapshot);
-          const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-          cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
-          if (snapshot.progressCard !== undefined) {
-            const progressTarget = this.resolveChatReadTarget();
-            if (progressTarget) {
-              this.progressCards.hydrate(progressTarget, snapshot.progressCard);
-            }
-          }
-          return boardRestored;
+          hydration.adoptReadySnapshot?.();
+          return restoreBoard(storedSnapshot?.board);
         })
         .catch(() => undefined)
         .finally(() => {

@@ -109,6 +109,7 @@ const repositoryScriptEntries = [
   "scripts/perf/database-page-cache-measure.ts!",
   // The ACP eviction PR invokes this isolated stdio/Gateway workload by path.
   "scripts/perf/acp-ledger-eviction-measure.ts!",
+  "scripts/perf/plugin-blob-registration-measure.ts!",
   // The source header documents this GitHub reader benchmark's Node command.
   "scripts/perf/github-reader-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
@@ -278,6 +279,15 @@ const repositoryScriptEntries = [
   "scripts/perf/session-initial-context-measure.ts!",
   "scripts/perf/sql-probe-measure.ts!",
   "scripts/perf/workspace-manifest-retention.ts!",
+  // Merged benchmark PRs and source headers invoke these retained workloads by exact path.
+  // The transcript broadcast benchmark loads the stall recorder through --gateway-preload.
+  "scripts/bench-filesystem-preconditions.mts!",
+  "scripts/perf/github-tool-selection-measure.ts!",
+  "scripts/perf/session-transcript-code-measure.mjs!",
+  "scripts/perf/stall-recorder-cost-preload.mjs!",
+  "scripts/perf/trajectory-preparation-retention.ts!",
+  "scripts/perf/transcript-session-list-measure.ts!",
+  "scripts/perf/transport-pull-allocation-measure.mjs!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.

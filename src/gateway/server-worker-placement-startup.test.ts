@@ -362,7 +362,12 @@ describe("worker placement startup health lifetime", () => {
 
   it("retries worker environment cleanup after a failed stop attempt", async () => {
     const stopError = new Error("tunnel cleanup failed");
-    mockDispatch();
+    const unsubscribeOrphans = vi.fn();
+    const subscribeOrphanWorkspaceChanges = vi.fn(() => unsubscribeOrphans);
+    const reconcile = vi.fn(async () => {
+      expect(subscribeOrphanWorkspaceChanges).toHaveBeenCalledOnce();
+    });
+    mockDispatch({ subscribeOrphanWorkspaceChanges, reconcile });
     const environments = {
       ...createEnvironments(),
       stop: vi.fn().mockRejectedValueOnce(stopError).mockResolvedValueOnce(undefined),
@@ -373,11 +378,14 @@ describe("worker placement startup health lifetime", () => {
       throw new Error("worker placement runtime did not start");
     }
 
+    expect(reconcile).toHaveBeenCalledOnce();
     const firstStop = sidecar.stop();
+    expect(unsubscribeOrphans).toHaveBeenCalledOnce();
     expect(sidecar.stop()).toBe(firstStop);
     await expect(firstStop).rejects.toBe(stopError);
     await expect(sidecar.stop()).resolves.toBeUndefined();
 
+    expect(unsubscribeOrphans).toHaveBeenCalledOnce();
     expect(environments.stop).toHaveBeenCalledTimes(2);
   });
 

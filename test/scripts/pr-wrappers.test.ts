@@ -1314,7 +1314,7 @@ fs.symlinkSync(${JSON.stringify(expected)}, path.join(root, "node_modules/tsx"),
 const workspaceModules = path.join(root, "packages/markdown-core/node_modules");
 fs.mkdirSync(workspaceModules, { recursive: true });
 for (const name of Object.keys(${JSON.stringify(JSON.parse(readScript("packages/markdown-core/package.json")).dependencies)})) {
-  if (!name.startsWith("mdast-") && !name.startsWith("micromark-")) continue;
+  if (name !== "micromark" && !name.startsWith("mdast-") && !name.startsWith("micromark-")) continue;
   const target = path.join(root, "node_modules/.workspace", name);
   fs.cpSync(fs.realpathSync(path.join(${JSON.stringify(fixture.tooling)}, "packages/markdown-core/node_modules", name)), target, { recursive: true });
   fs.symlinkSync(path.relative(workspaceModules, target), path.join(workspaceModules, name), "dir");

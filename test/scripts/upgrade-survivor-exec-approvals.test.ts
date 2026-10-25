@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
@@ -67,11 +68,13 @@ function fixture(legacy = false) {
   function observe(stage = "survival") {
     const before = existsSync(dbPath) ? readFileSync(dbPath) : null;
     const legacyBefore = existsSync(legacyPath) ? readFileSync(legacyPath) : null;
-    const entries = readdirSync(state, { recursive: true });
+    const entries = listDirectoryTreeStrictSync(state).map((walkEntry) => walkEntry.relativePath);
     const result = run("assert-exec-approvals", stage);
     expect(existsSync(dbPath) ? readFileSync(dbPath) : null).toEqual(before);
     expect(existsSync(legacyPath) ? readFileSync(legacyPath) : null).toEqual(legacyBefore);
-    expect(readdirSync(state, { recursive: true })).toEqual(entries);
+    expect(listDirectoryTreeStrictSync(state).map((walkEntry) => walkEntry.relativePath)).toEqual(
+      entries,
+    );
     for (const privateValue of [
       "synthetic-socket-value-must-not-be-logged",
       "/opt/upgrade-survivor/bin",

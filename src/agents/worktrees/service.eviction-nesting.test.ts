@@ -2,13 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  areDiagnosticsEnabledForProcess,
-  setDiagnosticsEnabledForProcess,
-} from "../../infra/diagnostic-events.js";
 import * as gitExec from "../../infra/git-exec.js";
-import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
-import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -187,21 +182,22 @@ it("refuses a late live owner of unresolved shared metadata before deleting its 
       unavailable = true;
     }
   });
-  setLoggerOverride({ level: "warn", consoleLevel: "silent", file: path.join(root, "evict.log") });
-  const logs = createDiagnosticLogRecordCapture();
-  const diagnosticsWereEnabled = areDiagnosticsEnabledForProcess();
-  setDiagnosticsEnabledForProcess(true);
+  const logFile = path.join(root, "evict.log");
+  setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logFile });
   try {
     await expect(create("replacement")).rejects.toThrow(/cap 2.*live owners/);
     expect(unavailable).toBe(true);
     expect(lease).toBeDefined();
-    await logs.flush();
+    await flushLogger();
+    const fileLog = await fs.readFile(logFile, "utf8");
     expect(
-      logs.records.some(
-        ({ message }) =>
-          message.includes(`Worktree eviction live-refused: ${outer.id}`) &&
-          message.includes(external.id),
-      ),
+      fileLog
+        .split("\n")
+        .some(
+          (line) =>
+            line.includes(`Worktree eviction live-refused: ${outer.id}`) &&
+            line.includes(external.id),
+        ),
     ).toBe(true);
     expect(registry(outer.id)).toMatchObject({ id, path: checkoutPath, lastActiveAt });
     expect(registry(outer.id)?.removedAt).toBeUndefined();
@@ -215,8 +211,6 @@ it("refuses a late live owner of unresolved shared metadata before deleting its 
       }
     } finally {
       await lease?.release();
-      logs.cleanup();
-      setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
       setLoggerOverride(null);
       resetLogger();
     }
