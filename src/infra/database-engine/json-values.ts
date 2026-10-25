@@ -7,11 +7,16 @@ import {
   type RawBuilder,
   type ShallowDehydrateObject,
   type Simplify,
+  type SqlBool,
 } from "kysely";
 import {
   jsonArrayFrom as sqliteJsonArrayFrom,
   jsonObjectFrom as sqliteJsonObjectFrom,
 } from "kysely/helpers/sqlite";
+import {
+  readJsonPredicateScalar,
+  type JsonPredicateToken,
+} from "../../state/json-predicate-fields.js";
 import { getNodeSqliteKysely } from "../kysely-sync.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-connection.js";
 
@@ -233,4 +238,173 @@ export function jsonPickObject(
     WHEN 'object' THEN json(value) WHEN 'array' THEN json(value)
     WHEN 'true' THEN json('true') WHEN 'false' THEN json('false')
     ELSE value END) FROM json_each(${value}) WHERE key IN (${sql.join(keys)}))`;
+}
+
+type JsonFieldSelection = { readonly [key: string]: true | JsonFieldSelection };
+
+/** Whether native JSON field access can decode this value without losing escaped code units. */
+export function jsonNativeFieldsValid(
+  db: DatabaseSync | PostgresSqlConnection,
+  value: Expression<unknown>,
+): RawBuilder<SqlBool> {
+  return isPostgresSqlConnection(db)
+    ? /* kysely-allow-raw: jsonb validation rejects escaped NUL and unmatched surrogates before native field access. */ sql<SqlBool>`coalesce(pg_input_is_valid(${value}, 'jsonb'), false)`
+    : /* kysely-allow-raw: SQLite field access has the same validity/depth boundary as json_valid. */ sql<SqlBool>`coalesce(json_valid(${value}), 0)`;
+}
+
+/**
+ * Compact native JSON for the lexical scanner, preserving duplicate member order.
+ * Malformed/deep input and PostgreSQL values with undecodable escapes retain raw
+ * text. SQLite also retains escaped NULs because JSON aggregation truncates member
+ * names at NUL. Callers select tokens with scanJsonObjectFields, never hydrate the
+ * returned document.
+ */
+export function jsonObjectFieldsForScan(
+  db: DatabaseSync | PostgresSqlConnection,
+  value: Expression<string>,
+  fields: JsonFieldSelection,
+): RawBuilder<string> {
+  if (!isPostgresSqlConnection(db)) {
+    const projectSqlite = (
+      input: Expression<unknown>,
+      selected: JsonFieldSelection,
+      depth: number,
+    ): RawBuilder<unknown> => {
+      const alias = `sqlite_field_${depth}`;
+      const key = sql.ref(`${alias}.key`);
+      const member = sql.ref(`${alias}.value`);
+      const memberType = sql.ref(`${alias}.type`);
+      const nested = Object.entries(selected).filter(
+        (entry): entry is [string, JsonFieldSelection] => entry[1] !== true,
+      );
+      // JSON1 scalars lose their subtype through json_each; restore containers and exact booleans.
+      const retained = /* kysely-allow-raw: Preserve JSON-valued selected members through aggregation. */ sql`CASE ${memberType}
+        WHEN 'object' THEN json(${member}) WHEN 'array' THEN json(${member})
+        WHEN 'true' THEN json('true') WHEN 'false' THEN json('false') ELSE ${member} END`;
+      const projected =
+        nested.length === 0
+          ? retained
+          : sql`CASE ${sql.join(
+              nested.map(
+                ([name, children]) =>
+                  sql`WHEN ${key} = ${sql.lit(name)} AND ${memberType} = 'object'
+            THEN json(${projectSqlite(member, children, depth + 1)})`,
+              ),
+              sql` `,
+            )} ELSE ${retained} END`;
+      return /* kysely-allow-raw: Native JSON1 enumeration retains duplicate member order without returning bodies. */ sql`(SELECT json_group_object(${key}, ${projected})
+        FROM json_each(${input}) AS ${sql.id(alias)}
+        WHERE ${key} IN (${sql.join(Object.keys(selected).map((name) => sql.lit(name)))}))`;
+    };
+    return /* kysely-allow-raw: CASE preserves malformed/deep input and raw NUL member labels for the scanner. */ sql<string>`CASE WHEN json_valid(${value}) AND instr(${value}, ${String.raw`\u0000`}) = 0 THEN
+      CASE WHEN json_type(${value}) = 'object' THEN ${projectSqlite(value, fields, 0)} ELSE ${value} END
+      ELSE ${value} END`;
+  }
+  const project = (
+    input: Expression<unknown>,
+    selected: JsonFieldSelection,
+    depth: number,
+  ): RawBuilder<unknown> => {
+    const alias = `json_field_${depth}`;
+    const key = sql.ref(`${alias}.key`);
+    const member = sql.ref(`${alias}.value`);
+    const order = sql.ref(`${alias}.ordinality`);
+    const nested = Object.entries(selected).filter(
+      (entry): entry is [string, JsonFieldSelection] => entry[1] !== true,
+    );
+    const projected =
+      nested.length === 0
+        ? member
+        : sql`CASE ${sql.join(
+            nested.map(
+              ([name, children]) =>
+                sql`WHEN ${key} = ${sql.lit(name)} AND json_typeof(${member}) = 'object' THEN ${project(member, children, depth + 1)}`,
+            ),
+            sql` `,
+          )} ELSE ${member} END`;
+    return /* kysely-allow-raw: JSON (not JSONB) aggregation retains every selected duplicate in input order. */ sql`(SELECT coalesce(json_object_agg(${key}, ${projected} ORDER BY ${order}), '{}'::json)
+      FROM json_each(CASE WHEN json_typeof(${input}) = 'object' THEN ${input} ELSE '{}'::json END)
+        WITH ORDINALITY AS ${sql.id(alias)}(key, value, ordinality)
+      WHERE ${key} IN (${sql.join(Object.keys(selected).map((name) => sql.lit(name)))}))`;
+  };
+  return /* kysely-allow-raw: CASE fences all native decoding; the scanner handles exceptional raw text. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, value)} THEN
+    CASE WHEN json_typeof(${value}::json) = 'object' THEN ${project(sql`${value}::json`, fields, 0)}::text ELSE ${value} END
+    ELSE ${value} END`;
+}
+
+/** First-member string lookup, used only as a native candidate filter; exceptional text needs the scanner. */
+export function jsonFirstStringValue(
+  db: DatabaseSync | PostgresSqlConnection,
+  value: Expression<string>,
+  keys: readonly string[],
+): RawBuilder<string | null> {
+  if (!isPostgresSqlConnection(db)) {
+    const path = keys.reduce(
+      (prefix, key) =>
+        `${prefix}.${/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) ? key : JSON.stringify(key)}`,
+      "$",
+    );
+    return /* kysely-allow-raw: nested CASE retains SQLite first-key and malformed/deep-input behavior. */ sql<
+      string | null
+    >`CASE WHEN json_valid(${value}) THEN CASE WHEN json_type(${value}, ${sql.lit(path)}) = 'text' THEN json_extract(${value}, ${sql.lit(path)}) END END`;
+  }
+  let token: RawBuilder<unknown> = sql`${value}::json`;
+  for (const [index, key] of keys.entries()) {
+    const alias = `first_field_${index}`;
+    token = sql`(SELECT ${sql.ref(`${alias}.value`)} FROM json_each(CASE WHEN json_typeof(${token}) = 'object' THEN ${token} ELSE '{}'::json END)
+      WITH ORDINALITY AS ${sql.id(alias)}(key, value, ordinality)
+      WHERE ${sql.ref(`${alias}.key`)} = ${key} ORDER BY ${sql.ref(`${alias}.ordinality`)} LIMIT 1)`;
+  }
+  return /* kysely-allow-raw: PostgreSQL otherwise returns the last duplicate; raw ordinal lookup retains SQLite's first. */ sql<
+    string | null
+  >`CASE WHEN ${jsonNativeFieldsValid(db, value)} THEN CASE WHEN json_typeof(${token}) = 'string' THEN ${token} #>> '{}' END END`;
+}
+
+/** Enumerate every string-valued object member, including duplicate keys. */
+export function jsonObjectStringEntries(
+  db: DatabaseSync | PostgresSqlConnection,
+  value: Expression<string>,
+): RawBuilder<{ key: string; value: string }> {
+  return isPostgresSqlConnection(db)
+    ? /* kysely-allow-raw: JSON enumeration preserves duplicates; CASE fences undecodable input. */ sql<{
+        key: string;
+        value: string;
+      }>`(SELECT key, value #>> '{}' AS value FROM json_each(CASE WHEN ${jsonNativeFieldsValid(db, value)} THEN CASE WHEN json_typeof(${value}::json) = 'object' THEN ${value}::json ELSE '{}'::json END ELSE '{}'::json END) WHERE json_typeof(value) = 'string')`
+    : /* kysely-allow-raw: SQLite json_each exposes decoded string values. */ sql<{
+        key: string;
+        value: string;
+      }>`(SELECT key, value FROM json_each(CASE WHEN json_valid(${value}) THEN ${value} ELSE '{}' END) WHERE type = 'text')`;
+}
+
+/** Decode one extracted JSON1 value without constructing unrelated object fields. */
+export function jsonScannedValue(
+  token: JsonPredicateToken | undefined,
+  affinity?: "numeric",
+): unknown {
+  if (!token) {
+    return null;
+  }
+  if (token.kind === "object" || token.kind === "array") {
+    return JSON.parse(token.text);
+  }
+  const value = readJsonPredicateScalar(token);
+  if (affinity === "numeric" && typeof value === "string") {
+    // Column comparisons apply numeric affinity to a complete decimal token; SQLite stops at NUL.
+    const nul = value.indexOf("\0");
+    const numeric = nul < 0 ? value : value.slice(0, nul);
+    if (
+      /^[\t\n\v\f\r ]*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?[\t\n\v\f\r ]*$/u.test(numeric)
+    ) {
+      return Number(numeric);
+    }
+  }
+  // SQLite exposes each unpaired surrogate as three replacement characters through UTF-8.
+  return typeof value === "string"
+    ? value.replace(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+        "\uFFFD\uFFFD\uFFFD",
+      )
+    : typeof value === "boolean"
+      ? Number(value)
+      : value;
 }
