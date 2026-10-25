@@ -32,7 +32,7 @@ import {
 } from "../../plugins/runtime-degraded-state.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
-import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
+import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createPermitPool } from "../../shared/permit-pool.js";
@@ -546,10 +546,7 @@ export async function collectGatewayHealthSnapshot(params: {
     const boundAccounts = defaultAgentId
       ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
       : [];
-    const preferredAccountId = resolvePreferredAccountId({
-      defaultAccountId,
-      boundAccounts,
-    });
+    const preferredAccountId = boundAccounts[0] ?? defaultAccountId;
     const boundAccountIdsAll = Array.from(
       new Set(Array.from(channelBindings.get(plugin.id)?.values() ?? []).flat()),
     );

@@ -6,7 +6,10 @@ import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
+import {
+  createPluginPackagingConfigIssues,
+  createTestConfigSnapshot,
+} from "../commands/test-runtime-config-helpers.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import {
@@ -631,22 +634,7 @@ describe("config cli", () => {
     it.each([
       {
         name: "plugin packaging compiled-output failures",
-        snapshot: () =>
-          makeInvalidSnapshot({
-            issues: [
-              {
-                path: "plugins.slots.memory",
-                message: "plugin not found: source-only-pack",
-              },
-            ],
-            warnings: [
-              {
-                path: "plugins",
-                message:
-                  "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
-              },
-            ],
-          }),
+        snapshot: () => makeInvalidSnapshot(createPluginPackagingConfigIssues()),
         messages: [
           "plugin not found: source-only-pack",
           "This is a plugin packaging issue, not a local config problem.",
