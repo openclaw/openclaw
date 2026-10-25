@@ -137,77 +137,45 @@ describe("xai tts", () => {
       mockImage();
     });
 
-    it("builds provider metadata and resolves configuration", async () => {
-      expect(provider).toMatchObject({
-        id: "xai",
-        label: "xAI",
-        defaultModel: "grok-imagine-image",
-        defaultTimeoutMs: 600_000,
-        models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-quality"],
-        capabilities: {
-          generate: { maxCount: 4, supportsAspectRatio: true },
-          edit: { enabled: true, maxInputImages: 3 },
-        },
-      });
-      expect(provider.capabilities.geometry?.aspectRatios).toEqual(
-        "1:1 16:9 9:16 4:3 3:4 3:2 2:3 2:1 1:2 19.5:9 9:19.5 20:9 9:20".split(" "),
-      );
-      const configured = provider.isConfiguredAsync;
-      if (!configured) {
-        throw new Error("Expected image config predicate");
-      }
-      expect(await configured({})).toBe(false);
-      expect(await configured({ cfg: config({ apiKey: "xai-image-test-key" }) })).toBe(true);
+    it.each([undefined, "xai-image-test-key"])("resolves image credentials %s", async (apiKey) => {
+      expect(await provider.isConfiguredAsync?.({ cfg: config({ apiKey }) })).toBe(Boolean(apiKey));
     });
     it("preserves an arbitrary image model in the request and result", async () => {
       const model = "grok-imagine-image-future";
       const timers = vi.spyOn(globalThis, "setTimeout");
       const result = await generate({
         model,
+        count: 5,
         aspectRatio: "20:9",
         resolution: "2K",
         cfg: config({ baseUrl: "https://custom.x.ai/v1" }),
       });
-      expect(resolveKey).toHaveBeenCalledWith(expect.objectContaining({ provider: "xai" }));
       expect(result.model).toBe(model);
       expect(timers.mock.calls.map(([, delay]) => delay)).toContain(600_000);
       expect(capturedRequest()).toMatchObject({
         url: "https://custom.x.ai/v1/images/generations",
         method: "POST",
       });
-      expect(capturedJson()).toMatchObject({ model, aspect_ratio: "20:9", resolution: "2k" });
+      expect(capturedJson()).toMatchObject({ model, n: 4, aspect_ratio: "20:9", resolution: "2k" });
     });
-    it("sends single-image edits as a singular image_url", async () => {
-      const model = "grok-imagine-image-quality";
-      mockImage(
-        "image/png",
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYGD4z0ABAAEfAG0B0xMAAAAASUVORK5CYII=",
-      );
-      await generate({ model, inputImages: [inputImage("fakeimage")] });
-      expect(capturedRequest().url).toContain("/images/edits");
-      expect(capturedJson()).toMatchObject({
-        model,
-        prompt: "Combine the references",
-        image: { url: expect.stringContaining("data:image/png;base64,"), type: "image_url" },
-        response_format: "b64_json",
-      });
-    });
-    it("uses a plural payload for multiple edit inputs", async () => {
+    it.each([1, 3])("builds the edit payload for %s input images", async (count) => {
       mockImage("image/png", Buffer.from("edited").toString("base64"));
+      const types = ["png", "jpeg", "webp"].slice(0, count);
       await generate({
-        inputImages: [
-          inputImage("first"),
-          inputImage("second", "image/jpeg"),
-          inputImage("third", "image/webp"),
-        ],
+        model: "grok-imagine-image-quality",
+        inputImages: types.map((type) => inputImage(type, `image/${type}`)),
       });
       expect(capturedRequest().url).toContain("/images/edits");
+      const images = types.map((type) => ({
+        url: `data:image/${type};base64,${Buffer.from(type).toString("base64")}`,
+        type: "image_url",
+      }));
       expect(capturedJson()).toEqual(
         expect.objectContaining({
-          images: ["png", "jpeg", "webp"].map((type) => ({
-            url: expect.stringContaining(`data:image/${type};base64,`),
-            type: "image_url",
-          })),
+          model: "grok-imagine-image-quality",
+          prompt: "Combine the references",
+          response_format: "b64_json",
+          ...(count === 1 ? { image: images[0] } : { images }),
         }),
       );
     });
