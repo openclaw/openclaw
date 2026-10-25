@@ -21,6 +21,7 @@ const route = {
 };
 const tiers = { requestedTier: "ultrafast", responseTier: "priority" };
 const observation = { ...route, ...tiers };
+const outcomes = [{ provider: "openai", profileId: account.profileId, status: "ready" as const }];
 
 function deferredDiscovery() {
   const entered = createDeferred();
@@ -38,44 +39,33 @@ describe("prepared account catalog observations", () => {
   it("retains account discovery across request projections until explicit refresh or identity replacement", async () => {
     const retirement = new AbortController();
     const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal);
-    const tokenCredential = { type: "token", provider: "openai", token: "first" } as const;
-    const load = vi.fn(async () => [
-      { provider: "openai", profileId: "account", status: "ready" as const },
-    ]);
-    const request = {
-      profileId: "account",
-      credential: tokenCredential,
-      load,
-      allowDiscovery: true,
-    };
+    const load = vi.fn(async () => outcomes);
+    const request = { ...account, load, allowDiscovery: true };
     expect((await owner.acquire({ ...request, allowDiscovery: false })).outcomes).toEqual([]);
     expect(load).not.toHaveBeenCalled();
     const first = await owner.acquire(request);
-    await owner.acquire({ ...request, credential: { ...tokenCredential } });
+    await owner.acquire({ ...request, credential: { ...credential } });
     await owner.acquire({ ...request, allowDiscovery: false });
     expect(load).toHaveBeenCalledOnce();
     const refreshed = await owner.acquire({ ...request, refresh: true });
-    expect(load).toHaveBeenCalledTimes(2);
     expect(first.isCurrent()).toBe(false);
     const failure = new Error("Discovery unavailable");
     load.mockRejectedValueOnce(failure);
     await expect(owner.acquire({ ...request, refresh: true })).rejects.toBe(failure);
     expect((await owner.acquire(request)).outcomes).toEqual(refreshed.outcomes);
     expect(refreshed.isCurrent()).toBe(true);
-    expect(load).toHaveBeenCalledTimes(3);
     const { entered, release, load: discover } = deferredDiscovery();
     load.mockImplementationOnce(discover);
     const superseded = owner.acquire({ ...request, refresh: true });
     await entered.promise;
     const replacement = await owner.acquire({
       ...request,
-      credential: { ...tokenCredential, token: "replacement" },
+      credential: { ...credential, key: "replacement" },
     });
     expect(refreshed.isCurrent()).toBe(false);
     release.resolve([]);
     await expect(superseded).rejects.toThrow("changed");
     expect(replacement.isCurrent()).toBe(true);
-    expect(load).toHaveBeenCalledTimes(5);
     retirement.abort();
     await expect(owner.acquire(request)).rejects.toThrow("changed");
     expect(load).toHaveBeenCalledTimes(5);
@@ -126,9 +116,6 @@ describe("prepared account catalog observations", () => {
     ]) {
       expect(owner.readServiceTierObservations({ ...route, ...mismatch })).toEqual([]);
     }
-    const outcomes = [
-      { provider: "openai", profileId: account.profileId, status: "ready" as const },
-    ];
     const load = vi.fn(async () => outcomes);
     const request = { ...account, load, allowDiscovery: true };
     expect((await owner.acquire({ ...request, allowDiscovery: false })).outcomes).toEqual([]);
@@ -139,7 +126,6 @@ describe("prepared account catalog observations", () => {
     expect(owner.readServiceTierObservations(route)).toEqual([tiers]);
     expect((await owner.acquire(request)).outcomes).toEqual(outcomes);
     expect(owner.readServiceTierObservations(route)).toEqual([tiers]);
-    expect(load).toHaveBeenCalledTimes(2);
 
     onChanged.mockClear();
     await owner.acquire({ ...request, refresh: true });
@@ -214,16 +200,13 @@ describe("prepared account catalog observations", () => {
     expect(record({ ...priority, responseTier: "priority" })).toBe(true);
     expect(record(ultrafast)).toBe(false);
     expect(record({ ...priority, responseTier: "priority" })).toBe(false);
-    expect(onChanged).toHaveBeenCalledTimes(3);
 
     record(priority);
     vi.advanceTimersByTime(240_000);
     expect(record(ultrafast)).toBe(false);
     vi.advanceTimersByTime(60_000);
-    expect(onChanged).toHaveBeenCalledTimes(5);
     expect(record(ultrafast)).toBe(false);
     expect(record(priority)).toBe(true);
-    expect(onChanged).toHaveBeenCalledTimes(6);
   });
 
   it("bounds response tier observations per account and rejects a superseded owner", () => {

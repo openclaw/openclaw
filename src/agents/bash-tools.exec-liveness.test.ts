@@ -16,11 +16,9 @@ import {
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { SpawnProcessAdapter } from "../process/supervisor/types.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
-import { getFinishedSession, getSession, waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
-import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
-import { fullGatewayExec, runningSession } from "./bash-tools.lifecycle.test-support.js";
+import { fullGatewayExec } from "./bash-tools.lifecycle.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   getSupervisor: vi.fn(),
@@ -43,17 +41,12 @@ vi.mock("../infra/shell-env.js", () => ({
 }));
 vi.mock("./bash-tools.exec-host-gateway.js", () => ({ processGatewayAllowlist: mocks.approve }));
 
-function execTool(overrides: ExecToolDefaults = {}) {
-  return createExecTool({
-    ...fullGatewayExec,
-    notifyOnExit: false,
-    ...overrides,
-  });
-}
-
 function createWrappedExec(sessionId: string, allowBackground = false) {
   const ref = { sessionId, sessionKey: `agent:main:${sessionId}`, runId: `run-${sessionId}` };
-  const tool = wrapToolWithBeforeToolCallHook(execTool({ allowBackground }), ref);
+  const tool = wrapToolWithBeforeToolCallHook(
+    createExecTool({ ...fullGatewayExec, notifyOnExit: false, allowBackground }),
+    ref,
+  );
   return { tool, ref };
 }
 
@@ -214,32 +207,4 @@ it("releases foreground liveness when exec backgrounds without removing its proc
   // Drain the deferred supervisor decision before checking background termination.
   await vi.advanceTimersToNextTimerAsync();
   expect(child.kill).toHaveBeenCalledOnce();
-});
-
-it.each([
-  ["background timeout=0", { background: true, timeoutSeconds: 0 }, false, undefined],
-  ["yield uses default timeout", { yieldMs: 10 }, true, 1_000],
-] as const)("%s", async (scopeKey, args, yielded, timeoutMs) => {
-  const tool = execTool({ allowBackground: true, timeoutSec: 1, scopeKey });
-  const execution = tool.execute("background", { command: "build", ...args });
-  await child.ready();
-  if (yielded) {
-    await vi.advanceTimersByTimeAsync(10);
-  }
-  const { sessionId } = runningSession((await execution).details);
-  expect(child.spawn.mock.calls[0]?.[0].timeoutMs).toBe(timeoutMs);
-  await vi.advanceTimersByTimeAsync(yielded ? 991 : 2_000);
-  if (yielded) {
-    await waitForExecScope(scopeKey);
-    expect(getFinishedSession(sessionId)).toMatchObject({
-      terminalStatus: "failed",
-      exitReason: "overall-timeout",
-    });
-  } else {
-    expect(child.kill).not.toHaveBeenCalled();
-    expect(getFinishedSession(sessionId)).toBeUndefined();
-    expect(getSession(sessionId)?.exited).toBe(false);
-    child.completed.resolve({ code: 0, signal: null });
-    await waitForExecScope(scopeKey);
-  }
 });

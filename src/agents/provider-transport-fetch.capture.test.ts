@@ -20,13 +20,9 @@ import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.
 
 const model: Model<"openai-responses"> = makeProviderModelFixture({
   id: "gpt-5",
-  name: "Loopback fixture",
   provider: "openai",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  contextWindow: 200_000,
-  maxTokens: 1024,
 });
 const usage = {
   input_tokens: 500,
@@ -107,15 +103,6 @@ describe("managed provider response capture", () => {
           },
           async (baseUrl) => {
             const localModel = { ...model, baseUrl: `${baseUrl}/v1` };
-            const response = await buildGuardedModelFetch(localModel, 20_000)(
-              `${baseUrl}/v1/responses`,
-              {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ model: model.id, stream: true, input: "fixture" }),
-                signal: controller.signal,
-              },
-            );
             try {
               const request = {
                 model: model.id,
@@ -126,7 +113,7 @@ describe("managed provider response capture", () => {
                 client: new OpenAI({
                   apiKey: "fixture-key",
                   baseURL: localModel.baseUrl,
-                  fetch: async () => response,
+                  fetch: buildGuardedModelFetch(localModel, 20_000),
                 }),
                 request,
                 buildFullHistoryRequest: () => request,
@@ -155,9 +142,8 @@ describe("managed provider response capture", () => {
               });
               if (mode === "partial-idle") {
                 await readCapturedResponse();
-                caller.abort(cancelReason);
-                controller.abort(cancelReason);
-              } else if (mode === "cancel") {
+              }
+              if (mode === "cancel" || mode === "partial-idle") {
                 caller.abort(cancelReason);
                 controller.abort(cancelReason);
               } else if (mode === "error") {
@@ -214,7 +200,6 @@ describe("managed provider response capture", () => {
               }
             } finally {
               controller.abort();
-              await response.body?.cancel().catch(() => undefined);
               await finalizeDebugProxyCaptureAsync();
             }
           },
