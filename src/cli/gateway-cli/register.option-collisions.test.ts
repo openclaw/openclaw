@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerGatewayCli } from "./register.js";
+import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   callGatewayCli: vi.fn(
@@ -140,12 +141,11 @@ vi.mock("./discover.js", () => ({
 }));
 
 function expectCliError(message: unknown) {
-  expect(callGatewayCli).not.toHaveBeenCalled();
+  expectCallCount(0, callGatewayCli, defaultRuntime.error);
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
     ok: false,
     error: { type: "cli_error", message },
   });
-  expect(defaultRuntime.error).not.toHaveBeenCalled();
   expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
 }
 
@@ -314,8 +314,7 @@ describe("gateway register option collisions", () => {
       undefined,
       { defaultTimeoutMs: 10_000, sharedStateMode: "read-only" },
     );
-    expect(loadGatewayHealthModule).not.toHaveBeenCalled();
-    expect(loadHealthStyleModule).not.toHaveBeenCalled();
+    expectCallCount(0, loadGatewayHealthModule, loadHealthStyleModule);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true });
 
     const textProgram = new Command();
@@ -323,8 +322,7 @@ describe("gateway register option collisions", () => {
     registerFreshGatewayCli(textProgram);
     await textProgram.parseAsync(["node", "openclaw", "gateway", "health"]);
 
-    expect(loadGatewayHealthModule).toHaveBeenCalledOnce();
-    expect(loadHealthStyleModule).toHaveBeenCalledOnce();
+    expectCallCount(1, loadGatewayHealthModule, loadHealthStyleModule);
     expect(defaultRuntime.log).toHaveBeenCalledWith("Gateway Health");
   });
 });

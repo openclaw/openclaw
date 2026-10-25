@@ -426,9 +426,8 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             await exited;
             helper.release();
             await helper.wait();
-            expect(waitUpdateHelpers).toHaveBeenCalledOnce();
+            expectCallCount(1, waitUpdateHelpers, runtime.exit);
             expect(restartProcess).not.toHaveBeenCalled();
-            expect(runtime.exit).toHaveBeenCalledOnce();
           }
         },
         createCloseMock().mockImplementation(async () => closing.resolve("closed")),

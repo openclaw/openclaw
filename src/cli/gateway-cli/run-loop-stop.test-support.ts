@@ -73,8 +73,7 @@ export function registerHostedUpdateStopTests(f: UpdateRespawnFixtures) {
         disposed.resolve();
         await expect(withTimeout(exited, 4_000)).resolves.toBe(0);
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
-        expect(close).toHaveBeenCalledOnce();
-        expect(start).toHaveBeenCalledOnce();
+        expectCallCount(1, close, start);
         expect(f.respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
       } finally {
         joined.resolve(true);
@@ -332,9 +331,8 @@ export function registerForegroundUpdateStopTests({
         await setImmediate();
         await setImmediate();
         expect(consumeIntent).toHaveBeenCalledTimes(reads + 1);
-        expect(rollback).not.toHaveBeenCalled();
+        expectCallCount(0, rollback, close, runtime.exit);
         expect(admissionClosed()).toBe(true);
-        expectCallCount(0, close, runtime.exit);
         expectCallCount(1, settle, captureStop);
         joined.resolve(true);
         await expect(withTimeout(exited, 4000)).resolves.toBe(0);
@@ -496,9 +494,8 @@ export function registerForegroundUpdateStopTests({
         }
         stop();
         stop();
-        expect(runtime.exit).not.toHaveBeenCalled();
+        expectCallCount(0, runtime.exit, cancelUpdate);
         expect(consumeIntent).toHaveBeenCalledTimes(consumedIntents);
-        expect(cancelUpdate).not.toHaveBeenCalled();
         if (stoppingUpdater) {
           expect(respawnUpdate).not.toHaveBeenCalled();
           updater.resolve({ respawn: phase !== "unsafe-updater" });

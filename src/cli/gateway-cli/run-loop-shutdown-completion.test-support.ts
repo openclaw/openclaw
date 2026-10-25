@@ -355,13 +355,11 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       f.flushLogger.mockRejectedValueOnce(new Error("shutdown cleanup failed"));
       captureSignal("SIGUSR2")();
       await vi.advanceTimersByTimeAsync(0);
-      expect(close).toHaveBeenCalledOnce();
+      expectCallCount(1, close, f.armShutdownHardExitWatchdog);
       expect(f.gatewayLog.error).toHaveBeenCalledWith(
         "gateway lifecycle completion failed: shutdown cleanup failed",
       );
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(f.armShutdownHardExitWatchdog).toHaveBeenCalledOnce();
-      expect(f.cancelShutdownHardExitWatchdog).not.toHaveBeenCalled();
+      expectCallCount(0, runtime.exit, f.cancelShutdownHardExitWatchdog);
       await vi.advanceTimersByTimeAsync(10_000);
       await expect(exited).resolves.toBe(1);
     }, true);
