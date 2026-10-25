@@ -51,6 +51,12 @@ function sessionRows(rows: Array<[string, string, number]>, model?: string) {
   }));
 }
 
+function mockStores(...stores: ReturnType<typeof sessionRows>[]) {
+  for (const rows of stores) {
+    listSessionEntriesMock.mockReturnValueOnce(rows);
+  }
+}
+
 function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {
   return {
     agents: {
@@ -89,13 +95,10 @@ describe("sessionsCommand default store agent selection", () => {
   it("lists each SQLite owner when --all-agents resolves to a shared store path", async () => {
     loadConfigMock.mockImplementation(() => createSessionsConfig("/tmp/shared-sessions.json"));
     listSessionEntriesMock.mockReset();
-    listSessionEntriesMock
-      .mockReturnValueOnce(
-        sessionRows([["agent:main:room", "s1", Date.now() - 60_000]], "test:opus"),
-      )
-      .mockReturnValueOnce(
-        sessionRows([["agent:voice:room", "s2", Date.now() - 30_000]], "test:opus"),
-      );
+    mockStores(
+      sessionRows([["agent:main:room", "s1", Date.now() - 60_000]], "test:opus"),
+      sessionRows([["agent:voice:room", "s2", Date.now() - 30_000]], "test:opus"),
+    );
 
     await sessionsCommand({ allAgents: true, json: true }, runtime);
 
@@ -113,19 +116,16 @@ describe("sessionsCommand default store agent selection", () => {
 
   it("applies a global active limit while preserving store order for tied timestamps", async () => {
     const now = Date.now();
-    listSessionEntriesMock
-      .mockReturnValueOnce(
-        sessionRows([
-          ["agent:main:tie", "main-tie", now - 60_000],
-          ["agent:main:old", "main-old", now - 180_000],
-        ]),
-      )
-      .mockReturnValueOnce(
-        sessionRows([
-          ["agent:voice:tie", "voice-tie", now - 60_000],
-          ["agent:voice:newest", "voice-newest", now - 30_000],
-        ]),
-      );
+    mockStores(
+      sessionRows([
+        ["agent:main:tie", "main-tie", now - 60_000],
+        ["agent:main:old", "main-old", now - 180_000],
+      ]),
+      sessionRows([
+        ["agent:voice:tie", "voice-tie", now - 60_000],
+        ["agent:voice:newest", "voice-newest", now - 30_000],
+      ]),
+    );
 
     await sessionsCommand({ allAgents: true, json: true, active: "2", limit: 2 }, runtime);
 
@@ -168,9 +168,7 @@ describe("sessionsCommand default store agent selection", () => {
 
   it("uses all configured agent stores with --all-agents", async () => {
     listSessionEntriesMock.mockReset();
-    listSessionEntriesMock
-      .mockReturnValueOnce(sessionRows([["main_row", "s1", Date.now() - 60_000]], "test:opus"))
-      .mockReturnValueOnce([]);
+    mockStores(sessionRows([["main_row", "s1", Date.now() - 60_000]], "test:opus"), []);
 
     await sessionsCommand({ allAgents: true }, runtime);
 

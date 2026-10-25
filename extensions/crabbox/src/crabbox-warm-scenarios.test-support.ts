@@ -1,4 +1,3 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   resetPluginStateStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -75,18 +74,7 @@ export const captureOperation = (
   ...overrides,
 });
 
-export function pause() {
-  const entered = createDeferred<void>(),
-    released = createDeferred<void>();
-  return {
-    entered: entered.promise,
-    release: () => released.resolve(),
-    async wait(this: void) {
-      entered.resolve();
-      await released.promise;
-    },
-  };
-}
+export { createAsyncGate as pause } from "../../test-support/async-gate.test-support.js";
 
 export const warmStore = <T = WarmProfileRecord>(env?: NodeJS.ProcessEnv) =>
   createPluginStateSyncKeyedStoreForTests<T>("crabbox", {

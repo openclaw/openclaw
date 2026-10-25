@@ -2,6 +2,7 @@ import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   beamTestNow,
+  beamTestSessions as sessions,
   beamMirrorTestFixture,
   beamTestHandler,
   createBeamTestCatalog,
@@ -16,8 +17,6 @@ import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS, type BeamUpload } from "./types.j
 let fixture: ReturnType<typeof beamMirrorTestFixture>;
 let clock: number;
 let activeSessions: BeamTestSession[];
-const sessions = (ids: string[], recencyAt: number) =>
-  ids.map((threadId) => ({ threadId, recencyAt }));
 beforeEach(() => {
   fixture = beamMirrorTestFixture();
   clock = beamTestNow;

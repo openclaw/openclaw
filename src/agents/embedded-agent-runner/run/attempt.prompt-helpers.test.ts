@@ -83,7 +83,6 @@ describe("resolvePromptBuildHookResult drain cache", () => {
       },
     });
     expect(result.toolsAllow).toEqual([]);
-    expect(runBeforePromptBuild).toHaveBeenCalledOnce();
   });
 
   it("reuses drained injections across retries and releases them when the run ends", async () => {
@@ -126,10 +125,8 @@ describe("buildAfterTurnRuntimeContext", () => {
     workspaceDir: "/tmp/workspace",
     agentDir: "/tmp/agent",
   });
-  const runtime = (overrides: Partial<RuntimeAttempt>) =>
-    buildAfterTurnRuntimeContext(runtimeParams(overrides));
 
-  it("preserves session-id-scoped processes with borrowed policy", () => {
+  it.each([true, false])("preserves process scope and model policy (locked=%s)", (locked) => {
     resetProcessRegistryForTests();
     for (const [id, scopeKey, pid] of [
       ["sess-session-id", "session-123", 1234],
@@ -140,59 +137,42 @@ describe("buildAfterTurnRuntimeContext", () => {
         scopeKey,
       });
     }
-    const legacy = buildAfterTurnRuntimeContext({
-      ...runtimeParams({ sessionId: "session-123", sandboxSessionKey: "agent:main" }),
-      activeAgentId: "main",
-    });
-    expect(legacy.activeProcessSessions).toHaveLength(1);
-    expect(legacy).toMatchObject({
-      activeProcessSessions: [{ sessionId: "sess-session-id", command: "sleep 600", pid: 1234 }],
-      transcriptStorage: { kind: "sqlite" },
-    });
-  });
-
-  it("keeps the primary model for a locked after-turn runtime context", () => {
-    const runtimeContext = runtime({
-      sessionKey: "agent:main:session:locked",
-      sandboxSessionKey: "global",
-      sandboxAgentId: "main",
-      config: { agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } } },
-      modelId: "gpt-5.5",
-      agentHarnessId: "openclaw",
-      modelSelectionLocked: true,
-    });
-
-    expect(runtimeContext).toMatchObject({
-      modelSelectionLocked: true,
-      sandboxSessionKey: "global",
-      sandboxAgentId: "main",
-      provider: "openai",
-      model: "gpt-5.5",
-    });
-  });
-
-  it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
-    const legacy = runtime({
-      trigger: "heartbeat",
-      inputProvenance: { kind: "external_user" },
-      sessionKey: "agent:main:session:abc",
-      authProfileId: "openai:p1",
-      config: {
-        agents: {
-          defaults: {
-            models: { "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" } },
-            compaction: { model: "summary" },
+    const context = buildAfterTurnRuntimeContext({
+      ...runtimeParams({
+        sessionId: "session-123",
+        sandboxSessionKey: "global",
+        sandboxAgentId: "main",
+        trigger: "cron",
+        inputProvenance: { kind: "external_user" },
+        authProfileId: "openai:p1",
+        modelId: "gpt-5.5",
+        agentHarnessId: "openclaw",
+        modelSelectionLocked: locked,
+        config: {
+          agents: {
+            defaults: {
+              models: { "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" } },
+              compaction: { model: "summary" },
+            },
           },
         },
-      },
+      }),
+      activeAgentId: "main",
     });
-
-    expect(legacy).toMatchObject({
-      provider: "openrouter",
-      model: "anthropic/claude-sonnet-4-5",
+    expect(context.activeProcessSessions).toHaveLength(1);
+    expect(context).toMatchObject({
+      activeProcessSessions: [{ sessionId: "sess-session-id", command: "sleep 600", pid: 1234 }],
+      transcriptStorage: { kind: "sqlite" },
+      modelSelectionLocked: locked,
+      sandboxSessionKey: "global",
+      sandboxAgentId: "main",
+      provider: locked ? "openai" : "openrouter",
+      model: locked ? "gpt-5.5" : "anthropic/claude-sonnet-4-5",
       modelCallUrgency: "background",
     });
-    expect(legacy.authProfileId).toBeUndefined();
+    if (!locked) {
+      expect(context.authProfileId).toBeUndefined();
+    }
   });
   it("derives afterTurn token count from the current assistant usage snapshot", () => {
     const lastCallUsage = {

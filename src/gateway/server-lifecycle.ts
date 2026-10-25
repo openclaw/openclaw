@@ -68,7 +68,6 @@ export async function prepareGatewayLifecycle(params: {
   const sandboxRegistry = prepareSandboxRegistryClose();
   const talkClose = prepareTalkConnectionClose(runtime.clients, log);
   const {
-    minimalTestGateway,
     transportBridge,
     sessionMessageSubscribers,
     isConnectionActive,
@@ -87,6 +86,7 @@ export async function prepareGatewayLifecycle(params: {
     runtimeStateRef,
     gatewayInstanceRuntimeRef,
     startupState,
+    unavailableGatewayMethods,
     readinessEventLoopHealth,
     browserAuthRateLimiter,
     chatRunState,
@@ -248,10 +248,20 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.pluginServices = services;
     },
   });
-  const unavailableGatewayMethods = new Set<string>(
-    minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
-  );
   // Kernel methods are the only writers for readiness and advertised-method state.
+  let readyAnnounced = false;
+  const announceReady = () => {
+    if (
+      !readyAnnounced &&
+      !unavailableGatewayMethods.has("chat.send") &&
+      startupState.sidecarsReady &&
+      runtime.getReadiness().ready
+    ) {
+      readyAnnounced = true;
+      runtime.startupTrace.mark("ready");
+      log.info("gateway ready");
+    }
+  };
   const kernel = {
     pluginRuntimeGeneration,
     pluginMetadata: params.pluginMetadata,
@@ -267,7 +277,13 @@ export async function prepareGatewayLifecycle(params: {
           unavailableGatewayMethods.delete(method);
         }
       }
+      if (!options?.keepChatSendUnavailable) {
+        runtime.inputRecovery.releaseInitial();
+      }
+      announceReady();
     },
+    trackInputRecovery: (progress: Parameters<typeof runtime.inputRecovery.track>[0]) =>
+      runtime.inputRecovery.track(progress, announceReady),
     publishMethodSurface: (methods: readonly string[]) => {
       runtimeState.gatewayMethods.splice(0, runtimeState.gatewayMethods.length, ...methods);
     },
@@ -282,10 +298,10 @@ export async function prepareGatewayLifecycle(params: {
       return previous;
     },
     setScheduledServiceHandles: (handles: {
-      heartbeatRunner: typeof runtimeState.heartbeatRunner;
+      stopScheduledServices: typeof runtimeState.stopScheduledServices;
       stopDeliveryRecovery: typeof runtimeState.stopDeliveryRecovery;
     }) => {
-      runtimeState.heartbeatRunner = handles.heartbeatRunner;
+      runtimeState.stopScheduledServices = handles.stopScheduledServices;
       runtimeState.stopDeliveryRecovery = handles.stopDeliveryRecovery;
     },
     setPostAttachHandles: (handles: {
@@ -302,7 +318,6 @@ export async function prepareGatewayLifecycle(params: {
     getReloadState: () => ({
       hooksConfig: runtimeState.hooksConfig,
       hookClientIpConfig: runtimeState.hookClientIpConfig,
-      heartbeatRunner: runtimeState.heartbeatRunner,
       cronState: runtimeState.cronState,
     }),
     setReloadHookState: (next: {
@@ -312,9 +327,6 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.hooksConfig = next.hooksConfig;
       publishHooksTokenEnvKey(next.hooksConfig);
       runtimeState.hookClientIpConfig = next.hookClientIpConfig;
-    },
-    setHeartbeatRunner: (next: typeof runtimeState.heartbeatRunner) => {
-      runtimeState.heartbeatRunner = next;
     },
     // Stable callbacks keep reload transactions out of retained plugin contexts.
     getCronService: () => runtimeState.cronState.cron,
@@ -489,6 +501,7 @@ export async function prepareGatewayLifecycle(params: {
         getEventLoopHealth: readinessEventLoopHealth.snapshot,
         getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
         getSessionRowProjection: runtime.getSessionRowProjection,
+        getCronState: () => runtimeState.cronState,
       }),
     );
   };
@@ -587,7 +600,7 @@ export async function prepareGatewayLifecycle(params: {
               pluginServices: runtimeState.pluginServices,
               cron: runtimeState.cronState.cron,
               stopCronMaintenance: shutdownRuntime.stopCronMaintenance,
-              heartbeatRunner: runtimeState.heartbeatRunner,
+              stopScheduledServices: runtimeState.stopScheduledServices,
               maintenance: runtimeState.maintenance,
               stopMediaCleanup: stopMediaCleanupForClose,
               agentUnsub: runtimeState.agentUnsub,

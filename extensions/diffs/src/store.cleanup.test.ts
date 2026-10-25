@@ -16,6 +16,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   await fixture.cleanup();
 });
 
@@ -34,7 +35,14 @@ async function file(id: string, old = false) {
 }
 
 it.each(["expired", "orphan"] as const)("cleans 129 %s files; keeps live files", async (kind) => {
+  vi.useFakeTimers({ toFake: ["Date"] });
   const live = "f".repeat(20);
+  const young = "e".repeat(20);
+  const boundary = "d".repeat(20);
+  await file(young);
+  const boundaryDir = await file(boundary);
+  const boundaryTime = new Date(Date.now() - 24 * 60 * 60 * 1_000);
+  await fs.utimes(boundaryDir, boundaryTime, boundaryTime);
   await fixture.blobStore.register(live, new Uint8Array(), metadata);
   await file(live, true);
   for (let index = 0; index < 129; index += 1) {
@@ -46,8 +54,12 @@ it.each(["expired", "orphan"] as const)("cleans 129 %s files; keeps live files",
     }
   }
 
+  const lookup = vi.spyOn(fixture.blobStore, "lookup");
   await fixture.store.cleanupExpired();
-  expect(await fs.readdir(fixture.rootDir)).toEqual([live]);
+  expect((await fs.readdir(fixture.rootDir)).toSorted()).toEqual([boundary, young, live]);
+  expect(lookup.mock.calls).toHaveLength(kind === "orphan" ? 130 : 1);
+  expect(lookup.mock.calls.map(([key]) => key)).not.toContain(young);
+  expect(lookup.mock.calls.map(([key]) => key)).not.toContain(boundary);
   expect(await readPreview(live)).toBe(live);
   expect((await fixture.blobStore.entries()).map((entry) => entry.key)).toEqual([live]);
 });
@@ -71,11 +83,11 @@ it("scheduled cleanup joins accepted filesystem work before reporting a sibling 
     return await remove(target, options);
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  const store = new DiffArtifactStore({ ...fixture, logger });
+  const scheduled = new DiffArtifactStore({ ...fixture, logger });
   const settled = vi.fn<() => void>();
-  store.scheduleCleanup();
-  const stopping = store.stopCleanup().then(settled);
-  const joined = store
+  scheduled.scheduleCleanup();
+  const stopping = scheduled.stopCleanup().then(settled);
+  const joined = scheduled
     .cleanupExpired()
     .catch((error: unknown) => error)
     .finally(settled);

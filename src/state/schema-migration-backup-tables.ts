@@ -26,6 +26,14 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     ],
     29: ["session_nodes", "session_reactions", "sqlite_stat1", "sqlite_stat4"],
     31: ["memory_index_sources", "memory_index_chunks"],
+    // PostgreSQL-only function replacement; SQLite advances metadata only.
+    32: [],
+    // PostgreSQL-only derived vector projection; SQLite advances metadata only.
+    33: [],
+    // PostgreSQL-only index ordering; SQLite advances metadata only.
+    34: [],
+    // PostgreSQL-only partial-index ordering; SQLite advances metadata only.
+    35: [],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -43,5 +51,15 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     ],
     // Only shared-state version and content metadata change.
     30: [],
+    31: [
+      "local_workspace_projections",
+      "local_workspace_manifest_nodes",
+      "sqlite_stat1",
+      "sqlite_stat4",
+    ],
+    // PostgreSQL-only index ordering; SQLite advances metadata only.
+    32: [],
+    // PostgreSQL-only partial-index ordering; SQLite advances metadata only.
+    33: [],
   },
 };

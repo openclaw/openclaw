@@ -24,10 +24,8 @@ import { ComposerDictationSendAction } from "./components/chat-composer-controls
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  persistChatComposerState,
-} from "./composer-persistence.ts";
+import { persistChatComposerState } from "./composer-draft-storage.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -183,13 +181,17 @@ it("publishes a restored persisted draft and queue after adopting their revision
   state.connected = true;
   expect(persistChatComposerState(state, state.sessionKey, { draft: "Saved draft" })).toBe(true);
   expect(
-    admitStoredChatComposerQueueItem(state, captureChatOutboxAdmission(state, state.sessionKey), {
-      id: "saved-input",
-      text: "Saved queued input",
-      createdAt: 1,
-      sendState: "held",
-    }),
-  ).toBe(true);
+    admitStoredChatComposerQueueItemResult(
+      state,
+      captureChatOutboxAdmission(state, state.sessionKey),
+      {
+        id: "saved-input",
+        text: "Saved queued input",
+        createdAt: 1,
+        sendState: "held",
+      },
+    ),
+  ).toBe("admitted");
   state.chatQueue = [];
   const queue = mountSolid(() => (
     <output>{state.chatQueue.map((item) => item.text).join(";")}</output>
@@ -208,14 +210,14 @@ it("publishes a restored persisted draft and queue after adopting their revision
   expect(view.textarea()).toBe(textarea);
 });
 
-it("restores the conversation draft when a restored goal edit is cancelled", () => {
+it("restores the conversation draft when a restored goal edit is cancelled", async () => {
   const { state, view } = mountOwnedComposer({
     draft: "Edit this objective",
     goalDraftMode: { action: "edit", goalId: "goal-one", previousDraft: "Conversation draft" },
     onGoalSubmit: vi.fn(async () => false),
   });
+  await waitForSolid(() => expect(view.goal()?.querySelector("button")).toBeTruthy());
   const cancel = view.goal()!.querySelector<HTMLButtonElement>("button")!;
-  expect(cancel).not.toBeNull();
   cancel.click();
   flush();
   expect(state.chatGoalDraftMode).toBeNull();
@@ -231,7 +233,7 @@ it("starts a goal and admits only one same-turn submit", async () => {
   input("/goal start ");
   flush();
   expect(state.chatGoalDraftMode).toEqual({ action: "start" });
-  expect(view.goal()).not.toBeNull();
+  await waitForSolid(() => expect(view.goal()).not.toBeNull());
   expect(view.textarea().value).toBe("");
   input("Keep every literal space  ");
   flush();

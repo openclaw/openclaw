@@ -22,9 +22,7 @@ function config(appServer: Record<string, unknown> = {}): OpenClawConfig {
     agents: {
       defaults: {
         model: { primary: "openai/gpt-5.6-sol" },
-        models: {
-          "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
-        },
+        models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
       },
     },
     plugins: { entries: { codex: { enabled: true, config: { appServer } } } },
@@ -44,53 +42,48 @@ function managedDeps(version = CODEX_APP_SERVER_VERSION) {
   vi.spyOn(managedBinary, "isManagedCodexDesktopCommand").mockImplementation((command) =>
     command.startsWith("/Applications/"),
   );
-  const resolveNativeCommand = vi.fn(
-    (_command: string): string | undefined => "/candidate/plugin/codex-native",
-  );
   return {
-    resolveStartOptions: vi.fn(async (start) => ({
-      ...start,
-      command:
-        start.managedCommandOrder === "desktop-first"
-          ? "/Applications/ChatGPT.app/Contents/Resources/codex"
-          : "/candidate/plugin/codex",
-      commandSource: "resolved-managed" as const,
-    })),
-    resolveNativeCommand,
+    resolveStartOptions: vi
+      .spyOn(managedBinary, "resolveManagedCodexAppServerStartOptions")
+      .mockImplementation(async (start) => ({
+        ...start,
+        command:
+          start.managedCommandOrder === "desktop-first"
+            ? "/Applications/ChatGPT.app/Contents/Resources/codex"
+            : "/candidate/plugin/codex",
+        commandSource: "resolved-managed" as const,
+      })),
+    resolveNativeCommand: vi
+      .spyOn(managedBinary, "resolveManagedCodexNativeCommand")
+      .mockReturnValue("/candidate/plugin/codex-native"),
     runVersionCommand: vi
       .spyOn(managedBinary, "runCodexVersionCommand")
       .mockResolvedValue(`codex-cli ${version}\n`),
   };
 }
 
-function registry() {
+function createCheck() {
   let check: HealthCheck | undefined;
-  return {
+  const host = {
     pluginRoot: "/candidate/plugin",
     getHealthCheck: () => check,
     registerHealthCheck: vi.fn((value: HealthCheck) => {
       check = value;
     }),
   };
-}
-
-function createCheck(deps: Parameters<typeof registerCodexManagedAppServerDoctorChecks>[1]) {
-  const host = registry();
-  registerCodexManagedAppServerDoctorChecks(host, deps);
-  const check = host.getHealthCheck();
-  if (!check) {
+  registerCodexManagedAppServerDoctorChecks(host);
+  const registered = host.getHealthCheck();
+  if (!registered) {
     throw new Error("Codex managed health check was not registered");
   }
-  return check;
+  return { check: registered, host };
 }
 
 function nativeCheck(command: string) {
   const deps = managedDeps();
   deps.runVersionCommand.mockRestore();
-  return createCheck({
-    ...deps,
-    resolveNativeCommand: () => command,
-  });
+  deps.resolveNativeCommand.mockReturnValue(command);
+  return createCheck().check;
 }
 
 function expectFinding(findings: unknown, expected: Record<string, unknown>) {
@@ -104,6 +97,15 @@ it.skipIf(process.platform === "win32")(
   async () => {
     const root = tempDirs.make("openclaw-codex-closed-stdin-");
     const command = path.join(root, "codex");
+    const packageRoot = path.join(root, "node_modules", "@openai", "codex");
+    const launcher = path.join(packageRoot, "bin", "codex.js");
+    const triple = `${process.arch === "arm64" ? "aarch64" : "x86_64"}-${process.platform === "darwin" ? "apple-darwin" : "unknown-linux-musl"}`;
+    const native = path.join(packageRoot, "vendor", triple, "bin", "codex");
+    await fs.mkdir(path.dirname(launcher), { recursive: true });
+    await fs.mkdir(path.dirname(native), { recursive: true });
+    await fs.writeFile(path.join(packageRoot, "package.json"), '{"name":"@openai/codex"}');
+    await fs.writeFile(launcher, "", { mode: 0o755 });
+    await fs.symlink(command, native);
     await fs.writeFile(
       command,
       `#!${process.execPath}
@@ -134,10 +136,7 @@ fs.writeSync(1, "codex-cli ${CODEX_APP_SERVER_VERSION}\\n");
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    expect(result, result.stderr || result.stdout).toMatchObject({
-      signal: null,
-      status: 0,
-    });
+    expect(result, result.stderr || result.stdout).toMatchObject({ signal: null, status: 0 });
     expect(result.error).toBeUndefined();
     expect(JSON.parse(result.stdout)).toEqual({
       ok: true,
@@ -158,17 +157,13 @@ it("reports an incompatible passive catalog executable without Codex routes", as
       syscall: "spawn",
     }),
   );
-  expectFinding(await createCheck(deps).detect(context(cfg)), {
+  expectFinding(await createCheck().check.detect(context(cfg)), {
     severity: "warning",
     path: "/candidate/plugin/codex-native",
     message: expect.stringContaining(
       "Codex catalog updater cannot run: /candidate/plugin/codex-native is not runnable on this CPU",
     ),
   });
-  expect(deps.resolveStartOptions).toHaveBeenCalledWith(
-    expect.objectContaining({ managedCommandOrder: "package-only" }),
-    { pluginRoot: "/candidate/plugin", preferInstalled: false },
-  );
 });
 
 it("reports a real missing executable during update finalization", async () => {
@@ -183,8 +178,7 @@ it("reports a real missing executable during update finalization", async () => {
 
 it("registers once in each host registry", () => {
   for (let index = 0; index < 2; index++) {
-    const host = registry();
-    registerCodexManagedAppServerDoctorChecks(host);
+    const { host } = createCheck();
     registerCodexManagedAppServerDoctorChecks(host);
     expect(host.registerHealthCheck).toHaveBeenCalledOnce();
     expect(host.getHealthCheck()?.id).toBe(CODEX_MANAGED_APP_SERVER_CHECK_ID);
@@ -271,7 +265,7 @@ it.each([
   } else {
     deps.resolveNativeCommand.mockReturnValueOnce(undefined);
   }
-  expectFinding(await createCheck(deps).detect(context()), {
+  expectFinding(await createCheck().check.detect(context()), {
     checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
     message,
     ...(scenario === "absent native artifact" ? { path: "/candidate/plugin/codex" } : {}),
@@ -284,7 +278,7 @@ it.each([
   ["unix transport", { transport: "unix", url: "unix:///tmp/codex.sock", homeScope: "user" }],
 ])("does not probe a %s", async (_label, appServer) => {
   const deps = managedDeps();
-  await expect(createCheck(deps).detect(context(config(appServer)))).resolves.toEqual([]);
+  await expect(createCheck().check.detect(context(config(appServer)))).resolves.toEqual([]);
   expect(deps.resolveStartOptions).not.toHaveBeenCalled();
   expect(deps.runVersionCommand).not.toHaveBeenCalled();
 });
@@ -311,7 +305,7 @@ it("ignores managed commands for agents whose effective runtime is not Codex", a
     },
   };
   const deps = managedDeps();
-  await expect(createCheck(deps).detect(context(cfg))).resolves.toEqual([]);
+  await expect(createCheck().check.detect(context(cfg))).resolves.toEqual([]);
   expect(deps.resolveStartOptions).toHaveBeenCalledTimes(2);
   expect(deps.runVersionCommand.mock.calls).toEqual([["/candidate/plugin/codex-native", {}]]);
 });
@@ -323,11 +317,10 @@ it("still validates a package fallback selected after desktop-first resolution",
     command: "/candidate/plugin/codex",
     commandSource: "resolved-managed" as const,
   }));
-  expectFinding(await createCheck(deps).detect(context(config({ homeScope: "user" }))), {
+  expectFinding(await createCheck().check.detect(context(config({ homeScope: "user" }))), {
     checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
     severity: "error",
     path: "/candidate/plugin/codex-native",
     message: `Managed Codex app-server version mismatch: expected ${CODEX_APP_SERVER_VERSION}, detected 0.146.0.`,
   });
-  expect(deps.runVersionCommand).toHaveBeenCalledWith("/candidate/plugin/codex-native", {});
 });

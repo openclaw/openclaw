@@ -9,6 +9,8 @@ import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-tr
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPostgresPhysicalFactsForPath } from "../infra/database-engine/physical-facts.js";
+import { recordSessionRowSelection } from "../infra/gateway-work-metrics.js";
+import { getMainThreadTaskName } from "../infra/main-thread-stall.js";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import {
   isIncognitoSessionKey,
@@ -227,9 +229,6 @@ export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
     scope,
   } = params;
   const storePaths = resolveSessionRowScopePaths(query, scope);
-  if (!query.key && !storePaths && !query.agentId) {
-    return Array.from(rows.values());
-  }
   const candidates = query.key
     ? byKey.get(`${kind}:${query.key}`)
     : storePaths
@@ -238,7 +237,7 @@ export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
         : new Set(storePaths.flatMap((storePath) => Array.from(byStore.get(storePath) ?? [])))
       : query.agentId
         ? byAgent.get(query.agentId)
-        : undefined;
+        : rows;
   if (!candidates) {
     return [];
   }
@@ -407,11 +406,16 @@ export function createSessionRowEntrySelector(owner: {
   state: () => SessionRowEntrySelection;
 }) {
   const noDirtyRows = new Set<string>();
-  return (query: records.Query = {}, metadataPrepared = false) => {
+  return (
+    query: records.Query = {},
+    metadataPrepared = false,
+    selectionKind?: "running-candidate",
+  ) => {
     if (!owner.isActive()) {
       return [];
     }
-    return owner.runAsOwner(() => {
+    const task = getMainThreadTaskName();
+    const selected = owner.runAsOwner(() => {
       if (!owner.prepare()) {
         throw new Error("Session row topology changed; prepare current facts before reading");
       }
@@ -420,6 +424,23 @@ export function createSessionRowEntrySelector(owner: {
         selectSessionRowEntries(state, query, metadataPrepared ? noDirtyRows : state.dirty),
       );
     });
+    recordSessionRowSelection(
+      selectionKind ??
+        (query.sessionIdOrKey
+          ? "session-id"
+          : query.parentSessionKey
+            ? "parent"
+            : query.key
+              ? "exact"
+              : query.storePath
+                ? "store"
+                : query.agentId
+                  ? "agent"
+                  : "broad"),
+      selected.length,
+      task,
+    );
+    return selected;
   };
 }
 
@@ -434,30 +455,32 @@ function selectSessionRowEntries(
   const parent = query.parentSessionKey;
   let keys: Set<string> | undefined;
   if (parent) {
-    const owner = parseAgentSessionKey(parent)?.agentId;
-    const agents = owner ? [owner] : query.agentId ? [query.agentId] : byAgent.keys();
+    const parentKey = typeof parent === "string" ? parent : parent.key;
     keys = new Set<string>();
-    const sentinel = parent === "global" || parent === "unknown";
-    const references = sentinel
-      ? byParent.keys()
-      : [
-          ...[...agents].map((agentId) =>
-            records.parentReference(cfg, parent, agentId, undefined, params.referenced),
-          ),
-          ...matching({ ...query, key: parent }).map((row) =>
-            records.physical(row.storeTarget.storePath, parent),
-          ),
-        ];
-    for (const ref of references) {
-      // Sentinels retain physical and cross-agent alias links even without a parent row.
-      if (sentinel && ref.slice(ref.indexOf("\0") + 1) !== parent) {
-        continue;
-      }
+    const addReference = (ref: string) => {
       for (const id of byParent.get(ref) ?? []) {
         const row = rows.get(id);
         if (row) {
-          keys.add(row.key);
+          keys!.add(row.key);
         }
+      }
+    };
+    if (parentKey === "global" || parentKey === "unknown") {
+      // Sentinels retain physical and cross-agent alias links even without a parent row.
+      for (const ref of byParent.keys()) {
+        if (ref.slice(ref.indexOf("\0") + 1) === parentKey) {
+          addReference(ref);
+        }
+      }
+    } else if (typeof parent !== "string" && parentKey.startsWith("agent:")) {
+      addReference(records.logicalSessionRowIdentity(parent.agentId, parentKey));
+    } else {
+      const owner = parseAgentSessionKey(parentKey)?.agentId;
+      const agents = owner ? [owner] : query.agentId ? [query.agentId] : byAgent.keys();
+      for (const agentId of agents) {
+        addReference(
+          records.parentReference(cfg, parentKey, agentId, undefined, params.referenced),
+        );
       }
     }
   }

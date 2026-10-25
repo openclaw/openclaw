@@ -624,22 +624,12 @@ describe("Doctor stored auth alias migration", () => {
     await withOpenClawTestState({ label: "alias-partial", layout: "home" }, async (fixture) => {
       const cfg: OpenClawConfig = { plugins: { enabled: false } };
       const invalid = { version: 1, profiles: { "google-gemini-cli:broken": 17 } };
-      runAuthProfileWriteTransaction(
-        undefined,
-        (database) => {
-          writePersistedAuthProfileStoreRaw(
-            {
-              version: 1,
-              profiles: {
-                "claude-cli:work": { type: "api_key", provider: "claude-cli", key: "retained-key" },
-              },
-            },
-            undefined,
-            database,
-          );
+      writeStore(fixture.env, {
+        version: 1,
+        profiles: {
+          "claude-cli:work": { type: "api_key", provider: "claude-cli", key: "retained-key" },
         },
-        { env: fixture.env },
-      );
+      });
       writeStore(fixture.env, invalid, fixture.agentDir("broken"));
       const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
       const result = await maybeRepairLegacyAuthProfileStores({
@@ -759,22 +749,12 @@ describe("Doctor stored auth alias migration", () => {
   it("refuses alias planning when an agent location is not a directory", async () => {
     await withOpenClawTestState({ label: "alias-census", layout: "home" }, async (fixture) => {
       const cfg: OpenClawConfig = { plugins: { enabled: false } };
-      runAuthProfileWriteTransaction(
-        undefined,
-        (database) => {
-          writePersistedAuthProfileStoreRaw(
-            {
-              version: 1,
-              profiles: {
-                "claude-cli:work": { type: "api_key", provider: "claude-cli", key: "retained-key" },
-              },
-            },
-            undefined,
-            database,
-          );
+      writeStore(fixture.env, {
+        version: 1,
+        profiles: {
+          "claude-cli:work": { type: "api_key", provider: "claude-cli", key: "retained-key" },
         },
-        { env: fixture.env },
-      );
+      });
       await fixture.writeText("agents/unavailable/agent", "not an agent directory");
       const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
       expect(profileIdMap.size).toBe(0);
@@ -865,12 +845,7 @@ describe("Doctor stored auth alias migration", () => {
         },
         { env: fixture.env },
       );
-      runAuthProfileWriteTransaction(
-        fixture.agentDir("worker"),
-        (database) =>
-          writePersistedAuthProfileStoreRaw(agent, fixture.agentDir("worker"), database),
-        { env: fixture.env },
-      );
+      writeStore(fixture.env, agent, fixture.agentDir("worker"));
       expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(shared);
       expect(readPersistedAuthProfileStoreRaw(fixture.agentDir("worker"))).toEqual(agent);
 

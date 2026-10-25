@@ -9,8 +9,8 @@ import {
   formatCompletionReloadCommand,
   resolveCompletionCachePath,
 } from "../cli/completion-runtime.js";
+import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
 import {
   checkShellCompletionStatus,
   doctorShellCompletion,
@@ -135,7 +135,7 @@ describe("doctorShellCompletion", () => {
   it("shows the Bash login profile after installing completion without .bashrc", async () => {
     await setupBashHome();
     installCompletionMock.mockResolvedValue(undefined);
-    await doctorShellCompletion(makePrompter(true));
+    await doctorShellCompletion(makePrompter(true, true));
 
     expect(installCompletionMock).toHaveBeenCalledWith("bash", true, "openclaw");
     expectCompletionNote("source ~/.bash_profile");
@@ -175,7 +175,7 @@ describe("doctorShellCompletion", () => {
     const { profilePath } = await setupBashHome();
     const failedPath = path.dirname(profilePath);
     installCompletionMock.mockRejectedValue(wrappedFsError("EPERM", failedPath));
-    await expect(doctorShellCompletion(makePrompter(true))).resolves.not.toThrow();
+    await expect(doctorShellCompletion(makePrompter(true, true))).resolves.not.toThrow();
 
     const command = formatCompletionReloadCommand(
       "bash",
@@ -190,6 +190,6 @@ describe("doctorShellCompletion", () => {
     const { profilePath } = await setupBashHome(true);
     installCompletionMock.mockRejectedValue(wrappedFsError("ENOSPC", profilePath));
 
-    await expect(doctorShellCompletion(makePrompter(true))).rejects.toThrow("ENOSPC");
+    await expect(doctorShellCompletion(makePrompter(true, true))).rejects.toThrow("ENOSPC");
   });
 });

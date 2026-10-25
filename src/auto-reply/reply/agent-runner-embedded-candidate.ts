@@ -162,6 +162,14 @@ export async function runEmbeddedFallbackCandidate(
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         assistantErrorTranscript: params.assistantErrorTranscript,
         authProfileFailurePolicy: params.authProfileFailurePolicy,
+        ...(params.cyberAccessProgram
+          ? {
+              cyberAccessProgram: params.cyberAccessProgram,
+              ...(params.authProfileId
+                ? { authProfileId: params.authProfileId, authProfileIdSource: "user" as const }
+                : {}),
+            }
+          : {}),
         onAutoCompactionSucceeded: (count) => {
           attemptCompactionCount = Math.max(attemptCompactionCount, count);
         },
@@ -172,8 +180,6 @@ export async function runEmbeddedFallbackCandidate(
         toolProgressDetail: turn.toolProgressDetail,
         // Marks reply-owned policy; final attempt preparation binds its concrete route.
         toolAuthorityFingerprint: turn.replyOperation?.toolAuthorityFingerprint,
-        enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
-        forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         deferTerminalLifecycle: true,
         onAttemptStart: lifecycleBackstop.beginAttempt,
         onAttemptTerminalReplaced: lifecycleBackstop.replaceAttemptTerminal,

@@ -6,6 +6,9 @@ const { runtimeFactoryMocks } = getWorkerPlacementStartupMocks();
 import { getRuntimeConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
+import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
+import { supportsSpawnBrokerCommandTransport } from "../process/spawn-broker/pipe.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -17,6 +20,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { runPublicationCommand } from "./github-publication-git-transport.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
   createIdleDiskSpace,
@@ -164,13 +168,23 @@ it("retires changed placements after real placement and session writes without i
 it("finishes background reconciliation after the notifying session request closes", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const time = createGatewaySchedulerClock();
+    const broker = supportsSpawnBrokerCommandTransport() ? createSpawnBrokerHost() : undefined;
+    await broker?.ready();
     const placements = createWorkerSessionPlacementStore({
       database: openOpenClawStateDatabase(),
     });
-    let completed = createDeferredCore<boolean>();
+    const completed = createDeferredCore<boolean>();
+    const parents: string[] = [];
     const reconcileActive = vi.fn(async () => {
       try {
         await placements.readRecoveryCandidates();
+        const result = await runPublicationCommand([
+          process.execPath,
+          "-e",
+          "process.stdout.write(String(process.ppid))",
+        ]);
+        expect(result.code).toBe(0);
+        parents.push(result.stdout.toString());
         completed.resolve(true);
       } catch (error) {
         completed.resolve(false);
@@ -178,19 +192,22 @@ it("finishes background reconciliation after the notifying session request close
       }
     });
     const warn = vi.fn();
-    const sidecar = await startRuntime(time, reconcileActive, warn);
+    const sidecar = await runWithSpawnBroker(broker, () =>
+      startRuntime(time, reconcileActive, warn),
+    );
     try {
-      await time.advanceBy(60_000);
-      reconcileActive.mockClear();
-      completed = createDeferredCore<boolean>();
       const request = new AsyncWorkScope();
-      request.run(() => emitDeletion(Symbol("session-database")));
+      runWithSpawnBroker(undefined, () =>
+        request.run(() => emitDeletion(Symbol("session-database"))),
+      );
       await request.drain();
       expect(await completed.promise).toBe(true);
       expect(reconcileActive).toHaveBeenCalledOnce();
+      expect(parents).toEqual([String(broker?.pid ?? process.pid)]);
       expect(warn).not.toHaveBeenCalled();
     } finally {
       await sidecar?.stop();
+      await broker?.close();
     }
   }));
 

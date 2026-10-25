@@ -8,7 +8,7 @@ export default definePluginEntry({
   configSchema: emptyPluginConfigSchema(),
   register(api) {
     api.registerTool(
-      { contextVersion: 2, create: (context) => createAutoReviewTool(api, context) },
+      { contextVersion: 2, create: (context) => createAutoReviewTool(context) },
       {
         name: "autoreview",
         optional: true,

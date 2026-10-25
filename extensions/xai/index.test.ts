@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi, ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
+import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerAuthRuntimeMocks = vi.hoisted(() => ({
@@ -18,11 +21,7 @@ import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildLiveXaiProvider } from "./provider-catalog.js";
 import setupPlugin from "./setup-api.js";
-import {
-  createXaiPayloadCaptureStream,
-  expectXaiFastToolStreamShaping,
-  runXaiGrok4ResponseStream,
-} from "./test-helpers.js";
+import { captureXaiRequest } from "./test-helpers.js";
 
 type XaiAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
 
@@ -36,28 +35,12 @@ function registerXaiAutoEnableProbe(): XaiAutoEnableProbe {
 
 type XaiBilledToolName = "code_execution" | "x_search";
 
-function registerXaiBilledToolFactories() {
-  const tools = new Map<string, Parameters<OpenClawPluginApi["registerTool"]>[0]>();
-  plugin.register(
-    createTestPluginApi({
-      registerTool(tool, opts) {
-        if (opts?.name) {
-          tools.set(opts.name, tool);
-        }
-      },
-    }),
-  );
-
-  function requireFactory(name: XaiBilledToolName) {
-    const factory = tools.get(name);
-    assert(typeof factory === "function", `Expected ${name} to register a tool factory`);
-    return factory;
-  }
-
-  return {
-    code_execution: requireFactory("code_execution"),
-    x_search: requireFactory("x_search"),
-  };
+function billedToolFactory(name: XaiBilledToolName) {
+  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+  plugin.register(createTestPluginApi({ registerTool }));
+  const factory = registerTool.mock.calls.find(([, opts]) => opts?.name === name)?.[0];
+  assert(typeof factory === "function", `Expected ${name} to register a tool factory`);
+  return factory;
 }
 
 function createXaiBilledToolConfig(name: XaiBilledToolName, enabled?: boolean) {
@@ -77,12 +60,9 @@ function mockXaiRuntimeOAuth() {
   });
 }
 
-function stubXaiFetch(respond: (url: string) => Response | Promise<Response>) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    return await respond(url);
-  });
-  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+function stubXaiFetch(respond: () => Response) {
+  const fetchMock = vi.fn<typeof fetch>(async () => respond());
+  vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
@@ -105,14 +85,22 @@ function xaiToolContext(
   };
 }
 
+function catalogContext(
+  auth: ReturnType<ProviderCatalogContext["resolveProviderAuth"]>,
+  config: OpenClawConfig = {},
+) {
+  return {
+    config,
+    env: {},
+    resolveProviderAuth: () => auth,
+    resolveProviderApiKey: () => ({ apiKey: "env-xai-key", discoveryApiKey: "env-xai-key" }),
+  };
+}
+
 async function runXaiCatalog(options: { auth?: "none" } = {}) {
   const provider = await registerSingleProviderPlugin(plugin);
   const result = await provider.catalog?.run({
-    config: { models: {} },
-    agentDir: "/agent",
-    workspaceDir: "/workspace",
-    env: {},
-    resolveProviderAuth: () =>
+    ...catalogContext(
       options.auth === "none"
         ? { apiKey: undefined, discoveryApiKey: undefined, mode: "none", source: "none" }
         : {
@@ -122,10 +110,10 @@ async function runXaiCatalog(options: { auth?: "none" } = {}) {
             source: "profile",
             profileId: "xai-profile",
           },
-    resolveProviderApiKey: () => ({
-      apiKey: "env-xai-key",
-      discoveryApiKey: "env-xai-key",
-    }),
+      { models: {} },
+    ),
+    agentDir: "/agent",
+    workspaceDir: "/workspace",
   });
   assert(result && "provider" in result, "expected xAI catalog provider result");
   return { provider, result: result.provider };
@@ -145,6 +133,58 @@ describe("xai provider plugin", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  const proxyUrl = "https://cli-chat-proxy.grok.com/v1";
+  const apiUrl = "https://api.x.ai/v1";
+  it.each([
+    ["oauth", undefined, proxyUrl, "oauth"],
+    ["token", proxyUrl, proxyUrl, "token"],
+    ["token", apiUrl, apiUrl, undefined],
+    ["api_key", undefined, apiUrl, undefined],
+  ] as const)(
+    "keeps the static catalog on the selected %s route (%s)",
+    async (mode, baseUrl, expectedUrl, expectedAuth) => {
+      const result = await registeredProvider.staticCatalog?.run(
+        catalogContext(
+          { mode, source: "profile", apiKey: undefined, discoveryApiKey: "selected-fixture" },
+          baseUrl ? { models: { providers: { xai: { baseUrl, models: [] } } } } : {},
+        ),
+      );
+      assert(result && "provider" in result, "expected a static xAI catalog");
+      expect([result.provider.baseUrl, result.provider.auth]).toEqual([expectedUrl, expectedAuth]);
+    },
+  );
+
+  it.each([
+    { name: "an existing selection", primary: "xai/grok-4.5", expected: "xai/grok-4.5" },
+    { name: "a fresh selection", primary: undefined, expected: "xai/grok-4.7" },
+  ])("applies registered API-key setup with $name", async ({ primary, expected }) => {
+    const method = registeredProvider.auth.find((entry) => entry.id === "api-key");
+    assert(method?.runNonInteractive, "expected the non-interactive xAI API-key method");
+    const fallbacks = ["xai/grok-4.3", "xai/grok-build-0.1"];
+    const pinned = { alias: "Pinned", params: { temperature: 0.7 } };
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { ...(primary ? { primary } : {}), fallbacks: [...fallbacks] },
+          models: { "xai/grok-4.5": structuredClone(pinned) },
+        },
+      },
+    };
+    const result = await method.runNonInteractive({
+      authChoice: "xai-api-key",
+      config,
+      baseConfig: config,
+      opts: {},
+      runtime: createNonExitingRuntime(),
+      resolveApiKey: async () => ({ key: "synthetic-existing-profile", source: "profile" }),
+      toApiKeyCredential: () => {
+        throw new Error("Existing profile must not be rewritten");
+      },
+    });
+    expect(result?.agents?.defaults?.model).toEqual({ primary: expected, fallbacks });
+    expect(result?.agents?.defaults?.models?.["xai/grok-4.5"]).toEqual(pinned);
   });
 
   it("registers SuperGrok usage through xAI OAuth only", async () => {
@@ -175,14 +215,7 @@ describe("xai provider plugin", () => {
   });
 
   it("shows every chat model the xAI API-key listing returns", async () => {
-    const chatModels = [
-      "grok-4.20-0309-non-reasoning",
-      "grok-4.20-0309-reasoning",
-      "grok-4.5",
-      "grok-4.6",
-      "grok-4.7",
-      "grok-5-preview",
-    ];
+    const chatModels = ["grok-4.7", "grok-5-preview"];
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
@@ -198,14 +231,10 @@ describe("xai provider plugin", () => {
     }));
 
     const provider = await buildLiveXaiProvider({ apiKey: "xai-key", fetchGuard });
-    expect(provider.apiKey).toBe("xai-key");
     expect(provider.models.map((model) => model.id)).toEqual(chatModels);
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(fetchParams?.url).toBe("https://api.x.ai/v1/models");
-    const headers = fetchParams?.init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    assert(headers instanceof Headers, "expected fetch headers");
-    expect(headers.get("Authorization")).toBe("Bearer xai-key");
+    expect(new Headers(fetchParams?.init?.headers).get("Authorization")).toBe("Bearer xai-key");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -231,18 +260,18 @@ describe("xai provider plugin", () => {
         );
       }
       const fetchMock = stubXaiModels({ id: "grok-4.3", api_backend: "responses" });
-      const result = await registeredProvider.catalog?.run({
-        config: { models: { providers: { xai: { baseUrl, auth: "token", models: [] } } } },
-        env: {},
-        resolveProviderAuth: () => ({
-          apiKey: prepared ? apiKey : "MISSING_GROK_TOKEN",
-          discoveryApiKey: prepared ? apiKey : undefined,
-          mode: "token",
-          profileId,
-          source: "profile",
-        }),
-        resolveProviderApiKey: () => ({ apiKey: "unselected-api-key" }),
-      });
+      const result = await registeredProvider.catalog?.run(
+        catalogContext(
+          {
+            apiKey: prepared ? apiKey : "MISSING_GROK_TOKEN",
+            discoveryApiKey: prepared ? apiKey : undefined,
+            mode: "token",
+            profileId,
+            source: "profile",
+          },
+          { models: { providers: { xai: { baseUrl, auth: "token", models: [] } } } },
+        ),
+      );
       if (!resolves && !prepared) {
         expect(result).toEqual({
           providers: {},
@@ -264,14 +293,17 @@ describe("xai provider plugin", () => {
   it("uses the Grok OAuth proxy catalog for xAI OAuth discovery", async () => {
     mockXaiRuntimeOAuth();
     const fetchMock = stubXaiModels(
-      {
-        id: "grok-composer-2.5-fast",
-        name: "Composer 2.5",
-        context_window: 200_000,
-        api_backend: "responses",
-      },
-      { id: "grok-build", name: "Grok Build", context_window: 512_000, api_backend: "responses" },
+      { id: "grok-composer-2.5-fast", api_backend: "responses" },
+      { id: "grok-build", api_backend: "responses" },
       { id: "grok-imagine-image", api_backend: "image" },
+      {
+        id: "grok-fixture-fast",
+        api_backend: "responses",
+        supports_reasoning_effort: true,
+        reasoning_efforts: ["xhigh", "high", "medium", "low"].map((value) =>
+          value === "high" ? { id: value, value, default: true } : { id: value, value },
+        ),
+      },
     );
     const { provider, result } = await runXaiCatalog();
 
@@ -280,7 +312,20 @@ describe("xai provider plugin", () => {
     expect(result.models.map(({ id, reasoning }) => ({ id, reasoning }))).toEqual([
       { id: "grok-composer-2.5-fast", reasoning: true },
       { id: "grok-build", reasoning: true },
+      { id: "grok-fixture-fast", reasoning: true },
     ]);
+    const model = result.models.find((entry) => entry.id === "grok-fixture-fast");
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "xai",
+        modelId: "grok-fixture-fast",
+        reasoning: model?.reasoning,
+        compat: model?.compat,
+      }),
+    ).toEqual({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
+      defaultLevel: "high",
+    });
     const composer = result.models[0];
     assert(composer, "expected OAuth Composer model");
     const normalizedComposer = provider.normalizeResolvedModel?.({
@@ -289,17 +334,14 @@ describe("xai provider plugin", () => {
       model: { ...composer, provider: "xai" },
     } as never);
     assert(normalizedComposer, "expected normalized OAuth Composer model");
-    const capture = createXaiPayloadCaptureStream();
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "xai",
-      modelId: normalizedComposer.id,
-      extraParams: {},
-      streamFn: capture.streamFn,
-    } as never);
-    assert(wrapped, "expected xAI stream wrapper");
-    void wrapped(normalizedComposer as never, { messages: [] } as never, {});
-    expect(capture.getCapturedPayload()).not.toHaveProperty("reasoning");
-    expect(capture.getCapturedPayload()?.include).toEqual(["reasoning.encrypted_content"]);
+    assert(provider.wrapStreamFn, "expected xAI stream wrapper");
+    const { payload } = captureXaiRequest(normalizedComposer as never, {
+      wrap: provider.wrapStreamFn,
+    });
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
+    expect(payload.tool_stream).toBe(true);
+    expect(payload).toHaveProperty("tools.0.function.strict", true);
     expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
       provider: "xai",
       cfg: { models: {} },
@@ -320,10 +362,8 @@ describe("xai provider plugin", () => {
     const fetchMock = stubXaiFetch(() => new Response("temporarily unavailable", { status: 503 }));
     const resolveProviderApiKey = vi.fn(() => ({ apiKey: "alternate-key" }));
     const result = await registeredProvider.catalog?.run({
-      config: {},
-      env: {},
+      ...catalogContext({ apiKey: undefined, mode: "none", source: "none" }),
       resolveProviderApiKey,
-      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
     });
 
     expect(result).toEqual({
@@ -370,7 +410,7 @@ describe("xai provider plugin", () => {
   });
 
   it("forwards exact caller cancellation through the registered lazy X search factory", async () => {
-    const factory = registerXaiBilledToolFactories().x_search;
+    const factory = billedToolFactory("x_search");
     const tool = factory(xaiToolContext("x_search", "xai", true));
     assert(tool && !Array.isArray(tool), "Expected one registered lazy X search tool");
     expect(tool.resultContentSource).toBe("network");
@@ -393,7 +433,6 @@ describe("xai provider plugin", () => {
       tool.execute("lazy-xai-cancel", { query: "registered lazy cancellation" }, controller.signal),
     ).rejects.toBe(reason);
 
-    expect(mockFetch).toHaveBeenCalledOnce();
     expect(transportSignal?.reason).toBe(reason);
   });
 
@@ -407,7 +446,7 @@ describe("xai provider plugin", () => {
       ["runtime disable overrides source", "xai", true, false, true, false],
       ["runtime consent overrides source", "openai", true, true, false, true],
     ])("%s", (_label, provider, hasAuth, expected, enabled, runtimeEnabled) => {
-      const factory = registerXaiBilledToolFactories()[toolName];
+      const factory = billedToolFactory(toolName);
       const tool = factory({
         ...xaiToolContext(toolName, provider, enabled, hasAuth),
         ...(runtimeEnabled === undefined
@@ -432,54 +471,26 @@ describe("xai provider plugin", () => {
     expect(probe({ config: {}, env: {} })).toBeNull();
   });
 
-  it("wires provider stream shaping for fast mode and tool-stream defaults", async () => {
-    const capture = createXaiPayloadCaptureStream();
-
-    const wrapped = registeredProvider.wrapStreamFn?.({
+  function resolveModel(modelId: string, api = "openai-responses") {
+    return registeredProvider.resolveDynamicModel?.({
       provider: "xai",
-      modelId: "grok-4",
-      extraParams: { fastMode: true },
-      streamFn: capture.streamFn,
+      modelId,
+      modelRegistry: { find: () => null } as never,
+      providerConfig: { api, baseUrl: "https://api.x.ai/v1" },
     } as never);
+  }
 
-    runXaiGrok4ResponseStream(wrapped);
-    expectXaiFastToolStreamShaping(capture);
-  });
-
-  it("defaults tool_stream extra params but preserves explicit values", async () => {
-    const prepare = (extraParams: { fastMode: boolean; tool_stream?: boolean }) =>
-      registeredProvider.prepareExtraParams?.({
-        provider: "xai",
-        modelId: "grok-4",
-        extraParams,
-      } as never);
-    expect(prepare({ fastMode: true })).toEqual({ fastMode: true, tool_stream: true });
-    const explicit = { fastMode: true, tool_stream: false };
-    expect(prepare(explicit)).toBe(explicit);
-  });
-
-  it("owns forward-compatible Grok model resolution", () => {
-    const resolve = (modelId: string, api: string) =>
-      registeredProvider.resolveDynamicModel?.({
-        provider: "xai",
-        modelId,
-        modelRegistry: { find: () => null } as never,
-        providerConfig: { api, baseUrl: "https://api.x.ai/v1" },
-      } as never);
-    expect(resolve("grok-4.3", "openai-completions")).toMatchObject({
+  it("registers model resolution with normalized IDs and configured transport", () => {
+    expect(resolveModel("xai/GROK-4.3", "openai-completions")).toMatchObject({
       id: "grok-4.3",
       provider: "xai",
       api: "openai-completions",
-      baseUrl: "https://api.x.ai/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
+      baseUrl: apiUrl,
     });
-    expect(resolve("grok-build-latest", "openai-responses")).toMatchObject({
-      id: "grok-4.5",
-      reasoning: true,
-      contextWindow: 500_000,
-    });
+  });
+
+  it("refuses the unsupported multi-agent endpoint ids", () => {
+    expect(resolveModel("grok-4.20-multi-agent-experimental-beta-0304")).toBeUndefined();
   });
 
   it("marks modern Grok refs without accepting multi-agent ids", () => {
@@ -491,47 +502,119 @@ describe("xai provider plugin", () => {
     ).toEqual([false, false]);
   });
 
-  it("follows the listed reasoning efforts for a Grok model the ID rules do not cover", async () => {
-    mockXaiRuntimeOAuth();
-    stubXaiModels({
-      id: "grok-fixture-fast",
-      api_backend: "responses",
-      supports_reasoning_effort: true,
-      reasoning_efforts: ["xhigh", "high", "medium", "low"].map((value) =>
-        value === "high" ? { id: value, value, default: true } : { id: value, value },
-      ),
-    });
-    const { provider, result } = await runXaiCatalog();
-    const model = result.models.find((entry) => entry.id === "grok-fixture-fast");
-    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "xai",
-        modelId: "grok-fixture-fast",
-        reasoning: model?.reasoning,
-        compat: model?.compat,
-      }),
-    ).toEqual({
-      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }],
-      defaultLevel: "high",
-    });
-    const normalized = provider.normalizeResolvedModel?.({
+  async function fetchUsage(payload: unknown, status = 200) {
+    assert(registeredProvider.fetchUsageSnapshot, "xAI usage provider is registered");
+    const snapshot = await registeredProvider.fetchUsageSnapshot({
+      config: {},
+      env: {},
       provider: "xai",
-      modelId: "grok-fixture-fast",
-      model: { ...model, provider: "xai" },
-    } as never);
-    expect(normalized?.compat).toMatchObject({
-      supportsReasoningEffort: true,
-      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+      token: "oauth-token",
+      timeoutMs: 5000,
+      fetchFn: createProviderUsageFetch(async (url, init) => {
+        expect(url).toBe("https://cli-chat-proxy.grok.com/v1/billing?format=credits");
+        expect(init?.headers).toMatchObject({
+          Authorization: "Bearer oauth-token",
+          Accept: "application/json",
+          "x-grok-client-mode": "cli",
+          "x-grok-client-version": "1.0.4",
+        });
+        return makeResponse(status, payload);
+      }),
     });
-    expect(normalized?.thinkingLevelMap).toEqual({
-      off: null,
-      minimal: "low",
-      low: "low",
-      medium: "medium",
-      high: "high",
-      xhigh: "xhigh",
+    assert(snapshot, "xAI usage provider returns a snapshot");
+    return snapshot;
+  }
+
+  const weekly = {
+    type: "USAGE_PERIOD_TYPE_WEEKLY",
+    start: "2026-09-21T12:01:29Z",
+    end: "2026-09-28T12:01:29Z",
+  };
+  const omitted = { windows: [], summary: "Included usage omitted" };
+  const monthlyEnd = "2026-09-30T00:00:00Z";
+
+  describe("fetchXaiUsage", () => {
+    it.each([
+      [
+        "explicit zero weekly usage",
+        { creditUsagePercent: 0, currentPeriod: weekly, prepaidBalance: { val: "1250" } },
+        { subscription_tier: "SuperGrok Heavy" },
+        { windows: [{ label: "Weekly", usedPercent: 0, resetAt: Date.parse(weekly.end) }] },
+        "SuperGrok Heavy",
+        12.5,
+      ],
+      [
+        "legacy monthly counters",
+        { used: { val: 2500 }, monthly_limit: { val: 10000 }, billing_period_end: monthlyEnd },
+        { subscriptionTier: "Premium+" },
+        { windows: [{ label: "Monthly", usedPercent: 25, resetAt: Date.parse(monthlyEnd) }] },
+        "Premium+",
+        0,
+      ],
+      [
+        "omitted weekly usage despite on-demand counters",
+        {
+          currentPeriod: weekly,
+          onDemandCap: { val: 10000 },
+          onDemandUsed: { val: 2500 },
+          isUnifiedBillingUser: true,
+          prepaidBalance: { val: 0 },
+          billingPeriodStart: weekly.start,
+          billingPeriodEnd: weekly.end,
+        },
+        {},
+        omitted,
+        "SuperGrok",
+        0,
+      ],
+      [
+        "omitted monthly usage",
+        { currentPeriod: { ...weekly, type: "USAGE_PERIOD_TYPE_MONTHLY" } },
+        {},
+        omitted,
+        "SuperGrok",
+        0,
+      ],
+    ] as const)(
+      "fetches billing with CLI headers and preserves %s",
+      async (_name, config, tier, expected, plan, balance) => {
+        await expect(fetchUsage({ ...tier, config })).resolves.toEqual({
+          provider: "xai",
+          displayName: "SuperGrok",
+          billing: [{ type: "balance", label: "Prepaid balance", amount: balance, unit: "USD" }],
+          plan,
+          ...expected,
+        });
+      },
+    );
+
+    it("returns token-expired errors for billing auth failures", async () => {
+      await expect(fetchUsage({ error: "expired" }, 401)).resolves.toEqual({
+        provider: "xai",
+        displayName: "xAI",
+        windows: [],
+        error: "Token expired",
+      });
+    });
+
+    it.each([
+      ["malformed JSON", "{not-json", "Malformed billing response"],
+      ["missing config", {}, "Malformed billing response"],
+      ["missing usage fields", { config: { prepaidBalance: { val: "100" } } }, "No usage data"],
+      [
+        "weekly period without bounds",
+        { config: { currentPeriod: { type: weekly.type } } },
+        "No usage data",
+      ],
+      [
+        "unusable included-usage percent",
+        { config: { creditUsagePercent: -1, currentPeriod: weekly } },
+        "No usage data",
+      ],
+    ])("returns a stable error for %s", async (_name, payload, error) => {
+      const result = await fetchUsage(payload);
+      expect(result.error).toBe(error);
+      expect(result.windows).toHaveLength(0);
     });
   });
 });

@@ -6,6 +6,7 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
 import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.ts";
 import { openEditor } from "../lib/editor-links.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { IdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
@@ -14,17 +15,11 @@ import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  sessionPullRequestsForGateway,
-} from "../lib/session-pull-requests.ts";
 import { categoryClearReturnsToGroups } from "../lib/sessions/grouping.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
   resolveUiConfiguredMainKey,
-  parseAgentSessionKey,
-  scopedSessionArtifactKey,
 } from "../lib/sessions/session-key.ts";
 import {
   canCopySessionMarkdown,
@@ -37,8 +32,8 @@ import {
   runControlUiPluginAction,
 } from "../plugins/control-ui-actions.ts";
 import { renderSidebarAgentMenu as SidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
+import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
 import { renderSidebarIdentityMenu as SidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
-import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
 import { renderSidebarPeopleFilterMenuForMenus } from "./app-sidebar-people-filter-menu.tsx";
 import { renderSidebarPluginNavigationMenuForMenus } from "./app-sidebar-plugin-navigation-menu.tsx";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
@@ -48,24 +43,21 @@ import {
   renderSidebarSessionGroupMenuForMenus,
   renderSidebarSessionSortMenuForMenus,
 } from "./app-sidebar-session-menu-renderers.tsx";
-import "../styles/sidebar-menus.css";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { canRetryGatewayStatus } from "./gateway-status.ts";
+import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
-import {
-  SessionMenu,
-  type SessionMenuAction,
-  type SessionMenuWork,
-} from "./session-menu-solid.tsx";
-import { fetchSessionMenuWork } from "./session-menu-work.ts";
+import { SessionMenu, type SessionMenuAction } from "./session-menu-solid.tsx";
+import { runSessionAction, runBatchSessionAction } from "./session-organizer-menu.runtime.ts";
 import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
 import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
+import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import type { MenuEntry } from "./solid/menu.tsx";
 
-export { CatalogSessionMenu } from "./catalog-session-menu-solid.tsx";
+export { SidebarCatalogMenu as CatalogSessionMenu } from "./app-sidebar-catalog-menu.runtime.tsx";
+export { createSessionMenuWork } from "./session-menu-work.ts";
 
 const AgentCreateDialog = lazy(() => import("./agent-create-dialog.tsx"), {
   export: "AgentCreateDialog",
@@ -136,82 +128,7 @@ function renderSidebarMenus(
   ];
 }
 
-export function createSessionMenuWork(
-  host: SidebarMenusOwner,
-  setWork: (work: SessionMenuWork | null) => void,
-) {
-  const sessionMenuWorkOwner = {};
-  let sessionMenuWorkStore: ReturnType<typeof sessionPullRequestsForGateway> | null = null;
-  let stopSessionMenuGateway: (() => void) | undefined;
-  let sessionMenuWorkVersion = 0;
-
-  function releaseSessionMenuWork() {
-    sessionMenuWorkVersion += 1;
-    stopSessionMenuGateway?.();
-    stopSessionMenuGateway = undefined;
-    sessionMenuWorkStore?.unwatch(sessionMenuWorkOwner);
-    sessionMenuWorkStore = null;
-  }
-
-  function loadSessionMenuWork(session: SidebarRecentSession) {
-    const version = ++sessionMenuWorkVersion;
-    const context = host.sessionDataContext;
-    const snapshot = context?.gateway.snapshot;
-    const client = snapshot?.phase === "connected" ? snapshot.client : null;
-    setWork(
-      session.worktreeId
-        ? {
-            pullRequestUrl: null,
-            worktreePath: null,
-          }
-        : null,
-    );
-    if (!session.worktreeId || !context) {
-      return;
-    }
-    // A replacement connection retires pending menu work before starting its successor.
-    stopSessionMenuGateway = context.gateway.subscribe((next) => {
-      if (next.phase === "connected" && next.client !== client) {
-        releaseSessionMenuWork();
-        loadSessionMenuWork(session);
-      }
-    });
-    if (!client) {
-      return;
-    }
-    const { selectedAgentId } = host.getSessionNavigationState();
-    const store = (sessionMenuWorkStore = sessionPullRequestsForGateway(context.gateway));
-    const pullRequestKey = scopedSessionArtifactKey(
-      session.key,
-      parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
-    );
-    void fetchSessionMenuWork({
-      client,
-      loadPullRequests: canCallGatewayMethod(
-        context.gateway.snapshot,
-        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        "operator.read",
-      )
-        ? () => store.load(sessionMenuWorkOwner, pullRequestKey)
-        : undefined,
-      worktreeId: session.worktreeId,
-      execNode: session.execNode,
-    }).then((work) => {
-      if (
-        version === sessionMenuWorkVersion &&
-        // A replacement provider wrapper may retain the same Gateway and client.
-        host.sessionDataContext?.gateway === context.gateway &&
-        context.gateway.snapshot.client === client
-      ) {
-        setWork(work);
-      }
-    });
-  }
-
-  return { load: loadSessionMenuWork, release: releaseSessionMenuWork };
-}
-
-export function renderSidebarRailPinMenuForMenus(
+function renderSidebarRailPinMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
   position: NonNullable<SidebarMenus["railPinMenuPosition"]>,
@@ -262,12 +179,13 @@ export function renderSidebarRailPinMenuForMenus(
   );
 }
 
-export function renderSidebarAgentMenuForMenus(
+function renderSidebarAgentMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
   position: NonNullable<SidebarMenus["agentMenuPosition"]>,
   avatars: () => IdentityAvatars,
 ): JSX.Element {
+  const avatarGateway = useAvatarGatewayContext();
   const trigger = menus.triggers.get("agent");
   const menuRef = menus.menuRef("agent");
   const chipAgent = createMemo(() => host.activeChipAgent());
@@ -283,6 +201,19 @@ export function renderSidebarAgentMenuForMenus(
     const source = host.sessionDataContext?.theme;
     return source && projectTheme(source).preferences;
   });
+  const creationDisabledReason = createMemo(() => {
+    const snapshot = gateway()?.read().snapshot;
+    if (canCallGatewayMethod(snapshot, "agents.create", "operator.admin")) {
+      return null;
+    }
+    if (!snapshot?.client || snapshot.phase !== "connected" || !snapshot.hello) {
+      return t("agentChip.creationRequiresConnection");
+    }
+    if (isGatewayMethodAdvertised(snapshot, "agents.create") !== true) {
+      return t("agentChip.creationUnsupported");
+    }
+    return t("agentChip.creationRequiresAdmin");
+  });
   return (
     <SidebarAgentMenu
       {...{
@@ -297,13 +228,7 @@ export function renderSidebarAgentMenuForMenus(
           agents()?.read().recentlyCreatedAgentId ??
           preferences()?.read().sidebarRecentlyCreatedAgentId,
         rosterMode: host.sidebarAgentsMode === "roster" && !chipAgent().pending,
-        creationDisabledReason: canCallGatewayMethod(
-          gateway()?.read().snapshot,
-          "agents.create",
-          "operator.admin",
-        )
-          ? null
-          : t("agentChip.creationUnavailable"),
+        creationDisabledReason: creationDisabledReason(),
         onShowAllAgents: () => {
           host.navigationView = "sessions";
           host.sessionDataContext?.navigation.update({ navCollapsed: false });
@@ -317,7 +242,10 @@ export function renderSidebarAgentMenuForMenus(
             menus.focusAgentRoster?.();
           });
         },
-        resolveAvatarUrl: (url) => avatars().resolve(url),
+        resolveAvatarUrl: (url) => {
+          avatarGateway();
+          return avatars().resolve(url);
+        },
         avatarErrorHandler: (url) => avatars().imageErrorHandler(url),
         openMode: menus.agentMenuMode,
         agentUnreadCount: (agentId) => host.agentUnreadCount(agentId),
@@ -349,7 +277,7 @@ export function renderSidebarAgentMenuForMenus(
   );
 }
 
-export function renderSidebarAgentCreateDialogForMenus(
+function renderSidebarAgentCreateDialogForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
 ): JSX.Element | null {
@@ -364,9 +292,14 @@ export function renderSidebarAgentCreateDialogForMenus(
         onCancel={() => menus.closeAgentCreateDialog()}
         onCreate={(identity) => {
           menus.closeAgentCreateDialog();
-          void import("../app/create-agent.ts").then(({ createApplicationAgent }) =>
-            createApplicationAgent(context, identity),
-          );
+          void import("../app/create-agent.ts")
+            .then(({ createApplicationAgent }) => createApplicationAgent(context, identity))
+            .catch((error: unknown) =>
+              showToast({
+                message: t("agentChip.creationFailed", { error: formatUiError(error) }),
+                durationMs: 12_000,
+              }),
+            );
         }}
       />
     </Loading>
@@ -425,7 +358,7 @@ function renderSidebarIdentityMenuForMenus(
   );
 }
 
-export function renderSidebarSessionMenuForMenus(
+function renderSidebarSessionMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
   menu: NonNullable<SidebarMenus["sessionMenu"]>,
@@ -578,7 +511,7 @@ export function renderSidebarSessionMenuForMenus(
         const actionSignal = pluginActionSignal();
         const batch = batchRows();
         if (batch) {
-          void host.sessionOrganizer.runBatchSessionAction(action, batch, allUnread());
+          void runBatchSessionAction(host.sessionOrganizer, action, batch, allUnread());
           return;
         }
         switch (action.kind) {
@@ -645,7 +578,7 @@ export function renderSidebarSessionMenuForMenus(
             }
             break;
           default:
-            void host.sessionOrganizer.runSessionAction(session(), action);
+            void runSessionAction(host.sessionOrganizer, session(), action);
         }
       }}
     />

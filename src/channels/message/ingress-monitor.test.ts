@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { waitForAbortSignal as waitForAbort } from "../../infra/abort-signal.js";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -20,7 +21,6 @@ import {
   createMonitor,
   PermanentIngressError,
   useIngressMonitorQueueFixture,
-  waitForAbort,
   type RawEvent,
   type StoredEvent,
 } from "./ingress-monitor.test-harness.js";

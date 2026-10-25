@@ -533,6 +533,10 @@ it.for(["workspace", "workspace-write", "config"] as const)(
       entered.resolve(pausedPhase);
       await resume.promise;
     };
+    if (phase === "workspace-write") {
+      // Bootstrap private state with native ACL inspection before the JS write pause.
+      openOpenClawStateDatabase({ env: state.env });
+    }
     const restoreWorkspacePreparation = installWorkspacePreparationPause(workspace, phase, pause);
     const commit = vi.fn();
     const rollback = vi.fn(async () => await fs.rm(stagedFile));

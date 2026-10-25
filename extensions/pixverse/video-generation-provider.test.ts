@@ -127,6 +127,24 @@ describe("pixverse video generation provider", () => {
     });
   });
 
+  it("releases the submission response before polling its video job", async () => {
+    const events: string[] = [];
+    postJsonRequestMock.mockResolvedValue({
+      response: successfulResponse({ video_id: 123 }),
+      release: vi.fn(async () => {
+        events.push("release");
+      }),
+    });
+    fetchWithTimeoutMock.mockImplementation(async () => {
+      events.push("poll");
+      return successfulResponse({ status: 1, url: videoUrl });
+    });
+
+    await generateVideo();
+
+    expect(events).toEqual(["release", "poll"]);
+  });
+
   it.each([
     [{ providerOptions: { seed: 1.5 } }, {}],
     [{}, { seed: 1.5 }],
@@ -202,13 +220,16 @@ describe("pixverse video generation provider", () => {
     expect(createRequest.body?.img_id).toBe(111);
   });
 
-  it("reports PixVerse moderation failures from status polling", async () => {
+  it.each([
+    [6, "PixVerse video generation was deleted before completion"],
+    [7, "PixVerse video generation failed content moderation"],
+    [8, "PixVerse video generation failed"],
+    [undefined, "PixVerse video status response missing status"],
+  ] as const)("reports PixVerse poll status %s", async (status, message) => {
     mockPixVerseVideoSubmit(333);
-    mockPixVersePoll({ id: 333, status: 7 });
+    mockPixVersePoll({ id: 333, status });
 
-    await expect(generateVideo()).rejects.toThrow(
-      "PixVerse video generation failed content moderation",
-    );
+    await expect(generateVideo()).rejects.toThrow(message);
   });
 
   it.each([

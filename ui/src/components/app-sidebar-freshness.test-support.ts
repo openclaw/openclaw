@@ -14,6 +14,7 @@ import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../test-helpers/gateway-client.ts";
+import { createActiveSessionPlacement } from "../test-helpers/session-placement.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 
 export async function mountRoster(
@@ -90,16 +91,5 @@ export const waitForRequest = (
     ),
   );
 
-export const placement = (status: "available" | "offline") => ({
-  state: "active" as const,
-  generation: 1,
-  createdAtMs: 1,
-  updatedAtMs: 1,
-  stateChangedAtMs: 1,
-  environmentId: "worker:device",
-  activeOwnerEpoch: 1,
-  workerBundleHash: "a".repeat(64),
-  workspaceBaseManifestRef: "manifest",
-  remoteWorkspaceDir: "/workspace",
-  runner: { kind: "device" as const, status },
-});
+export const placement = (status: "available" | "offline") =>
+  createActiveSessionPlacement({ runner: { kind: "device" as const, status } });

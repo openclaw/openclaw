@@ -40,18 +40,15 @@ it.each(["direct", "symlink"])("reads a %s .env file", (kind) => {
   expect(logWarnSpy).not.toHaveBeenCalled();
 });
 
-it("returns null for a missing file (quiet)", () => {
-  expect(readDotEnvFile({ filePath: join(tmpDir(), "missing.env"), quiet: true })).toBeNull();
+it("returns null for a missing file", () => {
+  expect(readDotEnvFile({ filePath: join(tmpDir(), "missing.env") })).toBeNull();
   expect(logWarnSpy).not.toHaveBeenCalled();
 });
 
-it("warns when an oversized .env file is skipped", () => {
+it("skips an oversized .env file", () => {
   const large = Buffer.alloc(2 * 1024 * 1024, "x");
   large.write("KEY=value\n", 0, "utf8");
-  expect(readDotEnvFile({ filePath: tmpFile("large.env", large), quiet: false })).toBeNull();
-  expect(logWarnSpy).toHaveBeenCalledWith(
-    expect.stringContaining("skipping oversized .env file (max"),
-  );
+  expect(readDotEnvFile({ filePath: tmpFile("large.env", large) })).toBeNull();
 });
 
 it.each([

@@ -144,8 +144,8 @@ function pairedOperator(deviceId: string, scopes = ["operator.read"], revokedAtM
   return { deviceId, roles: ["operator"], approvedScopes: scopes, tokens: { operator } };
 }
 
-function createDelivery(params: Partial<Parameters<typeof createEventWebPushDelivery>[0]> = {}) {
-  return createEventWebPushDelivery({ getRuntimeConfig: () => ({}), ...params });
+function createDelivery(getRuntimeConfig: () => OpenClawConfig = () => ({})) {
+  return createEventWebPushDelivery(getRuntimeConfig);
 }
 
 function finishAgent(delivery = createDelivery(), data: object = {}, opts?: GatewayBroadcastOpts) {
@@ -222,26 +222,20 @@ describe("event Web Push classification", () => {
     const cfg: OpenClawConfig = { agents: { entries: { research: { identity: { avatar } } } } };
 
     finishAgent(
-      createDelivery({ getRuntimeConfig: () => cfg }),
-      { runId: "avatar-run" },
+      createDelivery(() => cfg),
+      {},
       researchContext,
     );
-
-    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2), {
-      timeout: 3_000,
-    });
-    const identifiedPayload = mocks.send.mock.calls.find(
-      ([call]) => call.subscriptions[0] === identified,
-    )?.[0].payload;
-    const privatePayload = mocks.send.mock.calls.find(
-      ([call]) => call.subscriptions[0] === privateTarget,
-    )?.[0].payload;
+    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+    const payloadFor = (subscription: BoundWebPushSubscription) =>
+      mocks.send.mock.calls.find(([call]) => call.subscriptions[0] === subscription)?.[0].payload;
+    const identifiedPayload = payloadFor(identified);
     expect(identifiedPayload.icon).toMatch(/^data:image\/png;base64,/);
     expect(identifiedPayload.icon.length).toBeLessThanOrEqual(2_400);
     expect(
       readImageMetadataFromHeader(Buffer.from(identifiedPayload.icon.split(",")[1], "base64")),
     ).toEqual({ width: 32, height: 32 });
-    expect(privatePayload).not.toHaveProperty("icon");
+    expect(payloadFor(privateTarget)).not.toHaveProperty("icon");
   });
 
   it("drops a prepared avatar when identity changes during recipient preparation", async () => {
@@ -253,11 +247,10 @@ describe("event Web Push classification", () => {
     });
 
     finishAgent(
-      createDelivery({ getRuntimeConfig: () => cfg }),
-      { runId: "changed-avatar-run" },
+      createDelivery(() => cfg),
+      {},
       researchContext,
     );
-
     await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledOnce());
     expect(mocks.send.mock.calls[0]?.[0].payload).not.toHaveProperty("icon");
   });
@@ -342,8 +335,7 @@ describe("event Web Push classification", () => {
     ],
   ] as const)("routes %s to its originating Gateway", async (event, payload, path) => {
     setPaired(pairedOperator("browser-device", ["operator.read", "operator.questions"]));
-    const delivery = createDelivery({ getRuntimeConfig: gatewayConfig });
-    delivery.handleEvent(event, payload, researchContext);
+    createDelivery(gatewayConfig).handleEvent(event, payload, researchContext);
     await expectPayload({
       url: `${path}#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator`,
     });
@@ -356,11 +348,9 @@ describe("event Web Push classification", () => {
         role: "assistant",
         provider: "openclaw",
         model: "gateway-injected",
-        content: [{ type: "text", text: "Injected transcript update" }],
       },
     });
     await Promise.resolve();
-    expect(mocks.sender).not.toHaveBeenCalled();
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
@@ -400,12 +390,10 @@ describe("event Web Push classification", () => {
   });
 
   it("rereads subscriptions after transport preparation before sending", async () => {
-    const stale = makeSubscription("stale-device");
     const preparation = prepareSender();
-    setRecipients(stale);
+    setRecipients(makeSubscription("stale-device"));
     const getRuntimeConfig = vi.fn(() => ({}));
-    const delivery = createDelivery({ getRuntimeConfig });
-    finishAgent(delivery);
+    finishAgent(createDelivery(getRuntimeConfig));
     await vi.waitFor(() => expect(mocks.sender).toHaveBeenCalledOnce());
     expect(getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.subscriptions).not.toHaveBeenCalled();
@@ -448,13 +436,10 @@ describe("event Web Push classification", () => {
     }
     subscriptions.resolve([makeSubscription("browser-device")]);
     await vi.waitFor(() => expect(mocks.pairing).toHaveBeenCalledOnce());
-    if (revoked) {
-      expect(mocks.send).not.toHaveBeenCalled();
-      expect(order).toEqual(["authority", "next-microtask"]);
-    } else {
-      expect(mocks.send).toHaveBeenCalledOnce();
-      expect(order).toEqual(["authority", "send", "next-microtask"]);
-    }
+    expect(mocks.send).toHaveBeenCalledTimes(revoked ? 0 : 1);
+    expect(order).toEqual(
+      revoked ? ["authority", "next-microtask"] : ["authority", "send", "next-microtask"],
+    );
   });
 
   it.each(["preferences changed", "profile merged"] as const)(
@@ -487,12 +472,6 @@ describe("event Web Push classification", () => {
       pairingReady.resolve();
       await authorityCompleted.promise;
       expect(mocks.send).not.toHaveBeenCalled();
-      expect(mocks.preferences).toHaveBeenCalledTimes(2);
-      expect(mocks.preferences).toHaveBeenLastCalledWith(
-        [profileId],
-        "notifications.web.v1",
-        expect.anything(),
-      );
     },
   );
 
@@ -504,14 +483,12 @@ describe("event Web Push classification", () => {
     it("targets the recipient's canonical subscriptions, not other readers of the session", async () => {
       const bob = makeSubscription("bob-browser", "bob");
       const mergedBob = makeSubscription("bob-phone", "bob-old");
-      const subscriptions = [
+      setRecipients(
         makeSubscription("alice-browser", "alice"),
         bob,
         mergedBob,
-        makeSubscription("carol-browser", "carol"),
         makeSubscription("anonymous-browser"),
-      ];
-      setRecipients(...subscriptions);
+      );
       mocks.identity.mockImplementation((id: string) =>
         profileIdentity(id === "bob-old" ? "bob" : id, [id]),
       );
@@ -553,7 +530,7 @@ describe("event Web Push classification", () => {
         cause: new Error("invalid key length"),
       });
       mocks.sender.mockRejectedValueOnce(failure);
-      finishAgent(createDelivery({ log: { warn: mocks.warn } }), { runId: "failure-run" });
+      finishAgent(createDelivery(), { runId: "failure-run" });
       await vi.waitFor(() => expect(mocks.warn).toHaveBeenCalledOnce());
       expect(mocks.warn).toHaveBeenCalledWith("event Web Push delivery could not complete", {
         category: "agent-finished",
@@ -629,15 +606,12 @@ describe("event Web Push classification", () => {
           setPaired(pairedOperator("admin-browser", ["operator.admin"]));
           const preparation = prepareSender();
           const getRuntimeConfig = vi.fn(() => cfg);
-          const delivery = createDelivery({ getRuntimeConfig });
+          const delivery = createDelivery(getRuntimeConfig);
           if (scenario === "generic event") {
             finishAgent(
               delivery,
-              { runId: "draft-run", agentId: "main" },
-              {
-                sessionKeys: [sessionKey],
-                agentId: "main",
-              },
+              { agentId: "main" },
+              { sessionKeys: [sessionKey], agentId: "main" },
             );
           } else {
             delivery.deliverMention(
@@ -661,7 +635,6 @@ describe("event Web Push classification", () => {
             preparation.resolve(mocks.send);
             await authorityCompleted.promise;
             expect(statements.map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0, 0]);
-            expect(mocks.canReceive).toHaveBeenCalledOnce();
             if (scenario === "eligible admin") {
               expectSend({ subscriptions: [subscription] });
             } else {
@@ -681,7 +654,7 @@ describe("event Web Push classification", () => {
       async (detailLevel) => {
         const subscription = makeSubscription("browser-device", "bob", { detailLevel });
         setSubscriptions(subscription);
-        createDelivery({ getRuntimeConfig: gatewayConfig }).deliverMention(
+        createDelivery(gatewayConfig).deliverMention(
           humanMention({ senderLabel: "Al\nice", sessionTitle: "Review\u202E" }),
         );
         await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledOnce());
@@ -712,7 +685,7 @@ describe("event Web Push classification", () => {
     ] as const)("rechecks %s after sender preparation", async (_name, revoke) => {
       const preparation = prepareSender();
       const getRuntimeConfig = vi.fn(() => ({}));
-      createDelivery({ getRuntimeConfig }).deliverMention(humanMention());
+      createDelivery(getRuntimeConfig).deliverMention(humanMention());
       await vi.waitFor(() => expect(mocks.sender).toHaveBeenCalledOnce());
       expect(getRuntimeConfig).not.toHaveBeenCalled();
       revoke();

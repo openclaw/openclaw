@@ -8,6 +8,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { WorktreesModel } from "./worktrees-model.ts";
@@ -36,17 +37,11 @@ function worktree(id = "worktree-1", overrides: Partial<WorktreeRecord> = {}): W
 }
 
 function gatewayWithSnapshot(client: GatewayBrowserClient | null, connected: boolean) {
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   return { snapshot, subscribe: () => () => undefined } as unknown as ApplicationContext["gateway"];
 }
 
@@ -190,6 +185,47 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("shows pending list readiness and retries a failed first read", async () => {
+    const first = deferred<{ worktrees: WorktreeRecord[] }>();
+    const request = listRequest([worktree()]).mockReturnValueOnce(first.promise);
+    const page = createWorktreesPage(request).mount();
+    await waitForRead(request);
+    await waitForSolid(() => expect(page.element.textContent).toContain("Loading"));
+    expect(page.element.textContent).not.toContain("No managed worktrees");
+
+    first.reject(new Error("List unavailable"));
+    await waitForSolid(() => expect(page.button("Retry")).toBeDefined());
+    expect(page.query('[role="alert"]')?.textContent).toContain("List unavailable");
+    page.button("Retry").click();
+    await waitForSolid(() =>
+      expect(page.query('button[aria-label="Delete: worktree-1"]')).not.toBeNull(),
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(page.query('[role="alert"]')).toBeNull();
+  });
+
+  it("retains a rejected creation draft and releases its pending presentation", async () => {
+    const created = deferred<unknown>();
+    const request = pendingRequest("worktrees.create", created.promise);
+    const page = createWorktreesPage(request, {
+      createOpen: true,
+      createRepoRoot: "/tmp/repo",
+      createName: "retained draft",
+    }).mount();
+    await waitForRead(request);
+    await waitForSolid(() => expect(page.model.loading).toBe(false));
+    page.button("Create").click();
+    await waitForCall(request, "worktrees.create", {
+      repoRoot: "/tmp/repo",
+      name: "retained draft",
+    });
+    await waitForSolid(() => expect(page.inputs().every((input) => input.disabled)).toBe(true));
+    created.reject(new Error("Creation unavailable"));
+    await waitForSolid(() => expect(page.button("Create")?.disabled).toBe(false));
+    expect(page.query<HTMLInputElement>('input[aria-label="Name"]')?.value).toBe("retained draft");
+    expect(page.query('[role="alert"]')?.textContent).toContain("Creation unavailable");
+  });
+
   it("keeps local creation editable but disables server actions while offline", async () => {
     const request = vi.fn(async () => ({
       worktrees: [worktree(), { ...worktree("removed"), removedAt: 2 }],

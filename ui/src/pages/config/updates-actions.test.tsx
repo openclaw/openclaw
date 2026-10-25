@@ -56,7 +56,7 @@ it.each(["confirmation", "report"] as const)(
       onReportFailure,
       update: { updateRun: run, reportableUpdateFailureId: run.runId },
     });
-    const label = operation === "confirmation" ? "Update now" : "Report update failure";
+    const label = operation === "confirmation" ? "Update Gateway…" : "Report update failure";
     const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (candidate) => candidate.textContent?.trim() === label,
     )!;
@@ -79,7 +79,7 @@ it("shows a failed confirmation load and retries the command", async () => {
     .mockRejectedValueOnce(new Error("Confirmation unavailable"))
     .mockResolvedValue(undefined);
   renderUpdates({ onUpdateNow });
-  row("Update now").querySelector<HTMLButtonElement>("button")!.click();
+  row("Update Gateway…").querySelector<HTMLButtonElement>("button")!.click();
   await waitForSolid(() =>
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       "Confirmation unavailable",
@@ -107,7 +107,7 @@ it("keeps native automatic-update intent until acknowledgement and permits retry
   input.dispatchEvent(new Event("change"));
   await waitForSolid(() => {
     expect(input.checked).toBe(false);
-    expect(input.disabled).toBe(true);
+    expect(input.getAttribute("aria-disabled")).toBe("true");
   });
   first.reject(new Error("Automatic updates could not be saved"));
   await waitForSolid(() =>
@@ -119,7 +119,7 @@ it("keeps native automatic-update intent until acknowledgement and permits retry
   second.resolve({ ...snapshot, updates: { ...snapshot.updates, automatic: false } });
   await waitForSolid(() => {
     const confirmed = toggle("Check for updates automatically");
-    expect(confirmed.disabled).toBe(false);
+    expect(confirmed.getAttribute("aria-disabled")).toBeNull();
     expect(confirmed.checked).toBe(false);
   });
   expect(post.mock.calls.slice(1)).toEqual([

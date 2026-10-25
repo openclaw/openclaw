@@ -31,6 +31,52 @@ function settle(mutation: ReturnType<typeof deferred<unknown>>, error?: string) 
   return error ? mutation.reject(new Error(error)) : mutation.resolve({});
 }
 
+it.each(actions)(
+  "%s sends one decision per in-flight request",
+  async (method, run, isNode, failed) => {
+    const siblings = actions.filter((action) => action[2] === isNode);
+    const mutation = deferred<unknown>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(mutation.promise)
+      .mockResolvedValue({ pending: [], paired: [] });
+    const state = pairing.createInitialDevicesState({ client: { request }, connected: true });
+    const first = run(state, "request-1");
+    await Promise.all(siblings.map((action) => action[1](state, "request-1")));
+    expect(request).toHaveBeenCalledTimes(1);
+    if (failed) {
+      mutation.reject(new Error("pairing denied"));
+    } else {
+      mutation.resolve({});
+    }
+    await first;
+    // The guard clears once the decision settles, so the operator can decide again.
+    await run(state, "request-1");
+    expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(2);
+  },
+);
+
+it("keeps a replacement decision guarded when a retired request settles", async () => {
+  const retired = deferred<unknown>();
+  const replacement = deferred<unknown>();
+  const request = vi
+    .fn()
+    .mockReturnValueOnce(retired.promise)
+    .mockReturnValueOnce(replacement.promise)
+    .mockResolvedValue({ pending: [], paired: [] });
+  const state = pairing.createInitialDevicesState({ client: { request }, connected: true });
+  const first = pairing.approveDevicePairing(state, "request-1");
+  state.requestGeneration += 1;
+  state.devicesDeciding = [];
+  const second = pairing.approveDevicePairing(state, "request-1");
+  retired.resolve({});
+  await first;
+  await pairing.rejectDevicePairing(state, "request-1");
+  expect(request).toHaveBeenCalledTimes(2);
+  replacement.resolve({});
+  await second;
+});
+
 it.each(actions)("%s refresh/error", async (method, run, isNode, failed) => {
   const { mutation, devices, nodes, request, state, settled, start } = setup();
   const current = isNode ? vi.fn() : request;

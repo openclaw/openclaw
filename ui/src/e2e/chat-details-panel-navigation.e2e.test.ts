@@ -1,10 +1,14 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -42,14 +46,15 @@ async function setup(page: Page) {
       },
     ],
     historyMessages: [
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "The project notes and release checklist are ready for review." },
-        ],
-      },
+      chatMessage("assistant", "The project notes and release checklist are ready for review."),
     ],
-    featureMethods: ["board.get", "chat.metadata", "chat.startup", "terminal.open"],
+    featureMethods: [
+      "board.get",
+      "chat.metadata",
+      "chat.startup",
+      "sessions.companion.state",
+      "terminal.open",
+    ],
     terminalEnabled: true,
     methodResponses: {
       "cron.list": {
@@ -67,18 +72,14 @@ async function setup(page: Page) {
         revision: 1,
         tabs: [{ tabId: "main", title: "Project overview", position: 0, chatDock: "right" }],
         widgets: [
-          {
+          createBoardWidget({
             name: "overview",
-            tabId: "main",
             title: "Project overview",
-            contentKind: "html",
             sizeW: 12,
             sizeH: 8,
-            position: 0,
             grantState: "granted",
-            revision: 1,
             frameUrl,
-          },
+          }),
         ],
       },
       "artifacts.list": {
@@ -105,6 +106,11 @@ async function setup(page: Page) {
     .frameLocator(".board-widget iframe")
     .getByText("Ready for review", { exact: true })
     .waitFor();
+  await page
+    .locator(".chat-pane-cache__pane--visible .chat-group.assistant .chat-text", {
+      hasText: "The project notes and release checklist are ready for review.",
+    })
+    .waitFor();
 }
 
 async function expectBesidePanel(page: Page, details: Locator) {
@@ -126,6 +132,8 @@ async function openOutputs(details: Locator) {
     await summary.click();
   }
   await details.getByRole("button", { name: "View all", exact: true }).waitFor();
+  // The row is visible before its disclosure finishes changing height.
+  await waitForLayoutSettled(details.page(), '[data-details-group="outputs"]');
 }
 
 suite.define(() => {
@@ -140,7 +148,42 @@ suite.define(() => {
         const details = await openChatDetails(page);
         await openOutputs(details);
         await details.getByRole("button", { name: "View all", exact: true }).click();
-        await page.locator('[data-panel-slot="workspace"][data-region="side"]').waitFor();
+        try {
+          await page.locator('[data-panel-slot="workspace"][data-region="side"]').waitFor();
+        } catch (error) {
+          recordControlUiE2eFailureFacts(page, {
+            detailsViewAllDashboardCase: main === "Dashboard",
+          });
+          await withTimeout(
+            page.evaluate(() => {
+              const nodes = document.querySelectorAll<HTMLElement>(
+                "[data-panel-slot][data-region]",
+              );
+              const panels = [...nodes]
+                .slice(0, 32)
+                .filter((panel) => panel.checkVisibility({ visibilityProperty: true }));
+              const facts: Record<string, boolean | number | null> = {
+                detailsViewAllPanelsTruncated: nodes.length > 32,
+                detailsViewAllVisiblePanels: panels.length,
+                detailsViewAllDetailsVisible: [...document.querySelectorAll(".chat-details")].some(
+                  (detailsPanel) => detailsPanel.checkVisibility({ visibilityProperty: true }),
+                ),
+              };
+              for (const slot of ["conversation", "dashboard", "workspace"]) {
+                for (const region of ["main", "side"]) {
+                  facts[`detailsViewAll_${slot}_${region}`] = panels.filter(
+                    (panel) => panel.dataset.panelSlot === slot && panel.dataset.region === region,
+                  ).length;
+                }
+              }
+              return facts;
+            }),
+            1_000,
+          )
+            .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+            .catch(() => undefined);
+          throw error;
+        }
         await expect.poll(() => details.isVisible()).toBe(false);
         await expect
           .poll(() =>

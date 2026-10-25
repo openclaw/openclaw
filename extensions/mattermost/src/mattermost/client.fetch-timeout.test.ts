@@ -47,7 +47,6 @@ async function withHangingServer(
     received: Promise<void>;
     requestCount: () => number;
   }) => Promise<void>,
-  timeoutMs = 50,
 ): Promise<void> {
   let requestCount = 0;
   const received = Promise.withResolvers<void>();
@@ -58,10 +57,10 @@ async function withHangingServer(
       request.resume();
     },
     async (baseUrl) => {
-      // Advance deadlines after real socket I/O; loaded workers may connect after 50ms.
+      // Advance deadlines only after real socket I/O.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       try {
-        const client = createMattermostClient({ ...clientDefaults, baseUrl, timeoutMs });
+        const client = createMattermostClient({ ...clientDefaults, baseUrl });
         await run({
           client,
           received: received.promise,
@@ -78,24 +77,24 @@ async function withHangingServer(
 describe("Mattermost REST client fetch timeout", () => {
   afterEach(() => vi.restoreAllMocks());
   it.each([
-    ["configured client deadline", 50, false],
-    ["caller AbortSignal with a default deadline", 30_000, true],
-  ] as const)("rejects a hanging request through %s", async (_name, timeoutMs, cancel) => {
+    ["default client deadline", false],
+    ["caller AbortSignal with a default deadline", true],
+  ] as const)("rejects a hanging request through %s", async (_name, cancel) => {
     await withHangingServer(async ({ client, received, requestCount }) => {
       const controller = new AbortController();
       const request = cancel
         ? client.request("/users/me", { signal: controller.signal })
         : fetchMattermostMe(client);
-      const outcome = settleWithin(request, 750);
+      const outcome = settleWithin(request, 31_000);
       await Promise.race([received, request]);
       if (cancel) {
         controller.abort();
       } else {
         expect(requestCount()).toBe(1);
       }
-      await vi.advanceTimersByTimeAsync(750);
+      await vi.advanceTimersByTimeAsync(30_000);
       expectTimeoutOutcome(await outcome);
-    }, timeoutMs);
+    });
   });
 
   it("preserves caller cancellation through a guarded response body", async () => {
@@ -112,7 +111,7 @@ describe("Mattermost REST client fetch timeout", () => {
           fetchResolved.resolve();
           return result;
         });
-        const client = createMattermostClient({ ...clientDefaults, baseUrl, timeoutMs: 30_000 });
+        const client = createMattermostClient({ ...clientDefaults, baseUrl });
         const controller = new AbortController();
         const reason = new Error("caller stopped after headers");
         const request = client.request("/users/me", { signal: controller.signal });
@@ -129,15 +128,15 @@ describe("Mattermost REST client fetch timeout", () => {
     await withHangingServer(async ({ client, received }) => {
       const request = createMattermostDirectChannelWithRetry(client, ["bot-user", "dm-user"], {
         maxRetries: 0,
-        timeoutMs: 250,
+        timeoutMs: 60_000,
       });
-      const earlyOutcome = settleWithin(request, 120);
+      const earlyOutcome = settleWithin(request, 30_001);
 
       await Promise.race([received, request]);
-      await vi.advanceTimersByTimeAsync(120);
+      await vi.advanceTimersByTimeAsync(30_001);
       expect(await earlyOutcome).toEqual({ status: "pending" });
-      const outcome = settleWithin(request, 600);
-      await vi.advanceTimersByTimeAsync(600);
+      const outcome = settleWithin(request, 30_001);
+      await vi.advanceTimersByTimeAsync(30_001);
       expectTimeoutOutcome(await outcome);
     });
   });

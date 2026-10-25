@@ -43,6 +43,16 @@ afterEach(() => {
 });
 
 describe("isSystemAgentSensitiveConfigValue", () => {
+  it.each([
+    ["https://example.test/v1", false],
+    ["https://user:synthetic@example.test/v1", true],
+    ["https://example.test/v1?token=synthetic", true],
+  ])("classifies URL value %s without exposing appended path data", (value, sensitive) => {
+    const path = "models.providers.synthetic.baseUrl";
+    expect(isSystemAgentSensitiveConfigValue(path, value)).toBe(sensitive);
+    expect(redactSystemAgentConfigPath(`${path}.appended`)).toBe("<redacted path>");
+  });
+
   it("detects sensitive descendants in structured parent writes", () => {
     expect(
       isSystemAgentSensitiveConfigValue(

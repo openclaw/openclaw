@@ -405,7 +405,7 @@ export function parseUnionSeg(seg: string): readonly string[] | null {
   if (inner.length === 0) {
     return null;
   }
-  const alts = inner.split(",");
+  const alts = splitRespectingBrackets(inner, ",");
   if (alts.some((a) => a.length === 0)) {
     return null;
   }
@@ -689,8 +689,14 @@ function validateSubSegment(sub: string, input: string): void {
         "OC_PATH_MALFORMED_UNION",
       );
     }
-    if (inner.split(",").some((a) => a.length === 0)) {
+    const alternatives = splitRespectingBrackets(inner, ",");
+    if (alternatives.some((a) => a.length === 0)) {
       fail(`Empty alternative in union "${sub}": ${printable(input)}`, "OC_PATH_MALFORMED_UNION");
+    }
+    for (const alternative of alternatives) {
+      if (isUnionSeg(alternative)) {
+        validateSubSegment(alternative, input);
+      }
     }
   }
 }

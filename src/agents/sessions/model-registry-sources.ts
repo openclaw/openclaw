@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ModelRequestHeaders } from "../../llm/types.js";
 import type { ProviderModelCatalog } from "../models-config.merge.js";
 import { loadPersistedPluginModelCatalogs } from "../plugin-model-catalog-execution.js";
 import type { PersistedPluginModelCatalog } from "../plugin-model-catalog-read.types.js";
@@ -95,7 +96,7 @@ export type ResolvedRequestAuth =
   | {
       ok: true;
       apiKey?: string;
-      headers?: Record<string, string>;
+      headers?: ModelRequestHeaders;
     }
   | {
       ok: false;

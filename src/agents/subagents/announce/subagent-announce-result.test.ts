@@ -215,7 +215,7 @@ describe("exact-run announcement results", () => {
       ],
     );
     const prepared = await readFindings([child]);
-    expect(prepared.text).toContain(`${"&lt;archived&gt;".repeat(700)}required-archive-tail`);
+    expect(prepared.text).toContain(text);
     expect(prepared.text).not.toMatch(/older archive result|newer archive result/);
     expect(child.completion?.terminalReply).toBe(terminalReply);
     expect(terminalReply).toEqual({ disposition: "visible", text: `${text.slice(0, 4_095)}…` });

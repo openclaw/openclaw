@@ -289,11 +289,13 @@ openclaw-session-diff:has(> .session-diff--mobile) {
   font-variant-numeric: tabular-nums;
 }
 
-.session-diff--mobile .chat-diffstat__add {
+.session-diff--mobile .chat-diffstat__add,
+.session-diff--desktop .chat-diffstat__add {
   color: var(--ok);
 }
 
-.session-diff--mobile .chat-diffstat__del {
+.session-diff--mobile .chat-diffstat__del,
+.session-diff--desktop .chat-diffstat__del {
   color: var(--destructive);
 }
 
@@ -306,4 +308,8 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 .session-diff-mobile__rail .session-diff__scope svg {
   width: 16px;
   height: 16px;
+}
+
+.session-diff-mobile__summary:has(+ .session-diff__files > openclaw-panel-empty-state) {
+  margin-bottom: 0;
 }

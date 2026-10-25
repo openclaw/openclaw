@@ -31,15 +31,6 @@ export type ControlUiSessionPathTarget =
       slugCandidate?: string;
     };
 
-function normalizePath(path: string): string {
-  const trimmed = path.trim();
-  if (!trimmed) {
-    return "/";
-  }
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withSlash.length > 1 && withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
-}
-
 function decodePathSegment(segment: string): string | null {
   if (segment === "~dot") {
     return ".";
@@ -59,7 +50,10 @@ export function parseControlUiSessionPath(
   basePath = "",
   mainKey?: string,
 ): ControlUiSessionPathTarget | null {
-  const normalizedPath = normalizePath(pathname);
+  const trimmed = pathname.trim();
+  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  const normalizedPath =
+    withSlash.length > 1 && withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
   for (const namespace of ["chat", "dashboard"] as const) {
     const prefix = `${normalizeControlUiBasePath(basePath)}/${namespace}/`;
     if (!normalizedPath.startsWith(prefix)) {

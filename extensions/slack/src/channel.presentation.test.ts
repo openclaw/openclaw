@@ -1,19 +1,18 @@
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
-import { setSlackRuntime } from "./runtime.js";
 
-const handleSlackActionMock = vi.fn();
+const { handleSlackActionMock } = vi.hoisted(() => ({ handleSlackActionMock: vi.fn() }));
+vi.mock(import("./action-runtime.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  handleSlackAction: handleSlackActionMock,
+}));
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
 beforeEach(() => {
   handleSlackActionMock.mockReset();
-  setSlackRuntime({
-    channel: { slack: { handleSlackAction: handleSlackActionMock } },
-  } as never);
 });
-afterEach(() => setSlackRuntime(null as never));
 
 const cfg = { channels: { slack: { botToken: "xoxb-test", appToken: "xapp-test" } } };
 it("keeps data literal and authored mentions and commands intact in mixed presentation edits", async () => {

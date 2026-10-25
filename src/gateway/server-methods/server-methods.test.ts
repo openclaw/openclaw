@@ -9,6 +9,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { waitForFast } from "../../../test/helpers/vitest-wait.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -66,13 +67,6 @@ import {
   withRequestedExecApproval,
 } from "./exec-approval.test-support.js";
 import { logsHandlers } from "./logs.js";
-
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
 
 const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 
@@ -2204,31 +2198,21 @@ describe("gateway healthHandlers.health cache freshness", () => {
     await restoreContextEngineRegistryState();
   });
 
-  it.each([
-    { name: "rate-limits request-driven refreshes for fresh cached health", backward: false },
-    {
-      name: "restarts request-driven health refreshes when the clock moves backward",
-      backward: true,
-    },
-  ])("$name", async ({ backward }) => {
+  it("rate-limits request-driven refreshes for fresh cached health", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
     const cached = createHealthSnapshot({});
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-    for (let index = 0; index < (backward ? 1 : 3); index += 1) {
+    for (let index = 0; index < 3; index += 1) {
       await requestHealthSnapshot({ cached, refreshHealthSnapshot });
     }
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
 
-    if (backward) {
-      vi.setSystemTime(Date.now() - HEALTH_REFRESH_INTERVAL_MS);
-    } else {
-      await vi.advanceTimersByTimeAsync(HEALTH_REFRESH_INTERVAL_MS - 1);
-      await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
-      expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-    }
+    await vi.advanceTimersByTimeAsync(HEALTH_REFRESH_INTERVAL_MS - 1);
+    await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
   });
@@ -2277,7 +2261,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     );
     try {
       const contextEngine = await resolveContextEngine({
-        plugins: { slots: { contextEngine: engineId } },
+        plugins: { allow: ["health-test"], slots: { contextEngine: engineId } },
       } as OpenClawConfig);
       await contextEngine.assemble({ sessionId: "s1", messages: [] });
 

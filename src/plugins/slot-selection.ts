@@ -1,4 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveSelectedContextEnginePluginId,
+  type ContextEngineOwnerMetadata,
+} from "./config-state.js";
 import { isBundledManifestOwner } from "./manifest-owner-policy.js";
 import {
   loadPluginMetadataSnapshot,
@@ -11,6 +15,8 @@ export async function applySlotSelectionForPlugin(
   pluginId: string,
   preparedMetadata?: PluginMetadataSnapshot,
   beforeRuntimeInspection?: () => void,
+  warn?: (message: string) => void,
+  ownershipRecords?: readonly ContextEngineOwnerMetadata[],
 ): Promise<OpenClawConfig> {
   // Selection inspects the install candidate, never the running Gateway's inventory.
   const metadataSnapshot =
@@ -24,13 +30,21 @@ export async function applySlotSelectionForPlugin(
   if (!plugin) {
     return config;
   }
-  if (!plugin.kind && !isBundledManifestOwner(plugin)) {
+  // Reconstruct legacy ownership without letting a plugin-ID match displace a declared owner.
+  const legacyContextEngineOwnerId = resolveSelectedContextEnginePluginId(
+    config,
+    (ownershipRecords ?? metadataSnapshot.plugins).map((entry) =>
+      entry.id === plugin.id ? { id: entry.id } : entry,
+    ),
+  );
+  let selectedKind = plugin.kind;
+  if (!selectedKind && !isBundledManifestOwner(plugin)) {
     // Bundled manifests own slot declarations. Only legacy external plugins need
     // runtime kind inspection; enabling a bundled non-slot plugin must not execute its module.
     const { withPluginDiagnosticsReport } = await import("./status.js");
     // Importing diagnostics yields; recheck the install owner before plugin code executes.
     beforeRuntimeInspection?.();
-    return await withPluginDiagnosticsReport(
+    selectedKind = await withPluginDiagnosticsReport(
       {
         config,
         onlyPluginIds: [plugin.id],
@@ -39,11 +53,7 @@ export async function applySlotSelectionForPlugin(
       },
       (runtimeReport) => {
         const runtimePlugin = runtimeReport.plugins.find((entry) => entry.id === plugin.id);
-        return applyExclusiveSlotSelection({
-          config,
-          selectedId: plugin.id,
-          selectedKind: runtimePlugin?.kind ?? plugin.kind,
-        });
+        return runtimePlugin?.kind ?? plugin.kind;
       },
     );
   }
@@ -51,6 +61,9 @@ export async function applySlotSelectionForPlugin(
   return applyExclusiveSlotSelection({
     config,
     selectedId: plugin.id,
-    selectedKind: plugin.kind,
+    selectedKind,
+    contextEngineIds: plugin.contextEngineIds,
+    legacyContextEngineOwnerId,
+    warn,
   });
 }

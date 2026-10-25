@@ -15,6 +15,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createModelProviderLogin, type ModelProviderLogin } from "./login-controller.ts";
 import { ModelProviderLoginView } from "./login-view.tsx";
 import {
+  museCodeCapability,
   loginHarness,
   openPicker,
   selectProvider,
@@ -23,6 +24,7 @@ import {
 } from "./model-providers-page.login.test-support.ts";
 import {
   appendPage,
+  expandProvider,
   unmountPage,
   type ModelProvidersPageTestElement,
   startSelectedLogin,
@@ -59,23 +61,7 @@ describe("Models provider login", () => {
   ])("connects Muse Code (setup: $setup, entry: $entry)", async ({ setup, entry }) => {
     vi.spyOn(window, "open").mockReturnValue(null);
     const { context, request, answer } = loginHarness({
-      capabilities: [
-        {
-          provider: "meta",
-          apiKeySupported: true,
-          quickApiKeySetup: true,
-          loginOptions: [
-            {
-              id: "meta/muse-code",
-              brandId: "meta",
-              label: "Muse Code",
-              kind: "device-code",
-              featured: true,
-              requiresSetup: true,
-            },
-          ],
-        },
-      ],
+      capabilities: [museCodeCapability()],
     });
     const originalRequest = request.getMockImplementation()!;
     const authStatusReady = deferred();
@@ -91,18 +77,16 @@ describe("Models provider login", () => {
     });
     const page = appendPage(context);
     if (entry === "readiness") {
+      // The setup prompt shows only until a model works; Provider access connects after that.
+      const connect = setup ? "[data-model-readiness] button" : "[data-models-connect]";
       await waitForSolid(() => {
-        expect(
-          page.querySelector("[data-model-readiness]")?.getAttribute("data-model-readiness"),
-        ).toBe(setup ? "model-required" : "ready");
-        expect(
-          page.querySelector<HTMLButtonElement>("[data-model-readiness] button")?.disabled,
-        ).toBe(false);
+        expect(page.querySelector("[data-model-readiness]") !== null).toBe(setup);
+        expect(page.querySelector<HTMLButtonElement>(connect)?.disabled).toBe(false);
       });
       if (setup) {
         expect(page.view.props.loading).toBe(true);
       }
-      page.querySelector<HTMLButtonElement>("[data-model-readiness] button")!.click();
+      page.querySelector<HTMLButtonElement>(connect)!.click();
       await page.updateComplete;
     } else {
       await openPicker(page);
@@ -259,7 +243,7 @@ describe("Models provider login", () => {
       try {
         await chooseLogin(page, "Example browser sign-in");
         await waitForSolid(() =>
-          expect(page.querySelector<HTMLAnchorElement>(".wizard-step__sign-in a")?.href).toBe(
+          expect(page.querySelector<HTMLAnchorElement>(".wizard-sign-in a")?.href).toBe(
             "https://provider.example/sign-in",
           ),
         );
@@ -277,8 +261,10 @@ describe("Models provider login", () => {
           );
         }
         if (cancel) {
-          [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
-            .find((button) => button.textContent?.trim() === "Cancel")!
+          page
+            .querySelector<HTMLButtonElement>(
+              'openclaw-modal-dialog button[aria-label="Cancel sign-in"]',
+            )!
             .click();
           await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
           expect(session?.getStatus()).toBe("cancelled");
@@ -392,8 +378,19 @@ describe("Models provider login", () => {
       },
       { timeoutMs: null },
     );
-    expect(page.querySelector('input[type="password"][name="wizard-text"]')).not.toBeNull();
+    const input = page.querySelector<HTMLInputElement>(
+      'input[type="password"][name="wizard-text"]',
+    )!;
+    expect(input).not.toBeNull();
     await submitCredential(page);
+    await waitForSolid(() => expect(input.disabled).toBe(true));
+    expect(page.querySelector('input[name="wizard-text"]')).toBe(input);
+    expect(input.value).toBe("synthetic-test-credential");
+    expect(
+      [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
+        (button) => button.textContent?.trim() === "Cancel",
+      )?.disabled,
+    ).toBe(false);
 
     const dismissal = new CustomEvent("modal-cancel", { bubbles: true, cancelable: true });
     page.querySelector("openclaw-modal-dialog")!.dispatchEvent(dismissal);
@@ -748,10 +745,7 @@ describe("Models provider login", () => {
       ],
     });
     const page = appendPage(context);
-    await waitForSolid(() =>
-      expect(page.querySelector('[data-provider-id="example-owner"]')).not.toBeNull(),
-    );
-    const card = page.querySelector('[data-provider-id="example-owner"]')!;
+    const card = await expandProvider(page, "example-owner");
     const addAccount = [...card.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Add account",
     );
@@ -894,7 +888,7 @@ describe("Models provider login", () => {
     let controller!: ModelProviderLogin;
     const view = mountSolid(() => {
       controller = createModelProviderLogin({
-        getScope: () => ({ context, agentId }),
+        getScope: () => ({ context, agentId, connectionEpoch: 1 }),
         canStart: () => true,
         canContinue: () => true,
         refresh: async () => undefined,
@@ -938,7 +932,7 @@ describe("Models provider login", () => {
     let controller!: ModelProviderLogin;
     const view = mountSolid(() => {
       controller = createModelProviderLogin({
-        getScope: () => ({ context, agentId: "writer", authStatus }),
+        getScope: () => ({ context, agentId: "writer", connectionEpoch: 1, authStatus }),
         canStart: () => true,
         canContinue: () => true,
         refresh: async () => undefined,
@@ -980,7 +974,7 @@ describe("Models provider login", () => {
       const view = mountSolid(
         () => {
           controller = createModelProviderLogin({
-            getScope: () => ({ context, agentId: "writer" }),
+            getScope: () => ({ context, agentId: "writer", connectionEpoch: 1 }),
             canStart: () => true,
             canContinue: () => true,
             refresh: async () => undefined,

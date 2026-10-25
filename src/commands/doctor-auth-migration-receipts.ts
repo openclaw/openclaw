@@ -18,6 +18,7 @@ import {
   recordLegacyMigrationRun,
   recordLegacyMigrationSource,
 } from "../infra/state-migrations.receipts.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -53,13 +54,8 @@ export function prepareAuthProfileSourceReceipt(params: {
   env?: NodeJS.ProcessEnv;
 }): AuthProfileMigrationSourceReceipt {
   const sourceBytes = fs.readFileSync(params.pathname);
-  let sourceRecordCount = 0;
-  try {
-    const parsed = JSON.parse(sourceBytes.toString("utf8")) as unknown;
-    sourceRecordCount = isRecord(parsed) ? Object.keys(parsed).length : 0;
-  } catch {
-    // The migration parser reports malformed input separately; receipts never include its bytes.
-  }
+  const parsed = parseAuthProfileMigrationSource({ sourceBytes, sourcePath: params.pathname });
+  const sourceRecordCount = isRecord(parsed) ? Object.keys(parsed).length : 0;
   const now = new Date(params.now());
   const sourcePath = path.resolve(params.pathname);
   const sourceSha256 = sha256Hex(sourceBytes);
@@ -72,7 +68,7 @@ export function prepareAuthProfileSourceReceipt(params: {
     sourceSha256,
     sourceSizeBytes: sourceBytes.byteLength,
     sourceRecordCount,
-    sourceBytes: Buffer.from(sourceBytes),
+    sourceBytes,
     targetDatabasePath: path.resolve(params.targetDatabasePath),
     targetTable: params.targetTable,
     ...(params.targetStoreKey ? { targetStoreKey: params.targetStoreKey } : {}),
@@ -105,13 +101,14 @@ export function assertAuthProfileMigrationSourcesUnchanged(
 }
 
 export function parseAuthProfileMigrationSource(
-  receipt: AuthProfileMigrationSourceReceipt | undefined,
+  receipt: Pick<AuthProfileMigrationSourceReceipt, "sourceBytes" | "sourcePath"> | undefined,
 ): unknown {
   if (!receipt?.sourceBytes) {
     return null;
   }
+  const text = decodeUtf8Input(receipt.sourceBytes, `Legacy auth source ${receipt.sourcePath}`);
   try {
-    return JSON.parse(receipt.sourceBytes.toString("utf8")) as unknown;
+    return JSON.parse(text) as unknown;
   } catch {
     return null;
   }

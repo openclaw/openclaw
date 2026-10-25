@@ -54,9 +54,18 @@ it("keeps compact custom snooze keyboard input inside its popover", async () => 
   const field = page.getByLabelText("Date and time", { exact: true });
   const picker = menu.querySelector<HTMLElement>(".session-menu__snooze-picker")!;
   await expect.element(field).toHaveFocus();
+  const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+  // Date/time segments and the native picker button precede the next form control.
+  for (let step = 0; step < 8 && document.activeElement !== cancel.element(); step += 1) {
+    await userEvent.tab();
+    expect(picker.contains(document.activeElement)).toBe(true);
+  }
+  await expect.element(cancel).toHaveFocus();
   await userEvent.tab();
-  await expect.element(page.getByRole("button", { name: "Cancel", exact: true })).toHaveFocus();
+  await expect.element(page.getByRole("button", { name: "Snooze", exact: true })).toHaveFocus();
   await userEvent.tab();
+  await expect.element(field).toHaveFocus();
+  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
   await expect.element(page.getByRole("button", { name: "Snooze", exact: true })).toHaveFocus();
   await userEvent.tab();
   await expect.element(field).toHaveFocus();

@@ -23,63 +23,48 @@ function resolve(
   });
 }
 
-async function createNpmShimPair(executable: string) {
+async function createHost(executable: string, native = false) {
   const binDir = tempDirs.make(`openclaw-node-host-${executable}-`);
   const barePath = path.join(binDir, executable);
   const commandPath = path.join(binDir, `${executable}.cmd`);
-  await fs.writeFile(barePath, "#!/bin/sh\nexit 0\n", "utf8");
-  await fs.writeFile(commandPath, "@echo off\r\nexit /b 0\r\n", "utf8");
-  if (process.platform !== "win32") {
-    await fs.chmod(barePath, 0o755);
+  if (native) {
+    await fs.copyFile(process.execPath, barePath);
+  } else {
+    await fs.writeFile(barePath, "#!/bin/sh\nexit 0\n", "utf8");
+    await fs.writeFile(commandPath, "@echo off\r\nexit /b 0\r\n", "utf8");
+    if (process.platform !== "win32") {
+      await fs.chmod(barePath, 0o755);
+    }
   }
   return { barePath, binDir, commandPath };
 }
-
-async function createBareNativeHost(executable: string) {
-  const binDir = tempDirs.make(`openclaw-node-host-${executable}-`);
-  const barePath = path.join(binDir, executable);
-  await fs.copyFile(process.execPath, barePath);
-  return { barePath, binDir };
-}
-
-it.runIf(process.platform === "win32").each([
-  ["codex", "fallback"],
-  ["claude", "prefer"],
-  ["opencode", "fallback"],
-  ["pi", "direct"],
-] as const)("selects the Windows npm launcher for the %s catalog", async (executable, strategy) => {
-  const { binDir, commandPath } = await createNpmShimPair(executable);
-  expect(resolve(executable, binDir, strategy)).toEqual({ executable: commandPath });
-});
 
 it.runIf(process.platform === "win32").each([true, false])(
   "preserves an explicit includeExtensionless=%s Windows override",
   async (includeExtensionless) => {
     const executable = "custom-host";
-    const { barePath, binDir } = await (includeExtensionless
-      ? createNpmShimPair(executable)
-      : createBareNativeHost(executable));
+    const { barePath, binDir } = await createHost(executable, !includeExtensionless);
     expect(resolve(executable, binDir, "direct", includeExtensionless)).toEqual(
       includeExtensionless ? { executable: barePath } : undefined,
     );
   },
 );
 
-it.runIf(process.platform === "win32").each([["direct"], ["fallback"], ["prefer"]] as const)(
+it.runIf(process.platform === "win32").each(["direct", "fallback", "prefer"] as const)(
   "falls back to a bare-only Windows host for %s",
   async (strategy) => {
-    const { barePath, binDir } = await createBareNativeHost(`bare-${strategy}`);
+    const { barePath, binDir } = await createHost(`bare-${strategy}`, true);
     expect(resolve(`bare-${strategy}`, binDir, strategy, undefined, ".CMD;.EXE")).toEqual({
       executable: barePath,
     });
   },
 );
 
-it.runIf(process.platform === "win32").each([["direct"], ["fallback"], ["prefer"]] as const)(
+it.runIf(process.platform === "win32").each(["direct", "fallback", "prefer"] as const)(
   "prefers a later Windows PATHEXT launcher over an earlier bare shim for %s",
   async (strategy) => {
-    const { binDir: bareDir } = await createBareNativeHost(`later-${strategy}`);
-    const { binDir: launcherDir, commandPath } = await createNpmShimPair(`later-${strategy}`);
+    const { binDir: bareDir } = await createHost(`later-${strategy}`, true);
+    const { binDir: launcherDir, commandPath } = await createHost(`later-${strategy}`);
     const pathEnv = `${bareDir};${launcherDir}`;
     expect(resolve(`later-${strategy}`, pathEnv, strategy)).toEqual({ executable: commandPath });
   },
@@ -88,7 +73,7 @@ it.runIf(process.platform === "win32").each([["direct"], ["fallback"], ["prefer"
 it.runIf(process.platform !== "win32")(
   "keeps the extensionless npm launcher on POSIX",
   async () => {
-    const { barePath, binDir } = await createNpmShimPair("codex");
+    const { barePath, binDir } = await createHost("codex");
     expect(resolve("codex", binDir)).toEqual({ executable: barePath });
   },
 );

@@ -21,7 +21,6 @@ import {
   normalizeVideoGenerationDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
-  type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { parseGeminiAuth } from "./gemini-auth.js";
@@ -95,28 +94,6 @@ function resolveResolution(params: {
   }
   const maxEdge = Math.max(parsedSize.width, parsedSize.height);
   return maxEdge >= 1920 ? "1080p" : maxEdge >= 1280 ? "720p" : undefined;
-}
-
-function resolveInputImage(req: VideoGenerationRequest) {
-  const input = req.inputImages?.[0];
-  if (!input?.buffer) {
-    return undefined;
-  }
-  return {
-    imageBytes: input.buffer.toString("base64"),
-    mimeType: normalizeOptionalString(input.mimeType) || "image/png",
-  };
-}
-
-function resolveInputVideo(req: VideoGenerationRequest) {
-  const input = req.inputVideos?.[0];
-  if (!input?.buffer) {
-    return undefined;
-  }
-  return {
-    videoBytes: input.buffer.toString("base64"),
-    mimeType: normalizeOptionalString(input.mimeType) || "video/mp4",
-  };
 }
 
 function resolveGoogleGeneratedVideoFileDownloadUrl(params: {
@@ -345,11 +322,23 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
     let usedRestFallback = false;
     let operation;
     try {
+      const inputImage = req.inputImages?.[0];
+      const inputVideo = req.inputVideos?.[0];
       operation = await client.models.generateVideos({
         model: stripGoogleProviderPrefix(model),
         prompt: req.prompt,
-        image: resolveInputImage(req),
-        video: resolveInputVideo(req),
+        image: inputImage?.buffer
+          ? {
+              imageBytes: inputImage.buffer.toString("base64"),
+              mimeType: normalizeOptionalString(inputImage.mimeType) || "image/png",
+            }
+          : undefined,
+        video: inputVideo?.buffer
+          ? {
+              videoBytes: inputVideo.buffer.toString("base64"),
+              mimeType: normalizeOptionalString(inputVideo.mimeType) || "video/mp4",
+            }
+          : undefined,
         config: {
           ...(durationSeconds !== undefined ? { durationSeconds } : {}),
           ...(aspectRatio ? { aspectRatio } : {}),

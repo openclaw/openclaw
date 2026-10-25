@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import { readUpdateTargetCliOptions } from "../cli/update-cli/update-command-cli-options.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
@@ -14,6 +14,7 @@ import * as schemaVersions from "../state/openclaw-schema-versions.js";
 import { ignoreMissingPath } from "./errno.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 import * as canaryCmd from "./update-candidate-canary-commands.js";
 import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
@@ -68,7 +69,7 @@ export async function validateUpdateCandidateCanary(params: {
   const started = Date.now();
   let rehearsal: UpdateCandidateRehearsal | undefined;
   let cleanupUncertain = false;
-  const sourceEnv = params.env ?? process.env;
+  const { env: sourceEnv = process.env, onStep, onProgress, root } = params;
   let env: NodeJS.ProcessEnv = { ...sourceEnv };
   const logTail: string[] = [];
   const stepLogTail: string[] = [];
@@ -83,7 +84,6 @@ export async function validateUpdateCandidateCanary(params: {
     durationMs: Date.now() - stepStartedAt,
     exitCode,
   });
-  const { onStep, onProgress } = params;
   let receiptFailed = false;
   const reportReceipt = async <Value>(
     callback: ((value: Value) => void | Promise<void>) | undefined,
@@ -149,14 +149,14 @@ export async function validateUpdateCandidateCanary(params: {
     return safe;
   };
   const launch = (
-    entry: string,
+    target: canaryCmd.UpdateCanaryTarget,
     args: string[],
     observers: Pick<Parameters<typeof launchCanary>[0], "onLine" | "hidesLine" | "onStdout"> = {},
   ) => {
     params.signal?.throwIfAborted();
     return launchCanary({
       ...observers,
-      entry,
+      target,
       args,
       root: params.root,
       env,
@@ -171,13 +171,15 @@ export async function validateUpdateCandidateCanary(params: {
     if (!entry) {
       throw new Error("The update is missing its Gateway executable");
     }
-    const continuationEntry = path.join(
-      params.root,
-      "dist",
-      runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
-    );
+    const cliTarget: canaryCmd.UpdateCanaryTarget = { kind: "cli", entryPath: entry };
+    const continuationEntry = resolveRuntimeWorkerUrl({
+      ...runtimeProcessEntrypoints.updateMigratedFinalize,
+      root,
+    });
     try {
-      await fs.lstat(continuationEntry);
+      if (!isEmbeddedStandaloneModule(continuationEntry.href)) {
+        await fs.lstat(continuationEntry);
+      }
     } catch (error) {
       ignoreMissingPath(error);
       if (params.migrationPolicy === "startup-only") {
@@ -304,7 +306,7 @@ export async function validateUpdateCandidateCanary(params: {
         : undefined;
       let checksCompletedAt: number | undefined;
       const disposalWarnings: string[] = [];
-      const running = launch(command.entry ?? entry, command.args, {
+      const running = launch(command.target ?? cliTarget, command.args, {
         hidesLine: sectionTiming?.hidesLine,
         onLine: (line) => {
           sectionTiming?.observeLine(line);
@@ -544,16 +546,16 @@ export async function validateUpdateCandidateCanary(params: {
     progress.phase = "startup";
     await beginStep({ name: "candidate-gateway-startup", command: "gateway run" });
     startBudget();
-    remaining();
+    // Doctor attests the deployment; only the Gateway uses runtime overrides.
+    await rehearsal.prepareRuntime(remaining);
     const args = ["gateway", "run", ...UPDATE_CANARY_PROGRESS_ARGS, "--bind", "loopback"];
     const startup = readiness.observeUpdateCandidateStartup({ env, stateDir: params.stateDir });
     const processExit = new AbortController();
-    const running = launch(entry, [...args, "--port", String(port)], {
+    const running = launch(cliTarget, [...args, "--port", String(port)], {
       onLine: startup.onLine,
     });
     const abortExited = () => processExit.abort();
-    running.child.once("exit", abortExited);
-    running.child.once("error", abortExited);
+    running.child.once("exit", abortExited).once("error", abortExited);
     let startupFailure: unknown;
     try {
       const probeFailure = await readiness.waitForUpdateCandidateReadiness({

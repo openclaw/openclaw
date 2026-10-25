@@ -85,6 +85,16 @@ function toolAllowed(policy: GatewayToolPolicyConfig, name: string): boolean {
   return policy.allow.some((entry) => normalizeToolPolicyName(entry) === name);
 }
 
+/** Query the execution contract for tools such as exec that have no action argument. */
+export function isGatewayToolAllowedWithoutAction(
+  toolName: string,
+  config: OpenClawConfig | undefined = getRuntimeConfigSnapshot() ?? undefined,
+): boolean {
+  const policy = config?.tools?.gatewayPolicy;
+  const name = normalizeToolPolicyName(toolName);
+  return !policy || (toolAllowed(policy, name) && policyActions(policy, name) === undefined);
+}
+
 /** Capture the deployment policy when constructing the tool executor. */
 export function createGatewayToolPolicyAssertion(
   tool: GatewayToolPolicyTarget,

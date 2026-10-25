@@ -11,6 +11,7 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
+import * as auth from "../sessions/auth-profile-preservation.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
 import {
@@ -49,8 +50,9 @@ const ANTHROPIC_OPUS_ID = "claude-opus-4-6";
 const OPENAI_GPT_MODEL = "openai/gpt-5.4";
 const OPENAI_GPT_ID = "gpt-5.4";
 
+const applyAuthOverride = auth.applyModelOverrideWithAuthProfileCompatibility;
 type ProviderAuthMetadataSnapshot = NonNullable<
-  ApplySessionsPatchArgs["providerAuthMetadataSnapshot"]
+  Parameters<typeof applyAuthOverride>[0]["metadataSnapshot"]
 >;
 
 const EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT = {
@@ -85,7 +87,6 @@ function runPatch({
   storeKey = MAIN_SESSION_KEY,
   agentId,
   loadGatewayModelCatalog,
-  providerAuthMetadataSnapshot,
   archivedBy,
   mainEntry,
   ...patch
@@ -96,7 +97,6 @@ function runPatch({
     storeKey,
     agentId,
     loadGatewayModelCatalog,
-    providerAuthMetadataSnapshot,
     archivedBy,
     patch: { key: storeKey, ...patch },
   });
@@ -158,14 +158,17 @@ async function applyMainModelPatch(params: {
   catalogRefs?: string[];
   providerAuthMetadataSnapshot?: ProviderAuthMetadataSnapshot;
 }) {
+  const metadataSnapshot =
+    params.providerAuthMetadataSnapshot ?? EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT;
+  using _ = vi
+    .spyOn(auth, "applyModelOverrideWithAuthProfileCompatibility")
+    .mockImplementation((options) => applyAuthOverride({ ...options, metadataSnapshot }));
   return await patchOk({
     store: params.store,
     cfg: params.cfg,
     model: params.model,
     loadGatewayModelCatalog:
       params.catalogRefs === undefined ? undefined : loadCatalog(...params.catalogRefs),
-    providerAuthMetadataSnapshot:
-      params.providerAuthMetadataSnapshot ?? EMPTY_PROVIDER_AUTH_METADATA_SNAPSHOT,
   });
 }
 
@@ -491,6 +494,22 @@ describe("gateway sessions patch", () => {
     expect(pinned.updatedAt).toBeGreaterThan(1);
   });
 
+  test("commits an icon or color change without ageing the session row", async () => {
+    const store = mainStoreEntry({ sessionId: "sess-icon" });
+
+    const iconed = await patchOk({ store, icon: "✅", expectedSessionId: "sess-icon" });
+    expect(iconed.icon).toBe("✅");
+    expect(iconed.updatedAt).toBe(1);
+
+    const cleared = await patchOk({ store, icon: null, color: null });
+    expect(cleared.icon).toBeUndefined();
+    expect(cleared.updatedAt).toBe(1);
+
+    const renamed = await patchOk({ store, icon: "🐛", label: "Waiting" });
+    expect(renamed.icon).toBe("🐛");
+    expect(renamed.updatedAt).toBeGreaterThan(1);
+  });
+
   test("stores sanitized agent status with attention and a bounded TTL", async () => {
     const before = Date.now();
     const entry = await patchOk({
@@ -519,18 +538,6 @@ describe("gateway sessions patch", () => {
       attention: null,
     });
     expect(entry.agentStatus).toBeUndefined();
-  });
-
-  test.each([
-    { field: "responseUsage", value: "off" },
-    { field: "reasoningLevel", value: "off" },
-    { field: "verboseLevel", value: "full" },
-    { field: "elevatedLevel", value: "off" },
-    { field: "elevatedLevel", value: "on" },
-  ] as const)("persists explicit $field=$value", async ({ field, value }) => {
-    const entry = await patchOk({ [field]: value });
-    // Explicit off values must survive configured defaults, including messages.responseUsage.
-    expect(entry[field]).toBe(value);
   });
 
   test.each(["thinkingLevel", "contextWindow", "elevatedLevel"] as const)(
@@ -582,6 +589,8 @@ describe("gateway sessions patch", () => {
   test.each([
     { field: "category", raw: "  Research  ", normalized: "Research" },
     { field: "color", raw: "  Blue ", normalized: "blue" },
+    { field: "verboseLevel", raw: "  EVERYTHING  ", normalized: "full" },
+    { field: "traceLevel", raw: "  UNFILTERED  ", normalized: "raw" },
   ] as const)("normalizes and clears $field", async ({ field, raw, normalized }) => {
     const entry = await patchOk({ mainEntry: {}, [field]: raw });
     expect(entry[field]).toBe(normalized);
@@ -631,6 +640,11 @@ describe("gateway sessions patch", () => {
 
   test.each([
     { patch: { verboseLevel: "maybe" }, error: 'invalid verboseLevel (use "on"|"off"|"full")' },
+    { patch: { traceLevel: "maybe" }, error: 'invalid traceLevel (use "on"|"off"|"raw")' },
+    {
+      patch: { verboseLevel: "maybe", traceLevel: "maybe" },
+      error: 'invalid verboseLevel (use "on"|"off"|"full")',
+    },
     { patch: { elevatedLevel: "maybe" }, error: "invalid elevatedLevel" },
     {
       patch: { color: "crimson" },
@@ -666,7 +680,6 @@ describe("gateway sessions patch", () => {
     {
       name: "provider auth alias",
       overrides: {
-        sessionId: "sess-alias",
         providerOverride: "byteplus",
         modelOverride: "seedance-1-0-lite-t2v-250428",
         authProfileOverride: "byteplus:work",
@@ -682,7 +695,6 @@ describe("gateway sessions patch", () => {
     {
       name: "unprefixed default provider",
       overrides: {
-        sessionId: "sess-unprefixed-default-provider",
         authProfileOverride: "work",
         authProfileOverrideSource: "user",
         authProfileOverrideCompactionCount: 4,
@@ -696,7 +708,6 @@ describe("gateway sessions patch", () => {
     {
       name: "unprefixed provider change",
       overrides: {
-        sessionId: "sess-unprefixed-provider-change",
         authProfileOverride: "work",
         authProfileOverrideCompactionCount: 4,
       },

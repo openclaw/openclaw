@@ -31,7 +31,6 @@ import {
 } from "./code-mode.js";
 import {
   createCodeModeHarness,
-  fakeTool,
   mcpTool,
   pluginTool,
   resetCodeModeTestState,
@@ -52,6 +51,7 @@ import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
 import { createReadTool } from "./sessions/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { addClientToolsToToolCatalog, restrictToolSearchCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
@@ -348,8 +348,8 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
   const codeModeSkills = resolveCodeModeSkills({
     skillsPrompt: await resolveSkillsPrompt({ entries: [learned], workspaceDir: "/workspace" }),
     candidates: [learned.skill],
-    reader: async () => "# Learned instructions\n",
   });
+  codeModeSkills[0]!.reader = async () => "# Learned instructions\n";
   const used: Array<{ event: DiagnosticEventPayload; skillFile?: string }> = [];
   const stop = onTrustedInternalDiagnosticEvent(
     (event, _metadata, privateData) => {
@@ -924,3 +924,26 @@ it.each(["aborted", "timeout"] as const)(
     await next.check('return (await load("key")) === undefined;', true);
   },
 );
+
+it("keeps an astral skill description whole at the skills.list cap", async () => {
+  const prefix = "a".repeat(511);
+  const skills = [
+    {
+      name: "boundary-guide",
+      description: `${prefix}😀tail`,
+      location: "/skills/boundary-guide/SKILL.md",
+      source: { filePath: "/skills/boundary-guide/SKILL.md" },
+    },
+  ];
+  const harness = createCatalogCodeModeHarness(createInstalledSkillTools(skills), {
+    codeModeSkills: skills,
+  });
+  const result = await harness.complete("return await skills.list(0);");
+  expectCompleted(result, [
+    {
+      name: "boundary-guide",
+      description: prefix,
+      location: "/skills/boundary-guide/SKILL.md",
+    },
+  ]);
+});

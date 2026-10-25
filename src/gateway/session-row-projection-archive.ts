@@ -168,10 +168,15 @@ export function createSessionRowProjectionArchive(params: {
           readPins.delete(pins);
           pins = new Set(ids);
           readPins.add(pins);
+          limit = Math.max(limit, pins.size);
           trim();
         },
         release() {
           readPins.delete(pins);
+          limit = Math.max(
+            DEFAULT_ARCHIVED_MATERIALIZED_ROWS,
+            ...Array.from(readPins, (heldPins) => heldPins.size),
+          );
           trim();
         },
       };

@@ -73,13 +73,13 @@ function remove(name: string) {
   return deleteSecretStoreEntry({ scope: team, name, database });
 }
 function readHidden(name: string) {
-  return readHiddenGitHubSecretRecord({ name, database });
+  return readHiddenGitHubSecretRecord({ name });
 }
 function removeHidden(name: string) {
-  return deleteHiddenGitHubSecretRecord({ name, database });
+  return deleteHiddenGitHubSecretRecord({ name });
 }
-function writeHidden(name: string, value: string, updatedBy?: string | null) {
-  return writeHiddenGitHubSecretRecord({ name, value, updatedBy, database });
+function writeHidden(name: string, value: string) {
+  return writeHiddenGitHubSecretRecord({ name, value });
 }
 
 function invalidGitHubNames(prefix: string) {
@@ -129,7 +129,9 @@ function rawWriter(now: number) {
 function createDatabaseOptions() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secret-store-")));
   roots.push(root);
-  return { path: path.join(root, "state.sqlite") };
+  fs.mkdirSync(path.join(root, "state"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  return { path: path.join(root, "state", "openclaw.sqlite") };
 }
 
 function countStoredRows(name: string): number {
@@ -206,16 +208,15 @@ describe("secret store", () => {
       vi.useFakeTimers();
       vi.setSystemTime(now - ageMs);
       await write(name, "temporary-value", { kind, allowedHosts });
-      const consumption = consumeGitHubSetupHandoff({ name, nowMs: now, database });
-      const duplicate = accepted
-        ? consumeGitHubSetupHandoff({ name, nowMs: now, database })
-        : undefined;
+      vi.setSystemTime(now);
+      const consumption = consumeGitHubSetupHandoff({ name });
+      const duplicate = accepted ? consumeGitHubSetupHandoff({ name }) : undefined;
       expect(await consumption).toBe(accepted ? "temporary-value" : undefined);
       if (accepted) {
         expect(await duplicate).toBeUndefined();
         expect(countStoredRows(name)).toBe(0);
         await write("DEPLOY_TOKEN", "unrelated-value");
-        expect(await consumeGitHubSetupHandoff({ name: "DEPLOY_TOKEN", database })).toBeUndefined();
+        expect(await consumeGitHubSetupHandoff({ name: "DEPLOY_TOKEN" })).toBeUndefined();
         expect(await read("DEPLOY_TOKEN")).toEqual({ ok: true, value: "unrelated-value" });
       }
     },
@@ -336,14 +337,14 @@ describe("secret store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     await write(setupName, "abandoned-value", { allowedHosts: [] });
-    await writeHidden(deviceName, "device-value", "test");
-    await writeHidden(oauthName, "oauth-value", "test");
+    await writeHidden(deviceName, "device-value");
+    await writeHidden(oauthName, "oauth-value");
     await write("UNRELATED_SECRET", "keep-value");
 
-    expect(await listHiddenGitHubSecretRecords({ prefix: "github-device", database })).toEqual([
+    expect(await listHiddenGitHubSecretRecords({ prefix: "github-device" })).toEqual([
       { name: deviceName, value: "device-value" },
     ]);
-    expect(await listHiddenGitHubSecretRecords({ prefix: "github-oauth", database })).toEqual([
+    expect(await listHiddenGitHubSecretRecords({ prefix: "github-oauth" })).toEqual([
       { name: oauthName, value: "oauth-value" },
     ]);
     expect(await readHidden(deviceName)).toBe("device-value");
@@ -363,13 +364,14 @@ describe("secret store", () => {
     }
   });
 
-  it.each(["github-device", "github-oauth"] as const)(
+  it.each(["github-device", "github-oauth", undefined] as const)(
     "lists exact live %s records without materializing unrelated credentials",
     async (prefix) => {
       const now = Date.parse("2026-01-01T00:00:00.000Z");
       const insert = rawWriter(now);
       vi.useFakeTimers();
       vi.setSystemTime(now);
+      const selected = prefix ?? "github-device";
       const cases = [
         { accept: true },
         { created: now - 15 * 60_000 + 1, accept: true },
@@ -380,12 +382,12 @@ describe("secret store", () => {
         { kind: "env", accept: false },
         { allowedHosts: "[]", accept: false },
         { deleted: now, accept: false },
-        ...invalidGitHubNames(prefix).map((name) => ({ name, accept: false })),
+        ...invalidGitHubNames(selected).map((name) => ({ name, accept: false })),
       ];
       const fixtures = cases.map((entry, index) =>
         Object.assign(
           {
-            name: `${prefix}-${index.toString(16).padStart(32, "0")}`,
+            name: `${selected}-${index.toString(16).padStart(32, "0")}`,
             value: `synthetic-parity:${prefix}:${index}`,
           },
           entry,
@@ -394,23 +396,22 @@ describe("secret store", () => {
       for (const entry of fixtures.toReversed()) {
         insert(entry);
       }
-      const sibling = prefix === "github-device" ? "github-oauth" : "github-device";
+      const sibling = selected === "github-device" ? "github-oauth" : "github-device";
       insert({ name: `${sibling}-${"a".repeat(32)}`, value: `synthetic-sibling:${prefix}` });
       for (let index = 0; index < 64; index++) {
         insert({ name: `UNRELATED_${index}`, value: `synthetic-unrelated:${prefix}:${index}` });
       }
-      expect(
-        (await listHiddenGitHubSecretRecords({ prefix, database })).map(({ name }) => name),
-      ).toEqual(
-        fixtures
-          .filter((entry) => entry.accept)
-          .map((entry) => entry.name)
-          .toSorted(),
+      const expected = fixtures.filter((entry) => entry.accept).map((entry) => entry.name);
+      if (prefix === undefined) {
+        expected.push(`${sibling}-${"a".repeat(32)}`);
+      }
+      expect((await listHiddenGitHubSecretRecords({ prefix })).map(({ name }) => name)).toEqual(
+        expected.toSorted(),
       );
       for (const entry of fixtures) {
         expect(isRegistered(entry.value)).toBe(entry.accept);
       }
-      expect(isRegistered(`synthetic-sibling:${prefix}`)).toBe(false);
+      expect(isRegistered(`synthetic-sibling:${prefix}`)).toBe(prefix === undefined);
       expect(isRegistered(`synthetic-unrelated:${prefix}:0`)).toBe(false);
     },
   );
@@ -422,8 +423,8 @@ describe("secret store", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     await write(setupName, "setup-value", { allowedHosts: [] });
-    await writeHidden(deviceName, "device-value", "test");
-    await writeHidden(oauthName, "oauth-value", "test");
+    await writeHidden(deviceName, "device-value");
+    await writeHidden(oauthName, "oauth-value");
 
     vi.setSystemTime(new Date("2026-01-01T00:10:00.001Z"));
     expect(purge()).toBe(1);
@@ -551,8 +552,8 @@ describe("secret store", () => {
   it("validates and hard-deletes exact hidden GitHub device and OAuth records", async () => {
     const deviceName = "github-device-66666666666666666666666666666666";
     const oauthName = "github-oauth-66666666666666666666666666666666";
-    await writeHidden(deviceName, "device-value", null);
-    await writeHidden(oauthName, "oauth-value", undefined);
+    await writeHidden(deviceName, "device-value");
+    await writeHidden(oauthName, "oauth-value");
 
     await expect(write(oauthName, "oauth-value", { updatedBy: null })).rejects.toThrow(
       expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }),
@@ -561,10 +562,10 @@ describe("secret store", () => {
       expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }),
     );
     await expect(
-      writeHidden("github-device-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "wrong-case", null),
+      writeHidden("github-device-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "wrong-case"),
     ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
     await expect(
-      writeHidden("github-setup-66666666666666666666666666666666", "wrong-owner", null),
+      writeHidden("github-setup-66666666666666666666666666666666", "wrong-owner"),
     ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_INVALID_NAME" }));
 
     await removeHidden(deviceName);

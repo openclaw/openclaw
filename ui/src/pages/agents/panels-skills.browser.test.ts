@@ -30,19 +30,73 @@ function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {
     configLoading: false,
     configSaving: false,
     configDirty: false,
+    presentationRetired: Promise.withResolvers<void>().promise,
     filter: "",
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
     onToggle: () => false,
     onClear: () => undefined,
     onDisableAll: () => false,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
+    onConfigReload: async () => undefined,
+    onConfigSave: async () => undefined,
     ...overrides,
   };
 }
 
 describe("agents skills panel (browser)", () => {
+  it("retains skill rows and diagnostics when a refresh returns new snapshots", async () => {
+    const container = document.createElement("div");
+    const params = skillsParams([
+      createSkill({
+        name: "First skill",
+        disabled: true,
+        missing: { bins: ["synthetic-tool"], anyBins: [], env: [], config: [], os: [] },
+      }),
+      createSkill({ name: "Second skill" }),
+    ]);
+    const view = mountSolid(AgentSkills, params, container);
+    await waitForSolid(() => {
+      expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(2);
+      expect(container.textContent).not.toContain("Loading");
+    });
+    const rows = [...container.querySelectorAll(".agent-skill-row")];
+    const diagnostics = [...rows[0]!.querySelectorAll(".settings-row__desc")];
+    const filter = container.querySelector("input[name=agent-skills-filter]");
+    const refreshed = deferred<SkillStatusReport>();
+    view.update({
+      ...params,
+      agentSkillsRead: { agentId: "main", result: refreshed.promise },
+    });
+    await waitForSolid(() => expect(container.textContent).toContain("Loading"));
+    expect(container.querySelector("input[name=agent-skills-filter]")).toBe(filter);
+    expect(container.querySelectorAll(".agent-skill-row")[0]).toBe(rows[0]);
+    expect(container.querySelectorAll(".agent-skill-row")[1]).toBe(rows[1]);
+
+    const next = structuredClone(params.agentSkillsReport!);
+    next.skills[0]!.description = "Updated description";
+    next.skills.reverse();
+    refreshed.resolve(next);
+    await waitForSolid(() => expect(container.textContent).toContain("Updated description"));
+    expect(container.querySelectorAll(".agent-skill-row")[0]).toBe(rows[1]);
+    expect(container.querySelectorAll(".agent-skill-row")[1]).toBe(rows[0]);
+    const currentDiagnostics = rows[0]!.querySelectorAll(".settings-row__desc");
+    expect(currentDiagnostics).toHaveLength(diagnostics.length);
+    diagnostics.forEach((diagnostic, index) => expect(currentDiagnostics[index]).toBe(diagnostic));
+    expect(container.querySelector("input[name=agent-skills-filter]")).toBe(filter);
+
+    const resolved = structuredClone(next);
+    resolved.skills[1]!.missing.bins = [];
+    resolved.skills[1]!.disabled = false;
+    resolved.skills[0]!.missing.bins = ["new-tool"];
+    const changed = deferred<SkillStatusReport>();
+    view.update({ ...params, agentSkillsRead: { agentId: "main", result: changed.promise } });
+    changed.resolve(resolved);
+    await waitForSolid(() => expect(rows[1]!.textContent).toContain("new-tool"));
+    expect(rows[0]!.textContent).not.toContain("synthetic-tool");
+    expect(container.querySelectorAll(".agent-skill-row")[0]).toBe(rows[1]);
+    expect(container.querySelectorAll(".agent-skill-row")[1]).toBe(rows[0]);
+  });
+
   it("shows inherited skills while resetting and restores the allowlist after rejection before retry", async () => {
     const first = deferred();
     const retry = deferred();
@@ -295,7 +349,7 @@ describe("agents skills panel (browser)", () => {
     );
     const toggle = learnedRow?.querySelector<HTMLInputElement>("input.settings-toggle__input");
     expect(toggle?.checked).toBe(true);
-    expect(toggle?.disabled).toBe(true);
+    expect(toggle?.hasAttribute("disabled")).toBe(true);
     expect(learnedRow?.textContent).toContain("archive in Workshop to hide");
     expect(container.textContent).toContain("2/2");
   });

@@ -6,31 +6,29 @@ import {
   openBrowserActions,
   type BrowserRequestEnvelope,
 } from "../../../components/browser/browser-panel-controller-test-support.ts";
+import { createApplicationGatewaySnapshot } from "../../../test-helpers/application-context-fixtures.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import type { BoardWidget } from "../types.ts";
+import { createBoardWidget } from "../widget.test-support.ts";
 import "./browser.tsx";
 
 const sessionKey = "agent:main:dashboard-test";
 const dashboardIdentity = { sessionKey, name: "status", instanceId: "first" };
 const browserMethods = ["browser.request", "browser.dashboard.request"];
 function widget(instanceId: string): BoardWidget {
-  return {
+  return createBoardWidget({
     name: "status",
     instanceId,
-    tabId: "main",
     contentKind: "plugin",
     pluginKind: "browser:dashboard",
     props: { url: "http://status.example" },
     sizeW: 12,
     sizeH: 8,
-    position: 0,
-    revision: 1,
-    grantState: "none",
-  };
+  });
 }
 function response(instanceId: string, paused = false, targetId = instanceId) {
   return {
@@ -62,17 +60,15 @@ function mount(
     },
     { sessionScoped: !scopes.includes("operator.admin") },
   );
-  const { gateway, publish, publishEvent } = createApplicationGateway({
-    phase: "connected",
-    client,
-    hello: gatewayHelloForMethods(advertised, scopes),
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey,
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const { gateway, publish, publishEvent } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client,
+      hello: gatewayHelloForMethods(advertised, scopes),
+      assistantAgentId: "main",
+      sessionKey,
+    }),
+  );
   const provider = createApplicationContextProvider({
     resourceBasePath: "",
     gateway,
@@ -219,6 +215,29 @@ describe("Browser dashboard presentation", () => {
     retrying.resolve(response("first", true));
     await h.waitForText("browser is stopped");
     expect(h.element.textContent).not.toContain("Browser stop failed");
+  });
+
+  it("keeps panel visibility live during a background inspection and retains its failure", async () => {
+    const inspection = createDeferred<ReturnType<typeof response>>();
+    const h = mount(
+      dashboard(async (envelope) =>
+        envelope.method === "GET" ? inspection.promise : response("first"),
+      ),
+    );
+    await h.waitForPanel();
+    const panel = h.panel()!;
+    h.changed();
+    await vi.waitFor(() =>
+      expect(h.actions().filter((entry) => entry.method === "GET")).toHaveLength(1),
+    );
+    h.element.active = false;
+    await vi.waitFor(() => expect(panel.presented).toBe(false));
+    expect(h.panel()).toBe(panel);
+    inspection.reject(new Error("Dashboard inspection failed"));
+    await h.waitForText("Dashboard inspection failed");
+    expect(h.panel()).toBe(panel);
+    expect(panel.presented).toBe(false);
+    expect(h.actions().map((entry) => entry.method)).toEqual(["POST", "GET"]);
   });
 
   it("admits the replacement widget while a retired widget command is pending", async () => {

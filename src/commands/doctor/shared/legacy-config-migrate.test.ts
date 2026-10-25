@@ -107,7 +107,7 @@ function defaultModelSelections(model: string) {
       music: model,
     },
     subagents: { model: { primary: model, fallbacks: [model] } },
-    compaction: { model, memoryFlush: { model } },
+    compaction: { model },
   };
 }
 

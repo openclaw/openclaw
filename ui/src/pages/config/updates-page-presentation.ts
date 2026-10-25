@@ -28,6 +28,10 @@ export function createConfigUpdatesPresentation(context: ApplicationContext) {
     return completion;
   }
   return {
+    busy(this: void) {
+      const update = context.overlays.snapshot;
+      return update.updateRunning || update.updateReconciliationPending;
+    },
     read,
     refresh,
     captureCommandPresentation(this: void): UpdatesCommandPresentation {

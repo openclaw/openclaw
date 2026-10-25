@@ -7,6 +7,8 @@ import {
   createStore,
   Errored,
   For,
+  isPending,
+  latest,
   Loading,
   Show,
   onSettled,
@@ -27,7 +29,7 @@ import {
 import { i18n } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -59,7 +61,6 @@ registerEnglishCatalog(registerSettingsEnglish);
 
 type MutationKind = "preparing" | "mutating" | "recovering" | "destroying";
 type MutationSlot = "preparing" | "image" | "destroying";
-type Feedback = { promise: Promise<void> } | { error: string };
 const preparationErrors = new Map([
   ["capacity", "capacity"],
   ["invalid_project", "invalidProject"],
@@ -73,43 +74,28 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   const [selected, setSelected] = createSignal<string | null>(null, { ownedWrite: true });
   const [view, setView] = createStore<{
     result: SnapshotsResult | null;
-    loading: boolean;
     inventory: EnvironmentsListResult | null;
   }>({
     result: null,
-    loading: false,
     inventory: null,
   });
+  const [loadRequest, setLoadRequest] = createSignal<{ promise: Promise<void> }>();
+  const readPending = createMemo<boolean>(() => loadRequest()?.promise.then(() => false) ?? false, {
+    loadingValue: true,
+  });
+  // Keep accepted inventory visible while optional image details are still loading.
+  const loading = () => isPending(readPending) || latest(readPending);
   const [notice, setNotice] = createSignal<string | null>(null);
   const operations: Partial<Record<MutationSlot, GatewayConnectionScope>> = {};
-  const [preparation, showPreparation] = createOptimistic<GatewayConnectionScope | null>(null);
-  const [imagePending, showImage] = createOptimistic<GatewayConnectionScope | null>(null);
-  const [destruction, showDestruction] = createOptimistic<GatewayConnectionScope | null>(null);
-  const pending = {
-    preparing: { read: preparation, write: showPreparation },
-    image: { read: imagePending, write: showImage },
-    destroying: { read: destruction, write: showDestruction },
-  };
-  const [feedback, setFeedback] = createSignal<Feedback | null>(null);
-  const completion = createMemo(() => {
-    const current = feedback();
-    if (current && "error" in current) {
-      throw new Error(current.error);
-    }
-    return current?.promise.then(() => null) ?? null;
-  });
-  const presentMutation = action(function* (
-    slot: MutationSlot,
-    scope: GatewayConnectionScope,
-    settled: Promise<void>,
-  ) {
-    pending[slot].write(scope);
-    yield settled;
-  });
-  const presented = (slot: MutationSlot) => {
-    const scope = pending[slot].read();
-    return Boolean(scope && scope.epoch === gateway.epoch && operations[slot] === scope);
-  };
+  let presentationLifetime = Promise.withResolvers<void>();
+  const [feedback, setFeedback] = createSignal<Promise<void> | null>(null);
+  const completion = createMemo(() => feedback()?.then(() => null) ?? null);
+
+  function showFeedback(promise: Promise<void>) {
+    void setFeedback(() => promise);
+    // The error boundary may retire before its admitted work settles.
+    void promise.catch(() => {});
+  }
 
   const dismissed = new Set<string>();
 
@@ -131,6 +117,8 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   }
 
   function invalidateRequests() {
+    presentationLifetime.resolve();
+    presentationLifetime = Promise.withResolvers<void>();
     refreshAgain = false;
     activeLoad = undefined;
     delete operations.preparing;
@@ -138,9 +126,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     delete operations.destroying;
     setFeedback(null);
     polling.cancel();
-    setView((draft) => {
-      draft.loading = false;
-    });
+    setLoadRequest(undefined);
     setNotice(null);
     activeConfirmation?.abort();
   }
@@ -163,6 +149,30 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     ensureInitialData: () => queueMicrotask(() => void load()),
     onPageActivation: () => void load(),
   });
+  const connectionEpoch = createMemo(() => gateway.epoch);
+  const presentation = createMemo(() => {
+    const epoch = connectionEpoch();
+    const [preparing, setPreparing] = createOptimistic(false);
+    const [image, setImage] = createOptimistic(false);
+    const [destroying, setDestroying] = createOptimistic(false);
+    return {
+      epoch,
+      preparing: { read: preparing, write: setPreparing },
+      image: { read: image, write: setImage },
+      destroying: { read: destroying, write: setDestroying },
+    };
+  });
+  const presentMutation = action(function* (
+    current: ReturnType<typeof presentation>,
+    slot: MutationSlot,
+    settled: Promise<void>,
+    retired: Promise<void>,
+  ) {
+    if (current.epoch === gateway.readEpoch()) {
+      current[slot].write(true);
+    }
+    yield Promise.race([settled, retired]);
+  });
   function syncInventoryInputs() {
     const current = [
       context.runtimeConfig.state.configSnapshot?.appliedConfigHash,
@@ -178,7 +188,10 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     // Config and permission receipts invalidate the inventory at their synchronous owners.
     const stop = runtime.subscribe(syncInventoryInputs);
     syncInventoryInputs();
-    return stop;
+    return () => {
+      stop();
+      activeConfirmation?.abort();
+    };
   });
 
   const canCall = (method: string) =>
@@ -208,9 +221,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     }
     const request = {};
     activeLoad = request;
-    setView((draft) => {
-      draft.loading = true;
-    });
     const promise = (async () => {
       try {
         const inventory = await scope.client.request<EnvironmentsListResult>("environments.list", {
@@ -251,14 +261,11 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         }
       } catch (error) {
         if (gateway.isCurrent(scope)) {
-          setFeedback({ error: formatUiError(error) });
+          throw error;
         }
       } finally {
         if (gateway.isCurrent(scope) && activeLoad === request) {
           activeLoad = undefined;
-          setView((draft) => {
-            draft.loading = false;
-          });
           polling.cancel();
           // This native microtask samples settled state once for polling, without subscribing.
           queueMicrotask(() => {
@@ -286,8 +293,10 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         }
       }
     })();
-    setFeedback({ promise });
-    return promise;
+    const settled = promise.catch(() => {});
+    setLoadRequest({ promise: settled });
+    showFeedback(promise);
+    return settled;
   }
 
   function prepare(profileId: string, projectPath: string) {
@@ -299,7 +308,9 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       (profile) => profile.id === profileId && profile.warmImages === "on",
     );
     if (!eligible || !projectPath) {
-      setFeedback({ error: i18n.t("cloudWorkersPage.snapshots.selectBuildInputs") });
+      showFeedback(
+        Promise.reject(new Error(i18n.t("cloudWorkersPage.snapshots.selectBuildInputs"))),
+      );
       return;
     }
     setNotice(null);
@@ -392,7 +403,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       return;
     }
     if (!gateway.isCurrent(scope) || !canCallNow("crabbox.images.recover")) {
-      setFeedback({ error: i18n.t("cloudWorkersPage.snapshots.recoveryChanged") });
+      showFeedback(Promise.reject(new Error(i18n.t("cloudWorkersPage.snapshots.recoveryChanged"))));
       return;
     }
     setNotice(null);
@@ -489,8 +500,10 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     if (operations[slot]) {
       return;
     }
+    const current = presentation();
+    const retired = presentationLifetime.promise;
     operations[slot] = scope;
-    const settled = (async () => {
+    const pending = (async () => {
       try {
         await mutate();
       } catch (error) {
@@ -501,9 +514,10 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
             const code =
               error instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(error) : null;
             const key = kind === "preparing" && code ? preparationErrors.get(code) : undefined;
-            setFeedback({
-              error: key ? i18n.t(`cloudWorkersPage.snapshots.${key}`) : formatUiError(error),
-            });
+            throw new UserFacingError(
+              key ? i18n.t(`cloudWorkersPage.snapshots.${key}`) : formatUiError(error),
+              { cause: error },
+            );
           }
         }
       } finally {
@@ -512,15 +526,16 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         }
       }
     })();
+    const settled = pending.catch(() => {});
     if (kind !== "mutating") {
-      setFeedback({ promise: settled });
+      showFeedback(pending);
     }
     // Commit owner receipts before starting a presentation-only action transition.
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
     if (operations[slot] === scope && gateway.isCurrent(scope)) {
-      await presentMutation(slot, scope, settled);
+      await presentMutation(current, slot, settled, retired);
     }
     return settled;
   }
@@ -561,19 +576,17 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
             ) : undefined
           }
         >
-          <Show when={feedback()} keyed>
-            {(request) => (
-              <Errored
-                fallback={(err) => (
-                  <div class="callout warning" role="alert">
-                    {formatUiError(err())}
-                  </div>
-                )}
-              >
-                <Loading on={request}>{completion()}</Loading>
-              </Errored>
-            )}
-          </Show>
+          <Loading on={feedback()}>
+            <Errored
+              fallback={(err) => (
+                <div class="callout warning" role="alert">
+                  {formatUiError(err())}
+                </div>
+              )}
+            >
+              {completion()}
+            </Errored>
+          </Loading>
           <Show when={notice()}>
             <div class="callout" role="status">
               {notice()}
@@ -584,7 +597,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
             fallback={
               <SettingsEmpty
                 message={
-                  view.loading ? (
+                  loading() ? (
                     t("common.loading")
                   ) : (
                     <>
@@ -646,14 +659,16 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                   <CloudWorkerEnvironmentSheet
                     environment={environment()}
                     profiles={view.result?.profiles ?? []}
-                    busy={view.loading || presented("image") || presented("preparing")}
+                    busy={
+                      presentation().image.read() || presentation().preparing.read() || loading()
+                    }
                     canCall={canCall}
                     deleteReason={deleteReason}
                     onRebuild={prepare}
                     onMutate={mutateImage}
                     onRecover={(snapshot) => void recoverCapture(snapshot)}
                     onDestroy={(item, dismiss) => void destroyBuild(item, dismiss)}
-                    destroying={presented("destroying")}
+                    destroying={presentation().destroying.read()}
                   />
                 )}
               </Show>
@@ -681,7 +696,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                     image={image()}
                     label={image().profileId ?? image().profileKey}
                     actions
-                    busy={view.loading || presented("image")}
+                    busy={presentation().image.read() || loading()}
                     canCall={canCall}
                     deleteReason={deleteReason}
                     onMutate={mutateImage}
@@ -694,7 +709,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                   <CloudWorkerBuildRow
                     environment={worker()}
                     label={worker().worker?.profileId ?? worker().id}
-                    destroying={presented("destroying")}
+                    destroying={presentation().destroying.read()}
                     canCall={canCall}
                     onDestroy={(item, dismiss) => void destroyBuild(item, dismiss)}
                   />

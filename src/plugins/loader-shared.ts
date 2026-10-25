@@ -280,6 +280,7 @@ function createManifestPluginRecord(params: {
     activationState: params.activationState,
     channelIds: manifestRecord.channels,
     providerIds: manifestRecord.providers,
+    declaredContextEngineIds: manifestRecord.contextEngineIds,
     configSchema: Boolean(manifestRecord.configSchema),
   });
   if (!params.shouldLoadModules) {

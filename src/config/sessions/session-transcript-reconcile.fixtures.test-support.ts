@@ -1,5 +1,6 @@
 import type { SQLInputValue } from "node:sqlite";
 import type { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -10,9 +11,14 @@ import type {
   SqliteWorkerOperations,
   SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
@@ -101,6 +107,33 @@ export async function seedTranscript(
 export async function closeReconcileDatabases(stateDir?: string) {
   await closeOpenClawAgentDatabasesAsync(stateDir);
   await closeOpenClawStateDatabaseAsync();
+}
+
+export function readAgentDatabaseLeaseIds(pathname: string, env?: NodeJS.ProcessEnv): string[] {
+  return openOpenClawStateDatabase({ env })
+    .db.prepare(
+      "SELECT lease_id FROM agent_database_leases WHERE owner_pid = ? AND path = ? ORDER BY lease_id",
+    )
+    .all(process.pid, pathname)
+    .map((lease) => String(lease.lease_id));
+}
+
+export function observeCanonicalWriterLeases() {
+  const leases = new Map<string, string>();
+  const spy = sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
+    const facts = request.facts;
+    if (
+      request.stage === "open" &&
+      isRecord(facts) &&
+      typeof facts.databasePath === "string" &&
+      typeof facts.leaseId === "string"
+    ) {
+      leases.set(facts.databasePath, facts.leaseId);
+    }
+    admit(request, grant);
+  });
+  const restore = () => spy.mockRestore();
+  return { leases, restore, [Symbol.dispose]: restore };
 }
 
 export function acquireReconcileGatewayOwner(

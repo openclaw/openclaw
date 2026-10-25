@@ -15,12 +15,7 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 const pullRequests = {
-  featureMethods: [
-    "chat.metadata",
-    "chat.startup",
-    "sessions.patch",
-    SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  ],
+  featureMethods: ui.sessionMethods("sessions.patch", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD),
   methodResponses: { [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true } },
 };
 async function showPullRequests(
@@ -147,8 +142,8 @@ suite.define(() => {
       const actionOnlyText = actionOnlyRow.locator(".sidebar-recent-session__text");
       const actionOnlyLink = actionOnlyRow.locator(".sidebar-recent-session__link");
       const actionOnlyPin = ui.button(actionOnlyRow, "Pin session", false);
-      await expect
-        .poll(() => actionOnlyRow.getAttribute("class"))
+      await ui
+        .pollAttribute(actionOnlyRow, "class")
         .toContain("sidebar-recent-session--single-line");
       await ui.expectRightPadding(actionOnlyLink, "2px");
       const restingTextBounds = await ui.bounds(actionOnlyText);
@@ -236,7 +231,7 @@ suite.define(() => {
       const pin = ui.button(row, "Pin session", false);
       const menu = row.locator("[data-sidebar-session-archive]");
       await expect.poll(() => fork.isVisible()).toBe(true);
-      await expect.poll(() => row.locator(".session-row-state").count()).toBe(0);
+      await ui.expectCount(row.locator(".session-row-state"), 0);
 
       const [nameBounds, forkBounds, pinBounds, menuBounds] = await Promise.all([
         ui.bounds(row.locator(".sidebar-recent-session__name")),
@@ -346,7 +341,7 @@ suite.define(() => {
     }));
 
   it("does not widen desktop session text when hover actions appear beside trailing state", () =>
-    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    ui.withSessionPage(suite, async (page) => {
       await showPullRequests(
         page,
         [
@@ -380,12 +375,12 @@ suite.define(() => {
           row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator").isVisible(),
         )
         .toBe(true);
-      await expect.poll(() => row.locator('[aria-label="Forked session"]').count()).toBe(1);
+      await ui.expectCount(row.locator('[aria-label="Forked session"]'), 1);
       await expect
         .poll(() => row.locator("[data-pull-request-state='open']").isVisible())
         .toBe(true);
       await expect.poll(() => state.isVisible()).toBe(true);
-      await expect.poll(() => row.locator(".session-glyph__ring").count()).toBe(0);
+      await ui.expectCount(row.locator(".session-glyph__ring"), 0);
       const prIcon = row.locator("[data-pull-request-state='open'] svg");
       expect(
         await prIcon.evaluate((icon) => {

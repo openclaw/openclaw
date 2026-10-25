@@ -72,30 +72,19 @@ describe("collectChannelLegacyConfigRules", () => {
     expect(listPluginDoctorLegacyConfigRulesMock).not.toHaveBeenCalled();
   });
 
-  it("scopes channel legacy scans to touched channels during dry-run validation", () => {
+  it.each([
+    { name: "touched channels", touched: [["channels", "discord", "token"]], excluded: undefined },
+    {
+      name: "channels not covered by explicit rules",
+      touched: undefined,
+      excluded: new Set(["telegram"]),
+    },
+  ])("scopes scans to $name", ({ touched, excluded }) => {
     loadBundledChannelDoctorContractApiMock.mockImplementation((channelId: string) => ({
       legacyConfigRules: [legacyRule(channelId)],
     }));
 
-    const rules = collectChannelLegacyConfigRules(configuredChannels, [
-      ["channels", "discord", "token"],
-    ]);
-
-    expect(rules).toEqual([legacyRule("discord")]);
-    expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledTimes(1);
-    expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledWith("discord");
-  });
-
-  it("skips channel ids already covered by explicit legacy rules", () => {
-    loadBundledChannelDoctorContractApiMock.mockImplementation((channelId: string) => ({
-      legacyConfigRules: [legacyRule(channelId)],
-    }));
-
-    const rules = collectChannelLegacyConfigRules(
-      configuredChannels,
-      undefined,
-      new Set(["telegram"]),
-    );
+    const rules = collectChannelLegacyConfigRules(configuredChannels, touched, excluded);
 
     expect(rules).toEqual([legacyRule("discord")]);
     expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledTimes(1);

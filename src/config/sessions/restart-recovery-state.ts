@@ -11,7 +11,10 @@ import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
@@ -44,9 +47,14 @@ export function recordLifecycleFence(
 }
 
 export function isMainRestartRecoveryCandidate(
-  entry: { spawnDepth?: unknown; subagentRole?: unknown },
+  entry: { spawnDepth?: unknown; subagentRole?: unknown; mainRestartRecovery?: unknown },
   sessionKey: string,
 ): boolean {
+  // A child can run independent turns after its registry task has finished.
+  // The interruption owner assigns those turns the ordinary session recovery cycle.
+  if (entry.mainRestartRecovery && !isCronSessionKey(sessionKey) && !isAcpSessionKey(sessionKey)) {
+    return true;
+  }
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
     return false;
   }
@@ -500,6 +508,12 @@ export function normalizeRestartRecoveryEntryFields(
       : undefined,
   );
   assign(
+    "restartRecoverySourceMessageChannel",
+    entry.restartRecoverySourceMessageChannel === null
+      ? null
+      : normalizeMessageChannel(entry.restartRecoverySourceMessageChannel),
+  );
+  assign(
     "restartRecoverySourceReplyDeliveryMode",
     entry.restartRecoverySourceReplyDeliveryMode === "automatic" ||
       entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only"
@@ -612,7 +626,13 @@ export function hasOrphanedMainSessionWork(
     hasRestartRecoveryTerminalRun(entry, entry.lastRunId);
   return (
     entry.archivedAt === undefined &&
-    isMainRestartRecoveryCandidate(entry, sessionKey) &&
+    !isCronSessionKey(sessionKey) &&
+    !isAcpSessionKey(sessionKey) &&
+    (isMainRestartRecoveryCandidate(entry, sessionKey) ||
+      ((entry.abortedLastRun === true || entry.status === "interrupted") &&
+        Boolean(
+          entry.lifecycleRunId || entry.lastRunId || entry.restartRecoveryDeliverySourceRunId,
+        ))) &&
     (hasMainSessionRecoveryClaim(entry) ||
       entry.abortedLastRun === true ||
       (entry.status === "interrupted" && !settledInterruption))
@@ -635,8 +655,8 @@ export function canReplaceAbortedRestartRecoveryClaim(
     entry.pendingFinalDelivery === undefined &&
     entry.restartRecoveryBeforeAgentReplyState === undefined &&
     entry.restartRecoveryDeliveryReceiptState === undefined &&
-    // Main-session recovery resumes other claims before new input. It never owns child,
-    // cron, or ACP sessions, so their interrupted claim would otherwise reject every turn.
+    // Session recovery resumes its claims before new input. Other lifecycle owners
+    // must be able to replace an interrupted claim when admitting a new turn.
     (entry.restartRecoverySourceIngress === "control-ui" ||
       !isMainRestartRecoveryCandidate(entry, sessionKey)),
   );
@@ -712,6 +732,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryRequesterSenderId: undefined,
     restartRecoverySameChannelThreadRequired: undefined,
     restartRecoverySourceIngress: undefined,
+    restartRecoverySourceMessageChannel: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
     restartRecoveryForceSafeTools: undefined,
     ...(terminalDeliveryEvidence

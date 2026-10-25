@@ -152,9 +152,9 @@ describe("public session document", () => {
     expect(article.querySelector("iframe")?.style.height).toBe("600px");
   });
 
-  it("keeps code and non-hosted embeds literal and excludes non-inline receipts", () => {
+  it("keeps code literal and excludes non-inline receipts", () => {
     const text =
-      '```text\n[embed ref="cv_timeline" /]\n```\n`[embed ref="cv_timeline" /]`\n[embed url="https://www.youtube.com/watch?v=example" /]';
+      '```text\n[embed ref="cv_timeline" /]\n```\n`[embed url="https://example.test" /]`';
     const page = JSDOM.fragment(
       render(
         [
@@ -170,8 +170,64 @@ describe("public session document", () => {
       ),
     );
     expect(page.querySelector("iframe")).toBeNull();
-    expect(page.textContent).toContain('[embed ref="cv_timeline" /]');
-    expect(page.textContent).toContain("https://www.youtube.com/watch?v=example");
+    expect(page.querySelector("article a")).toBeNull();
+    expect(page.querySelector("pre")?.textContent).toContain('[embed ref="cv_timeline" /]');
+    expect(page.querySelector("p code")?.textContent).toBe('[embed url="https://example.test" /]');
+  });
+
+  it("links non-hosted embeds without loading them and omits private Gateway pages", () => {
+    const page = JSDOM.fragment(
+      render(
+        [
+          message(
+            "assistant",
+            [
+              'Watch [embed url="https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42" title="A & B" /] now.',
+              '[embed url="https://example.test/page"]ignored body[/embed]',
+              '[embed url="/__openclaw__/canvas/game/index.html" title="Private" /]',
+              '[embed url="javascript:alert(1)" /][embed url="https://user:pw@example.test/" /]',
+            ].join("\n\n"),
+          ),
+          message("assistant", '[embed url="/__openclaw__/canvas/" /]'),
+        ],
+        widgetOptions,
+      ),
+    );
+    const articles = page.querySelectorAll("article");
+    expect(articles).toHaveLength(1);
+    const text = articles[0]!.textContent;
+    expect(text).toContain("Watch  now.");
+    expect(text).not.toMatch(/\[embed|ignored body|Private/);
+    expect(page.querySelector("iframe")).toBeNull();
+    expect(
+      [...articles[0]!.querySelectorAll("a")].map((link) => [
+        link.getAttribute("href"),
+        link.getAttribute("rel"),
+        link.textContent,
+      ]),
+    ).toEqual([
+      ["https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42", "noreferrer noopener nofollow", "A & B"],
+      ["https://example.test/page", "noreferrer noopener nofollow", "https://example.test/page"],
+    ]);
+  });
+
+  it("renders mixed widget and link embeds in shortcode order", () => {
+    const page = JSDOM.fragment(
+      render(
+        [
+          message(
+            "assistant",
+            '[embed url="https://example.test/first" /] [embed ref="cv_timeline" /] [embed url="https://example.test/last" /]',
+          ),
+        ],
+        widgetOptions,
+      ),
+    );
+    expect(
+      [...page.querySelectorAll("article a, article iframe")].map(
+        (node) => node.getAttribute("href") ?? node.getAttribute("data-public-widget"),
+      ),
+    ).toEqual(["https://example.test/first", "cv_timeline", "https://example.test/last"]);
   });
 
   it("retains shortcode-only messages and requires a mapped widget URL to render frames", () => {

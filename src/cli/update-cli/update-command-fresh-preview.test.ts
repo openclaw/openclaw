@@ -83,6 +83,18 @@ function runUpdate(opts: shared.UpdateCommandOptions = {}) {
   return updateCommand({ yes: true, json: true, restart: false, ...opts });
 }
 
+function stageUpdate(root = fixture.root) {
+  const stage = createStage(root);
+  vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(stage);
+  return stage;
+}
+
+function expectUnactivated(stage: ReturnType<typeof createStage>) {
+  expect(stage.close).toHaveBeenCalledOnce();
+  expect(stage.run).not.toHaveBeenCalled();
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
+}
+
 function expectJson(result: unknown) {
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining(result));
 }
@@ -185,7 +197,6 @@ describe("update command admission with fresh state", () => {
       vi.spyOn(devUpdateTarget, "readDevUpdateTarget").mockImplementation(() => {
         throw new Error("fixture invalid dev target");
       });
-      const triage = vi.spyOn(commandTriage, "prepareUpdateCommandFailureTriage");
       const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
         throw new ExitError(code);
       });
@@ -217,7 +228,6 @@ describe("update command admission with fresh state", () => {
         expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
         expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
       } else {
-        expect(triage).not.toHaveBeenCalled();
         expectFreshStatePreserved(fixture);
       }
       expect(exit).not.toHaveBeenCalled();
@@ -229,8 +239,7 @@ describe("update command admission with fresh state", () => {
 
   it("closes the stage when successful initialization is followed by legacy release failure", async () => {
     allowPackageRuntime();
-    const staged = createStage(fixture.root);
-    vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
+    const staged = stageUpdate();
     vi.spyOn(initialization, "initializeUpdateStateFromTarget").mockImplementation(async () => {
       createSelectedTargetStateDatabase(fixture.databasePath);
     });
@@ -272,15 +281,6 @@ describe("update command admission with fresh state", () => {
         throw new Error(`fixture CLI exit ${code}`);
       });
       let admittedRun: shared.UpdateCommandOptions["run"];
-      let triagePrepared = false;
-      const prepareTriage = commandTriage.prepareUpdateCommandFailureTriage;
-      vi.spyOn(commandTriage, "prepareUpdateCommandFailureTriage").mockImplementation(
-        async (...args) => {
-          const handler = await prepareTriage(...args);
-          triagePrepared = true;
-          return handler;
-        },
-      );
       let leaseAtPublication: string | undefined;
       vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
         leaseAtPublication = createManagedHandoffLeaseStore().read(fixture.root).kind;
@@ -311,7 +311,6 @@ describe("update command admission with fresh state", () => {
         // The installation work is complete; keep its real terminal publisher,
         // ledger, executor, and outer staged-package cleanup to prove ordering.
         admittedRun = params.opts.run;
-        expect(triagePrepared).toBe(true);
         const result = updateResult({ root: fixture.root });
         const publish = async (failure?: unknown) => {
           const settled = await resolveSettledUpdateCommandResult(
@@ -334,7 +333,6 @@ describe("update command admission with fresh state", () => {
         (error: unknown) => error,
       );
 
-      expect(initialization.initializeUpdateStateFromTarget).toHaveBeenCalledOnce();
       assert(admittedRun);
       expect(admittedRun.runId).toBe(executorRunId);
       expect(admittedRun.runId.trim()).not.toBe("");
@@ -433,8 +431,7 @@ describe("update command admission with fresh state", () => {
   it("accepts target Doctor config changes that preserve the selected stored channel", async () => {
     const configPath = writeStoredChannel("stable");
     allowPackageRuntime();
-    const staged = createStage(fixture.root);
-    vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
+    const staged = stageUpdate();
     const migrated = {
       update: { channel: "stable" },
       gateway: { mode: "local" },
@@ -453,9 +450,7 @@ describe("update command admission with fresh state", () => {
     await expect(runUpdate()).rejects.toBe(afterDoctor);
 
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual(migrated);
-    expect(staged.close).toHaveBeenCalledOnce();
-    expect(staged.run).not.toHaveBeenCalled();
-    expect(fs.existsSync(fixture.databasePath)).toBe(false);
+    expectUnactivated(staged);
   });
 
   it("keeps fresh staging releasable for a supervised handoff before package activation", async () => {
@@ -472,12 +467,8 @@ describe("update command admission with fresh state", () => {
       }),
     );
     allowPackageRuntime();
-    const staged = {
-      root: fixture.root,
-      run: vi.fn().mockRejectedValue(new Error("Unexpected package activation")),
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-    vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(staged);
+    const staged = stageUpdate();
+    staged.run.mockRejectedValue(new Error("Unexpected package activation"));
     const handoffStop = new Error("Fixture stopped after successful preflight handoff release");
     vi.spyOn(initialization, "initializeUpdateStateFromTarget").mockImplementation(async () => {
       assert(fence);
@@ -489,9 +480,7 @@ describe("update command admission with fresh state", () => {
       updateCommand({ tag: "2026.9.2", yes: true, json: true, restart: true }),
     ).rejects.toBe(handoffStop);
 
-    expect(staged.close).toHaveBeenCalledOnce();
-    expect(staged.run).not.toHaveBeenCalled();
-    expect(fs.existsSync(fixture.databasePath)).toBe(false);
+    expectUnactivated(staged);
     expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
   });
 });
@@ -522,9 +511,7 @@ it.each([
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
       return staged;
     });
-    const runtime = vi
-      .spyOn(runtimePlan, "resolvePackageRuntimePreflight")
-      .mockResolvedValue({ ok: true, value: {} });
+    const runtime = allowPackageRuntime();
     const doctor = vi
       .spyOn(initialization, "initializeUpdateStateFromTarget")
       .mockImplementation(async (params) => {
@@ -561,12 +548,8 @@ it.each([
         expect.objectContaining({ target: { version: "2026.9.2", nodeEngine: ">=22" } }),
       );
       expect(admission).toHaveBeenCalledOnce();
-      const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
-      try {
-        expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: schema });
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(fixture.databasePath, { readOnly: true });
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: schema });
     }
   },
 );
@@ -607,8 +590,7 @@ it.each(["node", "concurrent-state"] as const)(
 
 it("requires confirmation for an inspected older artifact without a TTY", async () => {
   const candidate = createArtifact("2026.9.2", 16);
-  const stage = createStage(candidate);
-  vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(stage);
+  const stage = stageUpdate(candidate);
   allowPackageRuntime();
   const doctor = vi
     .spyOn(initialization, "initializeUpdateStateFromTarget")
@@ -708,8 +690,10 @@ it("Doctor sees an already-current update's completed history after original-sta
     await expect(readHistory.mock.results[activeRead]!.value).resolves.toEqual([]);
     const completedRead = readHistory.mock.calls.findIndex(([input]) => input?.active !== true);
     await expect(readHistory.mock.results[completedRead]!.value).resolves.toContainEqual(finished);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Pre-repair state retained for manual recovery"),
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Recovery copy saved before repair. No action needed. For manual recovery:",
+      ),
     );
     expect(runtime.error.mock.calls.flat().join("\n")).not.toContain("remains recorded as running");
   } finally {

@@ -11,7 +11,6 @@ import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-e
 import { bindGoalContinuationExecution } from "./goal-continuation-return.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
-import { getReplySystemEventContext } from "./system-event-session-key.js";
 import { withVisibleWorkSessionReporter } from "./visible-work-sessions.js";
 
 const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
@@ -135,9 +134,7 @@ export async function runAgentTurnWithOutcome(
           sessionId: params.followupRun.run.sessionId,
           agentId: params.followupRun.run.agentId,
         },
-        owners:
-          eventExecution?.execRequestOwners ??
-          getReplySystemEventContext(params.opts)?.execRequestOwners,
+        owners: eventExecution?.execRequestOwners,
         abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
       },
       () =>

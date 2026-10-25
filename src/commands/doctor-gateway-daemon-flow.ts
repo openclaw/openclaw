@@ -322,7 +322,7 @@ export async function maybeRepairGatewayDaemon(params: {
     await maybeRepairLaunchAgentBootstrap({
       env: {
         ...process.env,
-        OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
+        OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(process.env.OPENCLAW_PROFILE),
       },
       title: "Node",
       runtime: params.runtime,

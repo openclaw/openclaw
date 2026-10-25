@@ -57,6 +57,7 @@ it.each(["ordinary", "consumer"] as const)(
       expect(scope?.pluginId).toBe(instance.pluginId);
       expect(scope).not.toBe(outer);
     });
+    // Each independent view installs one frame carrying invocation and recovery.
     expect(frames).toHaveBeenCalledTimes(2);
     frames.mockRestore();
     expect(getScope()).toBeUndefined();

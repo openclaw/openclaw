@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import * as runtimeGuard from "../infra/runtime-guard.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
@@ -14,7 +15,7 @@ const mocks = vi.hoisted(() => ({
 }));
 const runtime = createTestRuntime();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const tty = createCliTtyMock([process.stdout]);
 const contains = (text: string) => expect.stringContaining(text);
 const repairHint = contains("nvm install 26");
 const nodeCheck = "core/doctor/node-runtime";
@@ -61,25 +62,21 @@ beforeEach(() => {
     status: "unsupported",
     version: "22.23.2",
   });
-  mockCliRuntime("26.8.1");
+  mockCliRuntime("26.12.1");
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
-  if (originalIsTTY) {
-    Object.defineProperty(process.stdout, "isTTY", originalIsTTY);
-  } else {
-    Reflect.deleteProperty(process.stdout, "isTTY");
-  }
+  tty.restore();
 });
 
 it.each(["invalid config", "snapshot failure"])(
   "keeps Node repair hints after %s",
   async (failure) => {
     useInvalidConfig();
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+    tty.set(true);
     mockCliRuntime("24.15.0");
     if (failure === "snapshot failure") {
       vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
@@ -132,9 +129,9 @@ it("registers CLI and service Node repair findings", async () => {
 
 it.each([
   [
-    { status: "supported", version: "24.15.0", note: "Node 24.15.0: unsupported, capability OK." },
-    "[info] Node 24.15.0:",
-    ["[warning]", "undefined"],
+    { status: "unsupported", version: "24.22.0" },
+    "Gateway service Node 24.22.0 is unsupported.",
+    ["[info]", "undefined"],
   ],
   [
     { status: "probe-failed", error: new Error("unavailable") },

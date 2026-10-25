@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveUpdatedNodeRuntime } from "../../node-runtime-update.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -27,7 +28,7 @@ afterEach(() => {
 const targetRuntime = {
   env: { CI: "1", OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
   acceptVersion: (version: string) => version.startsWith("26."),
-  nodeVersion: "26.8.1",
+  nodeVersion: "26.12.1",
 };
 const nodeBinary = (root: string) =>
   path.join(root, ...(process.platform === "win32" ? ["node.exe"] : ["bin", "node"]));
@@ -54,13 +55,17 @@ const probeResult = (version: string): SpawnSyncReturns<string> => ({
   signal: null,
   output: [],
   stderr: "",
-  stdout: JSON.stringify({ version, probe: { ...capabilities, version: "3.53.4" } }),
+  stdout: JSON.stringify({
+    nodeVersion: version,
+    bunVersion: null,
+    sqliteProbe: { ...capabilities, version: "3.53.4" },
+  }),
 });
 
 it.each([
-  ["healthy supported", "26.8.1", true],
-  ["broken supported", "26.8.1", false],
-  ["lossless vendor", "24.15.0+vendor.1", true],
+  ["healthy supported", "26.12.1", true],
+  ["broken supported", "26.12.1", false],
+  ["lossless vendor", "24.22.1+vendor.1", true],
 ] as const)("validates a %s cached runtime", async (_label, version, lossless) => {
   vi.stubEnv("CI", "1");
   vi.stubEnv("OPENCLAW_NODE_UPDATE_RESPAWNED", "");
@@ -91,15 +96,17 @@ it.each([
       }
     `,
   );
+  const nodeExecPath = resolveTestNodeExecPath();
   spawn.mockImplementation((_file, args, options) =>
-    spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, ...args], options),
+    spawnSync(nodeExecPath, ["--import", pathToFileURL(preload).href, ...args], options),
   );
 
   expect(await resolveUpdatedNodeRuntime(root)).toBe(lossless ? candidate : null);
   expect(spawn.mock.calls.map((call) => call[2].timeout)).toEqual([5_000]);
   expect(JSON.parse(spawn.mock.results[0]?.value.stdout)).toMatchObject({
-    version,
-    probe: { ...capabilities, text: lossless },
+    nodeVersion: version,
+    bunVersion: null,
+    sqliteProbe: { ...capabilities, text: lossless },
   });
 });
 
@@ -107,11 +114,11 @@ it.each([true, false])("provisions without a TTY (compatible=%s)", async (compat
   const { root, candidate } = await createRuntime();
   spawn
     .mockReturnValueOnce(probeResult("24.19.0"))
-    .mockReturnValue(probeResult(compatible ? "26.8.1" : "24.19.0"));
+    .mockReturnValue(probeResult(compatible ? "26.12.1" : "24.19.0"));
   const installCommand = vi.fn(async () => 0);
   const result = await resolveUpdatedNodeRuntime(root, { ...targetRuntime, installCommand });
   expect(installCommand.mock.calls).toEqual([
-    [expect.any(String), expect.arrayContaining(["26.8.1"]), targetRuntime.env],
+    [expect.any(String), expect.arrayContaining(["26.12.1"]), targetRuntime.env],
   ]);
   expect(result).toBe(compatible ? candidate : null);
 });
@@ -120,15 +127,15 @@ it.skipIf(process.platform === "win32").each(["compatible", "incompatible", "mis
   "rechecks the published private Node alias after %s installation",
   async (outcome) => {
     const { root, candidate: oldNode, alias } = await createRuntime(true);
-    const newNode = nodeBinary(`${alias}-v26.8.1`);
+    const newNode = nodeBinary(`${alias}-v26.12.1`);
     await writeRuntime(newNode);
     spawn.mockImplementation((file) =>
-      probeResult(file === newNode && outcome === "compatible" ? "26.8.1" : "24.19.0"),
+      probeResult(file === newNode && outcome === "compatible" ? "26.12.1" : "24.19.0"),
     );
     const installCommand = vi.fn(async () => {
       await fs.unlink(alias);
       if (outcome !== "missing") {
-        await fs.symlink("node-v26.8.1", alias, "dir");
+        await fs.symlink("node-v26.12.1", alias, "dir");
       }
       return 0;
     });

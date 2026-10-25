@@ -34,6 +34,7 @@ export type PlacementRecoveryDeps = {
     | "get"
     | "fenceWorkerTurnForRecovery"
     | "destroy"
+    | "reclaim"
     | "startTunnel"
     | "stopTunnel"
     | "reconcileEnvironment"

@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPlainTextToolCallAttempt } from "../../../../packages/tool-call-repair/src/index.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
@@ -49,16 +50,12 @@ type EmbeddedAttemptSubscription = ReturnType<typeof subscribeEmbeddedAgentSessi
 export function createAttemptCarryover() {
   let latestMcpAppChannelView: EmbeddedRunAttemptResult["latestMcpAppChannelView"];
   let latestMcpConnectAction: EmbeddedRunAttemptResult["latestMcpConnectAction"];
-  let heartbeatToolResponse: EmbeddedRunAttemptResult["heartbeatToolResponse"];
   let modelAttempt: AgentRuntimeModelAttempt | undefined;
   return {
     apply(
       attempt: Pick<
         EmbeddedRunAttemptResult,
-        | "latestMcpAppChannelView"
-        | "latestMcpConnectAction"
-        | "heartbeatToolResponse"
-        | "modelAttempt"
+        "latestMcpAppChannelView" | "latestMcpConnectAction" | "modelAttempt"
       >,
     ): void {
       modelAttempt = attempt.modelAttempt;
@@ -66,8 +63,6 @@ export function createAttemptCarryover() {
       attempt.latestMcpAppChannelView = latestMcpAppChannelView;
       latestMcpConnectAction = attempt.latestMcpConnectAction ?? latestMcpConnectAction;
       attempt.latestMcpConnectAction = latestMcpConnectAction;
-      heartbeatToolResponse = attempt.heartbeatToolResponse ?? heartbeatToolResponse;
-      attempt.heartbeatToolResponse = heartbeatToolResponse;
     },
     get modelAttempt() {
       return modelAttempt;
@@ -329,7 +324,15 @@ export function completeEmbeddedAttemptResult(
         Boolean(resolveToolCallName(name, allowedToolNames, undefined, true)),
       );
   }
+  const accessProgram = asOptionalRecord(
+    sessionRuntime.transport.effectiveExtraParams.accessPrograms,
+  )?.cyber;
   const result: EmbeddedRunAttemptWithReceiptEvidence = {
+    ...(accessProgram === "standard" ||
+    accessProgram === "daybreak_blue" ||
+    accessProgram === "daybreak_red"
+      ? { cyberAccessProgram: accessProgram }
+      : {}),
     ...(textToolCallAttempt ? { textToolCallAttempt: true } : {}),
     ...state,
     ...evidence,

@@ -91,7 +91,9 @@ it.each(
       expect(style).toMatchObject({ width: "320px", maxHeight: "420px", overflowY: "auto" });
     }
     const selector =
-      surface !== "members" ? '[data-value^="assign-owner:"]' : '[data-value^="member:"]';
+      surface !== "members"
+        ? '[data-value^="assign-owner:"]'
+        : 'button.chat-pane__sharing-permission[data-value^="permission:"]';
     await expect
       .poll(() => root.querySelectorAll(selector).length)
       .toBe(count + (surface === "members" ? 0 : 2));
@@ -115,7 +117,10 @@ it.each(
       await userEvent.click(sharingSearch);
     }
     await expect.element(input).toBeVisible();
-    await userEvent.click(input);
+    if (surface === "members") {
+      await userEvent.click(input);
+    }
+    // Assignment typing must enter the visible search without a separate click.
     await userEvent.keyboard("pc");
     expect(onAction).not.toHaveBeenCalled();
     await expect.element(input).toHaveValue("pc");
@@ -147,6 +152,14 @@ it.each(
         owner: { type: "human", id: `profile-person-${String(count - 1).padStart(4, "0")}` },
       });
     } else {
+      const read = page.getByRole("menuitemradio", { name: "Can read", exact: true });
+      const send = page.getByRole("menuitemradio", { name: "Can send", exact: true });
+      await expect.element(read).toHaveAttribute("aria-checked", "true");
+      await expect.poll(() => document.activeElement).toBe(read.element());
+      expect(onAction).not.toHaveBeenCalled();
+      await userEvent.keyboard("{ArrowDown}");
+      expect(document.activeElement).toBe(send.element());
+      await userEvent.keyboard("{Enter}");
       expect(onAction).toHaveBeenCalledWith(`person-${count - 1}`, true);
     }
   },

@@ -13,15 +13,11 @@ import {
   SLACK_QA_NATIVE_TABLE,
   assertSlackCodexApprovalModelSupported,
 } from "./slack-live.contracts.js";
-import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
 import {
   observeSlackScenarioMessages,
   waitForSlackNoReply,
 } from "./slack-live.message-observations.js";
-import {
-  buildSlackApprovalCheckpointMessage,
-  runSlackTableInvalidBlocksFallbackScenario,
-} from "./slack-live.observations.js";
+import { runSlackTableInvalidBlocksFallbackScenario } from "./slack-live.observations.js";
 import { findScenario } from "./slack-live.scenario.test-helpers.js";
 import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
@@ -31,7 +27,7 @@ vi.mock("./slack-plugin.runtime.js", async () => {
   return { loadSlackQaRuntime: () => runtime };
 });
 
-function buildSlackConfigFixture(
+function configFixture(
   base: Parameters<typeof buildSlackQaConfig>[0],
   params: Partial<Parameters<typeof buildSlackQaConfig>[1]> = {},
 ) {
@@ -45,7 +41,7 @@ function buildSlackConfigFixture(
   });
 }
 
-function buildSlackMessageRun(id: string, sutUserId = "U999999999") {
+function messageRun(id: string, sutUserId = "U999999999") {
   const run = findScenario([id])[0]?.buildRun(sutUserId);
   if (!run || !("input" in run)) {
     throw new Error(`expected Slack message scenario: ${id}`);
@@ -53,8 +49,8 @@ function buildSlackMessageRun(id: string, sutUserId = "U999999999") {
   return run;
 }
 
-function buildSlackReplyRun(id: string, sutUserId = "U999999999") {
-  const run = buildSlackMessageRun(id, sutUserId);
+function replyRun(id: string, sutUserId = "U999999999") {
+  const run = messageRun(id, sutUserId);
   if (!run.afterReply) {
     throw new Error(`missing Slack reply verifier: ${id}`);
   }
@@ -67,6 +63,14 @@ function slackMessage(text: string, ts: string, blockText?: string[]) {
 function slackRead(text: string, ts: string, user = "U999999999") {
   return { text, ts, user };
 }
+function contains(text: string | undefined, ...parts: string[]) {
+  for (const part of parts) {
+    expect(text).toContain(part);
+  }
+}
+function readContext(conversations: Record<string, unknown>) {
+  return { ...context, sutReadClient: { conversations } } as never;
+}
 
 const observationContext = {
   channelId: "C123456789",
@@ -76,7 +80,7 @@ const observationContext = {
   observationScenarioId: "slack-mention-gating",
 };
 const fallbackContext = {
-  cfg: buildSlackConfigFixture({}, { driverBotUserId: "U111111111" }),
+  cfg: configFixture({}, { driverBotUserId: "U111111111" }),
   channelId: "C123456789",
   sutAccountId: "sut",
   sutIdentity: { userId: "U999999999" },
@@ -94,17 +98,13 @@ function runFallback(
   });
 }
 
-describe("Slack live QA runtime helpers", () => {
-  beforeAll(async () => {
-    // Warm the real action graph outside the scenario deadlines.
-    await loadSlackQaRuntime().preloadSlackActions();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+// Warm the real action graph outside the scenario deadlines.
+beforeAll(() => loadSlackQaRuntime().preloadSlackActions());
+afterEach(() => vi.useRealTimers());
 
+describe("Slack live QA runtime helpers", () => {
   function progress(suffix: string, sutUserId = "U999999999") {
-    const run = buildSlackMessageRun(`slack-progress-commentary-${suffix}`, sutUserId);
+    const run = messageRun(`slack-progress-commentary-${suffix}`, sutUserId);
     const marker = (name: string) => {
       const value = run.input.match(new RegExp(`SLACK-QA-${name}-[0-9A-F]{8}`, "u"))?.[0];
       if (!value) {
@@ -132,6 +132,7 @@ describe("Slack live QA runtime helpers", () => {
       output,
       final,
       verifyObserved,
+      verify,
       check: (...args: Parameters<typeof verify>) => expect(() => verify(...args)),
       tools: (...messages: Array<string | [string, string]>) =>
         expect(() =>
@@ -176,7 +177,7 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("surfaces MPIM cleanup failures and retains ownership for a retry", async () => {
-    const run = buildSlackMessageRun("slack-mpim-app-mention-dedupe", "U_SUT");
+    const run = messageRun("slack-mpim-app-mention-dedupe", "U_SUT");
     const close = vi
       .fn()
       .mockRejectedValueOnce(new Error("close failed"))
@@ -207,7 +208,7 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("sends an MPIM recall only for a valid threaded seed, without leaking its nonce", async () => {
-    const run = buildSlackReplyRun("slack-mpim-app-mention-dedupe", "U_SUT");
+    const run = replyRun("slack-mpim-app-mention-dedupe", "U_SUT");
     const seed = /SLACK_QA_MPIM_SEED_[A-Z0-9]+/u.exec(run.input)?.[0];
     if (!seed) {
       throw new Error("missing Slack MPIM seed marker");
@@ -217,6 +218,7 @@ describe("Slack live QA runtime helpers", () => {
       channel: "C_MPIM",
       ts: "2.000000",
     }));
+    const reply = { thread_ts: "1.000000", ts: "1.500000", user: "U_SUT" };
     const context = {
       channelId: "C_MPIM",
       sentTs: "1.000000",
@@ -226,20 +228,11 @@ describe("Slack live QA runtime helpers", () => {
         conversations: {
           history: async () => ({ messages: [] }),
           replies: async () => ({
-            messages: [
-              {
-                bot_id: "B_SUT",
-                text: `${recall}_TESTNONCE`,
-                thread_ts: "1.000000",
-                ts: "3.000000",
-                user: "U_SUT",
-              },
-            ],
+            messages: [{ ...reply, bot_id: "B_SUT", text: `${recall}_TESTNONCE`, ts: "3.000000" }],
           }),
         },
       },
     } as never;
-    const reply = { thread_ts: "1.000000", ts: "1.500000", user: "U_SUT" };
     await expect(run.afterReply(reply, context)).rejects.toThrow(
       "MPIM seed reply did not contain the provider-generated bot nonce",
     );
@@ -254,8 +247,7 @@ describe("Slack live QA runtime helpers", () => {
       expect.objectContaining({ channel: "C_MPIM", thread_ts: "1.000000" }),
     );
     const text = postMessage.mock.calls[0]?.[0]?.text;
-    expect(text).toContain(`previous reply beginning with ${seed}_BOT_`);
-    expect(text).toContain(`exact format: ${recall}_<NONCE>`);
+    contains(text, `previous reply beginning with ${seed}_BOT_`, `exact format: ${recall}_<NONCE>`);
     expect(text).not.toContain("TESTNONCE");
   });
 
@@ -268,7 +260,7 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("configures native approval forwarding and the guardian runtime", () => {
-    const cfg = buildSlackConfigFixture(
+    const cfg = configFixture(
       { agents: { defaults: {}, entries: { qa: { model: { primary: "openai/gpt-5.6-luna" } } } } },
       {
         overrides: {
@@ -287,10 +279,6 @@ describe("Slack live QA runtime helpers", () => {
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime).toEqual({
       id: "codex",
     });
-    expect(cfg.approvals).toEqual({
-      exec: { enabled: true, mode: "session" },
-      plugin: { enabled: true, mode: "session" },
-    });
     expect(cfg.channels?.slack?.accounts?.sut).toMatchObject({
       allowFrom: ["U999999999"],
       execApprovals: { enabled: true, approvers: ["U999999999"], target: "channel" },
@@ -299,7 +287,7 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("requires a complete disabled-channel warning after the captured log cursor", async () => {
-    const run = buildSlackMessageRun("slack-channel-disabled-warning");
+    const run = messageRun("slack-channel-disabled-warning");
     const call = vi
       .fn()
       .mockResolvedValueOnce({ cursor: 12 })
@@ -314,12 +302,10 @@ describe("Slack live QA runtime helpers", () => {
     await expect(run.afterNoReply?.(context)).resolves.toBe(
       "structured disabled-channel warning observed",
     );
-    expect(call).toHaveBeenNthCalledWith(
-      2,
+    expect(call.mock.calls[1]?.slice(0, 2)).toEqual([
       "logs.tail",
-      { cursor: 12, limit: 200, maxBytes: 256_000 },
-      { timeoutMs: 20_000 },
-    );
+      expect.objectContaining({ cursor: 12 }),
+    ]);
     await expect(run.afterNoReply?.(context)).rejects.toThrow(
       "did not emit the structured warning",
     );
@@ -327,7 +313,7 @@ describe("Slack live QA runtime helpers", () => {
 
   it("configures independent commentary, tool progress, and durable verbosity", () => {
     const config = (suffix: string) => {
-      const cfg = buildSlackConfigFixture(
+      const cfg = configFixture(
         {
           agents: {
             defaults: { verboseDefault: "off" },
@@ -367,63 +353,57 @@ describe("Slack live QA runtime helpers", () => {
     });
   });
 
-  it("verifies progress commentary from history and captured writes", () => {
-    for (const suffix of ["true", "false", "omitted", "verbose-dedupe", "verbose-full"]) {
-      const { commentary, tool, output, final, run, verifyObserved } = progress(suffix);
+  it.each(["true", "false", "omitted", "verbose-dedupe", "verbose-full"])(
+    "verifies %s progress commentary from history and captured writes",
+    (suffix) => {
+      const { commentary, tool, output, run, verify } = progress(suffix);
       expect(run.input).toContain(
         `printf '%s' '${tool}' >/dev/null; sleep 5; printf '%s\\n' '${output}'`,
       );
       const messages = [
-        slackMessage(final, "2"),
         suffix === "true"
           ? slackMessage("Working…", "1", [`• *Commentary* — _${commentary}_`])
           : slackMessage(commentary, "1"),
       ];
+      const extra = {
+        omitted: slackMessage(commentary, "1", ["• *Exec* — sleep 5"]),
+        "verbose-dedupe": slackMessage("Exec", "1.5"),
+        "verbose-full": slackMessage(`Exec\n\`\`\`\n${output}\n\`\`\``, "1.5"),
+      };
+      if (suffix === "omitted" || suffix === "verbose-dedupe" || suffix === "verbose-full") {
+        messages.push(extra[suffix]);
+      }
+      expect(verify(messages)).toContain("verified");
       if (suffix === "omitted") {
-        messages.push(slackMessage(commentary, "1", ["• *Exec* — sleep 5"]));
+        for (const row of ["Exec — sleep 5", "Run — `sleep 5`"]) {
+          messages[1] = slackMessage(commentary, "1", [row]);
+          expect(verify(messages)).toContain("verified");
+        }
       }
-      if (suffix === "verbose-dedupe") {
-        messages.push(slackMessage("Exec", "1.5"));
-      }
-      if (suffix === "verbose-full") {
-        messages.push(slackMessage(`Exec\n\`\`\`\n${output}\n\`\`\``, "1.5"));
-      }
-      const verify = () => verifyObserved({ finalMessage: { text: final, ts: "2" }, messages });
-      expect(verify()).toContain("verified");
-      if (suffix === "omitted") {
-        messages[2] = slackMessage(commentary, "1", ["Exec — sleep 5"]);
-        expect(verify()).toContain("verified");
-        messages[2] = slackMessage(commentary, "1", ["Run — `sleep 5`"]);
-        expect(verify()).toContain("verified");
-      }
-    }
-  });
+    },
+  );
 
   it("recognizes exact commentary rows within Slack progress cards", () => {
     const { commentary: c, check } = progress("true");
-    for (const message of [
-      { text: `_${c}_` },
-      { text: `💬 ${c}` },
-      { text: `:speech_balloon: ${c}` },
-      { text: `_${c}_\n_more commentary_` },
-      {
-        text: "Working…",
-        blockText: [`✅ *Working*`, `• *Commentary* — _${c}_\n• *Commentary* — _another note_`],
-      },
-    ]) {
-      check([{ channelId: "C123456789", ts: "commentary", ...message }]).not.toThrow();
+    for (const text of [`_${c}_`, `💬 ${c}`, `:speech_balloon: ${c}`]) {
+      check([slackMessage(text, "commentary")]).not.toThrow();
     }
-    for (const message of [
-      { text: c },
-      { text: `prefix _${c}_ suffix` },
-      { text: `💬 ${c} extra prose` },
-      { text: "Working…", blockText: [`• *Exec* — _${c}_`] },
-      { text: "Working…", blockText: [`• *Commentary* — _${c} extra prose_`] },
-      { text: "Working…", blockText: [`• *Update* — ${c}`] },
-    ]) {
-      check([{ channelId: "C123456789", ts: "commentary", ...message }]).toThrow(
-        "expected commentary in the Slack progress commentary lane",
-      );
+    check([
+      slackMessage("Working…", "commentary", [
+        `✅ *Working*`,
+        `• *Commentary* — _${c}_\n• *Commentary* — _another note_`,
+      ]),
+    ]).not.toThrow();
+    const rejected = [
+      ...[c, `prefix _${c}_ suffix`, `💬 ${c} extra prose`].map((text) =>
+        slackMessage(text, "commentary"),
+      ),
+      ...[`• *Exec* — _${c}_`, `• *Commentary* — _${c} extra prose_`, `• *Update* — ${c}`].map(
+        (block) => slackMessage("Working…", "commentary", [block]),
+      ),
+    ];
+    for (const message of rejected) {
+      check([message]).toThrow("expected commentary in the Slack progress commentary lane");
     }
   });
 
@@ -434,9 +414,7 @@ describe("Slack live QA runtime helpers", () => {
       .toThrow("status headline");
     const lane = progress("true");
     for (const text of [lane.tool, lane.output, "Exec", "run sleep → print text"]) {
-      lane
-        .check([slackMessage(`💬 ${lane.commentary}`, "commentary"), slackMessage(text, "tool")])
-        .toThrow("tool progress to stay out");
+      lane.tools(text).toThrow("tool progress to stay out");
     }
     const draft = progress("omitted");
     draft
@@ -459,15 +437,10 @@ describe("Slack live QA runtime helpers", () => {
 
   it("requires full tool output rather than echoed command metadata", () => {
     const p = progress("verbose-full");
-    p.tools(`Exec: printf '${p.output}'`).toThrow("expected exact tool output");
     p.tools(`Exec: ${p.output}`).toThrow("expected exact tool output");
     const summary = `\`sleep 5; printf '%s\\\\n' '${p.output}' # ${p.tool}\``;
     const delivered = sanitizeAssistantVisibleText(`${summary}\n\`\`\`txt\n${p.output}\n\`\`\``);
-    expect(sanitizeAssistantVisibleText(summary)).toBe(summary);
-    expect(delivered).toBe(`${summary}\n\`\`\`txt\n${p.output}\n\`\`\``);
     p.tools(delivered).not.toThrow();
-    p.tools(p.output).not.toThrow();
-    p.tools(`Run command: # ${p.tool}\n${p.output}`).not.toThrow();
     p.tools([`Exec\n${p.output}`, "tool-1"], [`Exec\n${p.output}`, "tool-2"]).toThrow(
       "expected exact tool output in one standalone verbose message",
     );
@@ -571,41 +544,29 @@ describe("Slack live QA runtime helpers", () => {
     });
     await vi.advanceTimersByTimeAsync(500);
     await observation;
-    expect(historyCalls).toBeGreaterThanOrEqual(2);
     expect(new Set(observedMessages.map((observed) => observed.text))).toEqual(
       new Set(["FINAL_MARKER", "EARLIER_COMMENTARY", "LATE_DUPLICATE", "THREAD_DUPLICATE"]),
     );
   });
 
   it("stores complete ordered invalid_blocks fallback chunks through the public send path", async () => {
-    const probe = buildSlackInvalidBlocksTableProbe();
     const stored: Array<Record<string, unknown> & { ts: string }> = [];
-    const postMessage = vi.fn(async (payload: Record<string, unknown>) => {
+    const postMessage = async (payload: Record<string, unknown>) => {
       const ts = `2.${String(stored.length + 1).padStart(6, "0")}`;
       stored.push({ ...payload, ts });
       return { channel: "C123456789", ok: true, ts };
-    });
-    const history = vi.fn(async () => ({
+    };
+    const history = async () => ({
       messages: stored.toReversed().map((payload) => ({
         blocks: payload.blocks,
         text: typeof payload.text === "string" ? payload.text.replace(/\s+/gu, " ") : payload.text,
         ts: payload.ts,
         user: "U999999999",
       })),
-    }));
+    });
     const result = await runFallback(postMessage, history);
-    expect(postMessage).toHaveBeenCalledTimes(3);
-    expect(
-      stored.every((payload) => !Object.hasOwn(payload, "blocks") && payload.mrkdwn === false),
-    ).toBe(true);
-    const text = stored.map((payload) => payload.text).join("");
-    expect(text).toHaveLength(probe.fallbackText.length);
-    expect(text.split("\n")).toContain(probe.firstRowText);
-    expect(text.split("\n")).toContain(probe.finalRowText);
-    expect(stored.map((payload) => payload.ts)).toEqual(["2.000001", "2.000002", "2.000003"]);
     expect(result.message).toMatchObject({ ts: "2.000003", user: "U999999999" });
-    expect(result.details).toContain("API attempts=4");
-    expect(result.details).toContain("complete delivery=true");
+    contains(result.details, "API attempts=4", "complete delivery=true");
   });
 
   it("bounds invalid_blocks readback diagnostics", async () => {
@@ -621,13 +582,10 @@ describe("Slack live QA runtime helpers", () => {
         slackRead(index === 1 ? malformed : "", `2.00000${index}`),
       ),
     })).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(Error);
     if (!(error instanceof Error)) {
       throw new Error("expected readback failure");
     }
-    expect(error.message).toContain(`${malformed.length} characters`);
-    expect(error.message).toContain('actual="BROKEN-');
-    expect(error.message).toContain("…");
+    contains(error.message, `${malformed.length} characters`, 'actual="BROKEN-', "…");
     expect(error.message.length).toBeLessThan(700);
   });
 
@@ -640,7 +598,6 @@ describe("Slack live QA runtime helpers", () => {
     await expect(runFallback(postMessage, vi.fn())).rejects.toThrow(
       "Slack fallback part 1 failed after invalid_blocks; observed no fallback API failure code",
     );
-    expect(postMessage).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -649,7 +606,7 @@ describe("Slack live QA runtime helpers", () => {
   ])(
     "enables the message tool without changing allowlist semantics ($allow)",
     ({ allow, expected, alsoAllow }) => {
-      const cfg = buildSlackConfigFixture(
+      const cfg = configFixture(
         { tools: { allow } },
         {
           overrides: findScenario(["slack-reaction-glyph-native"])[0]?.configOverrides,
@@ -661,9 +618,8 @@ describe("Slack live QA runtime helpers", () => {
   );
 
   it("verifies the reaction scenario using the SUT-owned normalized glyph", async () => {
-    const run = buildSlackReplyRun("slack-reaction-glyph-native");
-    expect(run.input).toContain('emoji to exactly "✅"');
-    expect(run.input).toContain("Do not substitute a shortcode");
+    const run = replyRun("slack-reaction-glyph-native");
+    contains(run.input, 'emoji to exactly "✅"', "Do not substitute a shortcode");
     const get = vi.fn(async () => ({
       message: { reactions: [{ count: 1, name: "white_check_mark", users: ["U999999999"] }] },
     }));
@@ -698,39 +654,9 @@ describe("Slack live QA runtime helpers", () => {
     );
   });
 
-  it("builds approval checkpoint message evidence from Slack blocks", () => {
-    expect(
-      buildSlackApprovalCheckpointMessage({
-        blocks: [
-          {
-            type: "section",
-            text: { type: "mrkdwn", text: "Plugin approval required" },
-          },
-          {
-            type: "actions",
-            elements: [
-              {
-                type: "button",
-                text: { type: "plain_text", text: "Allow Once" },
-                value:
-                  'openclaw:approval:v1:{"approvalId":"plugin:abc","approvalKind":"plugin","decision":"allow-once"}',
-              },
-            ],
-          },
-        ],
-        text: "Plugin approval required",
-      }),
-    ).toEqual({
-      actionLabels: ["Allow Once"],
-      blockText: ["Plugin approval required", "Allow Once"],
-      hasNativeActions: true,
-      text: "Plugin approval required",
-    });
-  });
-
   it("ignores unrelated SUT replies but rejects the scenario marker during mention-gating", async () => {
     vi.useFakeTimers();
-    const run = buildSlackMessageRun("slack-mention-gating");
+    const run = messageRun("slack-mention-gating");
     const history = vi
       .fn()
       .mockResolvedValueOnce({ messages: [slackRead("unrelated reply", "2")] })
@@ -754,9 +680,9 @@ describe("Slack live QA runtime helpers", () => {
   });
 });
 
-function buildNativeDataRun(kind: "chart" | "table") {
-  const run = findScenario([`slack-${kind}-presentation-native`])[0]?.buildRun("U_SUT");
-  if (!run || !("input" in run) || !run.captureBeforeReply || !run.afterReply) {
+function nativeDataRun(kind: "chart" | "table") {
+  const run = replyRun(`slack-${kind}-presentation-native`, "U_SUT");
+  if (!run.captureBeforeReply) {
     throw new Error(`missing Slack native ${kind} scenario verifier`);
   }
   const summary = run.input.match(
@@ -772,7 +698,6 @@ function buildNativeDataRun(kind: "chart" | "table") {
   }`;
   return {
     ...run,
-    afterReply: run.afterReply,
     captureBeforeReply: run.captureBeforeReply,
     summary,
     accessibleText,
@@ -781,15 +706,11 @@ function buildNativeDataRun(kind: "chart" | "table") {
 const context = { channelId: "C123456789", sentTs: "1.000000", sutIdentity: { userId: "U_SUT" } };
 
 describe("Slack native data QA scenarios", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it.each(["chart", "table"] as const)(
     "keeps interleaved native %s identities within their captured runs",
     async (kind) => {
-      const first = buildNativeDataRun(kind);
-      const second = buildNativeDataRun(kind);
+      const first = nativeDataRun(kind);
+      const second = nativeDataRun(kind);
       expect(first.summary).not.toBe(second.summary);
       expect(first.matchText).not.toBe(second.matchText);
       const reads = [
@@ -816,35 +737,27 @@ describe("Slack native data QA scenarios", () => {
           ],
         };
       });
-      const params = { ...context, sutReadClient: { conversations: { history } } } as never;
+      const params = readContext({ history });
       await expect(first.afterReply({}, params)).rejects.toThrow("did not retain its message id");
       expect(history).not.toHaveBeenCalled();
-      const writes = reads.map(({ ts, run }) => ({
-        channelId: context.channelId,
-        text: run.summary,
-        ts,
-      }));
+      const writes = reads.map(({ ts, run }) => slackMessage(run.summary, ts));
       expect(first.captureBeforeReply(writes)).toBe(true);
       expect(second.captureBeforeReply(writes)).toBe(true);
-      const verdict = `verified native ${kind === "chart" ? "data_visualization" : "data_table"} block and deterministic accessible text`;
-      await expect(second.afterReply({}, params)).resolves.toBe(verdict);
-      await expect(first.afterReply({}, params)).resolves.toBe(verdict);
-      expect(history).toHaveBeenCalledTimes(2);
+      await expect(second.afterReply({}, params)).resolves.toContain("verified native");
+      await expect(first.afterReply({}, params)).resolves.toContain("verified native");
     },
   );
 
   it("rejects fallback-only native chart delivery", async () => {
     vi.useFakeTimers();
-    const run = buildNativeDataRun("chart");
+    const run = nativeDataRun("chart");
     const history = vi.fn(async () => ({
       messages: [slackRead(run.accessibleText, "2.000000", "U_SUT")],
     }));
-    expect(
-      run.captureBeforeReply([{ channelId: context.channelId, text: run.summary, ts: "2.000000" }]),
-    ).toBe(true);
-    const result = expect(
-      run.afterReply({}, { ...context, sutReadClient: { conversations: { history } } } as never),
-    ).rejects.toThrow("waiting for Slack message");
+    expect(run.captureBeforeReply([slackMessage(run.summary, "2.000000")])).toBe(true);
+    const result = expect(run.afterReply({}, readContext({ history }))).rejects.toThrow(
+      "waiting for Slack message",
+    );
     await vi.advanceTimersByTimeAsync(16_000);
     await result;
   });

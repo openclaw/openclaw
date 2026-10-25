@@ -34,6 +34,7 @@ export type SessionWorkspaceNavigation = SessionWorkspaceTreeState & {
 };
 
 export type SessionWorkspaceDirectory = {
+  readResult?: Promise<void>;
   browser?: SessionWorkspaceListResult["browser"];
   loading: boolean;
   error: string | null;
@@ -48,6 +49,7 @@ export type SessionWorkspaceMobileNavigation = {
 };
 
 export type SessionWorkspacePreview = {
+  readResult?: Promise<SessionWorkspacePreview | undefined>;
   id: string;
   label: string;
   content: SidebarSelection;

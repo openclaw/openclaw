@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { installTmpDirHarness } from "./test-helpers.js";
 
 const lanceMocks = vi.hoisted(() => ({
   countRows: vi.fn(async () => 1),
@@ -9,7 +10,8 @@ const lanceMocks = vi.hoisted(() => ({
   schema: vi.fn(async () => ({ fields: [{ name: "agentId" }] })),
 }));
 
-vi.mock("./lancedb-runtime.js", () => ({
+vi.mock("./lancedb-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./lancedb-runtime.js")>()),
   loadLanceDbModule: vi.fn(async () => ({
     connect: vi.fn(async () => ({
       tableNames: vi.fn(async () => ["memories"]),
@@ -31,13 +33,14 @@ vi.mock("./lancedb-runtime.js", () => ({
 import { MemoryDB } from "./lancedb-store.js";
 
 let db: MemoryDB;
+const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-lifetime-" });
 const memoryId = "890e1fae-1234-4678-abcd-ef0123456789";
 const query = () => db.query("main", { columns: ["id"] });
 const entry = { text: "new", vector: [1, 0, 0], importance: 0.5, category: "fact" as const };
 const knownRows = [{ id: "known" }];
 beforeEach(() => {
   vi.clearAllMocks();
-  db = new MemoryDB("/unused", 3);
+  db = new MemoryDB(getDbPath(), 3);
 });
 afterEach(() => db.close());
 
@@ -81,4 +84,26 @@ test("pending initialization callers share one table opening without extra refre
   expect(lanceMocks.checkoutLatest).not.toHaveBeenCalled();
   await expect(query()).resolves.toEqual(knownRows);
   expect(lanceMocks.checkoutLatest).toHaveBeenCalledTimes(1);
+});
+
+test("close retains custody until an accepted native query settles", async () => {
+  const started = createDeferred<void>();
+  const rows = createDeferred<Array<{ id: string }>>();
+  lanceMocks.queryRows.mockImplementationOnce(() => {
+    started.resolve();
+    return rows.promise;
+  });
+  const reading = query();
+  await started.promise;
+  const closing = db.close();
+  const maintenance = new MemoryDB(getDbPath(), 3);
+  try {
+    await expect(maintenance.optimize()).rejects.toThrow(/in use/);
+  } finally {
+    rows.resolve(knownRows);
+    await reading;
+    await closing;
+    await expect(query()).rejects.toThrow(/closed/);
+    await maintenance.close();
+  }
 });

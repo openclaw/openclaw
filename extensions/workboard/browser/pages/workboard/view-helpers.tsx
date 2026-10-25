@@ -10,18 +10,20 @@ import { formatDateTimeMs } from "../../lib/format.ts";
 import {
   getWorkboardState,
   workboardMutationsReady,
-  type WorkboardCard,
-  type WorkboardEvent,
-  type WorkboardExecutionEngine,
-  type WorkboardLifecycle,
-  type WorkboardPriority,
-  type WorkboardStatus,
-  type WorkboardUiState,
-} from "../../lib/workboard/index.ts";
-import type { WorkboardClientContext } from "../../lib/workboard/runtime.ts";
+  type WorkboardClientContext,
+} from "../../lib/workboard/runtime.ts";
 import { isReservedSessionKey } from "../../lib/workboard/session-links.ts";
 import type { WorkboardSessionResolution } from "../../lib/workboard/session-resolution.ts";
 import { getCardSessionState } from "../../lib/workboard/session-state.ts";
+import type {
+  WorkboardCard,
+  WorkboardEvent,
+  WorkboardExecutionEngine,
+  WorkboardLifecycle,
+  WorkboardPriority,
+  WorkboardStatus,
+  WorkboardUiState,
+} from "../../lib/workboard/types.ts";
 import { agentDisplayName, findCardAgent, type WorkboardAgentsList } from "./agent-filter.ts";
 
 export type BoardAutomationState = { jobId: string } & (
@@ -188,7 +190,6 @@ export function workboardMutationContext(workboard: WorkboardProps): WorkboardCl
   return {
     host: workboard.host,
     client: workboard.client,
-    requestUpdate: workboard.onRequestUpdate,
   };
 }
 

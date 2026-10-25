@@ -8,6 +8,7 @@ import {
   markCronJobActive,
 } from "../../cron/active-jobs.js";
 import { prepareCronRunAdmission } from "../../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../../cron/scheduled-occurrence.test-support.js";
 import {
   resolveMessageActionTurnAuthorization,
   revokeMessageActionTurnCapability,
@@ -33,6 +34,7 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
       const stale = new Error("delivery attempt is no longer current");
       const cfg = { session: { store: f.database.path } };
       const run = prepareCronRunAdmission({
+        scheduledExecution: TEST_SCHEDULED_EXECUTION,
         ...f.scope,
         cfg,
         jobId,

@@ -30,17 +30,13 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 
 /** Inspect the same published --check contract consumed by candidate canary. */
 export async function inspectUpdateDoctorChildSupport(
-  argv: string[],
+  worker: { workerUrl: URL; argv: string[] },
   options: CommandOptions,
   assertCurrent: () => void,
 ): Promise<boolean> {
   assertCurrent();
-  const workerPath = argv[1];
-  if (!workerPath) {
-    throw new UpdateCommandRecoveryPendingError("Target Doctor worker path is missing.");
-  }
   try {
-    await fs.lstat(workerPath);
+    await fs.lstat(worker.workerUrl);
   } catch (cause) {
     if (hasErrnoCode(cause, "ENOENT")) {
       // Candidate canary preserves this pre-worker published-target contract.
@@ -55,7 +51,7 @@ export async function inspectUpdateDoctorChildSupport(
   assertCurrent();
   let result: SpawnResult;
   try {
-    result = await runUtf8CommandWithTimeout([...argv, "--check"], {
+    result = await runUtf8CommandWithTimeout([...worker.argv, "--check"], {
       ...options,
       killProcessTree: true,
       requireProcessTreeExtinction: true,

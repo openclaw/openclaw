@@ -382,12 +382,13 @@ export async function sendStructuredDurableMessageBatchCore(
   input: Omit<DurableMessageSendContextParams, "payloads"> & {
     plan: readonly OutboundPayloadPlan[];
   },
+  sessionGeneration?: SessionDeliveryGeneration,
 ): Promise<DurableMessageBatchSendResult> {
   const { plan, ...params } = input;
   return await sendMessageBatch(
     { ...params, payloads: plan.map((entry) => entry.payload) },
     ({ payloads: _payloads, ...delivery }) =>
-      deliverStructuredOutboundPayloadsInternal({ ...delivery, plan }),
+      deliverStructuredOutboundPayloadsInternal({ ...delivery, plan, sessionGeneration }),
   );
 }
 

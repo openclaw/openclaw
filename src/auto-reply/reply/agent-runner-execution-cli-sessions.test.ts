@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
@@ -22,11 +23,11 @@ import {
   createMinimalRunAgentTurnParams,
   expectMockCallArgFields,
   getExecuteAgentTurnForTest,
-  initialFallbackAttemptOptions,
   makeTestSessionStorePath,
   requireMockCall,
   requireRecord,
   setupAgentRunnerExecutionTestState,
+  runFallbackCandidate,
 } from "./agent-runner-execution.test-support.js";
 import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
 
@@ -475,16 +476,9 @@ describe("executeAgentTurn: CLI session routing", () => {
   it("preserves a reused binding after an operator aborts a channel turn", async () => {
     const sessionKey = "agent:main:direct:aborted-run";
     state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(
-        "claude-cli",
-        "claude-opus-4-8",
-        initialFallbackAttemptOptions(params),
-      ),
-      provider: "claude-cli",
-      model: "claude-opus-4-8",
-      attempts: [],
-    }));
+    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+      runFallbackCandidate(params, "claude-cli", "claude-opus-4-8"),
+    );
     state.runCliAgentMock.mockRejectedValueOnce(
       Object.assign(new Error("CLI run aborted"), { name: "AbortError" }),
     );
@@ -525,14 +519,8 @@ describe("executeAgentTurn: CLI session routing", () => {
       }),
     );
 
-    let releaseAdmission!: () => void;
-    const admissionGate = new Promise<void>((resolve) => {
-      releaseAdmission = resolve;
-    });
-    let notifyAdmissionWait!: () => void;
-    const admissionWait = new Promise<void>((resolve) => {
-      notifyAdmissionWait = resolve;
-    });
+    const { resolve: releaseAdmission, promise: admissionGate } = createDeferred();
+    const { resolve: notifyAdmissionWait, promise: admissionWait } = createDeferred();
     const restoreAdmission = installSessionPlacementAdmissionProvider({
       assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => {

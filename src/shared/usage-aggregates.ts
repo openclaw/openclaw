@@ -124,6 +124,44 @@ export function createUsageAggregateAccumulator() {
     return day;
   }
 
+  function addModelDays(usage: SessionUsageEntry["usage"]) {
+    for (const day of usage?.dailyModelUsage ?? []) {
+      const key = usageDailyModelIdentity(day.date, day.provider, day.model);
+      const existing: SessionDailyModelUsage = dailyModels.get(key) ?? {
+        date: day.date,
+        provider: day.provider,
+        model: day.model,
+        tokens: 0,
+        cost: 0,
+        count: 0,
+      };
+      existing.tokens += day.tokens;
+      existing.cost += day.cost;
+      if (day.usageReport?.state === "unavailable") {
+        existing.usageReport = day.usageReport;
+      }
+      existing.count += day.count;
+      dailyModels.set(key, existing);
+    }
+  }
+
+  function addCalendar(usage: SessionUsageEntry["usage"]) {
+    for (const day of usage?.dailyBreakdown ?? []) {
+      mergeGroupedTotals(costDays, day.date, day);
+    }
+    addModelDays(usage);
+  }
+
+  function totalsForDays(selectedDays: ReadonlySet<string>) {
+    const selected = createEmptyCostUsageTotals();
+    for (const [date, day] of costDays) {
+      if (selectedDays.has(date)) {
+        addCostUsageTotals(selected, day);
+      }
+    }
+    return selected;
+  }
+
   function add({
     usage,
     agentId,
@@ -207,24 +245,7 @@ export function createUsageAggregateAccumulator() {
       existing.toolCalls += day.toolCalls;
       existing.errors += day.errors;
     }
-    for (const day of usage.dailyModelUsage ?? []) {
-      const key = usageDailyModelIdentity(day.date, day.provider, day.model);
-      const existing: SessionDailyModelUsage = dailyModels.get(key) ?? {
-        date: day.date,
-        provider: day.provider,
-        model: day.model,
-        tokens: 0,
-        cost: 0,
-        count: 0,
-      };
-      existing.tokens += day.tokens;
-      existing.cost += day.cost;
-      if (day.usageReport?.state === "unavailable") {
-        existing.usageReport = day.usageReport;
-      }
-      existing.count += day.count;
-      dailyModels.set(key, existing);
-    }
+    addModelDays(usage);
   }
 
   function finish(): SessionsUsageAggregates {
@@ -280,5 +301,5 @@ export function createUsageAggregateAccumulator() {
     };
   }
 
-  return { totals, add, finish };
+  return { totals, totalsForDays, add, addCalendar, finish };
 }

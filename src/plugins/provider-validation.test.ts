@@ -1,20 +1,19 @@
 import { expect, it } from "vitest";
-import type { PluginDiagnostic } from "./manifest-types.js";
-import { normalizeRegisteredProvider } from "./provider-validation.js";
+import { createOwnershipRecord } from "./registry-ownership.test-support.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
 function normalize(overrides: Partial<ProviderPlugin>) {
-  const diagnostics: PluginDiagnostic[] = [];
-  const provider = normalizeRegisteredProvider({
-    pluginId: "demo-plugin",
-    source: "/tmp/demo/index.ts",
-    provider: { id: "demo", label: "Demo", auth: [], ...overrides },
-    pushDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
-  });
-  return { provider, diagnostics };
+  const builder = createTestPluginRegistry();
+  const record = createOwnershipRecord("demo-plugin", { source: "/tmp/demo/index.ts" });
+  builder.registerProvider(record, { id: "demo", label: "Demo", auth: [], ...overrides });
+  return {
+    provider: builder.registry.providers[0]?.provider,
+    diagnostics: builder.registry.diagnostics,
+  };
 }
 
-it("drops invalid and duplicate auth methods, and clears bad wizard method bindings", () => {
+it("normalizes provider metadata and preserves default OAuth repairs", () => {
   const method: ProviderAuthMethod = {
     id: "primary",
     label: "Primary",
@@ -39,6 +38,11 @@ it("drops invalid and duplicate auth methods, and clears bad wizard method bindi
     label: "Demo Provider",
     aliases: ["alias-one"],
     deprecatedProfileIds: ["demo:legacy"],
+    oauthProfileIdRepairs: [
+      {},
+      { legacyProfileId: "demo:old", promptLabel: "Legacy profile" },
+      { promptLabel: "Choose a profile" },
+    ],
     envVars: ["DEMO_API_KEY"],
     auth: [method],
     wizard: {
@@ -56,6 +60,12 @@ it("drops invalid and duplicate auth methods, and clears bad wizard method bindi
     label: " Demo Provider ",
     aliases: [" alias-one ", "alias-one", ""],
     deprecatedProfileIds: [" demo:legacy ", "demo:legacy", ""],
+    oauthProfileIdRepairs: [
+      {},
+      { legacyProfileId: "   ", promptLabel: "" },
+      { legacyProfileId: " demo:old ", promptLabel: " Legacy profile " },
+      { legacyProfileId: " ", promptLabel: " Choose a profile " },
+    ],
     envVars: [" DEMO_API_KEY ", "DEMO_API_KEY"],
     auth: [
       {
@@ -81,7 +91,7 @@ it("drops invalid and duplicate auth methods, and clears bad wizard method bindi
       modelPicker: { label: " Demo models ", methodId: " missing " },
     },
   });
-  expect(provider).toEqual(expected);
+  expect(provider).toEqual({ ...expected, pluginRoot: undefined });
   expect(diagnostics.map(({ level, message }) => [level, message])).toEqual([
     ["error", 'provider "demo" auth method duplicated id "primary"'],
     ["error", 'provider "demo" auth method missing id'],
@@ -91,6 +101,21 @@ it("drops invalid and duplicate auth methods, and clears bad wizard method bindi
       'provider "demo" model-picker method "missing" not found; falling back to available methods',
     ],
   ]);
+});
+
+it.each([{ values: [] }, { values: ["", "   "] }])(
+  "omits discarded deprecated profile IDs: $values",
+  ({ values }) => {
+    const { provider, diagnostics } = normalize({ deprecatedProfileIds: values });
+    expect(provider).not.toHaveProperty("deprecatedProfileIds");
+    expect(diagnostics).toEqual([]);
+  },
+);
+
+it("omits empty OAuth profile-ID repair lists", () => {
+  const { provider, diagnostics } = normalize({ oauthProfileIdRepairs: [] });
+  expect(provider).not.toHaveProperty("oauthProfileIdRepairs");
+  expect(diagnostics).toEqual([]);
 });
 
 it("drops wizard metadata when a provider has no auth methods", () => {

@@ -300,8 +300,7 @@ it.each(["configured", "explicit", "ordered"])(
       lastUsed: 1_700_000_000_000,
       cooldownUntil: Date.now() + 60_000,
       cooldownReason: "rate_limit" as const,
-      errorCount: 3,
-      failureCounts: { rate_limit: 3 },
+      lastRateLimitAt: 1_700_000_000_000,
     };
     stored.usageStats = {
       [profileId]: failureState,

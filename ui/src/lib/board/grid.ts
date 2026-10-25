@@ -1,4 +1,5 @@
-export const BOARD_GRID_COLUMNS = 12;
+import { BOARD_GRID_COLUMNS } from "./grid-constants.ts";
+
 export const BOARD_GRID_ROW_HEIGHT = 56;
 export const BOARD_GRID_GAP = 12;
 export const BOARD_DOCUMENT_AUTO_MAX_ROWS = 240;
@@ -224,10 +225,6 @@ function autoBoardWidgetHeightPx(
   );
 }
 
-function boardRowSpanPx(rows: number): number {
-  return rows * BOARD_GRID_ROW_HEIGHT + (rows - 1) * BOARD_GRID_GAP;
-}
-
 export function effectiveBoardWidgetRows(
   widget: BoardWidgetSizingInput,
   contentHeightPx: number | undefined,
@@ -263,10 +260,8 @@ export function exactBoardWidgetHeightPx(
   }
   // Never exceed the quantized cell. The normal editable board retains its row
   // cap; shell-free documents can raise it so the document owns vertical scroll.
-  return Math.min(
-    requiredHeight,
-    boardRowSpanPx(effectiveBoardWidgetRows(widget, contentHeightPx, chromeRowPx, maxAutoRows)),
-  );
+  const rows = effectiveBoardWidgetRows(widget, contentHeightPx, chromeRowPx, maxAutoRows);
+  return Math.min(requiredHeight, rows * BOARD_GRID_ROW_HEIGHT + (rows - 1) * BOARD_GRID_GAP);
 }
 
 /** Structural sizing inputs so pure grid math stays free of view-type imports. */

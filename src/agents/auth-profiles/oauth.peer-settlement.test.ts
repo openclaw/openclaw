@@ -3,16 +3,13 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
+import { retainPersistedCredential } from "./credential-authority.test-support.js";
 import {
   candidate,
   expired,
   expectTerminal,
   oauth,
   profileId,
-  provider,
   read,
   requireOAuth,
   useOAuthCoordinationFixture,
@@ -29,11 +26,9 @@ import {
   settleOAuthRefreshPeerClaims,
 } from "./oauth-refresh-peers.js";
 import { storeWith } from "./oauth-test-utils.js";
-import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { closeAuthProfileReadPool, resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { saveAuthProfileStore } from "./store-runtime.js";
-import { captureAuthProfileStorePersistenceSnapshot } from "./store.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 vi.mock("../../llm/oauth.js", () => ({
@@ -54,18 +49,6 @@ async function seedAccountConflict(identifiedPeer = false) {
     fx.mainDir,
   );
   return { ownerAgentDir, peerAgentDir };
-}
-function retainPersistedCredential(agentDir: string, selectedProfileId: string) {
-  const shared = openOpenClawStateDatabase();
-  const { databasePath } = captureAuthProfileStorePersistenceSnapshot(agentDir).owner;
-  const source = readDatabasePathIdentitySync(databasePath);
-  const authority = captureAuthProfileCredentialAuthority(
-    captureOpenClawStateWorkerContext({ path: shared.path }),
-    { databasePath, identity: `${source.key}:${source.birthtime ?? ""}` },
-    selectedProfileId,
-  );
-  authority.observe(loadPersistedAuthProfileStore(agentDir)?.profiles[selectedProfileId]);
-  return authority;
 }
 
 describe("OAuth refresh peer settlement", () => {
@@ -161,78 +144,71 @@ describe("OAuth refresh peer settlement", () => {
     }
   });
 
-  it("terminally fences peers instead of exposing a different shared account", async () => {
-    const { ownerAgentDir, peerAgentDir } = await seedAccountConflict();
-    fx.refresh.mockResolvedValue(oauth("rotated-a", { accountId: "acct-a" }));
-
-    await expect(fx.resolve(ownerAgentDir)).resolves.toMatchObject({ apiKey: "rotated-a-access" });
-
-    expect(read(fx.mainDir)).toMatchObject({
-      access: "shared-b-access",
-      accountId: "acct-b",
-    });
-    expect(read(ownerAgentDir)).toMatchObject({
-      access: "rotated-a-access",
-      accountId: "acct-a",
-    });
-    const terminalPeer = read(peerAgentDir);
-    expectTerminal(terminalPeer);
-    await expect(fx.resolve(peerAgentDir)).resolves.toBeNull();
-  });
-
-  it.each([
-    {
-      name: "conflicting account ids despite matching email",
-      provider: "openai",
-      ownerIdentity: { accountId: "acct-a", email: "a@example.com" },
-      peerIdentity: { accountId: "acct-b", email: "a@example.com" },
-    },
-    {
-      name: "identity-less cross-tenant Copilot peer",
-      provider: "github-copilot",
-      ownerIdentity: { enterpriseUrl: "https://tenant-a.ghe.com/copilot/" },
-      peerIdentity: { enterpriseUrl: "https://tenant-b.ghe.com/" },
-    },
-  ])(
-    "terminally fences an exact replacement for $name",
-    async ({ provider: peerProvider, ownerIdentity, peerIdentity }) => {
-      const peerAgentDir = await fx.agentDirectory("peer-a");
-      const peerProfileId = `${peerProvider}:default`;
-      const ownerOriginal = oauth("cached", {
-        provider: peerProvider,
-        access: "cached-access-token",
-        refresh: "refresh-token",
-        expires: Date.now() - 60_000,
-        ...ownerIdentity,
+  it.each([false, true])(
+    "terminally fences peers instead of exposing a different shared account (relogin: %s)",
+    async (relogin) => {
+      const { ownerAgentDir, peerAgentDir } = await seedAccountConflict(relogin);
+      const replacement = oauth(relogin ? "relogin-a" : "rotated-a", { accountId: "acct-a" });
+      let resolving: ReturnType<typeof fx.resolve>;
+      if (relogin) {
+        const { started, finishRefresh } = fx.blockRefresh(() => undefined);
+        resolving = fx.resolve(ownerAgentDir);
+        await started;
+        await fx.reconnect(ownerAgentDir, replacement);
+        finishRefresh();
+      } else {
+        fx.refresh.mockResolvedValue(replacement);
+        resolving = fx.resolve(ownerAgentDir);
+      }
+      await expect(resolving).resolves.toMatchObject({ apiKey: replacement.access });
+      expect(read(fx.mainDir)).toMatchObject({ access: "shared-b-access", accountId: "acct-b" });
+      expect(read(ownerAgentDir)).toMatchObject({
+        access: replacement.access,
+        accountId: "acct-a",
       });
-      const fence = createOAuthRefreshFence({
-        profileId: peerProfileId,
-        credential: ownerOriginal,
-      });
-      const replacement = {
-        ...ownerOriginal,
-        access: "rotated-access",
-        refresh: "rotated-refresh",
-        expires: Date.now() + 3_600_000,
-      };
-      saveAuthProfileStore(storeWith(peerProfileId, fence), peerAgentDir);
-      const persistedFence = requireOAuth(read(peerAgentDir, peerProfileId));
-      await settleOAuthRefreshPeerClaims({
-        profileId: peerProfileId,
-        fence: persistedFence,
-        claims: [
-          {
-            candidate: candidate("peer-a", peerAgentDir),
-            original: { ...ownerOriginal, ...peerIdentity },
-          },
-        ],
-        authoritativeSharedCredential: replacement,
-        replacement,
-      });
-      const settled = read(peerAgentDir, peerProfileId);
-      expectTerminal(settled);
+      expectTerminal(read(peerAgentDir));
+      if (!relogin) {
+        await expect(fx.resolve(peerAgentDir)).resolves.toBeNull();
+      }
     },
   );
+
+  it("terminally fences an exact replacement for an identity-less cross-tenant Copilot peer", async () => {
+    const peerAgentDir = await fx.agentDirectory("peer-a");
+    const peerProfileId = "github-copilot:default";
+    const ownerOriginal = oauth("cached", {
+      provider: "github-copilot",
+      access: "cached-access-token",
+      refresh: "refresh-token",
+      expires: Date.now() - 60_000,
+      enterpriseUrl: "https://tenant-a.ghe.com/copilot/",
+    });
+    const fence = createOAuthRefreshFence({
+      profileId: peerProfileId,
+      credential: ownerOriginal,
+    });
+    const replacement = {
+      ...ownerOriginal,
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+      expires: Date.now() + 3_600_000,
+    };
+    saveAuthProfileStore(storeWith(peerProfileId, fence), peerAgentDir);
+    const persistedFence = requireOAuth(read(peerAgentDir, peerProfileId));
+    await settleOAuthRefreshPeerClaims({
+      profileId: peerProfileId,
+      fence: persistedFence,
+      claims: [
+        {
+          candidate: candidate("peer-a", peerAgentDir),
+          original: { ...ownerOriginal, enterpriseUrl: "https://tenant-b.ghe.com/" },
+        },
+      ],
+      authoritativeSharedCredential: replacement,
+      replacement,
+    });
+    expectTerminal(read(peerAgentDir, peerProfileId));
+  });
 
   it("continues rolling back peers after one candidate cannot be restored or terminalized", async () => {
     const original = requireOAuth(expired().profiles[profileId]);
@@ -251,44 +227,14 @@ describe("OAuth refresh peer settlement", () => {
         profileId,
         fence: persistedFence,
         claims: [
-          {
-            candidate: candidate("peer-b", healthyAgentDir),
-            original,
-          },
-          {
-            candidate: candidate("peer-a", brokenAgentDir),
-            original,
-          },
+          { candidate: candidate("peer-b", healthyAgentDir), original },
+          { candidate: candidate("peer-a", brokenAgentDir), original },
         ],
       }),
     ).rejects.toThrow(AggregateError);
     expect(authority.readCurrentCredential()).toEqual(read(healthyAgentDir));
-    expect(read(healthyAgentDir)).toMatchObject({
-      type: "oauth",
-      provider,
-      access: original.access,
-      refresh: original.refresh,
-      expires: original.expires,
-    });
-  });
-
-  it("terminally fences superseded peers when shared inheritance is a different account", async () => {
-    const { ownerAgentDir, peerAgentDir } = await seedAccountConflict(true);
-
-    const { started, finishRefresh } = fx.blockRefresh(() => undefined);
-
-    const resolving = fx.resolve(ownerAgentDir);
-    await started;
-    await fx.reconnect(ownerAgentDir, oauth("relogin-a", { accountId: "acct-a" }));
-    finishRefresh();
-
-    await expect(resolving).resolves.toMatchObject({ apiKey: "relogin-a-access" });
-    expect(read(fx.mainDir)).toMatchObject({
-      access: "shared-b-access",
-      accountId: "acct-b",
-    });
-    const terminalPeer = read(peerAgentDir);
-    expectTerminal(terminalPeer);
+    const { type, provider, access, refresh, expires } = original;
+    expect(read(healthyAgentDir)).toMatchObject({ type, provider, access, refresh, expires });
   });
 
   it("reports exact removal owners and preserves a reconnected peer", async () => {

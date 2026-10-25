@@ -192,9 +192,10 @@ async function createFixture(
   };
   const config = await getGatewayConfigModule();
   config.clearRuntimeConfigSnapshot();
+  const roles = { default: "creator", definitions: { creator: role } };
   const cfg = {
     ...config.getRuntimeConfig(),
-    gateway: { roles: { default: "creator", definitions: { creator: role } } },
+    gateway: { roles },
   };
   const context = createDirectChatContext({
     getRuntimeConfig: () => cfg,
@@ -235,7 +236,7 @@ async function createFixture(
   const request = sessionCreation(client, context, key, storePath, "create-account-authority");
   const create = (selection?: string, idempotent = true) =>
     request.create(selection, idempotent ? "create-once" : undefined);
-  return { authProfileId, client, clients, context, key, owner, role, ...request, create };
+  return { authProfileId, client, clients, context, key, owner, role, roles, ...request, create };
 }
 
 test.each([
@@ -273,32 +274,45 @@ test.each([
     }),
 );
 
-test.each(["disconnect", "role scope", "connection scope", "profile"] as const)(
-  "sessions.create rechecks its session-only account capture after %s changes during preparation",
+test.each([
+  "disconnect",
+  "role scope",
+  "connection scope",
+  "profile",
+  "explicit disconnect",
+] as const)(
+  "sessions.create rechecks its account capture after %s changes during preparation",
   (change) =>
-    withFixture(["operator.sessions.write", true], async (fixture) => {
-      const { entered, release } = holdCatalog(fixture.context);
-      const request = fixture.create(model);
-      try {
-        await Promise.race([entered.promise, request]);
-        expect(fixture.respond).not.toHaveBeenCalled();
-        if (change === "disconnect") {
-          fixture.clients.delete(fixture.client);
-        } else if (change === "role scope") {
-          fixture.role.scopes = ["operator.sessions.read"];
-        } else if (change === "connection scope") {
-          fixture.client.connect.scopes = ["operator.sessions.read"];
-        } else {
-          fixture.client.authenticatedUserProfile = identifiedClient(
-            ensureProfileForEmail("replacement-creator@example.test").id,
-          ).authenticatedUserProfile;
+    withFixture(
+      [change === "explicit disconnect" ? "operator.write" : "operator.sessions.write", true],
+      async (fixture) => {
+        const { entered, release } = holdCatalog(fixture.context);
+        const request = fixture.create(
+          change === "explicit disconnect"
+            ? `${model}@${expectDefined(fixture.authProfileId, "owned account")}`
+            : model,
+        );
+        try {
+          await Promise.race([entered.promise, request]);
+          expect(fixture.respond).not.toHaveBeenCalled();
+          if (change === "disconnect" || change === "explicit disconnect") {
+            fixture.clients.delete(fixture.client);
+          } else if (change === "role scope") {
+            fixture.role.scopes = ["operator.sessions.read"];
+          } else if (change === "connection scope") {
+            fixture.client.connect.scopes = ["operator.sessions.read"];
+          } else {
+            fixture.client.authenticatedUserProfile = identifiedClient(
+              ensureProfileForEmail("replacement-creator@example.test").id,
+            ).authenticatedUserProfile;
+          }
+        } finally {
+          release.resolve();
+          await request;
         }
-      } finally {
-        release.resolve();
-        await request;
-      }
-      fixture.expectRejected();
-    }),
+        fixture.expectRejected();
+      },
+    ),
 );
 
 test("session-only creation does not authorize an explicit personal account selection", () =>
@@ -312,27 +326,15 @@ test("sessions.create rejects a session-only creator revoked after initial menti
     const recipientProfile = ensureProfileForEmail("creation-recipient@example.test");
     const recipient = { ...identifiedClient(recipientProfile.id), connId: "creation-recipient" };
     fixture.clients.add(recipient);
-    const cfg = fixture.context.getRuntimeConfig();
-    const mentionConfig: typeof cfg = {
-      ...cfg,
-      gateway: {
-        ...cfg.gateway,
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: fixture.role,
-            administrator: {
-              agents: "*",
-              scopes: ["operator.admin"],
-              sessions: { others: "write" },
-            },
-            disabled: { agents: [], scopes: [], sessions: { others: "none" } },
-          },
-        },
+    Object.assign(fixture.roles.definitions, {
+      administrator: {
+        agents: "*",
+        scopes: ["operator.admin"],
+        sessions: { others: "write" },
       },
-    };
-    fixture.context.getRuntimeConfig = () => mentionConfig;
-    setUserProfileRole(fixture.owner.id, "guest");
+      disabled: { agents: [], scopes: [], sessions: { others: "none" } },
+    } satisfies Record<string, GatewayOperatorRoleDefinition>);
+    setUserProfileRole(fixture.owner.id, "creator");
     setUserProfileRole(recipientProfile.id, "administrator");
     const inbox = createMentionInbox({
       scheduler: createTestGatewayScheduler(),

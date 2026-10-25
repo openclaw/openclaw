@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   createSessionEventState,
@@ -14,6 +17,14 @@ import {
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
 const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
+
+// Keep history ordering/count assertions independent of auxiliary post-run auth reads.
+function withAuthStatus(request: GatewayRequestHandler): GatewayRequestHandler {
+  return (method, ...args) =>
+    method === "models.authStatus"
+      ? Promise.resolve({ ts: 0, providers: [] })
+      : request(method, ...args);
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -81,8 +92,8 @@ describe("terminal reply recovery", () => {
       chatRunId: runId,
       pendingSessionMessageReloadSessionKey: null,
       client: authenticated
-        ? createTestGatewayClient(request)
-        : ({ request } as unknown as GatewayBrowserClient),
+        ? createTestGatewayClient(withAuthStatus(request))
+        : ({ request: withAuthStatus(request) } as unknown as GatewayBrowserClient),
       ...overrides,
     });
     return { prompt, persistedReply, request, state };
@@ -156,7 +167,7 @@ describe("terminal reply recovery", () => {
       const { state } = createSessionEventState({
         chatRunId: runId,
         pendingSessionMessageReloadSessionKey: null,
-        client: createTestGatewayClient(request),
+        client: createTestGatewayClient(withAuthStatus(request)),
       });
       const fail = event(
         state,
@@ -181,7 +192,7 @@ describe("terminal reply recovery", () => {
       const request = vi.fn();
       const { state } = createSessionEventState({
         chatRunId: "foreground-run",
-        client: createTestGatewayClient(request),
+        client: createTestGatewayClient(withAuthStatus(request)),
       });
       event(
         state,
@@ -261,7 +272,7 @@ describe("terminal reply recovery", () => {
       assistant("The post-final snapshot contains this reply.").content,
       {
         pendingSessionMessageReloadSessionKey: pendingReload ? "agent:main:main" : null,
-        client: { request } as unknown as GatewayBrowserClient,
+        client: { request: withAuthStatus(request) } as unknown as GatewayBrowserClient,
       },
     );
 
@@ -315,7 +326,7 @@ describe("terminal reply recovery", () => {
         : kind === "live reply"
           ? { chatMessages: [prompt] }
           : {}),
-      client: createTestGatewayClient(request),
+      client: createTestGatewayClient(withAuthStatus(request)),
     });
     emitGatewayEvent(state, "chat", {
       sessionKey: state.sessionKey,

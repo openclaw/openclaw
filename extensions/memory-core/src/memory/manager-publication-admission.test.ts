@@ -22,6 +22,7 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
 import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import { memoryAdmissionRestartEntrypoint } from "./manager-publication-admission-entrypoint.test-support.js";
+import { observePublishedSql } from "./manager-publication-observer.test-support.js";
 import type { MemoryPublicationConnection } from "./manager-publication-task.js";
 import { bindSqliteWorkerBackend } from "./manager-publication.worker.js";
 import { readMemoryConnectionPragmas, readMemoryShadowIdentity } from "./manager-shadow-task.js";
@@ -94,8 +95,17 @@ it.each(["clean", "unclean"])(
         for (const dimensions of [2, 3]) {
           resize(backend, dimensions);
         }
-        resize(sourceBackend, 2);
-        const resized = resize(sourceBackend, 3);
+        const observed = observePublishedSql(source);
+        let resized: ReturnType<typeof resize>;
+        try {
+          resize(sourceBackend, 2);
+          expect(observed.calls().filter(({ sql }) => /DROP TABLE/i.test(sql))).toHaveLength(0);
+          observed.clear();
+          resized = resize(sourceBackend, 3);
+          expect(observed.calls().filter(({ sql }) => /DROP TABLE/i.test(sql))).toHaveLength(1);
+        } finally {
+          observed.restore();
+        }
         assert.ok(resized && typeof resized === "object" && "ok" in resized && resized.ok);
         assert.ok(resized.searchSchema);
         expect(resized.searchSchema.vector).toContain("FLOAT[3]");

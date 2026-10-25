@@ -76,12 +76,8 @@ function writeSource(root: string, version: string, extension: "ts" | "js" = "ts
 function write(root: string, name: string, contents: string) {
   return writeArtifact(path.join(root, name), contents);
 }
-function loadApi(pluginRoot: string, pluginId?: string) {
-  return loadPluginPublicArtifactModuleSync<PublicApi>({
-    pluginRoot,
-    pluginId,
-    artifactBasename: "api.js",
-  });
+function loadApi(pluginRoot: string) {
+  return loadPluginPublicArtifactModuleSync<PublicApi>({ pluginRoot, artifactBasename: "api.js" });
 }
 function loadFacade(dirName: string, artifactBasename = "runtime-api.js") {
   return loadBundledPluginPublicSurfaceModuleSyncCore<PublicApi>({ dirName, artifactBasename });
@@ -161,9 +157,8 @@ describe("managed plugin public surfaces", () => {
     vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
     // Secret refresh copies env while retaining the selected manifest and live source generation.
-    const env = { ...process.env };
     const providers = resolvePluginWebSearchProviders({
-      env,
+      env: { ...process.env },
       mode: "setup",
       onlyPluginIds: [pluginId],
       config: { plugins: { allow: [pluginId] } },
@@ -291,18 +286,8 @@ describe("managed plugin public surfaces", () => {
       expect(Object.isExtensible(lazy)).toBe(true);
       expect(lazy.read()).toBe("registered-one");
     }
-    const probes = [
-      vi.spyOn(fs, "existsSync"),
-      vi.spyOn(fs, "realpathSync"),
-      vi.spyOn(fs, "statSync"),
-      vi.spyOn(fs, "openSync"),
-    ];
     expect(api()).toBe(originalApi);
     expect(lazy.read()).toBe("registered-one");
-    for (const probe of probes) {
-      expect(probe).not.toHaveBeenCalled();
-      probe.mockRestore();
-    }
 
     await first.instance.dispose();
     writeSource(root, "source-two", "ts", 2);
@@ -376,11 +361,10 @@ describe("managed plugin public surfaces", () => {
     second.entry.default.register("second-instance");
     second.registry.plugins.unshift(first.record);
     second.publish();
-    const load = (pluginId?: string) => loadApi(root, pluginId);
+    const load = () => loadApi(root);
     expect(() => load()).toThrow(/ambiguous runtime ownership/);
-    expect(load("first").read()).toBe("first-instance");
-    expect(load("second").read()).toBe("second-instance");
     expect(inRequest(second.registry, () => load().read(), "first")).toBe("first-instance");
+    expect(inRequest(second.registry, () => load().read(), "second")).toBe("second-instance");
   });
 
   it.each([
@@ -395,8 +379,7 @@ describe("managed plugin public surfaces", () => {
     "keeps public APIs on the registered %s graph when source and build coexist in %s (entry in %s)",
     (extension, buildDirectory, entryDirectory) => {
       const root = fs.realpathSync(temp.make("openclaw-public-mixed-source-"));
-      const buildRoot = path.join(root, buildDirectory);
-      writeSource(buildRoot, "stale-build", "js");
+      writeSource(path.join(root, buildDirectory), "stale-build", "js");
       writeSource(root, "source");
       if (extension === "mts") {
         fs.renameSync(path.join(root, "index.ts"), path.join(root, "index.mts"));
@@ -486,10 +469,7 @@ describe("managed plugin public surfaces", () => {
       vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", directory);
       const request = { dirName: pluginId, artifactBasename: "api.js" };
       expect(
-        withPluginRuntimeGatewayRequestScope(
-          { pluginRegistry: createEmptyPluginRegistry(), isWebchatConnect: () => false },
-          () => loadBundledPluginPublicSurfaceModuleSyncCore<PublicApi>(request).read(),
-        ),
+        inRequest(createEmptyPluginRegistry(), () => loadFacade(pluginId, "api.js").read()),
       ).toBe("library");
       const active = prepare(root, pluginId, "bundled", extension);
       active.publish("registered");

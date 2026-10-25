@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import type { SystemAgentChatHistoryResult } from "@openclaw/gateway-protocol";
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { AssistantDock } from "../app/assistant-dock.ts";
@@ -23,11 +22,12 @@ import {
   createPluginHelpRequest,
 } from "../pages/custodian/plugin-help.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { sessionListResult } from "../test-helpers/chat-model.ts";
 import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./assistant-panel-solid.tsx";
-import "./assistant-panel-content.ts";
+import "./assistant-panel-content-solid.tsx";
 
 type HomeProps = Parameters<typeof import("./home-session-solid.tsx").HomeSession>[0];
 type TestHome = HTMLElement & HomeProps;
@@ -384,21 +384,6 @@ describe("assistant panel", () => {
     expect(panel.assistantPanelOpen).toBe(false);
   });
 
-  it("keeps a closed plugin dock closed when automatic Ask help arrived while it was open", async () => {
-    vi.stubGlobal("innerWidth", 1342);
-    const { context, panel } = await mountPanel({
-      custodianSuppressed: false,
-      pageRouteId: "plugin-settings",
-    });
-    openReview(context.assistantDock, "main");
-    publishPluginHelpContext(context, {}, plugin("example"), { overview: true, installed: true });
-    await panel.updateComplete;
-    expect(context.assistantDock.openSessionKey).toBe("agent:main:review");
-    await click(panel, ".assistant-panel-actions button:last-child");
-    expect(panel.assistantPanelOpen).toBe(false);
-    expect(context.assistantDock.openSessionKey).toBeNull();
-  });
-
   it("opens for read-only viewers and distinguishes agents sharing a global session key", async () => {
     const { context, panel, setGatewaySnapshot } = await mountPanel({ global: true });
     const hello = context.gateway.snapshot.hello!;
@@ -428,20 +413,14 @@ describe("assistant panel", () => {
     const { context, panel, provider, request, setGatewaySnapshot } = await mountPanel({
       global: true,
     });
-    context.sessions.state.result = {
-      ts: 0,
-      path: "",
-      count: 2,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [
-        session("global", "main", { label: "Personal Home" }),
-        session("global", "research", {
-          label: "Parser work",
-          sessionId: "research-incarnation",
-          spawnedWorkspaceDir: "/worktrees/parser",
-        }),
-      ],
-    };
+    context.sessions.state.result = sessionListResult(0, [
+      session("global", "main", { label: "Personal Home" }),
+      session("global", "research", {
+        label: "Parser work",
+        sessionId: "research-incarnation",
+        spawnedWorkspaceDir: "/worktrees/parser",
+      }),
+    ]);
     panel.pageSessionKey = "global";
     panel.pageAgentId = "research";
     panel.homeAvailable = true;
@@ -672,27 +651,18 @@ describe("assistant panel", () => {
     expect(panel.assistantPanelOpen).toBe(true);
   });
 
-  it("opens plugin help on request and limits automatic opening for installed plugins on desktop", async () => {
+  it("opens installed plugin help on desktop only when requested", async () => {
     vi.stubGlobal("innerWidth", 1342);
     const { context, panel, request } = await mountPanel({
       custodianSuppressed: false,
       pageRouteId: "plugin-settings",
     });
-    const owner = {};
-    const publishHelp = async (id: string, overview: boolean) => {
-      publishPluginHelpContext(context, owner, plugin(id), { overview, installed: true });
-      await panel.updateComplete;
-    };
-    await publishHelp("first", true);
-    expect(panel.assistantPanelOpen).toBe(true);
+    publishPluginHelpContext(context, {}, plugin("first"), { installed: true });
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(false);
     await createPluginHelpRequest(context, plugin("first"))();
     await panel.updateComplete;
     expect(panel.assistantPanelOpen).toBe(true);
-    await toggle(panel, CUSTODIAN_PANEL_TOGGLE_EVENT, { open: false });
-    await publishHelp("second", true);
-    expect(panel.assistantPanelOpen).toBe(false);
-    await publishHelp("second", false);
-    expect(panel.assistantPanelOpen).toBe(false);
     expect(request.mock.calls.every((call) => call[1]?.message === undefined)).toBe(true);
   });
 

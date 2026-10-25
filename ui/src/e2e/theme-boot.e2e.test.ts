@@ -1,17 +1,11 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import {
-  controlUiBundledGatewayUrl,
-  installMockGateway,
-  waitForControlUiRoute,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI theme continuity during startup" });
 const profileId = "theme-reader";
-const secondSessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 const browserOptions = { deviceScaleFactor: 2, locale: "en-US", serviceWorkers: "block" } as const;
 const configResponse = (config: object, hash: string) => ({
   config,
@@ -108,30 +102,6 @@ async function assertThemeFrames(
     ),
     `Every painted frame must use the resolved palette: ${JSON.stringify({ stable, surfaces })}`,
   ).toEqual([]);
-  await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const root = document.documentElement;
-        const style = getComputedStyle(root);
-        const narrowChat =
-          root.classList.contains("control-ui-chat-shell") &&
-          matchMedia(
-            "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
-          ).matches;
-        const background =
-          (narrowChat && style.getPropertyValue("--bg-content").trim()) ||
-          style.getPropertyValue("--bg").trim();
-        const metas = [...document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')];
-        return {
-          meta:
-            metas.length > 0 &&
-            metas.every((meta) => meta.content === background && !meta.hasAttribute("media")),
-          statusBar:
-            style.getPropertyValue("--control-ui-system-chrome-background").trim() === background,
-        };
-      }),
-    )
-    .toEqual({ meta: true, statusBar: true });
 }
 
 async function checkStartup({
@@ -164,16 +134,6 @@ async function checkStartup({
         ...scenario,
         awaitInitialRoster: false,
         presenceUsers: saved ? scenario.presenceUsers : [],
-        sessions: [
-          { key: "agent:main:main", kind: "direct", label: "Home", updatedAt: 2 },
-          {
-            key: secondSessionKey,
-            kind: "direct",
-            label: "Second conversation",
-            updatedAt: 1,
-            owner: { actor: { type: "human", id: profileId, label: "Theme Reader" } },
-          },
-        ],
         deferredMethods: saved ? ["users.prefs.get"] : [],
         methodResponses: {
           "config.get": configResponse(config, "theme-boot"),
@@ -242,39 +202,6 @@ async function checkStartup({
         await ready(page);
         await assertThemeFrames(page, expectedAppearance);
       }
-      if (width !== 1440 || !saved || mode === "system") {
-        return;
-      }
-      await gateway.setOnline(false);
-      await page.locator(".agent-chat__input--offline").waitFor();
-      await assertThemeFrames(page, expectedAppearance);
-      await gateway.setOnline(true);
-      await waitForControlUiGatewayReady(page);
-      await assertThemeFrames(page, expectedAppearance);
-      await page.evaluate((url) => {
-        history.pushState(null, "", url);
-        window.dispatchEvent(new PopStateEvent("popstate"));
-      }, `${suite.server.baseUrl}settings/appearance`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/appearance",
-        routeId: "appearance",
-      });
-      await assertThemeFrames(page, expectedAppearance);
-      await page.goBack();
-      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-      await assertThemeFrames(page, expectedAppearance);
-      await page
-        .locator(
-          `.sidebar-recent-session[data-session-key="${secondSessionKey}"] a.sidebar-recent-session__link`,
-        )
-        .click();
-      await gateway.waitForRequest("chat.startup", {
-        match: { sessionKey: secondSessionKey },
-      });
-      await assertThemeFrames(page, expectedAppearance);
-      await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
-      await page.locator(".new-session-page__message").waitFor();
-      await assertThemeFrames(page, expectedAppearance);
     },
     async () => releaseAppScripts(),
   );

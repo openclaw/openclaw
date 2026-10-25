@@ -12,7 +12,6 @@ export type {
   RuntimeToolInputSchemaProjection,
 } from "@openclaw/ai/internal/tool-schema";
 
-/** Diagnostic for one incompatible runtime tool schema. */
 export type RuntimeToolSchemaDiagnostic = {
   readonly toolName: string;
   readonly toolIndex: number;

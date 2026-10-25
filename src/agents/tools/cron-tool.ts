@@ -30,7 +30,7 @@ import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { withToolEffectBoundary } from "../tool-effect-receipt.js";
 import { bindAgentToolReplaySafety } from "../tool-replay-safety.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
-import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
+import { AUTOMATIONS_TOOL_NAME, CRON_SCOPED_READ_ACTIONS } from "./automations-tool-name.js";
 import {
   type AnyAgentTool,
   jsonResult,
@@ -41,6 +41,7 @@ import {
 import { createCronAutomationActions } from "./cron-tool-automation.js";
 import {
   isEmptyRecoveredCronPatch,
+  prepareCronToolArguments,
   readCronToolJob,
   stripCronCreateNullClears,
 } from "./cron-tool-canonicalize.js";
@@ -62,7 +63,6 @@ import { formatCronTerminalPresentation } from "./cron-tool-presentation.js";
 import {
   assertCronPacingInput,
   createCronToolSchema,
-  CRON_SCOPED_READ_ACTIONS,
   CRON_TOOL_LIST_MAX_LIMIT,
 } from "./cron-tool-schema.js";
 import { listCronSelfJob } from "./cron-tool-self-list.js";
@@ -175,6 +175,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       nextCheckEnabled,
       management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
     }),
+    prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
       assertCurrentRun?.();
@@ -205,7 +206,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         !CRON_MANAGEMENT_METHODS.some((method) => method === `cron.${action}`)
       ) {
         throw new Error(
-          "This turn can only list, get, update, run, or remove automations. Use the Automations page for other actions.",
+          "This turn can only list, get, update, run, remove, or bind automations. Use the Automations page for other actions.",
         );
       }
       assertCronSelfRemoveScope(opts, action, params);
@@ -406,7 +407,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               );
             }
             case "get":
-            case "runs": {
+            case "runs":
+            case "bind": {
               const id = requireCronJobIdParam(params);
               const runId = action === "runs" ? readToolStringParam(params, "runId") : undefined;
               return jsonResult(

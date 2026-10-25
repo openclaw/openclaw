@@ -220,8 +220,8 @@ export function inspectOpenAIToolSchemas(
   if (!shouldApplyOpenAIToolCompat(ctx)) {
     return [];
   }
-  // Native OpenAI transports fall back to `strict: false` when any tool schema is not
-  // strict-compatible, so these findings are expected for optional-heavy tool schemas.
+  // Compatibility normalization runs before runtime inspection. Registration
+  // diagnostics own open-object warnings while the raw schemas are available.
   return [];
 }
 

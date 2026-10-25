@@ -126,14 +126,12 @@ it.each([
   const local = host([session("native"), session("adopted", { sessionKey: row.key })]);
   const visibility = projectSidebarArchiveVisibility({
     sessionData: {
-      sessionsAgentId: "main",
-      sessionsResult: null,
-      sessionResultsByAgent: {},
       childSessionRowsByParent: {},
       loadedChildSessionKeys: new Set(),
       loadingChildSessionKeys: new Set(),
       childSessionErrorsByParent: new Map(),
     },
+    sourceRows: [],
     selectedAgentId: "main",
     statusFilter,
     now: 100,
@@ -180,5 +178,12 @@ it.each([false, true])(
     expect(projectSidebarSessionCatalogs([catalog(hosts)], ownerId, liveRows)).toEqual([
       { ...catalog(hosts), visibleHosts: [{ ...hosts[0]!, sessions: [hosts[0]!.sessions[0]!] }] },
     ]);
+    expect(
+      projectSidebarSessionCatalogs(
+        [{ ...catalog(hosts), error: { code: "UNAVAILABLE", message: "Discovery failed" } }],
+        "operator:unrelated",
+        liveRows,
+      ),
+    ).toEqual([]);
   },
 );

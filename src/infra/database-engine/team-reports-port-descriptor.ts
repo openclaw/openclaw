@@ -1,4 +1,5 @@
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "../../plugins/public-surface-loader.js";
+import { historicalIndexOrderingPort } from "./historical-index-ordering-port.js";
 import {
   DatabasePortDataError,
   type DatabasePortProvider,
@@ -9,7 +10,13 @@ import metadata from "./team-reports-port.generated.json" with { type: "json" };
 
 export async function loadTeamReportsPortDescriptor(
   owner?: Parameters<DatabasePortProvider["loadDescriptor"]>[0],
+  sourceVersion = metadata.version,
 ): Promise<PortDescriptor> {
+  if (sourceVersion !== metadata.version && sourceVersion !== 1) {
+    throw new DatabasePortDataError(
+      `Missing team-reports PostgreSQL backup descriptor for version ${sourceVersion}`,
+    );
+  }
   const api = loadBundledPluginPublicArtifactModuleFromCandidatesSync<{
     teamReportsDatabasePortApi: {
       postgres: string;
@@ -26,7 +33,7 @@ export async function loadTeamReportsPortDescriptor(
       "Team Reports port API is unavailable; install the matching Team Reports plugin.",
     );
   }
-  return {
+  const descriptor: PortDescriptor = {
     ...metadata,
     preData: api.postgres.slice(metadata.preData[0], metadata.preData[1]),
     postData: api.postgres.slice(metadata.postData[0], metadata.postData[1]),
@@ -41,4 +48,8 @@ export async function loadTeamReportsPortDescriptor(
     migrateSqliteSource: (file) => api.admit(file),
     admit: (file, input) => api.admit(file, input),
   };
+  if (sourceVersion === metadata.version) {
+    return descriptor;
+  }
+  return historicalIndexOrderingPort(descriptor, sourceVersion, api.postgres);
 }

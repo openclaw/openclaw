@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { ensureOpenClawAgentSchema } from "../state/openclaw-agent-db-schema.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
+import { expectDatabaseRows } from "./git-backup.test-support.js";
 import { createGlobalDatabase } from "./local-repository.schema.test-support.js";
 import { withDatabase } from "./local-repository.test-support.js";
 
@@ -118,20 +119,18 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
   const restored = await restore({ role: "global" });
   expect(restored.tables.every((table) => table.ok)).toBe(true);
   withDatabase(targetPath, (database) => {
-    const query = (sql: string) => database.prepare(sql).all();
-    expect(query(byteQuery)).toEqual(expectedBytes);
-    expect(query("SELECT * FROM quoted_ddl")).toEqual([
+    database.exec("INSERT INTO trigger_values VALUES (1)");
+  });
+  expectDatabaseRows(targetPath, {
+    [byteQuery]: expectedBytes,
+    "SELECT * FROM quoted_ddl": [
       {
         "double;quote": "semi;'colon",
         "bracket;quote": "bracket",
         "backtick;quote": "backtick",
       },
-    ]);
-    database.exec("INSERT INTO trigger_values VALUES (1)");
-    expect(query("SELECT value FROM trigger_values ORDER BY rowid")).toEqual([
-      { value: 2 },
-      { value: 2 },
-    ]);
+    ],
+    "SELECT value FROM trigger_values ORDER BY rowid": [{ value: 2 }, { value: 2 }],
   });
   const schemaPath = path.join(outputPath, "schema.sql");
   const schema = await fs.readFile(schemaPath, "utf8");

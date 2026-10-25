@@ -36,7 +36,10 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
-import { registerGatewayCancellationTests } from "./server-close-cancellation.test-support.js";
+import {
+  recoveryRun,
+  registerGatewayCancellationTests,
+} from "./server-close-cancellation.test-support.js";
 import { registerGatewayResourceRetirementTests } from "./server-close-retirement.test-support.js";
 import {
   createGatewayCloseTestDepsFactory,
@@ -48,6 +51,19 @@ import {
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 const { mocks } = await vi.hoisted(() => import("./server-close.mocks.test-support.js"));
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) =>
+      createMockSubsystemLogger(subsystem, {
+        info: (...args) => mocks.logInfo(...args),
+        warn: (...args) => mocks.logWarn(...args),
+      }),
+  };
+});
 
 const sharedStateLifecycle = resolveGlobalMap<string, boolean>(
   Symbol("gateway-close-shared-state"),
@@ -113,22 +129,6 @@ function createHttpServer(
   close = vi.fn((callback: (error?: Error | null) => void) => callback(null)),
 ) {
   return { close, closeIdleConnections: vi.fn() };
-}
-
-function recoveryRun(
-  runId: string,
-  sessionKey: string,
-  sessionId: string,
-  lifecycleGeneration = getAgentEventLifecycleGeneration(),
-) {
-  return {
-    storePath: "/synthetic/gateway-close/sessions.sqlite",
-    agentId: "main",
-    runId,
-    lifecycleGeneration,
-    sessionKey,
-    sessionId,
-  };
 }
 
 describe("createGatewayCloseHandler", () => {
@@ -426,7 +426,7 @@ describe("createGatewayCloseHandler", () => {
     expect(stopCronMaintenance.mock.invocationCallOrder[0]).toBeLessThan(
       httpClose.mock.invocationCallOrder[0]!,
     );
-    expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
+    expect(deps.stopScheduledServices).toHaveBeenCalledTimes(1);
     expect(httpClose).toHaveBeenCalled();
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(getActivePluginRegistry()).toBeNull();
@@ -474,7 +474,7 @@ describe("createGatewayCloseHandler", () => {
           expect(await pluginServices.stop()).toEqual({ errors: [failure] });
           expect(stop).toHaveBeenCalledOnce();
         }
-        expect(deps.heartbeatRunner.stop).toHaveBeenCalledOnce();
+        expect(deps.stopScheduledServices).toHaveBeenCalledOnce();
       } finally {
         await pluginServices.stop().catch(() => {});
         await instance.dispose();
@@ -523,7 +523,7 @@ describe("createGatewayCloseHandler", () => {
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
       for (const stop of [
         deps.cron.stop,
-        deps.heartbeatRunner.stop,
+        deps.stopScheduledServices,
         deps.stopMediaCleanup,
         deps.chatRunState.clear,
         lifecycleUnsub,

@@ -8,8 +8,15 @@ type ConfigPageProps = ReturnType<ReturnType<typeof createConfigPage>["configPro
 // Async presenters retain their owners' admitted completions.
 type ConfigData = {
   [Key in keyof ConfigPageProps]: Key extends
+    | "onSave"
+    | "onRawDiscard"
+    | "onOpenFile"
+    | "presentationRetired"
+    | "setSessionObserverEnabled"
+    | "setSessionObserverUtilityModel"
     | "onNativeNotificationsSendTest"
     | "onImportCustomTheme"
+    | "onCameraSelect"
     | "onWebPushSubscribe"
     | "onWebPushUnsubscribe"
     | "onWebPushTest"
@@ -24,6 +31,10 @@ type ConfigData = {
 type ConfigViewOptions = Partial<
   Pick<
     ConfigData,
+    | "schemaRead"
+    | "onRetrySchema"
+    | "appearanceDisplayReady"
+    | "onAppearanceDataNeeded"
     | "mutationAllowed"
     | "openFileAllowed"
     | "rawDraftPending"
@@ -36,6 +47,7 @@ type ConfigViewOptions = Partial<
     | "onRetryThemeCatalog"
     | "customThemeImportExpanded"
     | "onOpenCustomThemeImport"
+    | "onCustomThemeImportFocus"
     | "terminalFontFamily"
     | "forceShowAdvanced"
     | "forceAdvancedSection"
@@ -84,7 +96,7 @@ type ConfigViewOptions = Partial<
   sessionObserverModels?: readonly ConfigPageProps["sessionObserverModels"][number][];
   microphone?: SettingsMediaDeviceState;
   camera?: SettingsMediaDeviceState;
-  onOpenFile?: () => void;
+  onOpenFile?: ConfigPageProps["onOpenFile"];
   webPush?: WebPushSnapshot;
   includeSections?: readonly string[];
   excludeSections?: readonly string[];

@@ -7,7 +7,7 @@ import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createDreamingViewState, type DreamingViewState } from "./dreaming.ts";
 import {
   renderDreamingView,
-  fullDreamingViewAccess,
+  createDreamingViewProps,
   installDreamingViewTestTranslations,
 } from "./view.test-helpers.ts";
 import { renderDreaming } from "./view.tsx";
@@ -104,26 +104,10 @@ function buildProps(
     timezone: "America/Los_Angeles",
     ...statusOverrides,
   };
-  const props: DreamingProps = {
-    access: fullDreamingViewAccess,
-    viewState,
-    active: true,
-    selectedAgentId: "main",
-    statusError: null,
-    readStatus: () => null,
+  return createDreamingViewProps(viewState, {
     readStatusData: () => status,
-    readDiary: () => result.dreamDiaryContent,
-    readImports: () => result.wikiImportInsights,
-    readOverview: () => result.wikiOverview,
-    modeSaving: false,
-    dreamDiaryLoading: false,
-    dreamDiaryActionLoading: false,
-    dreamDiaryActionMessage: null,
-    dreamDiaryActionArchivePath: null,
     dreamDiaryContent:
       "# Dream Diary\n\n<!-- openclaw:dreaming:diary:start -->\n\n---\n\n*April 5, 2026, 3:00 AM*\n\nThe repository whispered of forgotten endpoints tonight.\n\n<!-- openclaw:dreaming:diary:end -->",
-    memoryWikiEnabled: true,
-    wikiImportInsightsLoading: false,
     wikiImportInsights: {
       sourceType: "chatgpt",
       totalItems: 2,
@@ -192,7 +176,6 @@ function buildProps(
         },
       ],
     },
-    wikiOverviewLoading: false,
     wikiOverview: {
       totalItems: 1,
       totalPages: 2,
@@ -236,30 +219,13 @@ function buildProps(
         },
       ],
     },
-    onRefreshDiary: () => {},
-    onRefreshImports: () => {},
-    onRefreshWikiOverview: () => {},
-    onOpenConfig: () => {},
-    onOpenWikiPage: async () => {},
     onCloseWikiPreview: vi.fn(),
-    wikiPreview: null,
-    onBackfillDiary: () => {},
-    onCopyDreamingArchivePath: () => {},
-    onDedupeDreamDiary: () => {},
-    onResetDiary: () => {},
-    onResetGroundedShortTerm: () => {},
-    onRepairDreamingArtifacts: () => {},
-    onViewStateChange: () => {},
-  };
-  const result: DreamingProps = {
-    ...props,
     ...overrides,
     onViewStateChange: vi.fn((update) => {
       update(viewState);
       overrides?.onViewStateChange?.(update);
     }),
-  };
-  return result;
+  });
 }
 
 function renderInto(props: DreamingProps): HTMLDivElement {

@@ -45,20 +45,17 @@ it("uses one non-bootstrap, alias-pinned inventory for a planning snapshot", asy
   });
 });
 it("warns once and continues after timeout without consulting the host", async () => {
-  const host = vi.spyOn(exec, "runCommandBuffered");
   for (const platform of ["linux", "freebsd"] as const) {
     vi.spyOn(process, "platform", "get").mockReturnValue(platform);
     const onWarning = vi.fn();
-    const runCommand = vi
-      .fn<typeof exec.runCommandBuffered>()
-      .mockResolvedValue(result("", { code: null, termination: "timeout" }));
-    const inspection = createSystemPackageOwnershipInspection(100, { runCommand, onWarning });
+    const runCommand = vi.spyOn(exec, "runCommandBuffered");
+    runCommand.mockClear().mockResolvedValue(result("", { code: null, termination: "timeout" }));
+    const inspection = createSystemPackageOwnershipInspection(100, { onWarning });
     await expect(inspection.assertUnowned("/fixture/openclaw")).resolves.toBeUndefined();
     await expect(inspection.assertEntryUnowned("/fixture/launcher")).resolves.toBeUndefined();
     expect(runCommand).toHaveBeenCalledOnce();
     expectWarning(onWarning, "Continuing without verified system-package ownership");
   }
-  expect(host).not.toHaveBeenCalled();
 });
 it("retains the pre-mutation error contract for a positive linux owner", async () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");

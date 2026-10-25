@@ -1,30 +1,34 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
+import type {
+  ChannelAccountSnapshot,
+  ChannelMessageActionName,
+} from "openclaw/plugin-sdk/channel-contract";
 import {
   buildChannelOutboundSessionRoute,
   createChatChannelPlugin,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
+import {
+  listWhatsAppAccountIds,
+  resolveWhatsAppAccount,
+  type ResolvedWhatsAppAccount,
+} from "./accounts.js";
 import { whatsappApprovalCapability } from "./approval-native.js";
 import { readWebAuthExistsForDecision, WHATSAPP_AUTH_UNSTABLE_CODE } from "./auth-store.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
-import {
-  describeWhatsAppMessageActions,
-  resolveWhatsAppAgentReactionGuidance,
-} from "./channel-actions.js";
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
 import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
 import { resolveWhatsAppGroupSessionKey } from "./group-session-key.js";
-import type { WhatsAppSelfIdentity } from "./identity.js";
 import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
@@ -34,6 +38,7 @@ import {
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
+import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendTypingWhatsApp } from "./send.js";
 import { createWhatsAppPluginBase } from "./shared.js";
@@ -44,10 +49,17 @@ const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
   () => import("./channel-react-action.js"),
 );
 
-type WhatsAppStatusSnapshot = ChannelAccountSnapshot & {
-  self: WhatsAppSelfIdentity | null;
-  authAgeMs: number | null;
-};
+function resolveEnabledWhatsAppAgentReactions(cfg: OpenClawConfig, accountId?: string) {
+  if (!cfg.channels?.whatsapp) {
+    return undefined;
+  }
+  const gate = createActionGate(cfg.channels.whatsapp.actions);
+  if (!gate("reactions")) {
+    return undefined;
+  }
+  const resolved = resolveWhatsAppReactionLevel({ cfg, accountId });
+  return resolved.agentReactionsEnabled ? resolved : undefined;
+}
 
 function projectWhatsAppRuntimeStatus(runtime?: ChannelAccountSnapshot) {
   return {
@@ -63,11 +75,6 @@ function projectWhatsAppRuntimeStatus(runtime?: ChannelAccountSnapshot) {
     healthState: runtime?.healthState,
     ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),
   };
-}
-
-function resolveWhatsAppMessageActionTarget(params: { args: Record<string, unknown> }) {
-  const chatJid = params.args.chatJid;
-  return typeof chatJid === "string" ? normalizeWhatsAppMessagingTarget(chatJid) : undefined;
 }
 
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
@@ -113,10 +120,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
       agentPrompt: {
         reactionGuidance: ({ cfg, accountId }) => {
-          const level = resolveWhatsAppAgentReactionGuidance({
+          const level = resolveEnabledWhatsAppAgentReactions(
             cfg,
-            accountId: accountId ?? undefined,
-          });
+            accountId ?? undefined,
+          )?.agentReactionGuidance;
           return level ? { level, channelLabel: "WhatsApp" } : undefined;
         },
       },
@@ -198,11 +205,39 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           react: {
             aliases: ["chatJid", "messageId"],
             deliveryTargetAliases: ["chatJid"],
-            resolveDeliveryTarget: resolveWhatsAppMessageActionTarget,
+            resolveDeliveryTarget: ({ args }) => {
+              const chatJid = args.chatJid;
+              return typeof chatJid === "string"
+                ? normalizeWhatsAppMessagingTarget(chatJid)
+                : undefined;
+            },
           },
         },
-        describeMessageTool: ({ cfg, accountId }) =>
-          describeWhatsAppMessageActions({ cfg, accountId }),
+        describeMessageTool: ({ cfg, accountId }) => {
+          if (!cfg.channels?.whatsapp) {
+            return null;
+          }
+          const gate = createActionGate(cfg.channels.whatsapp.actions);
+          const actions: ChannelMessageActionName[] = [];
+          const canReact =
+            accountId != null
+              ? Boolean(resolveEnabledWhatsAppAgentReactions(cfg, accountId))
+              : listWhatsAppAccountIds(cfg).some((listedAccountId) => {
+                  const account = resolveWhatsAppAccount({ cfg, accountId: listedAccountId });
+                  return (
+                    account.enabled &&
+                    Boolean(resolveEnabledWhatsAppAgentReactions(cfg, listedAccountId))
+                  );
+                });
+          if (canReact) {
+            actions.push("react");
+          }
+          if (gate("polls")) {
+            actions.push("poll");
+          }
+          actions.push("upload-file");
+          return { actions };
+        },
         supportsAction: ({ action }) => action === "react" || action === "upload-file",
         resolveExecutionMode: ({ action }) =>
           action === "react" || action === "upload-file" ? "gateway" : "local",
@@ -342,7 +377,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             {
               statusSink: (next: WebChannelStatus) => {
                 const hasIdentity = next.running && next.healthState !== "logged-out";
-                const snapshot: WhatsAppStatusSnapshot = {
+                const snapshot = {
                   accountId: ctx.accountId,
                   ...next,
                   self: hasIdentity ? auth.selfId : null,

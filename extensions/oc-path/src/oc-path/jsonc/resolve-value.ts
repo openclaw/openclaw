@@ -25,7 +25,7 @@ export function resolveJsoncValueOcPath(
 
   for (const rawSeg of segments) {
     let seg = unquoteSeg(rawSeg);
-    if (seg.length === 0) {
+    if (rawSeg.length === 0) {
       return null;
     }
     if (isPositionalSeg(rawSeg)) {

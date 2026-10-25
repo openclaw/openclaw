@@ -12,14 +12,14 @@ type TranslationSource = {
 const englishListeners = createChangeListeners({ snapshot: true });
 const registeredEnglish = new WeakSet<() => unknown>();
 
-/** Solid callers register their lazy English before reading its keys. */
-export function registerEnglishCatalog<T>(register: () => T): T {
-  const result = register();
-  if (!registeredEnglish.has(register)) {
-    registeredEnglish.add(register);
-    englishListeners.publish();
+/** Each lazy catalog installs once, before its consumers read its keys. */
+export function registerEnglishCatalog(register: () => void): void {
+  if (registeredEnglish.has(register)) {
+    return;
   }
-  return result;
+  register();
+  registeredEnglish.add(register);
+  englishListeners.publish();
 }
 
 /** A revision also invalidates when a catalog changes without a locale change. */

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { withUpdateInProgressEnv } from "../cli/update-cli/update-command-service-env.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -21,7 +22,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
-const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const tty = createCliTtyMock([process.stdin]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const result = (status: UpdateRunResult["status"]): UpdateRunResult => ({
   status,
@@ -45,7 +46,7 @@ function gitResult(code = 0, stdout = "/repo/source\n", stderr = "") {
 }
 
 async function expectSkipped(overrides: Parameters<typeof offer>[0] = {}) {
-  await expect(offer(overrides)).resolves.toEqual({ updated: false });
+  await expect(offer(overrides)).resolves.toBe(false);
   expect(mocks.confirm).not.toHaveBeenCalled();
   expect(mocks.updateCommand).not.toHaveBeenCalled();
 }
@@ -55,7 +56,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
   vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", undefined);
   vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
-  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+  tty.set(true);
   vi.spyOn(fs, "realpath").mockImplementation(async (candidate) => String(candidate));
   mocks.git.mockResolvedValue(gitResult());
   mocks.confirm.mockResolvedValue(true);
@@ -66,11 +67,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
-  if (stdinIsTty) {
-    Object.defineProperty(process.stdin, "isTTY", stdinIsTty);
-  } else {
-    delete (process.stdin as Partial<typeof process.stdin>).isTTY;
-  }
+  tty.restore();
 });
 
 it("reports a host-owned install before Git discovery", async () => {
@@ -101,7 +98,7 @@ it.each(["nonInteractive", "non-TTY"] as const)(
   "requires interactive authority: %s",
   async (gate) => {
     if (gate === "non-TTY") {
-      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+      tty.set(false);
     }
     await expectSkipped({ options: gate === "nonInteractive" ? { nonInteractive: true } : {} });
     expect(mocks.git).not.toHaveBeenCalled();
@@ -114,15 +111,11 @@ it.each([undefined, "still-starting"] as const)(
     mocks.updateCommand.mockImplementation(async ({ onResult }) => {
       expect(mocks.outro).not.toHaveBeenCalled();
       await withUpdateInProgressEnv(process.cwd(), async () => {
-        await expect(offer()).resolves.toEqual({ updated: false });
+        await expect(offer()).resolves.toBe(false);
       });
       onResult?.(reason ? { ...result("skipped"), reason } : result("ok"));
     });
-    await expect(offer()).resolves.toEqual({
-      updated: true,
-      handled: true,
-      ...(reason ? { reason } : {}),
-    });
+    await expect(offer()).resolves.toBe(true);
     expect(mocks.confirm).toHaveBeenCalledOnce();
     expect(mocks.updateCommand).toHaveBeenCalledExactlyOnceWith({
       sourceUpdate: { root: "/repo/source" },
@@ -140,7 +133,7 @@ it.each([undefined, "still-starting"] as const)(
 
 it("leaves a declined update with Doctor", async () => {
   mocks.confirm.mockResolvedValue(false);
-  await expect(offer()).resolves.toEqual({ updated: false });
+  await expect(offer()).resolves.toBe(false);
   expect(mocks.confirm).toHaveBeenCalledWith({
     message: "Update OpenClaw from git before running doctor?",
     initialValue: true,

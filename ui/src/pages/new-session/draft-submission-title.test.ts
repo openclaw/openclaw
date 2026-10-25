@@ -4,7 +4,8 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import { backgroundCreateOptions } from "./draft-submission-flow.test-support.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
-import { renderControl, waitForModelControl } from "./model-control.test-support.ts";
+import { controlQueries } from "./model-control-view-queries.test-support.ts";
+import { waitForModelControl } from "./model-control.test-support.ts";
 
 let releaseAccount: (() => void) | undefined;
 beforeEach(() => {
@@ -79,9 +80,19 @@ function accountTitleFixture(preview?: ReturnType<typeof createDeferred<ModelCat
   const { context, place } = fixture;
   Object.assign(context.gateway.snapshot, { selfUser: { id: "person-a", name: "Person A" } });
   place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
-  const draw = () => renderControl(place.modelControl, context, "main", place.selectedAgent());
-  const select = (value: string) =>
-    draw().querySelector<HTMLButtonElement>(`[data-chat-account-option="${value}"]`)!.click();
+  const { draw, find } = controlQueries(place.modelControl, context, "main", place.selectedAgent());
+  const select = async (value: string, label?: string) => {
+    await waitForModelControl(place.modelControl, context, "main", place.selectedAgent());
+    if (!find("account-option", value)) {
+      find("account-group-toggle")!.click();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    if (label) {
+      expect(draw().textContent).toContain(label);
+    }
+    find("account-option", value)!.click();
+    await vi.advanceTimersByTimeAsync(0);
+  };
   releaseAccount = () => {
     preview?.resolve(confirmed);
     place.modelControl.reset();
@@ -92,19 +103,8 @@ function accountTitleFixture(preview?: ReturnType<typeof createDeferred<ModelCat
     confirmed,
     titleRequest,
     select,
-    chooseAccount: async (account: UserModelAccount) => {
-      const container = await waitForModelControl(
-        place.modelControl,
-        context,
-        "main",
-        place.selectedAgent(),
-      );
-      container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(draw().textContent).toContain(account.label);
-      select(`account:${account.authProfileId}`);
-      await vi.advanceTimersByTimeAsync(0);
-    },
+    chooseAccount: (account: UserModelAccount) =>
+      select(`account:${account.authProfileId}`, account.label),
   };
 }
 
@@ -159,7 +159,7 @@ it.each(["pending", "unconfirmed", "different provider"])(
     expect(titles.takePreparedTitle()).toBeUndefined();
     expect(titleRequest).toHaveBeenCalledOnce();
 
-    select("automatic");
+    await select("automatic");
     await prepareTitle(fixture);
     expect(titleRequest).toHaveBeenCalledTimes(2);
     expect(titles.takePreparedTitle()).toBe("Prepared title");

@@ -22,6 +22,7 @@ import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import { auditGatewayServiceConfig as inspectGatewayServiceConfig } from "./service-audit.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 import {
   execSystemctlUserMock,
@@ -125,13 +126,11 @@ async function systemdFixture(
 
 it("audits missing KillMode separately from effective manager policy", async () => {
   const fixture = await systemdFixture((unit) => unit.replace("KillMode=mixed\n", ""));
-  execSystemctlUserMock.mockResolvedValue({
-    code: 0,
-    stderr: "",
-    termination: "exit",
-    stdout:
+  execSystemctlUserMock.mockResolvedValue(
+    nativeExit(
       "LoadState=loaded\nAfter=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=330s\n",
-  });
+    ),
+  );
   const result = await auditGatewayServiceConfig(fixture);
   expect(result.ok).toBe(true);
   expect(result.issues).toEqual([]);
@@ -240,6 +239,24 @@ it.each(["base", "drop-in"])("recognizes standard systemd directives in %s", asy
     fact.message.includes("unrecognized"),
   );
   expect(unknown?.map((fact) => fact.key)).toEqual(["Service.RestartStpes", "Service.OnFailure"]);
+});
+
+it.each(["base", "drop-in"])("preserves ignored systemd metadata in %s", async (location) => {
+  const metadata =
+    "[Unit]\nX-Fleet=managed\n[X-Fleet]\nOwner=operations\nRestartSec=20\nKillMode=process\n";
+  const fixture = await systemdFixture(
+    (unit) => (location === "base" ? `${unit}\n${metadata}` : unit),
+    location === "drop-in" ? metadata : undefined,
+  );
+  const result = await auditGatewayServiceConfig(fixture);
+  expect(result.issues).toEqual([]);
+  expect(result.definitionDrift).toHaveLength(4);
+  for (const fact of result.definitionDrift ?? []) {
+    expect(fact).toMatchObject({
+      kind: "unknown-edit",
+      message: expect.stringContaining("not changed"),
+    });
+  }
 });
 
 it.each([

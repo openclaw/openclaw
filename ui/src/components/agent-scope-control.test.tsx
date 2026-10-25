@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { AgentScopeControl } from "./agent-scope-control.tsx";
-import type { AgentSelectElement } from "./agent-select.ts";
+import type { AgentSelectElement } from "./agent-select.tsx";
 
 function createSelection(setScope: (agentId: string | null) => void) {
   return {

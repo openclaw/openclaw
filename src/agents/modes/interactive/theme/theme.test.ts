@@ -30,6 +30,31 @@ function loadColor(color: string | number, mode: "256color" | "truecolor") {
 }
 
 describe("loadThemeFromPath", () => {
+  it("preserves missing-color repair guidance", () => {
+    const themePath = join(tempDirs.make("openclaw-theme-"), "missing-color.json");
+    writeFileSync(
+      themePath,
+      JSON.stringify({
+        ...darkTheme,
+        colors: { ...darkTheme.colors, thinkingXhigh: undefined },
+      }),
+    );
+
+    expect(() => loadThemeFromPath(themePath)).toThrow(
+      'Missing required color tokens:\n  - thinkingXhigh\n\nPlease add these colors to your theme\'s "colors" object.',
+    );
+  });
+
+  it("reports invalid numeric palette values at their color path", () => {
+    const themePath = join(tempDirs.make("openclaw-theme-"), "invalid-color.json");
+    writeFileSync(
+      themePath,
+      JSON.stringify({ ...darkTheme, colors: { ...darkTheme.colors, accent: 256 } }),
+    );
+
+    expect(() => loadThemeFromPath(themePath)).toThrow("/colors/accent");
+  });
+
   it.each([
     ["#0000ff", 21],
     ["#2f00ff", 21],

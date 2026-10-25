@@ -20,11 +20,7 @@ import {
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 
-function readChannelCommandSetting(
-  cfg: OpenClawConfig,
-  channelId: string,
-  key: "native" | "nativeSkills",
-): unknown {
+function readChannelCommandSetting(cfg: OpenClawConfig, channelId: string): unknown {
   const channelCfg = cfg.channels?.[channelId as keyof NonNullable<OpenClawConfig["channels"]>];
   if (!channelCfg || typeof channelCfg !== "object" || Array.isArray(channelCfg)) {
     return undefined;
@@ -33,7 +29,7 @@ function readChannelCommandSetting(
   if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
     return undefined;
   }
-  return (commands as Record<string, unknown>)[key];
+  return (commands as Record<string, unknown>).nativeSkills;
 }
 
 async function isChannelPluginConfigured(
@@ -280,7 +276,7 @@ export async function collectPluginsTrustFindings(params: {
             }
             return resolveNativeSkillsEnabled({
               providerId: plugin.id,
-              providerSetting: readChannelCommandSetting(params.cfg, plugin.id, "nativeSkills") as
+              providerSetting: readChannelCommandSetting(params.cfg, plugin.id) as
                 | "auto"
                 | boolean
                 | undefined,

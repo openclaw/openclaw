@@ -26,6 +26,7 @@ import {
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import { readLegacyMigrationSourceSnapshot } from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 const LEGACY_SOURCES = [
   { profile: "primary", relativePath: "identity/device-auth.json" },
@@ -133,9 +134,10 @@ async function readLegacyDeviceAuthSource(stateDir: string, source: LegacyDevice
       "Legacy device-auth files disagree; preserve them and resolve the conflict before importing.",
     );
   }
+  const text = decodeUtf8Input(snapshot.buffer, `Legacy device-auth store ${snapshot.sourcePath}`);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(snapshot.buffer.toString("utf8"));
+    parsed = JSON.parse(text);
   } catch {
     throw new Error("Legacy device-auth store is invalid or unsupported.");
   }

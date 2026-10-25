@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -14,12 +15,10 @@ const WARM_SESSION_KEY = "agent:main:warm-later";
 const CLOCK_START = Date.UTC(2026, 8, 3, 12, 0, 0);
 
 function transcript(text: string, seq: number) {
-  const message = {
-    role: "assistant",
-    content: [{ type: "text", text }],
+  const message = chatMessage("assistant", text, {
     timestamp: CLOCK_START - 60_000 + seq,
     __openclaw: { id: `msg-${seq}`, seq },
-  };
+  });
   return { messages: [message] };
 }
 

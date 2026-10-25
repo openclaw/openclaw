@@ -9,6 +9,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
+import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const ledger = vi.hoisted(() => vi.fn<() => Promise<BackupRunRecord[]>>());
@@ -33,7 +34,6 @@ async function invoke(params: Record<string, unknown>, jobs: CronJob[] = []) {
     defaultAgentId: "main",
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   vi.spyOn(cron, "list").mockResolvedValue(jobs);
@@ -108,32 +108,28 @@ it("backup.status returns destination freshness, cron-owned schedules and config
     state: { nextRunAtMs: 70_000 },
   };
   const respond = await invoke({}, [job]);
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    {
-      targets,
-      schedules: [
-        {
-          id: "backup-job",
-          mode: "offsite",
-          target: "offsite",
-          namespace: "host",
-          enabled: true,
-          everyMs: 60_000,
-          nextRunAtMs: 70_000,
-        },
-      ],
-      locations: [
-        {
-          name: "offsite",
-          provider: "filesystem",
-          displayTarget: "/missing/remote",
-          encrypted: false,
-        },
-      ],
-    },
-    undefined,
-  );
+  expectRpcResult(respond, {
+    targets,
+    schedules: [
+      {
+        id: "backup-job",
+        mode: "offsite",
+        target: "offsite",
+        namespace: "host",
+        enabled: true,
+        everyMs: 60_000,
+        nextRunAtMs: 70_000,
+      },
+    ],
+    locations: [
+      {
+        name: "offsite",
+        provider: "filesystem",
+        displayTarget: "/missing/remote",
+        encrypted: false,
+      },
+    ],
+  });
 });
 
 it("backup.status requires read scope and rejects unsupported parameters before reading", async () => {
@@ -144,10 +140,6 @@ it("backup.status requires read scope and rejects unsupported parameters before 
     allowed: false,
     missingScope: "operator.read",
   });
-  expect(await invoke({ unexpected: true })).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "INVALID_REQUEST" }),
-  );
+  expectRpcError(await invoke({ unexpected: true }), { code: "INVALID_REQUEST" });
   expect(ledger).not.toHaveBeenCalled();
 });

@@ -6,11 +6,6 @@ import {
 import type { ScopeUpgradeOwner } from "./device-scope-upgrade-owner.runtime.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 
-type ScopeUpgradeOwnerConstructor = new (
-  initial: ApplicationGatewaySnapshot,
-  onChange: () => void,
-) => ScopeUpgradeOwner;
-
 export type ScopeUpgradeCapability = ReturnType<typeof createScopeUpgradeCapability>;
 
 /** App-lifetime state shared by every Inbox presenter and settings takeover. */
@@ -44,7 +39,9 @@ export function createScopeUpgradeCapability(gateway: ApplicationGateway) {
     get state() {
       return state;
     },
-    activate(Owner: ScopeUpgradeOwnerConstructor) {
+    activate(
+      Owner: new (initial: ApplicationGatewaySnapshot, onChange: () => void) => ScopeUpgradeOwner,
+    ) {
       owner ??= new Owner(snapshot, syncOwner);
       owner.sync(snapshot);
       publish(owner.state);

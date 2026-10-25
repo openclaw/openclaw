@@ -7,28 +7,21 @@ import { registerAcpCli } from "./acp-cli.js";
 type AcpClientOptions = { verbose?: boolean };
 type AcpGatewayOptions = { gatewayPassword?: string; gatewayToken?: string; prefixCwd?: boolean };
 
-const mocks = vi.hoisted(() => ({
+const mocks = await vi.hoisted(async () => ({
   runAcpClientInteractive: vi.fn(async (_opts: AcpClientOptions) => 0),
   serveAcpGateway: vi.fn(async (_opts: AcpGatewayOptions) => {}),
-  defaultRuntime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn(),
-  },
+  defaultRuntime: vi.mocked(
+    (await import("../test-utils/plugin-runtime-env.js")).createNonExitingRuntimeEnv(),
+  ),
 }));
 
 const { runAcpClientInteractive, serveAcpGateway, defaultRuntime } = mocks;
 const errors = () => defaultRuntime.error.mock.calls.map(([message]) => String(message));
 
-vi.mock("../acp/client.js", () => ({
-  runAcpClientInteractive: (opts: AcpClientOptions) => mocks.runAcpClientInteractive(opts),
-}));
-
-vi.mock("../acp/server.js", () => ({
-  serveAcpGateway: (opts: AcpGatewayOptions) => mocks.serveAcpGateway(opts),
-}));
+// mock-isolation: Parse client options without starting an interactive terminal session.
+vi.mock("../acp/client.js", () => ({ runAcpClientInteractive: mocks.runAcpClientInteractive }));
+// mock-isolation: Parse gateway options without starting the ACP transport.
+vi.mock("../acp/server.js", () => ({ serveAcpGateway: mocks.serveAcpGateway }));
 
 vi.mock("../runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../runtime.js")>();
@@ -108,9 +101,7 @@ describe("acp cli option collisions", () => {
   });
 
   it("formats client errors with formatErrorMessage instead of String(err) (#83904)", async () => {
-    runAcpClientInteractive.mockImplementationOnce(async () => {
-      throw { code: 42, why: "boom" } as unknown as Error;
-    });
+    runAcpClientInteractive.mockRejectedValueOnce({ code: 42, why: "boom" });
     await parseAcp(["client"]);
 
     expect(errors()).toContain('{"code":42,"why":"boom"}');

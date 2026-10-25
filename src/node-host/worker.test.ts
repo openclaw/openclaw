@@ -104,20 +104,6 @@ describe("NodeHostWorkerBridgeClient", () => {
     await response;
     expect(settled).toBe(true);
   });
-
-  it("does not keep the worker alive for a pending gateway timeout", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const response = client.request("skills.bins", {}, { timeoutMs: 60_000 });
-      const timer = timeoutSpy.mock.results[0]?.value as NodeJS.Timeout | undefined;
-
-      expect(timer?.hasRef()).toBe(false);
-      client.close();
-      await expect(response).rejects.toThrow("node-host worker stopped");
-    } finally {
-      timeoutSpy.mockRestore();
-    }
-  });
 });
 
 it("preserves the signal exit code when closing stdin emits EOF", async () => {

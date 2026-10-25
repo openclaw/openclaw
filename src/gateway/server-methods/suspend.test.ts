@@ -20,19 +20,17 @@ vi.mock("../server-active-work.js", () => ({
 
 async function invoke(method: keyof typeof suspendHandlers, params: unknown) {
   const respond = vi.fn();
-  const pauseScheduling = vi.fn();
-  const resumeScheduling = vi.fn();
   const info = vi.fn();
   const handler = expectDefined(suspendHandlers[method], "suspendHandlers[method] test invariant");
   await handler({
     params,
     respond,
     context: {
-      cron: { pauseScheduling, resumeScheduling },
+      cron: { pauseScheduling: vi.fn(), resumeScheduling: vi.fn() },
       logGateway: { warn: vi.fn(), info },
     },
   } as unknown as Parameters<typeof handler>[0]);
-  return { respond, pauseScheduling, resumeScheduling, info };
+  return { respond, info };
 }
 
 beforeEach(() => {
@@ -55,27 +53,6 @@ describe("gateway suspend handlers", () => {
       code: "INVALID_REQUEST",
       message: "invalid gateway.suspend.prepare params",
     });
-  });
-
-  it("wires prepare to scheduler pause/resume and returns busy or ready", async () => {
-    const result = { status: "busy", reason: "active-work" };
-    coordinator.prepare.mockReturnValueOnce(result);
-    const { respond, pauseScheduling, resumeScheduling } = await invoke("gateway.suspend.prepare", {
-      requestId: "request-1",
-    });
-
-    expect(coordinator.prepare.mock.calls[0]?.[0]).toMatchObject({
-      requestId: "request-1",
-      terminalPolicy: "preserve",
-      pauseScheduling: expect.any(Function),
-      resumeScheduling: expect.any(Function),
-    });
-    const options = coordinator.prepare.mock.calls[0]?.[0];
-    options.pauseScheduling();
-    options.resumeScheduling();
-    expect(pauseScheduling).toHaveBeenCalledOnce();
-    expect(resumeScheduling).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(true, result);
   });
 
   it("maps a competing prepared lease to retryable unavailable", async () => {

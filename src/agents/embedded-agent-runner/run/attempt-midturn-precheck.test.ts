@@ -1,5 +1,7 @@
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
+import { createOpenAICompletionsTransportStreamFn } from "../../../../packages/ai/src/transports/openai-completions-transport.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { Context } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
@@ -12,6 +14,7 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -27,174 +30,113 @@ const { installEmbeddedAttemptStreamGuards } =
 
 registerAgentSessionLoopTestLifecycle();
 
+type AdmissionOptions = Partial<{
+  growSystem: boolean;
+  tweakSystem: boolean;
+  tweakTools: boolean;
+  opaque: boolean;
+  completionTokens: number;
+  assistantChars: number;
+  asyncFragments: boolean;
+  syntheticAssistant: boolean;
+  ownsCompaction: boolean;
+  oversizedAssembly: boolean;
+  compatibleBudget: boolean;
+  responseSchema: boolean;
+}>;
+
 describe("provider request admission", () => {
-  it.each([
-    {
-      name: "owning engine cannot submit oversized assembled history on its first request",
-      usage: 15_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-      ownsCompaction: true,
-      oversizedAssembly: true,
-    },
-    {
-      name: "owning engine admits fitting requests despite an exaggerated engine estimate",
-      usage: 15_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: true,
-      ownsCompaction: true,
-    },
-    {
-      name: "owning engine blocks an oversized measured continuation without opt-in",
-      usage: 23_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-      ownsCompaction: true,
-    },
-    { name: "measured unchanged prefix", usage: 15_000, chars: 12_000, cap: 16_000, fits: true },
-    {
-      name: "counts measured visible completion once",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: true,
-      completionTokens: 6_000,
-      assistantChars: 24_000,
-    },
-    {
-      name: "counts visible completion once after a small system change",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: true,
-      completionTokens: 5_000,
-      assistantChars: 20_000,
-      tweakSystem: true,
-    },
-    {
-      name: "counts visible completion once after tool definitions change",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: true,
-      completionTokens: 5_000,
-      assistantChars: 20_000,
-      tweakTools: true,
-    },
-    {
-      name: "counts split visible completion once after a small system change",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: true,
-      completionTokens: 5_000,
-      assistantChars: 20_000,
-      asyncFragments: true,
-      tweakSystem: true,
-    },
-    {
-      name: "counts async completion fragments once when the provider identity arrives late",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: true,
-      completionTokens: 6_000,
-      assistantChars: 24_000,
-      asyncFragments: true,
-    },
-    {
-      name: "counts an unrelated synthetic assistant appended after the measured prefix",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: false,
-      syntheticAssistant: true,
-    },
-    {
-      name: "retains opaque reasoning occupancy",
-      usage: 15_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-      opaque: true,
-      completionTokens: 16_000,
-    },
-    {
-      name: "retains opaque reasoning after a small system change",
-      usage: 15_000,
-      chars: 2_000,
-      cap: 16_000,
-      fits: false,
-      opaque: true,
-      completionTokens: 16_000,
-      tweakSystem: true,
-    },
-    {
-      name: "measured oversized tail after projection",
-      usage: 14_000,
-      chars: 100_000,
-      cap: 16_000,
-      fits: true,
-    },
-    {
-      name: "unavailable usage after projection",
-      usage: 0,
-      chars: 100_000,
-      cap: 2_000,
-      fits: true,
-    },
-    {
-      name: "genuinely oversized measured tail",
-      usage: 23_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-    },
-    {
-      name: "unavailable usage with oversized prompt",
-      usage: 0,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-      growSystem: true,
-    },
-    {
-      name: "changed system invalidates measured prefix",
-      usage: 1_000,
-      chars: 12_000,
-      cap: 16_000,
-      fits: false,
-      growSystem: true,
-    },
-  ])(
-    "$name",
+  const visible = { completionTokens: 5_000, assistantChars: 20_000 };
+  const largerVisible = { completionTokens: 6_000, assistantChars: 24_000 };
+  type AdmissionCase = {
+    usage: number;
+    chars: number;
+    cap: number;
+    fits: boolean;
+    options: AdmissionOptions;
+  };
+  it.each`
+    name                                   | usage     | chars      | cap       | fits     | options
+    ${"compatible reasoning budget"}       | ${1_500}  | ${15_500}  | ${16_000} | ${true}  | ${{ compatibleBudget: true }}
+    ${"unchanged schema"}                  | ${24_000} | ${100}     | ${16_000} | ${true}  | ${{ compatibleBudget: true, responseSchema: true }}
+    ${"oversized engine assembly"}         | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true, oversizedAssembly: true }}
+    ${"exaggerated engine estimate"}       | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{ ownsCompaction: true }}
+    ${"oversized engine continuation"}     | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true }}
+    ${"unchanged measured prefix"}         | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{}}
+    ${"visible completion"}                | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${largerVisible}
+    ${"system tweak"}                      | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakSystem: true }}
+    ${"tool definitions tweak"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakTools: true }}
+    ${"split completion + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, asyncFragments: true, tweakSystem: true }}
+    ${"late response identity"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...largerVisible, asyncFragments: true }}
+    ${"synthetic assistant tail"}          | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ syntheticAssistant: true }}
+    ${"opaque reasoning"}                  | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000 }}
+    ${"opaque reasoning + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000, tweakSystem: true }}
+    ${"projected measured tail"}           | ${14_000} | ${100_000} | ${16_000} | ${true}  | ${{}}
+    ${"projected unavailable usage"}       | ${0}      | ${100_000} | ${2_000}  | ${true}  | ${{}}
+    ${"oversized measured tail"}           | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{}}
+    ${"oversized prompt without usage"}    | ${0}      | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
+    ${"changed system invalidates prefix"} | ${1_000}  | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
+  `(
+    "admits only fitting provider requests: $name",
     async ({
       usage,
       chars,
       cap,
       fits,
-      growSystem,
-      tweakSystem,
-      tweakTools,
-      opaque,
-      completionTokens,
-      assistantChars,
-      asyncFragments,
-      syntheticAssistant,
-      ownsCompaction,
-      oversizedAssembly,
-    }) => {
+      options: {
+        growSystem,
+        tweakSystem,
+        tweakTools,
+        opaque,
+        completionTokens,
+        assistantChars,
+        asyncFragments,
+        syntheticAssistant,
+        ownsCompaction,
+        oversizedAssembly,
+        compatibleBudget,
+        responseSchema,
+      },
+    }: AdmissionCase) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
       const model = {
         ...testModel,
         api: opaque ? ("openai-responses" as const) : ("openai-completions" as const),
         contextWindow: 32_768,
-        maxTokens: 1_024,
+        maxTokens: compatibleBudget ? 8_192 : 1_024,
+        ...(compatibleBudget
+          ? {
+              provider: "reasoning-proof",
+              baseUrl: "http://127.0.0.1:19831/v1",
+              reasoning: true,
+              compat: { maxTokensField: "max_tokens" as const },
+            }
+          : {}),
       };
-      const systemPrompt = "Keep these instructions. ".repeat(2_200);
+      const systemPrompt = compatibleBudget
+        ? "Read the report."
+        : "Keep these instructions. ".repeat(2_200);
+      const reasoningHistory = "synthetic reasoning ".repeat(3_500);
+      const seededManager =
+        compatibleBudget && !responseSchema ? SessionManager.inMemory() : undefined;
+      if (seededManager) {
+        await seededManager.appendMessageAsync({
+          role: "user",
+          content: "Earlier question.",
+          timestamp: 1,
+        });
+        await seededManager.appendMessageAsync({
+          ...createAssistant(model, [
+            {
+              type: "thinking",
+              thinking: reasoningHistory,
+              thinkingSignature: "reasoning_content",
+            },
+            { type: "text", text: "Earlier answer." },
+          ]),
+          usage: makeZeroUsageSnapshot(),
+        });
+      }
       const requests: Context[] = [];
       const settingsManager = SettingsManager.inMemory({
         compaction: { enabled: false, reserveTokens: 8_192 },
@@ -203,6 +145,7 @@ describe("provider request admission", () => {
       const { session, sessionManager } = await createTestSession({
         model,
         systemPrompt,
+        ...(seededManager ? { sessionManager: seededManager } : {}),
         settingsManager,
         contextOverflowRecoveryOwner: "caller",
         customTools: [
@@ -292,6 +235,11 @@ describe("provider request admission", () => {
       runtime.cacheTrace = null;
       runtime.isOpenAIResponsesApi = opaque === true;
       runtime.transcriptPolicy = { ...runtime.transcriptPolicy, repairToolUseResultPairing: false };
+      const wireRequests: Array<{
+        max_tokens?: number;
+        messages: Array<Record<string, unknown>>;
+        response_format?: unknown;
+      }> = [];
       session.agent.streamFn = (_model, context) => {
         requests.push({ ...context, messages: structuredClone(context.messages) });
         const toolCall = {
@@ -356,6 +304,67 @@ describe("provider request admission", () => {
         }
         return createAssistantResultStream(message);
       };
+      if (compatibleBudget) {
+        const host = getAiTransportHost();
+        onTestFinished(() => configureAiTransportHost(host));
+        configureAiTransportHost({
+          ...host,
+          resolveProviderRequestCapabilities: (input) => ({
+            ...host.resolveProviderRequestCapabilities(input),
+            usesExplicitProxyLikeEndpoint: true,
+          }),
+          buildModelFetch: () => async (input, init) => {
+            wireRequests.push(await new Request(input, init).json());
+            const first = wireRequests.length === 1;
+            const event = {
+              id: `chatcmpl-fixture-${wireRequests.length}`,
+              object: "chat.completion.chunk",
+              created: 1,
+              model: model.id,
+              choices: [
+                {
+                  index: 0,
+                  finish_reason: first ? "tool_calls" : "stop",
+                  delta: first
+                    ? {
+                        tool_calls: [
+                          {
+                            index: 0,
+                            id: "read-report",
+                            type: "function",
+                            function: { name: "read", arguments: "{}" },
+                          },
+                        ],
+                      }
+                    : { content: "Report received." },
+                },
+              ],
+              usage: { prompt_tokens: usage, completion_tokens: 64, total_tokens: usage + 64 },
+            };
+            return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`, {
+              headers: { "content-type": "text/event-stream" },
+            });
+          },
+        });
+        const transport = createOpenAICompletionsTransportStreamFn();
+        const responseFormat = responseSchema
+          ? {
+              type: "json_schema",
+              json_schema: {
+                name: "report",
+                schema: { type: "string", description: "x".repeat(16_000) },
+              },
+            }
+          : undefined;
+        session.agent.streamFn = (activeModel, context, options) => {
+          requests.push({ ...context, messages: structuredClone(context.messages) });
+          return transport(activeModel, context, {
+            ...options,
+            apiKey: "synthetic-key",
+            responseFormat,
+          });
+        };
+      }
       const streamGuards = installEmbeddedAttemptStreamGuards(fixture.input, {
         onRejectedProviderReplayRepaired: vi.fn(),
         onIdleTimeout: vi.fn(),
@@ -403,6 +412,19 @@ describe("provider request admission", () => {
           oversizedAssembly ? 0 : fits ? 2 : 1,
         );
         expect(pendingPrecheck !== null).toBe(!fits);
+        if (compatibleBudget) {
+          if (responseSchema) {
+            expect(wireRequests[0]?.response_format).toMatchObject({ type: "json_schema" });
+            expect(wireRequests[1]?.response_format).toEqual(wireRequests[0]?.response_format);
+          } else {
+            expect(
+              wireRequests.every((request) =>
+                request.messages.some((message) => message.reasoning_content === reasoningHistory),
+              ),
+            ).toBe(true);
+          }
+          expect(wireRequests.map((request) => request.max_tokens)).toEqual([8_192, 8_192]);
+        }
         if (fits) {
           const sent = requests[1]?.messages.find((message) => message.role === "toolResult");
           expect(sent?.content).toEqual([{ type: "text", text: expect.any(String) }]);

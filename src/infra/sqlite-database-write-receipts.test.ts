@@ -90,8 +90,11 @@ it("publishes cohort scope discovery once and preserves independent write receip
   expect(publications).toEqual([4]);
 });
 
-it("publishes new scope snapshots without revisiting unrelated scope cells", () => {
+it("publishes scope discovery and reference installs without revisiting unchanged scopes", () => {
   const record = createAdmission();
+  const references = new SharedArrayBuffer(8);
+  Atomics.store(new Int32Array(references), 0, 1);
+  record.references.set(0, references);
   const registry = new SqliteDatabaseAdmissionRegistry();
   registry.records.set(record.identity, record);
   const receipts = createReceipts(record, {
@@ -114,6 +117,17 @@ it("publishes new scope snapshots without revisiting unrelated scope cells", () 
     });
   }
 
+  registry.install([
+    {
+      ...record,
+      facts: new Map(),
+      writeScopes: new Map(),
+      references: new Map([[123, references]]),
+    },
+  ]);
+  expect(visited).toBe(0);
+  expect([...registry.capture(cursor)[0]!.references.keys()]).toEqual([123]);
+
   const added = receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new");
   expect(visited).toBe(0);
   const [delta] = registry.capture(cursor);
@@ -131,23 +145,42 @@ it("publishes new scope snapshots without revisiting unrelated scope cells", () 
   expect([...registry.capture(cursor)[0]!.writeScopes.keys()]).toEqual(['["key","new"]']);
 });
 
-it("invalidates a scope registered by another isolate during an accepted write", () => {
-  using reader = new DatabaseSync(":memory:");
-  using writer = new DatabaseSync(":memory:");
-  const host = createAdmission();
-  const worker = { ...host, writeScopes: new Map(host.writeScopes) };
-  const receipts = createReceipts(host, {
-    admission: (database) => (database === reader ? host : worker),
-    writer: () => worker,
+it("sweeps remote retirements after keyed publication and imports new scope cells", () => {
+  using database = new DatabaseSync(":memory:");
+  const record = createAdmission();
+  const references = new SharedArrayBuffer(8);
+  Atomics.store(new Int32Array(references), 0, 1);
+  record.references.set(0, references);
+  const registry = new SqliteDatabaseAdmissionRegistry();
+  registry.records.set(record.identity, record);
+  const receipts = createReceipts(record, {
+    publish: (current, keys) => registry.publish(current, keys),
   });
-  receipts.readSqliteDatabaseScopedWriteToken(reader, "existing");
-  worker.writeScopes = new Map(host.writeScopes);
-  let before: string | undefined;
-  receipts.withSqliteDatabaseWriteScope(writer, ["late"], () => {
-    receipts.begin(writer, false);
-    before = receipts.readSqliteDatabaseScopedWriteToken(reader, "late");
-    receipts.finish(writer, worker);
-  });
-  expect(before).toBeTypeOf("string");
-  expect(receipts.readSqliteDatabaseScopedWriteToken(reader, "late")).not.toBe(before);
+  receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "remote");
+  const remote = { ...record, writeScopes: new Map(record.writeScopes) };
+  createReceipts(remote, { publish: () => {} }).retireSqliteDatabaseWriteScopes(database, [
+    "remote",
+  ]);
+  receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "local");
+  registry.install([
+    {
+      ...record,
+      facts: new Map(),
+      writeScopes: new Map(),
+      references: new Map([[123, references]]),
+    },
+  ]);
+  expect([...record.writeScopes.keys()]).toEqual(['["key","local"]']);
+  expect([...registry.capture(undefined, { admissions: [record] })[0]!.writeScopes.keys()]).toEqual(
+    ['["key","local"]'],
+  );
+  const importer = { ...record, writeScopes: new Map() };
+  createReceipts(importer, { publish: () => {} }).readSqliteDatabaseScopedWriteTokenForPath(
+    ":memory:",
+    "imported",
+  );
+  registry.install([importer]);
+  expect(
+    [...registry.capture(undefined, { admissions: [record] })[0]!.writeScopes.keys()].toSorted(),
+  ).toEqual(['["key","imported"]', '["key","local"]']);
 });

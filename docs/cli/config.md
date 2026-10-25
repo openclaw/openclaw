@@ -255,6 +255,10 @@ When a model uses string shorthand, setting its `fallbacks` or a supported tool-
 
 When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured catalogs and the selected provider's model resolver before writing. Provider-supported exact `provider/model` pins are accepted even when absent from the curated picker; validation does not replace the selected model. Unknown model references are rejected without changing the active config. Refusals for newly authored per-agent references include the entered value and resolver reason; inherited values and environment-expanded details remain redacted. Run `openclaw models list` to browse the picker, or check the provider's documentation for an exact model ID. Successful validation does not prove that your account can call the model. [`openclaw models set`](/cli/models#common-commands) is deliberately more permissive for the same setting: it saves a model the local catalog cannot confirm and prints a warning instead of rejecting the write.
 
+Provider registration during model validation sees the full candidate config,
+including other values in the same patch. A provider-specific option and its
+supported model choice can therefore change atomically.
+
 <Note>
 Object assignment replaces the target path by default. Protected paths that commonly hold user-added entries refuse replacements that would remove existing entries unless you pass `--replace`: `agents.defaults.models`, `agents.entries`, `models.providers`, `models.providers.<id>`, `models.providers.<id>.models`, `plugins.entries`, and `auth.profiles`.
 </Note>

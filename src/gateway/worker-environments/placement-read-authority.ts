@@ -200,15 +200,18 @@ export async function prepareCachedPlacementPreservationRead(
       get placements() {
         assertUsable();
         const placements = new Map(baseline.map((placement) => [placement.sessionId, placement]));
-        for (const [sessionId, published] of owner.placements) {
-          if (published.sequence < sequence) {
-            continue;
-          }
-          const placement = published.placement;
-          if (placement && placement.state !== "local" && placement.state !== "reclaimed") {
-            placements.set(sessionId, placement);
-          } else {
-            placements.delete(sessionId);
+        // Replica reads cannot publish beyond the owner's sequence at capture.
+        if (owner.sequence >= sequence) {
+          for (const [sessionId, published] of owner.placements) {
+            if (published.sequence < sequence) {
+              continue;
+            }
+            const placement = published.placement;
+            if (placement && placement.state !== "local" && placement.state !== "reclaimed") {
+              placements.set(sessionId, placement);
+            } else {
+              placements.delete(sessionId);
+            }
           }
         }
         // Pending postimages can add protection, but cannot withdraw committed protection.

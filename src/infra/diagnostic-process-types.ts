@@ -1,8 +1,41 @@
 import type { HeapSpaceInfo } from "node:v8";
+import type { getSessionRowSelectionMetrics } from "./gateway-work-metrics.js";
 import type { GcSample } from "./gc-observer.js";
 import type { WorkerMessageMetric } from "./worker-message-metrics.js";
 import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import type { WorkerRequestKind } from "./worker-request-kind.js";
+
+export type WorkerGcProfiles = { heap: string; cpu: string };
+
+export type WorkerGcStorm = {
+  workerId?: string;
+  runId?: string;
+  sessionKeyHash?: string;
+  cellCount: number;
+  activeCellCount: number;
+  bridgeMethods: string[];
+  majorCollections: number;
+  intervalMs: number;
+  heapUsed: number;
+  heapTotal: number;
+  external: number;
+  arrayBuffers: number;
+  heapSizeLimitBytes: number;
+  captureStatus?: "requested" | "complete" | "unavailable";
+  captureReason?: string;
+  profiles?: WorkerGcProfiles;
+};
+
+export type WorkerMemorySample = Pick<
+  NodeJS.MemoryUsage,
+  "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
+> & {
+  heapSizeLimitBytes?: number;
+  oldGenerationAfterGcBytes?: number;
+  heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
+  retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
+  gc?: GcSample[];
+};
 
 export type DiagnosticRuntimeMeasurementFields =
   | {
@@ -112,6 +145,10 @@ export type DiagnosticMemoryUsage = {
   arrayBuffersBytes: number;
   heapSpaces?: HeapSpaceInfo[];
   workerCount?: number;
+  /** Live PostgreSQL bridges, including children of workers with diagnostic registration. */
+  postgresBridgeCount?: number;
+  /** Threads that started their own PostgreSQL pool without inherited endpoints. */
+  postgresPoolSelfRootCount?: number;
   workerHeapSampledCount?: number;
   workerHeapTotalBytes?: number;
   workerHeapUsedBytes?: number;
@@ -163,6 +200,8 @@ export type DiagnosticMemoryUsage = {
   }[];
   /** Main-thread transport totals; unknown payload sizes remain separate from known zero bytes. */
   workerMessages?: WorkerMessageMetric[];
+  /** Process-lifetime selector totals with bounded shape and caller labels. */
+  sessionRowSelections?: ReturnType<typeof getSessionRowSelectionMetrics>;
 };
 
 export const DIAGNOSTIC_MEMORY_PRESSURE_METRICS = [

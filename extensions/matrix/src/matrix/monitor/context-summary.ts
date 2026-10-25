@@ -2,7 +2,6 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { formatMatrixMessageText, resolveMatrixReplacementContent } from "../media-text.js";
 import {
   formatPollAsText,
@@ -11,16 +10,6 @@ import {
   type PollStartContent,
 } from "../poll-types.js";
 import type { MatrixRawEvent } from "./types.js";
-
-const MAX_CONTEXT_BODY_LENGTH = 500;
-
-export function truncateMatrixContextBody(value: string): string {
-  return truncateWithMarker(value, MAX_CONTEXT_BODY_LENGTH, {
-    marker: "...",
-    reserve: 3,
-    trimEnd: false,
-  });
-}
 
 export function summarizeMatrixMessageContextEvent(event: MatrixRawEvent): string | undefined {
   if (isPollStartType(event.type)) {

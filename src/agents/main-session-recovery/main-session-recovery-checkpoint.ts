@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isCompletionReportInputProvenance,
+  isCronExecutionInputProvenance,
   isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
@@ -41,7 +42,11 @@ export function selectMainSessionRecoveryCheckpoint(
         }
         switch (provenance?.kind) {
           case "internal_system":
-            source = provenance.sourceTool?.toLowerCase() === "cron" ? "cron" : provenance.kind;
+            source =
+              isCronExecutionInputProvenance(provenance) ||
+              provenance.sourceTool?.toLowerCase() === "cron"
+                ? "cron"
+                : provenance.kind;
             break;
           case "external_user":
             source = provenance.kind;

@@ -11,6 +11,8 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { createHistoryJob, createReadService } from "./cron-read.test-support.js";
 import { cronHandlers } from "./cron.js";
 import {
+  cronAccountPolicy,
+  expectCronReply,
   createCronCallerClient as callerClient,
   createCronTestContext,
   createCronTestInvoker,
@@ -29,7 +31,6 @@ it.each(["caller closes after read", "owner transfers before read"] as const)(
       cronEnabled: true,
       defaultAgentId: "main",
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: async () => ({ status: "skipped" }),
     });
     const entered = createDeferred();
@@ -37,12 +38,7 @@ it.each(["caller closes after read", "owner transfers before read"] as const)(
     let invocation: Promise<unknown> | undefined;
     try {
       const owner = { agentId: "ops", sessionKey: "agent:ops:main", accountId: "work" };
-      const scheduledToolPolicy = {
-        version: 1 as const,
-        mode: "account" as const,
-        ownerSessionKey: owner.sessionKey,
-        ownerAccountId: owner.accountId,
-      };
+      const scheduledToolPolicy = cronAccountPolicy(owner.sessionKey, owner.accountId);
       const job = await cron.add(
         {
           ...createHistoryJob("ops", owner.sessionKey),
@@ -63,13 +59,13 @@ it.each(["caller closes after read", "owner transfers before read"] as const)(
       const request = { context, client };
       context.cron.readScratch.mockImplementation((...args) => cron.readScratch(...args));
       const { respond: permitted } = await invokeCron("cron.scratch.get", { id: job.id }, request);
-      expect(permitted).toHaveBeenCalledExactlyOnceWith(
-        true,
+      expectCronReply(
+        permitted,
         expect.objectContaining({
           currentRevision: 1,
           scratch: expect.objectContaining({ content: "original private scratch" }),
         }),
-        undefined,
+        "once",
       );
       context.cron.readScratch.mockClear();
       let current = true;

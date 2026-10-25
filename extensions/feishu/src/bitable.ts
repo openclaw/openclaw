@@ -178,91 +178,6 @@ function isPlaceholderBitableRecord(fields: unknown): boolean {
   return Object.values(fields).every(isDefaultEmptyBitableFieldValue);
 }
 
-async function cleanupNewBitable(
-  client: Lark.Client,
-  appToken: string,
-  tableId: string,
-  tableName: string,
-  logger: CleanupLogger,
-): Promise<{ cleanedRows: number; cleanedFields: number }> {
-  let cleanedRows = 0;
-  let cleanedFields = 0;
-  const tablePath = { app_token: appToken, table_id: tableId };
-
-  const fieldsRes = await client.bitable.appTableField.list({
-    path: tablePath,
-  });
-
-  if (fieldsRes.code === 0 && fieldsRes.data?.items) {
-    const primaryField = fieldsRes.data.items.find((f) => f.is_primary);
-    const defaultFieldsToDelete = fieldsRes.data.items.filter(
-      (f) => !f.is_primary && DEFAULT_CLEANUP_FIELD_TYPES.has(f.type ?? 0),
-    );
-    // Keep primary-field rename ahead of deletions, with independent failure accounting.
-    for (const field of [primaryField, ...defaultFieldsToDelete]) {
-      if (!field?.field_id) {
-        continue;
-      }
-      const isPrimary = field === primaryField;
-      const operation = isPrimary ? "update" : "delete";
-      try {
-        const path = { ...tablePath, field_id: field.field_id };
-        const response = isPrimary
-          ? await client.bitable.appTableField.update({
-              path,
-              data: { field_name: tableName.length <= 20 ? tableName : "Name", type: 1 },
-            })
-          : await client.bitable.appTableField.delete({ path });
-        ensureLarkSuccess(response, `bitable.appTableField.${operation}`);
-        cleanedFields++;
-      } catch (err) {
-        const failure = isPrimary
-          ? "rename primary field"
-          : `delete default field ${field.field_name}`;
-        logger.debug(`Failed to ${failure}: ${String(err)}`);
-      }
-    }
-  }
-
-  const recordsRes = await client.bitable.appTableRecord.list({
-    path: tablePath,
-    params: { page_size: 100 },
-  });
-
-  if (recordsRes.code === 0 && recordsRes.data?.items) {
-    const emptyRecordIds = recordsRes.data.items
-      .filter((r) => isPlaceholderBitableRecord(r.fields))
-      .map((r) => r.record_id)
-      .filter((id): id is string => Boolean(id));
-
-    if (emptyRecordIds.length > 0) {
-      try {
-        const response = await client.bitable.appTableRecord.batchDelete({
-          path: tablePath,
-          data: { records: emptyRecordIds },
-        });
-        ensureLarkSuccess(response, "bitable.appTableRecord.batchDelete");
-        cleanedRows = emptyRecordIds.length;
-      } catch {
-        // Fallback: delete one by one if batch API is unavailable
-        for (const recordId of emptyRecordIds) {
-          try {
-            const response = await client.bitable.appTableRecord.delete({
-              path: { ...tablePath, record_id: recordId },
-            });
-            ensureLarkSuccess(response, "bitable.appTableRecord.delete");
-            cleanedRows++;
-          } catch (err) {
-            logger.debug(`Failed to delete empty row ${recordId}: ${String(err)}`);
-          }
-        }
-      }
-    }
-  }
-
-  return { cleanedRows, cleanedFields };
-}
-
 async function createApp(
   client: Lark.Client,
   name: string,
@@ -293,7 +208,82 @@ async function createApp(
     if (tablesRes.code === 0) {
       tableId = tablesRes.data?.items?.[0]?.table_id;
       if (tableId) {
-        cleanup = await cleanupNewBitable(client, appToken, tableId, name, log);
+        let cleanedRows = 0;
+        let cleanedFields = 0;
+        const tablePath = { app_token: appToken, table_id: tableId };
+
+        const fieldsRes = await client.bitable.appTableField.list({
+          path: tablePath,
+        });
+
+        if (fieldsRes.code === 0 && fieldsRes.data?.items) {
+          const primaryField = fieldsRes.data.items.find((f) => f.is_primary);
+          const defaultFieldsToDelete = fieldsRes.data.items.filter(
+            (f) => !f.is_primary && DEFAULT_CLEANUP_FIELD_TYPES.has(f.type ?? 0),
+          );
+          // Keep primary-field rename ahead of deletions, with independent failure accounting.
+          for (const field of [primaryField, ...defaultFieldsToDelete]) {
+            if (!field?.field_id) {
+              continue;
+            }
+            const isPrimary = field === primaryField;
+            const operation = isPrimary ? "update" : "delete";
+            try {
+              const path = { ...tablePath, field_id: field.field_id };
+              const response = isPrimary
+                ? await client.bitable.appTableField.update({
+                    path,
+                    data: { field_name: name.length <= 20 ? name : "Name", type: 1 },
+                  })
+                : await client.bitable.appTableField.delete({ path });
+              ensureLarkSuccess(response, `bitable.appTableField.${operation}`);
+              cleanedFields++;
+            } catch (err) {
+              const failure = isPrimary
+                ? "rename primary field"
+                : `delete default field ${field.field_name}`;
+              log.debug(`Failed to ${failure}: ${String(err)}`);
+            }
+          }
+        }
+
+        const recordsRes = await client.bitable.appTableRecord.list({
+          path: tablePath,
+          params: { page_size: 100 },
+        });
+
+        if (recordsRes.code === 0 && recordsRes.data?.items) {
+          const emptyRecordIds = recordsRes.data.items
+            .filter((r) => isPlaceholderBitableRecord(r.fields))
+            .map((r) => r.record_id)
+            .filter((id): id is string => Boolean(id));
+
+          if (emptyRecordIds.length > 0) {
+            try {
+              const response = await client.bitable.appTableRecord.batchDelete({
+                path: tablePath,
+                data: { records: emptyRecordIds },
+              });
+              ensureLarkSuccess(response, "bitable.appTableRecord.batchDelete");
+              cleanedRows = emptyRecordIds.length;
+            } catch {
+              // Fallback: delete one by one if batch API is unavailable
+              for (const recordId of emptyRecordIds) {
+                try {
+                  const response = await client.bitable.appTableRecord.delete({
+                    path: { ...tablePath, record_id: recordId },
+                  });
+                  ensureLarkSuccess(response, "bitable.appTableRecord.delete");
+                  cleanedRows++;
+                } catch (err) {
+                  log.debug(`Failed to delete empty row ${recordId}: ${String(err)}`);
+                }
+              }
+            }
+          }
+        }
+
+        cleanup = { cleanedRows, cleanedFields };
       }
     }
   } catch (err) {

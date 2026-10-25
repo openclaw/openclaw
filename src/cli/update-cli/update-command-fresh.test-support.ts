@@ -111,7 +111,6 @@ export function installFreshUpdateFixture() {
     vi.spyOn(updateGlobal, "createGlobalInstallEnv").mockResolvedValue({ ...process.env });
     vi.spyOn(packageDestination, "inspectNpmGlobalDestination").mockResolvedValue({
       kind: "empty",
-      prefix: home,
     });
     vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockResolvedValue({
       manager: "npm",

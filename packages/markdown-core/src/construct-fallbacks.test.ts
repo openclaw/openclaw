@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { applyConstructFallbacks } from "./construct-fallbacks.js";
 import { FormatCapabilityProfile } from "./format-capabilities.js";
 import { markdownToIR, sliceMarkdownIR, type MarkdownIR } from "./ir.js";
+import { plainIR as makeIR, style, htmlTag } from "./markdown.test-support.js";
 
 const ALL_NATIVE = FormatCapabilityProfile.define({
   mechanism: "markdown",
@@ -24,36 +25,17 @@ it("preserves authored tags through projection and list-marker removal", () => {
   const native = applyConstructFallbacks(parsed, ALL_NATIVE);
   const stripped = project(parsed, { bulletList: "strip" });
 
-  expect(native.htmlTags).toEqual([
-    { start: 2, end: 5, raw: "<b>", name: "b", closing: false, selfClosing: false },
-    { start: 6, end: 10, raw: "</b>", name: "b", closing: true, selfClosing: false },
-  ]);
+  expect(native.htmlTags).toEqual([htmlTag(2, 5, "<b>", "b"), htmlTag(6, 10, "</b>", "b", true)]);
   expect(stripped.text).toBe("<b>x</b>");
-  expect(stripped.styles).toEqual([{ start: 0, end: 8, style: "bold" }]);
-  expect(stripped.htmlTags).toEqual([
-    { start: 0, end: 3, raw: "<b>", name: "b", closing: false, selfClosing: false },
-    { start: 4, end: 8, raw: "</b>", name: "b", closing: true, selfClosing: false },
-  ]);
+  expect(stripped.styles).toEqual([style(0, 8, "bold")]);
+  expect(stripped.htmlTags).toEqual([htmlTag(0, 3, "<b>", "b"), htmlTag(4, 8, "</b>", "b", true)]);
   expect(Object.keys(native)).not.toContain("htmlTags");
   expect(Object.keys(stripped)).not.toContain("htmlTags");
 });
 
-function makeIR(
-  text: string,
-  styles: MarkdownIR["styles"] = [],
-  links: MarkdownIR["links"] = [],
-): MarkdownIR {
-  return { text, styles, links };
-}
-
 describe("applyConstructFallbacks", () => {
   it.each([
-    [
-      "heading",
-      "native",
-      makeIR("Title", [{ start: 0, end: 5, style: "heading_2" }]),
-      ["Title", ["heading_2"], 0],
-    ],
+    ["heading", "native", makeIR("Title", [style(0, 5, "heading_2")]), ["Title", ["heading_2"], 0]],
     [
       "linkLabel",
       "strip",
@@ -78,28 +60,20 @@ describe("applyConstructFallbacks", () => {
   it("keeps link suffixes outside surrounding styles", () => {
     const ir = makeIR(
       "see docs now",
-      [{ start: 0, end: 12, style: "bold" }],
+      [style(0, 12, "bold")],
       [{ start: 4, end: 8, href: "https://example.com" }],
     );
 
     expect(project(ir, { linkLabel: "fallback" })).toEqual({
       text: "see docs (https://example.com) now",
-      styles: [
-        { start: 0, end: 8, style: "bold" },
-        { start: 30, end: 34, style: "bold" },
-      ],
+      styles: [style(0, 8, "bold"), style(30, 34, "bold")],
       links: [],
     });
   });
 
   it("merges heading fallback with authored bold and respects stripped bold", () => {
-    const ir = makeIR("Title", [
-      { start: 0, end: 5, style: "heading_1" },
-      { start: 0, end: 5, style: "bold" },
-    ]);
-    expect(project(ir, { heading: "fallback" }).styles).toEqual([
-      { start: 0, end: 5, style: "bold" },
-    ]);
+    const ir = makeIR("Title", [style(0, 5, "heading_1"), style(0, 5, "bold")]);
+    expect(project(ir, { heading: "fallback" }).styles).toEqual([style(0, 5, "bold")]);
     expect(project(ir, { heading: "fallback", bold: "strip" }).styles).toEqual([]);
   });
 

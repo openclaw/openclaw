@@ -16,6 +16,7 @@ import type { ChatHost } from "./chat-send-contract.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatComposerMemoryFallback } from "./chat-state-host.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 
 type RequestHandlers = Record<string, unknown>;
 
@@ -117,12 +118,14 @@ export function findChatSendPayload(host: {
 }
 
 function composerDefaults(chatMessage = "", chatAttachments: ChatAttachment[] = []) {
+  const chatMessagesBySession: ChatMessageCache = new Map();
   return {
     connected: true,
     sessionKey: "agent:main",
     chatLoading: false,
     chatMessage,
     chatMessages: [],
+    chatMessagesBySession,
     chatLocalInputHistoryBySession: {},
     chatInputHistorySessionKey: null,
     chatInputHistoryItems: null,
@@ -158,6 +161,7 @@ export function createImmediateCommandHost(
 }
 
 type TestChatHost = ChatHost & {
+  selectedChatSessionIncognito: boolean;
   basePath: string;
   resourceBasePath: string;
   chatAvatarUrl: string | null;
@@ -259,6 +263,7 @@ export function makeChatHost(
   };
   const host = {
     ...composerDefaults(),
+    selectedChatSessionIncognito: false,
     chatSubmissions: createChatSubmissions(),
     client: request ? createTestGatewayClient(request) : null,
     chatDisplayedLeafEntryId: undefined,

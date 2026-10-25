@@ -6,14 +6,14 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { createAcceptedFixture } from "./manager.ownership.test-support.js";
 import {
   extractStatesFromUpserts,
   installAcpSessionManagerTestLifecycle,
-  managerFixture,
-  mockMutableSession,
   mockParentedAcpSessionEntries,
   readySessionMeta,
   resolvedIdentity,
+  runtimeHandle,
   runtimeTurn as turn,
 } from "./manager.test-helpers.js";
 
@@ -23,23 +23,17 @@ describe("AcpSessionManager turn results", () => {
   installAcpSessionManagerTestLifecycle();
 
   function setupRuntime(meta = readySessionMeta(), sessionKey = "agent:codex:acp:session-1") {
-    const f = managerFixture(sessionKey, meta);
-    const sessionMeta = { currentMeta: meta };
-    mockMutableSession(sessionKey, sessionMeta);
+    const f = createAcceptedFixture({ sessionKey, meta });
     const run = (overrides: Partial<Parameters<typeof f.manager.runTurn>[0]> = {}) =>
-      f.run({
-        text: "Do work",
-        requestId: "turn-result",
-        ...overrides,
-      });
+      f.run("turn-result", { text: "Do work", ...overrides });
     const start = (result: (requestId: string) => Partial<AcpRuntimeTurn> = () => ({})) => {
-      const startTurn = vi.fn<NonNullable<typeof f.runtimeState.runtime.startTurn>>((input) =>
+      const startTurn = vi.fn<NonNullable<typeof f.runtime.startTurn>>((input) =>
         turn(input.requestId, result(input.requestId)),
       );
-      f.runtimeState.runtime.startTurn = startTurn;
+      f.runtime.startTurn = startTurn;
       return startTurn;
     };
-    return { ...f.runtimeState, sessionKey, sessionMeta, run, start };
+    return { ...f, sessionKey, sessionMeta: f.persisted, run, start };
   }
 
   function parentSession(
@@ -55,27 +49,25 @@ describe("AcpSessionManager turn results", () => {
 
   function setupPersistentRuntime() {
     const sessionKey = "agent:claude:acp:binding:discord:default:retry-no-session";
-    const meta = {
-      currentMeta: readySessionMeta({
+    const state = setupRuntime(
+      readySessionMeta({
         agent: "claude",
         runtimeSessionName: sessionKey,
         identity: resolvedIdentity({ acpxSessionId: "acpx-sid-stale" }),
       }),
-    };
-    const state = setupRuntime(meta.currentMeta, sessionKey);
-    mockMutableSession(sessionKey, meta);
-    state.ensureSession.mockImplementation(async (input) => ({
-      sessionKey: input.sessionKey,
-      backend: "acpx",
-      runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
-      backendSessionId: input.resumeSessionId ? "acpx-sid-stale" : "acpx-sid-fresh",
-    }));
+      sessionKey,
+    );
+    state.ensureSession.mockImplementation(async (input) =>
+      runtimeHandle(input.sessionKey, `${input.sessionKey}:${input.mode}:runtime`, {
+        backendSessionId: input.resumeSessionId ? "acpx-sid-stale" : "acpx-sid-fresh",
+      }),
+    );
     state.getStatus.mockResolvedValue({
       summary: "status=alive",
       backendSessionId: "acpx-sid-fresh",
       details: { status: "alive" },
     });
-    return { state, meta, sessionKey };
+    return { state, meta: state.sessionMeta, sessionKey };
   }
 
   it("rejects expired admission before submitting to the runtime", async () => {
@@ -234,10 +226,7 @@ describe("AcpSessionManager turn results", () => {
         });
         expect(state.runTurn).not.toHaveBeenCalled();
         expect(closeStream).toHaveBeenCalledWith({ reason: `turn-result-${status}` });
-        expect(events).toEqual([
-          { type: "text_delta", stream: "output", text: "partial output" },
-          { type: "done", ...result },
-        ]);
+        expect(events).toEqual([output, { type: "done", ...result }]);
         const states = extractStatesFromUpserts();
         expect(states).toEqual(expect.arrayContaining(["running", "idle"]));
         expect(states).not.toContain("error");

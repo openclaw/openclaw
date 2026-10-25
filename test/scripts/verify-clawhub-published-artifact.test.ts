@@ -1,23 +1,15 @@
 import { createHash } from "node:crypto";
 /* oxlint-disable typescript/no-base-to-string -- fetch mocks normalize standard RequestInfo inputs for registry URL assertions. */
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  truncateSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   verifyPublishedClawHubArtifacts,
   verifyPublishedClawHubPackage,
 } from "../../scripts/verify-clawhub-published-artifact.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const bytes = new TextEncoder().encode("expected");
 const wrongBytes = new TextEncoder().encode("wrong");
 const digestMismatch = "artifact sha256 mismatch";
@@ -43,12 +35,6 @@ const manifestDefaults = {
   terminalRunAttempt: "1",
 };
 
-afterEach(() => {
-  for (const directory of tempDirs.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
 function identity(artifact: Uint8Array) {
   return {
     sha256: createHash("sha256").update(artifact).digest("hex"),
@@ -58,9 +44,12 @@ function identity(artifact: Uint8Array) {
   };
 }
 
-function writeManifest(mode: "publish" | "configure-only", artifact: Uint8Array, runAttempt = "1") {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-clawhub-readback-"));
-  tempDirs.push(root);
+function writeManifest(
+  mode: "publish" | "configure-only" = "configure-only",
+  artifact = bytes,
+  runAttempt = "1",
+) {
+  const root = tempDirs.make("openclaw-clawhub-readback-");
   const path = join(root, "manifest.json");
   const artifactIdentity = identity(artifact);
   writeFileSync(
@@ -111,27 +100,27 @@ function verifyManifest(
 ) {
   return verifyPublishedClawHubArtifacts({
     ...manifestDefaults,
-    manifestPath: overrides.manifestPath ?? writeManifest("configure-only", bytes),
+    manifestPath: overrides.manifestPath ?? writeManifest(),
     ...overrides,
     retryOptions: { fetchImpl, attempts: 1, delayMs: 1, ...retryOptions },
   });
 }
 
 function verifyPackage(
-  expectedArtifactDir: string,
-  retryOptions: RetryOptions & { fetchImpl: Fetch },
+  fetchImpl: Fetch,
+  retryOptions: RetryOptions = {},
+  expectedArtifactDir = writeExpectedArtifact(bytes),
 ) {
   return verifyPublishedClawHubPackage({
     ...packageCoordinates,
     expectedArtifactDir,
-    retryOptions,
+    retryOptions: { fetchImpl, attempts: 1, delayMs: 1, ...retryOptions },
     registry: "https://clawhub.example",
   });
 }
 
 function writeExpectedArtifact(artifact: Uint8Array) {
-  const artifactDir = mkdtempSync(join(tmpdir(), "openclaw-clawhub-oidc-readback-"));
-  tempDirs.push(artifactDir);
+  const artifactDir = tempDirs.make("openclaw-clawhub-oidc-readback-");
   writeFileSync(join(artifactDir, "openclaw-meta-2026.7.1-beta.3.tgz"), artifact);
   return artifactDir;
 }
@@ -181,11 +170,7 @@ function registryFetch(artifact: Uint8Array) {
 
 it("verifies exact artifact bytes without claiming the publication authentication", async () => {
   const fetchImpl = registryFetch(bytes);
-  const evidence = await verifyPackage(writeExpectedArtifact(bytes), {
-    fetchImpl,
-    attempts: 1,
-    delayMs: 1,
-  });
+  const evidence = await verifyPackage(fetchImpl);
 
   expect(evidence).toMatchObject({
     schemaVersion: 1,
@@ -205,18 +190,17 @@ it("rejects ambiguous or symlinked normal OIDC artifacts before registry access"
   const fetchImpl = registryFetch(bytes);
   const ambiguous = writeExpectedArtifact(bytes);
   writeFileSync(join(ambiguous, "second.tgz"), bytes);
-  await expect(verifyPackage(ambiguous, { fetchImpl, attempts: 1, delayMs: 1 })).rejects.toThrow(
+  await expect(verifyPackage(fetchImpl, {}, ambiguous)).rejects.toThrow(
     "exactly one root .tgz regular file",
   );
 
-  const root = mkdtempSync(join(tmpdir(), "openclaw-clawhub-oidc-symlink-"));
-  tempDirs.push(root);
+  const root = tempDirs.make("openclaw-clawhub-oidc-symlink-");
   const artifactDir = join(root, "artifact");
   const target = join(root, "target.tgz");
   mkdirSync(artifactDir);
   writeFileSync(target, bytes);
   symlinkSync(target, join(artifactDir, "linked.tgz"));
-  await expect(verifyPackage(artifactDir, { fetchImpl, attempts: 1, delayMs: 1 })).rejects.toThrow(
+  await expect(verifyPackage(fetchImpl, {}, artifactDir)).rejects.toThrow(
     "exactly one root .tgz regular file",
   );
   expect(fetchImpl).not.toHaveBeenCalled();
@@ -227,9 +211,9 @@ it("rejects a missing configure-only tag before artifact or publisher requests",
     Response.json({ package: { tags: { beta: "2026.7.1-beta.2" } } }),
   );
 
-  await expect(
-    verifyManifest(fetchImpl, { manifestPath: writeManifest("configure-only", bytes) }),
-  ).rejects.toThrow("@openclaw/meta ClawHub tag beta mismatch");
+  await expect(verifyManifest(fetchImpl)).rejects.toThrow(
+    "@openclaw/meta ClawHub tag beta mismatch",
+  );
   expect(fetchImpl.mock.calls.map(([url]) => String(url))).toEqual([
     "https://clawhub.example/api/v1/packages/%40openclaw%2Fmeta",
   ]);
@@ -283,9 +267,7 @@ it.each([
       return healthy(input);
     });
     const sleep = vi.fn(async () => {});
-    await expect(
-      verifyPackage(writeExpectedArtifact(bytes), { fetchImpl, attempts: 3, delayMs: 1, sleep }),
-    ).rejects.toThrow(message);
+    await expect(verifyPackage(fetchImpl, { attempts: 3, sleep })).rejects.toThrow(message);
     expect(sleep).not.toHaveBeenCalled();
     // Metadata validation follows the artifact download.
     expect(fetchImpl).toHaveBeenCalledTimes(stage === "detail" ? 1 : stage === "publisher" ? 2 : 4);
@@ -325,9 +307,7 @@ it("stops rather than retrying before an excessive server delay", async () => {
     async () => new Response(null, { status: 429, headers: { "retry-after": "61" } }),
   );
   const sleep = vi.fn(async () => {});
-  await expect(
-    verifyPackage(writeExpectedArtifact(bytes), { fetchImpl, attempts: 2, delayMs: 1, sleep }),
-  ).rejects.toThrow("HTTP 429");
+  await expect(verifyPackage(fetchImpl, { attempts: 2, sleep })).rejects.toThrow("HTTP 429");
   expect(fetchImpl).toHaveBeenCalledTimes(1);
   expect(sleep).not.toHaveBeenCalled();
 });
@@ -447,7 +427,7 @@ it.each([
   ["A".repeat(64), clawhubToolchainSha256, "manifest.clawhubToolchainSha256 is invalid"],
   [clawhubToolchainSha256, "e".repeat(64), "clawhubToolchainSha256 mismatch"],
 ])("requires locked toolchain identity %s/%s", async (manifestSha, expectedSha, error) => {
-  const manifestPath = writeManifest("configure-only", bytes);
+  const manifestPath = writeManifest();
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   writeFileSync(manifestPath, JSON.stringify({ ...manifest, clawhubToolchainSha256: manifestSha }));
   await expect(
@@ -460,18 +440,18 @@ it.each([
 
 it("rejects noncanonical, oversized, and symlinked manifests before registry access", async () => {
   const fetchImpl = registryFetch(bytes);
-  const manifestPath = writeManifest("configure-only", bytes);
+  const manifestPath = writeManifest();
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   writeFileSync(manifestPath, JSON.stringify({ ...manifest, unexpected: true }));
   await expect(verifyManifest(fetchImpl, { manifestPath })).rejects.toThrow("keys are invalid");
 
-  const oversizedPath = writeManifest("configure-only", bytes);
+  const oversizedPath = writeManifest();
   truncateSync(oversizedPath, 2 * 1024 * 1024 + 1);
   await expect(verifyManifest(fetchImpl, { manifestPath: oversizedPath })).rejects.toThrow(
     "size is outside the allowed range: 2097153",
   );
 
-  const targetPath = writeManifest("configure-only", bytes);
+  const targetPath = writeManifest();
   const symlinkPath = `${targetPath}.link`;
   symlinkSync(targetPath, symlinkPath);
   await expect(verifyManifest(fetchImpl, { manifestPath: symlinkPath })).rejects.toThrow(

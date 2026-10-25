@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import {
   configureMerge,
   expectAncestors,
@@ -48,7 +49,8 @@ function sourceCommit(
     return result.stdout.trim();
   };
   run(["read-tree", parent]);
-  const paths = readdirSync(directory, { recursive: true, withFileTypes: true })
+  const paths = listDirectoryTreeStrictSync(directory)
+    .map((walkEntry) => walkEntry.dirent)
     .filter((entry) => entry.isFile())
     .map((entry) => join(entry.parentPath, entry.name).slice(directory.length + 1));
   const blobs = run(

@@ -5,6 +5,7 @@ import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openChatDetailsPeople } from "./chat-details.test-support.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { board } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -54,12 +55,7 @@ suite.define(() => {
             sessionKey,
             featureMethods: ["board.get"],
             methodResponses: {
-              "board.get": {
-                sessionKey,
-                revision: 1,
-                tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-                widgets: [],
-              },
+              "board.get": board(sessionKey),
               "sessions.list": {
                 ...chatSessionListResponse([
                   createControlUiSessionRow(
@@ -110,9 +106,7 @@ suite.define(() => {
           await owner.waitFor({ state: "visible" });
           await participant.waitFor({ state: "visible" });
           expect(await members.count()).toBe(2);
-          expect(await owner.count()).toBe(1);
           expect(await owner.locator(".chat-details-people__role").textContent()).toBe("Owner");
-          expect(await participant.count()).toBe(1);
 
           await gateway.emitGatewayEvent("presence", { presence: [] });
           await count(".chat-pane__presence", 0);

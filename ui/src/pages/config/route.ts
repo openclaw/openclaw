@@ -3,7 +3,8 @@ import { definePage, redirect } from "@openclaw/uirouter";
 import { pathForRoute, routePageSpec, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
-import { CONFIG_PAGE_IDS, type ConfigPageId } from "./config-sections.ts";
+import { hasConfigPageDisplay, isAppearanceDataTarget } from "./config-page-reads.ts";
+import { CONFIG_PAGE_IDS, normalizeConfigSelection, type ConfigPageId } from "./config-sections.ts";
 import { configRouteData, configTargetIdFromHash, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
@@ -54,9 +55,17 @@ function loadConfigRoute(
           revision: context.settingsAgentSelection.intentRevision,
         }
       : undefined;
-  const primaryLoad = context.runtimeConfig.ensureLoaded();
-  if (pageId !== "updates") {
-    void primaryLoad.then(() => context.runtimeConfig.ensureSchemaLoaded()).catch(() => undefined);
+  const appearanceDisplay =
+    hasConfigPageDisplay(
+      context.runtimeConfig,
+      pageId,
+      normalizeConfigSelection(pageId, route.section, null).activeSection,
+    ) && !isAppearanceDataTarget(route.targetBlockId);
+  if (!appearanceDisplay) {
+    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+    if (pageId !== "updates") {
+      void context.runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
+    }
   }
   return {
     ...route,
@@ -76,12 +85,17 @@ function configPage(id: ConfigPageId) {
         : locationKey;
     },
     loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location, id),
-    component: () =>
-      import("./config-page.tsx").then((module) => ({
+    component: async () => {
+      // The sidebar is an independent lazy sibling; start it alongside the page.
+      void import("../../components/settings-sidebar-shell.tsx").catch(() => undefined);
+      const module = await import("./config-page.tsx");
+      await module.preloadConfigPage(id);
+      return {
         // Keep the current owner while another Settings subpage loads its data.
         renderOwnerKey: () => "settings-config",
         renderSolid: module.ConfigRoute,
-      })),
+      };
+    },
   });
 }
 

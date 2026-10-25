@@ -55,6 +55,8 @@ export type DoctorConfigPreflightResult = {
   stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
+  /** Config whose pre-session state migrations completed without unresolved work. */
+  preflightLegacyStateConfig?: OpenClawConfig;
 };
 
 /** Keep migrated selectors with Doctor's model-policy owner until billing facts are captured. */
@@ -169,6 +171,11 @@ export function prepareDoctorConfigMigrationResult(
       ...(receipts ? { stateMigrationStepReceipts: receipts } : {}),
       ...(postSession ? { postSessionPluginMigration: postSession } : {}),
       ...(planBound ? { postSessionPluginMigrationPlanBound: true } : {}),
+      ...(!params.shouldWriteConfig &&
+      !params.pluginInventoryChanged &&
+      isDeepStrictEqual(preflight.preflightLegacyStateConfig, params.cfg)
+        ? { preflightLegacyStateConfig: preflight.preflightLegacyStateConfig }
+        : {}),
     };
   };
 }

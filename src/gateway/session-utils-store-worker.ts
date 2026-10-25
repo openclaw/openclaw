@@ -459,7 +459,6 @@ export async function loadGatewaySessionEntryReadOnlyInWorker(
 /** Retain the original lookup domain for a later synchronous admission predicate. */
 export async function prepareGatewaySessionEntryReadOnlyInWorker(
   params: Parameters<typeof loadGatewaySessionEntryReadOnlyInWorker>[0],
-  onSelected?: (target: GatewaySessionStoreTargetWithStore) => void,
 ): Promise<{
   loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
   readPlan?: GatewaySessionEntryReadPlan;
@@ -471,7 +470,6 @@ export async function prepareGatewaySessionEntryReadOnlyInWorker(
       projection: params.projection ?? "full",
     },
     true,
-    onSelected,
   );
   params.assertActive?.();
   const select = (current: GatewaySessionStoreTargetWithStore) => {

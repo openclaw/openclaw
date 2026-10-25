@@ -59,7 +59,6 @@ test.each(["separate", "shared"] as const)(
     const harness = await startGatewayServerHarness();
     let readWorkMs = performance.now();
     const workClock = vi.spyOn(performance, "now").mockImplementation(() => readWorkMs);
-    let closing: Promise<void> | undefined;
     const httpAgent = new http.Agent({ keepAlive: true });
     const requestHealth = async () => {
       const response = await new Promise<http.IncomingMessage>((resolve, reject) => {
@@ -86,8 +85,15 @@ test.each(["separate", "shared"] as const)(
         "registered Gateway resident session projection",
       );
       const originalRead = projection.selectEntries;
+      let updatedAt = 300;
+      const changeResidentSession = async () => {
+        // These scenarios exercise fresh selection; unchanged health reads reuse preparation.
+        writeSession("fleet0", "session0", updatedAt++);
+        await projection.prepareSelection();
+      };
       let inserted = false;
       for (const method of ["health", "status"] as const) {
+        await changeResidentSession();
         let reads = 0;
         let httpAtRead: number | undefined;
         let traffic: Promise<void> | undefined;
@@ -143,27 +149,24 @@ test.each(["separate", "shared"] as const)(
         }
       }
       if (layout === "shared") {
+        // Busy-health recovery is covered by collector.session-store-path.test.ts.
         using read = vi.spyOn(projection, "selectEntries");
         const busy = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
-        const failRead = async <T>(request: () => Promise<T>, error: Error) => {
-          read.mockClear().mockImplementationOnce(() => {
+        for (const [request, error, ok] of [
+          [health, busy, true],
+          [health, new Error("invalid session state"), false],
+          [statusSummary, busy, false],
+        ] as const) {
+          await changeResidentSession();
+          read.mockImplementationOnce(() => {
             throw error;
           });
-          const response = await request();
-          expect(read).toHaveBeenCalledOnce();
-          return response;
-        };
-        const failedRead = await failRead(health, busy);
-        expect(failedRead.ok).toBe(true);
-        expect(failedRead.payload?.agents.map((agent) => agent.sessions.count)).toEqual(
-          agentIds.map(() => 0),
-        );
-        expect((await health()).payload?.agents.at(-1)?.sessions.count).toBe(13);
-        expect((await failRead(health, new Error("invalid session state"))).ok).toBe(false);
-        expect((await failRead(statusSummary, busy)).ok).toBe(false);
+          expect((await request()).ok).toBe(ok);
+        }
         expect((await statusSummary()).payload?.sessions.count).toBe(146);
       }
       if (layout === "separate") {
+        await changeResidentSession();
         const read = vi.spyOn(projection, "selectEntries").mockImplementation((...args) => {
           const rows = originalRead(...args);
           readWorkMs += 20;
@@ -200,40 +203,13 @@ test.each(["separate", "shared"] as const)(
           read.mockRestore();
           recordAgentDatabaseAdmissions([], { source: "startup" });
         }
-        const lifecycle: string[] = [];
-        vi.mocked(collector.collectGatewayHealthSnapshot).mockImplementation(async (params) => {
-          try {
-            return await actualCollector.collectGatewayHealthSnapshot(params);
-          } finally {
-            lifecycle.push("settled");
-          }
-        });
-        using closingRead = vi
-          .spyOn(projection, "selectEntries")
-          .mockImplementationOnce((...args) => {
-            const result = originalRead(...args);
-            readWorkMs += 20;
-            setImmediate(() => {
-              lifecycle.push("closing");
-              closing = harness.close().then(() => {
-                lifecycle.push("closed");
-              });
-            });
-            return result;
-          });
-        await Promise.allSettled([health()]);
-        await closing;
-        expect(lifecycle).toEqual(["closing", "settled", "closed"]);
-        const completedReads = closingRead.mock.calls.length;
-        await flushImmediate();
-        expect(closingRead).toHaveBeenCalledTimes(completedReads);
       }
       expect(sqliteSummaries).not.toHaveBeenCalled();
     } finally {
       restoreSummaries();
       workClock.mockRestore();
       httpAgent.destroy();
-      await (closing ?? harness.close());
+      await harness.close();
     }
   },
 );

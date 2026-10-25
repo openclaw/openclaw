@@ -1,15 +1,11 @@
 /* @vitest-environment jsdom */
-import { createMemo, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ProjectsSearchRemoteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
-import { resolveProjectChip } from "./project-chip.ts";
-import { ProjectChip } from "./project-chip.tsx";
-import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
+import { mountProjectChip } from "./project-chip.test-support.tsx";
 
 function result(name: string): ProjectsSearchRemoteResult {
   return {
@@ -26,10 +22,10 @@ function result(name: string): ProjectsSearchRemoteResult {
   };
 }
 
-function mountSearch() {
+async function mountSearch() {
   vi.useFakeTimers();
   const fixture = createRepositoryFixture();
-  const { browser, state: place, context, gateway, changed } = fixture;
+  const { browser, state: place, context, gateway } = fixture;
   const projects = [
     {
       id: "sample",
@@ -50,6 +46,7 @@ function mountSearch() {
     },
   });
   vi.spyOn(browser, "projects", "get").mockReturnValue(projects);
+  vi.spyOn(browser, "projectsReady", "get").mockReturnValue(true);
   vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
   vi.spyOn(place, "folder", "get").mockReturnValue("");
   vi.spyOn(place, "workspacePath").mockReturnValue("/fixture");
@@ -59,39 +56,18 @@ function mountSearch() {
   vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
   browser.selectProject({ kind: "local", id: "sample" });
   onTestFinished(() => browser.disconnect());
-  const options: NewSessionPlaceControlsOptions = {
-    place,
-    gateway,
-    context,
-    data: undefined,
-    submitting: false,
-    pendingPlacement: false,
-    onConnectMachine: vi.fn(),
-    onNavigate: vi.fn(),
-    onFocusComposer: vi.fn(),
-    onChange: changed,
-  };
-  const view = mountSolid(() => {
-    const [revision, setRevision] = createSignal(0);
-    changed.mockImplementation(() => setRevision((value) => value + 1));
-    const props = createMemo(() => {
-      revision();
-      return {
-        params: { ...options },
-        state: resolveProjectChip({
-          folder: "",
-          workspace: "/fixture",
-          projectId: browser.projectId,
-          selectedRemoteProject: browser.remoteProject,
-          projects,
-          recents: [],
-          projectQuery: browser.projectQuery,
-        }),
-        nativeTerminal: false,
-      };
-    });
-    return <ProjectChip {...props()} />;
-  });
+  const view = mountProjectChip(fixture, () => ({
+    folder: "",
+    workspace: "/fixture",
+    projectId: browser.projectId,
+    selectedRemoteProject: browser.remoteProject,
+    projects,
+    recents: [],
+    projectQuery: browser.projectQuery,
+  }));
+  await waitForSolid(() =>
+    expect(view.container.querySelector('input[type="search"]')).not.toBeNull(),
+  );
   const input = view.container.querySelector<HTMLInputElement>('input[type="search"]')!;
   const localRow = view.container.querySelector('[data-value="project:sample"]')!;
   const typeQuery = (query: string) => {
@@ -106,7 +82,7 @@ afterEach(() => vi.useRealTimers());
 
 describe("remote project search slot", () => {
   it("keeps input and local selection live through debounce, loading, failure, and a new query", async () => {
-    const { browser, request, view, input, localRow, typeQuery } = mountSearch();
+    const { browser, request, view, input, localRow, typeQuery } = await mountSearch();
     const current = createDeferred<ProjectsSearchRemoteResult>();
     request.mockReturnValueOnce(current.promise);
     input.focus();
@@ -159,7 +135,8 @@ describe("remote project search slot", () => {
   it.each(["client", "epoch"] as const)(
     "retires the old read when the %s changes without resetting the query",
     async (scope) => {
-      const { browser, context, gateway, request, changed, view, input, typeQuery } = mountSearch();
+      const { browser, context, gateway, request, changed, view, input, typeQuery } =
+        await mountSearch();
       const previous = createDeferred<ProjectsSearchRemoteResult>();
       const current = createDeferred<ProjectsSearchRemoteResult>();
       request.mockReturnValueOnce(previous.promise).mockReturnValueOnce(current.promise);

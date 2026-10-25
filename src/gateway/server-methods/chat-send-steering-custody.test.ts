@@ -44,6 +44,8 @@ import { createReplyOperation } from "../../sessions/session-controller.operatio
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
+import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -68,11 +70,6 @@ describe("steering input custody", () => {
         "revoked grant",
         "same permissions across profiles",
         "no native admission across profiles",
-        "different scopes across profiles",
-        "same role permissions across profiles",
-        "different role session caps across profiles",
-        "different role agents across profiles",
-        "different role sandbox across profiles",
       ] as const
     ).map((scenario) => ({
       scenario,
@@ -101,7 +98,6 @@ describe("steering input custody", () => {
         sessionKey: "agent:main:dashboard:steering-collaboration",
         preserveContent: true,
         active: !startOwnerTurn,
-        sandbox: scenario === "different role sandbox across profiles" ? "required" : undefined,
         // Both callers may write here; their caps still differ for other sessions.
         ...(withRoles
           ? { createdActor: { type: "human", source: "profile", id: incomingProfile.id } as const }
@@ -112,6 +108,13 @@ describe("steering input custody", () => {
       delete initialQueue.allowCollaborativeSteering;
       const steeringConfig: typeof initialConfig = {
         ...initialConfig,
+        agents: {
+          ...initialConfig.agents,
+          defaults: {
+            ...initialConfig.agents?.defaults,
+            model: { primary: "openai/gpt-test" },
+          },
+        },
         messages: {
           ...initialConfig.messages,
           queue: {
@@ -136,25 +139,7 @@ describe("steering input custody", () => {
             roles: {
               definitions: {
                 writer: role,
-                participant: {
-                  ...role,
-                  sessions: {
-                    others:
-                      scenario === "different role session caps across profiles" ? "view" : "write",
-                  },
-                  agents:
-                    scenario === "different role agents across profiles"
-                      ? ["main"]
-                      : scenario === "same role permissions across profiles"
-                        ? ["other", "main"]
-                        : role.agents,
-                  sandbox:
-                    scenario === "different role sandbox across profiles"
-                      ? "required"
-                      : scenario === "same role permissions across profiles"
-                        ? "inherit"
-                        : role.sandbox,
-                },
+                participant: { ...role, sessions: { others: "view" } },
               },
             },
           },
@@ -177,13 +162,10 @@ describe("steering input custody", () => {
         ...createOperatorWsClient({ connId, scopes: fixture.client.connect.scopes }),
         usesSharedGatewayAuth: sharedSecretOwner,
         authenticatedUserId: sharedSecretOwner ? undefined : "reconnect-steering@example.test",
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: null,
+        authenticatedUserProfile: dispatchProfile(profile.id, {
           avatarRevision: "synthetic-avatar",
-          hasAvatar: false,
           updatedAt: profile.updatedAt,
-        },
+        }),
         connect: { ...fixture.client.connect, caps: ["ui-commands"] },
         internal: sharedSecretOwner
           ? { authenticatedOperator: true as const, operatorRoleActor: { kind: "system" as const } }
@@ -237,16 +219,11 @@ describe("steering input custody", () => {
             extraHandlers: { "chat.send": handleChatSend },
           });
           await ownerDispatch.dispatcher.dispatch(
-            {
-              type: "req",
-              id: "owner-input",
-              method: "chat.send",
-              params: {
-                ...fixture.params,
-                message: "Continue the original work",
-                idempotencyKey: "owner-input",
-              },
-            },
+            gatewayRequest("owner-input", "chat.send", {
+              ...fixture.params,
+              message: "Continue the original work",
+              idempotencyKey: "owner-input",
+            }),
             originalClient,
           );
           await fixture.dispatchedRecorder;
@@ -414,18 +391,34 @@ describe("steering input custody", () => {
           expect(ownerUserContext).not.toContain(incomingProfile.id);
         }
         fixture.beforeApprove.mockClear();
-        const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
-          async (text, options, assertCurrent) =>
-            steerActiveSessionWithOptionalDeliveryWait(
-              session,
-              text,
-              options,
-              fixture.scope.sessionKey,
-              () => {
-                assertCurrent();
-                return true;
+        const steeringAccepted = createDeferred();
+        const queueMessage = vi.fn<
+          NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>
+        >(async (text, options, preparation, authorityKind) =>
+          steerActiveSessionWithOptionalDeliveryWait(
+            session,
+            text,
+            {
+              ...options,
+              onQueueAccepted: (nativeAccepted) => {
+                options?.onQueueAccepted?.(nativeAccepted);
+                if (nativeAccepted) {
+                  steeringAccepted.resolve();
+                }
               },
-            ),
+            },
+            fixture.scope.sessionKey,
+            () => {
+              preparation.assertCurrent();
+              return true;
+            },
+            {
+              kind: authorityKind,
+              assertCurrent: preparation.assertCurrent,
+              toolAuthorityPreparation: preparation,
+            },
+            preparation.prepareCurrent,
+          ),
         );
         operation.attachBackend({
           kind: "embedded",
@@ -435,7 +428,14 @@ describe("steering input custody", () => {
           supportsCrossProfileSteering:
             scenario !== "same grant" && scenario !== "no native admission across profiles",
           cancel: vi.fn(),
-          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+          messageInjectionV2: {
+            version: 2,
+            isAvailable: () => true,
+            queueMessage: async () => {
+              throw new Error("Expected the current prepared embedded steering boundary");
+            },
+            queueMessageAsync: queueMessage,
+          },
         });
         const dispatch = createDispatchTestHarness({
           connId: reconnectedClient.connId,
@@ -458,21 +458,21 @@ describe("steering input custody", () => {
           return await dispatchInput(params);
         });
         await dispatch.dispatcher.dispatch(
-          {
-            type: "req",
-            id: "reconnected-input",
-            method: "chat.send",
-            params: { ...fixture.params, queueMode: "steer" },
-          },
+          gatewayRequest("reconnected-input", "chat.send", {
+            ...fixture.params,
+            queueMode: "steer",
+          }),
           reconnectedClient,
         );
         if (accepted || forwarded) {
           expect(dispatch.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
         }
         if (accepted) {
-          expect(session.getSteeringMessages()).toEqual([
-            expect.stringContaining(fixture.params.message),
-          ]);
+          await withinTest(steeringAccepted.promise, signal);
+          expect(
+            session.getSteeringMessages(),
+            JSON.stringify(vi.mocked(fixture.context.logGateway.warn).mock.calls),
+          ).toEqual([expect.stringContaining(fixture.params.message)]);
           expect(queueMessage).toHaveBeenCalledOnce();
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         } else {

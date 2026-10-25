@@ -107,32 +107,45 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const catalogSource = projectMutableSource(catalogState, (state) => state);
   const catalog = createMemo(async () => catalogSource.read().read);
   let pageConnection: CatalogConnection | null = null;
+  let mutationPresentationLifetime = Promise.withResolvers<void>();
+  function retireMutationPresentation() {
+    mutationPresentationLifetime.resolve();
+    mutationPresentationLifetime = Promise.withResolvers<void>();
+  }
   const catalogScope = createMemo(() => {
     catalogSource.revision();
     return pageConnection;
   });
 
-  function createMutation<T>() {
-    const [preview, setPreview] = createOptimistic<{ connection: CatalogConnection; value: T }>();
-    const [saving, setSaving] = createOptimistic(false);
+  function createMutation<T extends string | boolean>() {
+    const presentation = createMemo(() => {
+      const connection = catalogScope();
+      const [preview, setPreview] = createOptimistic<T>();
+      const [saving, setSaving] = createOptimistic(false);
+      return { connection, preview, setPreview, saving, setSaving };
+    });
     const current = () => {
-      const next = preview();
-      return next?.connection === catalogScope() ? next : undefined;
+      const view = presentation();
+      return view.connection === pageConnection ? view.preview() : undefined;
     };
     return {
       current,
-      busy: () => current() !== undefined && saving(),
-      run: action(function* (connection: CatalogConnection, value: T, worker: () => Promise<void>) {
-        setPreview({ connection, value });
-        setSaving(true);
-        try {
-          yield worker();
-        } finally {
-          // Re-enable completed controls; native action settlement retires their preview.
-          if (pageConnection === connection) {
-            setSaving(false);
-          }
+      capture: presentation,
+      busy: () => {
+        const view = presentation();
+        return view.connection === pageConnection && view.saving();
+      },
+      run: action(function* (
+        view: ReturnType<typeof presentation>,
+        value: T,
+        pending: Promise<void>,
+        retired: Promise<void>,
+      ) {
+        if (view.connection === pageConnection) {
+          view.setPreview(() => value);
+          view.setSaving(true);
         }
+        yield Promise.race([pending, retired]);
       }),
     };
   }
@@ -192,6 +205,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
 
   function syncGateway(snapshot: ApplicationGatewaySnapshot) {
     const { client } = snapshot;
+    if (!readGatewayOperatorAccess(snapshot).canAdmin) {
+      retireMutationPresentation();
+    }
     const connected = snapshot.phase === "connected";
     const bootId = snapshot.hello?.server?.bootId;
     const generation = snapshot.pluginCapabilities?.generation;
@@ -212,6 +228,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       connected,
       bootId,
     };
+    retireMutationPresentation();
     pageConnection = connection;
     setEngineOutcome(null);
     setAddonOutcomes((draft) => {
@@ -275,6 +292,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   ) {
     if (!active || pageConnection !== connection || pageCatalogRequest !== request) {
       return;
+    }
+    if (nextCatalog.kind === "ready" && !nextCatalog.mutationAllowed) {
+      retireMutationPresentation();
     }
     catalogState.value = nextCatalog;
     catalogState.read = read;
@@ -346,7 +366,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       delete draft.errors[pluginId];
       delete draft.refreshWarnings[pluginId];
     });
-    await addonMutation.run(connection, enabled, async () => {
+    const view = addonMutation.capture();
+    const retired = mutationPresentationLifetime.promise;
+    const pending = (async () => {
       try {
         const mutation = await runPluginConfigMutation(
           application.runtimeConfig,
@@ -366,7 +388,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         const warnings = "warnings" in result ? (result.warnings ?? []) : [];
         const notice = warnings.join(" ");
         if (addonNoticeOperations.get(pluginId) === noticeOperation) {
-          applyPluginRefreshOutcome(connection, mutation.refreshError, pluginId);
+          if (retired === mutationPresentationLifetime.promise) {
+            applyPluginRefreshOutcome(connection, mutation.refreshError, pluginId);
+          }
           const currentBootId = application.gateway.snapshot.hello?.server?.bootId;
           const keepNotice =
             notice &&
@@ -384,7 +408,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
           await loadCatalog(currentConnection.client, currentConnection);
         }
       } catch (error) {
-        if (pageConnection === connection) {
+        if (pageConnection === connection && retired === mutationPresentationLifetime.promise) {
           setAddonOutcomes((draft) => {
             draft.errors[pluginId] = formatUiError(error);
           });
@@ -394,7 +418,10 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
           addonNoticeOperations.delete(pluginId);
         }
       }
-    });
+    })();
+    // Publish the configuration owner's admission before starting optimistic presentation.
+    await Promise.resolve();
+    await addonMutation.run(view, enabled, pending, retired);
   }
 
   function catalogCanMutate() {
@@ -433,7 +460,9 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     if (!connection || !client) {
       return;
     }
-    await engineMutation.run(connection, engineId, async () => {
+    const view = engineMutation.capture();
+    const retired = mutationPresentationLifetime.promise;
+    const pending = (async () => {
       try {
         const mutation = await runPluginConfigMutation(
           application.runtimeConfig,
@@ -443,20 +472,24 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
             canDispatch: () => canDispatchPluginMutation(connection),
           },
         );
-        applyPluginRefreshOutcome(connection, mutation.refreshError);
+        if (retired === mutationPresentationLifetime.promise) {
+          applyPluginRefreshOutcome(connection, mutation.refreshError);
+        }
         const currentConnection = pageConnection;
         if (currentConnection?.connected && currentConnection.client) {
           await loadCatalog(currentConnection.client, currentConnection);
         }
       } catch (error) {
-        if (pageConnection === connection) {
+        if (pageConnection === connection && retired === mutationPresentationLifetime.promise) {
           setEngineOutcome({
             kind: "error",
             message: formatUiError(error),
           });
         }
       }
-    });
+    })();
+    await Promise.resolve();
+    await engineMutation.run(view, engineId, pending, retired);
   }
 
   function syncSupport(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -520,7 +553,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     active = true;
     const unsubscribe = [
       // Retire pending reads on every connection transition, even within one render.
-      gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
+      application.gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
       // Config receipts retire obsolete support probes before their results can settle.
       runtime.subscribe(() => syncSupport(application.runtimeConfig)),
       // Route receipts retire the plugin's settings scope before its pending reads settle.
@@ -528,6 +561,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     ];
     syncGateway(gateway.read().snapshot);
     return () => {
+      retireMutationPresentation();
       active = false;
       pageConnection = null;
       pageSupportProbe = null;
@@ -539,17 +573,21 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const engineSelection = () => resolveMemoryEngineSelection(props.configObject);
   const displayedEngineSelection = (): MemoryEngineSelection => {
     const next = engineMutation.current();
-    return next ? { kind: "pinned", pluginId: next.value } : engineSelection();
+    return next !== undefined ? { kind: "pinned", pluginId: next } : engineSelection();
   };
   const agentId = () => agentSelection.read().state.selectedId;
-  function readSettingsSnapshot(): ControlUiSettingsSnapshot {
+  function readSettingsSnapshot(panel: "overview" | "memories"): ControlUiSettingsSnapshot | null {
+    const routeData = props.admittedRoute.read();
+    // Retained rendering must not reactivate a plugin after its tab's owner has moved on.
+    if (!routeData || memoryTabForRoute(routeData, application.basePath) !== panel) {
+      return null;
+    }
     // Read authority directly from each live owner.
     const selection = resolveMemoryEngineSelection(
       currentConfigObject(application.runtimeConfig.state) ?? {},
     );
     const id = selectedEngineId(selection);
     const entry = findMemoryPlugin(catalogState.value, id);
-    const routeData = props.admittedRoute.read();
     return {
       agentId: application.settingsAgentSelection.state.selectedId,
       agentsLoading: application.agents.state.agentsLoading,
@@ -573,8 +611,8 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   function subscribeSettings(listener: () => void) {
     settingsListeners.add(listener);
     // The plugin bridge must retire its request scope synchronously, before a batched render.
-    const stops = [agentSelection, gateway, runtime, application.agents, i18n].map((source) =>
-      source.subscribe(listener),
+    const stops = [agentSelection, application.gateway, runtime, application.agents, i18n].map(
+      (source) => source.subscribe(listener),
     );
     return () => {
       settingsListeners.delete(listener);
@@ -590,11 +628,12 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         catalog={catalog()}
         catalogScope={catalogScope()}
         addonOutcomes={addonOutcomes}
-        readAddonExpected={(id) => addonMutations.get(id)?.current()?.value}
+        readAddonExpected={(id) => addonMutations.get(id)?.current()}
         readAddonBusy={(id) => addonMutations.get(id)?.busy() ?? false}
         engineSelection={displayedEngineSelection()}
         enginePending={engineMutation.current() !== undefined}
-        engineBusy={engineMutation.busy() || props.mutationDisabled}
+        engineDisabled={props.mutationDisabled}
+        engineSaving={engineMutation.busy()}
         engineOutcome={engineOutcome()}
         onEngineChange={(nextEngineId) => void changeEngine(nextEngineId, engineSelection())}
         canToggleAddons={
@@ -609,7 +648,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
             <ControlUiSettingsPresentation
               application={application}
               placement={{ section: "memory", panel: "overview" }}
-              readSnapshot={readSettingsSnapshot}
+              readSnapshot={() => readSettingsSnapshot("overview")}
               subscribe={subscribeSettings}
               navigate={navigateTab}
               refreshAgents={() => {
@@ -623,7 +662,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
             <ControlUiSettingsPresentation
               application={application}
               placement={{ section: "memory", panel: "memories" }}
-              readSnapshot={readSettingsSnapshot}
+              readSnapshot={() => readSettingsSnapshot("memories")}
               subscribe={subscribeSettings}
               navigate={navigateTab}
               refreshAgents={() => {

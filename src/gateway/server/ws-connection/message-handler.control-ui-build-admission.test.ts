@@ -1,5 +1,5 @@
 // Raw WebSocket proof for the pre-registration Control UI build admission boundary.
-import type { IncomingMessage } from "node:http";
+import { once } from "node:events";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -17,9 +17,8 @@ import { getPairedDevice, requestDevicePairing } from "../../../infra/device-pai
 import { rawDataToString } from "../../../infra/ws.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
-import { GatewayClientRegistry } from "../client-registry.js";
 import { gatewayTestTextTransport } from "../connection-transport.test-support.js";
-import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
+import { createAdmissionHandler } from "./message-handler.admission.test-support.js";
 
 const {
   handleGatewayRequestMock,
@@ -93,6 +92,7 @@ vi.mock("../../../version.js", async (importOriginal) => {
 });
 
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { gatewayRequest } from "../../request-frame.test-support.js";
 import { attachGatewayWsMessageHandler } from "./message-handler.js";
 
 // A stale Control UI browser still owns a device identity; the build check is
@@ -144,10 +144,6 @@ async function prepareSignedControlUiDevice(nonce: string) {
   };
 }
 
-function createLogger() {
-  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-}
-
 function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
   return Promise.race([
     promise,
@@ -170,30 +166,20 @@ afterEach(() => {
 
 describe("Control UI build admission over WebSocket", () => {
   it.each([
-    {
-      name: "legacy same-origin document",
-      clientBuildId: undefined,
-    },
-    {
-      name: "explicit stale same-origin document",
-      clientBuildId: "stale-build",
-    },
-  ])("rejects a $name before registration or RPC dispatch", async (testCase) => {
-    const { clientBuildId } = testCase;
+    { buildId: undefined, protocol: PROTOCOL_VERSION },
+    { buildId: "stale-build", protocol: PROTOCOL_VERSION },
+    { buildId: "stale-build", protocol: PROTOCOL_VERSION + 1 },
+    { buildId: "stale-build", protocol: PROTOCOL_VERSION - 1 },
+  ])("rejects $protocol / $buildId", async ({ buildId, protocol }) => {
     const connectionWork = new GatewayConnectionWork();
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await withDeadline(
-      new Promise<void>((resolve) => {
-        wss.once("listening", resolve);
-      }),
-      "listen",
-    );
+    await withDeadline(once(wss, "listening"), "listen");
     const address = wss.address();
     if (!address || typeof address === "string") {
       throw new Error("WebSocket test server did not expose a port");
     }
     const origin = `http://127.0.0.1:${address.port}`;
-    let connectedClient: unknown = null;
+    let handler: ReturnType<typeof createAdmissionHandler> | undefined;
     // Hold the injected close until the post-rejection frame reaches the handler;
     // otherwise socket timing can make the no-RPC assertion vacuous.
     const { promise: postRejectionFrameObserved, resolve: releasePostRejectionFrame } =
@@ -205,25 +191,10 @@ describe("Control UI build admission over WebSocket", () => {
         socket.send(JSON.stringify(value));
         return { kind: "sent" } as const;
       };
-      attachGatewayWsMessageHandler({
-        clients: new GatewayClientRegistry(),
+      handler = createAdmissionHandler({
         socket: gatewayTestTextTransport(socket),
-        prepareAuthenticatedReceive: () => ({ ok: true, value: vi.fn() }),
         connectionWork,
-        upgradeReq: request as IncomingMessage,
-        ingressAttribution: {
-          kind: "direct-local",
-          clientIp: "127.0.0.1",
-          rateLimit: {
-            subject: { key: "127.0.0.1" },
-            resetOnSuccess: true,
-          },
-        },
-        connId: "legacy-build-connection",
-        bootId: "control-ui-build-admission-test-boot",
-        remoteAddr: "127.0.0.1",
-        localAddr: "127.0.0.1",
-        requestHost: request.headers.host,
+        upgradeReq: request,
         requestOrigin:
           typeof request.headers.origin === "string" ? request.headers.origin : undefined,
         connectNonce: "legacy-build-nonce",
@@ -232,16 +203,11 @@ describe("Control UI build admission over WebSocket", () => {
           token: "test-token",
           allowTailscale: false,
         }),
-        gatewayMethods: [],
-        events: [],
-        extraHandlers: {},
         buildRequestContext: () =>
           ({
             broadcast: vi.fn(),
             publishPresence: vi.fn(),
           }) as unknown as GatewayRequestContext,
-        nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
-        refreshHealthSnapshot: vi.fn(),
         send,
         close: (code, reason) => {
           if (closeRequested) {
@@ -251,41 +217,20 @@ describe("Control UI build admission over WebSocket", () => {
           void postRejectionFrameObserved.then(() => socket.close(code, reason));
         },
         isClosed: () => socket.readyState >= WebSocket.CLOSING,
-        clearHandshakeTimer: vi.fn(),
-        getClient: () => connectedClient as never,
-        setClient: (next) => {
-          connectedClient = next;
-          return true;
-        },
-        setHandshakeState: vi.fn(),
-        advanceHandshakePhase: vi.fn(),
-        setCloseCause: vi.fn(),
         setLastFrameMeta: (meta) => {
           setLastFrameMetaMock(meta);
           if (meta.method === "health" && meta.id === "post-rejection-rpc") {
             releasePostRejectionFrame();
           }
         },
-        originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
-        logGateway: createLogger() as never,
-        logHealth: createLogger() as never,
-        logWsControl: createLogger() as never,
       });
+      attachGatewayWsMessageHandler(handler);
     });
 
     const device = await prepareSignedControlUiDevice("legacy-build-nonce");
-    const ws = new WebSocket(`ws://127.0.0.1:${address.port}`, {
-      headers: {
-        origin,
-      },
-    });
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}`, { headers: { origin } });
     try {
-      await withDeadline(
-        new Promise<void>((resolve) => {
-          ws.once("open", resolve);
-        }),
-        "open",
-      );
+      await withDeadline(once(ws, "open"), "open");
       const response = withDeadline(
         new Promise<Record<string, unknown>>((resolve) => {
           ws.once("message", (data) => {
@@ -295,42 +240,48 @@ describe("Control UI build admission over WebSocket", () => {
         "connect rejection",
       );
       const closed = new Promise<number>((resolve) => {
-        ws.once("close", (code) => resolve(code));
+        ws.once("close", resolve);
       });
       ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "connect-legacy-build",
-          method: "connect",
-          params: {
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
+        JSON.stringify(
+          gatewayRequest("connect-legacy-build", "connect", {
+            minProtocol: protocol,
+            maxProtocol: protocol,
             client: {
               id: "openclaw-control-ui",
               version: "2026.8.1",
               platform: "web",
               mode: "webchat",
-              ...(clientBuildId ? { buildId: clientBuildId } : {}),
+              ...(buildId ? { buildId } : {}),
             },
             role: "operator",
             caps: [],
             auth: { token: "test-token" },
             device,
-          },
-        }),
+          }),
+        ),
       );
 
       const rejection = await response;
       expect(rejection).toMatchObject({
         ok: false,
         error: {
-          code: ErrorCodes.UNAVAILABLE,
-          message: "protocol mismatch: Control UI updated; reload this page to continue",
+          code: protocol === PROTOCOL_VERSION ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+          message: expect.stringContaining("protocol mismatch"),
           retryable: false,
           details: {
             code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
             gatewayBuildId: "gateway-build",
             reloadRequired: true,
+            ...(protocol === PROTOCOL_VERSION
+              ? {}
+              : {
+                  clientMinProtocol: protocol,
+                  clientMaxProtocol: protocol,
+                  minProtocol: PROTOCOL_VERSION,
+                  maxProtocol: PROTOCOL_VERSION,
+                  expectedProtocol: PROTOCOL_VERSION,
+                }),
           },
         },
       });
@@ -339,16 +290,11 @@ describe("Control UI build admission over WebSocket", () => {
           (rejection.error as { details?: unknown } | undefined)?.details,
         ),
       ).toBe("gateway-build");
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "post-rejection-rpc",
-          method: "health",
-          params: {},
-        }),
+      ws.send(JSON.stringify(gatewayRequest("post-rejection-rpc", "health", {})));
+      expect(await withDeadline(closed, "socket close")).toBe(
+        protocol === PROTOCOL_VERSION ? 1008 : 1002,
       );
-      expect(await withDeadline(closed, "socket close")).toBe(1008);
-      expect(connectedClient).toBeNull();
+      expect(handler?.getClient()).toBeNull();
       expect(await getPairedDevice(device.id)).toBeNull();
       expect(upsertPresenceMock).not.toHaveBeenCalled();
       expect(setLastFrameMetaMock).toHaveBeenCalledWith({

@@ -1,6 +1,6 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { DreamingEntry } from "./dreaming.ts";
 import { DreamingAction, DreamingRead, formatCompactDateTime } from "./view-shared.tsx";
@@ -150,26 +150,25 @@ export function DreamingAdvancedSection(props: DreamingProps) {
           </For>
         </div>
       </div>
-      {props.dreamDiaryActionMessage ? (
-        <div
-          class={[
-            "callout",
-            props.dreamDiaryActionMessage.kind === "success" ? "success" : "danger",
-          ]}
-          role="status"
-        >
-          <div class="row wrap items-center gap-2">
-            <span>{props.dreamDiaryActionMessage.text}</span>
-            {props.dreamDiaryActionArchivePath ? (
-              <DreamingAction
-                label={t("dreaming.wiki.copyArchivePath")}
-                disabled={props.dreamDiaryActionLoading}
-                onClick={() => props.onCopyDreamingArchivePath()}
-              />
-            ) : undefined}
+      <Show when={props.dreamDiaryActionMessage}>
+        {(message) => (
+          <div
+            class={["callout", message().kind === "success" ? "success" : "danger"]}
+            role="status"
+          >
+            <div class="row wrap items-center gap-2">
+              <span>{message().text}</span>
+              {props.dreamDiaryActionArchivePath ? (
+                <DreamingAction
+                  label={t("dreaming.wiki.copyArchivePath")}
+                  disabled={props.dreamDiaryActionLoading}
+                  onClick={() => props.onCopyDreamingArchivePath()}
+                />
+              ) : undefined}
+            </div>
           </div>
-        </div>
-      ) : undefined}
+        )}
+      </Show>
 
       <DreamingRead on={props.selectedAgentId}>
         <div class="dreams-advanced__sections">

@@ -2,15 +2,20 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import { runtimeAuthProfileRowsCache } from "../agents/auth-profiles/runtime-persisted-rows.js";
 import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
 } from "../agents/prepared-model-runtime-generation-scope.js";
 import {
+  beginPreparedModelRuntimePluginDrain,
   loadPublishedGatewayReplyDispatchRuntime,
   registerPreparedModelRuntimePublicationListener,
 } from "../agents/prepared-model-runtime.js";
+import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
@@ -99,17 +104,18 @@ async function expectCompleted(rpc: ReturnType<typeof sendAgentRpc>) {
   await expectStatus(rpc.final, "ok");
 }
 
-async function mockPublication(
-  agentDir: string,
-  result: () => Promise<{ agentDir: string; wrote: false }>,
-) {
+async function mockPublication(agentDir: string, result: () => Promise<void>) {
   const models = await import("../agents/models-config.js");
   const ensure = models.ensureOpenClawModelsJson;
   return vi
     .spyOn(models, "ensureOpenClawModelsJson")
-    .mockImplementation(async (config, dir, options) =>
-      dir === agentDir ? await result() : await ensure(config, dir, options),
-    );
+    .mockImplementation(async (config, dir, options) => {
+      if (dir !== agentDir) {
+        return await ensure(config, dir, options);
+      }
+      await result();
+      return {};
+    });
 }
 
 function expectRuntime(
@@ -155,6 +161,40 @@ afterEach(async () => {
   const outcomes = await Promise.all(rpcDrains.splice(0));
   testState.agentsConfig = undefined;
   expect(outcomes.flat().every((outcome) => outcome.status === "fulfilled")).toBe(true);
+});
+
+test("keeps queued auth publication readable after startup readers close", async () => {
+  const agentId = "auth-startup";
+  const before = await prepareAuthDispatchAgents(agentId);
+  // A persisted store makes publication read the real SQLite catalog.
+  saveAuthProfileStore({ version: 1, profiles: {} }, before.agentDir);
+  await prepareGatewayReplyRuntimeForTest({ force: true });
+  const readers = createSqliteReadOnlyWorkerScope();
+  const drain = beginPreparedModelRuntimePluginDrain();
+  const settled = createDeferred<{ phase: string; error?: unknown }>();
+  const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+    if (event.phase === "published" || event.phase === "failed") {
+      settled.resolve(event);
+    }
+  });
+  try {
+    readers.run(() => refreshAuth(before.agentDir, "synthetic-startup-key"));
+    // Recovery can leave no resident rows; publication must also work on a cold read.
+    runtimeAuthProfileRowsCache.invalidateRows(resolveAuthProfileDatabasePath(before.agentDir));
+    await readers.close();
+    // Recovery ends before the independently queued publication can run.
+    drain.release();
+    expect(await settled.promise).toEqual({ phase: "published" });
+    expect(await rpcReq(gatewaySuite.ws, "models.list", { agentId })).toMatchObject({ ok: true });
+    expect(await rpcReq(gatewaySuite.ws, "sessions.list", {})).toMatchObject({ ok: true });
+    const runId = "idem-agent-auth-startup";
+    await expectCompleted(sendAgentRpc(agentId, runId));
+    expect(agentCommandCallsFor(runId)).toHaveLength(1);
+  } finally {
+    unregister();
+    drain.release();
+    await readers.close();
+  }
 });
 
 test("keeps an accepted run on its admitted runtime generation", async () => {
@@ -260,7 +300,7 @@ test("aborts one affected waiter without cancelling shared auth publication", as
       }
       return pending;
     });
-  const publicationGate = createDeferred<{ agentDir: string; wrote: false }>();
+  const publicationGate = createDeferred();
   const ensureSpy = await mockPublication(before.agentDir, () => publicationGate.promise);
   const published = observePublication("published");
   let participantRecorded = false;
@@ -311,7 +351,7 @@ test("aborts one affected waiter without cancelling shared auth publication", as
     );
     expect(waiting.hasResponse()).toBe(false);
 
-    publicationGate.resolve({ agentDir: before.agentDir, wrote: false });
+    publicationGate.resolve();
     await published.promise;
     const after = await loadPublishedGatewayReplyDispatchRuntime({ agentId: affectedAgentId });
     expect(after).not.toBe(before.runtime);
@@ -322,7 +362,7 @@ test("aborts one affected waiter without cancelling shared auth publication", as
     await expectCompleted(subsequent);
     expect(agentCommandCallsFor(subsequentRunId)).toHaveLength(1);
   } finally {
-    publicationGate.resolve({ agentDir: before.agentDir, wrote: false });
+    publicationGate.resolve();
     published.unregister();
     ensureSpy.mockRestore();
     try {

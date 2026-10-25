@@ -2,6 +2,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import type { RouteLocation } from "@openclaw/uirouter";
 import { onCleanup } from "solid-js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -50,6 +51,12 @@ export function createActivityPageState(context: ApplicationContext) {
   let presencePayload: PresencePayload | undefined;
   let sessionActivityRevision = -1;
   let inspectorAbort: AbortController | null = null;
+  let inspectorRead:
+    | {
+        kind: "executions" | "decisions" | "refresh";
+        completion: ReturnType<typeof createDeferredCore<void>>;
+      }
+    | undefined;
   let inspectorClient: GatewayBrowserClient | null = null;
   let inspectorEpoch = 0;
   let inspectorSelectorKey: string | null = null;
@@ -65,6 +72,7 @@ export function createActivityPageState(context: ApplicationContext) {
     routeData,
     presentedRoute,
     runInspector,
+    inspectorRead,
     presencePayload,
     sessionActivity,
   }));
@@ -161,6 +169,8 @@ export function createActivityPageState(context: ApplicationContext) {
 
   function cancelInspectorRequest() {
     inspectorEpoch += 1;
+    inspectorRead?.completion.resolve();
+    inspectorRead = undefined;
     inspectorAbort?.abort();
     inspectorAbort = null;
   }
@@ -237,6 +247,10 @@ export function createActivityPageState(context: ApplicationContext) {
     const epoch = inspectorEpoch;
     const abort = new AbortController();
     inspectorAbort = abort;
+    const read = { kind: pageKind, completion: createDeferredCore() };
+    inspectorRead = read;
+    // Inspection may settle after its route retires; preserve its error for an active reader.
+    void read.completion.promise.catch(() => undefined);
     inspectorClient = client;
     const pageStatus = pageKind === "decisions" ? "decisionPageStatus" : "executionPageStatus";
     runInspector = previousState
@@ -288,6 +302,7 @@ export function createActivityPageState(context: ApplicationContext) {
         const merged = mergeDecisionPage(previousState.result, result);
         if (!merged && pageKind === "decisions") {
           runInspector = { ...previousState, decisionPageStatus: "error" };
+          read.completion.reject(new Error("The decision page no longer matches this execution."));
           return;
         }
         cursors = merged
@@ -335,11 +350,13 @@ export function createActivityPageState(context: ApplicationContext) {
               status: "error",
               recovery: decisionCursor && isExpiredDecisionCursorError(error) ? "restart" : "retry",
             };
+      read.completion.reject(error);
     } finally {
       if (inspectorAbort === abort) {
         inspectorAbort = null;
         publish();
       }
+      read.completion.resolve();
     }
   }
 

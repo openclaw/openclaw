@@ -1,39 +1,34 @@
 import "../../worker-heap-flag.mjs";
 import { channel } from "node:diagnostics_channel";
-import { basename } from "node:path";
-import { fileURLToPath } from "node:url";
 import { isMainThread, MessagePort, receiveMessageOnPort, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
+import type {
+  DiagnosticMemoryUsage,
+  WorkerGcStorm,
+  WorkerMemorySample,
+} from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
+import { MAX_DIAGNOSTIC_WORKER_SLOTS, workerScriptName } from "./worker-diagnostic-script.js";
 import {
-  MAX_DIAGNOSTIC_WORKER_SLOTS,
-  normalizeDiagnosticWorkerScript,
-} from "./worker-diagnostic-script.js";
-import type { WorkerGcStorm } from "./worker-memory.js";
-import {
+  canObserveWorkerMessages,
   recordWorkerMessage,
   observeWorkerMessage,
   workerMessagePayloadBytes,
 } from "./worker-message-metrics.js";
 import type { WorkerPoolClass } from "./worker-pool-sizing.js";
+import {
+  collectPostgresBridgeCounters,
+  countPostgresBridges,
+  countPostgresPoolSelfRoots,
+  readPostgresBridgeCounters,
+  type PostgresBridgeCounter,
+} from "./worker-postgres-bridge-census.js";
 
 const gcStorm = channel("openclaw.code-mode.gc-storm");
-
-type WorkerMemorySample = Pick<
-  NodeJS.MemoryUsage,
-  "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
-> & {
-  heapSizeLimitBytes?: number;
-  oldGenerationAfterGcBytes?: number;
-  heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
-  retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
-  gc?: GcSample[];
-};
 
 type WorkerCpuHandle = {
   readonly threadId: number;
@@ -64,24 +59,13 @@ type WorkerSource = {
   };
   heapPending?: boolean;
   memoryPort?: MessagePort;
+  postgresBridgeCounters?: readonly PostgresBridgeCounter[];
   memoryPending?: boolean;
   memoryUnavailable?: boolean;
   memoryFlush?: ReturnType<typeof createRetainedOperation<void>>;
 };
 
 export type { WorkerRetirementReason } from "@openclaw/worker-runtime";
-
-function workerScriptName(filename: string | URL, evalSource = false): string {
-  // Never retain eval source, arbitrary filenames, or installation paths in diagnostics.
-  if (evalSource || (filename instanceof URL && filename.protocol !== "file:")) {
-    return "other";
-  }
-  const name = basename(filename instanceof URL ? fileURLToPath(filename) : filename).replace(
-    /\.[cm]?[jt]s$/u,
-    ".js",
-  );
-  return normalizeDiagnosticWorkerScript(name);
-}
 
 // Native exit, not pool retirement or Gateway reset, ends resource-counter ownership.
 // Shared chunks must see the same workers; this registry never starts a sampler.
@@ -93,6 +77,9 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
     gcObserver: undefined as
       | ((samples: GcSample[], thread: string, workerSlot?: number) => void)
       | undefined,
+    postgresBridgeCount: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+    postgresPoolSelfRootCount: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+    postgresBridgeObservers: new Set<() => void>(),
     revision: 0,
     nextPoolId: 0,
     poolIds: new WeakMap<object, number>(),
@@ -121,7 +108,16 @@ export function trackNativeWorkerForCpu(
   // Register explicitly on Bun; Node may already have reported the Worker during construction.
   trackWorker(worker);
   const source = trackedWorkers.workers.get(worker)!;
-  source.script = workerScriptName(filename, evalSource);
+  const script = workerScriptName(filename, evalSource);
+  if (source.script !== script) {
+    if (source.script === "bridge.worker.js") {
+      Atomics.sub(trackedWorkers.postgresBridgeCount, 0, 1);
+    }
+    if (script === "bridge.worker.js") {
+      Atomics.add(trackedWorkers.postgresBridgeCount, 0, 1);
+    }
+    source.script = script;
+  }
   if (source.script === "code-mode-node.worker.js" && source.workerSlot === undefined) {
     // Reuse slots only after native exit; overflow keeps the script-level attribution.
     const occupied = new Set([...trackedWorkers.workers.values()].map((entry) => entry.workerSlot));
@@ -136,6 +132,52 @@ export function trackNativeWorkerForCpu(
   source.lifecycleMessages =
     source.script === "openclaw-state-lease-heartbeat.worker.js" ||
     source.script === "gateway-state-owner-heartbeat.worker.js";
+}
+
+export function getTrackedPostgresBridgeCounters(): PostgresBridgeCounter[] {
+  return collectPostgresBridgeCounters(
+    trackedWorkers.postgresBridgeCount,
+    trackedWorkers.workers.values(),
+    trackedWorkers.postgresPoolSelfRootCount,
+  );
+}
+
+/** Count once per thread, including a pool restarted after explicit cleanup. */
+export function recordPostgresPoolSelfRoot(): boolean {
+  return Atomics.compareExchange(trackedWorkers.postgresPoolSelfRootCount, 0, 0, 1) === 0;
+}
+
+export function observeTrackedPostgresBridgeCounters(observer: () => void): () => void {
+  trackedWorkers.postgresBridgeObservers.add(observer);
+  return () => trackedWorkers.postgresBridgeObservers.delete(observer);
+}
+
+function publishPostgresBridgeCounters(): void {
+  for (const observer of trackedWorkers.postgresBridgeObservers) {
+    observer();
+  }
+}
+
+function receivePostgresBridgeCounters(source: WorkerSource, value: unknown): void {
+  const next = readPostgresBridgeCounters(value);
+  const previous = source.postgresBridgeCounters;
+  // Native identity owns one shared counter; cloned wrappers do not change the topology.
+  if (
+    next.length === (previous?.length ?? 0) &&
+    next.every((counter, index) => counter.threadId === previous?.[index]?.threadId)
+  ) {
+    return;
+  }
+  source.postgresBridgeCounters = next;
+  publishPostgresBridgeCounters();
+}
+
+function getTrackedPostgresPoolCounts() {
+  const counters = getTrackedPostgresBridgeCounters();
+  return {
+    postgresBridgeCount: countPostgresBridges(counters),
+    postgresPoolSelfRootCount: countPostgresPoolSelfRoots(counters),
+  };
 }
 
 /** Pool identity follows its live Workers without retaining the pool itself. */
@@ -195,6 +237,7 @@ export function getTrackedWorkerPoolSnapshot() {
   }
   return {
     workerCount: trackedWorkers.workers.size,
+    ...getTrackedPostgresPoolCounts(),
     workerPoolCount: pools.size,
     workerPools: [...pools.values()]
       .toSorted((a, b) => b.workerCount - a.workerCount || a.poolId - b.poolId)
@@ -210,9 +253,15 @@ function forgetWorker(worker: WorkerCpuHandle): void {
   const counts = countWorkerStart(source);
   const reason = source.retirementReason ?? "exit";
   counts.retired.set(reason, (counts.retired.get(reason) ?? 0) + 1);
+  if (source.script === "bridge.worker.js") {
+    Atomics.sub(trackedWorkers.postgresBridgeCount, 0, 1);
+  }
   source.memoryFlush?.resolve();
   source.memoryPort?.close();
   trackedWorkers.workers.delete(worker);
+  if (source.postgresBridgeCounters) {
+    publishPostgresBridgeCounters();
+  }
   trackedWorkers.revision++;
 }
 
@@ -278,29 +327,6 @@ export function flushWorkerDiagnostics(worker: WorkerCpuHandle, reason: WorkerRe
   return completion.operation;
 }
 
-function canObserveWorkerMessages(worker: Worker): boolean {
-  if (!Object.isExtensible(worker)) {
-    return false;
-  }
-  for (const method of ["postMessage", "emit"]) {
-    let owner: object | null = worker;
-    while (owner) {
-      const descriptor = Object.getOwnPropertyDescriptor(owner, method);
-      if (descriptor) {
-        if (!descriptor.writable || typeof descriptor.value !== "function") {
-          return false;
-        }
-        break;
-      }
-      owner = Reflect.getPrototypeOf(owner);
-    }
-    if (!owner) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function trackWorker(worker: WorkerCpuHandle): void {
   if (trackedWorkers.workers.has(worker)) {
     return;
@@ -355,21 +381,25 @@ function trackWorker(worker: WorkerCpuHandle): void {
     };
   }
   let pending = false;
+  // Reuse reactions instead of allocating an async frame for every sample.
+  const finishCpuUsage = (usage: NodeJS.CpuUsage | undefined) => {
+    pending = false;
+    return usage;
+  };
+  const failCpuUsage = () => finishCpuUsage(undefined);
   const source: WorkerSource = {
     script: "other",
-    async cpuUsage() {
+    cpuUsage() {
       // Worker.cpuUsage cannot cancel an interrupt blocked in native work. Keep
       // at most one outstanding request even across sampler resets/restarts.
       if (pending) {
-        return undefined;
+        return Promise.resolve(undefined);
       }
       pending = true;
       try {
-        return await worker.cpuUsage();
+        return worker.cpuUsage().then(finishCpuUsage, failCpuUsage);
       } catch {
-        return undefined;
-      } finally {
-        pending = false;
+        return Promise.resolve(failCpuUsage());
       }
     },
   };
@@ -391,10 +421,19 @@ function pruneExitedWorkers(): void {
 
 export function getTrackedWorkerCpuSources(): {
   revision: number;
+  currentRevision: () => number;
   workers: { cpuUsage: () => Promise<NodeJS.CpuUsage | undefined> }[];
 } {
+  return {
+    revision: getTrackedWorkerCpuRevision(),
+    currentRevision: getTrackedWorkerCpuRevision,
+    workers: [...trackedWorkers.workers.values()],
+  };
+}
+
+function getTrackedWorkerCpuRevision(): number {
   pruneExitedWorkers();
-  return { revision: trackedWorkers.revision, workers: [...trackedWorkers.workers.values()] };
+  return trackedWorkers.revision;
 }
 
 async function refreshWorkerHeap(worker: WorkerCpuHandle, source: WorkerSource): Promise<void> {
@@ -506,6 +545,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     port.close();
     return true;
   }
+  receivePostgresBridgeCounters(source, message.postgresBridgeCounters);
   source.memoryPort = port;
   source.memoryPending = true;
   const close = () => {
@@ -523,8 +563,14 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
         | { flushed: true; heapUsed: number }
         | { gc: GcSample[] }
         | { gcStorm: WorkerGcStorm }
+        | { postgresBridgeCounters: PostgresBridgeCounter[] }
         | { retireWorkerId: string },
     ) => {
+      if ("postgresBridgeCounters" in record) {
+        receivePostgresBridgeCounters(source, record.postgresBridgeCounters);
+        recordWorkerMessage("memory", "from_worker");
+        return;
+      }
       if ("flushed" in record) {
         recordWorkerMessage("memory", "from_worker", 8);
         if (source.taskMetrics) {
@@ -546,44 +592,14 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
         // Capture registry-owned identity before a native exit can free this slot.
         const workerThreadId = worker.threadId;
         const workerSlot = source.workerSlot;
-        void import("../logging/subsystem.js").then(async ({ createSubsystemLogger }) => {
-          const { profiles, ...storm } = record.gcStorm;
-          const metadata = {
-            ...storm,
-            workerThreadId,
-            workerSlot,
-          };
-          const log = createSubsystemLogger("agents/code-mode");
-          if (profiles) {
-            try {
-              const { writeWorkerGcProfiles } =
-                await import("../logging/diagnostic-worker-gc-profile.js");
-              const profileFiles = await writeWorkerGcProfiles(profiles);
-              log.warn("Code Mode worker GC storm", { ...metadata, profileFiles });
-            } catch {
-              log.warn("Code Mode worker GC storm", {
-                ...metadata,
-                captureStatus: "unavailable",
-                captureReason: "profile-write-failed",
-              });
-            }
-          } else {
-            log.warn("Code Mode worker GC storm", metadata);
-          }
-          if (storm.captureStatus === "requested") {
-            // Workers cannot query process-wide tracing. Admit here before enabling their profiler.
-            const { getEnabledCategories } = await import("node:trace_events");
-            if (getEnabledCategories()) {
-              log.warn("Code Mode worker GC storm", {
-                ...metadata,
-                captureStatus: "unavailable",
-                captureReason: "tracing-active",
-              });
-            } else if (source.memoryPort === port) {
+        void import("../logging/diagnostic-worker-gc-profile.js").then(
+          async ({ reportWorkerGcStorm }) => {
+            const storm = await reportWorkerGcStorm(record.gcStorm, workerThreadId, workerSlot);
+            if (storm && source.memoryPort === port) {
               port.postMessage({ captureGcProfile: storm });
             }
-          }
-        });
+          },
+        );
         return;
       }
       // Known numeric payload bytes; object envelopes and diagnostic labels are excluded.
@@ -647,6 +663,7 @@ export function getTrackedWorkerLifecycleSnapshot() {
   pruneExitedWorkers();
   return {
     workerCount: trackedWorkers.workers.size,
+    ...getTrackedPostgresPoolCounts(),
     workerLifecycle: [...trackedWorkers.lifecycle].map(([script, counts]) => ({
       script,
       started: counts.started,

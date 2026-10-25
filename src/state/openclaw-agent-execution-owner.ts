@@ -6,7 +6,10 @@ import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
-import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
+import {
+  isSqliteWorkerError,
+  retainSqliteWorkerErrorCode,
+} from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
   type DatabasePathIdentity,
@@ -117,7 +120,7 @@ export function createAgentDatabaseExecution(
   const reportCleanupFailure = (error: unknown) => {
     // Diagnostic failures cannot turn a committed command into a replayable failure.
     try {
-      log.warn(`Agent database idle cleanup failed: ${formatErrorMessage(error)}`);
+      log.warn(`Agent database cleanup failed: ${formatErrorMessage(error)}`);
     } catch {
       // The resource owner still retains the cleanup failure.
     }
@@ -286,12 +289,24 @@ export function createAgentDatabaseExecution(
             await closeNative(current);
           }
         } catch (cleanupError) {
-          throw retainSqliteWorkerErrorCode(
-            new AggregateError([error, cleanupError], "Agent operation and cleanup failed", {
-              cause: error,
+          reportCleanupFailure(cleanupError);
+          const primary = error instanceof Error ? error : new Error(String(error));
+          const failure = Object.assign(
+            new Error(primary.message, {
+              cause: new AggregateError(
+                [error, cleanupError],
+                "Agent operation and cleanup failed",
+                {
+                  cause: error,
+                },
+              ),
             }),
-            error,
+            { name: primary.name },
           );
+          // Cleanup failures preserve the primary presentation without granting a retry.
+          throw isSqliteWorkerError(error, "outcome-unknown")
+            ? retainSqliteWorkerErrorCode(failure, error)
+            : failure;
         }
       }
       if (contended) {

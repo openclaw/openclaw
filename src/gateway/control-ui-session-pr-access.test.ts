@@ -585,6 +585,8 @@ it("retires cached branch data after canonical replacement and hydrates the new 
 it.each([
   "archived",
   "unchanged",
+  "row refresh",
+  "source",
   "grant",
   "selection",
   "literal-global",
@@ -602,7 +604,6 @@ it.each([
       if (change === "literal-global-visibility") {
         await f.seed("global", f.profile.id, { sessionId: "separate-global-row" });
       }
-      const replacementKey = `${key}:replacement`;
       const projection = getSessionRowProjection(f.context);
       if (change === "archived") {
         if (!projection) {
@@ -612,10 +613,6 @@ it.each([
         sessionChanges.emit({ all: true, scope: "catalog" });
         await projection.ensureMaterialized();
         expect(projection.capture({ agentId: "main", key })?.materialized).toBeUndefined();
-      }
-      if (change === "selection") {
-        await f.seed(replacementKey, f.other.id);
-        await projection?.ensureMaterialized();
       }
       const mutation =
         change === "literal-global" || change === "archived"
@@ -666,26 +663,29 @@ it.each([
         );
         if (mutation === "store closure") {
           await closeOpenClawAgentDatabaseByPathAsync((await sessionSource(key)).path);
+        } else if (mutation === "row refresh") {
+          sessionChanges.emit({ agentId: "main", sessionKey: key, scope: "session-entry" });
+          await projection?.ensureMaterialized();
+        } else if (mutation === "source") {
+          await f.seed(key, f.other.id, { spawnedCwd: "/synthetic/replacement" });
+          await projection?.ensureMaterialized();
         } else if (mutation === "selection") {
           if (!projection) {
             throw new Error("Missing session projection for selection replacement");
           }
-          const capture = projection.capture.bind(projection);
-          const replacement = capture({ agentId: "main", key: replacementKey });
-          expect(replacement).toBeDefined();
-          vi.spyOn(projection, "capture").mockImplementation((query) =>
-            query.key === key ? replacement : capture(query),
-          );
+          await f.seed(key, f.other.id, { sessionId: "replacement-selection" });
+          await projection.ensureMaterialized();
         } else {
           await f.changeReader(mutation, key);
         }
         held.resolve(result);
         await request;
         expect(load).toHaveBeenCalledOnce();
+        const allowed = mutation === "unchanged" || mutation === "row refresh";
         expect(respond).toHaveBeenCalledExactlyOnceWith(
-          mutation === "unchanged",
-          mutation === "unchanged" ? result : undefined,
-          mutation === "unchanged"
+          allowed,
+          allowed ? result : undefined,
+          allowed
             ? undefined
             : expect.objectContaining({
                 code: "UNAVAILABLE",
@@ -712,6 +712,24 @@ it.each(["local", "repository"] as const)(
       const repositories = getSessionRepositoryWorkspaceStore();
       const repository = source === "repository" ? await f.seedRepository() : undefined;
       await f.subscribe();
+      const read = createControlUiSessionPrRead({
+        client: f.client,
+        sessionKey,
+        getRuntimeConfig: f.context.getRuntimeConfig,
+        getSessionRowProjection: () => getSessionRowProjection(f.context),
+        isCurrentClient: () => !f.client.invalidated,
+      })!;
+      const target = await read();
+      expect(target).toBeDefined();
+      const sorts = vi.spyOn(Array.prototype, "sort");
+      try {
+        for (let index = 0; index < 3; index++) {
+          target!.assertCurrent!();
+        }
+        expect(sorts).not.toHaveBeenCalled();
+      } finally {
+        sorts.mockRestore();
+      }
       const statements = observeSqliteReadSql(StatementSync.prototype);
       try {
         for (let index = 1; index < 20; index++) {
@@ -739,9 +757,30 @@ it.each(["local", "repository"] as const)(
       }
       if (repository) {
         const previousCache = f.load.mock.calls[0]?.[1];
-        await repositories.delete({ workspaceId: repository.workspaceId, assertCurrent: () => {} });
+        expect((await read())?.source).toMatchObject({ repo: "publication" });
         const unavailable = { pullRequests: [], rateLimited: false };
-        f.load.mockResolvedValue(unavailable);
+        f.load.mockImplementation(async (_params, _signal, current) =>
+          current.target.source === null ? unavailable : snapshot,
+        );
+        // Read before background preparation can replace the invalidated repository facts.
+        const notifiedRead = vi.fn(read);
+        const stop = sessionChanges.subscribe((change) => {
+          if ("sessionKey" in change && change.sessionKey === sessionKey) {
+            void notifiedRead();
+          }
+        });
+        try {
+          await repositories.delete({
+            workspaceId: repository.workspaceId,
+            assertCurrent: () => {},
+          });
+          expect(notifiedRead).toHaveBeenCalledOnce();
+          expect((await notifiedRead.mock.results[0]!.value)?.source).toBeNull();
+        } finally {
+          stop();
+        }
+        // Settle the replacement load, then verify another poll emits no stale snapshot.
+        await f.subscriptions.pollNow();
         await f.subscriptions.pollNow();
         expect(previousCache?.aborted).toBe(true);
         expect(frames(f.socket)).toEqual([
@@ -752,6 +791,29 @@ it.each(["local", "repository"] as const)(
     });
   },
 );
+
+it("preserves scope order and duplicate multiplicity when checking a retained reader", async () => {
+  await withFixture("operator.admin", async (f) => {
+    f.client.connect.scopes = ["operator.read", "operator.write", "operator.read"];
+    const read = createControlUiSessionPrRead({
+      client: f.client,
+      sessionKey,
+      getRuntimeConfig: f.context.getRuntimeConfig,
+      getSessionRowProjection: () => getSessionRowProjection(f.context),
+      isCurrentClient: () => !f.client.invalidated,
+    })!;
+    const target = await read();
+    expect(target).toBeDefined();
+    expect(f.client.connect.scopes).toEqual(["operator.read", "operator.write", "operator.read"]);
+    f.client.connect.scopes = ["operator.write", "operator.read", "operator.read"];
+    expect(() => target!.assertCurrent!()).not.toThrow();
+    expect(await read()).toBe(target);
+    expect(f.client.connect.scopes).toEqual(["operator.write", "operator.read", "operator.read"]);
+    f.client.connect.scopes.pop();
+    expect(() => target!.assertCurrent!()).toThrow("Session pull-request target changed");
+    expect(await read()).toBeUndefined();
+  });
+});
 
 it("keeps warm default-loader SQL constant as readers join without a native row transaction", async () => {
   const provider = vi.fn<typeof fetch>(async (input) => {
@@ -778,7 +840,7 @@ it("keeps warm default-loader SQL constant as readers join without a native row 
       expect(preparation).toHaveBeenCalledTimes(1);
       preparation.mockClear();
       await f.subscriptions.replace(f.client.connId!, [sessionKey]);
-      expect(preparation).toHaveBeenCalledTimes(2);
+      expect(preparation).not.toHaveBeenCalled();
     } finally {
       preparation.mockRestore();
     }

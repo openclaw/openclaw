@@ -11,15 +11,11 @@ import {
 import { createProviderLocalServiceTestFixture } from "./provider-local-service.test-support.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-class LifecycleCreationCaller {
-  readonly prompt = Buffer.alloc(1024 * 1024, "synthetic");
-  constructor(readonly label: string) {}
-}
-const callerContext = new AsyncLocalStorage<LifecycleCreationCaller>();
+const callerContext = new AsyncLocalStorage<{ label: string; prompt: Buffer }>();
 const references: { label: string; reference: WeakRef<object> }[] = [];
 
 async function completedCaller(label: string, operation: () => Promise<void> | void) {
-  const caller = new LifecycleCreationCaller(label);
+  const caller = { label, prompt: Buffer.alloc(1024 * 1024, "synthetic") };
   references.push(
     { label, reference: new WeakRef(caller) },
     { label: `${label} prompt`, reference: new WeakRef(caller.prompt) },

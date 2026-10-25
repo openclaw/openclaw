@@ -19,12 +19,15 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
 import { getPluginMetadataSnapshotCache, retirePluginCache } from "../plugins/plugin-cache.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { applySkillEnvOverridesFromSnapshot } from "../skills/runtime/env-overrides.js";
 import * as agentAuthDiscovery from "./agent-auth-discovery.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { getPreparedModelCatalogWorkerPoolSnapshot } from "./prepared-model-catalog-worker.js";
 import { writeFixturePlugin, PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
@@ -97,6 +100,69 @@ const workerFailureWarnings = () =>
 describe("Gateway catalog worker pool", () => {
   beforeEach(() => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
+  });
+  it("keeps Gateway catalogs available across temporary skill environments", async () => {
+    const observed = observeWorkers();
+    try {
+      const fixture = await createFleetFixture(observed.subscribe, true, { agentCount: 2 });
+      await Promise.all(
+        fixture.snapshots.map((snapshot) =>
+          loadPreparedModelRuntimeAuth(snapshot, { providerIds: [PROVIDER_ID] }),
+        ),
+      );
+      const agentId = fixture.agentIds[0]!;
+      const sibling = fixture.snapshots[1]!;
+      const metadata = fixture.snapshots[0]!.metadataSnapshot;
+      const skillKey = "catalog-env-fixture";
+      const envKey = "OPENCLAW_CATALOG_SKILL_FIXTURE";
+      vi.stubEnv(envKey, undefined);
+      const refresh = async () => {
+        await refreshPreparedModelRuntimeSnapshots(fixture.config, {
+          catalogMode: "static",
+          allowGatewaySubagentBinding: true,
+          agentIds: new Set([agentId]),
+          pluginMetadataSnapshot: metadata,
+        });
+        const current = getPreparedModelRuntimeSnapshot({
+          agentId,
+          agentDir: fixture.entries[agentId]!.agentDir,
+          config: fixture.config,
+        })!;
+        await expect(
+          loadPreparedModelRuntimeAuth(current, { providerIds: [PROVIDER_ID] }),
+        ).resolves.toMatchObject({ authStore: { version: 1 } });
+        await loadCompletedFullCatalog(current);
+        const catalog = await loadGatewayModelCatalogSnapshot({
+          agentId,
+          agentDir: current.agentDir,
+          workspaceDir: fixture.entries[agentId]!.workspace,
+          getConfig: () => fixture.config,
+          readOnly: false,
+          refreshFullCatalog: true,
+        });
+        expect(catalog.entries).toContainEqual(
+          expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+        );
+        expect(sibling.isCurrent()).toBe(true);
+      };
+      for (const value of ["first-turn", "second-turn"]) {
+        const restore = applySkillEnvOverridesFromSnapshot({
+          snapshot: { prompt: "", skills: [{ name: skillKey }] },
+          config: { skills: { entries: { [skillKey]: { env: { [envKey]: value } } } } },
+        });
+        try {
+          expect(process.env[envKey]).toBe(value);
+          await refresh();
+          expect(process.env[envKey]).toBe(value);
+        } finally {
+          restore();
+        }
+        await refresh();
+      }
+      expect(observed.spawned).toHaveLength(1);
+    } finally {
+      observed.close();
+    }
   });
   it("republishes failed catalog borrowers before replacing their source worker", async () => {
     let firstWorkerStderr = "";
@@ -405,15 +471,9 @@ describe("Gateway catalog worker pool", () => {
                 ? fixture.config
                 : {
                     ...fixture.config,
-                    models: {
-                      providers: {
-                        [PROVIDER_ID]: {
-                          baseUrl: "https://replacement-catalog.invalid/v1",
-                          api: "openai-completions",
-                          models: [],
-                        },
-                      },
-                    },
+                    ...configFor(PROVIDER_ID, "https://replacement-catalog.invalid/v1", {
+                      api: "openai-completions",
+                    }),
                   };
             await refreshPreparedModelRuntimeSnapshots(config, {
               catalogMode: "static",
@@ -718,12 +778,11 @@ describe("Gateway catalog worker pool", () => {
           pluginMetadataSnapshot: previous.metadataSnapshot,
         });
         void publication.catch(() => {});
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           preparing.promise,
-          publication.then(() => {
-            throw new Error("Publication completed before its credential preparation");
-          }),
-        ]);
+          publication,
+          "Publication completed before its credential preparation",
+        );
         if (previousCatalog) {
           fs.rmSync(`${fixture.marker}.hold`);
           await expect(previousCatalog).rejects.toThrow("superseded");
@@ -818,12 +877,11 @@ describe("Gateway catalog worker pool", () => {
             loadPreparedModelRuntimeAuth(replacement(), { providerIds: [] }),
           );
           try {
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               retiring.promise,
-              request.then(() => {
-                throw new Error("replacement completed before retiring its previous worker");
-              }),
-            ]);
+              request,
+              "replacement completed before retiring its previous worker",
+            );
             closing = closePreparedModelRuntimeSnapshots();
             resumeTermination.resolve();
             await expect(request).rejects.toThrow("process lifetime closed");

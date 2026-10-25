@@ -111,10 +111,6 @@ export class RestScheduler<TData> {
     return bucket;
   }
 
-  private isBucketRateLimited(bucket: BucketState<TData>, now = Date.now()): boolean {
-    return bucket.remaining === 0 && bucket.resetAt > now;
-  }
-
   private bindRouteToBucket(routeKey: string, bucketKey: string): BucketState<TData> {
     const target = this.getBucket(bucketKey);
     target.routeKeys.add(routeKey);
@@ -152,7 +148,7 @@ export class RestScheduler<TData> {
     if (response.status !== 429) {
       return;
     }
-    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response, 1) * 1000);
+    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response) * 1000);
     const retryAt = resolveRateLimitResetAt(retryAfterMs);
     if (retryAt === undefined) {
       return;
@@ -186,7 +182,7 @@ export class RestScheduler<TData> {
       },
       resolveTimerTimeoutMs(delayMs, 0, 0),
     );
-    this.drainTimer.unref?.();
+    this.drainTimer.unref();
   }
 
   private drainQueues(): void {
@@ -215,7 +211,20 @@ export class RestScheduler<TData> {
     if (this.globalRateLimitUntil > now) {
       return { waitMs: this.globalRateLimitUntil - now };
     }
-    this.pruneIdleBuckets(now);
+    for (const [key, bucket] of this.buckets) {
+      if (bucket.active !== 0 || countPending(bucket) > 0) {
+        continue;
+      }
+      if (bucket.remaining === 0 && bucket.resetAt > now) {
+        continue;
+      }
+      for (const routeKey of bucket.routeKeys) {
+        if (this.routeBuckets.get(routeKey) === key) {
+          this.routeBuckets.delete(routeKey);
+        }
+      }
+      this.buckets.delete(key);
+    }
     let nextDelayMs: number | undefined;
     const buckets = Array.from(this.buckets.values()).filter((bucket) => countPending(bucket) > 0);
     if (buckets.length === 0) {
@@ -246,23 +255,6 @@ export class RestScheduler<TData> {
       }
     }
     return { waitMs: nextDelayMs };
-  }
-
-  private pruneIdleBuckets(now = Date.now()): void {
-    for (const [key, bucket] of this.buckets) {
-      if (bucket.active !== 0 || countPending(bucket) > 0) {
-        continue;
-      }
-      if (this.isBucketRateLimited(bucket, now)) {
-        continue;
-      }
-      for (const routeKey of bucket.routeKeys) {
-        if (this.routeBuckets.get(routeKey) === key) {
-          this.routeBuckets.delete(routeKey);
-        }
-      }
-      this.buckets.delete(key);
-    }
   }
 
   private async runQueuedRequest(

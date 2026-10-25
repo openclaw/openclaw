@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerControlsFixture,
@@ -157,17 +158,7 @@ it("mounts only visible activity pills without disturbing the mobile draft or fo
   expectDraft();
 
   const goal: NonNullable<ChatActivityPillsProps["goal"]> = {
-    value: {
-      schemaVersion: 1,
-      id: "mobile-goal",
-      objective: "Verify the release",
-      status: "active",
-      createdAt: 1,
-      updatedAt: 2,
-      tokenStart: 0,
-      tokensUsed: 0,
-      continuationTurns: 0,
-    },
+    value: createSessionGoalFixture("mobile-goal", "Verify the release", { updatedAt: 2 }),
     executionConfirmed: false,
     onOpen: vi.fn(),
   };
@@ -182,7 +173,7 @@ it("mounts only visible activity pills without disturbing the mobile draft or fo
 
   renderComposerInto(container, {
     ...props,
-    mobileActivityPills: { ...empty, goal: { ...goal, hidden: true } },
+    mobileActivityPills: empty,
   });
   expect(container.querySelector(".chat-activity-pills")).toBeNull();
   expect(onActivityPillsLayout).toHaveBeenLastCalledWith(expect.objectContaining({ strip }), true);

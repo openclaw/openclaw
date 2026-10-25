@@ -22,8 +22,8 @@ import {
   type CronUpdateOptions,
   createCronServiceState,
 } from "./service/state.js";
-import type { DeferredHookWake } from "./service/wake.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "./types.js";
+import type { DeferredHookWake } from "./wake-contract.js";
 
 export type { CronEvent } from "./types.js";
 

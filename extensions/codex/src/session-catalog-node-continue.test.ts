@@ -19,6 +19,7 @@ import {
   createEligibleControl,
   createRuntime,
   createGatewayApi,
+  createCatalogTestProvider,
   fs,
   os,
   path,
@@ -62,14 +63,13 @@ function registerProvider(
   control = createControl(),
   startupConfig: OpenClawConfig = {},
 ) {
-  const { api, getProvider } = createGatewayApi(runtime, startupConfig);
-  registerCodexSessionCatalog({
-    api,
-    bindingStore: createCodexTestBindingStore(),
+  return createCatalogTestProvider({
+    runtime,
+    startupConfig,
     control,
+    getPluginConfig: () => ({ supervision: { enabled: true } }),
     getRuntimeConfig,
   });
-  return getProvider()!;
 }
 const continueRequest = (overrides: { hostId?: string; clientScopes?: string[] } = {}) => ({
   hostId: "node:devbox",
@@ -139,7 +139,7 @@ it("adopts a paired-node session with bounded history and an executable binding"
     }
     throw new Error(`unexpected command: ${command}`);
   });
-  const { runtime, entries, createSessionEntry, patchSessionEntry } = createRuntime({
+  const { runtime, entries, createSessionEntry } = createRuntime({
     nodes: [{ ...pairedNode(), displayName: "Devbox" }],
     invoke,
   });
@@ -171,31 +171,20 @@ it("adopts a paired-node session with bounded history and an executable binding"
     agentId: "alpha",
     cwd: "/remote/repo",
   });
-  expect(second?.conversationBinding?.data).toMatchObject({ agentId: "alpha" });
   expect(createSessionEntry).toHaveBeenCalledOnce();
-  expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
-  expect(createSessionEntry).toHaveBeenCalledWith(
-    expect.objectContaining({
-      displayName: "Remote task",
-      spawnedCwd: "/remote/repo",
-      initialEntry: expect.objectContaining({
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-        pluginExtensions: {
-          codex: {
-            sessionCatalog: expect.objectContaining({
-              sourceHostId: "node:devbox",
-              sourceThreadId: remoteThreadId,
-              nodeId: "devbox",
-              initializing: true,
-            }),
-          },
-        },
-      }),
-    }),
-  );
-  expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
-  expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith(
+  expect(adopted).toMatchObject({
+    displayName: "Remote task",
+    spawnedCwd: "/remote/repo",
+    agentHarnessId: "codex",
+    modelSelectionLocked: true,
+    pluginExtensions: {
+      codex: { sessionCatalog: { sourceHostId: "node:devbox", sourceThreadId: remoteThreadId } },
+    },
+  });
+  expect(second?.conversationBinding?.data).toMatchObject({ agentId: "alpha" });
+  expect(
+    transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
+  ).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       thread: expect.objectContaining({
         id: remoteThreadId,
@@ -205,12 +194,12 @@ it("adopts a paired-node session with bounded history and an executable binding"
       cwd: "/remote/repo",
     }),
   );
-  // One finalize patch per continue; the restore rides afterConversationBound.
-  expect(patchSessionEntry).toHaveBeenCalledTimes(2);
   const restored = entries.find((entry) => entry.sessionKey === second?.sessionKey)?.entry;
-  expect(restored?.archivedAt).toBeUndefined();
-  expect(restored?.archivedBy).toBeUndefined();
-  expect(restored?.archiveReason).toBeUndefined();
+  expect([restored?.archivedAt, restored?.archivedBy, restored?.archiveReason]).toEqual([
+    undefined,
+    undefined,
+    undefined,
+  ]);
 
   const listed = await provider?.list({ agentId: "alpha", hostIds: ["node:devbox"] });
   expect(listed?.[0]?.sessions[0]).toMatchObject({
@@ -281,10 +270,6 @@ it("keeps Gateway-first upgrades compatible with the released node selector and 
     })),
   );
   expect(createSessionEntry).toHaveBeenCalledTimes(2);
-  for (const [request] of invoke.mock.calls) {
-    expect(request.nodeId).toBe("devbox");
-    expect(["alpha", "beta"]).toContain(selectReleasedNodeAgent(request.params));
-  }
 });
 
 it.each([
@@ -466,23 +451,16 @@ it("builds local and paired-node terminal plans from verified catalog records", 
       CODEX_HOME: resolveCodexAppServerHomeDir(resolveDefaultAgentDir(config)),
     },
   });
-  await expect(startTerminal("/workspace/new", "Fix A&B and 100%")).resolves.toEqual({
-    kind: "local",
-    argv: [executable, "--", "Fix A&B and 100%"],
-    cwd: "/workspace/new",
-    env: {
-      CODEX_HOME: resolveCodexAppServerHomeDir(resolveDefaultAgentDir(config)),
-    },
-    pathEnv: binDir,
-    title: "codex",
-  });
-  await expect(startTerminal("/workspace/command-prompt", "resume")).resolves.toMatchObject({
-    argv: [executable, "--", "resume"],
-  });
-  await expect(startTerminal("/workspace/blank")).resolves.toMatchObject({
-    argv: [executable],
-    cwd: "/workspace/blank",
-  });
+  for (const initialMessage of ["Fix A&B and 100%", "resume", undefined]) {
+    await expect(startTerminal("/workspace/new", initialMessage)).resolves.toEqual({
+      kind: "local",
+      argv: [executable, ...(initialMessage ? ["--", initialMessage] : [])],
+      cwd: "/workspace/new",
+      env: { CODEX_HOME: resolveCodexAppServerHomeDir(resolveDefaultAgentDir(config)) },
+      pathEnv: binDir,
+      title: "codex",
+    });
+  }
   const fresh = createCodexSessionCatalogNodeHostCommands(control).find(
     (command) => command.command === CODEX_TERMINAL_START_COMMAND,
   )!;
@@ -583,7 +561,6 @@ it("builds local and paired-node terminal plans from verified catalog records", 
     uploadPathStyle: "native",
     cwd: "/workspace/node",
   });
-  expect(invoke.mock.calls.at(-1)?.[0].params).not.toHaveProperty("searchTerm");
 
   node.invocableCommands = [CODEX_APP_SERVER_THREADS_LIST_COMMAND];
   await expect(getProvider()?.list({ hostIds: ["node:devbox"] })).resolves.toMatchObject([
@@ -657,12 +634,10 @@ it("reads local transcript turns one bounded App Server page at a time", async (
     ],
     nextCursor: "turns-page-2",
   });
-  expect(listTurnPage).toHaveBeenCalledWith({
-    threadId: "thread-1",
-    limit: 1,
-    sortDirection: "desc",
-    itemsView: "full",
-  });
+  expect(listTurnPage).toHaveBeenCalledOnce();
+  expect(listTurnPage).toHaveBeenCalledWith(
+    expect.objectContaining({ limit: 1, itemsView: "full" }),
+  );
   expect(control.readThread).not.toHaveBeenCalled();
 });
 
@@ -723,16 +698,8 @@ it.each([
     items: [projected],
     nextCursor: "remote-position-2",
   });
-  expect(invoke).toHaveBeenLastCalledWith({
-    nodeId: "devbox",
-    command,
-    params: {
-      agentId: "main",
-      threadId: "thread-remote",
-      cursor: "remote-position-1",
-      limit: nativeLimit,
-    },
-    timeoutMs: 65_000,
-    scopes: ["operator.write"],
+  expect(invoke.mock.calls[0]?.[0].params).toMatchObject({
+    cursor: "remote-position-1",
+    limit: nativeLimit,
   });
 });

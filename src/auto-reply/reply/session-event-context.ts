@@ -1,11 +1,14 @@
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createCronExecutionId } from "../../cron/run-id.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { readExecRequestOwners } from "../../infra/exec-request-context.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
@@ -73,6 +76,7 @@ export function buildSessionEventContext(params: {
   assertCurrent: () => void;
 }): MsgContext {
   const { agentId, sessionKey, text, options, occurrenceId, deliveryContext, target } = params;
+  const automation = options.scheduledAutomation;
   const ctx: MsgContext = {
     AgentId: agentId,
     SessionKey: sessionKey,
@@ -85,8 +89,16 @@ export function buildSessionEventContext(params: {
     CommandAuthorized: false,
     InputProvenance: {
       kind: "internal_system",
-      sourceTool: options.source,
-      ...(options.sourceRunId ? { runId: options.sourceRunId } : {}),
+      sourceTool: automation ? CRON_EXECUTION_SOURCE_TOOL : options.source,
+      ...(automation && automation.job.state.runningAtMs !== undefined
+        ? {
+            jobId: automation.job.id,
+            runId: createCronExecutionId(automation.job.id, automation.job.state.runningAtMs),
+            sourceSessionKey: sessionKey,
+          }
+        : options.sourceRunId
+          ? { runId: options.sourceRunId }
+          : {}),
     },
     ChatType: channelRouteTargetsMatchExact({
       left: deliveryContext,
@@ -105,7 +117,6 @@ export function buildSessionEventContext(params: {
       ? `${occurrenceId}:readmission-${options.readmissionAttempt}`
       : occurrenceId,
   };
-  const automation = options.scheduledAutomation;
   if (automation && !target.sessionId) {
     // The ordinary session writer owns creation; preserve the job's captured facts.
     ctx.SessionCreation = {
@@ -115,9 +126,19 @@ export function buildSessionEventContext(params: {
       skillLibrarySelections: automation.job.skillLibrarySelections,
     };
   }
-  if (automation?.controlUiAdmin && automation.operatorAuthority) {
+  const operatorAuthority = automation?.controlUiAdmin
+    ? automation.operatorAuthority
+    : options.source === "plugin"
+      ? readSessionEventTargetOperatorAuthority(target)
+      : undefined;
+  if (
+    operatorAuthority &&
+    (automation?.controlUiAdmin || operatorAuthority.profileId === GATEWAY_OWNER_PROFILE_ID)
+  ) {
+    // Plugin handoffs continue their captured owner capability while retaining
+    // internal provenance and the event text's existing command authorization.
     bindCommandOwnerAuthority(ctx, {
-      operatorAuthority: automation.operatorAuthority,
+      operatorAuthority,
       isCurrent: () => {
         params.assertCurrent();
         return true;

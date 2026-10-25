@@ -3,8 +3,11 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/help
 import * as sessionEntryWriter from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
-import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
-import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import {
+  makeAttempt,
+  makeNormalizationInput,
+  makePromptState,
+} from "./attempt-normalization.test-support.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
   assertAgentHarnessRunAdmission,
@@ -28,44 +31,27 @@ const mainTarget = (sessionId = "session-before") => ({
   storePath: "/tmp/sessions.json",
 });
 
-const sessionAccessorMocks = vi.hoisted(() => ({
-  patchSessionEntryCore:
-    vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
-  updateSessionEntry: vi.fn(async () => undefined),
-}));
+type SessionReaders = typeof import("../../../config/sessions/session-entry-read-runtime.js");
 const sessionReaderMocks = vi.hoisted(() => ({
-  readSessionEntrySummariesInWorker:
-    vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntrySummariesInWorker
-    >(),
-  readSessionEntryInWorker:
-    vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryInWorker
-    >(),
-  withSessionEntryReadOnlyInWorker:
-    vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
-    >(),
+  readSessionEntrySummariesInWorker: vi.fn<SessionReaders["readSessionEntrySummariesInWorker"]>(),
+  readSessionEntryInWorker: vi.fn<SessionReaders["readSessionEntryInWorker"]>(),
+  readSessionEntryReadOnlyInWorker: vi.fn<SessionReaders["readSessionEntryReadOnlyInWorker"]>(),
 }));
 
+// mock-isolation: Keep normalization entry fixtures outside the session database.
 vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => sessionReaderMocks);
 
 // mock-isolation: Normalization fixtures control transcript lookup and persistence without starting storage.
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: vi.fn(async () => undefined),
-  ...sessionAccessorMocks,
+  patchSessionEntryCore: vi.fn(async () => null),
+  updateSessionEntry: vi.fn(async () => undefined),
 }));
 
 beforeEach(() => {
-  sessionAccessorMocks.patchSessionEntryCore.mockReset().mockResolvedValue(null);
-  sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
   sessionReaderMocks.readSessionEntrySummariesInWorker.mockReset().mockResolvedValue([]);
   sessionReaderMocks.readSessionEntryInWorker.mockReset().mockResolvedValue(undefined);
-  sessionReaderMocks.withSessionEntryReadOnlyInWorker
-    .mockReset()
-    .mockImplementation(async (_scope, assertCurrent, consume) =>
-      consume({ ok: true, value: undefined }, { kind: "file", assertCurrent }),
-    );
+  sessionReaderMocks.readSessionEntryReadOnlyInWorker.mockReset().mockResolvedValue(undefined);
 });
 
 it.each([0, 2])(
@@ -92,26 +78,18 @@ it.each([0, 2])(
       setLifecycleGeneration: vi.fn(),
     });
     const cancelled = new Error("cancelled while user persistence was pending");
-    const contextRecoveryState = createEmbeddedRunContextRecoveryState();
+    const input = makeNormalizationInput(
+      makeAttempt(undefined, { compactionCount: 2, compactionTokensAfter: 40.9 }),
+      makePromptState(() => persistence.promise),
+    );
+    input.runInput.runParams = params;
+    input.runInput.laneController = laneController;
+    input.recordedCompactionCount = recordedCompactionCount;
+    input.sessionPromptState.activePrompt.persisted = true;
+    const contextRecoveryState = input.contextRecoveryState;
     contextRecoveryState.autoCompactionCount = recordedCompactionCount;
     contextRecoveryState.lastCompactionTokensAfter = recordedCompactionCount > 0 ? 60 : undefined;
-    // Cancellation exits before model normalization; only the completed-attempt boundary is live.
-    const normalization = normalizeEmbeddedRunAttempt({
-      runInput: {
-        runParams: params,
-        laneController,
-      },
-      preparedRuntime: { snapshot: () => ({}) },
-      recordedCompactionCount,
-      dispatchedAttempt: {
-        rawAttempt: { compactionCount: 2, compactionTokensAfter: 40.9 },
-      },
-      sessionPromptState: {
-        activePrompt: { persisted: true },
-        waitForCurrentUserMessagePersistence: () => persistence.promise,
-      },
-      contextRecoveryState,
-    } as never);
+    const normalization = normalizeEmbeddedRunAttempt(input);
 
     controller.abort(cancelled);
     persistence.resolve();
@@ -124,35 +102,38 @@ it.each([0, 2])(
 );
 
 describe("buildContextEngineCompactionSessionTarget", () => {
-  it("leaves the key absent when a marker has no stored mapping", async () => {
-    expect(
-      await buildContextEngineCompactionSessionTarget({
-        sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
-        sessionId: "stale-outer-session",
-      }),
-    ).toEqual({
-      agentId: "main",
-      sessionId: "marker-session",
-      storePath: "/tmp/sessions.json",
-    });
-  });
-
-  it("uses the explicit agent owner without inventing a session key", async () => {
-    expect(
-      await buildContextEngineCompactionSessionTarget({
-        agentId: "worker",
-        config: {
-          agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
-          session: { store: "/tmp/{agentId}/sessions.json" },
-        },
-        sessionFile: "compat-session",
-        sessionId: "compat-session",
-      }),
-    ).toEqual({
+  it.each([
+    {
+      sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
+      sessionId: "stale-outer-session",
+      expected: { agentId: "main", sessionId: "marker-session", storePath: "/tmp/sessions.json" },
+    },
+    {
       agentId: "worker",
+      config: {
+        agents: { ownership: "explicit" as const, entries: { main: {}, worker: {} } },
+        session: { store: "/tmp/{agentId}/sessions.json" },
+      },
+      sessionFile: "compat-session",
       sessionId: "compat-session",
-      storePath: "/tmp/worker/sessions.json",
-    });
+      expected: {
+        agentId: "worker",
+        sessionId: "compat-session",
+        storePath: "/tmp/worker/sessions.json",
+      },
+    },
+    {
+      sessionFile: "",
+      sessionId: "previous-session",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "adopted-session",
+        storePath: "/tmp/sessions.json",
+      },
+      expected: { agentId: "main", sessionId: "adopted-session", storePath: "/tmp/sessions.json" },
+    },
+  ])("resolves target without inventing a session key: %j", async ({ expected, ...input }) => {
+    expect(await buildContextEngineCompactionSessionTarget(input)).toEqual(expected);
   });
 
   it("rejects a partial target that conflicts with the fixed-store owner", async () => {
@@ -169,24 +150,6 @@ describe("buildContextEngineCompactionSessionTarget", () => {
         },
       }),
     ).rejects.toThrow(/belongs to "ops"/u);
-  });
-
-  it("preserves an adopted session id without inventing a session key", async () => {
-    expect(
-      await buildContextEngineCompactionSessionTarget({
-        sessionFile: "",
-        sessionId: "previous-session",
-        sessionTarget: {
-          agentId: "main",
-          sessionId: "adopted-session",
-          storePath: "/tmp/sessions.json",
-        },
-      }),
-    ).toEqual({
-      agentId: "main",
-      sessionId: "adopted-session",
-      storePath: "/tmp/sessions.json",
-    });
   });
 });
 
@@ -290,6 +253,7 @@ describe("createEmbeddedRunSessionPromptState", () => {
 
 function promptState() {
   return {
+    ...makePromptState(),
     sessionId: "session-before",
     sessionFile: "agent:main:main",
     sessionTarget: mainTarget(),
@@ -297,16 +261,20 @@ function promptState() {
   };
 }
 
-function adopt(state: ReturnType<typeof promptState>, sessionFileUsed?: string) {
-  return applyEmbeddedAttemptSessionIdentity({
-    assertCurrent: vi.fn(),
-    sessionPromptState: state,
-    sessionIdUsed: "session-after",
-    sessionFileUsed,
-  });
+function adopt(
+  state: ReturnType<typeof promptState>,
+  sessionFileUsed?: string,
+  assertCurrent: () => void = vi.fn(),
+) {
+  const input = makeNormalizationInput(
+    makeAttempt(undefined, { sessionIdUsed: "session-after", sessionFileUsed }),
+    state,
+  );
+  input.runInput.laneController.throwIfAborted = assertCurrent;
+  return normalizeEmbeddedRunAttempt(input);
 }
 
-describe("applyEmbeddedAttemptSessionIdentity", () => {
+describe("normalizeEmbeddedRunAttempt session identity", () => {
   const bindingChanged = "successor target changed the active session binding";
   const inconsistent = /successor (identity is inconsistent|files are unsupported)/u;
   it.each(["marker", "key"] as const)(
@@ -318,36 +286,35 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
           state.sessionFile = "sqlite:main:session-before:/tmp/sessions.json";
         }
         const previousFile = state.sessionFile;
+        const started = createDeferred();
         const gate = createDeferred();
         const failure = new Error(`identity read ${outcome}`);
-        let active = true;
-        const assertCurrent = () => {
-          if (!active) {
-            throw failure;
-          }
-        };
+        const controller = new AbortController();
+        const assertCurrent = () => controller.signal.throwIfAborted();
+        state.activePrompt.persisted = true;
         const entry = { sessionId: "session-after", updatedAt: 2 };
         sessionReaderMocks.readSessionEntrySummariesInWorker.mockImplementationOnce(async () => {
+          started.resolve();
           await gate.promise;
           return [{ sessionKey: "agent:main:main", entry }];
         });
-        sessionReaderMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
-          async (_scope, _assertCurrent, consume) => {
+        sessionReaderMocks.readSessionEntryReadOnlyInWorker.mockImplementationOnce(
+          async (_scope, _assertCurrent) => {
+            started.resolve();
             await gate.promise;
-            return consume({ ok: true, value: entry }, { kind: "file", assertCurrent });
+            return entry;
           },
         );
-        const pending = applyEmbeddedAttemptSessionIdentity({
-          sessionPromptState: state,
-          sessionIdUsed: "session-after",
-          sessionFileUsed:
-            kind === "marker" ? "sqlite:main:session-after:/tmp/sessions.json" : "agent:main:main",
+        const pending = adopt(
+          state,
+          kind === "marker" ? "sqlite:main:session-after:/tmp/sessions.json" : "agent:main:main",
           assertCurrent,
-        });
+        );
+        await awaitGateBeforeSettlement(started.promise, pending, "identity read was skipped");
         expect(state.adoptSessionId).not.toHaveBeenCalled();
         expect(state.sessionFile).toBe(previousFile);
         if (outcome === "revoked") {
-          active = false;
+          controller.abort(failure);
         } else if (outcome === "binding-changed") {
           state.sessionTarget.sessionKey = "agent:main:replacement";
         }
@@ -371,48 +338,10 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
           expect(state.sessionTarget.sessionId).toBe("session-before");
         }
         sessionReaderMocks.readSessionEntrySummariesInWorker.mockReset();
-        sessionReaderMocks.withSessionEntryReadOnlyInWorker.mockReset();
+        sessionReaderMocks.readSessionEntryReadOnlyInWorker.mockReset();
       }
     },
   );
-
-  it("normalization rechecks lane cancellation before adopting a delayed successor", async () => {
-    const state = {
-      ...promptState(),
-      activePrompt: { persisted: true },
-      waitForCurrentUserMessagePersistence: async () => {},
-    };
-    const started = createDeferred();
-    const read = createDeferred<[]>();
-    sessionReaderMocks.readSessionEntrySummariesInWorker.mockImplementationOnce(() => {
-      started.resolve();
-      return read.promise;
-    });
-    const controller = new AbortController();
-    const cancelled = new Error("lane cancelled during identity lookup");
-    const normalization = normalizeEmbeddedRunAttempt({
-      runInput: {
-        runParams: { abortSignal: controller.signal },
-        laneController: { throwIfAborted: () => controller.signal.throwIfAborted() },
-      },
-      preparedRuntime: { snapshot: () => ({}) },
-      dispatchedAttempt: {
-        rawAttempt: {
-          terminal: { kind: "ok" },
-          sessionIdUsed: "session-after",
-          sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
-        },
-      },
-      sessionPromptState: state,
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-    } as never);
-    await awaitGateBeforeSettlement(started.promise, normalization, "identity read was skipped");
-    controller.abort(cancelled);
-    read.resolve([]);
-    await expect(normalization).rejects.toBe(cancelled);
-    expect(state.adoptSessionId).not.toHaveBeenCalled();
-    expect(state.sessionTarget.sessionId).toBe("session-before");
-  });
 
   it("rebinds a legacy SQLite marker successor over the retained active entry", async () => {
     sessionReaderMocks.readSessionEntrySummariesInWorker.mockResolvedValue([
@@ -422,12 +351,7 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
 
     await adopt(state, "sqlite:main:session-after:/tmp/sessions.json");
 
-    expect(state.sessionTarget).toEqual({
-      agentId: "main",
-      sessionId: "session-after",
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-    });
+    expect(state.sessionTarget).toEqual(mainTarget("session-after"));
   });
 
   it.each([
@@ -456,5 +380,26 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
 
     expect(state.sessionFile).toBe("sqlite:main:session-after:/tmp/sessions.json");
     expect(state.sessionTarget).toMatchObject({ sessionId: "session-after" });
+  });
+
+  it("does not adopt a foreground successor from a detached attempt", async () => {
+    const state = promptState();
+    const input = makeNormalizationInput(
+      makeAttempt(undefined, {
+        sessionIdUsed: "foreground-session",
+        sessionFileUsed: "sqlite:main:foreground-session:/tmp/sessions.json",
+      }),
+      state,
+    );
+    input.runInput.runParams.sessionPersistence = "detached";
+
+    expect(await normalizeEmbeddedRunAttempt(input)).toMatchObject({ action: "proceed" });
+
+    expect(sessionReaderMocks.readSessionEntrySummariesInWorker).not.toHaveBeenCalled();
+    expect(sessionReaderMocks.readSessionEntryReadOnlyInWorker).not.toHaveBeenCalled();
+    expect(state.adoptSessionId).not.toHaveBeenCalled();
+    expect(state.sessionId).toBe("session-before");
+    expect(state.sessionFile).toBe("agent:main:main");
+    expect(state.sessionTarget).toEqual(mainTarget());
   });
 });

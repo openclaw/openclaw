@@ -4,6 +4,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
+} from "../shared/oauth-refresh-outcome.js";
 import { resolveConfiguredGitHubApiBaseUrl } from "./github-host.js";
 import { clearNativeGitHubTokenCache } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
@@ -46,6 +50,7 @@ type GitHubOAuthRequestOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
   apiBaseUrl?: string;
+  assertCurrent?: () => void | Promise<void>;
 };
 
 type GitHubOAuthDeviceAuthorization = {
@@ -97,7 +102,7 @@ type GitHubOAuthDevicePollResult =
 
 type GitHubOAuthRefreshResult =
   | { status: "refreshed"; tokens: GitHubOAuthTokenPair }
-  | { status: "error"; code: GitHubOAuthErrorCode };
+  | { status: "error"; code: GitHubOAuthErrorCode; failure?: Error };
 
 function githubOAuthProtocolError(surface: string): Error {
   return new Error(`GitHub OAuth ${surface} response was invalid`);
@@ -224,17 +229,44 @@ async function postGitHubOAuthForm(
   const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, GITHUB_OAUTH_REQUEST_TIMEOUT_MS, 1);
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
-  const response = await fetch(url, {
-    method: "POST",
-    redirect: "error",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: form,
-    signal,
-  });
-  return { response, body: await readGitHubResponse(response, surface, timeoutMs) };
+  let dispatched = false;
+  let received = false;
+  try {
+    await options.assertCurrent?.();
+    signal.throwIfAborted();
+    dispatched = true;
+    const response = await fetch(url, {
+      method: "POST",
+      redirect: "error",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: form,
+      signal,
+    });
+    received = true;
+    return { response, body: await readGitHubResponse(response, surface, timeoutMs) };
+  } catch (error) {
+    if (surface !== "token refresh") {
+      throw error;
+    }
+    throw createOAuthRefreshError(
+      "GitHub OAuth token refresh failed",
+      dispatched
+        ? {
+            version: 1,
+            phase: received ? "after-token-response" : "token-response",
+            outcome: "unknown",
+          }
+        : {
+            version: 1,
+            phase: "before-dispatch",
+            outcome: "not-attempted",
+            recovery: { kind: "later", evidence: "dispatch-not-started" },
+          },
+    );
+  }
 }
 
 async function readGitHubResponse(response: Response, surface: string, timeoutMs: number) {
@@ -324,13 +356,30 @@ async function exchangeGitHubOAuthToken(
   form: Record<string, string>,
   surface: string,
   options: GitHubOAuthRequestOptions,
-) {
+): Promise<
+  | { tokens: GitHubOAuthTokenPair; error?: never }
+  | {
+      error: { code: GitHubOAuthErrorCode; intervalSeconds?: number; failure?: Error };
+      tokens?: never;
+    }
+> {
   const { response, body } = await postGitHubOAuthForm(
     GITHUB_OAUTH_ACCESS_TOKEN_URL,
     new URLSearchParams({ client_id: GITHUB_OAUTH_CLIENT_ID, ...form }),
     surface,
     options,
   );
+  if (surface === "token refresh" && (!response.ok || body.error !== undefined)) {
+    const failure = createOAuthRefreshResponseError(
+      "GitHub OAuth token refresh",
+      response.status,
+      body,
+    );
+    if (body.access_token !== undefined || !isGitHubOAuthErrorCode(body.error)) {
+      throw failure;
+    }
+    return { error: { ...parseGitHubOAuthError(body, surface), failure } };
+  }
   if (body.error !== undefined && body.access_token !== undefined) {
     throw githubOAuthProtocolError(surface);
   }
@@ -340,7 +389,18 @@ async function exchangeGitHubOAuthToken(
   if (!response.ok) {
     throwGitHubOAuthHttpError(response, surface);
   }
-  return { tokens: parseGitHubOAuthTokenPair(body, surface) };
+  try {
+    return { tokens: parseGitHubOAuthTokenPair(body, surface) };
+  } catch (error) {
+    if (surface !== "token refresh") {
+      throw error;
+    }
+    throw createOAuthRefreshError("GitHub OAuth token refresh response was invalid", {
+      version: 1,
+      phase: "after-token-response",
+      outcome: "unknown",
+    });
+  }
 }
 
 export async function requestGitHubOAuthDeviceCode(
@@ -434,7 +494,7 @@ export async function refreshGitHubOAuthToken(
     params,
   );
   if (result.error) {
-    return { status: "error", code: result.error.code };
+    return { status: "error", code: result.error.code, failure: result.error.failure };
   }
   return { status: "refreshed", tokens: result.tokens };
 }

@@ -24,28 +24,25 @@ function createPersistence(
     onInvalidUpdateId,
     abortSignal,
   });
-  return { persistence, writes, onError, onInvalidUpdateId };
+  const checkpoint = () => [writes, persistence.getCommittedUpdateId()];
+  return { persistence, writes, checkpoint, onError, onInvalidUpdateId };
 }
 
 describe("createTelegramUpdateOffsetPersistence", () => {
   it.each([false, true])("handles a failed checkpoint (abort=%s)", async (abort) => {
     const controller = new AbortController();
-    let failFirstWrite = true;
-    const writeUpdateId = vi.fn(async () => {
-      if (failFirstWrite) {
-        failFirstWrite = false;
-        throw new Error("offset store unavailable");
-      }
-    });
-    const { persistence, writes, onError } = createPersistence(
+    const writeUpdateId = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("offset store unavailable"))
+      .mockResolvedValue(undefined);
+    const { persistence, checkpoint, onError } = createPersistence(
       writeUpdateId,
       abort ? controller.signal : undefined,
     );
 
     persistence.persistUpdateId(101);
     await flushMicrotasks();
-    expect(writes).toEqual([101]);
-    expect(persistence.getCommittedUpdateId()).toBe(100);
+    expect(checkpoint()).toEqual([[101], 100]);
     if (abort) {
       controller.abort();
     }
@@ -54,9 +51,7 @@ describe("createTelegramUpdateOffsetPersistence", () => {
 
     await flushMicrotasks();
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ updateId: 101 }));
-    expect(writes).toEqual(abort ? [101] : [101, 103]);
-    expect(writeUpdateId).toHaveBeenCalledTimes(abort ? 1 : 2);
-    expect(persistence.getCommittedUpdateId()).toBe(abort ? 100 : 103);
+    expect(checkpoint()).toEqual(abort ? [[101], 100] : [[101, 103], 103]);
     await persistence.stop();
   });
 
@@ -65,7 +60,7 @@ describe("createTelegramUpdateOffsetPersistence", () => {
     { timing: "during teardown", first: 101, next: 102, expected: [101, 102] },
   ])("checkpoints a new offset arriving $timing", async ({ timing, first, next, expected }) => {
     const write = createDeferred<void>();
-    const { persistence, writes } = createPersistence(async (id) => {
+    const { persistence, writes, checkpoint } = createPersistence(async (id) => {
       if (id === first) {
         await write.promise;
       }
@@ -82,8 +77,7 @@ describe("createTelegramUpdateOffsetPersistence", () => {
     } else {
       await flushMicrotasks();
     }
-    expect(writes).toEqual(expected);
-    expect(persistence.getCommittedUpdateId()).toBe(expected.at(-1));
+    expect(checkpoint()).toEqual([expected, expected.at(-1)]);
     await persistence.stop();
   });
 
@@ -107,15 +101,14 @@ describe("createTelegramUpdateOffsetPersistence", () => {
   });
 
   it("ignores a malformed update ID without blocking the next valid write", async () => {
-    const { persistence, writes, onInvalidUpdateId } = createPersistence();
+    const { persistence, checkpoint, onInvalidUpdateId } = createPersistence();
 
     persistence.persistUpdateId(Number.NaN);
     persistence.persistUpdateId(101);
     await flushMicrotasks();
 
     expect(onInvalidUpdateId).toHaveBeenCalledWith(Number.NaN);
-    expect(writes).toEqual([101]);
-    expect(persistence.getCommittedUpdateId()).toBe(101);
+    expect(checkpoint()).toEqual([[101], 101]);
     await persistence.stop();
   });
 });

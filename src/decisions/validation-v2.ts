@@ -160,7 +160,7 @@ export function validateDecisionBatchV2(batch: unknown): batch is DecisionBatchV
         : batch;
   return (
     !oversized &&
-    questions.length <= 256 &&
+    questions.length <= 400 &&
     finiteJson(jsonEnvelope, { rejectProxies: true }) === "valid"
   );
 }

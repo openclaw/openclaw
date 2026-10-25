@@ -81,11 +81,7 @@ describe("createComputerTool v2 execution", () => {
   it.each(["screenshot", "wait"] as const)(
     "rejects a targeted %s before desktop capture",
     async (action) => {
-      listNodesMock.mockResolvedValue([
-        macComputerNode({
-          computerUse: v2Descriptor(["screenshot", "get_window_state", "get_browser_state"]),
-        }),
-      ]);
+      useActions(["screenshot", "get_window_state", "get_browser_state"]);
       const tool = createVisionComputerTool();
       for (const reference of [
         "windowRef",
@@ -105,7 +101,7 @@ describe("createComputerTool v2 execution", () => {
 
   it("derives local wait from the selected node screenshot capability", async () => {
     const actions: ComputerUseV2ActionName[] = ["screenshot", "list_apps", "get_window_state"];
-    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+    useActions(actions);
     const tool = createVisionComputerTool();
     expect(tool.description).not.toContain("get_window_state");
 
@@ -237,7 +233,7 @@ describe("createComputerTool v2 execution", () => {
       "browser_download",
       "start_recording",
     ];
-    listNodesMock.mockResolvedValue([macComputerNode({ computerUse: v2Descriptor(actions) })]);
+    useActions(actions);
 
     const withoutCleanup = createVisionComputerTool();
     await withoutCleanup.execute("bind-without-cleanup", { action: "screenshot" });
@@ -397,9 +393,7 @@ describe("createComputerTool v2 execution", () => {
   it.each(["invalid", "omitted"] as const)(
     "rejects pixel input for an %s observation image but keeps element refs",
     async (image) => {
-      listNodesMock.mockResolvedValue([
-        macComputerNode({ computerUse: v2Descriptor(["get_window_state", "left_click"]) }),
-      ]);
+      useActions(["get_window_state", "left_click"]);
       callGatewayToolMock.mockResolvedValue({
         payload: {
           ok: true,
@@ -465,9 +459,7 @@ describe("createComputerTool v2 execution", () => {
   it.each(["inspect", "accept"])(
     "captures an after-image only for a dialog mutation: %s",
     async (dialogAction) => {
-      listNodesMock.mockResolvedValue([
-        macComputerNode({ computerUse: v2Descriptor(["browser_dialog"]) }),
-      ]);
+      useActions(["browser_dialog"]);
       callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
         (body as ComputerActBody).command === COMPUTER_ACT_COMMAND
           ? { payload: { ok: true, effect: "confirmed" } }
@@ -672,11 +664,7 @@ describe("createComputerTool schema", () => {
     ["no screenshot", ["list_windows"]],
   ] as const)("preserves the effective action list with %s", (_name, actions) => {
     const tool = createComputerTool({
-      transport: {
-        computerUse: v2Descriptor([...actions]),
-        resolveNode: async () => ({ nodeId: "session-desktop" }),
-        invoke: async () => undefined,
-      },
+      transport: sessionTransport([...actions]),
     });
     expect(readActionEnum(tool)).toEqual(
       actions.some((action) => action === "screenshot") ? [...actions, "take_control"] : actions,
@@ -715,11 +703,7 @@ describe("createComputerTool schema", () => {
 
   it("explains browser discovery and required reference pairs before execution", () => {
     const tool = createComputerTool({
-      transport: {
-        computerUse: v2Descriptor(["list_windows", "get_browser_state", "browser_prepare"]),
-        resolveNode: async () => ({ nodeId: "session-desktop" }),
-        invoke: async () => undefined,
-      },
+      transport: sessionTransport(["list_windows", "get_browser_state", "browser_prepare"]),
     });
     for (const [field, prerequisites] of [
       ["windowRef", ["list_windows", "browser_prepare", "required", "get_browser_state"]],

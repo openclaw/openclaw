@@ -800,7 +800,6 @@ describe("installPluginFromNpmSpec", () => {
       await markRetainedManagedNpmInstall({
         packageDir,
         pluginId: "policy-generation-plugin",
-        retainedAt: "2026-04-25T00:00:00.000Z",
         reason: "test-retained-generation",
       });
     }
@@ -1042,7 +1041,13 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     }
     const { result, warnings } = installed;
     expect(result.ok).toBe(true);
-    expect(warnings).toHaveLength(0);
+    expect(warnings).toEqual(
+      update
+        ? [
+            'Plugin runtime compatibility: [scan-incomplete] peer-dep-plugin@1.0.0 package.json:1:1: Missing required runtime dependency "unrelated-host"; install package dependencies before qualification.',
+          ]
+        : [expect.stringMatching(/^Repaired OpenClaw host link at /)],
+    );
     if (!result.ok) {
       return;
     }
