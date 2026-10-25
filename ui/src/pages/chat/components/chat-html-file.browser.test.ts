@@ -159,24 +159,6 @@ describe.runIf(browserMode)("HTML file presentation", () => {
     expect(button(first.panel, "Preview")).toBeDefined();
   });
 
-  it("saves a restored HTML draft from Preview with its retained conflict hash", async () => {
-    const draft = "<h1>Restored HTML</h1>";
-    const { panel, file } = await mount("save-draft.html", draft, undefined, "retained-hash");
-    const save = vi.mocked(file.edit!.save);
-    save.mockResolvedValue({ ok: true, hash: "saved" });
-    expect(panel.querySelector(".cm-editor")).toBeNull();
-    expect(button(panel, "Save").disabled).toBe(false);
-    await userEvent.click(button(panel, "Save"));
-    await expect
-      .poll(() => save.mock.calls)
-      .toEqual([[{ content: draft, expectedHash: "retained-hash" }]]);
-    await expect.poll(() => button(panel, "Save").disabled).toBe(true);
-    expect(readFileDraft(file)).toBeUndefined();
-    expect(panel.querySelector(".cm-editor")).toBeNull();
-    await userEvent.click(button(panel, "Source"));
-    await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toBe(draft);
-  });
-
   it.each(["Reload", "Overwrite"])(
     "resolves a retained draft conflict with %s from Preview",
     async (action) => {
@@ -201,6 +183,7 @@ describe.runIf(browserMode)("HTML file presentation", () => {
       await expect
         .poll(() => panel.querySelector(".file-view__save-notice")?.textContent)
         .toContain("Overwrite");
+      expect(save).toHaveBeenNthCalledWith(1, { content: draft, expectedHash: "retained-hash" });
       expect(readFileDraft(file)).toEqual({ content: draft, expectedHash: "retained-hash" });
       await userEvent.click(button(panel, action));
       await expect.poll(() => readFileDraft(file)).toBeUndefined();

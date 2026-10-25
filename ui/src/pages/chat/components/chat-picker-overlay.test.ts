@@ -58,8 +58,18 @@ function pickerIn(composer: HTMLElement) {
   };
 }
 
-function escapeEvent(init: KeyboardEventInit = {}) {
-  return new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...init });
+function escape(target: EventTarget, init: KeyboardEventInit = {}, claimed = false) {
+  const event = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  if (claimed) {
+    event.preventDefault();
+  }
+  target.dispatchEvent(event);
+  return event;
 }
 
 function dismissalSpy(composer: HTMLElement) {
@@ -103,24 +113,21 @@ it("dismisses the tooltip first with the composer listener registered before or 
     }
     dismissInvocations.mockClear();
 
-    const claimedEscape = escapeEvent();
-    claimedEscape.preventDefault();
-    field.dispatchEvent(claimedEscape);
+    escape(field, {}, true);
     expect(popup.matches(":popover-open")).toBe(true);
     expect(picker.open).toBe(true);
     expect(dismissInvocations).not.toHaveBeenCalled();
 
-    const escape = escapeEvent();
-    field.dispatchEvent(escape);
+    const event = escape(field);
     await settleTooltip(tooltip);
     expect(popup.matches(":popover-open")).toBe(false);
-    expect(escape.defaultPrevented).toBe(true);
+    expect(event.defaultPrevented).toBe(true);
     expect(picker.open).toBe(true);
     expect(dismissInvocations).not.toHaveBeenCalled();
     expect(field.value).toBe("Retained choice");
     expect(document.activeElement).toBe(field);
 
-    field.dispatchEvent(escapeEvent());
+    escape(field);
     expect(picker.open).toBe(false);
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(dismissInvocations).not.toHaveBeenCalled();
@@ -144,9 +151,7 @@ it("leaves Escape to an open native modal before dismissing retained invocations
   document.body.append(modal);
   const { dialog } = await getRenderedModalDialog(document.body);
   expect(dialog.open).toBe(true);
-  const modalEscape = escapeEvent();
-  dialog.dispatchEvent(modalEscape);
-  expect(modalEscape.defaultPrevented).toBe(false);
+  expect(escape(dialog).defaultPrevented).toBe(false);
   expect(dismissInvocations).not.toHaveBeenCalled();
 
   // jsdom does not synthesize the native cancel event from Escape.
@@ -154,9 +159,7 @@ it("leaves Escape to an open native modal before dismissing retained invocations
   dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
   await hidden;
   expect(dialog.open).toBe(false);
-  const invocationEscape = escapeEvent();
-  textarea.dispatchEvent(invocationEscape);
-  expect(invocationEscape.defaultPrevented).toBe(true);
+  expect(escape(textarea).defaultPrevented).toBe(true);
   expect(dismissInvocations).toHaveBeenCalledOnce();
   expect(document.activeElement).toBe(textarea);
 });
@@ -191,17 +194,13 @@ it.each([false, true])(
 
     releaseSecond();
     pointerOutside();
-    const escape = escapeEvent();
-    composer.dispatchEvent(escape);
-    expect(escape.defaultPrevented).toBe(false);
+    expect(escape(composer).defaultPrevented).toBe(false);
     expect(dismissInvocations).toHaveBeenCalledTimes(2);
 
     onTestFinished(installChatComposerPickerDismissal(document));
     pointerOutside();
     expect(dismissInvocations).toHaveBeenCalledTimes(3);
-    const reconnectedEscape = escapeEvent();
-    composer.dispatchEvent(reconnectedEscape);
-    expect(reconnectedEscape.defaultPrevented).toBe(true);
+    expect(escape(composer).defaultPrevented).toBe(true);
     expect(dismissInvocations).toHaveBeenCalledTimes(4);
     expect(document.activeElement).toBe(composer.querySelector("textarea"));
   },
@@ -218,13 +217,11 @@ it.each([
   bindPicker(picker);
   search.focus();
 
-  const escape = escapeEvent(composition);
-  search.dispatchEvent(escape);
-  expect(escape.defaultPrevented).toBe(false);
+  expect(escape(search, composition).defaultPrevented).toBe(false);
   expect(picker.open).toBe(true);
   expect(document.activeElement).toBe(search);
 
-  search.dispatchEvent(escapeEvent());
+  escape(search);
   expect(picker.open).toBe(false);
   expect(document.activeElement).toBe(trigger);
 });

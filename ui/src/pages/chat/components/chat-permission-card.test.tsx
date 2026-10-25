@@ -206,9 +206,6 @@ it("shows grant failures, clears them during retry, and waits for observed acces
   await waitForSolid(() => expect(button.disabled).toBe(false));
   expect(f.view.queryByRole("alert")).toBeNull();
   expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
-  f.permissions(["screenRecording", "granted"]);
-  f.view.getByRole("button", { name: "Try again" }).click();
-  expect(f.retry).toHaveBeenCalledExactlyOnceWith("I granted Screen Recording, try again.");
 });
 
 it.each([

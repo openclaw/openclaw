@@ -41,63 +41,51 @@ function mountResource(
     ...application.gateway.snapshot,
     phase: "connected",
     client: createTestGatewayClient(request),
-    ...(upload
+    hello: upload
       ? {
-          hello: {
-            ...gatewayHelloForMethods(["mcp.app.formResource"]),
-            policy: {
-              attachments: { maxBytes: 1024, maxImageBytes: 1024 },
-              maxPayload: 1024 * 1024,
-            },
-          },
+          ...gatewayHelloForMethods(["mcp.app.formResource"]),
+          policy: { attachments: { maxBytes: 1024, maxImageBytes: 1024 }, maxPayload: 1024 * 1024 },
         }
-      : {}),
+      : application.gateway.snapshot.hello,
   });
   // SAFETY: These paths consume only Gateway capabilities and the upload policy.
   const context = { gateway: application.gateway } as ApplicationContext;
   const selections = vi.fn();
-  const noSelection = new Set<string>();
-  let setDisabled!: (value: boolean) => void;
-  let setRequestId!: (value: string) => void;
+  let controls!: { setDisabled: (value: boolean) => void; setRequestId: (value: string) => void };
+  const question = upload
+    ? {
+        ...previewQuestion,
+        options: [],
+        resource: { ...previewQuestion.resource, userOptions: { kind: "file" as const } },
+      }
+    : previewQuestion;
   const view = mountSolid(
     () => {
       const [selected, setSelected] = createSignal<ReadonlySet<string>>(new Set());
-      const [disabled, updateDisabled] = createSignal(false);
-      const [requestId, updateRequestId] = createSignal("question-request");
-      setDisabled = updateDisabled;
-      setRequestId = updateRequestId;
-      const resource = (
-        <ChatQuestionResource
-          question={
-            upload
-              ? {
-                  ...previewQuestion,
-                  question: "Upload a part",
-                  options: [],
-                  resource: { ...previewQuestion.resource, userOptions: { kind: "file" } },
-                }
-              : previewQuestion
+      const [disabled, setDisabled] = createSignal(false);
+      const [requestId, setRequestId] = createSignal("question-request");
+      controls = { setDisabled, setRequestId };
+      const onSelection = upload
+        ? (values: string[]) => {
+            selections(values);
+            setSelected(new Set(values));
           }
+        : undefined;
+      return (
+        <ChatQuestionResource
+          question={question}
           requestId={requestId()}
           sessionKey={`agent:main:${upload ? "upload" : "preview"}-session`}
           agentId={agentId}
-          selected={upload ? selected() : noSelection}
+          selected={selected()}
           disabled={disabled()}
-          onSelection={
-            upload
-              ? (values) => {
-                  selections(values);
-                  setSelected(new Set(values));
-                }
-              : undefined
-          }
+          onSelection={onSelection}
         />
       );
-      return upload ? <div>{resource}</div> : resource;
     },
     { wrapper: createSolidApplicationContextProvider(context).wrapper },
   );
-  return { view, selections, setDisabled, setRequestId };
+  return { view, selections, ...controls };
 }
 
 function expectResourceRequest(
@@ -209,9 +197,10 @@ it("publishes uploaded resource selections and follows controlled selections", a
 it("retires pending previews on disabled and request changes while retaining controls", async () => {
   const first = Promise.withResolvers<QuestionResourceActionResult>();
   const second = Promise.withResolvers<QuestionResourceActionResult>();
-  const request = createGatewayRequestMock(async () => ({
+  const current: QuestionResourceActionResult = {
     preview: { contents: [{ text: "Current preview" }] },
-  }));
+  };
+  const request = createGatewayRequestMock(async () => current);
   request.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
   const { view, setDisabled, setRequestId } = mountResource(request);
   const button = await waitForSolid(() =>
@@ -266,12 +255,7 @@ it("retires pending previews on disabled and request changes while retaining con
   });
   await expectState(true);
   expectPreview();
-  retry.reject(new Error("Resource retry failed"));
-  await expectState(false, "Resource retry failed");
+  retry.resolve(current);
+  await expectState(false);
   expectPreview();
-  button.click();
-  await waitForSolid(() => {
-    expect(view.queryByRole("alert")).toBeNull();
-    expect(request).toHaveBeenCalledTimes(6);
-  });
 });

@@ -38,7 +38,6 @@ function selectRange(node: Text, start: number, end: number) {
 function pointerUp(
   thread: HTMLElement,
   options: Omit<Parameters<typeof handleChatSelectionPointerUp>[1], "paneId"> = {
-    onAddToChat: onAddToChatSpy,
     onAskSideChat: onAskSideChatSpy,
   },
   settle = true,
@@ -74,42 +73,17 @@ function key(
 }
 
 const onAskSideChatSpy = vi.fn();
-const onAddToChatSpy = vi.fn();
 
 afterEach(() => {
   removeChatSelectionPopup();
   window.getSelection()?.removeAllRanges();
   document.body.innerHTML = "";
   onAskSideChatSpy.mockReset();
-  onAddToChatSpy.mockReset();
   vi.useRealTimers();
 });
 
 describe("chat selection popup", () => {
   beforeEach(() => vi.useFakeTimers());
-
-  it("routes Add to chat to its own composer", () => {
-    const thread = selection("Let's Encrypt cert is valid", 18);
-    pointerUp(thread);
-    const toolbar = popup();
-    expect(toolbar).not.toBeNull();
-    expect(toolbar?.getAttribute("aria-label")).toBe("Selection actions");
-    const buttons = [...(toolbar?.querySelectorAll("button") ?? [])];
-    buttons[0]?.click();
-    expect(onAddToChatSpy).toHaveBeenCalledWith(
-      {
-        text: "Let's Encrypt cert",
-        start: 0,
-        end: 18,
-        messageId: "assistant-1",
-        entryId: "entry-1",
-      },
-      expect.objectContaining({ top: 100, left: 100 }),
-    );
-    expect(onAskSideChatSpy).not.toHaveBeenCalled();
-    expect(window.getSelection()?.isCollapsed).toBe(true);
-    expect(popup()).toBeNull();
-  });
 
   it("ignores selections outside chat bubbles and collapsed selections", () => {
     const thread = selection("bubble text");
@@ -131,12 +105,15 @@ describe("chat selection popup", () => {
     pointerUp(thread, { onAskSideChat: firstAskSideChat }, false);
     pointerUp(thread, { onAskSideChat: secondAskSideChat }, false);
     vi.advanceTimersToNextTimer();
+    expect(popup()?.getAttribute("aria-label")).toBe("Selection actions");
     (document.body.querySelector(".chat-selection-popup button") as HTMLButtonElement).click();
     expect(firstAskSideChat).not.toHaveBeenCalled();
     expect(secondAskSideChat).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "replacement" }),
-      expect.anything(),
+      { text: "replacement", start: 0, end: 11, messageId: "assistant-1", entryId: "entry-1" },
+      expect.objectContaining({ top: 100, left: 100 }),
     );
+    expect(window.getSelection()?.isCollapsed).toBe(true);
+    expect(popup()).toBeNull();
   });
 
   it.each(["scroll", "collapse"])("dismisses the toolbar on %s", (action) => {

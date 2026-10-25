@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
-import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
+import { threadFixture } from "./chat-transcript-fixture.test-support.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -45,17 +44,13 @@ function running(props: Props, runId: string, outputTokens: number) {
 }
 function mount(props: Props, updateBeforeStart = true) {
   props.showToolCalls = true;
-  const transcript = createTestTranscript();
-  const container = document.body.appendChild(document.createElement("div"));
+  const { transcript, container, rerender: draw } = threadFixture(props);
   const rerender = () => {
-    render(renderChatThread(props, transcript), container);
+    draw();
     transcript.update();
   };
-  cleanup.push(() => {
-    transcript.dispose();
-    container.remove();
-  });
-  render(renderChatThread(props, transcript), container);
+  cleanup.push(() => transcript.dispose());
+  draw();
   if (updateBeforeStart) {
     transcript.update();
   }
@@ -182,8 +177,7 @@ it.each([false, true])(
   },
 );
 it("keeps progress after accepted steers and before queued input", async () => {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(31_000);
-  cleanup.push(() => clock.mockRestore());
+  vi.spyOn(Date, "now").mockReturnValue(31_000);
   const runId = "active-run";
   const sequencedPrompt = (id: string, seq: number, target?: string) => ({
     role: "user",

@@ -84,6 +84,8 @@ function blocks(container: HTMLElement) {
   return all(container, ".chat-text > p, .chat-image-frame, .chat-assistant-attachment-card");
 }
 const rect = (element: Element) => element.getBoundingClientRect();
+const expectMargins = (element: Element, marginTop: string) =>
+  expect(getComputedStyle(element)).toMatchObject({ marginTop, marginBottom: "0px" });
 const geometry = (container: HTMLElement) =>
   blocks(container).map((element) => rect(element).toJSON());
 function expectRhythm(container: HTMLElement, count: number) {
@@ -187,14 +189,8 @@ it.each(["assistant", "user"])("separates all heading levels in %s messages", (r
       const root = container.querySelector(".chat-text")!;
       const headings = root.querySelectorAll(`h${level}`);
       expect(headings).toHaveLength(2);
-      expect(getComputedStyle(headings[0]!)).toMatchObject({
-        marginTop: "0px",
-        marginBottom: "0px",
-      });
-      expect(getComputedStyle(headings[1]!)).toMatchObject({
-        marginTop: `${textSize * 1.5}px`,
-        marginBottom: "0px",
-      });
+      expectMargins(headings[0]!, "0px");
+      expectMargins(headings[1]!, `${textSize * 1.5}px`);
       const previous = headings[1]!.previousElementSibling!;
       expect(
         Math.abs(rect(headings[1]!).top - rect(previous).bottom - textSize * 1.5),
@@ -202,10 +198,7 @@ it.each(["assistant", "user"])("separates all heading levels in %s messages", (r
       for (const block of root.querySelectorAll(
         ":scope > p, :scope > ul, :scope > blockquote, :scope > .code-block-wrapper",
       )) {
-        expect(getComputedStyle(block)).toMatchObject({
-          marginTop: `${textSize}px`,
-          marginBottom: "0px",
-        });
+        expectMargins(block, `${textSize}px`);
       }
     }
   }

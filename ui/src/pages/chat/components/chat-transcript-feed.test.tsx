@@ -64,9 +64,10 @@ function toolResult(toolCallId: string, isError = false) {
   };
 }
 
-it("preserves forwarded attribution beside ordinary user and assistant messages", () => {
+it("renders ordinary messages with attribution and optional local timestamps", () => {
+  const timestamp = new Date(2026, 8, 10, 9, 7).getTime();
   const container = mount([
-    { role: "user", content: "Please **inspect** [the renderer](https://example.com)." },
+    { role: "user", content: "Please **inspect** [the renderer](https://example.com).", timestamp },
     reply("Check the queue.", {
       senderLabel: "Forwarded from Daily report — café 雪 🦞",
       senderSession: {
@@ -77,7 +78,9 @@ it("preserves forwarded attribution beside ordinary user and assistant messages"
     }),
     reply("An agent sent this update.", { senderSession: { agentId: "reviewer" } }),
     reply("A named assistant is not a forwarded source.", { senderLabel: "Custom assistant" }),
-    reply("Found the [owner](https://example.com/owner).\n\n```ts\nconst ready = true;\n```"),
+    reply("Found the [owner](https://example.com/owner).\n\n```ts\nconst ready = true;\n```", {
+      timestamp: timestamp + 60_000,
+    }),
   ]);
   const attributions = container.all(".chat-reply-attribution--forwarded");
   expect(attributions.map((entry) => entry.textContent?.replace(/\s+/gu, " ").trim())).toEqual([
@@ -94,6 +97,11 @@ it("preserves forwarded attribution beside ordinary user and assistant messages"
   expect(container.one('a[href="https://example.com/owner"]')?.textContent).toBe("owner");
   expect(container.one("pre code")?.textContent).toContain("const ready = true;");
   expect(container.one(".chat-avatar, .chat-bubble, .chat-author-avatar")).toBeNull();
+  expect(container.texts(part("time"))).toEqual(["09:07", "09:08"]);
+  const unclocked = container
+    .all(part("entry"))
+    .find((entry) => entry.textContent?.includes("An agent sent this update."));
+  expect(unclocked?.querySelector(part("time"))).toBeNull();
 });
 
 it("groups consecutive calls across result messages and expands every command or path", () => {
@@ -104,7 +112,7 @@ it("groups consecutive calls across result messages and expands every command or
     completed(toolCall("exec-1", "exec", { command })),
     toolResult("exec-1"),
     completed(
-      toolCall("exec-2", "exec", { command: "pnpm lint:ui:styles" }),
+      toolCall("exec-2", "exec", { command: "set -e" }),
       toolCall("read-1", "read", { path }),
     ),
     toolResult("read-1"),
@@ -124,7 +132,8 @@ it("groups consecutive calls across result messages and expands every command or
   expect(
     group.querySelector(".chat-task-feed__calls .chat-task-feed__tool-line--full")?.textContent,
   ).toBe(command);
-  contains(group.textContent, "pnpm lint:ui:styles", path);
+  contains(group.textContent, "set -e", path);
+  expect(container.all(part("row-label"))[1]?.textContent).toBe("set -e");
   expect(group.querySelectorAll(part("tool-line")).length).toBeGreaterThanOrEqual(3);
   summary.click();
   expect(group.open).toBe(false);
@@ -151,18 +160,19 @@ it.each(["arguments", "args", "input"])(
 );
 
 it("preserves mixed-block order and associates late failure results with their call", () => {
+  const args = { query: "example", path: "src/components" };
   const container = mount([
     assistant(
       text("Before the command."),
       toolCall("failed-call", "exec", { command: "pnpm check:ui" }),
       text("After the command."),
-      toolCall("successful-call", "read", { path: "ui/package.json" }),
+      toolCall("successful-call", "codebase_search", args),
     ),
     toolResult("successful-call"),
     toolResult("failed-call", true),
   ]);
   expect(container.texts(part("entry"))).toEqual(
-    ["Before the command.", "pnpm check:ui", "After the command.", "ui/package.json"].map((value) =>
+    ["Before the command.", "pnpm check:ui", "After the command.", "example"].map((value) =>
       expect.stringContaining(value),
     ),
   );
@@ -170,8 +180,9 @@ it("preserves mixed-block order and associates late failure results with their c
   const failed = lines.filter((line) => line.textContent?.includes("pnpm check:ui"));
   expect(failed.length).toBeGreaterThan(0);
   expect(failed.every((line) => line.classList.contains("chat-task-feed__error"))).toBe(true);
-  const successful = lines.find((line) => line.textContent?.includes("ui/package.json"));
+  const successful = lines.find((line) => line.textContent?.includes("example"));
   expect(successful?.classList.contains("chat-task-feed__error")).toBe(false);
+  expect(JSON.parse(successful!.querySelector("code")!.textContent!)).toEqual(args);
 });
 
 it.each(["tool", "function", "toolResult", "tool_result", undefined])(
@@ -212,32 +223,6 @@ it("omits commentary text while retaining a call in the same assistant message",
   expect(container.one(part("tool-group") + " summary")?.textContent).toContain("Raw details");
   expect(container.textContent).toContain("The stylesheet owns the layout.");
   expect(container.all(part("entry"))).toHaveLength(2);
-});
-
-it("shows local HH:MM message timestamps and omits missing timestamps", () => {
-  const timestamp = new Date(2026, 8, 10, 9, 7).getTime();
-  const container = mount([
-    { role: "user", content: "Timestamped prompt", timestamp },
-    reply("No timestamp"),
-    reply("Later timestamp", { timestamp: timestamp + 60_000 }),
-  ]);
-  expect(container.all(part("time")).map((time) => time.textContent)).toEqual(["09:07", "09:08"]);
-  const unclocked = container
-    .all(part("entry"))
-    .find((entry) => entry.textContent?.includes("No timestamp"));
-  expect(unclocked?.querySelector(part("time"))).toBeNull();
-});
-
-it.each<[string, Record<string, unknown>, string | null]>([
-  ["exec", { command: "set -e" }, "set -e"],
-  ["codebase_search", { query: "example", path: "src/components" }, null],
-])("preserves %s input and setup-only command labels", (name, args, label) => {
-  const container = mount([assistant(toolCall("input", name, args))]);
-  if (label !== null) {
-    expect(container.one(part("row-label"))?.textContent).toBe(label);
-  } else {
-    expect(JSON.parse(container.one("code")!.textContent!)).toEqual(args);
-  }
 });
 
 it("preserves anonymous command disclosures when earlier rows arrive in the same group", () => {
