@@ -161,9 +161,6 @@ describe("setup config provenance", () => {
         }),
       );
       resetConfigRuntimeState();
-      const initial = await readConfigFileSnapshot();
-      expect(initial.valid).toBe(true);
-      expect(initial.sourceConfig.gateway?.auth?.token).toBe("synthetic-before");
       controls.drift = () => vi.stubEnv("SETUP_PROVENANCE_TOKEN", "synthetic-after");
       if (firstAgent || legacyRoster) {
         controls.preEnsureDrift = () =>

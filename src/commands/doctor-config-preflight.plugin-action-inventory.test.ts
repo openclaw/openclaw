@@ -33,6 +33,7 @@ const actions = [
 ];
 const version = "2026.9.6";
 const retainedState = "retained session state";
+const contents = (root: string, name: string) => fs.readFileSync(path.join(root, name), "utf8");
 
 afterEach(() => {
   clearPluginDoctorContractRegistryCache();
@@ -193,17 +194,13 @@ module.exports = { stateMigrations: [{
             warnings: [],
           });
           for (const { pluginId } of admitted) {
-            expect(
-              fs.readFileSync(path.join(externalPath(pluginId), "migrated-session-state"), "utf8"),
-            ).toBe(retainedState);
+            expect(contents(externalPath(pluginId), "migrated-session-state")).toBe(retainedState);
           }
           for (const pluginRoot of [
             ...(caller === "deferred-doctor" ? [externalPath("codex")] : []),
             ...actions.map(({ pluginId }) => path.join(bundledRoot, pluginId)),
           ]) {
-            expect(fs.readFileSync(path.join(pluginRoot, "pending-session-state"), "utf8")).toBe(
-              retainedState,
-            );
+            expect(contents(pluginRoot, "pending-session-state")).toBe(retainedState);
             expect(fs.existsSync(path.join(pluginRoot, "migrated-session-state"))).toBe(false);
           }
           expect(readDeferredPluginMigrations({ env })).toEqual(pending);

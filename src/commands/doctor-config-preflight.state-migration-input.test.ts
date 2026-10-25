@@ -150,21 +150,12 @@ describe("runDoctorConfigPreflight state migration input", () => {
       }),
       migrateCodexModelRefs: false,
     });
-    expect(mocks.state).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: expect.objectContaining({
-          memory: expect.objectContaining({
-            search: expect.objectContaining({
-              provider: "openai",
-              store: { vector: { enabled: false } },
-            }),
-          }),
-        }),
-        sourceConfigBeforeMigrations: resolvedConfig,
-        pluginDoctorConfig: resolvedConfig,
-        configIncludedPaths: includedPaths,
-      }),
-    );
+    expect(mocks.state.mock.calls[0]?.[0]).toMatchObject({
+      cfg: { memory: { search: { provider: "openai", store: { vector: { enabled: false } } } } },
+      sourceConfigBeforeMigrations: resolvedConfig,
+      pluginDoctorConfig: resolvedConfig,
+      configIncludedPaths: includedPaths,
+    });
   });
 
   it("keeps explicit Doctor repair authority for partially valid legacy config", async () => {
