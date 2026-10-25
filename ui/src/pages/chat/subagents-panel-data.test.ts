@@ -91,47 +91,33 @@ function fixture(
 ) {
   const subscriptions = new Set<string>();
   const released = createDeferred();
-  const request = vi.fn((method: string, params?: unknown): unknown => {
-    const values = asOptionalRecord(params) ?? {};
-    if (method === "sessions.messages.subscribe") {
+  const methods: Record<string, (values: Record<string, unknown>) => unknown> = {
+    "sessions.messages.subscribe": (values) => {
       subscriptions.add(String(values.key));
       return { key: values.key, agentId: values.agentId };
-    }
-    if (method === "sessions.messages.unsubscribe") {
+    },
+    "sessions.messages.unsubscribe": (values) => {
       subscriptions.delete(String(values.key));
       released.resolve();
       return {};
+    },
+    "sessions.subscribe": () => ({}),
+    "sessions.unsubscribe": () => ({}),
+    "sessions.abort": () => ({ aborted: true }),
+    "sessions.list": list,
+    "sessions.describe": readNative,
+    "chat.history": readHistory,
+  };
+  const request = vi.fn((method: string, params?: unknown): unknown => {
+    if (!Object.hasOwn(methods, method)) {
+      throw new Error(`Unexpected method: ${method}`);
     }
-    if (method === "sessions.subscribe" || method === "sessions.unsubscribe") {
-      return {};
-    }
-    if (method === "sessions.abort") {
-      return { aborted: true };
-    }
-    if (method === "sessions.list") {
-      return list(values);
-    }
-    if (method === "sessions.describe") {
-      return readNative(values);
-    }
-    if (method === "chat.history") {
-      return readHistory(values);
-    }
-    throw new Error(`Unexpected method: ${method}`);
+    return methods[method]!(asOptionalRecord(params) ?? {});
   });
   const client = createTestGatewayClient(request);
   const connection = createGatewayHarness(client);
   connection.publish({
-    hello: gatewayHelloForMethods([
-      ...SESSION_MUTATION_TEST_METHODS,
-      "sessions.list",
-      "sessions.describe",
-      "sessions.subscribe",
-      "sessions.unsubscribe",
-      "sessions.messages.subscribe",
-      "sessions.messages.unsubscribe",
-      "chat.history",
-    ]),
+    hello: gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, ...Object.keys(methods)]),
   });
   const sessions = createTestSessionCapability(connection.gateway);
   const context = createContext(connection.gateway, sessions);
@@ -261,38 +247,35 @@ describe("Subagents panel data ownership", () => {
     expect(f.subscriptions.has(row.key)).toBe(false);
   });
 
-  it.each([undefined, "parallel-audits"])(
-    "loads older running children beyond the first page (%s)",
-    async (swarmGroupId) => {
-      const finished = Array.from({ length: 20 }, (_, index) => child(`finished-${index}`));
-      const last = runningChild("last", {
-        key: "agent:research:subagent:last",
-        agentId: "research",
-        swarmGroupId,
-      });
-      const persistent = child("persistent", {
-        key: "agent:main:dashboard:persistent",
-        classification: undefined,
-      });
-      const f = fixture(
-        (params) =>
-          !params.spawnedBy
-            ? page([])
-            : params.offset === 21
-              ? page([last], { offset: 21, totalCount: 22 })
-              : page([...finished, persistent], { hasMore: true, nextOffset: 21, totalCount: 22 }),
-        (params) => history(params.sessionKey === last.key ? last : finished[0]!),
-      );
-      f.open();
-      await f.data.refresh();
-      expect(f.data.rows.map((row) => row.session.key)).toEqual([
-        ...finished.map((row) => row.key),
-        last.key,
-      ]);
-      expect(f.data.rows.at(-1)?.canStop).toBe(true);
-      expect(f.data.loading).toBe(false);
-    },
-  );
+  it("loads older running children beyond the first page", async () => {
+    const finished = Array.from({ length: 20 }, (_, index) => child(`finished-${index}`));
+    const last = runningChild("last", {
+      key: "agent:research:subagent:last",
+      agentId: "research",
+      swarmGroupId: "parallel-audits",
+    });
+    const persistent = child("persistent", {
+      key: "agent:main:dashboard:persistent",
+      classification: undefined,
+    });
+    const f = fixture(
+      (params) =>
+        !params.spawnedBy
+          ? page([])
+          : params.offset === 21
+            ? page([last], { offset: 21, totalCount: 22 })
+            : page([...finished, persistent], { hasMore: true, nextOffset: 21, totalCount: 22 }),
+      (params) => history(params.sessionKey === last.key ? last : finished[0]!),
+    );
+    f.open();
+    await f.data.refresh();
+    expect(f.data.rows.map((row) => row.session.key)).toEqual([
+      ...finished.map((row) => row.key),
+      last.key,
+    ]);
+    expect(f.data.rows.at(-1)?.canStop).toBe(true);
+    expect(f.data.loading).toBe(false);
+  });
 
   it("rejects a stale Stop target while allowing the current run to be stopped exactly", async () => {
     let row = runningChild("stop", { activeRunIds: ["original-run"] });

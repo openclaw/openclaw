@@ -67,11 +67,7 @@ export async function renderChatModelControls(
 }
 
 export function requireElement(container: Element, selector: string, label: string): Element {
-  const element = container.querySelector(selector);
-  if (element === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return element;
+  return expectDefined(container.querySelector(selector), label);
 }
 
 export function getComposerTextarea(container: Element): HTMLTextAreaElement {
@@ -333,11 +329,11 @@ export function renderChatInto(container: HTMLElement, overrides: Partial<ChatPr
 }
 
 export function getChatModelSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
+  const select = expectDefined(
+    container.querySelector<HTMLElement>('[data-chat-model-select="true"]'),
+    "chat model control",
+  );
   expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat model control");
-  }
   return select;
 }
 
@@ -346,11 +342,11 @@ export function getChatThinkingValue(control: HTMLElement): string {
 }
 
 export function getThinkingSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]');
+  const select = expectDefined(
+    container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]'),
+    "chat thinking control",
+  );
   expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat thinking control");
-  }
   return select;
 }
 

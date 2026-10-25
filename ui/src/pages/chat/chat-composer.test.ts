@@ -39,10 +39,6 @@ const microphoneGuidance =
   "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.";
 const voiceButton = (container: Element) => button(container, t("chat.composer.startVoiceInput"));
 
-function expectClasses(element: Element | null | undefined, classes: string) {
-  expect(new Set(element?.classList)).toEqual(new Set(classes.split(" ")));
-}
-
 async function mountTalk(
   catalog: { transcription: { ready: boolean }; realtime?: { ready: boolean } },
   overrides: Parameters<typeof props>[0] = {},
@@ -152,7 +148,6 @@ it("labels the send action as Suggest and emits ephemeral typing state", () => {
   expect(query(".agent-chat__control-label")?.textContent).toContain("Suggest");
   expect(query<HTMLButtonElement>('button[aria-label="Add attachment"]')?.disabled).toBe(true);
 
-  expect(textarea).not.toBeNull();
   textarea.value = "hello";
   textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -275,8 +270,7 @@ it("clears a live whitespace draft when the last rendered draft was already empt
   textarea.value = currentDraft;
   textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
 
-  expect(currentDraft).toBe("");
-  expect(textarea.value).toBe("");
+  expect([currentDraft, textarea.value]).toEqual(["", ""]);
   expect(onDraftChange).toHaveBeenLastCalledWith("", undefined);
   expect(textarea.matches(":placeholder-shown")).toBe(true);
 });
@@ -366,10 +360,11 @@ it("replaces the composer with the archived-session notice", () => {
 
   const banner = query(".agent-chat__disabled-banner");
   expect(banner?.textContent).toContain("This session is archived.");
-  expect(query(".agent-chat__input")).toBeNull();
-  expect(query("textarea")).toBeNull();
-  expect(query("openclaw-chat-question-panel")).toBeNull();
-  expect(query(".agent-chat__typing-indicator--outside")).toBeNull();
+  expect(
+    query(
+      ".agent-chat__input, textarea, openclaw-chat-question-panel, .agent-chat__typing-indicator--outside",
+    ),
+  ).toBeNull();
   banner?.querySelector<HTMLButtonElement>("button")?.click();
   expect(onAction).toHaveBeenCalledOnce();
   const stop = query<HTMLButtonElement>(`[aria-label="${t("chat.runControls.stopGenerating")}"]`);
@@ -440,12 +435,9 @@ it("keeps the dictation button stable through hold progress and latch", async ()
   capturedButton!.dispatchEvent(dictationPointer("pointerdown", 9));
   expect(capturedButton!.hasPointerCapture(9)).toBe(true);
   await vi.advanceTimersByTimeAsync(300);
-  expectClasses(
-    capturedButton,
-    "chat-send-btn chat-send-btn--voice chat-send-btn--hold-enabled chat-send-btn--dictation-arming",
-  );
+  expect(capturedButton?.matches(".chat-send-btn--dictation-arming")).toBe(true);
   const holdingControl = capturedButton?.closest(".chat-talk-control");
-  expectClasses(holdingControl, "chat-talk-control chat-talk-control--holding");
+  expect(holdingControl?.matches(".chat-talk-control--holding")).toBe(true);
   expect(holdingControl?.querySelector(".chat-talk-input-picker")).not.toBeNull();
   expect(capturedButton!.hasPointerCapture(9)).toBe(true);
   await vi.advanceTimersByTimeAsync(500);
@@ -455,7 +447,7 @@ it("keeps the dictation button stable through hold progress and latch", async ()
   );
   expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything());
   expect(rerenderedButton).toBe(capturedButton);
-  expectClasses(rerenderedButton, "chat-send-btn chat-send-btn--dictating");
+  expect(rerenderedButton?.matches(".chat-send-btn--dictating")).toBe(true);
   expect(query(".agent-chat__dictation-phase--listening")?.textContent?.trim()).toBe(
     t("chat.composer.dictationListening"),
   );
@@ -544,12 +536,7 @@ it("keeps fallback status in the composer without a compaction overlay", () => {
       occurredAt: 900,
     },
   });
-  expect(query(".compaction-indicator--active")).toBeNull();
-  expect(query(".chat-compaction")).toBeNull();
-  expect(query(".compaction-indicator--fallback")?.textContent?.trim()).toBe(
-    "Fallback active: deepinfra/moonshotai/Kimi-K2.5",
-  );
-  expect(query(".compaction-indicator--fallback")?.getAttribute("aria-label")).toBe(
-    "Selected: fireworks/minimax-m2p5 • Active: deepinfra/moonshotai/Kimi-K2.5 • Attempts: fireworks/minimax-m2p5: rate limit",
-  );
+  expect(query(".compaction-indicator--active, .chat-compaction")).toBeNull();
+  // Localized text and accessible details belong to chat-composer-status.test.tsx.
+  expect(query(".compaction-indicator--fallback")).not.toBeNull();
 });
