@@ -10,7 +10,6 @@ import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
-  type ExecApprovalRequestPayload,
 } from "../../infra/exec-approvals.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
@@ -60,8 +59,7 @@ it.for([
       );
     }
     const manager = createTestApprovalManager(test, {
-      resolveAllowedDecisions: (request: ExecApprovalRequestPayload) =>
-        resolveExecApprovalRequestAllowedDecisions(request),
+      resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
     });
     const delivered = createDeferredCore<ExecApprovalRequest>();
@@ -210,8 +208,7 @@ it.for([
 for (const decision of ["allow-once", "deny"] as const) {
   it(`shows stdin and honors ${decision} exactly once`, async (test) => {
     const manager = createTestApprovalManager(test, {
-      resolveAllowedDecisions: (request: ExecApprovalRequestPayload) =>
-        resolveExecApprovalRequestAllowedDecisions(request),
+      resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
     });
     const broadcast = vi.fn(async (_event: string, request: ExecApprovalRequest) => {
       expect(request.request.command).toContain("script-from-stdin");

@@ -16,11 +16,10 @@ import type { GatewayClient as ServerGatewayClient } from "./client-types.js";
 import { modelsAuthLoginHandlers } from "./models-auth-login.js";
 import { writeCatalogPlugin } from "./models-catalog-fixture.test-support.js";
 import {
-  closeModelsEndpoint,
   connectModelsReader,
   createModelsTestState,
-  listenModelsEndpoint,
   modelsTestConfig,
+  serveModelsEndpoint,
   settleModelsWork,
   startModelsGateway,
 } from "./models-integration.test-support.js";
@@ -78,13 +77,24 @@ async function withGatewayOwner<T>(state: OpenClawTestState, operation: () => Pr
   }
 }
 
-async function createState() {
-  return createModelsTestState("owner-bound-login", {
+const createState = () =>
+  createModelsTestState("owner-bound-login", {
     layout: "state-only",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-    },
+    env: { OPENCLAW_TEST_MINIMAL_GATEWAY: "0" },
   });
+
+async function finishLogin(client: Awaited<ReturnType<typeof startModelsGateway>>["client"]) {
+  let result: WizardNextResult = { done: false };
+  while (!result.done) {
+    const step = result.step;
+    result = await client.request<WizardNextResult>("wizard.next", {
+      sessionId: "owner-login",
+      ...(step && step.executor !== "gateway" && step.type !== "progress"
+        ? { answer: { stepId: step.id, value: step.type === "confirm" ? true : null } }
+        : {}),
+    });
+  }
+  return result;
 }
 
 async function writePlugin(state: OpenClawTestState, baseUrl: string) {
@@ -184,8 +194,9 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
         response.writeHead(404).end("{}");
       }
     });
+    await using listening = await serveModelsEndpoint(endpoint, true);
     try {
-      const cfg = await writePlugin(state, await listenModelsEndpoint(endpoint));
+      const cfg = await writePlugin(state, listening.baseUrl);
       await state.writeConfig(cfg);
       await withGatewayOwner(state, async () => {
         await using gateway = await startModelsGateway(state, cfg, token);
@@ -212,23 +223,7 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
             expect(requests).toBe(0);
           } else {
             await client.request("models.authLogin", params);
-            const completion = settleModelsWork(
-              (async () => {
-                let result: WizardNextResult = { done: false };
-                while (!result.done) {
-                  const step = result.step;
-                  result = await client.request<WizardNextResult>("wizard.next", {
-                    sessionId: params.sessionId,
-                    ...(step && step.executor !== "gateway" && step.type !== "progress"
-                      ? {
-                          answer: { stepId: step.id, value: step.type === "confirm" ? true : null },
-                        }
-                      : {}),
-                  });
-                }
-                return result;
-              })(),
-            );
+            const completion = settleModelsWork(finishLogin(client));
             await withinTest(prepared.promise, signal);
             release.resolve();
             await withinTest(atCredentialWrite.promise, signal);
@@ -264,10 +259,6 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
       });
     } finally {
       release.resolve();
-      endpoint.closeAllConnections();
-      if (endpoint.listening) {
-        await closeModelsEndpoint(endpoint);
-      }
     }
   },
 );

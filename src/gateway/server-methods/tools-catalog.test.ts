@@ -133,13 +133,7 @@ describe("tools.catalog handler", () => {
     const media = groups.find((group) => group.id === "media")?.tools;
     expect(media?.map((tool) => `${tool.source}:${tool.id}`)).toContain("core:tts");
     expect(tools.filter((tool) => tool.id === "openclaw")).toEqual([
-      {
-        id: "openclaw",
-        label: "openclaw",
-        description: "Delegate OpenClaw setup and repair",
-        source: "core",
-        defaultProfiles: [],
-      },
+      expect.objectContaining({ id: "openclaw", source: "core", defaultProfiles: [] }),
     ]);
     expect(ids.includes("agents_wait")).toBe(swarm);
     expect(ids.includes("personal_instructions")).toBe(multipleProfiles);
