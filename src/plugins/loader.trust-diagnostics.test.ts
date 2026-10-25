@@ -36,6 +36,21 @@ if (!agentMailIntegrity) {
   throw new Error("Expected a valid AgentMail catalog integrity");
 }
 
+type TrustCase = {
+  pluginId?: string;
+  packageName?: string;
+  version?: string;
+  override?: Partial<PluginInstallRecord>;
+  symlinkedStateRoot?: boolean;
+  repair?: boolean;
+  repairTrusted?: boolean;
+};
+function trustCase(name: string, reason: string, options: TrustCase = {}) {
+  return { name, reason, trusted: reason === "trusted-official", ...options };
+}
+const agentMail = { pluginId: "agentmail", packageName: "@agentmail/agentmail", version: "0.2.1" };
+const legacyAgentMail = { source: "clawhub", spec: "clawhub:@agentmail/agentmail@0.2.1" } as const;
+
 afterEach(async () => {
   try {
     await closeOpenClawStateDatabaseAsync();
@@ -126,120 +141,58 @@ describe("recorded plugin trust diagnostics", () => {
   });
 
   it.each([
-    {
-      name: "official install through a symlinked state root",
+    trustCase("official install through a symlinked state root", "trusted-official", {
       symlinkedStateRoot: true,
-      reason: "trusted-official",
-      trusted: true,
-    },
-    {
-      name: "legacy ClawHub spec",
+    }),
+    trustCase("legacy ClawHub spec", "provenance-missing", {
       override: { source: "clawhub", spec: `clawhub:${defaultPackageName}@2026.8.2` },
-      reason: "provenance-missing",
-      trusted: false,
       repair: true,
-    },
-    {
-      name: "missing provenance",
+    }),
+    trustCase("missing provenance", "provenance-missing", {
       override: { spec: undefined },
-      reason: "provenance-missing",
-      trusted: false,
-    },
-    {
-      name: "conflicting identity",
+    }),
+    trustCase("conflicting identity", "provenance-invalid", {
       override: { resolvedName: "@vendor/diffs" },
-      reason: "provenance-invalid",
-      trusted: false,
-    },
-    {
-      name: "local npm archive",
+    }),
+    trustCase("local npm archive", "origin-path", {
       override: { artifactKind: "npm-pack" },
-      reason: "origin-path",
-      trusted: false,
-    },
-    {
-      name: "official AgentMail ClawHub install",
-      pluginId: "agentmail",
-      packageName: "@agentmail/agentmail",
-      version: "0.2.1",
+    }),
+    trustCase("official AgentMail ClawHub install", "trusted-official", {
+      ...agentMail,
       override: {
-        source: "clawhub",
-        spec: "clawhub:@agentmail/agentmail@0.2.1",
+        ...legacyAgentMail,
         clawhubPackage: "@agentmail/agentmail",
         clawhubUrl: "https://clawhub.ai",
         clawhubChannel: "official",
       },
-      reason: "trusted-official",
-      trusted: true,
-    },
-    {
-      name: "legacy AgentMail ClawHub install",
-      pluginId: "agentmail",
-      packageName: "@agentmail/agentmail",
-      version: "0.2.1",
-      override: { source: "clawhub", spec: "clawhub:@agentmail/agentmail@0.2.1" },
-      reason: "provenance-missing",
-      trusted: false,
+    }),
+    trustCase("legacy AgentMail ClawHub install", "provenance-missing", {
+      ...agentMail,
+      override: legacyAgentMail,
       repair: true,
       repairTrusted: false,
-    },
-    {
-      name: "legacy AgentMail ClawHub install with matching integrity",
-      pluginId: "agentmail",
-      packageName: "@agentmail/agentmail",
-      version: "0.2.1",
-      override: {
-        source: "clawhub",
-        spec: "clawhub:@agentmail/agentmail@0.2.1",
-        integrity: agentMailIntegrity,
-      },
-      reason: "provenance-missing",
-      trusted: false,
+    }),
+    trustCase("legacy AgentMail ClawHub install with matching integrity", "provenance-missing", {
+      ...agentMail,
+      override: { ...legacyAgentMail, integrity: agentMailIntegrity },
       repair: true,
       repairTrusted: true,
-    },
-    {
-      name: "consistent third-party npm install",
+    }),
+    trustCase("consistent third-party npm install", "third-party-npm", {
       pluginId: "third-party-demo",
       packageName: "@vendor/third-party-demo",
       version: "1.0.0",
-      reason: "third-party-npm",
-      trusted: false,
-    },
-    {
-      name: "conflicting third-party npm identity",
+    }),
+    trustCase("conflicting third-party npm identity", "provenance-invalid", {
       pluginId: "third-party-demo",
       packageName: "@vendor/third-party-demo",
       override: { resolvedName: "@vendor/other" },
-      reason: "provenance-invalid",
-      trusted: false,
-    },
-    {
-      name: "official package recorded under another plugin id",
+    }),
+    trustCase("official package recorded under another plugin id", "provenance-invalid", {
       pluginId: "third-party-demo",
-      reason: "provenance-invalid",
-      trusted: false,
-    },
-    {
-      name: "unendorsed AgentMail npm namesake",
-      pluginId: "agentmail",
-      packageName: "@agentmail/agentmail",
-      version: "0.2.1",
-      reason: "provenance-invalid",
-      trusted: false,
-    },
-  ] satisfies Array<{
-    name: string;
-    pluginId?: string;
-    packageName?: string;
-    version?: string;
-    override?: Partial<PluginInstallRecord>;
-    symlinkedStateRoot?: boolean;
-    reason: string;
-    trusted: boolean;
-    repair?: boolean;
-    repairTrusted?: boolean;
-  }>)(
+    }),
+    trustCase("unendorsed AgentMail npm namesake", "provenance-invalid", agentMail),
+  ])(
     "inspection and registration agree for $name",
     async ({
       override,

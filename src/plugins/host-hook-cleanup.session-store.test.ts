@@ -23,6 +23,7 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { runPluginHostCleanup } from "./host-hook-cleanup.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createOwnershipHarness } from "./registry-ownership.test-support.js";
 import type { PluginRegistry } from "./registry-types.js";
 
 type CleanupOptions = Partial<Parameters<typeof runPluginHostCleanup>[0]>;
@@ -73,14 +74,7 @@ describe("plugin host cleanup session stores", () => {
   const harnessRegistration = (pluginId: string, id: string): Harness => ({
     pluginId,
     source: "test",
-    harness: {
-      id,
-      label: id,
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw new Error("unused test harness");
-      },
-    },
+    harness: createOwnershipHarness(id),
   });
 
   it("leaves entries unchanged when cleanup finds no plugin-owned state", async () => {

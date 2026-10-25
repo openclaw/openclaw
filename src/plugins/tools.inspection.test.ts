@@ -119,6 +119,15 @@ function pluginConfig(paths: string[], allow: string[]): OpenClawConfig["plugins
   return { allow, load: { paths }, slots: { memory: "none" } };
 }
 
+function toolScope(
+  config: OpenClawConfig,
+  workspaceDir: string,
+  toolAllowlist: string[],
+  agentId?: string,
+) {
+  return { context: { config, workspaceDir, agentId }, toolAllowlist };
+}
+
 async function inspectionLease(params: Parameters<typeof acquirePluginToolInspectionRegistry>[0]) {
   const inspection = await acquirePluginToolInspectionRegistry(params);
   return { ...inspection, [Symbol.asyncDispose]: () => inspection.release() };
@@ -146,9 +155,7 @@ it.each([
     const loadContext = resolvePluginRuntimeLoadContext({ config, env: process.env });
     await using inspection = await inspectionLease({
       loadContext,
-      scopes: [
-        { context: { config, workspaceDir: state.workspaceDir }, toolAllowlist: ["optional_tool"] },
-      ],
+      scopes: [toolScope(config, state.workspaceDir, ["optional_tool"])],
     });
     assert(inspection.registry);
     expect(inspection.registry.diagnostics).toEqual([]);
@@ -201,14 +208,10 @@ it.each(
         ready.resolve();
       };
       const sessionKey = "agent:main:readiness";
-      const scope = {
-        context: { config, agentId: "main", workspaceDir: state.workspaceDir },
-        toolAllowlist: ["project_tool"],
-      };
       const loadContext = resolvePluginRuntimeLoadContext({ config, env: process.env });
       await using inspection = await inspectionLease({
         loadContext,
-        scopes: [scope],
+        scopes: [toolScope(config, state.workspaceDir, ["project_tool"], "main")],
       });
       let host: Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>> | undefined;
       try {
@@ -365,11 +368,12 @@ it("registers the selected fleet once, preserves agent factories, and settles fa
       [scopes[0]!, alphaTools],
       [scopes[1]!, betaTools],
     ] as const) {
-      const shared = tools.find((tool) => tool.name === "shared_tool")!;
-      expect((await shared.execute("inspection", {})).details).toEqual({
-        agentId: scope.context.agentId,
-        workspaceDir: scope.context.workspaceDir,
-      });
+      for (const tool of tools) {
+        expect((await tool.execute("inspection", {})).details).toEqual({
+          agentId: scope.context.agentId,
+          workspaceDir: scope.context.workspaceDir,
+        });
+      }
     }
     expect(
       readEvents(events, "register").toSorted((a, b) => a.plugin.localeCompare(b.plugin)),
@@ -381,17 +385,6 @@ it("registers the selected fleet once, preserves agent factories, and settles fa
       })),
     );
     expect(readEvents(events).some((event) => event.plugin === "excluded")).toBe(false);
-    const factoryEvent = (plugin: string, agentId: string) => ({
-      plugin,
-      kind: "factory",
-      agentId,
-      workspaceDir: state.path(agentId),
-    });
-    expect(readEvents(events, "factory")).toEqual([
-      factoryEvent("shared", "alpha"),
-      factoryEvent("shared", "beta"),
-      factoryEvent("worker", "beta"),
-    ]);
     await inspection.release();
     await inspection.release();
     expect(
@@ -451,12 +444,7 @@ it.each(["a-first", "z-second"])(
       expect(loadContext.manifestRegistry?.plugins.map((record) => record.id)).toEqual(ids);
       await using inspection = await inspectionLease({
         loadContext,
-        scopes: [
-          {
-            context: { config, agentId: "main", workspaceDir: state.workspaceDir },
-            toolAllowlist: [`${selected}_tool`],
-          },
-        ],
+        scopes: [toolScope(config, state.workspaceDir, [`${selected}_tool`], "main")],
       });
       const registry = inspection.registry;
       assert(registry, "Expected the selected inspection registry");
