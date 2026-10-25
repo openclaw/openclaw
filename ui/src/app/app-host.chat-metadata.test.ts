@@ -32,7 +32,7 @@ import {
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { createShellConfigFixture } from "./app-host.test-support.ts";
-import type { ApplicationContext } from "./context.ts";
+import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 
 type ChatMetadataShell = HTMLElement & {
@@ -47,6 +47,12 @@ function connectedGateway() {
   const client = harness.gateway.snapshot.client;
   assert.ok(client);
   return { ...harness, client };
+}
+
+function metadataShell(gateway: ApplicationGateway) {
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
+  shell.runtime = { context: { gateway } as unknown as ApplicationContext };
+  return shell;
 }
 
 function metadataCalls(
@@ -137,10 +143,7 @@ it("reuses unrelated agent catalogs across a minute of scoped publications", asy
   const request = current().request.mockImplementation(async () => ({
     models: [{ id: `model-${revision}`, name: "Catalog model", provider: "fixture" }],
   }));
-  const shell = createShellOwner() as unknown as ChatMetadataShell;
-  shell.runtime = {
-    context: { gateway } as unknown as ApplicationContext,
-  };
+  const shell = metadataShell(gateway);
   const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
   const scopes = ["writer", "reader"].flatMap((agentId) => [
     { agentId },
@@ -196,8 +199,7 @@ it("settles discovery receipts without refetching unchanged warm catalogs", asyn
       ? { pendingProviders: ["fixture"] }
       : {}),
   }));
-  const shell = createShellOwner() as unknown as ChatMetadataShell;
-  shell.runtime = { context: { gateway } as unknown as ApplicationContext };
+  const shell = metadataShell(gateway);
   const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
   const scopes = [
     { agentId: "main" },
@@ -269,8 +271,7 @@ it("keeps a pending agent catalog read when another agent publishes changes", as
   const wire = createDeferred<ModelCatalogResult>();
   const catalog = { models: [{ id: "model", name: "Catalog model", provider: "fixture" }] };
   const request = current().request.mockReturnValue(wire.promise);
-  const shell = createShellOwner() as unknown as ChatMetadataShell;
-  shell.runtime = { context: { gateway } as unknown as ApplicationContext };
+  const shell = metadataShell(gateway);
   const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
   const scope = { agentId: "alpha" };
   const reader = new ModelCatalogReader(() => {});
@@ -361,8 +362,7 @@ it("updates service-tier hints without rereading unchanged session facts", async
   const state = makeChatHost({ client }) as ChatPageHost;
   state.connected = true;
   state.sessionKey = "agent:main:current";
-  const shell = createShellOwner() as unknown as ChatMetadataShell;
-  shell.runtime = { context: { gateway } as unknown as ApplicationContext };
+  const shell = metadataShell(gateway);
   try {
     await refreshChatMetadata(state);
     request.mockClear();

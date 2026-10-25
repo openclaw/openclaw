@@ -33,6 +33,14 @@ function publish(detail: unknown) {
   window.dispatchEvent(new CustomEvent("openclaw:native-device-settings-changed", { detail }));
 }
 
+const deviceSnapshot = createNativeDeviceSettingsSnapshot();
+const withPermissions = (change: Record<string, unknown>) => ({
+  permissions: { ...deviceSnapshot.permissions, ...change },
+});
+const withApp = (change: Record<string, unknown>) => ({
+  app: { ...deviceSnapshot.app, ...change },
+});
+
 describe("native device settings wire contract", () => {
   it.each([undefined, false, true])(
     "advertises AI setup only with explicit host support (%s)",
@@ -392,7 +400,7 @@ describe("native device settings wire contract", () => {
         ["fractional revision", { revision: 1.5 }],
         ["non-numeric revision", { revision: "2" }],
         ["device", { device: { platform: "macos" } }],
-        ["app", { app: { ...createNativeDeviceSettingsSnapshot().app, showDockIcon: "yes" } }],
+        ["app", withApp({ showDockIcon: "yes" })],
         ["absent family encoded as null", { app: null }],
         ["appearance", { app: { appearance: "sepia" } }],
         ["notifications", { app: { notificationsEnabled: "true" } }],
@@ -409,21 +417,10 @@ describe("native device settings wire contract", () => {
           null,
           { selectedId: 1, available: [] },
           { selectedId: "paper", available: [{ id: "paper" }] },
-        ].map(
-          (iconStyle) =>
-            [
-              "Dock icon",
-              { app: { ...createNativeDeviceSettingsSnapshot().app, iconStyle } },
-            ] as const,
-        ),
+        ].map((iconStyle) => ["Dock icon", withApp({ iconStyle })] as const),
         [
           "capabilities",
-          {
-            capabilities: {
-              ...createNativeDeviceSettingsSnapshot().capabilities,
-              computerControlProvider: "other",
-            },
-          },
+          { capabilities: { ...deviceSnapshot.capabilities, computerControlProvider: "other" } },
         ],
         [
           "browser",
@@ -431,54 +428,33 @@ describe("native device settings wire contract", () => {
             browser: {
               importAvailable: true,
               cookieSync: {
-                ...createNativeDeviceSettingsSnapshot().browser.cookieSync,
+                ...deviceSnapshot.browser.cookieSync,
                 domains: [42],
               },
             },
           },
         ],
-        [
-          "permissions",
-          { permissions: { ...createNativeDeviceSettingsSnapshot().permissions, entries: null } },
-        ],
+        ["permissions", withPermissions({ entries: null })],
         [
           "unknown permission id",
-          {
-            permissions: {
-              ...createNativeDeviceSettingsSnapshot().permissions,
-              entries: [{ id: "unknown", status: "granted" }],
-            },
-          },
+          withPermissions({ entries: [{ id: "unknown", status: "granted" }] }),
         ],
         [
           "duplicate permission id",
-          {
-            permissions: {
-              ...createNativeDeviceSettingsSnapshot().permissions,
-              entries: [
-                { id: "camera", status: "granted" },
-                { id: "camera", status: "denied" },
-              ],
-            },
-          },
+          withPermissions({
+            entries: [
+              { id: "camera", status: "granted" },
+              { id: "camera", status: "denied" },
+            ],
+          }),
         ],
         [
           "duplicate additional permission id",
-          {
-            permissions: {
-              ...createNativeDeviceSettingsSnapshot().permissions,
-              additionalEntries: [{ id: "camera", status: "denied" }],
-            },
-          },
+          withPermissions({ additionalEntries: [{ id: "camera", status: "denied" }] }),
         ],
         [
           "additional permission status",
-          {
-            permissions: {
-              ...createNativeDeviceSettingsSnapshot().permissions,
-              additionalEntries: [{ id: "eventPosting", status: "unknown" }],
-            },
-          },
+          withPermissions({ additionalEntries: [{ id: "eventPosting", status: "unknown" }] }),
         ],
         [
           "precise editability",
@@ -492,20 +468,12 @@ describe("native device settings wire contract", () => {
         ["missing voice wakeEnabled", { voice: { supported: true } }],
         ["missing voice supported", { voice: { wakeEnabled: false } }],
         ["Talk toggle", { voice: { supported: true, wakeEnabled: false, talkEnabled: "true" } }],
-        [
-          "location",
-          {
-            permissions: {
-              ...createNativeDeviceSettingsSnapshot().permissions,
-              location: { mode: ["off"], precise: false },
-            },
-          },
-        ],
+        ["location", withPermissions({ location: { mode: ["off"], precise: false } })],
         [
           "voice",
           {
             voice: {
-              ...createNativeDeviceSettingsSnapshot().voice,
+              ...deviceSnapshot.voice,
               microphone: { selectedId: null, devices: [{ id: "mic" }] },
             },
           },
