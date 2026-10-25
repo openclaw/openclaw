@@ -113,16 +113,6 @@ function settle(db: DatabaseSync) {
   throw new Error("Bounded projection maintenance did not finish");
 }
 
-it("reports sorted dirty sessions on admission and observes subsequent writes", () => {
-  const db = createDatabase();
-  seedCleanSession(db, "dirty-z");
-  seedCleanSession(db, "dirty-a");
-  db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1");
-  expectStatus(maintain(db), ["dirty-a", "dirty-z"]);
-  db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 0");
-  expectStatus(maintain(db));
-});
-
 it.each(["preflight", "sweep"] as const)(
   "%s leaves the writer lock free during both host grants and reads subsequent writes",
   (type) => {

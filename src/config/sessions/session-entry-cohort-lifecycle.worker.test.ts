@@ -70,7 +70,7 @@ async function admitCohort(scope: SessionAccessScope) {
   return { claim, reader: claim.reader };
 }
 
-function holdCohortReply() {
+async function startGatedRead(scope: SessionAccessScope, assertCurrent = noop) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   let armed = false;
@@ -99,22 +99,10 @@ function holdCohortReply() {
         );
       return execution;
     });
-  return {
-    entered,
-    release,
-    arm: () => {
-      armed = true;
-    },
-    restore: () => intercept.mockRestore(),
-  };
-}
-
-async function startGatedRead(scope: SessionAccessScope, assertCurrent = noop) {
-  const gate = holdCohortReply();
-  onTestFinished(gate.restore);
+  onTestFinished(() => intercept.mockRestore());
   const admitted = await admitCohort(scope);
   addSessionMember(scope, { identityId: "reply-member", addedBy: "owner", addedAt: 2 });
-  gate.arm();
+  armed = true;
   const consume = vi.fn();
   const reading = admitted.reader.withRead(
     { ...requestFor(scope), includeMembers: true },
@@ -122,16 +110,12 @@ async function startGatedRead(scope: SessionAccessScope, assertCurrent = noop) {
     consume,
   );
   onTestFinished(async () => {
-    gate.release.resolve();
+    release.resolve();
     await Promise.allSettled([reading]);
   });
   void reading.catch(noop);
-  await awaitGateBeforeSettlement(
-    gate.entered.promise,
-    reading,
-    "Cohort settled before its reply gate",
-  );
-  return { ...admitted, gate, reading, consume };
+  await awaitGateBeforeSettlement(entered.promise, reading, "Cohort settled before its reply gate");
+  return { ...admitted, gate: { release }, reading, consume };
 }
 
 it.for(["warm", "cold"] as const)(

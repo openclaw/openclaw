@@ -3,10 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionActor, SessionActorStorage } from "./session-actor-contract.js";
 import { authority, memoryOwnerFixture } from "./session-actor-memory-family.test-support.js";
-import type {
-  SessionActorStorageReads,
-  SessionActorStorageWrites,
-} from "./session-actor-storage-contract.js";
+import {
+  mutateMemory as mutate,
+  readMemory as read,
+} from "./session-actor-memory-publication.test-support.js";
+import type { SessionActorStorageWrites } from "./session-actor-storage-contract.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -44,16 +45,6 @@ function create(
   return mutate(store, "session.entry.create", { entry, cwd: "/synthetic" });
 }
 
-const read = <K extends keyof SessionActorStorageReads>(
-  store: SessionActorStorage,
-  type: K,
-  input: SessionActorStorageReads[K]["input"],
-) => store.read({ type, input }, authority);
-const mutate = <K extends keyof SessionActorStorageWrites>(
-  store: SessionActorStorage,
-  type: K,
-  input: SessionActorStorageWrites[K]["input"],
-) => store.mutate({ type, input }, authority);
 const entry = (store: SessionActorStorage) => read(store, "session.entry.read", {});
 const patch = (store: SessionActorStorage, label: string) =>
   mutate(store, "session.entry.patch", {

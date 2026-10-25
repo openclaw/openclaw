@@ -31,11 +31,11 @@ import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
 
-function migrationAcpMeta(agent: string, runtimeSessionName: string, lastActivityAt = 100) {
+function acpMeta(agent: string, lastActivityAt = 100) {
   return {
     backend: "fixture",
     agent,
-    runtimeSessionName,
+    runtimeSessionName: `${agent}-runtime`,
     mode: "persistent" as const,
     state: "idle" as const,
     lastActivityAt,
@@ -88,23 +88,47 @@ function acpHarness(env: NodeJS.ProcessEnv, agentIds: string[], storePath?: stri
 }
 
 function seedSession(env: NodeJS.ProcessEnv, sessionKey: string, agentId: string) {
-  const entry = {
-    sessionId: `session-${sessionKey}`,
-    lifecycleRevision: `revision-${sessionKey}`,
-    updatedAt: 100,
-  };
+  const entry = sessionEntry(sessionKey);
   replaceSessionEntrySync({ agentId, env, sessionKey }, entry);
   return entry;
+}
+
+function sessionEntry(id: string) {
+  return { sessionId: `session-${id}`, lifecycleRevision: `revision-${id}`, updatedAt: 100 };
+}
+
+function writeRawAcpEntry(
+  scope: { env: NodeJS.ProcessEnv; agentId: string; sessionKey: string },
+  entry: ReturnType<typeof sessionEntry>,
+  values: string[],
+  valid: boolean,
+) {
+  const database = openOpenClawAgentDatabase(scope);
+  if (!valid) {
+    runSqliteImmediateTransactionSync(database.db, () =>
+      markCanonicalSessionValidationPending(database),
+    );
+  }
+  const raw = `${JSON.stringify(entry).slice(0, -1)},${values.map((value) => `"acp":${value}`).join(",")}}`;
+  database.db
+    .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = ? WHERE session_key = ?")
+    .run(raw, Number(valid), scope.sessionKey);
+  return raw;
 }
 
 function seedMeta(
   env: NodeJS.ProcessEnv,
   sessionKey: string,
   lifecycleRevision: string,
-  meta: ReturnType<typeof migrationAcpMeta>,
-  now = 100,
+  meta: ReturnType<typeof acpMeta>,
 ) {
-  writeAcpSessionMetaForMigration({ env, sessionKey, lifecycleRevision, meta, now: () => now });
+  writeAcpSessionMetaForMigration({
+    env,
+    sessionKey,
+    lifecycleRevision,
+    meta,
+    now: () => meta.lastActivityAt,
+  });
 }
 
 it.each([false, true])(
@@ -161,12 +185,7 @@ it.each(["recorded", "ownerless", "literal"] as const)(
             ? "global"
             : buildAcpDatabaseSessionKey("absent", "retired");
       const entry = seed(sessionKey, "deferred");
-      seedMeta(
-        env,
-        sessionKey,
-        entry.lifecycleRevision,
-        migrationAcpMeta("deferred", "deferred-runtime"),
-      );
+      seedMeta(env, sessionKey, entry.lifecycleRevision, acpMeta("deferred"));
       const deferredPath = resolveOpenClawAgentSqlitePath({ agentId: "deferred", env });
       await closeOpenClawAgentDatabaseByPathAsync(deferredPath);
       const refusal = createAgentDatabaseInspectionRefusal({
@@ -193,74 +212,54 @@ it.each(["recorded", "ownerless", "literal"] as const)(
 
 it("startup refuses unresolved ACP ownership even without a discovered agent store", async () => {
   await withAcpState(["main", "ops"], async ({ env, startup }) => {
-    seedMeta(
-      env,
-      "@agent:main:agent:ops:acp:legacy",
-      "unresolved-revision",
-      migrationAcpMeta("ops", "unresolved-runtime"),
-    );
+    seedMeta(env, "@agent:main:agent:ops:acp:legacy", "unresolved-revision", acpMeta("ops"));
     await expect(startup()).rejects.toThrow("unresolved shared ACP owner");
   });
 });
 
 it("startup requires offline ACP repair before handing restored stores to runtime", async () => {
   await withAcpState(["main", "ops"], async ({ env, cfg, startup, handoff }) => {
-    const entry = {
-      sessionId: "restored-acp-session",
-      lifecycleRevision: "restored-revision",
-      updatedAt: 100,
-    };
-    const meta = migrationAcpMeta("main", "restored-runtime");
+    const meta = acpMeta("main");
     const literalKey = buildAcpDatabaseSessionKey("absent", "other");
     const owners = new Set<string>();
-    for (const [shape, agentId, sessionKey, sourceKey] of [
-      ["raw-key", "main", "agent:main:acp:raw", "agent:main:acp:raw"],
-      [
-        "ownerless-key",
-        "main",
-        "agent:main:acp:ownerless",
-        buildAcpDatabaseSessionKey("agent:main:acp:ownerless"),
-      ],
-      ["embedded-entry", "main", "agent:main:acp:embedded", undefined],
-      ["unsettled-embedded", "main", "agent:main:acp:unsettled", undefined],
-      ["literal-encoded-key", "ops", literalKey, literalKey],
-      [
-        "encoded-inner-alias",
-        "main",
-        "agent:main:main",
-        buildAcpDatabaseSessionKey("MAIN", "main"),
-      ],
+    for (const shape of [
+      "raw",
+      "ownerless",
+      "embedded",
+      "unsettled",
+      "literal",
+      "alias",
     ] as const) {
+      const agentId = shape === "literal" ? "ops" : "main";
+      const sessionKey =
+        shape === "literal"
+          ? literalKey
+          : shape === "alias"
+            ? "agent:main:main"
+            : `agent:main:acp:${shape}`;
+      const sourceKey =
+        shape === "embedded" || shape === "unsettled"
+          ? undefined
+          : shape === "alias"
+            ? buildAcpDatabaseSessionKey("MAIN", "main")
+            : shape === "ownerless"
+              ? buildAcpDatabaseSessionKey(sessionKey)
+              : sessionKey;
       handoff.mockClear();
       owners.add(agentId);
       const scope = { cfg, env, agentId, sessionKey };
-      const currentEntry = {
-        ...entry,
-        sessionId: `${entry.sessionId}-${shape}`,
-        lifecycleRevision: `${entry.lifecycleRevision}-${shape}`,
-      };
+      const currentEntry = sessionEntry(shape);
       replaceSessionEntrySync(
         scope,
         sourceKey === undefined ? { ...currentEntry, acp: meta } : currentEntry,
       );
-      if (shape === "unsettled-embedded") {
-        const database = openOpenClawAgentDatabase({ agentId, env });
-        const { db } = database;
-        runSqliteImmediateTransactionSync(db, () =>
-          markCanonicalSessionValidationPending(database),
-        );
-        const raw = `${JSON.stringify(currentEntry).slice(0, -1)},"acp":null,"acp":${JSON.stringify(meta)}}`;
-        db.prepare(
-          "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",
-        ).run(raw, sessionKey);
-        expect(
-          db.prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?").get(sessionKey),
-        ).toEqual({ entry_valid: 0 });
+      if (shape === "unsettled") {
+        writeRawAcpEntry(scope, currentEntry, ["null", JSON.stringify(meta)], false);
       }
       if (sourceKey) {
         seedMeta(env, sourceKey, currentEntry.lifecycleRevision, meta);
       }
-      if (shape === "unsettled-embedded") {
+      if (shape === "unsettled") {
         await expect(startup()).rejects.toMatchObject({
           message: `invalid persisted session row requires repair for ${sessionKey}; stop the Gateway and run openclaw doctor --fix`,
         });
@@ -296,21 +295,11 @@ it("startup requires offline ACP repair before handing restored stores to runtim
     }
     const nullKey = "agent:main:acp:last-null";
     const nullScope = { agentId: "main", sessionKey: nullKey, env };
-    const nullEntry = {
-      ...entry,
-      sessionId: "null-metadata-session",
-      lifecycleRevision: "null-metadata-revision",
-    };
+    const nullEntry = sessionEntry("null");
     replaceSessionEntrySync(nullScope, nullEntry);
-    const rawNull = `${JSON.stringify(nullEntry).slice(0, -1)},"acp":${JSON.stringify(meta)},"acp":null}`;
+    // Keep the last-null row admitted so the ACP check sees JSON's last property value.
+    const rawNull = writeRawAcpEntry(nullScope, nullEntry, [JSON.stringify(meta), "null"], true);
     const { db: agentDatabase } = openOpenClawAgentDatabase({ agentId: "main", env });
-    agentDatabase
-      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-      .run(rawNull, nullKey);
-    // Keep this row admitted so the ACP check sees JSON's last property value.
-    agentDatabase
-      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-      .run(nullKey);
     await expect(startup()).resolves.toBeUndefined();
     expect(readAcpSessionEntry({ ...nullScope, cfg })?.acp).toBeUndefined();
     expect(
@@ -341,7 +330,7 @@ it.each([false, true])(
             },
           );
         }
-        seedMeta(env, "global", "revision-ops", migrationAcpMeta("ops", "ops-runtime"));
+        seedMeta(env, "global", "revision-ops", acpMeta("ops"));
         if (shared) {
           await expect(startup(new Set(["main"]))).rejects.toThrow('run "openclaw doctor --fix"');
           expect(handoff).not.toHaveBeenCalled();
@@ -371,13 +360,7 @@ it("startup preserves unbound ACP rows retained by Doctor without serving their 
       "agent:retired:acp:absent",
     ];
     for (const sessionKey of keys) {
-      seedMeta(
-        env,
-        sessionKey,
-        "old-revision",
-        migrationAcpMeta("main", "retained-runtime", 50),
-        50,
-      );
+      seedMeta(env, sessionKey, "old-revision", acpMeta("main", 50));
     }
     const { db } = openOpenClawStateDatabase({ env });
     const before = db.prepare("SELECT * FROM acp_sessions ORDER BY session_key").all();

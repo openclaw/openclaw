@@ -239,14 +239,10 @@ it.each(["before-consume", "after-consume"])(
         }
         return "consumed";
       },
-    ).then(
-      (value) => ({ value, error: undefined }),
-      (error: unknown) => ({ value: undefined, error }),
     );
     try {
-      const result = await reading;
+      await expect(reading).resolves.toBe("consumed");
       expect(consumed).toBe(1);
-      expect(result).toEqual({ value: "consumed", error: undefined });
     } finally {
       await registryChange;
     }
@@ -325,10 +321,8 @@ it.for([
       if (!callerCurrent) {
         throw new Error("Captured caller was revoked");
       }
-    }).then(
-      (value) => ({ value, error: undefined }),
-      (error: unknown) => ({ value: undefined, error }),
-    );
+    });
+    void reading.catch(() => {});
     try {
       await withinTest(
         awaitGateBeforeSettlement(
@@ -350,9 +344,7 @@ it.for([
       }
       releaseWriter.resolve();
       await priorWriter;
-      const result = await reading;
-      expect(result.value).toBeUndefined();
-      expect(result.error).toBeInstanceOf(Error);
+      await expect(reading).rejects.toBeInstanceOf(Error);
     } finally {
       releaseWriter.resolve();
       intercept.mockRestore();
