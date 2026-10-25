@@ -77,7 +77,20 @@ When `tts.auto` is enabled, OpenClaw:
   `auto: "always"`. Explicit speech requests such as `/tts audio` and `/tts latest`
   still send audio. Commands that continue into an assistant run keep the normal
   auto-TTS behavior for the assistant's answer.
-- Skips TTS if the reply already contains structured media.
+- Never attaches audio to a reply that already carries media: one message holds
+  one media set, and the audio would replace the attachment. In `mode: "final"`,
+  when that attachment is not audio — a picture, a document, a video — the answer
+  is spoken as a separate voice message that follows the visible one. A reply
+  that already carries audio stays as it is, and so does a terminal command
+  reply.
+  That separate voice message is live-only on every channel: it is not written to
+  the durable outbound queue and is not replayed after a Gateway restart, so a
+  restart can lose the audio while the visible answer it repeats has already
+  arrived. Channels see the policy on the payload itself (`ttsSupplement.liveOnly`).
+  The separate message exists only in final-mode auto-TTS: with `mode: "all"` a
+  media reply stays silent — inline synthesis skips media payloads and no
+  supplement is minted — and ACP delivery applies its own synthesis and is not
+  part of this path.
 - Skips very short replies (under 10 chars).
 - Skips replies dominated by fenced code; inline code and surrounding prose remain eligible for speech.
 - Summarizes long replies when summaries are enabled, using
@@ -105,11 +118,45 @@ If the reply exceeds `maxLength`, OpenClaw never skips audio outright:
 ```text
 Reply -> TTS enabled?
   no  -> send text
-  yes -> has media / short?
+  yes -> short?
           yes -> send text
-          no  -> length > limit?
-                   no  -> TTS -> attach audio
-                   yes -> summary enabled and available?
-                            no  -> truncate -> TTS -> attach audio
-                            yes -> summarize -> TTS -> attach audio
+          no  -> has media?
+                    yes -> send the reply as it is, then:
+                             audio attachment     -> nothing further
+                             non-audio attachment -> mode "final"?
+                                                      yes -> TTS -> send audio-only message
+                                                      no  -> nothing further (ACP and
+                                                              non-final modes stay silent)
+                   no  -> length > limit?
+                            no  -> TTS -> attach audio
+                            yes -> summary enabled and available?
+                                      no  -> truncate -> TTS -> attach audio
+                                      yes -> summarize -> TTS -> attach audio
 ```
+
+## Channel contract for live-only supplements
+
+Several payload shapes carry `ttsSupplement`: ordinary auto-TTS replies and the
+deferred text of captioned-final delivery keep the answer text and are not
+marked live-only. The rules below apply only to the media voice supplement
+described above — a payload marked `ttsSupplement.liveOnly: true` together with
+`ttsSupplement.visibleTextAlreadyDelivered: true` (text absent, `mediaUrl` holds
+the audio). Channels and reply-delivery plugins that consume outbound payloads
+must honor three rules for such a payload:
+
+1. **A supplement never replaces the visible answer.** It arrives as its own
+   audio-only payload (text is absent, `mediaUrl` holds the audio, and
+   `ttsSupplement.visibleTextAlreadyDelivered` explains why): send it as an
+   additional voice message and leave the already-delivered answer untouched.
+   A channel that maps textless payloads onto "edit last message" or "delete
+   then resend" will destroy the answer it repeats — a real VK plugin shipped
+   that defect once, which is why the flag exists.
+2. **`liveOnly` must survive payload normalization.** While preparing a payload
+   for transport, keep `ttsSupplement.liveOnly` intact. The audio is fenced
+   only by an in-memory writer authority; persisting it for replay would let a
+   restart deliver it past a replaced writer. Treat the flag as
+   delivery-policy, not display metadata.
+3. **Never batch a live-only supplement with durable payloads.** Send it in its
+   own delivery; the outbound queue rejects mixed batches outright. A supplement
+   that loses the race with a Gateway restart is simply gone — the visible
+   answer has already arrived, and that is the accepted trade.
