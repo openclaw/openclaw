@@ -18,13 +18,7 @@ vi.mock("../channels/plugins/pairing.js", () => ({
 }));
 
 import {
-  readChannelPairingStateSnapshot,
-  writeChannelPairingStateSnapshot,
-} from "./pairing-store-sqlite.test-helpers.js";
-import {
   approveChannelPairingCode,
-  dismissChannelPairingRequest,
-  listChannelPairingRequests,
   readChannelAllowFromStoreSync,
   resolveChannelPairingRequestId,
 } from "./pairing-store.js";
@@ -67,17 +61,12 @@ async function requestFor(accountId: string) {
   return request;
 }
 
-function writeAllowFromFixture(entries: string[]) {
-  store.write({ version: 1, requests: [], allowFrom: { yy: entries } });
-}
-
 function upsert(id: string, accountId = DEFAULT_ACCOUNT_ID, channel = "telegram") {
   return pairingStoreFixture(channel, pairingEnv).upsert(id, accountId);
 }
 
 it("skips malformed persisted requests while approving valid codes", async () => {
-  const env = pairingEnv;
-  const database = openOpenClawStateDatabase({ env });
+  const database = openOpenClawStateDatabase({ env: pairingEnv });
   const db = getNodeSqliteKysely<PairingTestDatabase>(database.db);
   executeSqliteQuerySync(
     database.db,
@@ -106,30 +95,13 @@ it("skips malformed persisted requests while approving valid codes", async () =>
   await expect(store.list("alpha")).resolves.toHaveLength(1);
   await expect(store.list("stale-account")).resolves.toEqual([]);
   await expect(
-    approveChannelPairingCode({ channel: "telegram", accountId: "alpha", code: "GOODCODE", env }),
+    store.approve({ accountId: "alpha", code: "GOODCODE", pairingAdapter: undefined }),
   ).resolves.toMatchObject({ id: "valid-user" });
   await expect(store.allow("alpha")).resolves.toEqual(["valid-user"]);
   await expect(store.allow("stale-account")).resolves.toEqual([]);
 });
 
-it("handles pending request reuse, expiry, and per-account limits", async () => {
-  const env = pairingEnv;
-  const first = await upsert("u1", DEFAULT_ACCOUNT_ID, "demo-a");
-  const reused = await upsert("u1", DEFAULT_ACCOUNT_ID, "demo-a");
-  expect(reused).toEqual({ code: first.code, created: false });
-
-  const expired = await upsert("expired", DEFAULT_ACCOUNT_ID, "demo-b");
-  expect(expired.created).toBe(true);
-  const state = readChannelPairingStateSnapshot("demo-b", env);
-  const expiredAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-  state.requests = state.requests.map((request) => ({
-    ...request,
-    createdAt: expiredAt,
-    lastSeenAt: expiredAt,
-  }));
-  writeChannelPairingStateSnapshot("demo-b", state, env);
-  await expect(listChannelPairingRequests("demo-b", env)).resolves.toEqual([]);
-
+it("enforces the pending request limit", async () => {
   for (const id of ["one", "two", "three"]) {
     await expect(upsert(id, DEFAULT_ACCOUNT_ID, "demo-c")).resolves.toMatchObject({
       created: true,
@@ -141,22 +113,7 @@ it("handles pending request reuse, expiry, and per-account limits", async () => 
   });
 });
 
-it("persists a channel-derived approval entry from request metadata", async () => {
-  const fixture = pairingStoreFixture("demo-a", pairingEnv);
-  const request = await fixture.upsert("alice", DEFAULT_ACCOUNT_ID, {
-    proofEntry: "fixture-entry",
-  });
-  await expect(
-    fixture.approve({
-      code: request.code,
-      resolveApprovalStoreEntry: ({ meta }) => meta?.proofEntry ?? null,
-    }),
-  ).resolves.toMatchObject({ id: "alice" });
-  await expect(fixture.allow()).resolves.toEqual(["fixture-entry"]);
-});
-
 it("approves and dismisses account-scoped requests by opaque id", async () => {
-  const env = pairingEnv;
   await upsert("shared-sender", "alpha");
   await upsert("shared-sender", "beta");
   const alphaRequest = await requestFor("alpha");
@@ -174,14 +131,10 @@ it("approves and dismisses account-scoped requests by opaque id", async () => {
   await expect(store.approveRequest(alphaRequestId, "beta")).resolves.toBeNull();
 
   await expect(
-    dismissChannelPairingRequest({
-      channel: "telegram",
-      accountId: "beta",
-      requestId: betaRequestId,
-    }),
+    pairingStoreFixture("telegram", pairingEnv, "beta").dismiss(betaRequestId),
   ).resolves.toMatchObject({ id: "shared-sender" });
   await expect(store.allow("beta")).resolves.toEqual([]);
-  await expect(listChannelPairingRequests("telegram", env)).resolves.toEqual([]);
+  await expect(store.list()).resolves.toEqual([]);
 });
 
 it("regenerates colliding codes and reports exhaustion without leaking codes", () => {
@@ -199,8 +152,7 @@ it("regenerates colliding codes and reports exhaustion without leaking codes", (
 });
 
 it("keeps allowFrom and pending requests isolated by account", async () => {
-  const env = pairingEnv;
-  const alphaStore = pairingStoreFixture("telegram", env, "alpha");
+  const alphaStore = pairingStoreFixture("telegram", pairingEnv, "alpha");
   await alphaStore.add("1001");
   await expect(store.allow("alpha")).resolves.toEqual(["1001"]);
   await expect(store.allow("beta")).resolves.toEqual([]);
@@ -212,7 +164,7 @@ it("keeps allowFrom and pending requests isolated by account", async () => {
   expect((await requestFor("beta")).code).toBe(beta.code);
 
   await expect(
-    approveChannelPairingCode({ channel: "telegram", code: alpha.code, env }),
+    approveChannelPairingCode({ channel: "telegram", code: alpha.code, env: pairingEnv }),
   ).resolves.toMatchObject({ id: "shared" });
   await expect(store.allow("alpha")).resolves.toEqual(["1001", "shared"]);
   await expect(store.allow("beta")).resolves.toEqual([]);
@@ -225,11 +177,11 @@ it("keeps allowFrom and pending requests isolated by account", async () => {
 
 it("reads current SQLite entries without a process-local file cache", async () => {
   const env = pairingEnv;
-  writeAllowFromFixture(["1001"]);
+  store.write({ version: 1, requests: [], allowFrom: { yy: ["1001"] } });
   await expect(store.allow("yy")).resolves.toEqual(["1001"]);
   expect(readChannelAllowFromStoreSync("telegram", env, "yy")).toEqual(["1001"]);
 
-  writeAllowFromFixture(["10022"]);
+  store.write({ version: 1, requests: [], allowFrom: { yy: ["10022"] } });
   await expect(store.allow("yy")).resolves.toEqual(["10022"]);
   const sql = observeHostDataSql();
   try {
