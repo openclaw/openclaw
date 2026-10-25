@@ -540,6 +540,7 @@ export async function handleOpenAiHttpRequest(
       extraSystemPrompt: mergedExtraSystemPrompt,
       images,
       clientTools: toolChoice.tools,
+      toolChoice: toolChoice.constraint,
       modelOverride,
       sessionKey,
       runId,

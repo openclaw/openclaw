@@ -36,6 +36,11 @@ export type AgentStreamParams = {
   frequencyPenalty?: number;
   presencePenalty?: number;
   seed?: number;
+  /**
+   * Client tool the request requires (OpenAI-compatible `tool_choice`). Forwarded to providers
+   * that can force it; the gateway still emulates and checks it (best-effort).
+   */
+  toolChoice?: { type: "required" } | { type: "function"; name: string };
 };
 
 /** Simplified tool definition for client-provided OpenResponses hosted tools. */
