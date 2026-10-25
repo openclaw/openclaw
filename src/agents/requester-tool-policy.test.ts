@@ -16,6 +16,8 @@ import { attachToolAllowlistIntersection } from "./tool-policy.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
 
 describe("resolveRequesterToolPolicies", () => {
+  const requester = "agent:main:discord:direct:alice";
+  const runtimeDeny = { deny: ["group:runtime", "group:fs"] };
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-requester-policy-");
   let tempDir: string;
   let storePath: string;
@@ -56,7 +58,7 @@ describe("resolveRequesterToolPolicies", () => {
 
   function writeChild(sessionKey: string, patch: Partial<SessionEntry> = {}) {
     return writeSession(sessionKey, {
-      spawnedBy: "agent:main:discord:direct:alice",
+      spawnedBy: requester,
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
@@ -66,9 +68,12 @@ describe("resolveRequesterToolPolicies", () => {
   }
 
   function expectCurrentPolicy(result: ReturnType<typeof resolveRequesterToolPolicies>) {
-    expect(result.delegated).toBe(false);
-    expect(result.requesterPolicySource).toBe("current-request");
-    expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+    expectCurrentSource(result);
+    expect(result.senderPolicy).toEqual(runtimeDeny);
+  }
+
+  function expectCurrentSource(result: ReturnType<typeof resolveRequesterToolPolicies>) {
+    expect(result).toMatchObject({ delegated: false, requesterPolicySource: "current-request" });
   }
 
   function workerConfig(overrides: OpenClawConfig = {}) {
@@ -88,8 +93,7 @@ describe("resolveRequesterToolPolicies", () => {
     source: "persisted-child" | "completion-handoff",
     policy: { allow?: string[]; deny?: string[] },
   ) {
-    expect(result.delegated).toBe(true);
-    expect(result.requesterPolicySource).toBe(source);
+    expect(result).toMatchObject({ delegated: true, requesterPolicySource: source });
     expect(result.inheritedToolPolicy).toEqual(policy);
   }
 
@@ -188,7 +192,7 @@ describe("resolveRequesterToolPolicies", () => {
             toolsBySender: { "id:alice": source === "sender" ? policy : {} },
           },
         }),
-        sessionKey: "agent:main:discord:direct:alice",
+        sessionKey: requester,
         senderId: "alice",
         ...(source === "conversation" ? { conversationPolicy: policy } : {}),
       });
@@ -270,7 +274,7 @@ describe("resolveRequesterToolPolicies", () => {
     const result = await withPreparedSessionCapabilityRead(resolve);
     if (authority !== "current") {
       expect(result.delegated).toBe(false);
-      expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
+      expect(result.senderPolicy).toEqual(runtimeDeny);
       return;
     }
     expectInherited(result, "completion-handoff", { allow: ["read", "exec"], deny: ["write"] });
@@ -412,7 +416,7 @@ describe("resolveRequesterToolPolicies", () => {
       const partial = kind === "partial lineage";
       const external = kind === "sender identity" || kind === "external provenance";
       if (partial) {
-        await writeSession(childSessionKey, { spawnedBy: "agent:main:discord:direct:alice" });
+        await writeSession(childSessionKey, { spawnedBy: requester });
       } else {
         await writeChild(childSessionKey, {
           inheritedToolPolicyVersion: kind === "unversioned legacy" ? undefined : 1,
@@ -443,12 +447,8 @@ describe("resolveRequesterToolPolicies", () => {
     async (delegated) => {
       const requesterSessionKey = "agent:front:discord:direct:alice";
       const childSessionKey = "agent:worker:subagent:policy-admission";
-      await writeSession(childSessionKey, {
+      await writeChild(childSessionKey, {
         spawnedBy: requesterSessionKey,
-        spawnDepth: 1,
-        subagentRole: "orchestrator",
-        subagentControlScope: "children",
-        inheritedToolPolicyVersion: 1,
         inheritedToolDeny: delegated ? ["message", "write"] : ["message"],
         ...(delegated
           ? {
@@ -512,7 +512,7 @@ describe("resolveRequesterToolPolicies", () => {
   });
 
   it("restores a verified completion handoff to a distinct immutable completion owner", async () => {
-    const controllerSessionKey = "agent:main:discord:direct:alice";
+    const controllerSessionKey = requester;
     const completionOwnerSessionKey = "agent:main:main";
     const childSessionKey = "agent:main:subagent:child";
     await writeChild(childSessionKey, {
@@ -537,8 +537,7 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.senderPolicy).toBeUndefined();
 
     const controllerResult = await resolvePolicy({ sessionKey: controllerSessionKey, ...handoff });
-    expect(controllerResult.delegated).toBe(false);
-    expect(controllerResult.requesterPolicySource).toBe("current-request");
+    expectCurrentSource(controllerResult);
   });
 
   it("does not treat an ordinary dashboard key as a completion authority", async () => {
@@ -550,12 +549,11 @@ describe("resolveRequesterToolPolicies", () => {
       ...completionHandoffFacts(childSessionKey, "agent:main:main"),
     });
 
-    expect(result.delegated).toBe(false);
-    expect(result.requesterPolicySource).toBe("current-request");
+    expectCurrentSource(result);
   });
 
   async function writeNestedLineage() {
-    const requesterSessionKey = "agent:main:discord:direct:alice";
+    const requesterSessionKey = requester;
     const parentChildSessionKey = "agent:main:subagent:parent-child";
     const leafSessionKey = "agent:main:subagent:leaf";
     await writeChild(parentChildSessionKey, {
@@ -590,7 +588,7 @@ describe("resolveRequesterToolPolicies", () => {
   it("fails closed for untrusted or mismatched completion handoffs", async () => {
     const childSessionKey = "agent:main:subagent:child";
     await writeChild(childSessionKey);
-    const handoff = completionHandoffFacts(childSessionKey, "agent:main:discord:direct:alice");
+    const handoff = completionHandoffFacts(childSessionKey, requester);
     const resolveHandoff = (sessionKey: string, trusted = true) =>
       resolveRequesterToolPolicies({
         config: config(),
@@ -599,13 +597,12 @@ describe("resolveRequesterToolPolicies", () => {
         ...handoff,
         trustedInternalHandoff: trusted ? handoff.trustedInternalHandoff : undefined,
       });
-    const untrusted = resolveHandoff("agent:main:discord:direct:alice", false);
+    const untrusted = resolveHandoff(requester, false);
     const mismatched = resolveHandoff("agent:main:discord:direct:bob");
     const mismatchedCompletionOwner = resolveHandoff("agent:main:main");
 
     expectCurrentPolicy(untrusted);
     expectCurrentPolicy(mismatched);
-    expect(mismatchedCompletionOwner.delegated).toBe(false);
-    expect(mismatchedCompletionOwner.requesterPolicySource).toBe("current-request");
+    expectCurrentSource(mismatchedCompletionOwner);
   });
 });
