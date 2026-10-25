@@ -16,6 +16,12 @@ const htmlGrid = (input: string) =>
     .match(/<pre><code>([\s\S]*?)<\/code><\/pre>/u)?.[1]
     ?.split("\n") ?? [];
 
+const htmlText = (input: string) => renderTelegramHtmlText(input, { textMode: "html" });
+const expectBounded = (chunks: string[], limit: number) => {
+  expect(chunks.length).toBeGreaterThan(1);
+  expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
+};
+
 describe("Telegram formatting", () => {
   it("marks assistant-authored transcript role headers after parsing Markdown", () => {
     expect(markdownToTelegramHtml("**user**[Thu 2026-07-02] question")).toBe(
@@ -31,23 +37,19 @@ describe("Telegram formatting", () => {
   });
 
   it("preserves supported Telegram HTML in stream markdown rendering", () => {
-    const input = [
-      "✉️ <b>Morning Email Rollup</b>",
-      "",
-      "<blockquote>✅ No important emails in the last 24 hours.</blockquote>",
-      "",
-      "<pre><code>oauth2: invalid_grant</code></pre>",
-    ].join("\n");
+    const input =
+      "<b>Rollup</b>\n\n<blockquote>No emails.</blockquote>\n\n<pre><code>error</code></pre>";
 
     expect(markdownToTelegramHtml(input)).toBe(input);
     expect(chunkHtml(input).join("")).toBe(input);
   });
 
-  it("preserves Telegram expandable blockquote HTML", () => {
-    const input = "<blockquote expandable>hidden details</blockquote>";
-
+  it.each([
+    "<blockquote expandable>hidden details</blockquote>",
+    '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>',
+  ])("preserves supported Telegram HTML: %s", (input) => {
     expect(markdownToTelegramHtml(input)).toBe(input);
-    expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(input);
+    expect(htmlText(input)).toBe(input);
   });
 
   it.each([
@@ -84,10 +86,24 @@ describe("Telegram formatting", () => {
     ['<blockquote cite="x">bad</blockquote>', '&lt;blockquote cite="x"&gt;bad&lt;/blockquote&gt;'],
     ["<sup>1</sup>", "&lt;sup&gt;1&lt;/sup&gt;"],
     ['<tg-time unix="-1">bad</tg-time>', '&lt;tg-time unix="-1"&gt;bad&lt;/tg-time&gt;'],
-  ])("keeps code and unsupported markup escaped: %s", (input, expected) => {
+    [
+      '<code class="language-text">/queue followup debounce:0\n</code>',
+      "<code>/queue followup debounce:0\n</code>",
+    ],
+    [
+      '<pre><code class="language-python">print(1)\n</code></pre>',
+      '<pre><code class="language-python">print(1)\n</code></pre>',
+    ],
+    ['```bash\necho "hello"\n```', '<pre><code class="language-bash">echo "hello"\n</code></pre>'],
+    // #4071: overlapping bold and autolink ranges must nest, not cross.
+    [
+      "**start https://example.com** end",
+      '<b>start <a href="https://example.com">https://example.com</a></b> end',
+    ],
+  ])("renders code, escaping, and nested formatting: %s", (input, expected) => {
     expect(markdownToTelegramHtml(input)).toBe(expected);
     if (input.startsWith('<b class="x">')) {
-      expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(expected);
+      expect(htmlText(input)).toBe(expected);
     }
   });
 
@@ -116,33 +132,11 @@ describe("Telegram formatting", () => {
     ["pre", "<pre>", "</pre>"],
   ])("keeps only the table inside %s escaped between rendered tables", (_name, open, close) => {
     expect(
-      renderTelegramHtmlText(
+      htmlText(
         `<table><tr><td>A</td></tr></table>${open}<table><tr><td>B</td></tr></table>${close}<table><tr><td>C</td></tr></table>`,
-        { textMode: "html" },
       ),
     ).toBe(
       `<pre><code>| A   |</code></pre>\n\n${open}&lt;table&gt;&lt;tr&gt;&lt;td&gt;B&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;${close}<pre><code>| C   |</code></pre>\n\n`,
-    );
-  });
-
-  it.each([
-    [
-      '<code class="language-text">/queue followup debounce:0\n</code>',
-      "<code>/queue followup debounce:0\n</code>",
-    ],
-    [
-      '<pre><code class="language-python">print(1)\n</code></pre>',
-      '<pre><code class="language-python">print(1)\n</code></pre>',
-    ],
-    ['```bash\necho "hello"\n```', '<pre><code class="language-bash">echo "hello"\n</code></pre>'],
-  ])("preserves code language semantics: %s", (input, expected) => {
-    expect(markdownToTelegramHtml(input)).toBe(expected);
-  });
-
-  it("properly nests overlapping bold and autolink (#4071)", () => {
-    const res = markdownToTelegramHtml("**start https://example.com** end");
-    expect(res).toMatch(
-      /<b>start <a href="https:\/\/example\.com">https:\/\/example\.com<\/a><\/b> end/,
     );
   });
 
@@ -155,15 +149,8 @@ describe("Telegram formatting", () => {
   it.each([".", ")"])(
     "preserves list boundary spacing before numbered sections using %s",
     (marker) => {
-      const input = [
-        `2${marker} Synthetic checklist:`,
-        "",
-        "  • Verify sample A.",
-        "  • Verify sample B.",
-        `3${marker} Synthetic next section:`,
-      ].join("\n");
-      const expected =
-        "2. Synthetic checklist:\n\n• Verify sample A.\n• Verify sample B.\n\n3. Synthetic next section:";
+      const input = `2${marker} Checklist:\n\n  • Sample A.\n  • Sample B.\n3${marker} Next:`;
+      const expected = "2. Checklist:\n\n• Sample A.\n• Sample B.\n\n3. Next:";
 
       expect(markdownToTelegramHtml(input)).toBe(expected);
       expect(chunkHtml(input)).toEqual([expected]);
@@ -172,8 +159,7 @@ describe("Telegram formatting", () => {
 
   it("splits long multiline html text without breaking balanced tags", () => {
     const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expectBounded(chunks, 4000);
     expect(chunks[0]).toMatch(/^<b>[\s\S]*<\/b>$/);
     expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
   });
@@ -194,8 +180,7 @@ describe("Telegram formatting", () => {
       const chunks = splitTelegramHtmlChunks(html, 4000);
       const finalChunk = chunks.at(-1) ?? "";
 
-      expect(chunks.length).toBeGreaterThan(1);
-      expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+      expectBounded(chunks, 4000);
       expect(finalChunk.startsWith("<code>Assistant:</code> ")).toBe(expectedPrefix);
       expect(finalChunk).toContain(`\n${suffix}`);
     },
@@ -207,16 +192,14 @@ describe("Telegram formatting", () => {
 
   it("treats malformed leading ampersands as plain text when chunking html", () => {
     const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expectBounded(chunks, 4000);
   });
 
   it("breaks long html text on word boundaries instead of mid-word", () => {
     const text = Array.from({ length: 12 }, () => "abcde").join(" ");
     const chunks = splitTelegramHtmlChunks(text, 13);
 
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 13)).toBe(true);
+    expectBounded(chunks, 13);
     for (const chunk of chunks) {
       for (const token of chunk.trim().split(/\s+/)) {
         expect(token).toBe("abcde");
@@ -307,11 +290,6 @@ describe("Telegram formatting", () => {
     expect(() => splitTelegramHtmlChunks("<b>abcdef</b>", Number.NaN)).toThrow(TypeError);
   });
 
-  it("preserves supported tg-time markup", () => {
-    const input = '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>';
-    expect(markdownToTelegramHtml(input)).toBe(input);
-  });
-
   it("keeps a Markdown table visible between prose in legacy HTML", () => {
     const input = "Before\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
     const html = markdownToTelegramHtml(input, { tableMode: "block" });
@@ -326,9 +304,7 @@ describe("Telegram formatting", () => {
   it.each([".", ")"])(
     "does not insert list spacing inside a longer code fence using %s",
     (marker) => {
-      const input = ["````", "```", "• literal bullet", `3${marker} literal number`, "````"].join(
-        "\n",
-      );
+      const input = `\`\`\`\`\n\`\`\`\n• literal bullet\n3${marker} literal number\n\`\`\`\``;
       const expected =
         "<pre><code>```\n• literal bullet\n3" + marker + " literal number\n</code></pre>";
       expect(markdownToTelegramHtml(input, { wrapFileRefs: false })).toBe(expected);
@@ -339,13 +315,11 @@ describe("Telegram formatting", () => {
 
 describe("file references", () => {
   it("wraps file references in markdown mode", () => {
-    const result = renderTelegramHtmlText("Check README.md");
-    expect(result).toContain("<code>README.md</code>");
+    expect(renderTelegramHtmlText("Check README.md")).toContain("<code>README.md</code>");
   });
 
   it("does not wrap in HTML mode (trusts caller markup)", () => {
-    const result = renderTelegramHtmlText("Check README.md", { textMode: "html" });
-    expect(result).toBe("Check README.md");
+    expect(htmlText("Check README.md")).toBe("Check README.md");
   });
 
   it("preserves authored file-style links in chunked output", () => {
@@ -391,11 +365,9 @@ describe("file references", () => {
   });
 
   it("handles malformed HTML with stray closing tags (negative depth)", () => {
-    const input = "</code>README.md<code>inside</code> after.md";
-    const result = wrapFileReferencesInHtml(input);
-    expect(result).toContain("<code>README.md</code>");
-    expect(result).toContain("<code>after.md</code>");
-    expect(result).not.toContain("<code><code>");
+    expect(wrapFileReferencesInHtml("</code>README.md<code>inside</code> after.md")).toBe(
+      "</code><code>README.md</code><code>inside</code> <code>after.md</code>",
+    );
   });
 
   it("does not wrap orphaned TLD fragments inside protected HTML contexts", () => {
@@ -413,13 +385,9 @@ describe("file references", () => {
 
   it("handles multiple orphaned TLDs with HTML tags (offset stability)", () => {
     const input = '<a href="http://A.md">link</a> B.md <span title="C.sh">text</span> D.py';
-    const result = wrapFileReferencesInHtml(input);
-    expect(result).toContain("<code>B.md</code>");
-    expect(result).toContain("<code>D.py</code>");
-    expect(result).not.toContain("<code>A.md</code>");
-    expect(result).not.toContain("<code>C.sh</code>");
-    expect(result).toContain('href="http://A.md"');
-    expect(result).toContain('title="C.sh"');
+    expect(wrapFileReferencesInHtml(input)).toBe(
+      '<a href="http://A.md">link</a> <code>B.md</code> <span title="C.sh">text</span> <code>D.py</code>',
+    );
   });
 
   it.each([

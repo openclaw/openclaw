@@ -45,6 +45,8 @@ const toolStart = (
   name: string,
   toolCallId: string,
 ) => emitToolStart(options, { name, toolCallId, phase: "start" });
+const sentTexts = (send: Awaited<ReturnType<typeof observeTransport>>["sendMessage"]) =>
+  send.mock.calls.map(([, text]) => text);
 function expectStatus(status: ReturnType<typeof createReactions>, error: number, done: number) {
   expect({
     error: status.setError.mock.calls.length,
@@ -242,7 +244,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
             ? "I couldn't deliver my reply because of a network problem. Please ask again."
             : failedDelivery,
       ]);
-      expect(sendMessage.mock.calls.some(([, text]) => text === finalText)).toBe(false);
+      expect(sentTexts(sendMessage)).not.toContain(finalText);
       expectStatus(failedStatus, 1, 0);
       if (failure !== "definite no-send") {
         expect(deliverInbound).toHaveBeenCalledOnce();
@@ -253,11 +255,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
         expect(deleteMessage).not.toHaveBeenCalled();
       }
       if (partial) {
-        expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
-          prefix,
-          tail,
-          failedDelivery,
-        ]);
+        expect(sentTexts(sendMessage)).toEqual([prefix, tail, failedDelivery]);
         return;
       }
 
@@ -354,11 +352,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
             expect.objectContaining({ text: final, messageId: [...messages.keys()][0] }),
           );
         } else {
-          expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
-            preview,
-            expect.stringContaining("Read"),
-            final,
-          ]);
+          expect(sentTexts(sendMessage)).toEqual([preview, expect.stringContaining("Read"), final]);
         }
       }
     },
