@@ -30,10 +30,11 @@ export function packageActivationSqliteEnvironment(library: string): string {
 }
 
 export async function assertPackageActivationRecoveryRuntime(helper: string): Promise<void> {
+  // The sealed recovery program must run after its package and worker assets are removed.
   if (
     process.platform !== "win32" &&
     (process.versions.bun
-      ? await isCurrentRuntimeSupported()
+      ? await isCurrentRuntimeSupported({ sqliteProbeExecution: "current-thread" })
       : isSupportedNodeVersion(process.versions.node))
   ) {
     return;

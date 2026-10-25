@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { buildSync } from "esbuild";
 import { afterEach, expect, it, vi } from "vitest";
 import { probeSqlite } from "../../node-sqlite-capabilities.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -165,7 +166,7 @@ it.each([
   },
 );
 
-it("runs the shipped root worker without function source, loaders, or source files", () => {
+it.each([false, true])("runs the shipped root worker (bundled=%s)", (bundled) => {
   const root = temporary.make("sqlite-capability-bootstrap-");
   for (const name of [
     "node-sqlite.mjs",
@@ -176,16 +177,65 @@ it("runs the shipped root worker without function source, loaders, or source fil
   ]) {
     copyFileSync(new URL("../../" + name, import.meta.url), path.join(root, name));
   }
+  let entry = pathToFileURL(path.join(root, "node-sqlite.mjs"));
+  let bootstrap = pathToFileURL(path.join(root, "runtime-process-bootstrap.generated.mjs"));
+  if (bundled) {
+    const outfile = path.join(root, "dist", "chunks", "sqlite-bootstrap.mjs");
+    buildSync({
+      stdin: {
+        contents: `export { detectCurrentSqliteCapabilities } from "./node-sqlite.mjs";
+export * from "./runtime-process-bootstrap.generated.mjs";`,
+        resolveDir: root,
+      },
+      outfile,
+      bundle: true,
+      format: "esm",
+      platform: "node",
+    });
+    entry = pathToFileURL(outfile);
+    bootstrap = entry;
+  }
   const output = runProbe(`
     Function.prototype.toString = () => { throw new Error("function source unavailable"); };
     process.env.NODE_OPTIONS = "--require /missing-sqlite-preload.cjs";
     process.env.BUN_OPTIONS = "--preload /missing-sqlite-preload.mjs";
-    const { detectCurrentSqliteCapabilities } = await import(${JSON.stringify(pathToFileURL(path.join(root, "node-sqlite.mjs")).href)});
+    const { detectCurrentSqliteCapabilities } = await import(${JSON.stringify(entry.href)});
+    const { resolveRuntimeBootstrapExternalEntrypointUrl, resolveRuntimeBootstrapToolingEntrypointUrl } = await import(${JSON.stringify(bootstrap.href)});
     const pending = detectCurrentSqliteCapabilities();
     const capabilities = await pending;
-    process.stdout.write(JSON.stringify({ capabilities, samePending: pending === detectCurrentSqliteCapabilities() }));
+    process.stdout.write(JSON.stringify({
+      capabilities, samePending: pending === detectCurrentSqliteCapabilities(),
+      external: resolveRuntimeBootstrapExternalEntrypointUrl("cliLauncher").href,
+      tooling: resolveRuntimeBootstrapToolingEntrypointUrl("kyselyTypes").href,
+    }));
   `);
   expect(output).toMatchObject({
+    capabilities: { available: true, text: true, blob: true, json: true },
+    samePending: true,
+    external: pathToFileURL(path.join(root, "openclaw.mjs")).href,
+    tooling: pathToFileURL(path.join(root, "scripts/generate-kysely-types.mts")).href,
+  });
+});
+
+it("keeps an unavailable worker separate from a sealed recovery probe", () => {
+  const root = temporary.make("sqlite-capability-recovery-");
+  for (const name of [
+    "node-sqlite.mjs",
+    "node-version.mjs",
+    "node-sqlite-capabilities.mjs",
+    "runtime-process-bootstrap.generated.mjs",
+  ]) {
+    copyFileSync(new URL("../../" + name, import.meta.url), path.join(root, name));
+  }
+  const output = runProbe(`
+    const { detectCurrentSqliteCapabilities } = await import(${JSON.stringify(pathToFileURL(path.join(root, "node-sqlite.mjs")).href)});
+    const worker = await detectCurrentSqliteCapabilities();
+    const pending = detectCurrentSqliteCapabilities({ execution: "current-thread" });
+    const samePending = pending === detectCurrentSqliteCapabilities({ execution: "current-thread" });
+    process.stdout.write(JSON.stringify({ worker, capabilities: await pending, samePending }));
+  `);
+  expect(output).toMatchObject({
+    worker: { available: false },
     capabilities: { available: true, text: true, blob: true, json: true },
     samePending: true,
   });

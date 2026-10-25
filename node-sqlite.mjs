@@ -4,8 +4,11 @@ import { resolveRuntimeBootstrapEntrypointUrl } from "./runtime-process-bootstra
 
 export { isSqliteWalResetSafeVersion };
 
-// The launcher and bundled runtime chunks must share one process-local result.
-const capabilityCacheKey = Symbol.for("openclaw.sqliteCapabilities");
+// The launcher and bundled runtime chunks must share one process-local result per execution mode.
+const capabilityCacheKeys = {
+  worker: Symbol.for("openclaw.sqliteCapabilities"),
+  "current-thread": Symbol.for("openclaw.sqliteCapabilities.currentThread"),
+};
 function unavailableSqliteCapabilities(error) {
   return {
     available: false,
@@ -30,15 +33,19 @@ function isSqliteCapabilities(value) {
   );
 }
 
-async function probeCurrentSqlite() {
+/** @param {import("./node-sqlite.d.mts").SqliteProbeExecution} execution */
+async function probeCurrentSqlite(execution) {
   let worker;
   try {
     const DatabaseSync = process.getBuiltinModule?.("node:sqlite")?.DatabaseSync;
     if (typeof DatabaseSync !== "function") {
       return unavailableSqliteCapabilities(new Error("node:sqlite is unavailable"));
     }
-    // Keep the real capability check when Node's permission policy forbids workers.
-    if (!process.versions.bun && process.permission && !process.permission.has("worker")) {
+    // Recovery helpers outlive their package; Node may also forbid worker creation.
+    if (
+      execution === "current-thread" ||
+      (!process.versions.bun && process.permission && !process.permission.has("worker"))
+    ) {
       return probeSqlite(DatabaseSync);
     }
     const env = Object.fromEntries(
@@ -101,10 +108,13 @@ async function probeCurrentSqlite() {
   });
 }
 
-export function detectCurrentSqliteCapabilities() {
-  // Publish the Promise before Worker construction can notify another startup caller.
-  globalThis[capabilityCacheKey] ??= Promise.resolve().then(probeCurrentSqlite);
-  return Promise.resolve(globalThis[capabilityCacheKey]);
+/** @param {{ execution?: import("./node-sqlite.d.mts").SqliteProbeExecution }} [options] */
+export function detectCurrentSqliteCapabilities(options) {
+  const execution = options?.execution ?? "worker";
+  const key = capabilityCacheKeys[execution];
+  // An unavailable worker must not poison an explicitly in-process recovery probe.
+  globalThis[key] ??= Promise.resolve().then(() => probeCurrentSqlite(execution));
+  return Promise.resolve(globalThis[key]);
 }
 
 export function nodeRuntimeFailure(version, probe) {

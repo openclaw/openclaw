@@ -3,7 +3,8 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { resolveNodeRuntimeExecutable } from "./node-runtime-executable.js";
 
 // Platform fixtures do not create host files; the generated bootstrap has separate process proof.
-vi.mock("../../runtime-process-scripts.generated.mjs", () => ({
+vi.mock("../../runtime-process-scripts.generated.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime-process-scripts.generated.mjs")>()),
   createRuntimeProcessScriptFile: () => ({
     url: new URL("file:///qa/node-runtime-probe.mjs"),
     dispose() {},

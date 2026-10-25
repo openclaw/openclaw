@@ -804,7 +804,7 @@ function readManifestInput() {
   return fs.readFileSync(0, "utf8");
 }
 function assertManifestCurrent() {}
-function readManifestGit(root, args, maxBuffer) {
+async function readManifestGit(root, args, maxBuffer) {
   return childProcess.execFileSync("git", ["-C", root, ...args], {
     encoding: "buffer",
     maxBuffer,
