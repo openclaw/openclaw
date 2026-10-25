@@ -6,7 +6,7 @@ import { withContendedConfigMutation } from "../../test/helpers/config-mutation-
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as config from "../config/config.js";
 import { listConfiguredMcpServers, mcpConfigInternal } from "../config/mcp-config.js";
-import * as stateDb from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest as closeState } from "../test-utils/database-cleanup.js";
 import {
   setConfiguredMcpServer as setServer,
   unsetConfiguredMcpServer as unsetServer,
@@ -33,11 +33,6 @@ async function install(server: Parameters<typeof setServer>[0]["server"] = PER_R
   return result;
 }
 
-async function closeState() {
-  await stateDb.closeOpenClawStateDatabaseAsync();
-  stateDb.closeOpenClawStateDatabaseForTest();
-}
-
 function seedOAuthState() {
   const operator = operatorMcpOAuthIdentity("fixture", SERVER_URL);
   const requester = requesterMcpOAuthIdentity("fixture", SERVER_URL, {
@@ -54,9 +49,7 @@ function seedOAuthState() {
   return { operator, requester };
 }
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 it.aroundEach((run) =>
   withTempHome(
