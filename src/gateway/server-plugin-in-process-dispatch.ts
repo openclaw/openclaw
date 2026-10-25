@@ -1,6 +1,9 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
-import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  withoutGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -178,7 +181,9 @@ async function withInProcessGatewayDispatch<T>(
     // the caller's tool authority after that invocation closes.
     return method === "agent"
       ? await runWithoutOwnedSessionTranscriptWrites(() =>
-          runOutsideOperatorToolGatewayAuthority(() => run(resolved)),
+          runOutsideOperatorToolGatewayAuthority(() =>
+            withoutGatewayToolCallerIdentity(() => run(resolved)),
+          ),
         )
       : await run(resolved);
   } finally {
