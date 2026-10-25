@@ -129,6 +129,12 @@ function expectUnset<T>(value: T, ...keys: (keyof T)[]) {
   }
 }
 
+const userPin = (
+  providerOverride: string,
+  modelOverride: string,
+  overrides: Partial<SessionEntry> = {},
+) => makeEntry({ providerOverride, modelOverride, modelOverrideSource: "user", ...overrides });
+
 function selectSession(
   cfg: OpenClawConfig,
   provider: string,
@@ -399,7 +405,6 @@ describe("automatic fallback provenance", () => {
         modelOverrideFallbackOriginProvider: "openai",
         modelOverrideFallbackOriginModel: "gpt-4o",
       },
-      false,
       { primaryProvider: "openai", primaryModel: "gpt-4o" },
     ],
     [
@@ -411,10 +416,9 @@ describe("automatic fallback provenance", () => {
           activeModel: "openrouter/minimax/minimax-m2.7",
         },
       },
-      false,
       {},
     ],
-  ] as const)("%s", async (_name, overrides, reset, options) => {
+  ] as const)("%s", async (_name, overrides, options) => {
     const entry = makeEntry({ ...fallback, ...overrides });
     const before = { ...entry };
     const state = await selectSession({}, provider, model, entry, {
@@ -422,16 +426,11 @@ describe("automatic fallback provenance", () => {
       ...options,
     });
     expect(state).toMatchObject({
-      provider: reset ? provider : fallback.providerOverride,
-      model: reset ? model : fallback.modelOverride,
-      resetModelOverride: reset,
+      provider: fallback.providerOverride,
+      model: fallback.modelOverride,
+      resetModelOverride: false,
     });
-    if (reset) {
-      expect(state.resetModelOverrideRef).toBe("openrouter/minimax/minimax-m2.7");
-      expectUnset(entry, "providerOverride", "modelOverride", "modelOverrideSource");
-    } else {
-      expect(entry).toEqual(before);
-    }
+    expect(entry).toEqual(before);
   });
 
   it("clears a stale OpenAI pin and its ineligible auth", async () => {
@@ -465,10 +464,7 @@ it("keeps a missing explicit auth pin through credential restoration", async () 
       "openai:account-a": { type: "api_key", provider: "openai", key: "test-key-a" },
     },
   };
-  const entry = makeEntry({
-    providerOverride: "openai",
-    modelOverride: "gpt-4o",
-    modelOverrideSource: "user",
+  const entry = userPin("openai", "gpt-4o", {
     authProfileOverride: "openai:account-b",
     authProfileOverrideSource: "user",
   });
@@ -552,12 +548,7 @@ it("keeps a locked pin active without a degraded-catalog fallback notice", async
   const cfg: OpenClawConfig = {
     agents: { defaults: { models: { "openai/gpt-4o-mini": {}, "anthropic/*": {} } } },
   };
-  const entry = makeEntry({
-    providerOverride: "openai",
-    modelOverride: "gpt-4o",
-    modelOverrideSource: "user",
-    modelSelectionLocked: true,
-  });
+  const entry = userPin("openai", "gpt-4o", { modelSelectionLocked: true });
   const state = await selectSession(cfg, "openai", "gpt-4o-mini", entry);
   expect(state.resetModelOverride).toBe(false);
   expectUnset(state, "resetModelOverrideReason", "resetModelOverrideRef");
@@ -580,11 +571,7 @@ describe("refused pins use the primary instead of catalog order", () => {
   it.each(["direct", "parent", "degraded", "concurrent"] as const)(
     "uses the primary for a refused %s pin",
     async (source) => {
-      const pin = makeEntry({
-        providerOverride: "provider-c",
-        modelOverride: "model-c1",
-        modelOverrideSource: "user",
-      });
+      const pin = userPin("provider-c", "model-c1");
       const entry = source === "parent" ? makeEntry() : { ...pin };
       const parentSessionKey = "agent:main:parent";
       const sessionStore = { [sessionKey]: entry, [parentSessionKey]: pin };

@@ -34,13 +34,9 @@ import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 installQueueRuntimeErrorSilencer();
 const keys = new Set<string>();
-const queueKey = (key: string) => {
-  keys.add(key);
-  return key;
-};
 const createQueueCase = (...args: Parameters<typeof makeQueueCase>) => {
   const q = makeQueueCase(...args);
-  queueKey(q.key);
+  keys.add(q.key);
   return q;
 };
 afterEach(() => {
