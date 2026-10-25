@@ -414,32 +414,26 @@ it.skipIf(process.platform === "win32").each(["access", "default", "denied-grant
 );
 
 it.each([
-  {
-    name: "missing fuser",
-    result: {
-      status: null,
-      stdout: "",
-      stderr: "",
-      error: Object.assign(new Error("spawnSync fuser ENOENT"), { code: "ENOENT" }),
-    },
-    detail: "spawnSync fuser ENOENT",
-  },
-  {
-    name: "unexpected exit status",
-    result: { status: 2, stdout: "", stderr: "" },
-    detail: "exit status 2",
-  },
-  {
-    name: "terminated fuser",
-    result: { status: null, stdout: "", stderr: "", signal: "SIGTERM" as const },
-    detail: "signal SIGTERM",
-  },
-])("refuses uncertain SQLite handles with $name", async (scenario) => {
+  [
+    "spawnSync fuser ENOENT",
+    { error: Object.assign(new Error("spawnSync fuser ENOENT"), { code: "ENOENT" }) },
+  ],
+  ["exit status 2", { status: 2 }],
+  ["signal SIGTERM", { signal: "SIGTERM" }],
+] as const)("refuses uncertain SQLite handles with %s", async (detail, result) => {
   seedDatabase();
   const original = fs.statSync(sqlitePath);
-  fixture.fuserResult = { pid: 0, output: [], signal: null, ...scenario.result };
+  fixture.fuserResult = {
+    pid: 0,
+    output: [],
+    signal: null,
+    status: null,
+    stdout: "",
+    stderr: "",
+    ...result,
+  };
   expect((await repair()).join("\n")).toContain(
-    `fuser could not establish that all handles are closed: ${scenario.detail}`,
+    `fuser could not establish that all handles are closed: ${detail}`,
   );
   expect(fixture.exchanges).toBe(0);
   expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
