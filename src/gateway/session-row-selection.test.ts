@@ -158,8 +158,15 @@ it("maintains list order across metadata changes and archived-row rematerializat
       expect((await list("lastInteractionAt"))[0]?.key).toBe(second);
       expect((await list("activity"))[0]?.key).toBe(second);
       expect((await list())[0]?.key).toBe(first);
+      const search = async (text: string, archived: boolean | "all" = "all") =>
+        rowKeys(await listRows(projection, { search: text, archived }));
+      expect(await search("changed metadata")).toEqual([]);
       writeMain(second, { updatedAt: 3, label: "Changed metadata" });
       expect((await list())[0]).toMatchObject({ key: second, label: "Changed metadata" });
+      expect(await search("CHANGED—metadata")).toEqual([second]);
+      writeMain(second, { updatedAt: 3, label: "Replacement title" });
+      expect(await search("changed metadata")).toEqual([]);
+      expect(await search("replacement title")).toEqual([second]);
       const third = "agent:main:third";
       writeMain(third, { updatedAt: 4, lastInteractionAt: 3 });
       expect((await list())[0]?.key).toBe(third);
@@ -172,6 +179,8 @@ it("maintains list order across metadata changes and archived-row rematerializat
       });
       // Archive membership is presence, including a zero timestamp.
       writeMain(third, { updatedAt: 4, lastInteractionAt: 3, archivedAt: 0 });
+      expect(await search("agent:main:third", true)).toEqual([third]);
+      expect(await search("agent:main:third", false)).toEqual([]);
       expect((await list())[0]?.key).toBe(second);
       expect(await listRows(projection, { archived: true, limit: 1 })).toMatchObject({
         sessions: [{ key: third }],
@@ -275,9 +284,14 @@ it("refreshes agent owner facets when the sidebar roster changes", async () => {
       // Read the cold ACP row before a scoped read can populate its owner projection.
       expect((await list(false)).owners?.map(({ id }) => id)).toEqual(["owner"]);
       expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
+      const searchOwned = async (search: string, ownerId: string) =>
+        rowKeys(await listRows(projection, { archived: "all", search, ownerId }));
+      expect(await searchOwned("owned", "owner")).toEqual([key]);
       await patchSessionEntryCore({ agentId: "main", sessionKey: key }, () => ({
         label: "Metadata changed",
       }));
+      expect(await searchOwned("metadata changed", "owner")).toEqual([key]);
+      expect(await searchOwned("metadata changed", "main")).toEqual([]);
       expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
       cfg = { ...cfg, agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);

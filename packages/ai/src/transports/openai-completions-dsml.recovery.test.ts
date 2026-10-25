@@ -15,6 +15,7 @@ import {
   makeCompletionsModel,
   openRouterAnthropicModel,
   openRouterModel,
+  makeCompletionsToolDelta,
 } from "./openai-completions.test-support.js";
 
 describe("openai completions DSML", () => {
@@ -242,16 +243,7 @@ describe("openai completions DSML", () => {
       const { output, events, run } = streamFixture(openRouterModel);
       const content =
         '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/duplicate.md"}</|DSML|invoke></|DSML|tool_calls>';
-      const native = {
-        tool_calls: [
-          {
-            index: 0,
-            id: "call_native",
-            type: "function",
-            function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
-          },
-        ],
-      };
+      const native = makeCompletionsToolDelta("call_native", "read", '{"path":"/tmp/native.md"}');
       const deltas =
         arrival === "same chunk"
           ? [{ content, ...native }]

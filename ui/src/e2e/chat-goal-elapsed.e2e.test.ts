@@ -4,6 +4,7 @@ import { beforeEach, expect, it } from "vitest";
 import { createSessionGoalFixture } from "../../../src/gateway/session-goal.test-support.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI goal elapsed time" });
@@ -30,12 +31,7 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, {
           sessionKey: "agent:main:main",
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Deployment checks are ready." }],
-            },
-          ],
+          historyMessages: [chatMessage("assistant", "Deployment checks are ready.")],
           methodResponses: {
             "sessions.list": {
               ts: 61_000,

@@ -442,10 +442,11 @@
   flex: 0 0 20px;
   width: 20px;
   height: 20px;
+  aspect-ratio: 1;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border: 0;
   border-radius: 50%;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 9%, transparent);
+
   vertical-align: middle;
 }
 
@@ -914,11 +915,23 @@ img.chat-avatar.user {
   object-fit: cover;
 }
 
-/* Keep the image and its fallback in one stable grid item. display: contents
-   can lose the avatar column when Lit reconciles an attributed message. */
+/* The frame stays square while loading and when the image falls back. */
 .chat-avatar-slot {
   position: relative;
   display: grid;
+  width: 36px;
+  height: 36px;
+  aspect-ratio: 1;
+  flex-shrink: 0;
+  align-self: start;
+  margin-bottom: 4px;
+  border-radius: 50%;
+}
+
+.chat-avatar-slot > .chat-avatar {
+  width: 100%;
+  height: 100%;
+  margin-bottom: 0;
 }
 
 .chat-avatar-slot > :not(img, .identity-avatar__hat),
@@ -1048,6 +1061,7 @@ img.chat-avatar {
   border: 0;
   border-radius: var(--radius-full);
   background: var(--bg);
+  outline: 0;
   box-shadow: none;
 }
 
@@ -1055,17 +1069,18 @@ img.chat-avatar {
 .chat-message--reply > .chat-avatar-slot > .chat-avatar {
   border: 0;
   background: var(--bg);
+  outline: 0;
   box-shadow: none;
 }
 
 /* Center on the first text line inside the native 4px-padded assistant bubble:
    the strip row and bubble padding above the line, minus half the avatar's
-   overhang beyond one line box. */
+   overhang beyond one chat line box, independent of the avatar glyph line-height. */
 .chat-group.assistant.chat-group--reply > :is(.chat-avatar, .chat-avatar-slot) {
   grid-row: 1 / span 2;
   margin-top: calc(
     var(--chat-reply-attribution-line-height) + var(--chat-reply-attribution-gap) + 4px +
-      (1lh - var(--chat-avatar-column)) / 2
+      (var(--chat-text-size) * 1.5 - var(--chat-avatar-column)) / 2
   );
 }
 
@@ -1085,7 +1100,7 @@ img.chat-avatar {
   inset-inline-end: calc(100% + var(--chat-avatar-gap));
 }
 
-/* The child circle supplies the opaque surface; the slot includes its bottom margin. */
+/* The child circle supplies the opaque surface for the reply. */
 .chat-message--reply > .chat-avatar-slot {
   background: none;
 }
@@ -1172,13 +1187,8 @@ img.chat-avatar {
   width: 16px;
   height: 16px;
   border: 0;
+  outline: 0;
   box-shadow: none;
-}
-
-/* The agent avatar's hidden text fallback must not size its grid past the
-   16px circle, or the image stretches and crops. */
-.chat-reply-attribution__person .identity-avatar--agent {
-  grid-template: 100% / 100%;
 }
 
 .chat-reply-attribution__name {

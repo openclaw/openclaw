@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
@@ -9,6 +9,7 @@ import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import * as pluginRecords from "../../plugins/installed-plugin-index-records.js";
 import * as pluginLifecycle from "../../plugins/plugin-lifecycle-lease.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
 import { VERSION } from "../../version.js";
 import { createUpdateCliBaseSnapshot } from "./update-cli-config.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
@@ -126,11 +127,6 @@ function converge({
 
 function doctorOperation(args: string[]) {
   return args.includes("--repair") ? "repair" : args.includes("--lint") ? "readiness" : "validate";
-}
-function expectCalls(count: number, ...spies: Mock[]) {
-  for (const spy of spies) {
-    expect(spy).toHaveBeenCalledTimes(count);
-  }
 }
 
 describe("candidate convergence Doctor dispatch authority", () => {

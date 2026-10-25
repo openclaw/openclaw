@@ -39,11 +39,12 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Consolidated eager/route partitions measure 5/20/16 requests over HTTP/1.1.
+  // Consolidated eager/route partitions measure 5/20/17 requests over HTTP/1.1.
   // Preserve the initial two-request headroom; route limits match their measured graphs.
   startupJsRequests: 7,
   chatBootJsRequests: 20,
-  newBootJsRequests: 16,
+  // A neutral controls chunk keeps other routes from loading the New Session renderer.
+  newBootJsRequests: 17,
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
@@ -65,10 +66,12 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
+  // Lazy component CSS reduces startup/Chat payload without adding critical requests.
+  // Keep room for compression lost across the optional component stylesheets.
+  totalCssGzipBytes: 306_086,
   // Vyctor approved the restored mobile topbar in #182599 (2026-10-24).
-  // Fixed bundle ceilings, not a repeatable per-PR growth allowance.
-  totalCssGzipBytes: 303_372,
-  totalCssRawBytes: 1_595_521,
+  // Base measures 1,595,655 B. Keep main's 64 B build variance.
+  totalCssRawBytes: 1_595_719,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

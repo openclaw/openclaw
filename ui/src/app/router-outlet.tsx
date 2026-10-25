@@ -188,7 +188,7 @@ function RoutePresentation(props: {
         <AgentStartupState />
       </Show>
       <Show when={state() === "loading"}>
-        <LoadingState />
+        <LoadingState route />
       </Show>
     </>
   );
@@ -507,7 +507,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       </Show>
       <Show when={presentation().waiting}>
         <openclaw-route-fragment style={{ display: "contents" }}>
-          <LoadingState />
+          <LoadingState route />
         </openclaw-route-fragment>
       </Show>
     </openclaw-router-outlet>

@@ -8,6 +8,7 @@ import {
   postgresIndexOrderingMigration,
   withLegacyPostgresIndexOrdering,
 } from "../infra/database-engine/postgres-index-ordering.js";
+import { arePostgresSearchExtensionsAdmitted } from "../infra/database-engine/search-extension.js";
 import {
   isPostgresSqlConnection,
   type EngineConnection,
@@ -64,6 +65,12 @@ export function admitAgentEngineSearchExtensions(
   admit: (stage: "transaction" | "commit") => void,
 ): void {
   if (!isPostgresSqlConnection(db)) {
+    return;
+  }
+  if (arePostgresSearchExtensionsAdmitted(db, definitions)) {
+    for (const definition of Object.values(definitions)) {
+      admitStoreSearch(db, definition);
+    }
     return;
   }
   db.runTransaction(

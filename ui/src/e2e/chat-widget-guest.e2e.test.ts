@@ -7,6 +7,7 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
   chatMessage,
+  textContent,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -36,21 +37,18 @@ suite.define(() => {
               toolName: "show_widget",
               toolCallId: "saved-call",
               __openclaw: { id: "saved-result", seq: 1 },
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify({
-                    kind: "canvas",
-                    view: { id: docId, url: `/__openclaw__/canvas/documents/${docId}/index.html` },
-                    presentation: {
-                      target: "assistant_message",
-                      title: "Saved preview",
-                      sandbox: "scripts",
-                      preferredHeight: 300,
-                    },
-                  }),
-                },
-              ],
+              content: textContent(
+                JSON.stringify({
+                  kind: "canvas",
+                  view: { id: docId, url: `/__openclaw__/canvas/documents/${docId}/index.html` },
+                  presentation: {
+                    target: "assistant_message",
+                    title: "Saved preview",
+                    sandbox: "scripts",
+                    preferredHeight: 300,
+                  },
+                }),
+              ),
               timestamp: 1_700_000_000_000,
             },
             chatMessage("assistant", "Here is the saved conversation preview.", {

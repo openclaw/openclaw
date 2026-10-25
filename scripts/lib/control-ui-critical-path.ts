@@ -3,8 +3,29 @@ import type { CDPSession, Locator, Page } from "playwright";
 export const criticalPathRoutes = ["sessions", "settings", "cron", "agents"] as const;
 export type CriticalPathRoute = (typeof criticalPathRoutes)[number];
 
-type CriticalPathCapture = {
+export type CriticalPathPresentation = {
+  startedMs: number;
+  capturedMs: number;
+  settleMs: number;
+  cls: number;
+  nonRecentInputShiftSum: number;
+  allShiftSum: number;
+  layoutShifts: Array<{
+    atMs: number;
+    value: number;
+    hadRecentInput: boolean;
+    sources: Array<{
+      element: string | null;
+      previousRect: unknown;
+      currentRect: unknown;
+    }>;
+  }>;
+};
+
+export type CriticalPathCapture = {
   name: string;
+  documentUrl: string;
+  timeOrigin: number;
   startedMs: number;
   intentStartedMs?: number;
   intentDwellMs?: number;
@@ -12,6 +33,7 @@ type CriticalPathCapture = {
   readyMs: number;
   elapsedMs: number;
   capturedMs: number;
+  presentation?: CriticalPathPresentation;
   rpcs: Array<{
     method: string;
     params: unknown;
@@ -19,8 +41,21 @@ type CriticalPathCapture = {
     responseMs: number;
     requestBytes: number;
     responseBytes: number;
+    stack?: string;
+    abandoned?: true;
   }>;
-  resources: unknown[];
+  resources: Array<
+    Pick<
+      PerformanceResourceTiming,
+      | "name"
+      | "initiatorType"
+      | "startTime"
+      | "duration"
+      | "encodedBodySize"
+      | "decodedBodySize"
+      | "transferSize"
+    >
+  >;
 };
 
 function canonicalParams(value: unknown): unknown {
