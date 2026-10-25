@@ -70,6 +70,10 @@ function expectQuestionCancelled(
   expect(onResolved.mock.calls[0]?.[1].isCurrent()).toBe(true);
 }
 
+async function expectApproval(id: string, record: Record<string, unknown>) {
+  expect(await getOperatorApprovalDetailed({ id })).toMatchObject({ outcome: "found", record });
+}
+
 function createAuthorityHarness(
   params: Pick<
     GatewayAuxParams,
@@ -217,19 +221,16 @@ describe("gateway auxiliary authority lifecycle", () => {
     try {
       first.abort();
       await expect(records[0]!.decision).resolves.toBeNull();
-      expect(await getOperatorApprovalDetailed({ id: records[0]!.record.id })).toMatchObject({
-        outcome: "found",
-        record: { status: "cancelled", terminalReason: "run-aborted" },
+      await expectApproval(records[0]!.record.id, {
+        status: "cancelled",
+        terminalReason: "run-aborted",
       });
       await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(1));
       expect(publishResolved).toHaveBeenCalledWith(
         "plugin",
         expect.objectContaining({ id: records[0]!.record.id }),
       );
-      expect(await getOperatorApprovalDetailed({ id: records[1]!.record.id })).toMatchObject({
-        outcome: "found",
-        record: { status: "pending" },
-      });
+      await expectApproval(records[1]!.record.id, { status: "pending" });
       // Scoped approval notifications do not retire whole-run capabilities.
       expect(
         onAgentRunAuthorityClosed.mock.calls.filter(
@@ -463,10 +464,7 @@ describe("gateway auxiliary authority lifecycle", () => {
     });
 
     for (const record of [execRecord, pluginRecord]) {
-      expect(await getOperatorApprovalDetailed({ id: record.id })).toMatchObject({
-        outcome: "found",
-        record: { status: "pending" },
-      });
+      await expectApproval(record.id, { status: "pending" });
     }
     expect(questionResolved).not.toHaveBeenCalled();
     expect(publishResolved).not.toHaveBeenCalled();
