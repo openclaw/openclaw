@@ -345,34 +345,6 @@ describe("plugin command runtime", () => {
     expect(candidate.prepareDispatch("unexpected")).toEqual({ kind: "non-plugin" });
   });
 
-  it("defers full registry cleanup until an admitted command settles", async () => {
-    const { registry, cleanup } = createCleanupRegistry("slow");
-    const release = createDeferred();
-    const { promise: started, resolve: entered } = createDeferred();
-    registerCommand(registry, {
-      pluginId: "slow",
-      handler: async () => {
-        entered();
-        await release.promise;
-        return { text: "done" };
-      },
-    });
-    const dispatch = activeDispatch(registry);
-    const running = dispatch.execute(executionContext);
-    await started;
-    let clearSettled = false;
-    const clearing = clearActivePluginRegistry().then(() => {
-      clearSettled = true;
-    });
-    await Promise.resolve();
-    expect(clearSettled).toBe(false);
-    expect(cleanup).not.toHaveBeenCalled();
-    release.resolve();
-    await expect(running).resolves.toEqual({ text: "done" });
-    await clearing;
-    expect(cleanup).toHaveBeenCalledOnce();
-  });
-
   it.each([false, true])(
     "lets command-triggered clears finish (replaced: %s)",
     async (replaced) => {

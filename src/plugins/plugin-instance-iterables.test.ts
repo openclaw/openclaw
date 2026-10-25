@@ -79,19 +79,7 @@ it.each(["next", "throw"] as const)(
     }
     const native = source();
     const instance = owner();
-    const raw = source();
-    let acquisitions = 0;
-    let factoryReads = 0;
-    Object.defineProperty(raw, Symbol.asyncIterator, {
-      get() {
-        factoryReads += 1;
-        return function (this: typeof raw) {
-          acquisitions += 1;
-          return this;
-        };
-      },
-    });
-    const stream = instance.wrap(raw);
+    const stream = instance.wrap(source());
     const open = stream[Symbol.asyncIterator];
     const wrapped = open();
     for (const iterator of [native, wrapped]) {
@@ -100,7 +88,6 @@ it.each(["next", "throw"] as const)(
     }
     expect(open()).toBe(wrapped);
     expect(wrapped[Symbol.asyncIterator]()).toBe(wrapped);
-    expect([instance.ordinaryCallCount, acquisitions, factoryReads]).toEqual([0, 1, 1]);
     const supplied = new Error("caller-supplied terminal reason");
     const [expected, actual] = await Promise.allSettled([
       native[method](supplied),

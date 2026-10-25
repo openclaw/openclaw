@@ -176,39 +176,9 @@ function writeModernBundledChannelMigrationPlugin(pluginRoot: string, pluginId: 
     },
     "package.json": channelPackage(pluginId),
     "index.cjs": "throw new Error('shadowed bundled channel runtime loaded');\n",
-    "setup-entry.cjs": `module.exports = {
-  kind: 'bundled-channel-setup-entry',
-  loadSetupPlugin() { return {}; },
-};\n`,
-    "doctor-contract-api.cjs": `module.exports = { stateMigrations: [{
-  id: 'bundled-modern-state',
-  label: 'Bundled modern state',
-  detectLegacyState: () => null,
-  migrateLegacyState: () => ({ changes: [], warnings: [] }),
-}] };\n`,
+    "setup-entry.cjs": "throw new Error('shadowed bundled setup entry loaded');\n",
+    "doctor-contract-api.cjs": "throw new Error('shadowed bundled doctor contract loaded');\n",
   });
-}
-
-function writeDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string, legacy = false): void {
-  const owners = {
-    sessionRouteStateOwners: [
-      {
-        id: legacy ? "legacy-load-path-owner" : "load-path-session-owner",
-        label: legacy ? "Legacy Load Path Owner" : "Load Path Session Owner",
-        providerIds: [legacy ? "legacy-provider" : "load-path-provider"],
-        ...(!legacy && {
-          runtimeIds: ["load-path-runtime"],
-          cliSessionKeys: ["load-path-cli"],
-          authProfilePrefixes: ["load-path:"],
-        }),
-      },
-    ],
-  };
-  writeDoctorFixture(
-    pluginRoot,
-    pluginId,
-    legacy ? { "doctor-contract-api.cjs": commonJs(owners) } : { "openclaw.plugin.json": owners },
-  );
 }
 
 function writeLegacyPostSessionMigrationPlugin(pluginRoot: string, pluginId: string): void {
@@ -409,30 +379,34 @@ describe("doctor contract registry load-path plugins", () => {
           message: "load-path doctor contract warning",
         },
       ]);
+      const result = applyPluginDoctorCompatibilityMigrations(input.config, input);
+      expect(result.changes).toEqual(["configured load-path doctor contract LLM policy"]);
+      expect(result.config.plugins?.entries?.[pluginId]).toHaveProperty("llm", {
+        allowModelOverride: true,
+        allowedModels: ["openai/gpt-5.4-mini"],
+      });
     }
   });
 
-  it.each([
-    {
-      pluginId: "codex-legacy-doctor",
-      importedSymbols: ["archiveLegacyStateSource", "legacyStateFileExists"],
-    },
-    {
-      pluginId: "discord-legacy-doctor",
-      importedSymbols: [
-        "asObjectRecord",
-        "collectChannelAccountScopes",
-        "collectProviderDangerousNameMatchingScopes",
-        "defineChannelAliasMigration",
-        "defineKeyMoveMigration",
-        "hasLegacyAccountStreamingAliases",
-        "normalizeChannelAccounts",
-        "stripRetiredChannelKeys",
-      ],
-    },
-  ])("loads the preserved $pluginId package contract", ({ pluginId, importedSymbols }) => {
+  it("loads preserved runtime-doctor exports from a released package contract", () => {
+    const pluginId = "legacy-runtime-doctor";
     const input = fixture(pluginId, (pluginRoot) =>
-      writeLegacyRuntimeDoctorPlugin({ pluginRoot, pluginId, importedSymbols }),
+      writeLegacyRuntimeDoctorPlugin({
+        pluginRoot,
+        pluginId,
+        importedSymbols: [
+          "archiveLegacyStateSource",
+          "legacyStateFileExists",
+          "asObjectRecord",
+          "collectChannelAccountScopes",
+          "collectProviderDangerousNameMatchingScopes",
+          "defineChannelAliasMigration",
+          "defineKeyMoveMigration",
+          "hasLegacyAccountStreamingAliases",
+          "normalizeChannelAccounts",
+          "stripRetiredChannelKeys",
+        ],
+      }),
     );
 
     expect(listPluginDoctorLegacyConfigRules(input)).toEqual([
@@ -443,24 +417,10 @@ describe("doctor contract registry load-path plugins", () => {
     ]);
   });
 
-  it("applies compatibility normalizers from plugins.load.paths", () => {
-    const pluginId = "load-path-doctor";
-    const input = fixture(pluginId, writeDoctorPlugin);
-    const result = applyPluginDoctorCompatibilityMigrations(input.config, input);
-
-    expect(result.changes).toEqual(["configured load-path doctor contract LLM policy"]);
-    expect(result.config.plugins?.entries?.[pluginId]).toHaveProperty("llm", {
-      allowModelOverride: true,
-      allowedModels: ["openai/gpt-5.4-mini"],
-    });
-  });
-
-  it("discovers session route-state owners from plugins.load.paths", () => {
-    const pluginId = "load-path-session-owner";
-    const { config, env } = fixture(pluginId, writeDoctorSessionOwnerPlugin);
-
-    expect(listPluginDoctorSessionRouteStateOwners({ config, env })).toEqual([
-      {
+  it.each([
+    {
+      source: "manifest",
+      owner: {
         id: "load-path-session-owner",
         label: "Load Path Session Owner",
         providerIds: ["load-path-provider"],
@@ -468,24 +428,28 @@ describe("doctor contract registry load-path plugins", () => {
         cliSessionKeys: ["load-path-cli"],
         authProfilePrefixes: ["load-path:"],
       },
-    ]);
-  });
-
-  it("keeps the deprecated module owner route for external load-path plugins", () => {
-    const pluginId = "legacy-load-path-owner";
-    const { config, env } = fixture(pluginId, (root, id) =>
-      writeDoctorSessionOwnerPlugin(root, id, true),
-    );
-
-    expect(listPluginDoctorSessionRouteStateOwners({ config, env })).toEqual([
-      {
+    },
+    {
+      source: "legacy module",
+      owner: {
         id: "legacy-load-path-owner",
         label: "Legacy Load Path Owner",
         providerIds: ["legacy-provider"],
-        runtimeIds: [],
-        cliSessionKeys: [],
-        authProfilePrefixes: [],
       },
+    },
+  ])("discovers $source session route-state owners from load paths", ({ source, owner }) => {
+    const input = fixture(owner.id, (root, id) => {
+      const owners = { sessionRouteStateOwners: [owner] };
+      writeDoctorFixture(
+        root,
+        id,
+        source === "manifest"
+          ? { "openclaw.plugin.json": owners }
+          : { "doctor-contract-api.cjs": commonJs(owners) },
+      );
+    });
+    expect(listPluginDoctorSessionRouteStateOwners(input)).toEqual([
+      { runtimeIds: [], cliSessionKeys: [], authProfilePrefixes: [], ...owner },
     ]);
   });
 

@@ -66,15 +66,12 @@ function hostedFeedEntry({
   catalogFeatured,
   order,
   ...fields
-}: {
+}: Pick<OfficialExternalPluginCatalogEntry, "featured" | "featuredAt" | "description"> & {
   packageName: string;
   title: string;
-  featured?: boolean;
-  featuredAt?: number;
   pluginId?: string;
   catalogFeatured?: boolean;
   order?: number;
-  description?: string;
   icon?: string;
 }) {
   return {
@@ -85,17 +82,12 @@ function hostedFeedEntry({
     title,
     ...fields,
     publisher: { id: "openclaw", trust: "official" },
-    ...(pluginId
+    openclaw: pluginId
       ? {
-          openclaw: {
-            plugin: { id: pluginId, label: title },
-            catalog: {
-              ...(catalogFeatured === undefined ? {} : { featured: catalogFeatured }),
-              ...(order === undefined ? {} : { order }),
-            },
-          },
+          plugin: { id: pluginId, label: title },
+          catalog: { featured: catalogFeatured, order },
         }
-      : {}),
+      : undefined,
   };
 }
 
@@ -319,30 +311,19 @@ describe("plugin management Featured authority", () => {
     expectOnlyPlugin(await list(), { id: "new-tool", featured: false, order: 10 });
   });
 
+  const clawhub = { clawhubSpec: "clawhub:@acme/shared" };
+  const npmShared = { npmSpec: "@acme/shared" };
+  const both = { ...clawhub, ...npmShared };
   it.each([
-    ["one dual-source occurrence", "bundled"],
-    ["split source occurrences", "remote"],
-    ["different source", "remote"],
-    ["different ClawHub case", "remote"],
-  ])("preserves overlay identity for %s", async (mode, expectedId) => {
-    const both = { clawhubSpec: "clawhub:@acme/shared", npmSpec: "@acme/shared" };
-    const bundled = compositionEntry("bundled", both, { order: 41 });
-    const hosted = compositionEntry("remote", both);
-    let bundledEntries = [bundled];
-    if (mode === "split source occurrences") {
-      bundledEntries = [
-        compositionEntry("bundled-clawhub", { clawhubSpec: both.clawhubSpec }),
-        compositionEntry("bundled-npm", { npmSpec: both.npmSpec }),
-      ];
-    } else if (mode === "different source") {
-      hosted.openclaw.install = { clawhubSpec: both.clawhubSpec };
-      bundled.openclaw.install = { npmSpec: both.npmSpec };
-    } else if (mode === "different ClawHub case") {
-      hosted.openclaw.install = { clawhubSpec: "clawhub:@acme/Shared" };
-      bundled.openclaw.install = { clawhubSpec: both.clawhubSpec };
-    }
-    mocks.bundledEntries = bundledEntries;
-    setCatalog(undefined, [hosted]);
+    ["one dual-source occurrence", [both], both, "bundled"],
+    ["split source occurrences", [clawhub, npmShared], both, "remote"],
+    ["different source", [npmShared], clawhub, "remote"],
+    ["different ClawHub case", [clawhub], { clawhubSpec: "clawhub:@acme/Shared" }, "remote"],
+  ] as const)("preserves overlay identity for %s", async (_mode, bundled, hosted, expectedId) => {
+    mocks.bundledEntries = bundled.map((install, index) =>
+      compositionEntry(index ? "bundled-npm" : "bundled", install, { order: 41 }),
+    );
+    setCatalog(undefined, [compositionEntry("remote", hosted)]);
 
     expectOnlyPlugin(await list(), {
       id: expectedId,
