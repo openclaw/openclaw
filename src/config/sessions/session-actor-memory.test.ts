@@ -10,6 +10,7 @@ import { upsertSessionEntryCore } from "./session-accessor.js";
 import { applySessionEntryOperation } from "./session-accessor.sqlite-entry.js";
 import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
+import { memoryOwnerFixture } from "./session-actor-memory-family.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { memoryStorage } from "./session-actor-memory-publication.test-support.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
@@ -40,20 +41,15 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 const sessionKey = "agent:main:dashboard:incognito-actor-test";
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
+const database = { agentId: "main", path: "/synthetic/incognito" };
+const openFixture = memoryOwnerFixture(database);
 afterEach(async () => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
   await Promise.all(actors.splice(0).map((actor) => actor.release()));
   memorySessionActorOwners.reset();
 });
 
 async function fixture() {
-  const owner = createMemorySessionActorOwner({ agentId: "main", path: "/synthetic/incognito" });
-  owners.push(owner);
-  const target = { database: owner.identity, sessionKey };
-  const actor = await owner.acquire(target, lifetime);
+  const { actor } = await openFixture(sessionKey);
   await initialize(actor, "accept", {
     sessionFile: "/synthetic/transcript",
     cwd: "/synthetic",
@@ -65,7 +61,7 @@ async function fixture() {
       },
     ],
   });
-  return { owner, target, actor, acquire: () => owner.acquire(target, lifetime) };
+  return { actor };
 }
 
 function activity(actor: SessionActor, updatedAt: number) {
@@ -265,7 +261,6 @@ describe("memory session actor", () => {
   );
 });
 
-const database = { agentId: "main", path: "/synthetic/incognito" };
 const actors: SessionActor[] = [];
 
 async function acquireRegistered(options = database, key = sessionKey) {
@@ -407,11 +402,9 @@ describe("memory actor effect adapters", () => {
   }
 
   async function effectFixture() {
-    const owner = createMemorySessionActorOwner({ agentId: scope.agentId, path: scope.storePath });
-    owners.push(owner);
-    const actor = await owner.acquire(
-      { database: owner.identity, sessionKey: scope.sessionKey },
-      lifetime,
+    const { owner, actor } = await openFixture(
+      scope.sessionKey,
+      createMemorySessionActorOwner({ agentId: scope.agentId, path: scope.storePath }),
     );
     const binding = { actor, authority, agentId: scope.agentId, path: scope.storePath };
     const storage = memoryStorage(actor.storage!);
@@ -420,14 +413,19 @@ describe("memory actor effect adapters", () => {
     });
     const patch = async (value: Partial<InternalSessionEntry>) =>
       storage.commit("session.entry.patch", { operation: { kind: "fields", patch: value } });
-    return { owner, actor, binding, patch };
+    return {
+      owner,
+      actor,
+      patch,
+      run: <T>(callback: () => T) => runWithSessionActorStorage(binding, callback),
+    };
   }
 
   it("publishes lifecycle failure facts with the memory entry commit", async () => {
     const f = await effectFixture();
     await f.patch({ lifecycleRunId: "failed-run", startedAt: 1_000 });
     const onCommitted = vi.fn();
-    const result = await runWithSessionActorStorage(f.binding, () =>
+    const result = await f.run(() =>
       applySessionEntryOperation(
         scope,
         {
@@ -462,7 +460,7 @@ describe("memory actor effect adapters", () => {
 
   it("acquires an input handle without transferring the caller's actor lifetime", async () => {
     const f = await effectFixture();
-    const input = await runWithSessionActorStorage(f.binding, () =>
+    const input = await f.run(() =>
       acquireSessionInputActor(
         {
           agentId: scope.agentId,
@@ -480,7 +478,7 @@ describe("memory actor effect adapters", () => {
 
   it("reads terminal steering eligibility after an awaited in-process write", async () => {
     const f = await effectFixture();
-    const delivery = runWithSessionActorStorage(f.binding, () =>
+    const delivery = f.run(() =>
       prepareSteeringDelivery({
         ...scope,
         sourceTurnId: "source-turn",
@@ -597,7 +595,7 @@ describe("memory actor effect adapters", () => {
         inheritedToolPolicyVersion: 1,
       },
     });
-    const lineage = runWithSessionActorStorage(f.binding, () =>
+    const lineage = f.run(() =>
       createCompletionGrantLineageAdmission({
         cfg: {},
         context: {

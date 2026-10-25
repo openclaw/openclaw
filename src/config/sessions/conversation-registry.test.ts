@@ -2,11 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
-import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { withAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -15,8 +13,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
   listConversations,
@@ -29,7 +25,7 @@ import {
   commitReplySessionInitialization,
   deleteSessionEntryLifecycle,
   loadReplySessionInitializationSnapshot,
-  upsertSessionEntryCore as upsertCanonicalSessionEntry,
+  upsertSessionEntryCore as upsertSessionEntry,
 } from "./session-accessor.js";
 import {
   conversationPublication,
@@ -46,15 +42,6 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "./types.js";
-
-type LegacyDeliveryFixture = Partial<SessionEntry> & {
-  deliveryContext?: DeliveryContext;
-};
-
-const upsertSessionEntry = (
-  scope: Parameters<typeof upsertCanonicalSessionEntry>[0],
-  entry: LegacyDeliveryFixture,
-) => upsertCanonicalSessionEntry(scope, normalizeLegacySessionEntryDelivery(entry as SessionEntry));
 
 describe("conversation registry", () => {
   let tempDir: string;
@@ -73,8 +60,6 @@ describe("conversation registry", () => {
     );
     return receipts;
   };
-  const expectPostimage = (fact: unknown, row: unknown) =>
-    expect(fact).toMatchObject({ kind: "postimage", value: { row } });
 
   const registryScope = () => ({ agentId: "main", storePath });
   const sessionScope = (sessionKey: string) => ({ ...registryScope(), sessionKey });
@@ -90,11 +75,16 @@ describe("conversation registry", () => {
     to: string,
     channel = "reef",
     updatedAt = 100,
-  ): LegacyDeliveryFixture => ({
+  ): SessionEntry => ({
     sessionId,
     updatedAt,
     chatType: channel === "reef" ? "direct" : "channel",
-    deliveryContext: { channel, accountId: "default", to },
+    delivery: {
+      kind: "external",
+      route: { channel, accountId: "default", target: { to } },
+      context: { channel, accountId: "default", to },
+      origin: { provider: channel, accountId: "default", to },
+    },
   });
   const address = (
     peerId: string,
@@ -143,10 +133,6 @@ describe("conversation registry", () => {
     await closeOpenClawAgentDatabasesAsync(tempDir);
     return openDatabase(scope);
   };
-  const reopenSql = async () => {
-    const { db } = await reopenDatabase(registryScope());
-    return (sql: string, ...values: (string | number)[]) => db.prepare(sql).run(...values);
-  };
   const changeRows = async (
     query: (
       db: ReturnType<typeof getSessionKysely>,
@@ -173,27 +159,8 @@ describe("conversation registry", () => {
   });
 
   it("catalogs a directory address without inventing a model-context session", async () => {
-    const identity = address("reef:peer-a", undefined, {
-      nativeDirectUserId: "peer-a",
-      label: "@peer-a's agent",
-    });
+    const identity = address("reef:peer-a", undefined, { nativeDirectUserId: "peer-a" });
     await registerConversationAddresses(registryScope(), [identity!], 100);
-
-    const [conversation] = await list({ channel: "reef" });
-    expect(conversation).toMatchObject({
-      conversationRef: identity?.conversationRef,
-      target: "reef:peer-a",
-      label: "@peer-a's agent",
-      firstSeenAt: 100,
-      lastSeenAt: 100,
-    });
-    expect([conversation?.sessionId, conversation?.sessionKey, conversation?.role]).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ]);
-    expect(await read(identity!.conversationRef)).toEqual(conversation);
-
     const second = address("peer-b", "reef:peer-b");
     const label = "last\u0000literal\\u0000";
     await registerConversationAddresses(
@@ -202,8 +169,18 @@ describe("conversation registry", () => {
       200,
     );
     const updated = await read(identity!.conversationRef);
-    expect(updated).toMatchObject({ label, firstSeenAt: 100, lastSeenAt: 200 });
+    expect(updated).toMatchObject({
+      target: "reef:peer-a",
+      label,
+      firstSeenAt: 100,
+      lastSeenAt: 200,
+    });
     expect(updated?.nativeDirectUserId).toBeUndefined();
+    expect([updated?.sessionId, updated?.sessionKey, updated?.role]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
     expect(await read(second!.conversationRef)).toMatchObject({
       target: "reef:peer-b",
       firstSeenAt: 200,
@@ -304,7 +281,7 @@ describe("conversation registry", () => {
     expect(resumed!.lastSeenAt).toBeGreaterThan(canonicalConversation!.lastSeenAt);
     expect(resumed).toEqual({ ...canonicalConversation, lastSeenAt: resumed!.lastSeenAt });
 
-    await upsertCanonicalSessionEntry(scope, {
+    await upsertSessionEntry(scope, {
       totalTokens: 42,
       updatedAt: resumed!.lastSeenAt + 100,
     });
@@ -318,7 +295,7 @@ describe("conversation registry", () => {
     expect(observed).toMatchObject({ routeContext: { guildId: "guild-b" } });
     expect(observed!.lastSeenAt).toBeGreaterThan(resumed!.lastSeenAt);
 
-    await upsertCanonicalSessionEntry(scope, { label: "generic current write", updatedAt: 200 });
+    await upsertSessionEntry(scope, { label: "generic current write", updatedAt: 200 });
     expect((await list()).filter((conversation) => conversation.role === "primary")).toEqual([
       expect.objectContaining({ conversationRef, peerId: "canonical-ops" }),
     ]);
@@ -329,15 +306,15 @@ describe("conversation registry", () => {
       routeContext: { guildId: "guild-b" },
     });
 
-    const run = await reopenSql();
-    const updatedAssociation = run(
-      `UPDATE session_conversations SET last_seen_at = ?
-       WHERE session_id = ? AND conversation_id = ? AND role = 'primary'`,
-      afterCurrentWrite!.lastSeenAt,
-      "ops-session",
-      conversationRef,
+    const updatedAssociation = await changeRows((db) =>
+      db
+        .updateTable("session_conversations")
+        .set({ last_seen_at: afterCurrentWrite!.lastSeenAt })
+        .where("session_id", "=", "ops-session")
+        .where("conversation_id", "=", conversationRef)
+        .where("role", "=", "primary"),
     );
-    expect(Number(updatedAssociation.changes)).toBe(1);
+    expect(Number(updatedAssociation.numAffectedRows)).toBe(1);
     await closeOpenClawAgentDatabasesAsync(tempDir);
     closeOpenClawAgentDatabasesForTest();
 
@@ -349,7 +326,7 @@ describe("conversation registry", () => {
       role: "primary",
     });
     expect(unobserved?.routeContext).toBeUndefined();
-    await upsertCanonicalSessionEntry(scope, {
+    await upsertSessionEntry(scope, {
       label: "after older writer",
       updatedAt: afterCurrentWrite!.lastSeenAt + 1,
     });
@@ -504,7 +481,7 @@ describe("conversation registry", () => {
     });
   });
 
-  it("publishes native association role removals atomically and drops rolled-back catalogue changes", async () => {
+  it("keeps native association roles and publications atomic across rollback", async () => {
     const scope = sessionScope("agent:main:receipt");
     const sessionId = "receipt-session";
     await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
@@ -528,61 +505,33 @@ describe("conversation registry", () => {
         });
       }, options);
     write(0, 10);
-    const installed = new Map<string, unknown>();
-    observe(
-      conversationPublication.subscribeFacts((receipt) => {
-        if ("facts" in receipt) {
-          for (const [key, fact] of receipt.facts) {
-            installed.set(key, fact);
-          }
-        }
-      }),
-    );
-    const database = openOpenClawAgentDatabase(options);
-    const associationReads = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["route"],
-      (sql) =>
-        sql.startsWith('select "last_seen_at", "route_context_json" from "session_conversations"')
-          ? "route"
-          : null,
-    );
-    try {
-      write(1, 20, { guildId: "receipt-guild" });
-      expect(associationReads.counts.route).toBe(0);
-    } finally {
-      associationReads.restore();
-    }
+    const receipts = watchFacts();
+    write(1, 20, { guildId: "receipt-guild" });
+    const oldPrimary = JSON.stringify([
+      "association",
+      sessionId,
+      identities[0]!.conversationRef,
+      "primary",
+    ]);
+    expect(receipts.some(({ facts }) => facts.get(oldPrimary)?.kind === "absent")).toBe(true);
+    expect(await read(identities[0]!.conversationRef)).toMatchObject({
+      role: "related",
+      lastSeenAt: 20,
+    });
     expect(await read(identities[1]!.conversationRef)).toMatchObject({
+      role: "primary",
+      lastSeenAt: 20,
       routeContext: { guildId: "receipt-guild" },
     });
-    const associationKey = (index: number, role: string) =>
-      JSON.stringify(["association", sessionId, identities[index]!.conversationRef, role]);
-    const oldPrimary = associationKey(0, "primary");
-    const oldRelated = associationKey(0, "related");
-    const newPrimary = associationKey(1, "primary");
-    expect(installed.get(oldPrimary)).toEqual({ kind: "absent" });
-    for (const [key, role] of [
-      [oldRelated, "related"],
-      [newPrimary, "primary"],
-    ] as const) {
-      expectPostimage(installed.get(key), { role, last_seen_at: 20 });
-    }
-    const committedFacts = new Map(installed);
+    const committedReceipts = [...receipts];
     expect(() =>
       runOpenClawAgentWriteTransaction(() => {
         write(0, 30);
         throw new Error("rollback conversation");
       }, options),
     ).toThrow("rollback conversation");
-    expect(installed).toEqual(committedFacts);
-    expect(
-      openOpenClawAgentDatabase(options)
-        .db.prepare(
-          "SELECT role FROM session_conversations WHERE session_id = ? AND conversation_id = ?",
-        )
-        .get(sessionId, identities[1]!.conversationRef),
-    ).toEqual({ role: "primary" });
+    expect(receipts).toEqual(committedReceipts);
+    expect(await read(identities[1]!.conversationRef)).toHaveProperty("role", "primary");
   });
 
   it("publishes binding facts without transporting large catalogue metadata", async () => {

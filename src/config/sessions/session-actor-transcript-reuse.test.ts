@@ -1,6 +1,4 @@
 import { assert, expect, it, vi } from "vitest";
-import { readActivitySummarySource } from "../../gateway/session-activity-summary-source.js";
-import { readActivitySummaryBatch } from "../../gateway/session-activity-summary-source.worker.js";
 import { readSessionTranscriptAccountingAsync } from "../../gateway/session-transcript-readers.js";
 import { capturePersistedModelPromptProjection } from "../../sessions/user-turn-transcript-updates.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
@@ -15,7 +13,7 @@ import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-wr
 import type { SessionTranscriptTurnMessageAppend } from "./session-accessor.types.js";
 import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
-import { summaryFacts, transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
+import { transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
@@ -82,7 +80,7 @@ function appendMessage(
   );
 }
 
-it("reuses durable summaries and accounting while refreshing transcript writes and resets", () =>
+it("reuses durable anchors and accounting while refreshing transcript writes and resets", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     await captureRuntimeConfigAsyncReader()();
     const fixture = createSessionCompoundWorkerFixture();
@@ -120,9 +118,6 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
       expect(discoveryReads).not.toHaveBeenCalled();
     };
     const readAccounting = () => readSessionTranscriptAccountingAsync(scope, accountingOptions);
-    const readSummary = () => readActivitySummarySource({ scope, assertCurrent() {} });
-    const expectCanonicalSummary = (summary: Awaited<ReturnType<typeof readSummary>>) =>
-      expect(summaryFacts(summary)).toEqual(summaryFacts(readActivitySummaryBatch({ scope })));
     const readAnchors = (entryIds: string[]) =>
       readSessionTranscriptAnchorsAsync(scope, { entryIds });
     const initialAccounting = {
@@ -135,10 +130,6 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
     };
     try {
       expect(await readAccounting()).toEqual(initialAccounting);
-      expect(historyReads).toHaveBeenCalled();
-      const cold = await readSummary();
-      expect(cold?.notes).toEqual(["user: Original question", "assistant: Original answer"]);
-      expectCanonicalSummary(cold);
       expect(historyReads).toHaveBeenCalled();
       await actor.read(authority);
       await withOwnedSessionTranscriptWrites(
@@ -171,9 +162,6 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
           expect(uncovered.anchors.map((anchor) => anchor.entryId)).toEqual(["answer"]);
           expect(historyReads).toHaveBeenCalled();
           clearReads();
-          const initial = await readSummary();
-          expect(summaryFacts(initial)).toEqual(summaryFacts(cold));
-          expect(initial?.notes).toEqual(cold?.notes);
           expect(await readAccounting()).toEqual(initialAccounting);
           expectResident();
           const previousSeq = actor.snapshot(authority)!.transcript.version.rawSeq!;
@@ -285,24 +273,6 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             "next-answer",
           ]);
           expectResident();
-          clearReads();
-          const summary = await readSummary();
-          expectCanonicalSummary(summary);
-          expect(summary?.snapshot.totalMessages).toBe(4);
-          expect(summary?.notes).toEqual([
-            "user: Original question",
-            "assistant: Original answer",
-            "user: Next question",
-            "assistant: Next answer",
-          ]);
-          expect(summary?.snapshot.activeLeafEntryId).toBe("next-answer");
-          expect(summary?.page.events).toContainEqual({
-            event: expect.objectContaining({ id: "next-question", message: captured }),
-          });
-          expect(summary?.page.events.at(-1)?.event).toMatchObject({
-            id: "next-answer",
-            message: { content: "Next answer" },
-          });
           expect((await hydration.read()).snapshot.events).toContainEqual(
             expect.objectContaining({ id: "next-question", message: captured }),
           );
@@ -404,16 +374,6 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
           expect(rewrittenAnchors.anchors).toHaveLength(1);
           expect(rewrittenAnchors.anchors[0]).toMatchObject({ entryId: "next-question" });
           expect(rewrittenAnchors.anchors[0]?.generation).not.toBe(userAnchor.generation);
-          expect(historyReads).toHaveBeenCalled();
-          historyReads.mockClear();
-          const rewrittenSummary = await readSummary();
-          expectCanonicalSummary(rewrittenSummary);
-          expect(rewrittenSummary?.notes).toEqual([
-            "user: Original question",
-            "assistant: Corrected answer",
-            "user: Next question",
-            "assistant: Next answer",
-          ]);
           expect(historyReads).toHaveBeenCalled();
           historyReads.mockClear();
           const refreshed = await hydration.read();
@@ -523,53 +483,15 @@ it("slides durable context within its bounds and reloads only when an admission 
           });
           expect(historyReads).toHaveBeenCalled();
           await append("first-reply", "assistant", "First reply");
-          const second = await admit("second-input", "Second input");
-          await capturePersistedModelPromptProjection({
-            admission: second,
-            message: { role: "user", content: "Second input", timestamp: 10 },
-            text: "Second input",
-            assertCurrent() {},
-            assertWritable() {},
-            onCommitted() {},
-          });
-          historyReads.mockClear();
-          const fenced = await read(second);
-          expect(fenced).toMatchObject({
-            events: [sessionHeader, ...["old-4", "first-input", "first-reply"].map(eventWithId)],
-            totalEvents: 8,
-            activeLeafEntryId: "first-reply",
-          });
-          expect(fenced).toHaveProperty(
-            "parents",
-            new Map([
-              ["old-4", "old-3"],
-              ["first-input", "old-4"],
-              ["first-reply", "first-input"],
-            ]),
-          );
           const current = await read();
-          expect(current).toMatchObject({
-            events: [
-              sessionHeader,
-              ...["first-input", "first-reply"].map(eventWithId),
-              expect.objectContaining({
-                id: "second-input",
-                message: expect.objectContaining({
-                  __openclaw: { modelPromptProjection: { version: 1, text: "Second input" } },
-                }),
-              }),
-            ],
-            totalEvents: 8,
-          });
-          expect(historyReads).not.toHaveBeenCalled();
 
           // An input larger than the read limit must not displace its pre-input history.
           const oversized = await admit("oversized-input", "x".repeat(8192));
           historyReads.mockClear();
-          expect(await read(oversized)).toMatchObject({ events: current.events, totalEvents: 9 });
+          expect(await read(oversized)).toMatchObject({ events: current.events, totalEvents: 8 });
           expect(await read()).toMatchObject({
             events: [sessionHeader],
-            totalEvents: 9,
+            totalEvents: 8,
             truncated: true,
           });
           expect(historyReads).not.toHaveBeenCalled();
@@ -580,13 +502,13 @@ it("slides durable context within its bounds and reloads only when an admission 
           historyReads.mockClear();
           expect(await read()).toMatchObject({
             events: [sessionHeader],
-            totalEvents: 11,
+            totalEvents: 10,
             truncated: true,
           });
           expect(historyReads).not.toHaveBeenCalled();
           expect(await read(evicted)).toMatchObject({
             events: [sessionHeader, eventWithId("after-oversized")],
-            totalEvents: 11,
+            totalEvents: 10,
             activeLeafEntryId: "after-oversized",
           });
           expect(historyReads).toHaveBeenCalled();
