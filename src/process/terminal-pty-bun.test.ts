@@ -284,7 +284,10 @@ function spawnControlledBunPty() {
     env: {},
     name: "xterm-256color",
   });
-  const callbacks = spawn.mock.calls[0][1].terminal;
+  const callbacks = spawn.mock.calls[0]?.[1]?.terminal;
+  if (!callbacks) {
+    throw new Error("Bun.spawn did not receive terminal callbacks");
+  }
   return { handle, callbacks, terminal, done };
 }
 
