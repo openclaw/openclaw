@@ -80,7 +80,11 @@ describe("resolveIMessageInboundDecision command auth", () => {
   it("marks authorized iMessage control commands as text command turns", async () => {
     const { ctxPayload } = await buildContext(
       { id: 102, guid: "p:0/GUID-command", text: "/new" },
-      { allowFrom: [], dmPolicy: "pairing", storeAllowFrom: ["+15555550123"] },
+      {
+        allowFrom: [],
+        dmPolicy: "pairing",
+        readStoreAllowFrom: async () => ["+15555550123"],
+      },
     );
 
     expect(ctxPayload).toMatchObject({
