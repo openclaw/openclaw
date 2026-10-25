@@ -34,6 +34,85 @@ import {
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
 
+function deviceFor(
+  context: ReturnType<typeof createContext>,
+  deviceId: string,
+  isCurrent = () => true,
+) {
+  return captureGatewayDeviceRevocation(
+    context,
+    { deviceId, role: "operator" },
+    isCurrent,
+    undefined,
+    { isCurrent: () => true, subscribe: () => () => {} },
+  );
+}
+
+function withRequester<T>(
+  client: ReturnType<typeof createOperatorClient>,
+  context: ReturnType<typeof createContext>,
+  device: ReturnType<typeof deviceFor>,
+  identity: Parameters<typeof withGatewayToolCallerIdentity>[0],
+  run: () => T,
+  includeProfile = false,
+) {
+  return withPluginRuntimeGatewayRequestScope(
+    {
+      client,
+      context,
+      resolveGatewayContext: context.resolveGatewayContext!,
+      hasCurrentClientAuthority: device.isCurrent,
+      isWebchatConnect: () => false,
+    },
+    () =>
+      withOperatorToolGatewayAuthority(
+        {
+          ...(includeProfile ? { authenticatedUserProfile: client.authenticatedUserProfile } : {}),
+          scopes: client.connect.scopes ?? [],
+        },
+        () => withGatewayToolCallerIdentity(identity, run),
+      ),
+  );
+}
+
+async function retainRequester() {
+  const captured = await captureOperatorToolGatewayContinuationContext(undefined, {
+    retainRequester: true,
+  });
+  if (!captured) {
+    throw new Error("Expected retained requester owner");
+  }
+  return captured;
+}
+
+async function expectFenced(captured: Awaited<ReturnType<typeof retainRequester>>) {
+  const effect = vi.fn(async () => {});
+  await expect((async () => captured.runWithRequester(effect))()).rejects.toThrow();
+  expect(effect).not.toHaveBeenCalled();
+  expect(getGatewayToolCallerIdentity()).toBeUndefined();
+}
+
+async function requesterSource(
+  client: ReturnType<typeof createOperatorClient>,
+  context: ReturnType<typeof createContext>,
+  device: ReturnType<typeof deviceFor>,
+  sessionKey: string,
+) {
+  const source = await captureGatewayOperatorRunAuthority({
+    client,
+    context,
+    hasCurrentClientAuthority: device.isCurrent,
+  });
+  const origin = captureRequesterOrigin({
+    sessionKey,
+    operatorProfileId: client.authenticatedUserProfile?.profileId,
+  });
+  if (!source || !origin) {
+    throw new Error("Expected authenticated requester authority");
+  }
+  return { source, origin };
+}
+
 describe("accepted steering queue custody", () => {
   it.each(["consumed", "receiver-ended", "rejected", "source-revoked"] as const)(
     "settles queue custody on %s, never on an accepted confirmation error",
@@ -47,27 +126,15 @@ describe("accepted steering queue custody", () => {
         const context = createContext();
         const resolveGatewayContext = () => context;
         context.resolveGatewayContext = resolveGatewayContext;
-        const device = captureGatewayDeviceRevocation(
-          context,
-          { deviceId: "queue-custody-device", role: "operator" },
-          () => true,
-          undefined,
-          { isCurrent: () => true, subscribe: () => () => {} },
-        );
-        const source = await captureGatewayOperatorRunAuthority({
-          client,
-          context,
-          hasCurrentClientAuthority: device.isCurrent,
-        });
+        const device = deviceFor(context, "queue-custody-device");
         const sessionKey = "agent:main:dashboard:queue-custody";
         const sessionId = "queue-custody-session";
-        const requesterOrigin = captureRequesterOrigin({
+        const { source, origin: requesterOrigin } = await requesterSource(
+          client,
+          context,
+          device,
           sessionKey,
-          operatorProfileId: client.authenticatedUserProfile?.profileId,
-        });
-        if (!source || !requesterOrigin) {
-          throw new Error("Expected an authenticated original source");
-        }
+        );
         const handle = {
           runId: "queue-custody-active-run",
           isStreaming: () => true,
@@ -88,47 +155,33 @@ describe("accepted steering queue custody", () => {
         };
         try {
           await expect(
-            withPluginRuntimeGatewayRequestScope(
-              {
-                client,
-                context,
-                resolveGatewayContext,
-                hasCurrentClientAuthority: device.isCurrent,
-                isWebchatConnect: () => false,
-              },
+            withRequester(
+              client,
+              context,
+              device,
+              { agentId: "main", sessionKey, requesterOrigin, operatorAuthority: source.authority },
               () =>
-                withOperatorToolGatewayAuthority({ scopes: client.connect.scopes ?? [] }, () =>
-                  withGatewayToolCallerIdentity(
-                    {
-                      agentId: "main",
-                      sessionKey,
-                      requesterOrigin,
-                      operatorAuthority: source.authority,
-                    },
-                    () =>
-                      queueSessionsSendSteeringWithCustody(
-                        { agentId: "main", sessionKey, sessionId },
-                        operation,
-                        () => source.authority.assertCurrent(),
-                        async (assertCurrent, lifecycle) => {
-                          assertRetained = assertCurrent;
-                          settle = lifecycle.onQueueSettled;
-                          assertCurrent();
-                          if (boundary === "source-revoked") {
-                            invalidateGatewayDeviceRevocation(
-                              context,
-                              "queue-custody-device",
-                              "operator",
-                            );
-                            assertCurrent();
-                          }
-                          if (boundary !== "rejected") {
-                            lifecycle.onQueueAccepted?.(true);
-                          }
-                          throw failure;
-                        },
-                      ),
-                  ),
+                queueSessionsSendSteeringWithCustody(
+                  { agentId: "main", sessionKey, sessionId },
+                  operation,
+                  () => source.authority.assertCurrent(),
+                  async (assertCurrent, lifecycle) => {
+                    assertRetained = assertCurrent;
+                    settle = lifecycle.onQueueSettled;
+                    assertCurrent();
+                    if (boundary === "source-revoked") {
+                      invalidateGatewayDeviceRevocation(
+                        context,
+                        "queue-custody-device",
+                        "operator",
+                      );
+                      assertCurrent();
+                    }
+                    if (boundary !== "rejected") {
+                      lifecycle.onQueueAccepted?.(true);
+                    }
+                    throw failure;
+                  },
                 ),
             ),
           ).rejects.toThrow(boundary === "source-revoked" ? undefined : failure.message);
@@ -171,63 +224,31 @@ describe("retained requester continuation", () => {
         let receiptCurrent = true;
         const resolveGatewayContext = () => (gatewayCurrent ? context : undefined);
         context.resolveGatewayContext = resolveGatewayContext;
-        const device = captureGatewayDeviceRevocation(
-          context,
-          { deviceId: "retained-requester-device", role: "operator" },
-          () => connected,
-          undefined,
-          { isCurrent: () => true, subscribe: () => () => {} },
-        );
-        const source = await captureGatewayOperatorRunAuthority({
+        const device = deviceFor(context, "retained-requester-device", () => connected);
+        const { source, origin: requesterOrigin } = await requesterSource(
           client,
           context,
-          hasCurrentClientAuthority: device.isCurrent,
-        });
-        const requesterOrigin = captureRequesterOrigin({
-          sessionKey: "agent:main:requester",
-          operatorProfileId: client.authenticatedUserProfile?.profileId,
-        });
-        if (!source || !requesterOrigin) {
-          throw new Error("Expected authenticated requester authority");
-        }
+          device,
+          "agent:main:requester",
+        );
         let captured: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
         try {
-          captured = await withPluginRuntimeGatewayRequestScope(
+          captured = await withRequester(
+            client,
+            context,
+            device,
             {
-              client,
-              context,
-              resolveGatewayContext,
-              hasCurrentClientAuthority: device.isCurrent,
-              isWebchatConnect: () => false,
+              agentId: "main",
+              sessionKey: "agent:main:requester",
+              requesterOrigin,
+              operatorAuthority: source.authority,
+              operationalRunInstance: createOperationalRunInstanceRef("ended-requester"),
+              receiptAuthority: () => receiptCurrent,
+              fullPermission: true,
+              sessionEventToolsAllow: ["sessions_send"],
             },
-            () =>
-              withOperatorToolGatewayAuthority({ scopes: client.connect.scopes ?? [] }, () =>
-                withGatewayToolCallerIdentity(
-                  {
-                    agentId: "main",
-                    sessionKey: "agent:main:requester",
-                    requesterOrigin,
-                    operatorAuthority: source.authority,
-                    operationalRunInstance: createOperationalRunInstanceRef("ended-requester"),
-                    receiptAuthority: () => receiptCurrent,
-                    fullPermission: true,
-                    sessionEventToolsAllow: ["sessions_send"],
-                  },
-                  async () => {
-                    const pending = captureOperatorToolGatewayContinuationContext(undefined, {
-                      retainRequester: true,
-                    });
-                    if (!pending) {
-                      throw new Error("Expected retained requester owner");
-                    }
-                    return await pending;
-                  },
-                ),
-              ),
+            retainRequester,
           );
-          if (!captured) {
-            throw new Error("Requester transfer did not capture its source");
-          }
           receiptCurrent = false;
           connected = false;
           source.release();
@@ -257,10 +278,7 @@ describe("retained requester continuation", () => {
             gatewayCurrent = false;
           }
           expect(retained.assertCurrent).toThrow();
-          const effect = vi.fn(async () => {});
-          await expect((async () => captured?.runWithRequester(effect))()).rejects.toThrow();
-          expect(effect).not.toHaveBeenCalled();
-          expect(getGatewayToolCallerIdentity()).toBeUndefined();
+          await expectFenced(captured);
         } finally {
           captured?.release();
           source.release();
@@ -285,42 +303,21 @@ describe("retained requester continuation", () => {
       let aliceConnected = true;
       let bobConnected = true;
       let receiptCurrent = true;
-      const aliceDevice = captureGatewayDeviceRevocation(
-        context,
-        { deviceId: "selecting-alice-device", role: "operator" },
-        () => aliceConnected,
-        undefined,
-        { isCurrent: () => true, subscribe: () => () => {} },
-      );
-      const bobDevice = captureGatewayDeviceRevocation(
-        context,
-        { deviceId: "selected-bob-device", role: "operator" },
-        () => bobConnected,
-        undefined,
-        { isCurrent: () => true, subscribe: () => () => {} },
-      );
-      const aliceSource = await captureGatewayOperatorRunAuthority({
-        client: alice,
-        context,
-        hasCurrentClientAuthority: aliceDevice.isCurrent,
-      });
-      const bobSource = await captureGatewayOperatorRunAuthority({
-        client: bob,
-        context,
-        hasCurrentClientAuthority: bobDevice.isCurrent,
-      });
+      const aliceDevice = deviceFor(context, "selecting-alice-device", () => aliceConnected);
+      const bobDevice = deviceFor(context, "selected-bob-device", () => bobConnected);
       const sessionKey = "agent:main:selected-requester";
-      const aliceOrigin = captureRequesterOrigin({
+      const { source: aliceSource, origin: aliceOrigin } = await requesterSource(
+        alice,
+        context,
+        aliceDevice,
         sessionKey,
-        operatorProfileId: alice.authenticatedUserProfile?.profileId,
-      });
-      const bobOrigin = captureRequesterOrigin({
+      );
+      const { source: bobSource, origin: bobOrigin } = await requesterSource(
+        bob,
+        context,
+        bobDevice,
         sessionKey,
-        operatorProfileId: bob.authenticatedUserProfile?.profileId,
-      });
-      if (!aliceSource || !bobSource || !aliceOrigin || !bobOrigin) {
-        throw new Error("Expected both authenticated participant sources");
-      }
+      );
       const selectedBobOrigin = {
         ...bobOrigin,
         delegatedCreatorProfileId: aliceSource.authority.profileId,
@@ -335,54 +332,31 @@ describe("retained requester continuation", () => {
       });
       let captured: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
       try {
-        captured = await withPluginRuntimeGatewayRequestScope(
+        captured = await withRequester(
+          alice,
+          context,
+          aliceDevice,
           {
-            client: alice,
-            context,
-            resolveGatewayContext,
-            hasCurrentClientAuthority: aliceDevice.isCurrent,
-            isWebchatConnect: () => false,
+            agentId: "main",
+            sessionKey,
+            requesterOrigin: aliceOrigin,
+            operatorAuthority: aliceSource.authority,
+            personalToolParticipants: participants,
+            operationalRunInstance: createOperationalRunInstanceRef("finished-alice-selector"),
+            receiptAuthority: () => receiptCurrent,
+            fullPermission: true,
           },
           () =>
-            withOperatorToolGatewayAuthority(
-              {
-                authenticatedUserProfile: alice.authenticatedUserProfile,
-                scopes: alice.connect.scopes ?? [],
-              },
-              () =>
-                withGatewayToolCallerIdentity(
-                  {
-                    agentId: "main",
-                    sessionKey,
-                    requesterOrigin: aliceOrigin,
-                    operatorAuthority: aliceSource.authority,
-                    personalToolParticipants: participants,
-                    operationalRunInstance:
-                      createOperationalRunInstanceRef("finished-alice-selector"),
-                    receiptAuthority: () => receiptCurrent,
-                    fullPermission: true,
-                  },
-                  () =>
-                    withGatewayPersonalToolUser(bobSource.authority.profileId, async () => {
-                      const selected = resolveGatewayToolOperatorSelection({
-                        requireRequesterOrigin: true,
-                      });
-                      expect(selected.requesterOrigin).toEqual(selectedBobOrigin);
-                      expect(selected.operatorAuthority).toBe(bobSource.authority);
-                      const pending = captureOperatorToolGatewayContinuationContext(undefined, {
-                        retainRequester: true,
-                      });
-                      if (!pending) {
-                        throw new Error("Expected selected participant custody");
-                      }
-                      return await pending;
-                    }),
-                ),
-            ),
+            withGatewayPersonalToolUser(bobSource.authority.profileId, async () => {
+              const selected = resolveGatewayToolOperatorSelection({
+                requireRequesterOrigin: true,
+              });
+              expect(selected.requesterOrigin).toEqual(selectedBobOrigin);
+              expect(selected.operatorAuthority).toBe(bobSource.authority);
+              return retainRequester();
+            }),
+          true,
         );
-        if (!captured) {
-          throw new Error("Selected participant source was not captured");
-        }
         // Participant/turn membership and both sockets end; the accepted owner holds Bob's source.
         participants.close();
         receiptCurrent = false;
@@ -420,10 +394,7 @@ describe("retained requester continuation", () => {
         });
         invalidateGatewayDeviceRevocation(context, "selected-bob-device", "operator");
         expect(retained.assertCurrent).toThrow();
-        const effect = vi.fn(async () => {});
-        await expect((async () => captured?.runWithRequester(effect))()).rejects.toThrow();
-        expect(effect).not.toHaveBeenCalled();
-        expect(getGatewayToolCallerIdentity()).toBeUndefined();
+        await expectFenced(captured);
       } finally {
         captured?.release();
         participants.close();

@@ -72,6 +72,18 @@ const startCliAuthGateway = (state: OpenClawTestState, cfg: OpenClawConfig, toke
     scopes: ["operator.admin", "operator.read", "operator.write"],
   });
 
+async function writeProfiles(
+  state: OpenClawTestState,
+  profiles: Record<string, AuthProfileCredential>,
+  order?: string[],
+) {
+  await state.writeAuthProfiles({
+    version: 1,
+    profiles,
+    ...(order && { order: { anthropic: order } }),
+  });
+}
+
 describe.for(cases)("chat.send $name", (testCase) => {
   let fixture: CliAuthFixture;
   let caseWork: Promise<void> | undefined;
@@ -182,10 +194,7 @@ async function prepareCliAuthFixture(
         }),
       );
     }
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: credential ? { "anthropic:pasted": credential } : {},
-    });
+    await writeProfiles(state, credential ? { "anthropic:pasted": credential } : {});
     const modelRef = "anthropic/claude-sonnet-4-6";
     const token = "chat-cli-auth-test";
     const cfg = {
@@ -213,12 +222,8 @@ async function executeCliAuthCase(
   signal.throwIfAborted();
   const { state, cfg, modelRef, token, executable, nativeRoot } = fixture;
   const sessionKey = `agent:main:cli-auth-${randomUUID()}`;
-  const sendTurn = async (
-    client: CliAuthGateway["client"],
-    turnSessionKey: string,
-    message: string,
-    expectedReply: string,
-  ) => {
+  const sendTurn = async (turnSessionKey: string, message: string, expectedReply: string) => {
+    const { client } = fixture.gateway;
     signal.throwIfAborted();
     expect(resolveExecutablePath("claude")).toBe(executable);
     const accepted = await client.request<{ runId: string; status: string }>("chat.send", {
@@ -248,7 +253,6 @@ async function executeCliAuthCase(
   };
   const marker = `native-history-${randomUUID()}`;
   await sendTurn(
-    fixture.gateway.client,
     sessionKey,
     nativeContinuity ? `Remember ${marker}.` : "Reply using the saved account.",
     reply,
@@ -257,10 +261,7 @@ async function executeCliAuthCase(
     const original = await readBinding(sessionKey);
     expect(original?.sessionId).toBeTruthy();
     expect(original?.authProfileId).toBeUndefined();
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: { "anthropic:pasted": savedCredential },
-    });
+    await writeProfiles(state, { "anthropic:pasted": savedCredential });
     await gatewayFixture.disconnectGatewayClient(fixture.gateway.client);
     await fixture.gateway.server.close({ reason: "Verify persisted native account continuity" });
     signal.throwIfAborted();
@@ -270,7 +271,6 @@ async function executeCliAuthCase(
     await fixture.gateway.server.startupSettled;
     signal.throwIfAborted();
     await sendTurn(
-      fixture.gateway.client,
       sessionKey,
       "Recall the marker from our previous turn.",
       `Native history: ${marker}.`,
@@ -279,12 +279,9 @@ async function executeCliAuthCase(
     expect(resumed?.sessionId).toBe(original?.sessionId);
     expect(resumed?.authProfileId).toBe(original?.authProfileId);
     const savedSessionKey = `agent:main:cli-auth-${randomUUID()}`;
-    await sendTurn(
-      fixture.gateway.client,
-      savedSessionKey,
-      "Reply using the saved account.",
-      "Saved account reply.",
-    );
+    const sendSavedTurn = (key: string, message: string) =>
+      sendTurn(key, message, "Saved account reply.");
+    await sendSavedTurn(savedSessionKey, "Reply using the saved account.");
     const saved = await readBinding(savedSessionKey);
     expect(saved?.authProfileId).toBe("anthropic:pasted");
 
@@ -293,12 +290,7 @@ async function executeCliAuthCase(
       key: sessionKey,
       model: `${modelRef}@anthropic:pasted`,
     });
-    await sendTurn(
-      fixture.gateway.client,
-      sessionKey,
-      "Reply using my explicit account selection.",
-      "Saved account reply.",
-    );
+    await sendSavedTurn(sessionKey, "Reply using my explicit account selection.");
     const explicitlySelected = await readBinding(sessionKey);
     expect(explicitlySelected?.authProfileId).toBe("anthropic:pasted");
     expect(explicitlySelected?.sessionId).not.toBe(original?.sessionId);
@@ -308,32 +300,22 @@ async function executeCliAuthCase(
       provider: "anthropic",
       token: "synthetic-replacement-anthropic-token",
     } satisfies AuthProfileCredential;
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: {
+    await writeProfiles(
+      state,
+      {
         "anthropic:pasted": savedCredential,
         "anthropic:replacement": replacement,
       },
-      order: { anthropic: ["anthropic:replacement", "anthropic:pasted"] },
-    });
-    await sendTurn(
-      fixture.gateway.client,
-      savedSessionKey,
-      "Keep our existing account despite the new default.",
-      "Saved account reply.",
+      ["anthropic:replacement", "anthropic:pasted"],
     );
+    await sendSavedTurn(savedSessionKey, "Keep our existing account despite the new default.");
     expect(await readBinding(savedSessionKey)).toMatchObject({
       authProfileId: saved?.authProfileId,
       sessionId: saved?.sessionId,
     });
 
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: { "anthropic:replacement": replacement },
-      order: { anthropic: ["anthropic:replacement"] },
-    });
+    await writeProfiles(state, { "anthropic:replacement": replacement }, ["anthropic:replacement"]);
     await sendTurn(
-      fixture.gateway.client,
       savedSessionKey,
       "Use the available account after my old account was removed.",
       "Replacement account reply.",
