@@ -39,39 +39,32 @@ afterEach(() => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createSnapshot(
-  params: {
-    config?: Parameters<typeof indexPolicy.resolveInstalledPluginIndexPolicyHash>[0];
-    pluginIds?: readonly string[];
-    normalizationAlias?: string;
-    workspaceDir?: string;
-  } = {},
-): PluginMetadataSnapshot {
-  const snapshot = createPluginMetadataSnapshotFixture({
-    plugins: params.normalizationAlias
-      ? [
-          {
-            id: "fixture",
-            origin: "config",
-            rootDir: "/fixture",
-            source: "test",
-            modelIdNormalization: {
-              providers: { fixture: { aliases: { raw: params.normalizationAlias } } },
+function createSnapshot({
+  config,
+  normalizationAlias,
+  ...scope
+}: {
+  config?: Parameters<typeof indexPolicy.resolveInstalledPluginIndexPolicyHash>[0];
+  pluginIds?: readonly string[];
+  normalizationAlias?: string;
+  workspaceDir?: string;
+} = {}): PluginMetadataSnapshot {
+  const snapshot = createPluginMetadataSnapshotFixture(
+    {
+      plugins: normalizationAlias
+        ? [
+            {
+              id: "fixture",
+              modelIdNormalization: {
+                providers: { fixture: { aliases: { raw: normalizationAlias } } },
+              },
             },
-          },
-        ]
-      : [],
-  });
-  const policyHash = indexPolicy.resolveInstalledPluginIndexPolicyHash(params.config);
-  const index = { ...snapshot.index, policyHash };
-  return {
-    ...snapshot,
-    policyHash,
-    index,
-    registryIndex: index,
-    ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  };
+          ]
+        : [],
+    },
+    indexPolicy.resolveInstalledPluginIndexPolicyHash(config),
+  );
+  return { ...snapshot, ...scope };
 }
 
 function expectSnapshot(

@@ -243,7 +243,10 @@ describe("loadEnabledBundleMcpConfig", () => {
     },
   );
 
-  it("loads Agent Plugins placeholders, env, and transports", async ({ homeDir, workspaceDir }) => {
+  it("loads Agent transports and placeholders while rejecting cwd traversal", async ({
+    homeDir,
+    workspaceDir,
+  }) => {
     const pluginRoot = await writeAgentBundle(homeDir, "portable-mcp", {
       servers: {
         local: stdio({
@@ -257,18 +260,31 @@ describe("loadEnabledBundleMcpConfig", () => {
         }),
         remote: remote("streamable-http", "mcp", { headers: { Authorization: "Bearer test" } }),
         legacy: remote("sse", "sse"),
+        valid: stdio({ cwd: "./child" }),
+        dotPrefixedChild: stdio({ cwd: "./..cache" }),
+        relativeEscape: stdio({ cwd: "./../escape" }),
+        placeholderEscape: stdio({ cwd: "${PLUGIN_ROOT}/../escape" }),
       },
       textFiles: {
         "bin/server": "#!/bin/sh\n",
         "config.json": "{}\n",
+        "child/.keep": "",
+        "..cache/.keep": "",
       },
     });
 
     const loaded = loadEnabled(workspaceDir, "portable-mcp");
     const root = await fs.realpath(pluginRoot);
     const pluginDataPath = path.join(homeDir, ".openclaw", "plugin-data", "portable-mcp");
-    expectNoDiagnostics(loaded.diagnostics);
-    expect(loaded.config.mcpServers).toEqual({
+    expect(Object.keys(loaded.config.mcpServers)).toEqual([
+      "local",
+      "remote",
+      "legacy",
+      "valid",
+      "dotPrefixedChild",
+    ]);
+    const { valid, dotPrefixedChild, ...portableServers } = loaded.config.mcpServers;
+    expect(portableServers).toEqual({
       local: {
         transport: "stdio",
         command: path.join(root, "bin", "server"),
@@ -288,41 +304,21 @@ describe("loadEnabledBundleMcpConfig", () => {
     });
     expect(loaded.prepareDataDirsByServer).toEqual({
       local: { pluginId: "portable-mcp", dataDir: pluginDataPath },
+      valid: { pluginId: "portable-mcp", dataDir: pluginDataPath },
+      dotPrefixedChild: { pluginId: "portable-mcp", dataDir: pluginDataPath },
     });
     await expectPathMissing(pluginDataPath);
     expect(inspectAgent("portable-mcp", pluginRoot)).toMatchObject({
-      supportedServerNames: ["local", "remote", "legacy"],
-      stdioServerNames: ["local"],
+      supportedServerNames: ["local", "remote", "legacy", "valid", "dotPrefixedChild"],
+      stdioServerNames: ["local", "valid", "dotPrefixedChild"],
       unsupportedServerNames: [],
     });
-  });
-
-  it("resolves Agent Plugins cwd and rejects traversal", async ({ homeDir, workspaceDir }) => {
-    const pluginRoot = await writeAgentBundle(homeDir, "portable-cwd", {
-      servers: {
-        valid: stdio({ cwd: "./child" }),
-        dotPrefixedChild: stdio({ cwd: "./..cache" }),
-        relativeEscape: stdio({ cwd: "./../escape" }),
-        placeholderEscape: stdio({ cwd: "${PLUGIN_ROOT}/../escape" }),
-      },
-      textFiles: { "child/.keep": "", "..cache/.keep": "" },
-    });
-    const rootRealPath = await fs.realpath(pluginRoot);
-    const relativeProcessCwd = path.relative(rootRealPath, await fs.realpath(process.cwd()));
+    const relativeProcessCwd = path.relative(root, await fs.realpath(process.cwd()));
     expect(relativeProcessCwd === ".." || relativeProcessCwd.startsWith(`..${path.sep}`)).toBe(
       true,
     );
-    const loaded = loadEnabled(workspaceDir, "portable-cwd");
-
-    expect(Object.keys(loaded.config.mcpServers)).toEqual(["valid", "dotPrefixedChild"]);
-    await expectResolvedPathEqual(
-      loaded.config.mcpServers.valid?.cwd,
-      path.join(pluginRoot, "child"),
-    );
-    await expectResolvedPathEqual(
-      loaded.config.mcpServers.dotPrefixedChild?.cwd,
-      path.join(pluginRoot, "..cache"),
-    );
+    await expectResolvedPathEqual(valid?.cwd, path.join(pluginRoot, "child"));
+    await expectResolvedPathEqual(dotPrefixedChild?.cwd, path.join(pluginRoot, "..cache"));
     expect(loaded.diagnostics.map((entry) => entry.message)).toEqual([
       expect.stringContaining('invalid MCP server "relativeEscape"'),
       expect.stringContaining('invalid MCP server "placeholderEscape"'),

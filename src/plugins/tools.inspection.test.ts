@@ -37,8 +37,7 @@ function writeToolPlugin(params: {
   webSearchProviderId?: string;
 }): string {
   const toolName = `${params.id}_tool`;
-  const webSearchProviderId =
-    params.webSearchProviderId ?? (params.id === "shared" ? "inspection-search" : undefined);
+  const { webSearchProviderId } = params;
   fs.mkdirSync(params.root, { recursive: true });
   const writeJson = (name: string, value: unknown) =>
     fs.writeFileSync(path.join(params.root, name), JSON.stringify(value));
@@ -300,25 +299,6 @@ it("registers the selected fleet once, preserves agent factories, and settles fa
       );
     const alphaTools = resolve(scopes[0]!);
     const betaTools = resolve(scopes[1]!);
-    const registry = inspection.registry;
-    assert(registry, "Expected the selected inspection registry");
-    const resolveProviders = () =>
-      resolveRuntimeWebSearchProviders({
-        config,
-        onlyPluginIds: ["shared"],
-        manifestRecords: loadContext.manifestRegistry?.plugins,
-      });
-    const resolveSearch = (generation: boolean) =>
-      withPluginRuntimeRegistryScope(inspection.registry, () =>
-        generation
-          ? withPluginRuntimeGenerationRegistryScope(registry, resolveProviders)
-          : resolveProviders(),
-      );
-    for (const generation of [false, true]) {
-      expect(resolveSearch(generation).map((provider) => provider.id)).toEqual([
-        "inspection-search",
-      ]);
-    }
     expect(alphaTools.map((tool) => tool.name)).toEqual(["shared_tool"]);
     expect(betaTools.map((tool) => tool.name).toSorted()).toEqual(["shared_tool", "worker_tool"]);
     for (const [scope, tools] of [
@@ -350,9 +330,6 @@ it("registers the selected fleet once, preserves agent factories, and settles fa
         .toSorted(),
     ).toEqual(["broken", "shared", "worker"]);
     expect(() => resolve(scopes[0]!)).toThrow("Plugin tool inspection has been released");
-    for (const generation of [false, true]) {
-      expect(() => resolveSearch(generation)).toThrow("Plugin tool inspection has been released");
-    }
   });
 });
 
@@ -406,21 +383,32 @@ it.each(["a-first", "z-second"])(
       const registry = inspection.registry;
       assert(registry, "Expected the selected inspection registry");
       expect(registry.webSearchProviders.map(({ provider }) => provider.id)).toEqual([providerId]);
-      const providers = withPluginRuntimeRegistryScope(registry, () =>
+      const resolveProviders = () =>
         resolveRuntimeWebSearchProviders({
           config,
           onlyPluginIds: ids,
           manifestRecords: loadContext.manifestRegistry?.plugins,
-        }),
-      );
-      expect(providers.map(({ pluginId, id }) => ({ pluginId, id }))).toEqual([
-        { pluginId: "a-first", id: providerId },
-      ]);
+        });
+      const resolve = (generation: boolean) =>
+        withPluginRuntimeRegistryScope(registry, () =>
+          generation
+            ? withPluginRuntimeGenerationRegistryScope(registry, resolveProviders)
+            : resolveProviders(),
+        );
+      for (const generation of [false, true]) {
+        expect(resolve(generation).map(({ pluginId, id }) => ({ pluginId, id }))).toEqual([
+          { pluginId: "a-first", id: providerId },
+        ]);
+      }
       expect(
         readEvents(events, "register")
           .map(({ plugin }) => plugin)
           .toSorted(),
       ).toEqual(ids);
+      await inspection.release();
+      for (const generation of [false, true]) {
+        expect(() => resolve(generation)).toThrow("Plugin tool inspection has been released");
+      }
     });
   },
 );

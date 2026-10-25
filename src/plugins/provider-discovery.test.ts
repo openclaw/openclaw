@@ -10,24 +10,24 @@ import {
 } from "./provider-discovery.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
-function makeProvider(params: {
+function makeProvider({
+  id,
+  label = id,
+  order,
+  ...aliases
+}: {
   id: string;
   label?: string;
   order?: ProviderCatalogOrder;
   aliases?: string[];
   hookAliases?: string[];
 }): ProviderPlugin {
-  const hook = {
-    ...(params.order ? { order: params.order } : {}),
-    run: async () => null,
-  };
   return {
-    id: params.id,
-    label: params.label ?? params.id,
+    id,
+    label,
     auth: [],
-    ...(params.aliases ? { aliases: params.aliases } : {}),
-    ...(params.hookAliases ? { hookAliases: params.hookAliases } : {}),
-    catalog: hook,
+    ...aliases,
+    catalog: { order, run: async () => null },
   };
 }
 
@@ -231,14 +231,12 @@ describe("normalizePluginDiscoveryResult", () => {
 
 describe("runProviderStaticCatalog", () => {
   it("runs static catalogs with a sterile context", async () => {
-    let calls = 0;
     const provider: ProviderPlugin = {
       id: "demo",
       label: "Demo",
       auth: [],
       staticCatalog: {
         run: async (ctx) => {
-          calls += 1;
           expect(ctx).toEqual({
             config: {},
             env: {},
@@ -266,7 +264,5 @@ describe("runProviderStaticCatalog", () => {
         models: [],
       },
     });
-
-    expect(calls).toBe(1);
   });
 });

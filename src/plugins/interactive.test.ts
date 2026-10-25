@@ -123,23 +123,31 @@ function dispatchTelegram(data: string, callbackId: string) {
   return telegramInteractiveDispatcher(telegramParams(data, callbackId));
 }
 
-function dispatchBinding(channel: keyof typeof conversations) {
+function dispatchBinding(channel: keyof typeof conversations, onMatched: () => void) {
   switch (channel) {
     case "telegram":
-      return dispatchTelegram("codex:bind", "cb-bind");
+      return telegramInteractiveDispatcher({
+        ...telegramParams("codex:bind", "cb-bind"),
+        onMatched,
+      });
     case "discord":
-      return discordInteractiveDispatcher(
-        interactionParams(channel, "codex:bind", "ix-bind", { kind: "button", values: ["allow"] }),
-      );
+      return discordInteractiveDispatcher({
+        ...interactionParams(channel, "codex:bind", "ix-bind", {
+          kind: "button",
+          values: ["allow"],
+        }),
+        onMatched,
+      });
     case "slack":
-      return slackInteractiveDispatcher(
-        interactionParams(channel, "codex:bind", "slack-bind", {
+      return slackInteractiveDispatcher({
+        ...interactionParams(channel, "codex:bind", "slack-bind", {
           kind: "button",
           value: "bind",
           selectedValues: ["bind"],
           selectedLabels: ["Bind"],
         }),
-      );
+        onMatched,
+      });
   }
 }
 
@@ -261,31 +269,10 @@ describe("plugin interactive handlers", () => {
     });
   });
 
-  it("acknowledges matched Discord interactions before awaiting plugin handlers", async () => {
-    const callOrder: string[] = [];
-    const handler = vi.fn(async () => {
-      callOrder.push("handler");
-      expect(callOrder).toEqual(["ack", "handler"]);
-      return { handled: true };
-    });
-    register(handler, "discord");
-
-    await expect(
-      discordInteractiveDispatcher({
-        ...interactionParams("discord", "codex:approve:thread-1", "ix-ack-1", {
-          kind: "button",
-          values: undefined,
-        }),
-        onMatched: async () => {
-          callOrder.push("ack");
-        },
-      }),
-    ).resolves.toEqual(handled);
-  });
-
   it.each(["telegram", "discord", "slack"] as const)(
     "wires %s conversation binding helpers with channel context",
     async (channel) => {
+      const callOrder: string[] = [];
       const conversation = { channel, accountId: "default", ...conversations[channel] };
       const requestResult = {
         status: "bound" as const,
@@ -301,6 +288,8 @@ describe("plugin interactive handlers", () => {
             | DiscordInteractiveHandlerContext
             | SlackInteractiveHandlerContext,
         ) => {
+          callOrder.push("handler");
+          expect(callOrder).toEqual(["ack", "handler"]);
           await expect(
             ctx.requestConversationBinding({ summary: "Bind this topic" }),
           ).resolves.toEqual(requestResult);
@@ -313,7 +302,11 @@ describe("plugin interactive handlers", () => {
         pluginName: "Codex",
         pluginRoot: "/plugins/codex",
       });
-      await expect(dispatchBinding(channel)).resolves.toEqual(handled);
+      await expect(
+        dispatchBinding(channel, () => {
+          callOrder.push("ack");
+        }),
+      ).resolves.toEqual(handled);
       expect(requestPluginConversationBindingMock).toHaveBeenCalledWith({
         pluginId: "codex-plugin",
         pluginName: "Codex",
@@ -334,7 +327,6 @@ describe("plugin interactive handlers", () => {
   );
 
   it.each([
-    ["authorized and bound", { expectedStatus: "bound" }],
     ["unauthorized", { auth: false }],
     ["missing sender", { senderId: " " }],
     ["missing account", { accountId: " " }],
@@ -356,7 +348,6 @@ describe("plugin interactive handlers", () => {
       accountId: "default",
       conversationId: "conversation-1",
       conversation: undefined,
-      expectedStatus: "error",
       ...overrides,
     };
     let bindingResult: unknown;
@@ -381,10 +372,8 @@ describe("plugin interactive handlers", () => {
       },
     });
 
-    expect(bindingResult).toMatchObject({ status: testCase.expectedStatus });
-    expect(requestPluginConversationBindingMock).toHaveBeenCalledTimes(
-      testCase.expectedStatus === "bound" ? 1 : 0,
-    );
+    expect(bindingResult).toMatchObject({ status: "error" });
+    expect(requestPluginConversationBindingMock).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("settles concurrent dedupe claims (handler fails=%s)", async (fails) => {

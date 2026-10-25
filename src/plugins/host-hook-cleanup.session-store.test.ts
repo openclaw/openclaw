@@ -325,82 +325,71 @@ describe("plugin host cleanup session stores", () => {
     },
   );
 
-  it("matches a key-like runtime session ID case-insensitively without interpreting it as a key", async () => {
-    const runtimeSessionId = "signal:group: Opaque";
-    const first = store(path.join(stateDir, "agents", "a", "sessions", "sessions.json"));
-    const second = store(path.join(stateDir, "agents", "b", "sessions", "sessions.json"));
-    const targetKey = "agent:a:telegram:group:shared-room";
-    const unrelatedKey = "agent:a:telegram:group:unrelated-room";
-    const secondKey = "agent:b:telegram:group:shared-room";
-    const unrelatedEntry: SessionEntry = {
-      sessionId: "unrelated-session",
-      updatedAt,
-      delivery: { kind: "none" },
-      pluginExtensions: { cleanup: { state: { keep: true } } },
-    };
-    await first.write(targetKey, runtimeSessionId, {
-      pluginExtensions: { ...cleanupState, ...preserved },
-      pluginNextTurnInjections: injections("remove"),
-    });
-    await first.write(unrelatedKey, unrelatedEntry.sessionId, unrelatedEntry);
-    await second.write(secondKey, runtimeSessionId, { pluginExtensions: cleanupState });
-
-    await first.clean(
-      {
-        pluginId: "cleanup",
-        sessionKey: runtimeSessionId.toUpperCase(),
-        sessionStoreTargets: [
-          { agentId: "a", storePath: first.storePath },
-          { agentId: "b", storePath: second.storePath },
-        ],
-      },
-      2,
-    );
-    const firstMain = first.read(targetKey);
-    const secondOther = second.read(secondKey);
-    expect(firstMain?.pluginExtensions).toEqual(preserved);
-    expect(firstMain?.pluginNextTurnInjections).toBeUndefined();
-    expect(firstMain?.updatedAt).toBeGreaterThan(updatedAt);
-    expect(first.read(unrelatedKey)).toEqual(unrelatedEntry);
-    expect(secondOther?.pluginExtensions).toBeUndefined();
-    expect(secondOther?.updatedAt).toBeGreaterThan(updatedAt);
-  });
-
-  it("clears shared custom SQLite stores for each resolved agent", async () => {
-    const sharedStorePath = path.join(stateDir, "custom", "sessions.json");
-    const main = store(sharedStorePath, "main");
-    const work = store(sharedStorePath, "work");
-    await main.write("agent:main:main", "shared-session", { pluginExtensions: cleanupState });
-    await work.write("agent:work:main", "shared-session", { pluginExtensions: cleanupState });
-    const before = main.read("agent:main:main");
-    await main.clean(
-      { reason: "reset", sessionKey: "agent:main:main", skipPersistentSessionState: true },
-      0,
-    );
-    expect(main.read("agent:main:main")).toEqual(before);
-
-    await main.clean(
-      {
-        cfg: {
-          session: { store: sharedStorePath },
-          agents: {
-            entries: { main: {}, work: {} },
-            defaults: { sessionStore: { agentId: "main" } },
-          },
+  it.each([false, true])(
+    "cleans opaque runtime IDs across agent stores (shared: %s)",
+    async (shared) => {
+      const runtimeSessionId = "signal:group: Opaque";
+      const sharedPath = path.join(stateDir, "custom", "sessions.json");
+      const scopedStore = (id: string) =>
+        store(
+          shared ? sharedPath : path.join(stateDir, "agents", id, "sessions", "sessions.json"),
+          id,
+        );
+      const first = scopedStore("a");
+      const second = scopedStore("b");
+      const cfg = {
+        session: { store: first.storePath },
+        agents: {
+          entries: { a: {}, b: {} },
+          defaults: { sessionStore: { agentId: "a" } },
         },
-        pluginId: "cleanup",
-      },
-      2,
-    );
-    for (const [target, key] of [
-      [main, "agent:main:main"],
-      [work, "agent:work:main"],
-    ] as const) {
-      const after = target.read(key);
-      expect(after?.pluginExtensions).toBeUndefined();
-      expect(after?.updatedAt).toBeGreaterThan(updatedAt);
-    }
-  });
+      };
+      const targetKey = "agent:a:telegram:group:shared-room";
+      const unrelatedKey = "agent:a:telegram:group:unrelated-room";
+      const secondKey = "agent:b:telegram:group:shared-room";
+      const unrelatedEntry: SessionEntry = {
+        sessionId: "unrelated-session",
+        updatedAt,
+        delivery: { kind: "none" },
+        pluginExtensions: { cleanup: { state: { keep: true } } },
+      };
+      await first.write(targetKey, runtimeSessionId, {
+        pluginExtensions: { ...cleanupState, ...preserved },
+        pluginNextTurnInjections: injections("remove"),
+      });
+      await first.write(unrelatedKey, unrelatedEntry.sessionId, unrelatedEntry);
+      await second.write(secondKey, runtimeSessionId, { pluginExtensions: cleanupState });
+      const before = first.read(targetKey);
+      await first.clean(
+        { reason: "reset", sessionKey: targetKey, skipPersistentSessionState: true },
+        0,
+      );
+      expect(first.read(targetKey)).toEqual(before);
+
+      await first.clean(
+        {
+          cfg,
+          pluginId: "cleanup",
+          sessionKey: runtimeSessionId.toUpperCase(),
+          sessionStoreTargets: shared
+            ? undefined
+            : [
+                { agentId: "a", storePath: first.storePath },
+                { agentId: "b", storePath: second.storePath },
+              ],
+        },
+        2,
+      );
+      const firstMain = first.read(targetKey);
+      const secondOther = second.read(secondKey);
+      expect(firstMain?.pluginExtensions).toEqual(preserved);
+      expect(firstMain?.pluginNextTurnInjections).toBeUndefined();
+      expect(firstMain?.updatedAt).toBeGreaterThan(updatedAt);
+      expect(first.read(unrelatedKey)).toEqual(unrelatedEntry);
+      expect(secondOther?.pluginExtensions).toBeUndefined();
+      expect(secondOther?.updatedAt).toBeGreaterThan(updatedAt);
+    },
+  );
 
   it("preserves locked sessions for every harness owned by a disabled plugin", async () => {
     const { clean, read, write } = store();
