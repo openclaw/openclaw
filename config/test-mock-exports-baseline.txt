@@ -451,7 +451,6 @@
 ["extensions/geolocation/src/lookup-route.test.ts","openclaw/plugin-sdk/plugin-runtime","7a504b680d878d42aa9cbb23ff77c34971d43f8d9c218a4989e674ec4746ad8d",1]
 ["extensions/github-copilot/auth-reconnect.test.ts","./register.runtime.js","258fa99137884f0b3f59186f44ec9a74091f8db7969b2ae52314147bf05713c4",1]
 ["extensions/github-copilot/index.test.ts","./register.runtime.js","cc0cc8c3fa6b36e2b3f3b8db796f6ebef343316a3ca58a6fcdc7bb52993783e7",1]
-["extensions/github-copilot/models.test.ts","openclaw/plugin-sdk/state-paths","c523bcfd80b0c6356e94beb566c9f5680f7de26442c694ab4cb740b882afccb0",1]
 ["extensions/github-copilot/oauth.test.ts","./login.js","6ac7f1ee277213da62557c916edbd6e736af161248ff7d8c1ed0f80a91e0ae3a",1]
 ["extensions/github/index.test.ts","openclaw/plugin-sdk/gateway-method-runtime","8b4b5271a0a42a91f9d972cc9df3e6fc24b82bdd15c8252360d304724e28a7ab",1]
 ["extensions/google-meet/lazy-import.test.ts","./src/cli.js","f6245f5b8497e29a950a10ba38df2e3a6731a92ff314416f83ccbbbf4aad7a70",1]
