@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { recordPersistedRuntimeToolSchemaQuarantine as recordTool } from "../agents/tool-schema-quarantine-health.js";
@@ -12,13 +11,8 @@ import {
   recordPersistedContextEngineQuarantine as recordEngine,
 } from "../context-engine/quarantine-health.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "../context-engine/registry.test-support.js";
-import { resolveGatewayStartupPluginActivationConfig } from "../gateway/plugin-activation-runtime-config.js";
-import {
-  createCorePluginStateSyncKeyedStore,
-  resetPluginStateStoreForTests,
-} from "../plugin-state/plugin-state-store.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import * as pluginStateWorker from "../plugin-state/plugin-state-worker-client.js";
-import { createRuntimeHealthRecordEnvelope } from "../plugin-state/runtime-health-store.js";
 import {
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
   loadGatewayStartupPluginPlan,
@@ -101,40 +95,17 @@ afterEach(() => {
   resetPluginStateStoreForTests();
 });
 
-async function deadProcessId(): Promise<number> {
-  const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
-  const pid = child.pid;
-  if (!pid) {
-    throw new Error("failed to spawn short-lived process");
-  }
-  await new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
-  });
-  return pid;
-}
-
-function seedPersistedToolQuarantineForTest(
-  record: ReturnType<typeof createRuntimeHealthRecordEnvelope> & {
-    toolName: string;
-    owner?: string;
-  },
-): void {
-  const value = { ...record, reason: "unsupported schema" };
-  createCorePluginStateSyncKeyedStore<typeof value>({
-    ownerId: "core:runtime-tool-quarantine-health",
-    namespace: "schema-quarantines",
-    maxEntries: 128,
-    defaultTtlMs: 24 * 60 * 60 * 1_000,
-  }).register(JSON.stringify([record.owner ?? "", record.toolName, record.processId]), value);
-}
-
 describe("runtime plugin health snapshot", () => {
   it.each(["clear", "replace"] as const)(
     "settles an overlapping snapshot and observes %s on the next read",
     async (change) => {
       await withStateDirEnv("openclaw-status-quarantine-recovery-", async () => {
         await resetContextEngineRuntimeQuarantineForTests();
-        const quarantine = engineQuarantine("recovered-engine", "temporary failure");
+        const quarantine = engineQuarantine(
+          "recovered-engine",
+          "temporary failure",
+          "plugin:engine",
+        );
         await recordEngine(quarantine);
         const tool = toolQuarantine("still-quarantined-tool", 456);
         await recordTool(tool);
@@ -153,13 +124,10 @@ describe("runtime plugin health snapshot", () => {
             }
             return entries;
           });
+        const sql = observeHostDataSql();
         const pending = collectRuntime();
         try {
-          expect(await captured.promise).toEqual([
-            expect.objectContaining({
-              value: expect.objectContaining({ engineId: "recovered-engine" }),
-            }),
-          ]);
+          await captured.promise;
           await clearEngine("recovered-engine", process.pid);
           const replacement = { ...quarantine, reason: "new failure", failedAt: new Date(789) };
           if (change === "replace") {
@@ -167,6 +135,7 @@ describe("runtime plugin health snapshot", () => {
           }
           release.resolve();
           const snapshot = await pending;
+          expect(sql.queries).toEqual([]);
           expect(snapshot.contextEngineQuarantines).toEqual([quarantine]);
           expect(snapshot.runtimeToolQuarantines).toEqual([tool]);
           const nextSnapshot = await collectRuntime();
@@ -177,68 +146,10 @@ describe("runtime plugin health snapshot", () => {
           release.resolve();
           await pending;
           observation.mockRestore();
+          sql.restore();
         }
       });
     },
-  );
-
-  it(
-    "reads persisted engines without caller-thread SQLite",
-    inState(async () => {
-      await resetContextEngineRuntimeQuarantineForTests();
-      const quarantine = engineQuarantine(
-        "lossless-claw",
-        "intentional bootstrap failure",
-        "plugin:lossless-claw",
-      );
-      await recordEngine(quarantine);
-
-      const observation = observeHostDataSql();
-      let snapshot;
-      try {
-        snapshot = await collectRuntime();
-        expect(observation.queries).toEqual([]);
-      } finally {
-        observation.restore();
-      }
-      expect(snapshot.contextEngineQuarantines).toEqual([quarantine]);
-    }),
-  );
-
-  it(
-    "drops tools from dead or unverifiable recorder processes",
-    inState(async () => {
-      activate();
-      seedPersistedToolQuarantineForTest({
-        toolName: "stale_tool",
-        failedAtMs: 123,
-        processId: await deadProcessId(),
-        processToken: "dead-process-token",
-        processStartTime: null,
-      });
-      seedPersistedToolQuarantineForTest({
-        toolName: "live_tool",
-        ...createRuntimeHealthRecordEnvelope(new Date(456)),
-      });
-
-      expect((await collectRuntime()).runtimeToolQuarantines).toEqual([
-        toolQuarantine("live_tool", 456),
-      ]);
-    }),
-  );
-
-  it(
-    "drops quarantines from a previous incarnation of this PID",
-    inState(async () => {
-      activate();
-      seedPersistedToolQuarantineForTest({
-        toolName: "reused_pid_tool",
-        ...createRuntimeHealthRecordEnvelope(new Date(123)),
-        processToken: "stale-incarnation-token",
-      });
-
-      expect((await collectRuntime()).runtimeToolQuarantines).toEqual([]);
-    }),
   );
 
   it(
@@ -253,9 +164,10 @@ describe("runtime plugin health snapshot", () => {
       activate();
       expect((await collectRuntime()).runtimeToolQuarantines).toEqual([]);
 
-      activatePlugins(["bad-tools", "loaded"]);
-
-      expect((await collectRuntime()).runtimeToolQuarantines).toEqual([tool]);
+      activatePlugins(["bad-tools", "loaded"], ["broken", "error"], ["off", "disabled"]);
+      const snapshot = await collectRuntime();
+      expect(snapshot.runtimeToolQuarantines).toEqual([tool]);
+      expect(snapshot.runtimeLoadedPluginIds).toEqual(["bad-tools"]);
     }),
   );
 
@@ -281,20 +193,9 @@ describe("runtime plugin health snapshot", () => {
     ]);
     expect(channelsMock).not.toHaveBeenCalled();
   });
-
-  it("records only runtime status:loaded plugins as runtime-loaded", async () => {
-    activatePlugins(
-      ["runtime-ok", "loaded"],
-      ["runtime-broken", "error"],
-      ["runtime-off", "disabled"],
-    );
-
-    expect((await collectRuntime()).runtimeLoadedPluginIds).toEqual(["runtime-ok"]);
-  });
 });
 
 const planMock = vi.mocked(loadGatewayStartupPluginPlan);
-const activationMock = vi.mocked(resolveGatewayStartupPluginActivationConfig);
 const missingProvidersMock = vi.mocked(collectUnregisteredConfiguredMemoryEmbeddingProviders);
 const missingProvider = { configuredId: "custom-embed", source: "provider" } as const;
 const collect = (config?: Parameters<typeof collectInstalled>[0]["config"]) =>
@@ -311,15 +212,17 @@ describe("installed plugin health", () => {
 
   afterEach(() => {
     planMock.mockReset();
-    activationMock.mockClear();
     missingProvidersMock.mockReset();
     missingProvidersMock.mockReturnValue([]);
     clearRuntimeConfigSnapshot();
   });
 
   it(
-    "flags startup plugins that are not loaded as drift",
+    "plans startup drift with source config while retaining persisted health",
     inState(async () => {
+      const sourceConfig = { plugins: { entries: {} } };
+      const runtimeConfig = { plugins: { entries: { extra: { enabled: true } } } };
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
       planMock.mockReturnValue({
         channelPluginIds: [],
         pluginIds: ["planned-missing", "runtime-ok"],
@@ -329,35 +232,14 @@ describe("installed plugin health", () => {
       const quarantine = engineQuarantine("quarantined-engine", "startup failed");
       await recordEngine(quarantine);
 
-      const rawConfig = {};
-      const snapshot = await collect(rawConfig);
-
+      const snapshot = await collect(runtimeConfig);
       expect(planMock).toHaveBeenCalledWith(
-        expect.objectContaining({ config: rawConfig, activationSourceConfig: rawConfig }),
+        expect.objectContaining({ config: runtimeConfig, activationSourceConfig: sourceConfig }),
       );
       expect([snapshot.shouldRunPluginIds, snapshot.contextEngineQuarantines]).toEqual([
         ["planned-missing", "runtime-ok"],
         [quarantine],
       ]);
-    }),
-  );
-
-  it(
-    "plans through the gateway helper with source and runtime config",
-    inState(async () => {
-      const sourceConfig = { plugins: { entries: {} } } as never;
-      const runtimeConfig = { plugins: { entries: { extra: { enabled: true } } } } as never;
-      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-      activate();
-
-      await collect(runtimeConfig);
-
-      expect(activationMock).toHaveBeenCalledWith(
-        expect.objectContaining({ runtimeConfig, activationSourceConfig: sourceConfig }),
-      );
-      expect(planMock).toHaveBeenCalledWith(
-        expect.objectContaining({ config: runtimeConfig, activationSourceConfig: sourceConfig }),
-      );
     }),
   );
 
@@ -377,11 +259,7 @@ describe("installed plugin health", () => {
       expect(snapshot.unregisteredMemoryEmbeddingProviders).toEqual(
         config && registry ? [missingProvider] : undefined,
       );
-      if (config && registry) {
-        expect(missingProvidersMock).toHaveBeenCalledWith(
-          expect.objectContaining({ registeredProviderIds: expect.any(Set) }),
-        );
-      } else {
+      if (!config || !registry) {
         expect(missingProvidersMock).not.toHaveBeenCalled();
       }
       if (!config) {

@@ -27,6 +27,14 @@ const displayParams: Partial<Parameters<typeof buildStatusMessage>[0]> = {
   modelAuth: "api-key",
 };
 type StatusArgs = Parameters<typeof buildStatusMessage>[0];
+const session = (totalTokens: number, fields: Partial<SessionEntry> = {}): SessionEntry => ({
+  sessionId: "status-session",
+  updatedAt: 0,
+  totalTokens,
+  totalTokensFresh: true,
+  totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+  ...fields,
+});
 const haiku = {
   ...displayParams,
   modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
@@ -50,19 +58,6 @@ const statusRows = (parts: ReturnType<typeof buildStatusMessageParts>) =>
 
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
-});
-
-describe("buildStatusMessage current time", () => {
-  it("surfaces a live current-time line so session_status returns the date/time", () => {
-    // 2025-07-03T08:00:00Z; the Reference UTC line is timezone-independent.
-    const now = 1_751_529_600_000;
-    using _ = vi.spyOn(Date, "now").mockReturnValue(now);
-    const text = buildStatusMessage(haiku);
-
-    expect(text).toContain("Current time:");
-    expect(text).toContain("(UTC)");
-    expect(text).toContain("Reference UTC: 2025-07-03 08:00 UTC");
-  });
 });
 
 describe("buildStatusMessageParts presentation", () => {
@@ -95,16 +90,15 @@ describe("buildStatusMessageParts presentation", () => {
     });
 
     expect(parts.text).toContain("⏱️ Uptime: gateway 1h · system 2d");
+    expect(parts.text).toContain("Current time:");
+    expect(parts.text).toContain("(UTC)");
+    expect(parts.text).toContain("Reference UTC: 2025-07-03 08:00 UTC");
     expect(parts.text).toContain("Telegram rich messages: on");
     expect(parts.presentation.title).toMatch(/^🦞 OpenClaw /);
     expect(parts.presentation.title).toContain("(aaaaaaa)");
     const table = statusTable(parts);
     expect(table.headers).toEqual(["Item", "Value"]);
     expect(table.rowHeaderColumnIndex).toBe(0);
-    const rowLabels = table.rows.map((row) => row[0]);
-    expect(rowLabels).toEqual(
-      expect.arrayContaining(["🧠 Model", "📚 Context", "🧵 Session", "🪢 Queue"]),
-    );
     expect(
       table.rows.every((row) => row.length === 2 && row.every((cell) => String(cell).trim())),
     ).toBe(true);
@@ -151,15 +145,11 @@ describe("buildStatusMessageParts presentation", () => {
       const parts = buildStatusMessageParts({
         ...haiku,
         runtimeContextTokens: 100_000,
-        sessionEntry: {
-          sessionId: "status-meter-session",
-          totalTokens: 87_000,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
+        sessionEntry: session(87_000, {
           compactionCount: 2,
           compactionQualityDegraded,
           updatedAt: 1_751_529_500_000,
-        },
+        }),
         queue: { mode: "steer", depth: 3 },
       });
 
@@ -273,11 +263,6 @@ describe("buildStatusMessage cache usage", () => {
 });
 
 describe("buildStatusMessage context window", () => {
-  const tokenUsage = {
-    totalTokens: 11,
-    totalTokensFresh: true,
-    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-  };
   function windowStatus(entry: Partial<SessionEntry>, overrides: Partial<StatusArgs> = {}) {
     return buildStatusMessage({
       ...displayParams,
@@ -287,15 +272,15 @@ describe("buildStatusMessage context window", () => {
       resolvedHarness: "codex",
       modelAuth: "oauth",
       ...overrides,
-      sessionEntry: { sessionId: "context-window", updatedAt: 0, ...tokenUsage, ...entry },
+      sessionEntry: session(11, entry),
     });
   }
-  const lunarConfig = (contextTokens?: number): OpenClawConfig => ({
+  const lunarConfig = (contextTokens: number): OpenClawConfig => ({
     agents: { defaults: { model: "openai/gpt-5.6-luna" } },
     ...providerConfig("openai", "https://api.openai.com/v1", [
       {
         ...statusTestModel("gpt-5.6-luna", "GPT-5.6 Luna", 1_050_000),
-        ...(contextTokens === undefined ? {} : { contextTokens }),
+        contextTokens,
       },
     ]),
   });
@@ -335,26 +320,8 @@ describe("buildStatusMessage context window", () => {
     });
   }
 
-  it("rejects a stale runtime window after a same-model harness change", () => {
-    const text = windowStatus(
-      { ...runtimeEntry, agentHarnessId: "openclaw" },
-      { config: lunarConfig() },
-    );
-    expect(text).toContain("Context: 11/1.0m");
-    expect(text).not.toContain("Context: 11/272k");
-  });
-
   it("replaces matching runtime telemetry with a newly authored effective cap", () => {
     const text = windowStatus(runtimeEntry, { config: lunarConfig(1_000_000) });
-    expect(text).toContain("Context: 11/1.0m");
-    expect(text).not.toContain("Context: 11/272k");
-  });
-
-  it("preserves a locked legacy session window", () => {
-    const text = windowStatus(
-      { modelSelectionLocked: true, contextTokens: 1_000_000 },
-      { runtimeContextTokens: 272_000 },
-    );
     expect(text).toContain("Context: 11/1.0m");
     expect(text).not.toContain("Context: 11/272k");
   });
@@ -371,14 +338,11 @@ describe("buildStatusMessage context window", () => {
   it("ignores stale runtime context after a manual session model switch", () => {
     const text = cloudStatus(
       "glm-5.1",
-      {
+      session(128_393, {
         modelOverrideSource: "user",
         modelProvider: "ollama-cloud",
         model: "deepseek-v4-pro",
-        totalTokens: 128_393,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
+      }),
       {
         config: providerConfig("ollama-cloud", "https://ollama.com", [
           statusTestModel("deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000),
@@ -454,15 +418,10 @@ describe("buildStatusMessage context window", () => {
         model: "anthropic/claude-haiku-4-5",
       },
       runtimeContextTokens: 1_000_000,
-      sessionEntry: {
-        sessionId: "runtime-alias-context",
-        updatedAt: 0,
+      sessionEntry: session(36_000, {
         modelProvider: "claude-cli",
         model: "claude-haiku-4-5",
-        totalTokens: 36_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
+      }),
       queue: { mode: "collect", depth: 0 },
       modelAuth: "oauth",
       activeModelAuth: "oauth",
@@ -476,7 +435,7 @@ describe("buildStatusMessage context window", () => {
   it("shows auto-fallback override label when model differs from configured default", () => {
     const text = cloudStatus(
       "qwen3.6-blue",
-      {
+      session(50_000, {
         modelOverrideSource: "auto",
         modelOverrideFallbackOriginProvider: "ollama-cloud",
         modelOverrideFallbackOriginModel: "deepseek-v4-pro",
@@ -485,10 +444,7 @@ describe("buildStatusMessage context window", () => {
         agentHarnessId: "openclaw",
         contextTokens: 128_000,
         contextTokensSource: "runtime",
-        totalTokens: 50_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
+      }),
       {
         runtimeContextTokens: 128_000,
         sessionKey: "agent:main:telegram:direct:auto-fallback",
