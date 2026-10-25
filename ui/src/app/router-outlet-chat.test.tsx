@@ -1,6 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { Show } from "solid-js";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import type { SolidRouteProps } from "../app-route-types.tsx";
 import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
@@ -118,20 +118,24 @@ async function routeModule(
   };
 }
 
-async function ownedModule(
-  face: "chat" | "dashboard" = "chat",
-  teardown = vi.fn(async () => undefined),
-) {
-  return { teardown, module: await routeModule(face, ownedRenderer(teardown)) };
-}
+let teardown: ReturnType<typeof vi.fn<() => Promise<void>>>;
+let modules: Record<"chat" | "dashboard", TestModule>;
+beforeEach(async () => {
+  teardown = vi.fn(async () => undefined);
+  const render = ownedRenderer(teardown);
+  modules = {
+    chat: await routeModule("chat", render),
+    dashboard: await routeModule("dashboard", render),
+  };
+});
 
 function expectRetained(
   outlet: RouterOutletElement,
   view: Element | null,
-  teardown: () => Promise<void>,
+  retire: () => Promise<void>,
 ) {
   expect(appView(outlet)).toBe(view);
-  expect(teardown).not.toHaveBeenCalled();
+  expect(retire).not.toHaveBeenCalled();
 }
 
 afterEach(() => {
@@ -193,14 +197,13 @@ describe("openclaw-router-outlet chat ownership", () => {
     },
   );
   it("parks the loaded session on Home and restores its draft on return", async () => {
-    const { teardown, module } = await ownedModule();
     const refreshed = createDeferredCore<ChatRouteData>();
     const loader = vi
       .fn()
       .mockResolvedValueOnce(sessionData(sessionKey, "chat"))
       .mockImplementation(() => refreshed.promise);
     const router = testRouter(
-      page("chat", module, loader),
+      page("chat", modules.chat, loader),
       page("home", { renderSolid: () => <div data-testid="ordinary-route">Home</div> }),
     );
     const outlet = createOutlet(router);
@@ -232,11 +235,9 @@ describe("openclaw-router-outlet chat ownership", () => {
     "retains the session subtree across presentation switches (parked: %s)",
     async (parked) => {
       const nextData = createDeferredCore<ChatRouteData>();
-      const teardown = vi.fn(async () => undefined);
-      const render = ownedRenderer(teardown);
       const router = testRouter(
-        page("chat", await routeModule("chat", render), sessionData(sessionKey, "chat")),
-        page("dashboard", await routeModule("dashboard", render), nextData.promise),
+        page("chat", modules.chat, sessionData(sessionKey, "chat")),
+        page("dashboard", modules.dashboard, nextData.promise),
         page("home", { renderSolid: () => <div>Home</div> }),
       );
       const outlet = createOutlet(router);
@@ -263,15 +264,14 @@ describe("openclaw-router-outlet chat ownership", () => {
   it("retires parked views and uses the replacement scope's route data", async () => {
     let scope = { key: 1 };
     const teardownDone = createDeferredCore();
-    const teardown = vi.fn(() => teardownDone.promise);
+    teardown.mockImplementation(() => teardownDone.promise);
     const nextData = createDeferredCore<ChatRouteData>();
     const loader = vi
       .fn()
       .mockResolvedValueOnce(sessionData(sessionKey, "chat"))
       .mockImplementation(() => nextData.promise);
-    const module = await routeModule("chat", ownedRenderer(teardown));
     const router = testRouter(
-      page("chat", module, loader, () => String(scope.key)),
+      page("chat", modules.chat, loader, () => String(scope.key)),
       page("home", { renderSolid: () => <div>Home</div> }),
     );
     const outlet = createOutlet(router);
@@ -319,12 +319,8 @@ describe("openclaw-router-outlet chat ownership", () => {
       .fn()
       .mockImplementationOnce(() => oldResult.promise)
       .mockImplementation(() => newResult.promise);
-    const module = await routeModule(
-      "dashboard",
-      ownedRenderer(async () => undefined),
-    );
     const router = testRouter(
-      page("dashboard", module, loader, (_context, routeLocation) =>
+      page("dashboard", modules.dashboard, loader, (_context, routeLocation) =>
         JSON.stringify([scope.key, routeLocation.pathname]),
       ),
     );
@@ -346,14 +342,12 @@ describe("openclaw-router-outlet chat ownership", () => {
 
   it("does not revive a retired session when cold navigation supersedes its scope refresh", async () => {
     let scope = { key: 1 };
-    const render = ownedRenderer(async () => undefined);
-    const chatModule = await routeModule("chat", render);
     const dashboardModule = createDeferredCore<TestModule>();
     const homeModule = createDeferredCore<TestModule>();
     const router = testRouter(
       page(
         "chat",
-        chatModule,
+        modules.chat,
         () => sessionData(sessionKey, "chat"),
         () => String(scope.key),
       ),
@@ -374,7 +368,7 @@ describe("openclaw-router-outlet chat ownership", () => {
     outlet.setInputs({ retentionScope: scope });
     await settleOutlet(outlet);
     const homeNavigation = router.navigate("home", {});
-    dashboardModule.resolve(await routeModule("dashboard", render));
+    dashboardModule.resolve(modules.dashboard);
     await dashboardNavigation;
     await settleOutlet(outlet);
     expect(presentedValue(outlet)).toBeNull();
@@ -386,14 +380,12 @@ describe("openclaw-router-outlet chat ownership", () => {
 
   it("keeps a returning session inert until its pending MCP teardown completes", async () => {
     const done = createDeferredCore();
-    const teardown = vi.fn(() => done.promise);
-    const render = ownedRenderer(teardown);
-    const module = await routeModule("chat", render);
+    teardown.mockImplementation(() => done.promise);
     const router = testRouter(
-      page("chat", module, () => sessionData(sessionKey, "chat")),
+      page("chat", modules.chat, () => sessionData(sessionKey, "chat")),
       page(
         "dashboard",
-        { ...module, renderSolid: () => <p>Session not found</p> },
+        { ...modules.chat, renderSolid: () => <p>Session not found</p> },
         {
           kind: "missing-session",
           face: "dashboard",
@@ -416,9 +408,8 @@ describe("openclaw-router-outlet chat ownership", () => {
   });
 
   it("retires the old page without reloading a replacement router's current result", async () => {
-    const { teardown, module } = await ownedModule();
     const loader = vi.fn(() => sessionData(sessionKey, "chat"));
-    const create = () => testRouter(page("chat", module, loader));
+    const create = () => testRouter(page("chat", modules.chat, loader));
     const first = create();
     const second = create();
     const outlet = createOutlet(first);
@@ -436,11 +427,10 @@ describe("openclaw-router-outlet chat ownership", () => {
   it("retains an unresolved route until its missing-session result replaces it", async () => {
     const nextData = createDeferredCore<ChatRouteData>();
     let loadCount = 0;
-    const { teardown, module } = await ownedModule();
     const router = testRouter(
       page(
         "chat",
-        module,
+        modules.chat,
         () => (++loadCount === 1 ? sessionData(sessionKey, "chat") : nextData.promise),
         (_context, routeLocation) => routeLocation.pathname,
       ),

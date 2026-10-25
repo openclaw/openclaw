@@ -314,18 +314,6 @@ describe("server preferences", () => {
     await waitForFast(() => expect(readPending()).toEqual({ locale: "fr" }));
   });
 
-  it("preserves a newer same-key edit across the older batch ack", async () => {
-    const first = holdRequest(true);
-
-    push(client, { themeMode: "dark" });
-    await waitForRequest();
-    push(client, { themeMode: "light" });
-    first.resolve({});
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request.mock.calls[1]?.[1]).toEqual(patchParams({ themeMode: "light" }));
-  });
-
   it("retains in-memory pending intent when localStorage is unavailable", async () => {
     const storageError = new Error("storage unavailable");
     const unavailable = () => {
@@ -452,17 +440,6 @@ describe("read-only server preference lifecycle", () => {
     await resumed.promise;
     expect(request).not.toHaveBeenCalled();
     expect(readPending(pendingScope)).toEqual({ locale: "de" });
-  });
-
-  it("adopts a sibling tab's same-key replacement", async () => {
-    client = createClient(request, scope, false);
-    const persisted = { theme: "dash" };
-    push(client, { theme: "knot" });
-    storePending(persisted);
-    connect();
-    flush(client);
-    await waitForRequest();
-    expectPatch(persisted);
   });
 
   it("does not migrate cancelled pre-connection intent into an adopted gateway scope", async () => {

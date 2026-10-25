@@ -5,7 +5,7 @@ import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
+import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { BoardDocumentProps } from "../components/board/board-document.tsx";
 import type { LoginGateProps } from "../components/login-gate-solid.tsx";
 import "../components/login-gate-solid.tsx";
@@ -236,29 +236,21 @@ describe("warm boot app root", () => {
       container.querySelector("openclaw-terminal-panel"),
       "focused Terminal panel",
     );
-    const expectPanel = (
-      owner: GatewayBrowserClient | null,
-      connected: boolean,
-      available = true,
-    ) => {
+    const replacement = createTestGatewayClient(vi.fn());
+    for (const [patch, owner, connected, available] of [
+      [undefined, client, true, true],
+      [{ phase: "reconnecting", hello: null }, client, false, true],
+      [{ phase: "connected", hello }, client, true, true],
+      [{ client: replacement }, replacement, true, true],
+      [{ phase: "stopped", client: null, hello: null }, null, false, false],
+    ] as const) {
+      if (patch) {
+        await draw(patch);
+      }
+      expect(container.querySelector("openclaw-terminal-panel")).toBe(panel);
       expect(panel.client).toBe(owner);
       expect(panel).toMatchObject({ gatewayConnected: connected, available });
-    };
-    expectPanel(client, true);
-
-    await draw({ phase: "reconnecting", hello: null });
-    expect(container.querySelector("openclaw-terminal-panel")).toBe(panel);
-    expectPanel(client, false);
-
-    await draw({ phase: "connected", hello });
-    expectPanel(client, true);
-
-    const replacement = createTestGatewayClient(vi.fn());
-    await draw({ client: replacement });
-    expectPanel(replacement, true);
-
-    await draw({ phase: "stopped", client: null, hello: null });
-    expectPanel(null, false, false);
+    }
   });
 
   it("pins embedded ingress to its serving Gateway and never offers a shared-credential login", async () => {

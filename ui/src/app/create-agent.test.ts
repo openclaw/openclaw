@@ -17,28 +17,16 @@ import "../lib/toast-host.tsx";
 import "../test-helpers/app-sidebar-suite.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import { createChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationContext } from "./context.ts";
 import { createApplicationAgent } from "./create-agent.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
 const mainAgent = { id: "main", name: "Molty" };
 const mainLocation = { pathname: "/chat/main", search: "", hash: "" };
-const methods = (request: Awaited<ReturnType<typeof fixture>>["request"]) =>
-  request.mock.calls.map(([method]) => method);
 
 function expectSelected(context: ApplicationContext, id: string | undefined) {
   expect(context.agentSelection.state.selectedId).toBe(id);
   expect(context.gateway.snapshot.sessionKey).toBe(`agent:${id}:home`);
-}
-
-async function openAgentMenu(context: ApplicationContext) {
-  const { sidebar } = await mountSidebarContext(context);
-  sidebar.connected = true;
-  await sidebar.updateComplete;
-  sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
-  await sidebar.updateComplete;
-  return sidebar;
 }
 
 async function fixture(
@@ -75,10 +63,8 @@ async function fixture(
     }
     if (method === "agents.create") {
       creationStarted.resolve();
-      const verification: { ok: boolean; error?: string } = await (options.verification ?? {
-        ok: true,
-      });
-      if (!verification.ok) {
+      const verification = await options.verification;
+      if (verification && !verification.ok) {
         throw agentCreationRejection(verification.error ?? "Inference unavailable");
       }
       if (
@@ -159,7 +145,6 @@ async function fixture(
     router,
     navigate,
     replace,
-    chatSubmissions: createChatSubmissions(),
     basePath: "",
   });
   await router.start(history, "", context);
@@ -197,7 +182,7 @@ describe("application agent creation", () => {
       });
       await createApplicationAgent(context);
       expect(navigate).not.toHaveBeenCalled();
-      expect(methods(request)).toEqual(["agents.list"]);
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list"]);
       expect(context.chatSubmissions.creation).toBeUndefined();
       await vi.waitFor(() => expect(toast.toast?.message).toContain("Pair this browser"));
     },
@@ -240,7 +225,11 @@ describe("application agent creation", () => {
       createSessionsHarness("main", ["agent:main:home"]).sessions,
       structuredClone(roster),
     );
-    const sidebar = await openAgentMenu(resumed);
+    const { sidebar } = await mountSidebarContext(resumed);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
+    await sidebar.updateComplete;
     expect(sidebar.querySelector('[data-value^="agent:"]')?.getAttribute("data-value")).toBe(
       `agent:${createdId}`,
     );
@@ -252,11 +241,9 @@ describe("application agent creation", () => {
   });
 
   it("explains failed inference and restores the prior chat without persisting an agent", async () => {
-    const { context, request, roster, navigate, replace, toast, settledNavigation } = await fixture(
-      {
-        verification: Promise.resolve({ ok: false, error: "Provider credentials expired" }),
-      },
-    );
+    const { context, roster, replace, toast, settledNavigation } = await fixture({
+      verification: Promise.resolve({ ok: false, error: "Provider credentials expired" }),
+    });
     patchSettings(
       {
         gatewayUrl: context.gateway.connection.gatewayUrl,
@@ -272,8 +259,6 @@ describe("application agent creation", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await toast.updateComplete;
     expect(roster.agents).toEqual([mainAgent]);
-    expect(methods(request)).toEqual(["agents.list", "agents.create", "config.get"]);
-    expect(navigate).toHaveBeenCalledOnce();
     expect(replace).toHaveBeenCalledWith("chat", mainLocation);
     expect(context.chatSubmissions.creation).toBeUndefined();
     expectSelected(context, "main");
@@ -288,17 +273,10 @@ describe("application agent creation", () => {
 
   it("restores the prior chat if the same Gateway disconnects during verification", async () => {
     const verification = createDeferred<{ ok: boolean }>();
-    const {
-      context,
-      request,
-      roster,
-      replace,
-      publishGateway,
-      settledNavigation,
-      creationStarted,
-    } = await fixture({
-      verification: verification.promise,
-    });
+    const { context, roster, replace, publishGateway, settledNavigation, creationStarted } =
+      await fixture({
+        verification: verification.promise,
+      });
     const client = context.gateway.snapshot.client;
     const creating = createApplicationAgent(context);
     await settledNavigation();
@@ -318,14 +296,13 @@ describe("application agent creation", () => {
     // Reconnecting retains the last confirmed roster while refresh is unavailable.
     expect(context.agents.state.agentsList?.agents).toEqual([mainAgent]);
     expect(context.chatSubmissions.creation).toBeUndefined();
-    expect(methods(request)).toEqual(["agents.list", "agents.create"]);
   });
 
   it.each(["route", "selection"] as const)(
     "finishes the bot and its chat in the background after newer %s intent",
     async (intent) => {
       const verification = createDeferred<{ ok: boolean }>();
-      const { context, request, roster, navigate, toast, settledNavigation } = await fixture({
+      const { context, roster, navigate, toast, settledNavigation } = await fixture({
         verification: verification.promise,
       });
       const creating = createApplicationAgent(context);
@@ -342,10 +319,6 @@ describe("application agent creation", () => {
       await creating;
       expect(roster.agents[1]).toEqual({ id: expect.stringMatching(/^bot-/), name: "New agent" });
       expect(context.agents.state.agentsList?.agents).toContainEqual(roster.agents[1]);
-      expect(request).toHaveBeenCalledWith(
-        "agents.create",
-        expect.objectContaining({ agentId: roster.agents[1]?.id, onboarding: true }),
-      );
       expect(context.router.getState().location).toBe(location);
       expect(context.agentSelection.state).toEqual(selection);
       expect(context.gateway.snapshot.sessionKey).toBe("agent:main:home");

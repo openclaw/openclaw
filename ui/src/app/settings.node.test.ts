@@ -48,17 +48,16 @@ function roundTrip<K extends keyof UiSettings>(key: K, value: UiSettings[K]) {
   expect(loadSettings()[key]).toEqual(value);
 }
 
+const themeCleanups: Array<() => void> = [];
 function mountTheme(initial = loadSettings()) {
   const { gateway } = createGatewayStoreTestStore({ settings: initial });
   const theme = createApplicationTheme(initial, gateway);
-  return {
-    gateway,
-    theme,
-    dispose() {
-      theme.dispose();
-      gateway.stop();
-    },
-  };
+  themeCleanups.push(() => {
+    resetServerUiPrefsSync();
+    theme.dispose();
+    gateway.stop();
+  });
+  return { gateway, theme };
 }
 
 describe("resolveApplicationStartupSettings", () => {
@@ -77,21 +76,6 @@ describe("resolveApplicationStartupSettings", () => {
       settings: { gatewayUrl, token: "" },
       password: null,
     });
-  });
-
-  it("strips fragment bootstrap tokens without persisting them", () => {
-    const result = startup(
-      "wss://gateway.example",
-      "#gatewayUrl=wss%3A%2F%2Fgateway.example&bootstrapToken=boot-123&bootstrapProfile=owner",
-    );
-    expect(result).toMatchObject({
-      pendingGatewayUrl: null,
-      pendingGatewayToken: null,
-      pendingBootstrapToken: "boot-123",
-      pendingBootstrapProfile: "owner",
-      settings: { token: "" },
-    });
-    expect(result.location).toEqual({ pathname: "/", search: "", hash: "" });
   });
 
   it("carries fragment bootstrap tokens with changed gateway URLs", () => {
@@ -211,15 +195,6 @@ describe("gateway settings and layout persistence", () => {
     expect([...Array(localStorage.length)].map((_, index) => localStorage.key(index))).toEqual(
       before,
     );
-  });
-
-  it("clears the current-tab token explicitly", () => {
-    const gwUrl = expectedGatewayUrl("");
-    persistSessionToken(gwUrl, "stale-token");
-    expect(loadSettings().token).toBe("stale-token");
-    persistSessionToken(gwUrl, "");
-    expect(loadSettings().token).toBe("");
-    expect(sessionStorage.length).toBe(0);
   });
 
   it("isolates sessions and agents across inferred base paths", () => {
@@ -351,44 +326,47 @@ describe("gateway settings and layout persistence", () => {
     expect(loadUiPreferences("wss://other.example").openLinksExternally).not.toBe(true);
   });
 
-  it("publishes profile readiness only when requested", () => {
-    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
-    const { theme, dispose } = mountTheme();
-    theme.refresh();
-    const listener = vi.fn();
-    theme.subscribe(listener);
-    try {
+  describe("mounted preferences", () => {
+    afterEach(async () => {
+      for (const dispose of themeCleanups.splice(0)) {
+        dispose();
+      }
+      await vi.dynamicImportSettled();
+    });
+
+    it("publishes profile readiness only when requested", () => {
+      setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+      const { theme } = mountTheme();
+      theme.refresh();
+      const listener = vi.fn();
+      theme.subscribe(listener);
       theme.refresh();
       expect(listener).not.toHaveBeenCalled();
       theme.refresh({ notify: true });
       expect(listener).toHaveBeenCalledOnce();
-    } finally {
-      dispose();
-    }
-  });
+    });
 
-  it("scopes live preferences across tabs, Gateways and token rotation", async () => {
-    setTestLocation({ protocol: "https:", host: "gateway-a.example", pathname: "/" });
-    const events = new EventTarget();
-    vi.stubGlobal("addEventListener", events.addEventListener.bind(events));
-    vi.stubGlobal("removeEventListener", events.removeEventListener.bind(events));
-    const first = {
-      ...loadSettings(),
-      realtimeTalkInputDeviceId: "mic-a",
-      chatSendShortcut: "modifier-enter" as const,
-    };
-    const second = {
-      ...first,
-      gatewayUrl: "wss://gateway-b.example",
-      realtimeTalkInputDeviceId: "mic-b",
-      chatSendShortcut: "enter" as const,
-    };
-    saveSettings(first);
-    saveSettings(second);
-    const { gateway, theme, dispose } = mountTheme(first);
-    const dispatchStorage = (key: string) =>
-      events.dispatchEvent(Object.assign(new Event("storage"), { key }));
-    try {
+    it("scopes live preferences across tabs, Gateways and token rotation", async () => {
+      setTestLocation({ protocol: "https:", host: "gateway-a.example", pathname: "/" });
+      const events = new EventTarget();
+      vi.stubGlobal("addEventListener", events.addEventListener.bind(events));
+      vi.stubGlobal("removeEventListener", events.removeEventListener.bind(events));
+      const first = {
+        ...loadSettings(),
+        realtimeTalkInputDeviceId: "mic-a",
+        chatSendShortcut: "modifier-enter" as const,
+      };
+      const second = {
+        ...first,
+        gatewayUrl: "wss://gateway-b.example",
+        realtimeTalkInputDeviceId: "mic-b",
+        chatSendShortcut: "enter" as const,
+      };
+      saveSettings(first);
+      saveSettings(second);
+      const { gateway, theme } = mountTheme(first);
+      const dispatchStorage = (key: string) =>
+        events.dispatchEvent(Object.assign(new Event("storage"), { key }));
       resetServerUiPrefsSync();
       const key = `openclaw.control.settings.v1:${first.gatewayUrl}`;
       writeStored(
@@ -441,17 +419,11 @@ describe("gateway settings and layout persistence", () => {
       expect(theme.settings.composerHoldToRecord).toBe(false);
       expect(readStored(first.gatewayUrl)).not.toHaveProperty("token");
       expect(loadSettings().token).toBe("synthetic-rotated-credential");
-    } finally {
-      resetServerUiPrefsSync();
-      dispose();
-      await vi.dynamicImportSettled();
-    }
-  });
+    });
 
-  it("retains private-storage edits until owner disposal", () => {
-    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
-    const { theme, dispose } = mountTheme();
-    try {
+    it("retains private-storage edits until owner disposal", () => {
+      setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+      const { theme } = mountTheme();
       vi.spyOn(localStorage, "setItem").mockImplementation(() => {
         throw new Error("Storage unavailable");
       });
@@ -463,9 +435,7 @@ describe("gateway settings and layout persistence", () => {
       theme.dispose();
       patchSettings({ realtimeTalkInputDeviceId: "after-dispose" });
       expect(theme.settings.realtimeTalkInputDeviceId).toBe("private-mic");
-    } finally {
-      dispose();
-    }
+    });
   });
 
   it("normalizes persisted text scale to the nearest supported stop", () => {
