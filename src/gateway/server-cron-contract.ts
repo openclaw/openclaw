@@ -3,8 +3,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJobScratchState, CronJobScratchWriteResult } from "../cron/scratch-contract.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
-import type { DeferredHookWake } from "../cron/service/wake.js";
 import type { CronJob } from "../cron/types.js";
+import type { DeferredHookWake } from "../cron/wake-contract.js";
 import type { CronExitWatchers } from "./cron-exit-watchers.js";
 
 export type GatewayCronServiceContract = CronServiceContract & {

@@ -29,13 +29,13 @@ const config: OpenClawConfig = {
 it("invalidates retained summaries when provisioning commits but its reply is lost", async () => {
   await withOpenClawTestState({ label: "proactive-provision-lost-reply" }, async (state) => {
     const storePath = state.statePath("selected", "jobs.json");
-    const cfg = { ...config, cron: { store: storePath } };
+    writeConfigMachineState("cron.store", storePath);
     await saveCronJobsStore(storePath, { version: 1, jobs: [] });
     const before = getCronJobsStoreRevision(storePath);
     const dropped = loseFirstCronMutationReply("cron.provisionDefaultProactive");
     try {
       await expect(
-        provisionDefaultProactiveJob(cfg, "main", { cadenceMs: 60_000 }),
+        provisionDefaultProactiveJob(config, "main", { cadenceMs: 60_000 }),
       ).rejects.toThrow();
       expect(dropped.wasDropped()).toBe(true);
       const after = getCronJobsStoreRevision(storePath);
