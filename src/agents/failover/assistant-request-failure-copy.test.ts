@@ -21,6 +21,10 @@ describe("renderAssistantRequestFailureCopy", () => {
     "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
   const live = (fields: Parameters<typeof makeAssistant>[0]) =>
     formatUserFacingAssistantErrorText(makeAssistant(fields));
+  const copies = (assistant: ReturnType<typeof makeAssistant>) => [
+    formatUserFacingAssistantErrorText(assistant),
+    renderRecordedAssistantFailureCopy(assistant),
+  ];
   const loading = (fields: Parameters<typeof makeAssistant>[0]) =>
     makeAssistant({
       errorCode: "model_load_failed",
@@ -29,9 +33,18 @@ describe("renderAssistantRequestFailureCopy", () => {
       ...fields,
     });
   function expectBoth(expected: string, fields: Parameters<typeof makeAssistant>[0]) {
-    const assistant = makeAssistant(fields);
-    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
-    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+    expect(copies(makeAssistant(fields))).toEqual([expected, expected]);
+  }
+  function expectPrivateCopies(
+    assistant: ReturnType<typeof makeAssistant>,
+    ...fragments: (string | undefined)[]
+  ) {
+    for (const copy of copies(assistant)) {
+      for (const fragment of fragments) {
+        expect(copy).toContain(fragment);
+      }
+      expect(copy).not.toContain("PRIVATE");
+    }
   }
 
   it("preserves approval-expiry guidance in assistant history", () => {
@@ -66,7 +79,6 @@ describe("renderAssistantRequestFailureCopy", () => {
 
   it("gives the same reconciliation guidance in live replies and saved history", () => {
     const assistant = makeAssistant({
-      ...target,
       errorMessage: "Session actor requires reconciliation before another command",
     });
     const copy = formatUserFacingAssistantErrorText(assistant);
@@ -95,14 +107,7 @@ describe("renderAssistantRequestFailureCopy", () => {
     const summary = renderStorageFailureSummary(storageFailure);
     expect(summary).toEqual(expect.any(String));
     expect(summary).not.toBe("");
-    for (const copy of [
-      formatUserFacingAssistantErrorText(assistant),
-      renderRecordedAssistantFailureCopy(assistant),
-    ]) {
-      expect(copy).toContain(summary);
-      expect(copy).toContain(ERROR_DETAILS_HINT);
-      expect(copy).not.toContain("PRIVATE_STORAGE_DETAIL");
-    }
+    expectPrivateCopies(assistant, summary, ERROR_DETAILS_HINT);
   });
 
   it("retains cancellation provenance through name-only actor errors", () => {
@@ -118,13 +123,7 @@ describe("renderAssistantRequestFailureCopy", () => {
       errorType: actorError.name,
     });
     expect(classifyGatewayStorageFailure(assistant)).toBe("57014");
-    for (const copy of [
-      formatUserFacingAssistantErrorText(assistant),
-      renderRecordedAssistantFailureCopy(assistant),
-    ]) {
-      expect(copy).toContain(ERROR_DETAILS_HINT);
-      expect(copy).not.toContain("PRIVATE_ACTOR_DETAIL");
-    }
+    expectPrivateCopies(assistant, ERROR_DETAILS_HINT);
   });
 
   it("keeps provider-owned 57014 errors out of storage cancellation handling", () => {
@@ -140,10 +139,7 @@ describe("renderAssistantRequestFailureCopy", () => {
     expect(renderRecordedAssistantFailureCopy(assistant)).toBe(
       renderAssistantRequestFailureCopy({ reason: "rate_limit" }),
     );
-    for (const copy of [
-      formatUserFacingAssistantErrorText(assistant),
-      renderRecordedAssistantFailureCopy(assistant),
-    ]) {
+    for (const copy of copies(assistant)) {
       expect(copy).toEqual(expect.any(String));
       expect(copy).not.toBe("");
       expect(copy).not.toMatch(/postgres/i);
@@ -152,7 +148,6 @@ describe("renderAssistantRequestFailureCopy", () => {
   });
 
   it("renders loading facts consistently in live replies and saved history without provider prose", () => {
-    const expected = String.raw`Could not load model "local\/model" with 49152 context tokens. Wait for loading to finish on the model server, then retry, or lower the model's configured context size.`;
     const assistant = loading({
       model: "local/model",
       errorMessage: "PRIVATE_PROVIDER_DETAIL",
@@ -162,8 +157,8 @@ describe("renderAssistantRequestFailureCopy", () => {
         nextStep: "PRIVATE_INJECTION",
       }),
     });
-    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
-    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+    const expected = String.raw`Could not load model "local\/model" with 49152 context tokens. Wait for loading to finish on the model server, then retry, or lower the model's configured context size.`;
+    expect(copies(assistant)).toEqual([expected, expected]);
   });
 
   it("bounds, redacts, and escapes loading model labels", () => {
@@ -220,13 +215,14 @@ describe("renderAssistantRequestFailureCopy", () => {
 
   it("gives the custom-model opt-out for rejected reasoning controls", () => {
     const detail = "'reasoning_effort' is not supported for this model";
-    const expected =
-      "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.";
-    expectBoth(expected, {
-      provider: "custom-local",
-      model: "reasoning-model",
-      errorMessage: `400 ${JSON.stringify({ error: { type: "invalid_request_error", message: detail } })}`,
-    });
+    expectBoth(
+      "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.",
+      {
+        provider: "custom-local",
+        model: "reasoning-model",
+        errorMessage: `400 ${JSON.stringify({ error: { type: "invalid_request_error", message: detail } })}`,
+      },
+    );
   });
 
   it("preserves the provider rejection across live and saved replies", () => {
@@ -239,27 +235,10 @@ describe("renderAssistantRequestFailureCopy", () => {
 
   it("explains an Ollama embedding model rejection in live and saved replies", () => {
     const errorBody = JSON.stringify({ error: '"bge-m3:latest" does not support chat' });
-    const expected = String.raw`bge\-m3\:latest is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
-    expectBoth(expected, {
-      provider: "ollama",
-      model: "bge-m3:latest",
-      errorMessage: "400 " + errorBody,
-      errorBody,
-    });
-  });
-
-  it.each([
-    JSON.stringify({
-      error: {
-        type: "invalid_request_error",
-        message: JSON.stringify({ input: "PRIVATE_PROMPT" }),
-      },
-    }),
-    '422 Unprocessable Entity: [{"input":"PRIVATE_PROMPT"',
-  ])("keeps private payloads out of live and saved replies: %s", (errorMessage) => {
-    const assistant = makeAssistant({ errorMessage });
-    expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
-    expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");
+    expectBoth(
+      String.raw`bge\-m3\:latest is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`,
+      { provider: "ollama", model: "bge-m3:latest", errorMessage: "400 " + errorBody, errorBody },
+    );
   });
 
   it("unwraps direct and nested upstream rejections with status prefix", () => {
@@ -277,18 +256,14 @@ describe("renderAssistantRequestFailureCopy", () => {
   });
 
   it.each([
+    JSON.stringify({
+      error: { type: "invalid_request_error", message: '{"input":"PRIVATE_PROMPT"}' },
+    }),
     "422 Unprocessable Content: <html>PRIVATE_PROMPT</html>",
     '400 Bad Request: [{"input":"PRIVATE_PROMPT"}]',
     '422 Unprocessable Entity: [{"input":"PRIVATE_PROMPT"',
-  ])("does not display a status-prefixed raw response body: %s", (errorMessage) => {
-    const assistant = makeAssistant({ ...target, errorMessage });
-    expect(formatUserFacingAssistantErrorText(assistant)).not.toContain("PRIVATE");
-    expect(renderRecordedAssistantFailureCopy(assistant)).not.toContain("PRIVATE");
-  });
-
-  it("keeps provider bodies containing SQLite text redacted", () => {
-    const errorMessage = '{"error":{"message":"database is locked PRIVATE_CANARY"}}';
-    expect(live({ errorMessage })).toBe(runFailure);
+  ])("keeps raw response bodies out of live and saved replies: %s", (errorMessage) => {
+    expectPrivateCopies(makeAssistant({ errorMessage }));
   });
 
   it("handles partial model context", () => {
