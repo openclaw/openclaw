@@ -7,6 +7,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import * as draftStore from "../../lib/chat/composer-draft-store.runtime.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -74,6 +75,79 @@ function reconnectPane(
   return { request, client, ...createTestChatPane({ client }) };
 }
 
+function openingPane(approvals = false) {
+  let connectSent = createDeferred<boolean>();
+  let generation = 0;
+  const requested = createDeferred();
+  const approvalRequested = createDeferred();
+  const approval = createDeferred<{
+    key: string;
+    approvalReplay: { sessionKey: string; approvals: [] };
+  }>();
+  const subscription = createDeferred<{
+    key: string;
+    initialHistory: { ok: true; payload: ChatHistoryResult };
+  }>();
+  const history: ChatHistoryResult = {
+    messages: [{ role: "assistant", content: [{ type: "text", text: "Pipelined transcript" }] }],
+    sessionId: "pipeline-session",
+  };
+  const request = createReconnectRequest(history, {
+    "sessions.messages.subscribe": (params: { includeApprovals?: boolean }) => {
+      if (params.includeApprovals) {
+        approvalRequested.resolve();
+        return approval.promise;
+      }
+      requested.resolve();
+      return subscription.promise;
+    },
+  });
+  const client = createTestGatewayClient(request);
+  Object.defineProperties(client, {
+    connectSent: { configurable: true, get: () => connectSent.promise },
+    connectionGeneration: { configurable: true, get: () => generation },
+  });
+  const fixture = createTestChatPane({ client });
+  fixture.state.loadAssistantIdentity = vi.fn(async () => undefined);
+  fixture.state.chatMessage = "Unsent draft";
+  fixture.pane.sessionKey = fixture.state.sessionKey;
+  const hello = sessionMutationGatewayHello([
+    "operator.read",
+    "operator.write",
+    ...(approvals ? ["operator.approvals"] : []),
+  ]);
+  const connected = {
+    ...fixture.pane.context.gateway.snapshot,
+    hello: {
+      ...hello,
+      auth: {
+        ...hello.auth,
+        recoveryScope: "accepted-pipeline-scope",
+      },
+    },
+  };
+  fixture.pane.applyGatewaySnapshot({ ...connected, phase: "connecting", hello: null });
+  return {
+    ...fixture,
+    request,
+    requested: requested.promise,
+    approvalRequested: approvalRequested.promise,
+    approval,
+    subscription,
+    history,
+    connected,
+    dispatchConnect() {
+      generation += 1;
+      connectSent.resolve(true);
+    },
+    retireConnect() {
+      connectSent.resolve(false);
+      connectSent = createDeferred<boolean>();
+      generation += 1;
+    },
+  };
+}
+
 function presentationPane() {
   const fixture = createTestChatPane({
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
@@ -111,6 +185,101 @@ const setConnected = (pane: TestChatPane, value: boolean) =>
   Object.defineProperty(pane, "isConnected", { configurable: true, value });
 
 describe("chat pane connection lifecycle", () => {
+  it.each([false, true])(
+    "pipelines history before hello without early writes or duplicate history (approvals: %s)",
+    async (approvals) => {
+      const h = openingPane(approvals);
+      const ready = chatHistoryRequests(h.state).subscriptionReady;
+      expect(requestCalls(h.request, "sessions.messages.subscribe")).toHaveLength(0);
+      expect(h.state.connected).toBe(false);
+      expect(h.sessions.captureConnectionScope()).toBeNull();
+
+      // The first challenge advances generation from zero; the same dispatch receipt survives it.
+      h.dispatchConnect();
+      await h.requested;
+      expect(requestCalls(h.request, "sessions.messages.subscribe")).toEqual([
+        [
+          "sessions.messages.subscribe",
+          expect.objectContaining({
+            key: h.state.sessionKey,
+            initialHistory: expect.objectContaining({ limit: 80 }),
+          }),
+          expect.anything(),
+        ],
+      ]);
+      expect(requestCalls(h.request, "chat.startup")).toHaveLength(0);
+      expect(requestCalls(h.request, "chat.history")).toHaveLength(0);
+      expect(h.state.connected).toBe(false);
+      expect(h.state.chatSessionMessageSubscription ?? null).toBeNull();
+      expect(
+        readSessionMethodAccess(h.pane.context.gateway.snapshot, {
+          method: "chat.send",
+          requiredScope: "operator.write",
+        }).allowed,
+      ).toBe(false);
+
+      h.pane.applyGatewaySnapshot(h.connected);
+      h.subscription.resolve({
+        key: h.state.sessionKey,
+        initialHistory: { ok: true, payload: h.history },
+      });
+      await expect(ready).resolves.toBe(true);
+      await waitForSolid(() => expect(h.state.chatMessages).toEqual(h.history.messages));
+      expect(chatHistoryRequests(h.state).historyLoad.phase).toBe("committed");
+      expect(h.state).toMatchObject({ connected: true, chatMessage: "Unsent draft" });
+      expect(h.state.chatSessionMessageSubscription?.key).toBe(h.state.sessionKey);
+      expect(h.sessions.captureConnectionScope()).not.toBeNull();
+      if (approvals) {
+        await h.approvalRequested;
+        expect(h.state.chatSessionMessageSubscription?.includeApprovals).not.toBe(true);
+        h.approval.resolve({
+          key: h.state.sessionKey,
+          approvalReplay: { sessionKey: h.state.sessionKey, approvals: [] },
+        });
+        await waitForSolid(() =>
+          expect(h.state.chatSessionMessageSubscription?.includeApprovals).toBe(true),
+        );
+      }
+      h.pane.applyGatewaySnapshot(h.connected);
+      expect(requestCalls(h.request, "sessions.messages.subscribe")).toHaveLength(
+        approvals ? 2 : 1,
+      );
+      expect(requestCalls(h.request, "chat.startup")).toHaveLength(0);
+      expect(requestCalls(h.request, "chat.history")).toHaveLength(0);
+      expect(requestCalls(h.request, "chat.send")).toHaveLength(0);
+    },
+  );
+
+  it.each(["authentication failure", "replacement before dispatch"] as const)(
+    "retires pre-hello history after %s without adopting it",
+    async (failure) => {
+      const h = openingPane();
+      const ready = chatHistoryRequests(h.state).subscriptionReady;
+      if (failure === "authentication failure") {
+        h.dispatchConnect();
+        await h.requested;
+        // A closed transport rejects pending RPCs before publishing its offline snapshot.
+        h.subscription.reject(new Error("Connection rejected during authentication"));
+      }
+      h.retireConnect();
+      h.pane.applyGatewaySnapshot({ ...h.connected, phase: "offline", hello: null });
+      await expect(ready).resolves.toBe(false);
+      expect(h.state).toMatchObject({
+        connected: false,
+        chatMessages: [],
+        chatMessage: "Unsent draft",
+      });
+      expect(h.state.chatSessionMessageSubscription ?? null).toBeNull();
+      expect(h.sessions.captureConnectionScope()).toBeNull();
+      expect(requestCalls(h.request, "sessions.messages.subscribe")).toHaveLength(
+        failure === "authentication failure" ? 1 : 0,
+      );
+      expect(requestCalls(h.request, "chat.startup")).toHaveLength(0);
+      expect(requestCalls(h.request, "chat.history")).toHaveLength(0);
+      expect(requestCalls(h.request, "chat.send")).toHaveLength(0);
+    },
+  );
+
   it("keeps explicit mobile Outputs available during pending history only while presented", async () => {
     const { pane, state, request } = reconnectPane(new Promise<ChatHistoryResult>(() => {}));
     getPaneTestRuntime(pane).mergedChrome = true;

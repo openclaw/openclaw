@@ -101,3 +101,14 @@ with localhost median regression at most 5% and no worse p95. On a noisy host,
 collect an A/A control and use twenty pairs with renderer CPU and structural
 counters. A smaller, clean wire-byte reduction remains useful when it misses
 the readiness target; state that gap explicitly.
+
+## Warm navigation policy
+
+The Gateway HTML remains network-first. Authenticated documents are private,
+no-store responses containing viewer preferences and scope-filtered bootstrap
+configuration. The same chat URL can select a public reader or authenticated app
+using current access; the response also carries live terminal and ingress CSP.
+Replaying fetched HTML from a service-worker cache could cross these identity,
+access, and document-policy boundaries. The worker's integrity-bound generic
+shell remains an outage fallback, not an online replacement. An online shell
+would also need a fresh-document bypass for the existing build-mismatch reload.

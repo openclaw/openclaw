@@ -79,6 +79,7 @@ type ChatHistoryPaneRequests = {
   subscriptionGeneration: number;
   pendingApprovalReplay?: { generation: number; events: Map<string, SessionApprovalEvent> };
   subscriptionReady?: Promise<boolean>;
+  openingSubscription?: { isCurrent: () => boolean; admit: () => void };
   subscriptionError?: string;
   subscriptionRetry?: AbortController;
   initialHistory?: InitialChatHistoryReceipt;
