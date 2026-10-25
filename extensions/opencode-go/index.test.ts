@@ -391,7 +391,7 @@ describe("opencode-go provider plugin", () => {
   it.each(["stream", "simple"] as const)(
     "identifies native Anthropic %s requests without tagging proxies",
     async (mode) => {
-      const capturedHeaders: Array<Record<string, string> | undefined> = [];
+      const capturedHeaders: Array<NonNullable<Parameters<StreamFn>[2]>["headers"]> = [];
       const baseStreamFn: StreamFn = (_model, _context, options) => {
         capturedHeaders.push(options?.headers);
         return createAssistantMessageEventStream();

@@ -14,16 +14,15 @@ vi.mock("@anthropic-ai/sdk", { spy: true });
 vi.mock("openclaw/plugin-sdk/llm", { spy: true });
 afterEach(() => vi.resetAllMocks());
 
-function createTestModel(id = "claude-opus-4-7", overrides: Partial<Model> = {}): Model {
+function createTestModel(overrides: Partial<Model> = {}): Model {
   return {
-    id: `anthropic.${id}`,
-    name: id,
-    params: { canonicalModelId: id },
+    id: "anthropic.claude-opus-4-7",
+    name: "Claude Opus 4.7",
     provider: "amazon-bedrock-mantle",
     api: "anthropic-messages",
     baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
     headers: { "X-Test": "model-header" },
-    reasoning: id !== "claude-opus-4-7",
+    reasoning: false,
     input: ["text", "image"],
     cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     contextWindow: 1_000_000,
@@ -34,27 +33,40 @@ function createTestModel(id = "claude-opus-4-7", overrides: Partial<Model> = {})
 
 const streamMock = vi.mocked(stream);
 const clientMock = vi.mocked(Anthropic);
+function mockTransport() {
+  clientMock.mockImplementation(function (options) {
+    return { options } as never;
+  });
+}
+
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
+function firstStreamOptions(model: Model, context: unknown) {
+  const [actualModel, actualContext, options] = streamMock.mock.calls[0] ?? [];
+  expect(actualModel).toBe(model);
+  expect(actualContext).toBe(context);
+  return requireRecord(options, "stream options");
+}
+
 function captureStreamOptions(model: Model, options: SimpleStreamOptions = {}) {
-  const client = {};
-  clientMock.mockImplementation(function () {
-    return client as never;
+  const context = { messages: [] };
+  mockTransport();
+  streamMock.mockReturnValue({ kind: "anthropic-stream" } as never);
+  void createMantleAnthropicStreamFn()(model, context, {
+    apiKey: "bedrock-bearer-token",
+    ...options,
   });
-  const resultStream = { kind: "anthropic-stream" };
-  streamMock.mockReturnValue(resultStream as never);
-  const result = createMantleAnthropicStreamFn()(
-    model,
-    { messages: [] },
-    {
-      apiKey: "bedrock-bearer-token",
-      ...options,
-    },
-  );
-  expect(result).toBe(resultStream);
-  const forwarded = requireRecord(streamMock.mock.calls[0]?.[2], "stream options");
-  expect(forwarded.client).toBe(client);
-  return forwarded;
+  return firstStreamOptions(model, context);
+}
+
+function createReasoningModel(id: string, name: string, overrides: Partial<Model> = {}) {
+  return createTestModel({
+    id: `anthropic.${id}`,
+    name,
+    reasoning: true,
+    params: { canonicalModelId: id },
+    ...overrides,
+  });
 }
 
 describe("createMantleAnthropicStreamFn", () => {
@@ -88,19 +100,23 @@ describe("createMantleAnthropicStreamFn", () => {
   });
 
   it("uses authToken bearer auth for Mantle Anthropic requests", async () => {
+    const resultStream = { kind: "anthropic-stream" };
+    const model = createTestModel();
+    const context = { messages: [] };
+    mockTransport();
+    streamMock.mockReturnValue(resultStream as never);
     const acceptanceObserver = vi.fn();
     const onResponse = vi.fn();
-    const streamOptions = captureStreamOptions(
-      createTestModel(),
-      withProviderAcceptanceObserver(
-        {
-          apiKey: "bedrock-bearer-token",
-          onResponse,
-          headers: { "X-Caller": "caller-header" },
-        },
-        acceptanceObserver,
-      ),
+    const options = withProviderAcceptanceObserver(
+      {
+        apiKey: "bedrock-bearer-token",
+        onResponse,
+        headers: { "X-Caller": "caller-header" },
+      },
+      acceptanceObserver,
     );
+    const result = createMantleAnthropicStreamFn()(model, context, options);
+    expect(result).toBe(resultStream);
     const clientOptions = requireRecord(clientMock.mock.calls[0]?.[0], "client options");
     expect(clientOptions).toMatchObject({
       apiKey: null,
@@ -108,53 +124,78 @@ describe("createMantleAnthropicStreamFn", () => {
       baseURL: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
       fetch: expect.any(Function),
     });
-    expect(clientOptions.defaultHeaders).toEqual({
-      accept: "application/json",
-      "anthropic-dangerous-direct-browser-access": "true",
-      "anthropic-beta": "fine-grained-tool-streaming-2025-05-14",
-      "X-Test": "model-header",
-      "X-Caller": "caller-header",
-    });
-    expect(streamOptions).toMatchObject({ thinkingEnabled: false, onResponse });
+    expect(JSON.stringify(clientOptions.defaultHeaders)).toBe(
+      '{"accept":"application/json","anthropic-dangerous-direct-browser-access":"true","anthropic-beta":"fine-grained-tool-streaming-2025-05-14","X-Test":"model-header","X-Caller":"caller-header"}',
+    );
+    const streamOptions = firstStreamOptions(model, context);
+    const client = requireRecord(streamOptions.client, "stream client");
+    expect(requireRecord(client.options, "stream client options").authToken).toBe(
+      "bedrock-bearer-token",
+    );
+    expect(streamOptions.thinkingEnabled).toBe(false);
+    expect(streamOptions.onResponse).toBe(onResponse);
     await notifyProviderStreamOpened({ options: streamOptions, cancelStream: vi.fn() });
     expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
   });
 
   it.each([
-    ["claude-mythos-preview", "max", "high", undefined],
-    ["claude-mythos-preview", "minimal", "low", undefined],
-    ["claude-opus-5", "max", "max", 128_000],
-    ["claude-sonnet-5", undefined, "high", 128_000],
-    ["claude-sonnet-5", "off", "low", 128_000],
-    ["claude-mythos-5", undefined, "high", 1_000],
-  ] as const)("maps %s reasoning %s to %s", (id, reasoning, effort, maxTokens) => {
-    const options = captureStreamOptions(createTestModel(id), {
-      reasoning,
-      temperature: 0.2,
-      ...(id === "claude-mythos-5" ? { maxTokens } : {}),
-    });
+    { reasoning: "max" as const, effort: "high" },
+    { reasoning: "minimal" as const, effort: "low" },
+  ])("maps Mythos Preview $reasoning reasoning to $effort", ({ reasoning, effort }) => {
+    const options = captureStreamOptions(
+      createReasoningModel("claude-mythos-preview", "Claude Mythos Preview"),
+      { reasoning },
+    );
     expect(options).toMatchObject({ thinkingEnabled: true, effort });
-    if (maxTokens) {
-      expect(options.maxTokens).toBe(maxTokens);
+  });
+
+  it.each([
+    { id: "opus", name: "Opus", reasoning: "max", effort: "max" },
+    { id: "sonnet", name: "Sonnet", reasoning: undefined, effort: "high" },
+    { id: "sonnet", name: "Sonnet", reasoning: "off", effort: "low" },
+  ] as const)(
+    "keeps $name 5 adaptive for reasoning=$reasoning",
+    ({ id, name, reasoning, effort }) => {
+      const options = captureStreamOptions(
+        createReasoningModel(`claude-${id}-5`, `Claude ${name} 5`),
+        { reasoning, temperature: 0.2 },
+      );
+      expect(options).toMatchObject({ thinkingEnabled: true, effort, maxTokens: 128_000 });
       expect(options).not.toHaveProperty("temperature");
-    }
+    },
+  );
+
+  it("disables legacy thinking when the adjusted budget is below 1024", () => {
+    const options = captureStreamOptions(
+      createReasoningModel("claude-haiku-4-5", "Claude Haiku 4.5", { maxTokens: 1500 }),
+      { reasoning: "low" },
+    );
+    expect(options).toMatchObject({ maxTokens: 1500, thinkingEnabled: false });
     expect(options).not.toHaveProperty("thinkingBudgetTokens");
   });
 
-  it.each(["low", "xhigh"] as const)("adjusts legacy %s thinking", (reasoning) => {
-    const enabled = reasoning === "xhigh";
+  it("preserves Mantle's xhigh legacy budget independently of high", () => {
+    const thinkingBudgets = { high: 4096, xhigh: 6144 };
     const options = captureStreamOptions(
-      createTestModel("claude-haiku-4-5", { maxTokens: enabled ? 128_000 : 1500 }),
-      {
-        reasoning,
-        ...(enabled ? { maxTokens: 2048, thinkingBudgets: { high: 4096, xhigh: 6144 } } : {}),
-      },
+      createReasoningModel("claude-haiku-4-5", "Claude Haiku 4.5"),
+      { reasoning: "xhigh", thinkingBudgets, maxTokens: 2048 },
     );
-    expect(options).toMatchObject({ maxTokens: enabled ? 8192 : 1500, thinkingEnabled: enabled });
-    if (enabled) {
-      expect(options.thinkingBudgetTokens).toBe(6144);
-    } else {
-      expect(options).not.toHaveProperty("thinkingBudgetTokens");
-    }
+    expect(options).toMatchObject({
+      maxTokens: 2048 + 6144,
+      thinkingEnabled: true,
+      thinkingBudgetTokens: 6144,
+    });
+  });
+
+  it("defaults Mythos 5 to adaptive high reasoning", () => {
+    const options = captureStreamOptions(
+      createReasoningModel("claude-mythos-5", "Claude Mythos 5", {
+        thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+      }),
+      { maxTokens: 1_000, temperature: 0.2 },
+    );
+    expect(options).toMatchObject({ thinkingEnabled: true, effort: "high", maxTokens: 1_000 });
+    expect(options).not.toHaveProperty("thinkingBudgetTokens");
+    expect(options.temperature).toBeUndefined();
   });
 });
