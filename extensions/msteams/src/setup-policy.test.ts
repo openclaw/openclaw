@@ -20,6 +20,16 @@ function teamsConfig(msteams: MSTeamsConfig): OpenClawConfig {
 
 const policy = msteamsSetupWizard.dmPolicy!;
 const groups = msteamsSetupWizard.groupAccess!;
+const credentials = {
+  appId: "synthetic-app",
+  appPassword: "synthetic-secret",
+  tenantId: "synthetic-tenant",
+};
+const inherited = {
+  dmPolicy: "allowlist",
+  allowFrom: ["root-user"],
+  groupPolicy: "allowlist",
+} as const;
 function policyKeys(prefix: string) {
   return { policyKey: `${prefix}.dmPolicy`, allowFromKey: `${prefix}.allowFrom` };
 }
@@ -53,11 +63,7 @@ describe("msteamsSetupWizard account-scoped policies", () => {
     ]);
     const note = vi.fn(async () => {});
     const resolved = await groups.resolveAllowlist!({
-      cfg: teamsConfig({
-        appId: "synthetic-app",
-        appPassword: "synthetic-secret",
-        tenantId: "synthetic-tenant",
-      }),
+      cfg: teamsConfig(credentials),
       accountId: "default",
       credentialValues: {},
       entries: ["unknown/general", "whole-team", "channel", "incomplete"],
@@ -78,8 +84,7 @@ describe("msteamsSetupWizard account-scoped policies", () => {
   it("reads and edits root DM policy without consuming its SecretRef", () => {
     const secret = { source: "env" as const, provider: "default", id: "TEAMS_POLICY_SECRET" };
     const account = {
-      appId: "synthetic-app",
-      tenantId: "synthetic-tenant",
+      ...credentials,
       appPassword: secret,
       dmPolicy: "allowlist" as const,
       allowFrom: ["user-1"],
@@ -123,20 +128,13 @@ describe("msteamsSetupWizard account-scoped policies", () => {
   });
 
   it("writes the root default policy without changing siblings", () => {
-    const inherited = {
-      dmPolicy: "allowlist",
-      allowFrom: ["root-user"],
-      groupPolicy: "allowlist",
-    } as const;
     const cfg = teamsConfig({
       defaultAccount: "default",
       ...inherited,
       allowFrom: [...inherited.allowFrom],
-      appId: "default-app",
-      appPassword: "default-secret",
-      tenantId: "tenant-id",
+      ...credentials,
       accounts: {
-        support: { appId: "support-app", appPassword: "support-secret", tenantId: "tenant-id" },
+        support: { ...credentials, appId: "support-app", appPassword: "support-secret" },
       },
     });
     const opened = policy.setPolicy(cfg, "open", "default");
