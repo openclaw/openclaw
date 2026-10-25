@@ -286,9 +286,7 @@ describe("registerPreActionHooks", () => {
     program = buildProgram();
     const hooks = (
       program as unknown as {
-        _lifeCycleHooks?: {
-          preAction?: Array<(thisCommand: Command, actionCommand: Command) => Promise<void> | void>;
-        };
+        _lifeCycleHooks?: { preAction?: Array<Parameters<Command["hook"]>[1]> };
       }
     )["_lifeCycleHooks"]?.preAction;
     preActionHook = hooks?.[0] ?? null;

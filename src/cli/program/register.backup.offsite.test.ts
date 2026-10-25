@@ -300,9 +300,7 @@ describe("offsite backup CLI", () => {
           (async function* () {
             yield bytes;
           })(),
-          {
-            sizeBytes: bytes.length,
-          },
+          { sizeBytes: bytes.length },
         );
       };
       await writeClaim(foreignClaim);
@@ -311,9 +309,7 @@ describe("offsite backup CLI", () => {
       await reject(
         create("test-host", "--output", localCopy, "--keep-daily", "0"),
         collisionMessage,
-        {
-          namespace: "test-host",
-        },
+        { namespace: "test-host" },
       );
       await expectAbsent(localCopy);
       await expectListing(scratchRoot, []);
@@ -389,9 +385,7 @@ describe("offsite backup CLI", () => {
       try {
         expect(
           await json((await reopened.scope("backups/config").getObject("owner.json"))!),
-        ).toMatchObject({
-          deviceId: (await loadDeviceIdentityIfPresentAsync())!.deviceId,
-        });
+        ).toMatchObject({ deviceId: (await loadDeviceIdentityIfPresentAsync())!.deviceId });
       } finally {
         await reopened.close();
       }

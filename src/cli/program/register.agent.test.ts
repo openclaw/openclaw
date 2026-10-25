@@ -112,19 +112,15 @@ describe("agent command registration", () => {
   });
 
   it("selects agent creation posture", async () => {
+    const options = { name: "beta", bind: ["telegram", "discord:acct"], nonInteractive: true };
     await runCli(
       "agents add beta --workspace /tmp/ws --bind telegram --bind discord:acct --non-interactive --json".split(
         " ",
       ),
     );
-    expect(mocks.add).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        name: "beta",
-        bind: ["telegram", "discord:acct"],
-        nonInteractive: true,
-      }),
-      { hasAutomationFlags: true },
-    );
+    expect(mocks.add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(options), {
+      hasAutomationFlags: true,
+    });
   });
 
   it.each([
@@ -183,12 +179,7 @@ describe("backup registration", () => {
     [
       "create --output /repo --json --dry-run",
       handlers.create,
-      {
-        dryRun: true,
-        verify: false,
-        onlyConfig: false,
-        includeWorkspace: true,
-      },
+      { dryRun: true, verify: false, onlyConfig: false, includeWorkspace: true },
     ],
     ["verify /backup.tgz --json", handlers.verify, { archive: "/backup.tgz" }],
     [
@@ -212,23 +203,23 @@ describe("backup registration", () => {
       handlers.gitVerify,
       { ...gitOptions, store: "workboard" },
     ],
-  ] as const)("dispatches backup %s", async (args, command, options) => {
-    await parse(args);
-    expect(command).toHaveBeenCalledExactlyOnceWith(runtime, expect.objectContaining(options));
-  });
-
-  it.each([
-    ["verify /snapshot --scratch /scratch --json", handlers.sqliteVerify, { scratch: "/scratch" }],
     [
-      "restore /snapshot --target /restored.sqlite --json",
+      "sqlite verify /snapshot --scratch /scratch --json",
+      handlers.sqliteVerify,
+      { scratch: "/scratch" },
+      "/snapshot",
+    ],
+    [
+      "sqlite restore /snapshot --target /restored.sqlite --json",
       handlers.sqliteRestore,
       { target: "/restored.sqlite" },
+      "/snapshot",
     ],
-  ] as const)("dispatches backup sqlite %s", async (args, command, options) => {
-    await parse(`sqlite ${args}`);
+  ] as const)("dispatches backup %s", async (args, command, options, snapshot?: string) => {
+    await parse(args);
     expect(command).toHaveBeenCalledExactlyOnceWith(
       runtime,
-      "/snapshot",
+      ...(snapshot ? [snapshot] : []),
       expect.objectContaining(options),
     );
   });
