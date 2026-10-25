@@ -2,6 +2,7 @@ import { toUSVString } from "node:util";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import { engineNullSafeEqual } from "../infra/database-engine/scalar.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -174,13 +175,33 @@ export function appendMeetingTranscriptUtterance(params: {
       meetingTranscriptUtteranceQuery(database, session)
         .select("sequence")
         .where("utterance_id", "=", utterance.id)
-        .where("started_at", "is", utterance.startedAt ?? null)
-        .where("ended_at", "is", utterance.endedAt ?? null)
-        .where("speaker_id", "is", utterance.speaker?.id ?? null)
-        .where("speaker_label", "is", utterance.speaker?.label ?? null)
         .where("text", "=", utterance.text)
-        .where("final", "is", utterance.final === undefined ? null : utterance.final ? 1 : 0)
-        .where("metadata_json", "is", params.metadataJson)
+        .where((eb) =>
+          eb.and([
+            engineNullSafeEqual(
+              database,
+              eb.ref("started_at"),
+              eb.val(utterance.startedAt ?? null),
+            ),
+            engineNullSafeEqual(database, eb.ref("ended_at"), eb.val(utterance.endedAt ?? null)),
+            engineNullSafeEqual(
+              database,
+              eb.ref("speaker_id"),
+              eb.val(utterance.speaker?.id ?? null),
+            ),
+            engineNullSafeEqual(
+              database,
+              eb.ref("speaker_label"),
+              eb.val(utterance.speaker?.label ?? null),
+            ),
+            engineNullSafeEqual(
+              database,
+              eb.ref("final"),
+              eb.val(utterance.final === undefined ? null : utterance.final ? 1 : 0),
+            ),
+            engineNullSafeEqual(database, eb.ref("metadata_json"), eb.val(params.metadataJson)),
+          ]),
+        )
         .limit(1),
     )
   ) {
