@@ -124,6 +124,11 @@ it.each([
     const before = action === "disable" ? "Disable" : "Share with team";
     const after = action === "disable" ? "Enable" : "Make private";
     button(before).click();
+    expect(request).toHaveBeenNthCalledWith(2, "skills.library.mutate", {
+      action,
+      skillId: read.entry.skillId,
+      expectedRevision: read.entry.revision,
+    });
     await waitForFast(() => {
       expect(button(after).disabled).toBe(true);
       expect(row.textContent).toContain(action === "disable" ? "Disabled" : "Shared with team");

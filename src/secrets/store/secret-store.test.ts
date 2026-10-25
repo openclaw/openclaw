@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as kyselySync from "../../infra/kysely-sync.js";
@@ -421,7 +422,7 @@ describe("secret store", () => {
       expect((await listHiddenGitHubSecretRecords({ prefix })).map(({ name }) => name)).toEqual(
         expected.toSorted(),
       );
-      const boundary = fixtures[2];
+      const boundary = expectDefined(fixtures[2], "expiry boundary fixture");
       expect(await readHidden(boundary.name)).toBe(
         prefix === "github-oauth" ? boundary.value : undefined,
       );

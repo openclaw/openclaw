@@ -350,6 +350,15 @@ describe("getFollowupQueue", () => {
     );
   });
 
+  it("aborts work owned by a cleared queue", () => {
+    const queuedRun = makeSource();
+    enqueueFollowupRun(QUEUE_KEY, queuedRun, { mode: "followup" });
+
+    expect(queuedRun.queueAbortSignal?.aborted).toBe(false);
+    clearFollowupQueue(QUEUE_KEY);
+    expect(queuedRun.queueAbortSignal?.aborted).toBe(true);
+  });
+
   it("trims overflow metadata when a live queue cap shrinks", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 3 });
     for (const [contextKey, count] of [

@@ -454,6 +454,19 @@ it("CLI rejects invalid numeric options", async () => {
   }
 });
 
+it("CLI start delegates to the running gateway runtime", async () => {
+  callGatewayFromCliMock.mockResolvedValueOnce({ callId: "gateway-call", initiated: true });
+
+  const output = await runVoiceCallCli(["start", "--to", "+1", "--message", "Hello"]);
+  expectCliGatewayCall(
+    "voicecall.start",
+    { to: "+1", message: "Hello", mode: "conversation" },
+    "35000",
+  );
+  expect(createVoiceCallRuntime).not.toHaveBeenCalled();
+  expect(output).toContain('"callId": "gateway-call"');
+});
+
 it("responds with protocol errors for delegated gateway failures", async () => {
   expect(await invokeGateway(setup().methods, "voicecall.start", {})).toEqual([
     false,

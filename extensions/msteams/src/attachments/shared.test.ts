@@ -60,6 +60,7 @@ async function expectRedirectAuthorization(
         : ["trafficmanager.net"],
     authorizationAllowHosts,
     fetchFn: fetchMock,
+    resolveFn: async () => ({ address: "13.107.136.10" }),
     requestInit: { headers: { Authorization: "Bearer secret" } },
   });
   expect(res.status).toBe(200);
