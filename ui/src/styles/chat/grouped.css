@@ -1441,7 +1441,7 @@ button.chat-reply-attribution__target:disabled {
 
 /* User bubbles have different styling */
 .chat-group.user .chat-bubble {
-  --chat-bubble-background: var(--accent-subtle);
+  --chat-bubble-background: var(--chat-user-surface);
   background: var(--chat-bubble-background);
 
   :where(.shell[data-background-managed]) & {
@@ -1466,7 +1466,6 @@ button.chat-reply-attribution__target:disabled {
 
 /* Theme selection must not outrank the bare sent-media shell below. */
 :where(:root[data-theme-mode="light"]) .chat-group.user .chat-bubble {
-  --chat-bubble-background: color-mix(in srgb, var(--accent) 15%, var(--bg));
   border-color: transparent;
   background: var(--chat-bubble-background);
 

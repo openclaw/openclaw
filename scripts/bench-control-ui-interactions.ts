@@ -549,8 +549,21 @@ try {
                 "board-pins": { A: 400, B: 80 },
                 "sdk-avatars": { A: 120, B: 40 },
                 "sdk-avatar-identities": { A: 120, B: 40 },
+                tooltips: { A: 100 },
+                "link-providers": { A: 100, B: 30 },
+                "link-metadata": { A: 100, B: 30 },
+                "ci-pairs": { A: 100, B: 30 },
+                "clawhub-cards": { A: 100, B: 30 },
               },
               publications: 20,
+              nativeResourceWork: {
+                tooltips: "20 native child-list mutation batches",
+                "link-providers": "20 native child-list mutation batches in A",
+                "link-metadata": "20 replay request events; two actual panel producers",
+                "ci-pairs": "20 native A Gateway snapshots",
+                "clawhub-cards": "20 native A Gateway snapshots",
+                idle: "No deliberate publication; three native-clock seconds",
+              },
               note: "Extra benchmark-only entry changes the build graph; compare identical entry builds and measure shipping bytes separately.",
             }
           : undefined,
@@ -753,8 +766,11 @@ try {
                 scenario.projectionFamily,
                 values["projection-counts"],
               );
-              await page.waitForFunction(() => window.openclawControlUi !== undefined);
-              await settleSidebarBackgroundWork(page);
+              // Native instance fixtures have no shell or navigation prefetch owner.
+              if (scenario.route !== "/instance-resource-fixture.html") {
+                await page.waitForFunction(() => window.openclawControlUi !== undefined);
+                await settleSidebarBackgroundWork(page);
+              }
             }
             // Slow CPUs can still be loading boot modules after the first ready frame.
             await page.waitForLoadState("networkidle");
@@ -1012,13 +1028,26 @@ try {
               const sdk =
                 scenario.projectionFamily === "sdk-avatars" ||
                 scenario.projectionFamily === "sdk-avatar-identities";
+              const resourceFamily = [
+                "tooltips",
+                "link-providers",
+                "link-metadata",
+                "ci-pairs",
+                "clawhub-cards",
+              ].includes(scenario.projectionFamily);
               const method =
                 scenario.projectionFamily === "board-pins"
                   ? "board.get"
-                  : scenario.projectionFamily === "sdk-avatar-identities"
-                    ? "agent.identity.get"
-                    : "agents.list";
-              const expected = scenario.projectionIdle ? 0 : sdk ? 10 : 20;
+                  : scenario.projectionFamily === "ci-pairs"
+                    ? "controlUi.sessionPullRequests.checks"
+                    : scenario.projectionFamily === "clawhub-cards"
+                      ? "plugins.catalog.get"
+                      : resourceFamily
+                        ? "forge.detail"
+                        : scenario.projectionFamily === "sdk-avatar-identities"
+                          ? "agent.identity.get"
+                          : "agents.list";
+              const expected = scenario.projectionIdle || resourceFamily ? 0 : sdk ? 10 : 20;
               if ((result.requests[method] ?? 0) !== expected) {
                 throw new Error(
                   `Expected ${expected} measured ${method} requests, got ${result.requests[method] ?? 0}`,

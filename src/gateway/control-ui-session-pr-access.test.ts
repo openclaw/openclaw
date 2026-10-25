@@ -767,6 +767,10 @@ it.each(["local", "repository"] as const)(
       if (repository) {
         const previousCache = f.load.mock.calls[0]?.[1];
         expect((await read())?.source).toMatchObject({ repo: "publication" });
+        const unavailable = { pullRequests: [], rateLimited: false };
+        f.load.mockImplementation(async (_params, _signal, current) =>
+          current.target.source === null ? unavailable : snapshot,
+        );
         // Read before background preparation can replace the invalidated repository facts.
         const notifiedRead = vi.fn(read);
         const stop = sessionChanges.subscribe((change) => {
@@ -784,8 +788,8 @@ it.each(["local", "repository"] as const)(
         } finally {
           stop();
         }
-        const unavailable = { pullRequests: [], rateLimited: false };
-        f.load.mockResolvedValue(unavailable);
+        // Settle the replacement load, then verify another poll emits no stale snapshot.
+        await f.subscriptions.pollNow();
         await f.subscriptions.pollNow();
         expect(previousCache?.aborted).toBe(true);
         expect(frames(f.socket)).toEqual([
