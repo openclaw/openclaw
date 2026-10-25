@@ -152,62 +152,53 @@ function recover() {
   });
 }
 
-it("keeps the run alive while a plugin approval is pending, then lets the approver finish", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { decision, outcome } = requestApproval(480_000);
-    await vi.advanceTimersByTimeAsync(0);
+async function expectHungRunRecovered() {
+  vi.setSystemTime(Math.max(Date.now(), operation.watchdog.snapshot().semanticDeadlineAtMs));
+  await recover();
+  await operation.ownerSettlement;
+  expect(abort).toHaveBeenCalledTimes(1);
+}
 
-    // Seven minutes in: past the default five-minute stalled-run abort.
-    await vi.advanceTimersByTimeAsync(420_000);
-    await expect(recover()).resolves.toMatchObject({
-      status: "skipped",
-      reason: "active_reply_work",
-    });
-    expect(operation.watchdog.decide()).toMatchObject({ action: "observe", reason: "approval" });
-    expect(abort).not.toHaveBeenCalled();
-
-    decision.resolve({ id: "approval-1", decision: "allow-once" });
-    await expect(outcome).resolves.toMatchObject({ blocked: false });
-    expect(operation.watchdog.decide().reason).not.toBe("approval");
-
-    // The decision ends the wait: a run that then stays hung is recovered again.
-    vi.setSystemTime(Math.max(Date.now(), operation.watchdog.snapshot().semanticDeadlineAtMs));
-    await recover();
-    await operation.ownerSettlement;
-    expect(abort).toHaveBeenCalledTimes(1);
-  });
-});
-
-it("stops protecting the run once the approval window has passed", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { outcome } = requestApproval(120_000);
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(recover()).resolves.toMatchObject({ reason: "active_reply_work" });
-    expect(operation.watchdog.decide()).toMatchObject({ action: "observe", reason: "approval" });
-
-    // A Gateway that never answers cannot hold the run past timeout + grace.
-    await vi.advanceTimersByTimeAsync(120_000 + GATEWAY_GRACE_MS + 1);
-    expect(operation.watchdog.decide().reason).not.toBe("approval");
-    vi.setSystemTime(Math.max(Date.now(), operation.watchdog.snapshot().semanticDeadlineAtMs));
-    await recover();
-    await operation.ownerSettlement;
-    expect(abort).toHaveBeenCalledTimes(1);
-    void outcome.catch(() => {});
-  });
-});
-
-it("does not protect a run whose approval wait was cancelled", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const controller = new AbortController();
-    const { outcome } = requestApproval(480_000, controller.signal);
-    await vi.advanceTimersByTimeAsync(0);
-    controller.abort();
-    await expect(outcome).resolves.toMatchObject({ blocked: true });
-    expect(operation.watchdog.decide().reason).not.toBe("approval");
-
-    vi.setSystemTime(Math.max(Date.now(), operation.watchdog.snapshot().semanticDeadlineAtMs));
-    await recover();
-    await operation.ownerSettlement;
-    expect(abort).toHaveBeenCalledTimes(1);
-  });
-});
+it.each(["approved", "expired", "cancelled"] as const)(
+  "protects pending approval work until %s, then recovers a hung run",
+  async (ending) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const controller = new AbortController();
+      const timeoutMs = ending === "expired" ? 120_000 : 480_000;
+      const { decision, outcome } = requestApproval(
+        timeoutMs,
+        ending === "cancelled" ? controller.signal : undefined,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      if (ending !== "cancelled") {
+        // Approval can outlive the default five-minute stalled-run deadline.
+        if (ending === "approved") {
+          await vi.advanceTimersByTimeAsync(420_000);
+        }
+        await expect(recover()).resolves.toMatchObject({
+          status: "skipped",
+          reason: "active_reply_work",
+        });
+        expect(operation.watchdog.decide()).toMatchObject({
+          action: "observe",
+          reason: "approval",
+        });
+        expect(abort).not.toHaveBeenCalled();
+      }
+      if (ending === "expired") {
+        await vi.advanceTimersByTimeAsync(timeoutMs + GATEWAY_GRACE_MS + 1);
+      } else {
+        if (ending === "cancelled") {
+          controller.abort();
+        } else {
+          decision.resolve({ id: "approval-1", decision: "allow-once" });
+        }
+        await expect(outcome).resolves.toMatchObject({ blocked: ending === "cancelled" });
+      }
+      expect(operation.watchdog.decide().reason).not.toBe("approval");
+      await expectHungRunRecovered();
+      if (ending === "expired") {
+        void outcome.catch(() => {});
+      }
+    }),
+);
