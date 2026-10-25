@@ -4,7 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import {
   createMockSessionRuntime,
@@ -12,6 +12,7 @@ import {
 } from "./runtime.fast-context.test-support.js";
 import { createExternalProviderConfig, createVoiceCallBaseConfig } from "./test-fixtures.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
 const mocks = vi.hoisted(() => ({
   resolveVoiceCallConfig: vi.fn(),
@@ -213,8 +214,9 @@ function requireRealtimeConsultToolHandler() {
 async function startConsult(
   config: VoiceCallConfig,
   agentRuntime: ReturnType<typeof createConsultRuntime>,
+  coreConfig: OpenClawConfig = {},
 ) {
-  await createRuntime({ config, agentRuntime: agentRuntime as never });
+  await createRuntime({ config, agentRuntime: agentRuntime as never, coreConfig });
   return requireRealtimeConsultToolHandler();
 }
 
@@ -230,11 +232,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.webhookGetRealtimeHandler.mockReturnValue({
       setPublicUrl: mocks.realtimeHandlerSetPublicUrl,
     });
-    mocks.webhookGetStreamDisconnectLifecycle.mockReturnValue({
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-      retire: vi.fn(),
-    });
+    const streamDisconnectLifecycle = new StreamDisconnectGrace(() => {});
+    mocks.webhookGetStreamDisconnectLifecycle.mockReturnValue(streamDisconnectLifecycle);
+    onTestFinished(() => streamDisconnectLifecycle.close());
     mocks.webhookCtorArgs.length = 0;
     mocks.realtimeHandlerCtorArgs.length = 0;
     mocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
@@ -368,14 +368,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(await stopped).toBe(transportFailure);
   });
 
-  it("passes fullConfig to the webhook server for streaming provider resolution", async () => {
-    const coreConfig = { tts: { provider: "openai" } } as OpenClawConfig;
-    const fullConfig: OpenClawConfig = { plugins: { entries: { openai: { enabled: true } } } };
+  it("passes the complete config to the webhook server for streaming provider resolution", async () => {
+    const coreConfig: OpenClawConfig = { plugins: { entries: { openai: { enabled: true } } } };
 
-    await createRuntime({ coreConfig, fullConfig });
+    await createRuntime({ coreConfig });
 
     expect(mocks.webhookCtorArgs[0]?.[4]).toBe(coreConfig);
-    expect(mocks.webhookCtorArgs[0]?.[5]).toBe(fullConfig);
   });
 
   it("builds realtime instructions for the agent frozen on each call", async () => {
@@ -391,7 +389,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
       { agentId: "operator" },
     );
-    const fullConfig: OpenClawConfig = {
+    const coreConfig: OpenClawConfig = {
       agents: {
         entries: {
           operator: { identity: { name: "Main Voice" } },
@@ -399,7 +397,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         },
       },
     };
-    const runtime = await createRuntime({ config, fullConfig });
+    const runtime = await createRuntime({ config, coreConfig });
 
     const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
     expect(mocks.realtimeHandlerCtorArgs[0]?.[4]).toBe(
@@ -514,7 +512,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
       transcript: [{ speaker: "user", text: "Can you check shipment status?" }],
     });
 
-    const handler = await startConsult(config, agentRuntime);
+    const handler = await startConsult(config, agentRuntime, {
+      agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+    });
 
     const tools = requireRealtimeTools();
     expect(tools.map((tool) => requireRecord(tool, "realtime tool").name)).toEqual([
@@ -565,6 +565,30 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "Caller: Can you check shipment status?",
       "Caller: Also check the ETA.",
     );
+  });
+
+  it("dispatches realtime consults on the configured default model, not the compiled-in default", async () => {
+    const config = createRealtimeConfig();
+    const runEmbeddedAgent = answeringAgent("Checked with the configured model.");
+    setConsultCall({
+      agentId: "support",
+      direction: "outbound",
+      transcript: [{ speaker: "user", text: "What is the status?" }],
+    });
+
+    const handler = await startConsult(config, createDefaultConsultRuntime(runEmbeddedAgent), {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
+    });
+
+    await expect(
+      handler({ question: "Status?" }, "call-1", { partialUserTranscript: "" }),
+    ).resolves.toEqual({
+      text: "Checked with the configured model.",
+    });
+    expect(consultParamsFrom(runEmbeddedAgent)).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+    });
   });
 
   it("always exposes the built-in end-call tool without allowing configured replacement", async () => {

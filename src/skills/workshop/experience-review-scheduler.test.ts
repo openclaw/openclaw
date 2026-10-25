@@ -170,19 +170,17 @@ it("counts only assistant messages after the last user when the harness reports 
   countedTurn(0, 1, assistantTurn(1));
 });
 
-it("resets the counter when the foreground turn saved its own Workshop change", () => {
-  turn(8);
-  turn(1, { workshopMutated: true });
-  countedTurn(9, 0);
-  countedTurn(1, 1);
-});
-
-it("drops an already queued review when a later foreground turn saves its own change", async () => {
-  countedTurn(10, 1);
-  turn(1, { workshopMutated: true });
-  await fireTimers();
-  expect(runReview).not.toHaveBeenCalled();
-});
+it.each([8, 10])(
+  "resets %i accumulated iterations and queued work after a Workshop change",
+  async (iterations) => {
+    countedTurn(iterations, iterations === 10 ? 1 : 0);
+    turn(1, { workshopMutated: true });
+    await fireTimers();
+    expect(runReview).not.toHaveBeenCalled();
+    countedTurn(9, 0);
+    countedTurn(1, 1);
+  },
+);
 
 it("waits for ten accumulated iterations even when turns use a learned skill", async () => {
   const usedSkill = (name: string, skillFile: string) =>

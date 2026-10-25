@@ -3,7 +3,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
-import type { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
+import {
+  predatesCurrentBoot,
+  type createManagedHandoffBootIdentityReader,
+} from "./update-managed-service-handoff-boot.js";
 import { readCancelledUpdateFamily } from "./update-managed-service-handoff-cancellation.js";
 import {
   managedCommandCustody,
@@ -298,8 +301,6 @@ export async function prepareManagedHandoffRepair(
   } catch {
     // Missing boot evidence must not bypass the normal liveness checks.
   }
-  // Windows already reports its boot start as the identity; other platforms use opaque tokens.
-  const bootStartedAt = boot?.platform === "win32" ? Date.parse(boot.identity) : Number.NaN;
   const familyExited = (lease: ManagedHandoffLease) => {
     const lifetime = lease.action.kind === "triage" ? lease.action.lifetime : undefined;
     if (
@@ -312,8 +313,7 @@ export async function prepareManagedHandoffRepair(
         boot.identity !== lifetime.boot.identity
       );
     }
-    // A durable legacy write predating boot proves exit; allow five minutes of clock skew.
-    return lease.updatedAt < bootStartedAt - 5 * 60_000;
+    return predatesCurrentBoot(lease.updatedAt, boot);
   };
   const metadata = withDatabase(true, (db) =>
     readManagedHandoffRepairMetadata(db, previous, (operation) => store.transact(db, operation)),

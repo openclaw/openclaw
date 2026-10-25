@@ -1,6 +1,7 @@
 import path from "node:path";
 import { runPreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveAgentRoute as resolveProductionAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -588,15 +589,20 @@ describe("msteams message authorization and supplemental context", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("hydrates the canonical root once across replies from a cached thread-qualified route (#66771)", async () => {
-    const cachedRoute = {
-      sessionKey: `${channelSessionKey}:thread:old:thread:malformed`,
-      agentId: "main",
-      accountId: "default",
-    };
+  it("hydrates the canonical root once across replies through production routing (#66771)", async () => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const { handler, enqueueSystemEvent } = setup(
       { groupPolicy: "open" },
-      { resolveAgentRoute: () => cachedRoute },
+      {
+        resolveAgentRoute: ({ accountId, peer }) =>
+          resolveProductionAgentRoute({
+            cfg,
+            channel: "msteams",
+            accountId,
+            peer: { kind: "channel", id: peer.id },
+          }),
+      },
+      cfg,
     );
     graph.fetchChannelMessage.mockResolvedValue(
       threadMessage(parentId, "Original question", { displayName: "Alice" }),

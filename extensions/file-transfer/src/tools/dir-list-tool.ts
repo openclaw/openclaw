@@ -10,44 +10,6 @@ import {
 import { renderDirectoryText } from "./directory-text.js";
 import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
 
-function directoryListingText(
-  canonicalPath: string,
-  entries: Array<Record<string, unknown>>,
-  pageToken: string | undefined,
-  nextPageToken: string | undefined,
-  truncated: boolean,
-): string {
-  const offset = parseStrictNonNegativeInteger(pageToken) ?? 0;
-  const header = JSON.stringify({ path: canonicalPath, returnedCount: entries.length }).slice(
-    0,
-    -1,
-  );
-  return renderDirectoryText({
-    entries,
-    project: ({ name, isDir, size }) => ({ name, isDir, size }),
-    render: (visible) => {
-      const limited = visible.length < entries.length;
-      const continuation = limited
-        ? visible.length > 0
-          ? String(offset + visible.length)
-          : undefined
-        : nextPageToken;
-      const tail = JSON.stringify({ truncated: limited || truncated, nextPageToken: continuation });
-      const listing = `${header},"displayedCount":${visible.length},"entries":[${visible.join(",")}],${tail.slice(1)}`;
-      // Keep normal continuation guidance the same size on the last page.
-      const note =
-        limited && visible.length === 0
-          ? "No entries displayed: the next complete entry or directory metadata exceeds the text budget or contains reserved markers. Pagination cannot advance; use available node-local directory capabilities."
-          : (limited || truncated) && !continuation
-            ? "More entries available; the node supplied no continuation token."
-            : "If present, pass nextPageToken as pageToken; keep node and path.";
-      return { manifest: listing, text: `${listing}\n${note}` };
-    },
-    fallback:
-      "Directory listing omitted: the resolved path or continuation metadata cannot be represented safely within the 8192-byte text limit. No usable paths or continuation token are shown; use available node-local directory capabilities.",
-  });
-}
-
 export function createDirListTool(): AnyAgentTool {
   return {
     ...DIR_LIST_TOOL_DESCRIPTOR,
@@ -93,15 +55,39 @@ export function createDirListTool(): AnyAgentTool {
         decision: "allowed",
       });
 
-      return textResult(
-        directoryListingText(canonicalPath, entries, pageToken, nextPageToken, truncated),
-        {
-          path: canonicalPath,
-          entries,
-          nextPageToken,
-          truncated,
-        },
+      const offset = parseStrictNonNegativeInteger(pageToken) ?? 0;
+      const header = JSON.stringify({ path: canonicalPath, returnedCount: entries.length }).slice(
+        0,
+        -1,
       );
+      const text = renderDirectoryText({
+        entries,
+        project: ({ name, isDir, size }) => ({ name, isDir, size }),
+        render: (visible) => {
+          const limited = visible.length < entries.length;
+          const continuation = limited
+            ? visible.length > 0
+              ? String(offset + visible.length)
+              : undefined
+            : nextPageToken;
+          const tail = JSON.stringify({
+            truncated: limited || truncated,
+            nextPageToken: continuation,
+          });
+          const listing = `${header},"displayedCount":${visible.length},"entries":[${visible.join(",")}],${tail.slice(1)}`;
+          // Keep normal continuation guidance the same size on the last page.
+          const note =
+            limited && visible.length === 0
+              ? "No entries displayed: the next complete entry or directory metadata exceeds the text budget or contains reserved markers. Pagination cannot advance; use available node-local directory capabilities."
+              : (limited || truncated) && !continuation
+                ? "More entries available; the node supplied no continuation token."
+                : "If present, pass nextPageToken as pageToken; keep node and path.";
+          return { manifest: listing, text: `${listing}\n${note}` };
+        },
+        fallback:
+          "Directory listing omitted: the resolved path or continuation metadata cannot be represented safely within the 8192-byte text limit. No usable paths or continuation token are shown; use available node-local directory capabilities.",
+      });
+      return textResult(text, { path: canonicalPath, entries, nextPageToken, truncated });
     },
   };
 }

@@ -3,6 +3,8 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   archiveLegacyStateSource,
+  decodeUtf8Input,
+  Utf8InputError,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -212,7 +214,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       });
       let keys: ReefKeys;
       try {
-        keys = parseReefKeys(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
+        keys = parseReefKeys(
+          JSON.parse(
+            decodeUtf8Input(await fs.readFile(filePath), "Legacy Reef identity keys"),
+          ) as unknown,
+        );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           return { changes, warnings };
@@ -220,7 +226,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         warnings.push(
           `Failed importing Reef identity keys: ${String(error)}; left source in place`,
         );
-        return { changes, warnings };
+        return {
+          changes,
+          warnings,
+          ...(error instanceof Utf8InputError
+            ? { warningDisposition: "recoverable" as const }
+            : {}),
+        };
       }
       const existing = await store.lookup(REEF_KEYS_KEY);
       if (existing && JSON.stringify(existing) !== JSON.stringify(keys)) {
@@ -292,6 +304,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         maxEntries: REEF_REGISTRATION_MAX_ENTRIES,
         overflowPolicy: "reject-new",
       });
+      const notices: string[] = [];
+      let utf8Warnings = 0;
       const migrationStore = openReefIdentityMigrationStore(params.context);
       const durableMigrationStore = openReefDurableMigrationStore(params.context);
       const hasRegistrationSource =
@@ -315,8 +329,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         let legacy: ReefIdentityBinding | ReefSetupSession | undefined;
         try {
-          legacy = source.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
-        } catch {
+          legacy = source.parse(
+            JSON.parse(decodeUtf8Input(await fs.readFile(filePath), source.label)) as unknown,
+          );
+        } catch (error) {
+          if (error instanceof Utf8InputError) {
+            warnings.push(`${error.message} Left source in place`);
+            utf8Warnings++;
+            continue;
+          }
           // The structural validation below owns the fail-closed warning.
         }
         if (!legacy) {
@@ -375,43 +396,54 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       if (pending?.identityBindingRequired) {
         const keysPath = path.join(stateDir, "keys.json");
         const identityPath = path.join(stateDir, "identity.json");
-        try {
-          parseReefKeys(
-            await params.context
-              .openPluginStateKeyedStore<ReefKeys>({
-                namespace: REEF_KEYS_NAMESPACE,
-                maxEntries: REEF_KEYS_MAX_ENTRIES,
-                overflowPolicy: "reject-new",
-              })
-              .lookup(REEF_KEYS_KEY),
+        if ((await legacyReefFileExists(keysPath)) || (await legacyReefFileExists(identityPath))) {
+          // The source owner already reported its failure; retain the barrier without another refusal.
+          notices.push(
+            "Reef identity migration remains pending while legacy identity sources remain",
           );
-          const binding = parseReefIdentityBinding(
-            await store.lookup(REEF_REGISTRATION_IDENTITY_KEY),
-          );
-          if (!binding) {
-            throw new Error("saved identity binding is missing");
+        } else {
+          try {
+            parseReefKeys(
+              await params.context
+                .openPluginStateKeyedStore<ReefKeys>({
+                  namespace: REEF_KEYS_NAMESPACE,
+                  maxEntries: REEF_KEYS_MAX_ENTRIES,
+                  overflowPolicy: "reject-new",
+                })
+                .lookup(REEF_KEYS_KEY),
+            );
+            const binding = parseReefIdentityBinding(
+              await store.lookup(REEF_REGISTRATION_IDENTITY_KEY),
+            );
+            if (!binding) {
+              throw new Error("saved identity binding is missing");
+            }
+            if (configuredBindingResult.status === "invalid") {
+              throw new Error("configured handle or relay is invalid");
+            }
+            if (
+              configuredBinding &&
+              JSON.stringify(binding) !== JSON.stringify(configuredBinding)
+            ) {
+              throw new Error("configured handle or relay differs from saved identity binding");
+            }
+            await migrationStore.delete(REEF_KEYS_MIGRATION_KEY);
+            changes.push("Verified Reef identity keys and binding; cleared migration marker");
+          } catch (error) {
+            warnings.push(
+              `Reef identity migration is incomplete: ${String(error)}; left migration blocker in place`,
+            );
           }
-          if (configuredBindingResult.status === "invalid") {
-            throw new Error("configured handle or relay is invalid");
-          }
-          if (configuredBinding && JSON.stringify(binding) !== JSON.stringify(configuredBinding)) {
-            throw new Error("configured handle or relay differs from saved identity binding");
-          }
-          if (
-            (await legacyReefFileExists(keysPath)) ||
-            (await legacyReefFileExists(identityPath))
-          ) {
-            throw new Error("legacy identity sources remain");
-          }
-          await migrationStore.delete(REEF_KEYS_MIGRATION_KEY);
-          changes.push("Verified Reef identity keys and binding; cleared migration marker");
-        } catch (error) {
-          warnings.push(
-            `Reef identity migration is incomplete: ${String(error)}; left migration blocker in place`,
-          );
         }
       }
-      return { changes, warnings };
+      return {
+        changes,
+        warnings,
+        ...(notices.length > 0 ? { notices } : {}),
+        ...(utf8Warnings > 0 && utf8Warnings === warnings.length
+          ? { warningDisposition: "recoverable" as const }
+          : {}),
+      };
     },
   },
   reefAuditStateMigration,

@@ -13,7 +13,6 @@ import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-
 import type { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import type {
   SessionIdentityMutation,
@@ -26,6 +25,30 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
 const snapshotRuns = (runs: Map<string, SubagentRunRecord>) => new Map(runs);
+
+export function createSessionEntryReadMocks(sessionStore: Record<string, SessionEntry>) {
+  return {
+    readSessionEntryReadOnlyInWorker: vi.fn<
+      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
+    >(async (scope, assertCurrent) => {
+      assertCurrent?.();
+      const entry = await Promise.resolve(sessionStore[scope.sessionKey]);
+      assertCurrent?.();
+      return entry;
+    }),
+    withSessionEntryReadOnlyInWorker: vi.fn<typeof withSessionEntryReadOnlyInWorker>(
+      async (scope, assertCurrent, consume) => {
+        assertCurrent();
+        const result = await consume(
+          { ok: true, value: sessionStore[scope.sessionKey] },
+          { kind: "file", assertCurrent },
+        );
+        assertCurrent();
+        return result;
+      },
+    ),
+  };
+}
 
 export function createSubagentRegistryMockState() {
   const sessionIdentityMutationListeners = new Set<SessionIdentityMutationListener>();
@@ -137,11 +160,6 @@ export function createSubagentRegistryMockState() {
     removeInternalSessionEffectsSession: vi.fn(async () => {}),
     resolveAgentTimeoutMs: vi.fn(() => 1_000),
     dispatchRecoveryAgent: vi.fn(),
-    getGatewayRecoveryRuntime: vi.fn(() => ({
-      dispatchAgent: mocks.dispatchRecoveryAgent as GatewayRecoveryRuntime["dispatchAgent"],
-      waitForAgent: vi.fn(),
-      sendRecoveryNotice: vi.fn(),
-    })),
     lifecycleGeneration: "test-generation",
   };
   return Object.assign(mocks, {

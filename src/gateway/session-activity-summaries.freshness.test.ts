@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
@@ -68,6 +69,7 @@ beforeEach(async () => {
   cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
   testState = await createActivityRecapSessionFixture(cfg);
   complete.mockReset().mockResolvedValue(activityRecapResult(recap));
+  vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth").mockResolvedValue(true);
   vi.spyOn(observerModel, "defaultPrepareModel").mockResolvedValue(preparedActivityRecapModel);
   vi.spyOn(observerModel, "defaultCompleteModel").mockImplementation(complete);
   changed.mockReset();

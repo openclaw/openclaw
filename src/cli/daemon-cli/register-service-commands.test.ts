@@ -30,15 +30,18 @@ const gatewayServiceEnv = {
   OPENCLAW_SERVICE_KIND: "gateway",
 };
 
-vi.mock("./install.runtime.js", () => ({
+vi.mock("./install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install.js")>()),
   runDaemonInstall: (opts: unknown) => runDaemonInstall(opts),
 }));
 
-vi.mock("./status.runtime.js", () => ({
+vi.mock("./status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./status.js")>()),
   runDaemonStatus: (opts: unknown) => runDaemonStatus(opts),
 }));
 
-vi.mock("./lifecycle.runtime.js", () => ({
+vi.mock("./lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./lifecycle.js")>()),
   runDaemonRestart: (opts: unknown) => runDaemonRestart(opts),
   runDaemonStart: (opts: unknown) => runDaemonStart(opts),
   runDaemonStop: (opts: unknown) => runDaemonStop(opts),

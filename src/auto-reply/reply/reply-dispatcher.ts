@@ -289,14 +289,6 @@ export function createReplyDispatcher(
     } while (sent !== sendChain || settled !== settlementChain);
   };
 
-  const buildReceipt = (): ReplyDispatchReceipt => ({
-    counts: mapReplyDispatchCounts(settledCounts, (counts) => ({ ...counts })),
-    anyVisibleDelivered: Object.values(settledCounts).some(
-      (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
-    ),
-    ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
-  });
-
   const unregister = registerDispatcher(() => pending);
   const releasePending = () => {
     pending -= 1;
@@ -643,7 +635,13 @@ export function createReplyDispatcher(
     supportsSettledReceipt: true,
     waitForIdle: async () => {
       await waitForIdle();
-      const receipt = buildReceipt();
+      const receipt: ReplyDispatchReceipt = {
+        counts: mapReplyDispatchCounts(settledCounts, (counts) => ({ ...counts })),
+        anyVisibleDelivered: Object.values(settledCounts).some(
+          (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
+        ),
+        ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
+      };
       if (
         options.propagateRetryableNoSendFailure === true &&
         !hasPendingDelivery &&

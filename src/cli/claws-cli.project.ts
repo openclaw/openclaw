@@ -29,11 +29,6 @@ import type {
   ClawsValidateOptions,
 } from "./claws-cli.js";
 
-type PreparedDev = {
-  build: Awaited<ReturnType<typeof buildClawProject>>;
-  plan: ClawAddPlan;
-};
-
 const CLAW_DEV_RESULT_SCHEMA_VERSION = "openclaw.clawDev.v1" as const;
 
 function reportProjectError(
@@ -53,69 +48,6 @@ function reportProjectError(
     ok: false,
     error: { code, message },
   });
-}
-
-function logDevPlanSummary(plan: ClawAddPlan): void {
-  runtime.log(`Agent: ${plan.agent.finalId}`);
-  runtime.log(`Workspace: ${plan.agent.workspace}`);
-  logClawAgentConfiguration(plan);
-  runtime.log(`Actions: ${plan.summary.totalActions}`);
-  runtime.log(`Capability escalations: ${plan.capabilityChanges.length}`);
-  runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
-}
-
-async function prepareDev(projectPath: string, opts: ClawsDevOptions): Promise<PreparedDev> {
-  await using workspace = await tempWorkspace({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "openclaw-claw-dev-",
-  });
-  const build = await buildClawProject(projectPath, workspace.path("claw.tgz"));
-  await using extracted = await extractBuiltClawArtifact(build.artifact);
-  const result = await readClawManifestFile(extracted.packageRoot);
-  if (!result.ok) {
-    throw new ClawProjectError(
-      "artifact_verification_failed",
-      formatClawDiagnostics(result.diagnostics),
-    );
-  }
-  const configSnapshot = await readConfigFileSnapshot({
-    observe: false,
-    skipPluginValidation: true,
-  });
-  if (!configSnapshot.valid) {
-    throw new ClawProjectError(
-      "config_unavailable",
-      "OpenClaw config is invalid; fix it before previewing a Claw project.",
-    );
-  }
-  const config = configSnapshot.resolved;
-  const existingMcpServers = config.mcp?.servers ?? {};
-  const existingAgentIds = listAgentIds(config);
-  const plan = await buildClawAddPlan({
-    manifest: result.manifest,
-    clawMarkdownBody: result.clawMarkdownBody,
-    packageBootstrap: result.packageBootstrap,
-    openClawProfile: result.openClawProfile,
-    source: {
-      ...result.source,
-      integrityKind: "artifact",
-      integrity: build.integrity,
-      byteLength: build.byteLength,
-    },
-    diagnostics: result.diagnostics,
-    context: {
-      config,
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
-      ...(opts.workspace ? { workspace: opts.workspace } : {}),
-      existingAgentIds,
-      existingWorkspacePaths: existingAgentIds.map((agentId) =>
-        resolveAgentWorkspaceDir(config, agentId),
-      ),
-      existingMcpServers,
-      sourceReferenceRoot: `claw-artifact:${build.integrity}`,
-    },
-  });
-  return { build, plan };
 }
 
 export async function runClawsCreateCommand(
@@ -207,14 +139,63 @@ export async function runClawsDevCommand(
   projectPath: string,
   opts: ClawsDevOptions,
 ): Promise<void> {
-  let prepared: PreparedDev;
+  let build: Awaited<ReturnType<typeof buildClawProject>>;
+  let plan: ClawAddPlan;
   try {
-    prepared = await prepareDev(projectPath, opts);
+    await using workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-claw-dev-",
+    });
+    build = await buildClawProject(projectPath, workspace.path("claw.tgz"));
+    await using extracted = await extractBuiltClawArtifact(build.artifact);
+    const result = await readClawManifestFile(extracted.packageRoot);
+    if (!result.ok) {
+      throw new ClawProjectError(
+        "artifact_verification_failed",
+        formatClawDiagnostics(result.diagnostics),
+      );
+    }
+    const configSnapshot = await readConfigFileSnapshot({
+      observe: false,
+      skipPluginValidation: true,
+    });
+    if (!configSnapshot.valid) {
+      throw new ClawProjectError(
+        "config_unavailable",
+        "OpenClaw config is invalid; fix it before previewing a Claw project.",
+      );
+    }
+    const config = configSnapshot.resolved;
+    const existingMcpServers = config.mcp?.servers ?? {};
+    const existingAgentIds = listAgentIds(config);
+    plan = await buildClawAddPlan({
+      manifest: result.manifest,
+      clawMarkdownBody: result.clawMarkdownBody,
+      packageBootstrap: result.packageBootstrap,
+      openClawProfile: result.openClawProfile,
+      source: {
+        ...result.source,
+        integrityKind: "artifact",
+        integrity: build.integrity,
+        byteLength: build.byteLength,
+      },
+      diagnostics: result.diagnostics,
+      context: {
+        config,
+        ...(opts.agentId ? { agentId: opts.agentId } : {}),
+        ...(opts.workspace ? { workspace: opts.workspace } : {}),
+        existingAgentIds,
+        existingWorkspacePaths: existingAgentIds.map((agentId) =>
+          resolveAgentWorkspaceDir(config, agentId),
+        ),
+        existingMcpServers,
+        sourceReferenceRoot: `claw-artifact:${build.integrity}`,
+      },
+    });
   } catch (error) {
     reportProjectError(error, "project_dev_failed", CLAW_DEV_RESULT_SCHEMA_VERSION, opts.json);
     return;
   }
-  const { build, plan } = prepared;
   if (opts.json) {
     writeRuntimeJson(runtime, {
       schemaVersion: CLAW_DEV_RESULT_SCHEMA_VERSION,
@@ -233,7 +214,12 @@ export async function runClawsDevCommand(
   } else {
     runtime.log(`Claw dev preview: ${build.claw.name}@${build.claw.version}`);
     runtime.log(`Artifact integrity: ${build.integrity}`);
-    logDevPlanSummary(plan);
+    runtime.log(`Agent: ${plan.agent.finalId}`);
+    runtime.log(`Workspace: ${plan.agent.workspace}`);
+    logClawAgentConfiguration(plan);
+    runtime.log(`Actions: ${plan.summary.totalActions}`);
+    runtime.log(`Capability escalations: ${plan.capabilityChanges.length}`);
+    runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
     if (plan.blockers.length > 0) {
       runtime.error(formatClawDiagnostics(plan.blockers));
     }

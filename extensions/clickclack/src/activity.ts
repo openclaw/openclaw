@@ -34,36 +34,6 @@ function normalizedItemKind(payload: ClickClackItemEventPayload): string {
   return payload.kind?.trim().toLowerCase() ?? "";
 }
 
-function commentaryBody(payload: ClickClackItemEventPayload): string {
-  const text =
-    payload.progressText?.trim() || payload.summary?.trim() || payload.meta?.trim() || "";
-  if (!text) {
-    return "";
-  }
-  const kind = normalizedItemKind(payload);
-  if (THINKING_ITEM_KINDS.has(kind)) {
-    return `**Thinking**\n\n${text}`;
-  }
-  return text;
-}
-
-function activityBody(payload: ClickClackItemEventPayload): string {
-  const line = formatChannelProgressDraftLineForEntry(undefined, {
-    ...payload,
-    event: "item",
-    itemKind: payload.kind,
-  })?.trim();
-  if (line) {
-    return line;
-  }
-  const head = payload.name?.trim() || payload.title?.trim();
-  const text = payload.progressText?.trim() || payload.summary?.trim();
-  if (head && text) {
-    return `**${head}**\n\n${text}`;
-  }
-  return text || head || payload.status?.trim() || payload.kind?.trim() || "";
-}
-
 type CommentarySegment = {
   messageId?: string;
   body: string;
@@ -88,10 +58,8 @@ export function createClickClackActivityPublisher(params: {
   client: Pick<ClickClackClient, "createActivityMessage" | "updateMessageBody">;
   target: ClickClackActivityTarget;
   turnId: string;
-  flushMs?: number;
   onError?: (error: unknown) => void;
 }) {
-  const flushMs = params.flushMs ?? CLICKCLACK_COMMENTARY_FLUSH_MS;
   const commentaryByItem = new Map<string, CommentarySegment>();
   const toolRows = new Map<string, ToolRow>();
   let provenance: ClickClackMessageProvenance | undefined;
@@ -143,7 +111,12 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const handleCommentary = (payload: ClickClackItemEventPayload): void => {
-    const body = commentaryBody(payload);
+    const text =
+      payload.progressText?.trim() || payload.summary?.trim() || payload.meta?.trim() || "";
+    const body =
+      text && THINKING_ITEM_KINDS.has(normalizedItemKind(payload))
+        ? `**Thinking**\n\n${text}`
+        : text;
     const key = payload.itemId?.trim() || "turn";
     let segment = commentaryByItem.get(key);
     if (!body) {
@@ -172,7 +145,7 @@ export function createClickClackActivityPublisher(params: {
       segment.timer = setTimeout(() => {
         segment.timer = undefined;
         void flushCommentary(key);
-      }, flushMs);
+      }, CLICKCLACK_COMMENTARY_FLUSH_MS);
     }
   };
 
@@ -181,7 +154,19 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const handleDiscreteItem = (payload: ClickClackItemEventPayload): void => {
-    const body = activityBody(payload);
+    let body = formatChannelProgressDraftLineForEntry(undefined, {
+      ...payload,
+      event: "item",
+      itemKind: payload.kind,
+    })?.trim();
+    if (!body) {
+      const head = payload.name?.trim() || payload.title?.trim();
+      const text = payload.progressText?.trim() || payload.summary?.trim();
+      body =
+        head && text
+          ? `**${head}**\n\n${text}`
+          : text || head || payload.status?.trim() || payload.kind?.trim() || "";
+    }
     if (!body) {
       return;
     }

@@ -1,7 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { SessionMoveProfileTargetSchema } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
-import { readToolStringParam } from "./common.js";
+import { WORKTREE_NAME_PATTERN } from "../worktrees/name.js";
+import { readToolStringParam, ToolInputError } from "./common.js";
 
 export const SessionsSpawnPlacementSchema = Type.Union([
   Type.Object({ kind: Type.Literal("local") }, { additionalProperties: false }),
@@ -46,12 +47,61 @@ export const SESSIONS_SPAWN_SESSION_SCHEMA = {
     }),
   ),
   worktreeName: Type.Optional(
-    Type.String({ description: "Managed worktree name; requires worktree=true." }),
+    Type.String({
+      pattern: WORKTREE_NAME_PATTERN.source,
+      description:
+        "Managed worktree lowercase slug, 1–64 letters/digits/hyphens, starting with a letter or digit. Do not include a branch prefix such as codex/; OpenClaw supplies openclaw/. Requires worktree=true.",
+    }),
   ),
   worktreeBaseRef: Type.Optional(
     Type.String({ description: "Managed worktree base ref; requires worktree=true." }),
   ),
 };
+
+export function validateVisibleSpawnOptions(
+  raw: Record<string, unknown>,
+  runtime: "subagent" | "acp",
+): void {
+  // A visible session starts one run; empty attachment fields request no staging.
+  const requestedMode = raw.mode === "run" ? undefined : raw.mode;
+  const unsupported = [
+    ["runtime", runtime === "subagent" ? undefined : runtime, 'supports runtime="subagent" only'],
+    [
+      "thinking",
+      readToolStringParam(raw, "thinking"),
+      "thinking overrides are not wired to the sessions.create path",
+    ],
+    [
+      "thread",
+      raw.thread === true ? true : undefined,
+      "visible sessions route to the dashboard, not a channel thread",
+    ],
+    ["mode", requestedMode, "visible sessions are persistent dashboard sessions"],
+    [
+      "lightContext",
+      raw.lightContext === true ? true : undefined,
+      "bootstrap staging is not wired to the sessions.create path",
+    ],
+    [
+      "attachments",
+      Array.isArray(raw.attachments) && raw.attachments.length > 0 ? raw.attachments : undefined,
+      "attachment staging is not wired to the sessions.create path",
+    ],
+    [
+      "attachAs",
+      isRecord(raw.attachAs) ? readToolStringParam(raw.attachAs, "mountPath") : raw.attachAs,
+      "attachment staging is not wired to the sessions.create path",
+    ],
+  ] as const;
+  const unsupportedEntries = unsupported.filter(([, value]) => value !== undefined);
+  if (unsupportedEntries.length > 0) {
+    throw new ToolInputError(
+      `Parameters unavailable with visible=true: ${unsupportedEntries
+        .map(([name, , reason]) => `${name}: ${reason}`)
+        .join("; ")}`,
+    );
+  }
+}
 
 /** Formats the visible spawn call a model should retry with. */
 export function correctedVisibleSpawnCall(raw: Record<string, unknown>): string {

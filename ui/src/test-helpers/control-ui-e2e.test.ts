@@ -407,6 +407,9 @@ describe("shared proof capture", () => {
         <openclaw-app></openclaw-app>
         <div class="agent-chat__composer-combobox"><textarea ${storageFailed ? "disabled" : ""}>${storageFailed ? "" : "private-draft"}</textarea></div>
         <button class="chat-send-btn--send" aria-label="${sendLabel}" aria-busy="${storageFailed}" ${sendDisabled ? "disabled" : ""}></button>
+        <div class="agent-chat__input"><button class="chat-send-btn--stop" aria-label="private-stop">private-stop-text</button></div>
+        <openclaw-tooltip open content="private-open-tooltip">private-open-content</openclaw-tooltip>
+        <openclaw-tooltip content="private-closed-tooltip">private-closed-content</openclaw-tooltip>
         <div class="model-providers__head"><span class="settings-status">${badgeText}</span></div>
         <openclaw-agents-page>${screenshotFailed ? "" : `<textarea class="agent-file-textarea" ${storageFailed ? "disabled" : ""}>${fileText}</textarea>`}</openclaw-agents-page>
         <openclaw-canvas-widget-view doc-id="private-document"><div class="skeleton">private-widget-content</div></openclaw-canvas-widget-view>
@@ -420,6 +423,10 @@ describe("shared proof capture", () => {
         agentFilesList: { agentId: "private-agent", workspace: "private-path" },
       });
       document.body.append(...dom.childNodes);
+      const stop = document.querySelector<HTMLButtonElement>(".chat-send-btn--stop")!;
+      Object.assign(document.querySelector("openclaw-tooltip[open]")!, { anchor: stop });
+      stop.focus();
+      await vi.runOnlyPendingTimersAsync();
       const snapshot =
         catalogSource === "snapshot"
           ? {
@@ -635,12 +642,34 @@ describe("shared proof capture", () => {
                     draftLength: failure === "storage" ? 0 : 13,
                     nonempty: failure !== "storage",
                     disabled: failure === "storage",
+                    stop: { visible: true, disabled: false, focused: true },
                     send: {
                       label: sendLabel === "private-label" ? "unknown" : sendLabel,
                       labelLength: sendLabel.length,
                       disabled: failure !== "none" || sendLabel === "Loading chat",
                       busy: failure === "storage",
                     },
+                  },
+                  activeElement: {
+                    kind: "button",
+                    inComposer: true,
+                    isStop: true,
+                    isSend: false,
+                  },
+                  tooltips: {
+                    openCount: 1,
+                    entries: [
+                      {
+                        trigger: {
+                          kind: "button",
+                          inComposer: true,
+                          isStop: true,
+                          isSend: false,
+                        },
+                        hovered: false,
+                        containsFocus: true,
+                      },
+                    ],
                   },
                 },
           models: {

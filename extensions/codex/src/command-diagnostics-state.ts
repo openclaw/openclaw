@@ -37,10 +37,4 @@ export const codexDiagnosticsFeedbackState = {
   lastUploadByScope: new Map<string, number>(),
   pendingConfirmations: new Map<string, PendingCodexDiagnosticsConfirmation>(),
   pendingTokensByScope: new Map<string, string[]>(),
-  clear(): void {
-    this.lastUploadByThread.clear();
-    this.lastUploadByScope.clear();
-    this.pendingConfirmations.clear();
-    this.pendingTokensByScope.clear();
-  },
 };

@@ -2,16 +2,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Worker } from "node:worker_threads";
 import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./api.js";
 import plugin from "./index.js";
-import {
-  loadMemoryWikiCompiledCache,
-  writeMemoryWikiCompiledCache,
-  type MemoryWikiCompiledCacheSnapshot,
-} from "./src/compiled-cache.js";
+import { loadMemoryWikiCompiledCache, writeMemoryWikiCompiledCache } from "./src/compiled-cache.js";
 import { resolveMemoryWikiConfig } from "./src/config.js";
 import { deferred } from "./src/deferred.test-helpers.js";
 import {
@@ -20,9 +17,15 @@ import {
   loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
 } from "./src/log.js";
+import { renderWikiMarkdown } from "./src/markdown.js";
 import { withMemoryWikiVaultMutation } from "./src/mutation-coordinator.js";
+import { closeMemoryWikiQueryReader } from "./src/query-reader.js";
+import { getMemoryWikiPage } from "./src/query.js";
 import { waitForMemoryWikiImportedSourceSyncs } from "./src/source-sync.js";
-import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
+import {
+  createCompiledSnapshot as emptyCompiledSnapshot,
+  createMemoryWikiTestHarness,
+} from "./src/test-helpers.js";
 
 const toolMocks = vi.hoisted(() => {
   const createTool = (name: string) =>
@@ -43,32 +46,6 @@ const toolMocks = vi.hoisted(() => {
 vi.mock("./src/tool.js", () => toolMocks);
 
 const { createPluginApi, createTempDir } = createMemoryWikiTestHarness();
-
-function emptyCompiledSnapshot(): MemoryWikiCompiledCacheSnapshot {
-  return {
-    digest: { claimCount: 0, contradictionCount: 0, pages: [] },
-    claims: [],
-    dashboards: {
-      importInsights: {
-        sourceType: "chatgpt",
-        totalItems: 0,
-        totalClusters: 0,
-        clusters: [],
-        truncated: false,
-      },
-      overview: {
-        totalItems: 0,
-        totalPages: 0,
-        pageCounts: { synthesis: 0, entity: 0, concept: 0, source: 0, report: 0 },
-        totalClaims: 0,
-        totalQuestions: 0,
-        totalContradictions: 0,
-        clusters: [],
-        truncated: false,
-      },
-    },
-  };
-}
 
 describe("memory-wiki plugin", () => {
   it("registers default-vault tools inside the configured state directory", () => {
@@ -170,6 +147,53 @@ describe("memory-wiki plugin", () => {
           },
         },
       });
+    }
+  });
+
+  it("terminates the query reader workers on service stop and starts fresh ones for later reads", async () => {
+    const rootDir = await createTempDir("memory-wiki-index-stop-reader-");
+    const { api, registerService } = createPluginApi();
+    api.pluginConfig = { vault: { path: rootDir } };
+    plugin.register(api);
+    const service = registerService.mock.calls[0]?.[0];
+    await service?.start?.();
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    for (const name of ["alpha", "beta"]) {
+      await fs.writeFile(
+        path.join(rootDir, "sources", `${name}.md`),
+        renderWikiMarkdown({
+          frontmatter: { pageType: "source", id: `source.${name}`, title: name },
+          body: `# ${name}\n`,
+        }),
+      );
+    }
+    const config = resolveMemoryWikiConfig(api.pluginConfig);
+    // An id lookup reads the whole vault, which runs on the reader's workers.
+    const lookup = () => getMemoryWikiPage({ config, lookup: "source.alpha" });
+    // Start without reader workers, so every worker counted below belongs to this test.
+    await closeMemoryWikiQueryReader();
+    const workers: Worker[] = [];
+    const exited = new Set<Worker>();
+    const onWorker = (worker: Worker) => {
+      workers.push(worker);
+      worker.once("exit", () => exited.add(worker));
+    };
+    process.on("worker", onWorker);
+    try {
+      await expect(lookup()).resolves.toMatchObject({ path: "sources/alpha.md" });
+      const beforeStop = workers.length;
+      expect(beforeStop).toBeGreaterThan(0);
+      // Idle workers stay alive until they are retired or the reader closes.
+      expect(exited.size).toBe(0);
+
+      await service?.stop?.();
+
+      expect(exited.size).toBe(beforeStop);
+      await expect(lookup()).resolves.toMatchObject({ path: "sources/alpha.md" });
+      expect(workers.length).toBeGreaterThan(beforeStop);
+    } finally {
+      process.off("worker", onWorker);
+      await service?.stop?.();
     }
   });
 

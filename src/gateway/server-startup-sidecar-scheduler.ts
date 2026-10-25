@@ -46,8 +46,7 @@ export function schedulePostReadySidecarTask(params: {
     })().catch((err: unknown) => {
       params.log.warn(`${params.name} failed after gateway ready: ${String(err)}`);
     });
-  });
-  handle.unref?.();
+  }).unref();
   return {
     stop: async () => {
       // Sidecars get both a synchronous stopped predicate and an AbortSignal so

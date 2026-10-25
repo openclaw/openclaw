@@ -1,19 +1,23 @@
-import type { Selectable, Updateable } from "kysely";
 import { assertWorktreePersistentExecutionCurrentInDatabase } from "../../agents/worktrees/run-lease-store.kernel.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
+import type {
+  LocalWorkspaceMutation,
+  LocalWorkspaceProjection,
+} from "./local-workspace-store.types.js";
 
 const table = "local_workspace_projections";
-export type LocalWorkspaceProjection = Selectable<DB[typeof table]>;
-export type LocalWorkspaceMutation =
-  | { kind: "create"; row: Omit<LocalWorkspaceProjection, "revision"> }
-  | { kind: "update"; revision: number; patch: Updateable<DB[typeof table]> }
-  | { kind: "delete"; revision: number };
-const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+const nodes = "local_workspace_manifest_nodes";
+const query = (db: EngineConnection) =>
+  getNodeSqliteKysely<Pick<DB, typeof table | typeof nodes>>(db);
 
 export function readLocalWorkspaceProjectionInDatabase(db: EngineConnection, id: string) {
   return tableExists(db, table)
@@ -45,7 +49,7 @@ export function mutateLocalWorkspaceProjection(
         db,
         query(db)
           .selectFrom(table)
-          .select("revision")
+          .select(["revision", "baseline_ref"])
           .$if(mutation.kind === "delete", (builder) =>
             builder.select((eb) =>
               eb
@@ -80,7 +84,7 @@ export function mutateLocalWorkspaceProjection(
       query(db)
         .insertInto(table)
         .values({ ...mutation.row, revision: 0 })
-        .returningAll(),
+        .returning(["worktree_id", "revision"]),
     );
   }
   if (!current || current.revision !== mutation.revision) {
@@ -96,13 +100,58 @@ export function mutateLocalWorkspaceProjection(
     );
     return undefined;
   }
+  if (mutation.manifest) {
+    const { records, removed, previousRoot, replace } = mutation.manifest;
+    if (current.baseline_ref !== previousRoot) {
+      throw new Error("Local workspace manifest baseline changed");
+    }
+    if (replace) {
+      executeSqliteQuerySync(db, query(db).deleteFrom(nodes).where("worktree_id", "=", id));
+    } else {
+      for (let offset = 0; offset < removed.length; offset += 500) {
+        executeSqliteQuerySync(
+          db,
+          query(db)
+            .deleteFrom(nodes)
+            .where("worktree_id", "=", id)
+            .where("path", "in", removed.slice(offset, offset + 500)),
+        );
+      }
+    }
+    for (let offset = 0; offset < records.length; offset += 500) {
+      executeSqliteQuerySync(
+        db,
+        query(db)
+          .insertInto(nodes)
+          .values(
+            records.slice(offset, offset + 500).map((record) => ({
+              worktree_id: id,
+              path: record.node.path,
+              node_json: JSON.stringify(record),
+            })),
+          )
+          .onConflict((conflict) =>
+            conflict.columns(["worktree_id", "path"]).doUpdateSet((eb) => ({
+              node_json: eb.ref("excluded.node_json"),
+            })),
+          ),
+      );
+    }
+  }
   return executeSqliteQueryTakeFirstSync(
     db,
     query(db)
       .updateTable(table)
-      .set({ ...mutation.patch, worktree_id: id, revision: current.revision + 1 })
+      .set({
+        ...mutation.patch,
+        ...(mutation.manifest
+          ? { baseline_ref: mutation.manifest.resultingRoot, baseline_json: null }
+          : {}),
+        worktree_id: id,
+        revision: current.revision + 1,
+      })
       .where("worktree_id", "=", id)
-      .returningAll(),
+      .returning(["worktree_id", "revision"]),
   );
 }
 

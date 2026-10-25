@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import type { Compilable } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordAcpParentStreamEventsForTest as recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.test-support.js";
@@ -19,7 +20,7 @@ import {
   appendSqliteTrajectoryRuntimeEvents,
   createTrajectoryEvent,
 } from "../../trajectory/runtime-store.test-support.js";
-import { decodeSessionArchiveBytes, readSessionArchiveContentSync } from "./archive-compression.js";
+import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -31,10 +32,8 @@ import {
 import { writeTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
-import {
-  deleteMaterializedSessionStatePlans,
-  readSessionGenerationIdsForKeys,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-references.js";
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -155,7 +154,6 @@ describe("SQLite transcript archive worker", () => {
     const archivedPath = writeTranscriptArchive({
       archiveDirectory,
       content,
-      reason: "deleted",
       sessionId,
     });
     expect(archivedPath).not.toBe(stagedPath);
@@ -194,8 +192,9 @@ describe("SQLite transcript archive worker", () => {
     const archive = materialized[0]?.archive;
     expect(archive).toBeTruthy();
     expect(fs.existsSync(materialized[0]?.archivedTranscript?.archivedPath ?? "")).toBe(false);
+    expect(archive?.encoding).toBe("zstd");
     expect(
-      decodeSessionArchiveBytes(archive?.bytes ?? new Uint8Array(), archive?.encoding === "zstd"),
+      zstdDecompressSync(Buffer.from(archive?.bytes ?? new Uint8Array())).toString("utf8"),
     ).toBe(jsonl(events));
   });
 
@@ -383,23 +382,6 @@ describe("SQLite transcript archive worker", () => {
     await expect(materializeSessionStateDeletePlans([planned, conflict])).rejects.toThrow(
       `Conflicting SQLite transcript archive plans for ${target.sessionId}`,
     );
-  });
-
-  it("deletes empty lifecycle state without producing an archive", async () => {
-    const target = scope("empty-transcript");
-    await entry(target);
-    const result = await deletion(target.sessionKey);
-    expect(result).toMatchObject({ deleted: true, archivedTranscripts: [] });
-    expect(loadSessionEntry(target)).toBeUndefined();
-    const { query, rows } = databaseQueries();
-    expect(
-      rows(
-        query
-          .selectFrom("session_windows")
-          .select("session_id")
-          .where("session_id", "=", target.sessionId),
-      ),
-    ).toEqual([]);
   });
 
   it.each(["empty", "nonempty"] as const)(

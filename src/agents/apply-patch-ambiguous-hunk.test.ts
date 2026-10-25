@@ -24,27 +24,12 @@ async function applyTo(source: string, chunks: Chunk[]): Promise<string> {
 
 describe("apply_patch ambiguous hunk matching", () => {
   it.each([
-    {
-      tier: "exact",
-      source: "before\ntarget\ntarget\nafter\n",
-      pattern: "target",
-    },
-    {
-      tier: "trim-end",
-      source: "before\ntarget  \ntarget\t\nafter\n",
-      pattern: "target",
-    },
-    {
-      tier: "trim",
-      source: "before\n  target\n\ttarget\nafter\n",
-      pattern: "target",
-    },
-    {
-      tier: "punctuation",
-      source: "before\nIt\u2019s done\nIt\u2018s done\nafter\n",
-      pattern: "It's done",
-    },
-  ])("refuses duplicate matches at the $tier tier", async ({ source, pattern }) => {
+    ["exact", "target\ntarget", "target"],
+    ["trim-end", "target  \ntarget\t", "target"],
+    ["trim", "  target\n\ttarget", "target"],
+    ["punctuation", "It\u2019s done\nIt\u2018s done", "It's done"],
+  ])("refuses duplicate matches at the %s tier", async (_tier, lines, pattern) => {
+    const source = `before\n${lines}\nafter\n`;
     await expect(applyTo(source, [chunk({ oldLines: [pattern] })])).rejects.toThrow(
       /Found 2 occurrences.*include more surrounding lines/s,
     );
@@ -65,32 +50,14 @@ describe("apply_patch ambiguous hunk matching", () => {
   });
 
   it.each([
-    {
-      tier: "exact",
-      source: "before\ntarget\nafter\n",
-      pattern: "target",
-      expected: "before\nafter\n",
-    },
-    {
-      tier: "trim-end",
-      source: "before\ntarget  \nafter\n",
-      pattern: "target",
-      expected: "before\nafter\n",
-    },
-    {
-      tier: "trim",
-      source: "before\n  target\nafter\n",
-      pattern: "target",
-      expected: "before\nafter\n",
-    },
-    {
-      tier: "punctuation",
-      source: "before\nIt\u2019s done\nafter\n",
-      pattern: "It's done",
-      expected: "before\nafter\n",
-    },
-  ])("applies a unique match at the $tier tier", async ({ source, pattern, expected }) => {
-    await expect(applyTo(source, [chunk({ oldLines: [pattern] })])).resolves.toBe(expected);
+    ["exact", "target", "target"],
+    ["trim-end", "target  ", "target"],
+    ["trim", "  target", "target"],
+    ["punctuation", "It\u2019s done", "It's done"],
+  ])("applies a unique match at the %s tier", async (_tier, line, pattern) => {
+    await expect(
+      applyTo(`before\n${line}\nafter\n`, [chunk({ oldLines: [pattern] })]),
+    ).resolves.toBe("before\nafter\n");
   });
 
   it("prefers a unique exact match over broader tolerant lookalikes", async () => {

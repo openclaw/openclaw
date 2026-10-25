@@ -168,6 +168,7 @@ export type ClawHubPackageListItem = {
   channel: ClawHubPackageChannel;
   isOfficial: boolean;
   summary?: string | null;
+  icon?: string | null;
   ownerHandle?: string | null;
   ownerOfficial?: boolean;
   createdAt: number;
@@ -241,6 +242,7 @@ export type ClawHubPackageVersion = {
     version: string;
     createdAt: number;
     changelog: string;
+    icon?: string | null;
     distTags?: string[];
     files?: Array<{
       path: string;

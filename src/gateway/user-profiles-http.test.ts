@@ -170,7 +170,7 @@ describe("profile avatar HTTP endpoint", () => {
     getRuntimeConfig.mockReset();
     resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
     authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
-      bindHttpResponseAuthority({}, res, () => true),
+      bindHttpResponseAuthority({ operatorScopes: ["operator.read"] }, res, () => true),
     );
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
@@ -191,19 +191,15 @@ describe("profile avatar HTTP endpoint", () => {
     expect(res.writeHead).toHaveBeenCalledWith(204);
   });
 
-  it.each([
-    { method: "GET", revision: "old-png", conditional: false, immutable: false },
-    { method: "GET", revision: "old-png", conditional: true, immutable: false },
-  ])(
-    "serves $method revision=$revision conditional=$conditional with immutable=$immutable",
-    async ({ method, revision, conditional, immutable }) => {
+  it.each([false, true])(
+    "revalidates stale avatar revisions (conditional=%s)",
+    async (conditional) => {
       const bytes = Buffer.from([1, 2, 3]);
       avatarFixture.mockReturnValue({ bytes, mime: "image/png", sha256: "saved" });
       const pathname = "/control/api/users/profile-1/avatar";
       const res = response();
       await handle(res, pathname, {
-        method,
-        url: revision ? `${pathname}?v=${revision}` : pathname,
+        url: `${pathname}?v=old-png`,
         headers: {
           origin: "https://control.example",
           ...(conditional ? { "if-none-match": '"saved-png"' } : {}),
@@ -212,13 +208,11 @@ describe("profile avatar HTTP endpoint", () => {
       });
       expectHead(res, conditional ? 304 : 200, {
         ETag: '"saved-png"',
-        "Cache-Control": immutable
-          ? "private, max-age=31536000, immutable"
-          : "private, max-age=0, must-revalidate",
+        "Cache-Control": "private, max-age=0, must-revalidate",
       });
       expectHeader(res, "Vary", "Origin, Authorization, Cookie");
       expectHeader(res, "Access-Control-Allow-Origin", "https://control.example");
-      if (conditional || method === "HEAD") {
+      if (conditional) {
         expect(loadAvatarBytes).not.toHaveBeenCalled();
       } else {
         expect(res.end).toHaveBeenCalledWith(bytes);
@@ -402,43 +396,30 @@ describe("profile avatar HTTP endpoint", () => {
   );
 
   it.each([
-    { method: "POST", pathname: "/api/users/profile-1/avatar", basePath: "", code: 405 },
-    {
-      method: "GET",
-      pathname: "/control/api/users/profile-1/avatar/extra",
-      basePath: "/control",
-      code: 404,
-    },
-    {
-      method: "GET",
-      pathname: "/__openclaw__/workspace-icon/one",
-      basePath: "/control",
-      code: undefined,
-    },
-  ])(
-    "dispatches $method $pathname before avatar lookup",
-    async ({ method, pathname, basePath, code }) => {
-      const res = response();
-      const handled = await handle(res, pathname, { method, basePath });
-      expect(handled).toBe(code !== undefined);
-      expect(avatarFixture).not.toHaveBeenCalled();
-      expect(profileFixture).not.toHaveBeenCalled();
-      if (code === 404) {
-        expect(authorizeControlUiReadRequestOrReply).toHaveBeenCalledOnce();
-        expectHeader(res, "Cache-Control", "no-store");
-      } else {
-        expect(authorizeControlUiReadRequestOrReply).not.toHaveBeenCalled();
-      }
-      if (code === undefined) {
-        expect(getRuntimeConfig).not.toHaveBeenCalled();
-      } else {
-        expect(res.response.statusCode).toBe(code);
-      }
-      if (code === 405) {
-        expectHeader(res, "Allow", "GET, HEAD");
-      }
-    },
-  );
+    ["POST", "/api/users/profile-1/avatar", "", 405],
+    ["GET", "/control/api/users/profile-1/avatar/extra", "/control", 404],
+    ["GET", "/__openclaw__/workspace-icon/one", "/control", undefined],
+  ] as const)("dispatches %s %s before avatar lookup", async (method, pathname, basePath, code) => {
+    const res = response();
+    const handled = await handle(res, pathname, { method, basePath });
+    expect(handled).toBe(code !== undefined);
+    expect(avatarFixture).not.toHaveBeenCalled();
+    expect(profileFixture).not.toHaveBeenCalled();
+    if (code === 404) {
+      expect(authorizeControlUiReadRequestOrReply).toHaveBeenCalledOnce();
+      expectHeader(res, "Cache-Control", "no-store");
+    } else {
+      expect(authorizeControlUiReadRequestOrReply).not.toHaveBeenCalled();
+    }
+    if (code === undefined) {
+      expect(getRuntimeConfig).not.toHaveBeenCalled();
+    } else {
+      expect(res.response.statusCode).toBe(code);
+    }
+    if (code === 405) {
+      expectHeader(res, "Allow", "GET, HEAD");
+    }
+  });
 
   it.each([undefined, "42", "41"])(
     "caches only a current revision's definite miss (%s)",
@@ -560,7 +541,7 @@ describe("profile avatar HTTP endpoint", () => {
   });
 
   it.each(["resolve", "reject"])(
-    "waits for overflow cancellation to %s before releasing the reader and responding",
+    "rejects overflow without waiting for best-effort cancellation to %s",
     async (outcome) => {
       const profileId = `profile-gravatar-oversized-${outcome}`;
       setProfile(profileId, [`oversized-avatar-${outcome}@example.test`]);
@@ -582,12 +563,12 @@ describe("profile avatar HTTP endpoint", () => {
       const handling = serveProfile(profileId, res, fetchImpl);
       try {
         await cancellationStarted.promise;
-        // Drain promise work so fire-and-forget cleanup cannot pass by being unobserved.
-        await new Promise<void>((resolve) => {
-          process.nextTick(resolve);
-        });
-        expect(res.end).not.toHaveBeenCalled();
-        expect(body.locked).toBe(true);
+        await expect(handling).resolves.toBe(true);
+        expect(res.response.statusCode).toBe(502);
+        expect(res.end).toHaveBeenCalledExactlyOnceWith(
+          JSON.stringify({ ok: false, error: { type: "avatar_upstream_unavailable" } }),
+        );
+        expect(body.locked).toBe(false);
         expect(cancel).toHaveBeenCalledExactlyOnceWith(undefined);
 
         if (outcome === "resolve") {
@@ -595,12 +576,7 @@ describe("profile avatar HTTP endpoint", () => {
         } else {
           cancellation.reject(new Error("Gravatar cancellation failed"));
         }
-        await expect(handling).resolves.toBe(true);
-        expect(res.response.statusCode).toBe(502);
-        expect(res.end).toHaveBeenCalledExactlyOnceWith(
-          JSON.stringify({ ok: false, error: { type: "avatar_upstream_unavailable" } }),
-        );
-        expect(body.locked).toBe(false);
+        await cancellation.promise.catch(() => undefined);
         expect(cancel).toHaveBeenCalledExactlyOnceWith(undefined);
       } finally {
         cancellation.resolve();

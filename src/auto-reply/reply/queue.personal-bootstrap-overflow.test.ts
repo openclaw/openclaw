@@ -3,7 +3,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
   createFollowupTurnTestTurn,
-  createFollowupTurnTestTypingController,
   executeFollowupTurnForTest,
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
@@ -14,6 +13,7 @@ import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun } from "./queue/types.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
 beforeEach(resetFollowupTurnTestState);
@@ -95,7 +95,7 @@ it.each([
               },
             }),
             defaults: {
-              typing: createFollowupTurnTestTypingController(),
+              typing: createMockTypingController(),
               typingMode: "never",
               defaultModel: "claude",
             },

@@ -89,17 +89,12 @@ describe("shouldRequireGatewayTokenForInstall", () => {
     async (prefix) => {
       const stateDir = tempDirs.make("openclaw-install-password-env-");
       const passwordEnvKey = `${prefix}_GATEWAY_PASSWORD`;
-      const resolved = await resolveGatewayInstallToken({
-        config: { env: { vars: { [passwordEnvKey]: "synthetic-install-password" } } },
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        requireExisting: true,
-      });
-
-      expect(resolved.unavailableReason).toBe(
-        prefix === "OPENCLAW"
-          ? undefined
-          : "Deferred service load requires an existing Gateway token.",
-      );
+      expect(
+        shouldRequireGatewayTokenForInstall(
+          { env: { vars: { [passwordEnvKey]: "synthetic-install-password" } } },
+          { OPENCLAW_STATE_DIR: stateDir },
+        ),
+      ).toBe(prefix !== "OPENCLAW");
     },
   );
 

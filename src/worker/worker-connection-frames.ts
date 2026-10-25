@@ -2,45 +2,52 @@ import { randomUUID } from "node:crypto";
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket } from "ws";
-import {
-  lazyCompile,
-  type ProtocolValidator,
-} from "../../packages/gateway-protocol/src/protocol-validator.js";
+import type { ProtocolValidator } from "../../packages/gateway-protocol/src/protocol-validator.js";
 import {
   type WorkerConnectParams,
   type WorkerHeartbeatParams,
-  WorkerHeartbeatResponseFrameSchema,
   type WorkerLiveEventParams,
-  WorkerLiveEventResponseFrameSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   type WorkerTranscriptCommitParams,
-  WorkerTranscriptCommitResponseFrameSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerComputerParams } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
 import {
-  type WorkerComputerParams,
-  WorkerComputerResponseFrameSchema,
-} from "../../packages/gateway-protocol/src/schema/worker-computer.js";
+  WORKER_EXEC_APPROVAL_METHOD,
+  type WorkerExecApprovalParams,
+} from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import {
   type WorkerGatewayToolInvokeParams,
   type WorkerGatewayToolCancelParams,
   type WorkerGatewayToolUpdateFrame,
-  WorkerGatewayToolResponseFrameSchema,
-  WorkerGatewayToolCancelResponseFrameSchema,
   WORKER_GATEWAY_TOOL_METHODS,
   isWorkerGatewayToolFrameWithinBudget,
   validateWorkerGatewayToolUpdateFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   type WorkerInferenceCancelParams,
-  WorkerInferenceCancelResponseFrameSchema,
   type WorkerInferenceEventFrame,
   type WorkerInferenceStartParams,
-  WorkerInferenceStartResponseFrameSchema,
   type WorkerInferenceTerminalFrame,
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
   validateWorkerInferenceEventFrame,
   validateWorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  type WorkerTurnAdmissionParams,
+  WORKER_TURN_ADMISSION_METHOD,
+} from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import {
+  validateWorkerTurnAdmissionResponseFrame,
+  validateWorkerExecApprovalResponseFrame,
+  validateWorkerGatewayToolResponseFrame,
+  validateWorkerGatewayToolCancelResponseFrame,
+  validateWorkerHeartbeatResponseFrame,
+  validateWorkerTranscriptCommitResponseFrame,
+  validateWorkerLiveEventResponseFrame,
+  validateWorkerComputerResponseFrame,
+  validateWorkerInferenceStartResponseFrame,
+  validateWorkerInferenceCancelResponseFrame,
+} from "../../packages/gateway-protocol/src/worker-response-validators.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
@@ -50,42 +57,52 @@ import {
 import { WorkerConnectionInterruptedError } from "./worker-connection-contract.js";
 
 const WORKER_REQUEST_SPECS = {
+  "exec-approval": {
+    method: WORKER_EXEC_APPROVAL_METHOD,
+    validateResponse: validateWorkerExecApprovalResponseFrame,
+  },
+  "turn-admission": {
+    method: WORKER_TURN_ADMISSION_METHOD,
+    validateResponse: validateWorkerTurnAdmissionResponseFrame,
+  },
   "gateway-tool": {
     method: WORKER_GATEWAY_TOOL_METHODS.invoke,
-    validateResponse: lazyCompile(WorkerGatewayToolResponseFrameSchema),
+    validateResponse: validateWorkerGatewayToolResponseFrame,
   },
   "gateway-tool-cancel": {
     method: WORKER_GATEWAY_TOOL_METHODS.cancel,
-    validateResponse: lazyCompile(WorkerGatewayToolCancelResponseFrameSchema),
+    validateResponse: validateWorkerGatewayToolCancelResponseFrame,
   },
   heartbeat: {
     method: "worker.heartbeat",
-    validateResponse: lazyCompile(WorkerHeartbeatResponseFrameSchema),
+    validateResponse: validateWorkerHeartbeatResponseFrame,
   },
   transcript: {
     method: "worker.transcript.commit",
-    validateResponse: lazyCompile(WorkerTranscriptCommitResponseFrameSchema),
+    validateResponse: validateWorkerTranscriptCommitResponseFrame,
   },
   "live-event": {
     method: "worker.live-event",
-    validateResponse: lazyCompile(WorkerLiveEventResponseFrameSchema),
+    validateResponse: validateWorkerLiveEventResponseFrame,
   },
   computer: {
     method: "worker.computer",
-    validateResponse: lazyCompile(WorkerComputerResponseFrameSchema),
+    validateResponse: validateWorkerComputerResponseFrame,
   },
   "inference-start": {
     method: "worker.inference.start",
-    validateResponse: lazyCompile(WorkerInferenceStartResponseFrameSchema),
+    validateResponse: validateWorkerInferenceStartResponseFrame,
   },
   "inference-cancel": {
     method: "worker.inference.cancel",
-    validateResponse: lazyCompile(WorkerInferenceCancelResponseFrameSchema),
+    validateResponse: validateWorkerInferenceCancelResponseFrame,
   },
 } as const;
 
 type WorkerRequestKind = keyof typeof WORKER_REQUEST_SPECS;
 type WorkerRequestParams = {
+  "exec-approval": WorkerExecApprovalParams;
+  "turn-admission": WorkerTurnAdmissionParams;
   "gateway-tool": WorkerGatewayToolInvokeParams;
   "gateway-tool-cancel": WorkerGatewayToolCancelParams;
   heartbeat: WorkerHeartbeatParams;
@@ -234,7 +251,7 @@ export class WorkerConnectionFrameDispatcher {
       return Promise.reject(toStructuredErrorObject(error));
     }
     const payloadLimit =
-      kind === "inference-start" || kind === "transcript"
+      kind === "inference-start" || kind === "transcript" || kind === "turn-admission"
         ? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES
         : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
     if (Buffer.byteLength(encoded, "utf8") > payloadLimit) {

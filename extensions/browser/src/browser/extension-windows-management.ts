@@ -1,6 +1,5 @@
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import {
-  managementRequestSchema,
   parseWindowsManagementResponse,
   WINDOWS_MANAGEMENT_LIMIT,
   type WindowsManagementRequest,
@@ -22,8 +21,7 @@ export async function runWindowsManagement(
   request: WindowsManagementRequest,
   options: { signal?: AbortSignal } = {},
 ): Promise<WindowsManagementResponse> {
-  const admitted = managementRequestSchema.parse(request);
-  const input = JSON.stringify(admitted);
+  const input = JSON.stringify(request);
   if (Buffer.byteLength(input) > WINDOWS_MANAGEMENT_LIMIT) {
     throw new WindowsManagementTransportError(false);
   }
@@ -54,7 +52,7 @@ export async function runWindowsManagement(
     throw new WindowsManagementTransportError(true);
   }
   try {
-    return parseWindowsManagementResponse(result.stdout, result.code, admitted);
+    return parseWindowsManagementResponse(result.stdout, result.code, request);
   } catch {
     throw new WindowsManagementTransportError(true);
   }

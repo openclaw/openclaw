@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { hasLiveWorktreeRunLease } from "../../agents/worktrees/run-lease.test-support.js";
@@ -10,7 +11,11 @@ import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "../../agents/worktrees/service.test-support.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import {
+  replaceSessionEntrySync,
+  resetSessionEntryLifecycle,
+} from "../../config/sessions/session-accessor.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import {
   CREATOR,
@@ -36,8 +41,22 @@ import {
 import { realCronSession } from "./run.session.test-support.js";
 import { loadRunCronIsolatedAgentTurn, runEmbeddedAgentMock } from "./run.test-harness.js";
 
+const sessionRunner = vi.hoisted(() => ({
+  runEmbedded: vi.fn<typeof import("../../agents/embedded-agent-runner/run.js").runEmbeddedAgent>(),
+}));
+// mock-isolation: Only model execution is synthetic; session admission and filesystem tools stay real.
+vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
+  runEmbeddedAgent: sessionRunner.runEmbedded,
+}));
+
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const realSession = await realCronSession();
+await Promise.all([
+  import("../../auto-reply/dispatch.js"),
+  import("../../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
 installRequesterCronAuthorityTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const createRepo = useManagedWorktreeTestRepository();
@@ -45,6 +64,9 @@ const createRepo = useManagedWorktreeTestRepository();
 beforeEach(() => {
   resetAuthorityRunHarness();
   realSession.install();
+  sessionRunner.runEmbedded
+    .mockReset()
+    .mockImplementation((params) => runEmbeddedAgentMock(params));
 });
 
 it.each([
@@ -53,16 +75,23 @@ it.each([
   "operator",
   "archived",
   "managed",
+  "managed-alias",
+  "managed-escape",
   "managed-foreign-owner",
   "managed-manual-owner",
+  "isolated-child",
+  "isolated-child-managed",
+  "isolated-child-reset",
 ] as const)("scheduled file access respects %s conversation workspace", async (scenario) => {
+  // An isolated job created in a conversation is its child and runs in that conversation's binding.
+  const isolatedChild = scenario.startsWith("isolated-child");
   const foreignWorkspace = tempDirs.make("cron-foreign-workspace-");
   const foreignKey = "agent:main:dashboard:another-person";
   const targetKey = scenario === "foreign" || scenario === "operator" ? foreignKey : SESSION;
   const config = await prepareAuthorityConfig({
     tools: { allow: [AUTOMATIONS_TOOL_NAME, "read", "write"], fs: { workspaceOnly: true } },
   });
-  const managedRoot = scenario.startsWith("managed")
+  const managedRoot = scenario.includes("managed")
     ? tempDirs.make("cron-managed-workspace-")
     : undefined;
   const worktree = managedRoot
@@ -76,10 +105,25 @@ it.each([
         now: Date.now(),
       })
     : undefined;
-  const ownWorkspace = worktree?.path ?? stateDir;
+  const ownWorkspace =
+    worktree?.path ??
+    (scenario === "isolated-child" || scenario === "isolated-child-reset"
+      ? tempDirs.make("cron-parent-workspace-")
+      : stateDir);
   await fs.writeFile(path.join(stateDir, "sentinel.txt"), "DEFAULT_WORKSPACE");
   await fs.writeFile(path.join(ownWorkspace, "sentinel.txt"), "OWN_WORKSPACE");
   await fs.writeFile(path.join(foreignWorkspace, "sentinel.txt"), "FOREIGN_WORKSPACE");
+  let boundWorkspace = ownWorkspace;
+  if (worktree && (scenario === "managed-alias" || scenario === "managed-escape")) {
+    boundWorkspace =
+      scenario === "managed-alias"
+        ? path.join(expectDefined(managedRoot, "managed root"), "workspace-alias")
+        : path.join(worktree.path, "escaped-workspace");
+    await fs.symlink(
+      scenario === "managed-alias" ? worktree.path : foreignWorkspace,
+      boundWorkspace,
+    );
+  }
   const creatorEntry = {
     sessionId: SESSION_ID,
     updatedAt: Date.now(),
@@ -87,7 +131,7 @@ it.each([
     lastInteractionAt: Date.now(),
     lifecycleRevision: "original",
     createdActor: CREATOR,
-    spawnedCwd: ownWorkspace,
+    spawnedCwd: boundWorkspace,
     worktree: worktree
       ? { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot }
       : undefined,
@@ -110,7 +154,7 @@ it.each([
     name: `Workspace authority ${scenario}`,
     enabled: false,
     schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: `session:${targetKey}`,
+    sessionTarget: isolatedChild ? "isolated" : `session:${targetKey}`,
     payload: { kind: "agentTurn", message: "Read sentinel.txt", toolsAllow: ["read"] },
     delivery: { mode: "none" },
   };
@@ -153,20 +197,53 @@ it.each([
   if (scenario !== "operator") {
     expect(job.owner?.sessionKey).toBe(SESSION);
   }
+  if (isolatedChild) {
+    expect(job.sourceConversation?.sessionKey).toBe(SESSION);
+  }
   if (scenario === "archived") {
     replaceSessionEntrySync({ sessionKey: SESSION }, { ...creatorEntry, archivedAt: Date.now() });
   }
   const reads: string[] = [];
+  const refusals: string[] = [];
   runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) =>
     withAuthorityTools(
       params,
-      async (tools) => {
+      async (tools, admitted) => {
+        params.onExecutionPhase?.({ phase: "model_call_started" });
+        await params.onExecutionStarted?.();
+        await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
         const read = expectDefined(
           tools.find((tool) => tool.name === "read"),
           "read tool",
         );
         if (worktree) {
           expect(hasLiveWorktreeRunLease(process.env, worktree.id)).toBe(true);
+        }
+        if (scenario === "isolated-child-reset") {
+          // Embedded tool authority captures this check at run start and runs it before every tool effect.
+          const assertRunActive = expectDefined(
+            resolveAdmittedRunActiveAssertion(admitted),
+            "admitted run assertion",
+          );
+          // The parent conversation is reset (`/new`) while its child is running.
+          await resetSessionEntryLifecycle({
+            storePath: resolveSessionStorePathCore(config.session?.store, { agentId: "main" }),
+            target: { canonicalKey: SESSION, storeKeys: [SESSION] },
+            buildNextEntry: () => ({
+              ...creatorEntry,
+              sessionId: "replacement-conversation",
+              lifecycleRevision: "reset",
+            }),
+          });
+          try {
+            assertRunActive();
+            reads.push(
+              JSON.stringify(await read.execute("scheduled-read", { path: "sentinel.txt" })),
+            );
+          } catch (error) {
+            refusals.push(String(error));
+          }
+          return { payloads: [{ text: "Read refused" }], meta: { agentMeta: {} } };
         }
         const result = await read.execute("scheduled-read", { path: "sentinel.txt" });
         reads.push(JSON.stringify(result));
@@ -177,7 +254,7 @@ it.each([
         }
         return { payloads: [{ text: "Read complete" }], meta: { agentMeta: {} } };
       },
-      { sessionKey: targetKey },
+      isolatedChild ? {} : { sessionKey: targetKey },
     ),
   );
   const execution = createAuthorityCronService(config, runCronIsolatedAgentTurn);
@@ -185,14 +262,29 @@ it.each([
   try {
     await execution.run(job.id, "force");
     const result = execution.getJob(job.id)?.state;
-    if (scenario === "foreign" || scenario === "archived" || scenario.startsWith("managed-")) {
+    if (scenario === "isolated-child-reset") {
+      // The child keeps no access to the reset parent's workspace.
+      expect(reads).toEqual([]);
+      expect(refusals).toEqual([expect.stringMatching(/no longer active/)]);
+    } else if (scenario === "archived") {
+      // The occurrence admission pauses the job before any session turn runs.
+      expect(reads).toEqual([]);
+      expect(result?.lastRunStatus).toBe("skipped");
+      expect(result?.lastError).toMatch(/it was archived/);
+      expect(execution.getJob(job.id)?.enabled).toBe(false);
+    } else if (
+      scenario === "foreign" ||
+      scenario === "managed-foreign-owner" ||
+      scenario === "managed-manual-owner" ||
+      scenario === "managed-escape"
+    ) {
       expect(reads).toEqual([]);
       expect(result?.lastRunStatus).toBe("error");
       expect(result?.lastError).toMatch(
         scenario === "foreign"
           ? /only use its owning conversation’s workspace/
-          : scenario === "archived"
-            ? /is archived/
+          : scenario === "managed-escape"
+            ? /workspace does not match its managed worktree/
             : /worktree is missing, retired, or mismatched/,
       );
     } else {

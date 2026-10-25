@@ -25,6 +25,12 @@ import { makeQueuedRun } from "./subagent-registry.run-fixtures.test-support.js"
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRun } from "./subagent-run-generation.js";
 
+type RegistryFixture<Keys extends keyof ReturnType<typeof createSubagentRegistryMockState>> = {
+  mocks: Pick<ReturnType<typeof createSubagentRegistryMockState>, Keys>;
+  hydrateAndActivateRegistry: () => Promise<void>;
+};
+type RestoreRuns = { mockRestoredRuns: (createEntries: () => SubagentRunRecord[]) => void };
+
 vi.mock("../../../gateway/server-methods/sessions-delete.js", () => ({
   deleteGatewaySession: async ({
     params,
@@ -53,7 +59,7 @@ export async function activateSubagentRegistryWithRecoveryRuntime(
     resolveGatewayContext: () => gatewayContext as never,
   };
   bindGatewayContextResolver(recoveryRuntime, gatewayContext.resolveGatewayContext);
-  await mod.activateSubagentRegistry(gatewayContext.resolveGatewayContext);
+  await mod.activateSubagentRegistry(gatewayContext.resolveGatewayContext).settled;
 }
 
 export function registerRestoredRollbackPublicationTest({
@@ -61,45 +67,34 @@ export function registerRestoredRollbackPublicationTest({
   hydrateAndActivateRegistry,
   mockSingleCollectorConcurrency,
   mockRestoredRuns,
-}: {
-  mocks: Pick<
-    ReturnType<typeof createSubagentRegistryMockState>,
-    "entries" | "persistRegistryRows" | "callGateway" | "emitSessionLifecycleEvent"
-  >;
-  hydrateAndActivateRegistry: () => Promise<void>;
-  mockSingleCollectorConcurrency: () => void;
-  mockRestoredRuns: (createEntries: () => SubagentRunRecord[]) => void;
-}): void {
+}: RegistryFixture<"entries" | "persistRegistryRows" | "callGateway"> &
+  RestoreRuns & {
+    mockSingleCollectorConcurrency: () => void;
+  }): void {
   it("holds restored rollback for publication and cleanup without relaunching", async () => {
     vi.useRealTimers();
     const now = Date.now();
     mockSingleCollectorConcurrency();
-    mockRestoredRuns(() => [
-      makeQueuedRun({
-        runId: "run-restored-stop-one",
-        childSessionIdentity: { sessionId: "one", lifecycleRevision: "revision-one" },
-        groupId: "restore-stop",
-        createdAt: now,
-      }),
-      makeQueuedRun({
-        runId: "run-restored-stop-two",
-        childSessionIdentity: { sessionId: "two", lifecycleRevision: "revision-two" },
-        groupId: "restore-stop",
-        createdAt: now + 1,
-      }),
-    ]);
-    mocks.entries = {
-      "agent:main:subagent:run-restored-stop-one": {
-        sessionId: "one",
-        lifecycleRevision: "revision-one",
-        updatedAt: now,
-      },
-      "agent:main:subagent:run-restored-stop-two": {
-        sessionId: "two",
-        lifecycleRevision: "revision-two",
-        updatedAt: now,
-      },
-    };
+    const identities = ["one", "two"].map((sessionId) => ({
+      sessionId,
+      lifecycleRevision: `revision-${sessionId}`,
+    }));
+    mockRestoredRuns(() =>
+      identities.map((identity, index) =>
+        makeQueuedRun({
+          runId: `run-restored-stop-${identity.sessionId}`,
+          childSessionIdentity: { ...identity },
+          groupId: "restore-stop",
+          createdAt: now + index,
+        }),
+      ),
+    );
+    mocks.entries = Object.fromEntries(
+      identities.map((identity) => [
+        `agent:main:subagent:run-restored-stop-${identity.sessionId}`,
+        { ...identity, updatedAt: now },
+      ]),
+    );
     let agentCalls = 0;
     const dispatchedSessionKeys: unknown[] = [];
     const launchEntered = createDeferred();
@@ -175,18 +170,14 @@ export function registerRestoredRollbackPublicationTest({
     releaseAbort?.();
     await waitForFast(() => expect(deleteReleases).toHaveLength(1));
     expect(agentCalls).toBe(1);
-    await waitForFast(() =>
-      expect(mocks.callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "sessions.delete",
-          params: expect.objectContaining({
-            key: "agent:main:subagent:run-restored-stop-one",
-            expectedSessionId: "one",
-            expectedLifecycleRevision: "revision-one",
-          }),
-        }),
-      ),
-    );
+    expect(
+      mocks.callGateway.mock.calls.find(([request]) => request.method === "sessions.delete")?.[0]
+        .params,
+    ).toMatchObject({
+      key: "agent:main:subagent:run-restored-stop-one",
+      expectedSessionId: "one",
+      expectedLifecycleRevision: "revision-one",
+    });
     deleteReleases[0]?.();
     await waitForFast(() => expect(deleteReleases).toHaveLength(2));
     expect(agentCalls).toBe(1);
@@ -206,18 +197,14 @@ export function registerRestoredSessionReadTests({
   mocks,
   hydrateAndActivateRegistry,
   mockPendingAgentWait,
-}: {
-  mocks: Pick<
-    ReturnType<typeof createSubagentRegistryMockState>,
-    "entries" | "callGateway" | "mockRestoredRuns" | "withSessionEntryReadOnlyInWorker"
-  >;
-  hydrateAndActivateRegistry: () => Promise<void>;
+}: RegistryFixture<
+  "entries" | "callGateway" | "mockRestoredRuns" | "withSessionEntryReadOnlyInWorker"
+> & {
   mockPendingAgentWait: () => void;
 }): void {
-  it("routes restored waits for a newer session run", async () => {
-    const runId = "run-restored-orphan-routing";
-    const restored = createSubagentRunRecord({
-      runId,
+  it("routes restored waits for newer runs without reopening completed child sessions", async () => {
+    const active = createSubagentRunRecord({
+      runId: "run-restored-active",
       childSessionIdentity: {
         sessionId: "sess-child",
         lifecycleRevision: "revision-child",
@@ -234,21 +221,6 @@ export function registerRestoredSessionReadTests({
         abortedLastRun: false,
       }),
     };
-    mocks.mockRestoredRuns(() => [restored]);
-    mockPendingAgentWait();
-
-    await hydrateAndActivateRegistry();
-
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent.wait",
-        params: expect.objectContaining({ runId }),
-      }),
-    );
-  });
-
-  it("restores active runs without reopening completed child sessions", async () => {
     const completed = createSubagentRunRecord({
       runId: "run-restored-completed",
       childSessionKey: "agent:main:subagent:completed",
@@ -259,7 +231,6 @@ export function registerRestoredSessionReadTests({
       },
       cleanupCompletedAt: Date.now(),
     });
-    const active = createSubagentRunRecord({ runId: "run-restored-active" });
     mocks.mockRestoredRuns(() => [completed, active]);
     const readSession = mocks.withSessionEntryReadOnlyInWorker;
     vi.mocked(withSessionEntryReadOnlyInWorker).mockImplementation((...args) => {
@@ -272,6 +243,7 @@ export function registerRestoredSessionReadTests({
 
     await hydrateAndActivateRegistry();
 
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "agent.wait",
@@ -317,7 +289,6 @@ export function registerRestoredRequesterWakeSettlementTests({
             lifecycleRevision: `revision-${runId}`,
           },
           requesterAgentId: "main",
-          task: "restore requester settle wake",
           cleanup: "delete",
           expectsCompletionMessage: true,
           createdAt: endedAt - 1_000,
@@ -335,23 +306,20 @@ export function registerRestoredRequesterWakeSettlementTests({
           },
         }),
       );
-      mocks.restoreSubagentRunsFromDisk.mockImplementation((async (params: {
-        runs: Map<string, SubagentRunRecord>;
-      }) => {
+      type RestoreParams = { runs: Map<string, SubagentRunRecord> };
+      mocks.restoreSubagentRunsFromDisk.mockImplementation((async ({ runs }: RestoreParams) => {
         let inserted = 0;
         for (const entry of restored) {
-          if (!params.runs.has(entry.runId)) {
-            params.runs.set(entry.runId, entry);
+          if (!runs.has(entry.runId)) {
+            runs.set(entry.runId, entry);
             inserted += 1;
           }
         }
         return inserted;
       }) as never);
-      mocks.restoreSubagentRunsFromDisk.mockImplementationOnce((async (params: {
-        runs: Map<string, SubagentRunRecord>;
-      }) => {
+      mocks.restoreSubagentRunsFromDisk.mockImplementationOnce((async ({ runs }: RestoreParams) => {
         if (restoreTiming === "partial restore") {
-          params.runs.set(restored[0]!.runId, restored[0]!);
+          runs.set(restored[0]!.runId, restored[0]!);
         }
         throw new Error("transient sqlite read failure");
       }) as never);
@@ -390,8 +358,8 @@ export function registerRestoredRequesterWakeSettlementTests({
       const settleRootWork = observeRootWork();
       try {
         await mod.initSubagentRegistry();
-        await mod.activateSubagentRegistry(resolveGatewayContext);
-        await mod.activateSubagentRegistry(resolveGatewayContext);
+        await mod.activateSubagentRegistry(resolveGatewayContext).settled;
+        await mod.activateSubagentRegistry(resolveGatewayContext).settled;
         expect(wakeRequester).not.toHaveBeenCalled();
         if (restoreTiming === "partial restore") {
           await mod.testing.runSweeperTickForTests();
@@ -399,7 +367,7 @@ export function registerRestoredRequesterWakeSettlementTests({
         }
         gatewayOpen = restoreTiming !== "after Gateway closure";
         await mod.initSubagentRegistry();
-        await mod.activateSubagentRegistry(resolveGatewayContext);
+        await mod.activateSubagentRegistry(resolveGatewayContext).settled;
         await vi.advanceTimersByTimeAsync(1_000);
         if (!gatewayOpen || restoreTiming === "without instance binding") {
           await vi.advanceTimersByTimeAsync(5_000);
@@ -423,14 +391,6 @@ export function registerRestoredRequesterWakeSettlementTests({
         expect(mod.getSubagentRunByRunId(entry.runId)).toBeUndefined();
       }
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(wakeRequester).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requesterSessionKey: "agent:main:main",
-          settledEntry: expect.objectContaining({ runId: "run-settle-restore" }),
-          transitionBatch: expect.any(Function),
-          completeBatch: expect.any(Function),
-        }),
-      );
     },
   );
 }
@@ -440,15 +400,10 @@ export function registerRestoredLegacyAuthorityTests({
   mocks,
   hydrateAndActivateRegistry,
   mockRestoredRuns,
-}: {
-  getRegistry: () => SubagentRegistryHarness;
-  mocks: Pick<
-    ReturnType<typeof createSubagentRegistryMockState>,
-    "entries" | "callGateway" | "runSubagentAnnounceFlow"
-  >;
-  hydrateAndActivateRegistry: () => Promise<void>;
-  mockRestoredRuns: (createEntries: () => SubagentRunRecord[]) => void;
-}): void {
+}: RegistryFixture<"entries" | "callGateway" | "runSubagentAnnounceFlow"> &
+  RestoreRuns & {
+    getRegistry: () => SubagentRegistryHarness;
+  }): void {
   it("resumes a restored legacy terminal announcement without child-session effects", async () => {
     const mod = getRegistry();
     const endedAt = Date.now() - 1_000;

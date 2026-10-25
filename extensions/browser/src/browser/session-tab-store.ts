@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
@@ -111,11 +112,9 @@ export type BrowserDashboardStopIntent = z.infer<typeof browserDashboardStopInte
 function browserDashboardStopIntentKey(
   identity: Pick<BrowserDashboardIdentity, "sessionKey" | "agentId" | "instanceId" | "name">,
 ): string {
-  return `dashboard-stop:${createHash("sha256")
-    .update(
-      JSON.stringify([identity.sessionKey, identity.agentId, identity.instanceId, identity.name]),
-    )
-    .digest("hex")}`;
+  return `dashboard-stop:${sha256Hex(
+    JSON.stringify([identity.sessionKey, identity.agentId, identity.instanceId, identity.name]),
+  )}`;
 }
 
 export function parseBrowserDashboardStopIntent(
@@ -617,20 +616,14 @@ async function withBrowserSessionTabNativeIdentities<T>(
     dashboardTargets.length > 0
       ? withDashboardTabAdmission(dashboardTargets, authority, operation)
       : operation();
-  const identities = [
-    ...new Set(
-      records.flatMap((record) =>
-        record?.interactionTargetKind === "native" ? [browserSessionTabNativeIdentity(record)] : [],
-      ),
-    ),
-  ].toSorted();
-  const run = async (index: number): Promise<T> => {
-    const identity = identities[index];
-    return identity === undefined
-      ? await runOperation()
-      : await withBrowserSessionTabNativeActivity(identity, authority, () => run(index + 1));
-  };
-  return await run(0);
+  const nativeKeys = records.flatMap((record) =>
+    record?.interactionTargetKind === "native"
+      ? [`native:${browserSessionTabNativeIdentity(record)}`]
+      : [],
+  );
+  return nativeKeys.length > 0
+    ? await withBrowserSessionTabOperation(nativeKeys, authority, runOperation)
+    : await runOperation();
 }
 
 async function mutateBrowserSessionTabInOperation(

@@ -1,9 +1,6 @@
-import crypto from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import {
-  findPreferredDmConversationByUserId,
-  mergeStoredConversationReference,
-} from "./conversation-store-helpers.js";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   MSTeamsConversationStore,
   MSTeamsConversationStoreEntry,
@@ -21,10 +18,6 @@ const MSTEAMS_CONVERSATIONS_NAMESPACE = "conversations";
 const MSTEAMS_MAX_CONVERSATIONS = 1000;
 const MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS = MSTEAMS_MAX_CONVERSATIONS + 1000;
 const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
-
-function buildMSTeamsConversationStateKey(conversationId: string): string {
-  return crypto.createHash("sha256").update(conversationId).digest("hex");
-}
 
 function getStoredConversationId(reference: StoredConversationReference): string | null {
   const rawId = reference.conversation?.id;
@@ -53,7 +46,7 @@ export function createMSTeamsConversationStoreState(params?: {
     conversationId: string,
   ): Promise<StoredConversationReference | null> => {
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
-    const value = await conversationStore.lookup(buildMSTeamsConversationStateKey(normalizedId));
+    const value = await conversationStore.lookup(sha256Hex(normalizedId));
     return value && !isExpired(value) ? value : null;
   };
 
@@ -78,7 +71,7 @@ export function createMSTeamsConversationStoreState(params?: {
   ): Promise<void> => {
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
     await conversationStore.register(
-      buildMSTeamsConversationStateKey(normalizedId),
+      sha256Hex(normalizedId),
       toPluginJsonValue({
         ...reference,
         conversation: { ...reference.conversation, id: normalizedId },
@@ -95,14 +88,14 @@ export function createMSTeamsConversationStoreState(params?: {
     if (rows.length <= MSTEAMS_MAX_CONVERSATIONS) {
       return;
     }
-    const sorted = rows.toSorted((a, b) => {
+    rows.sort((a, b) => {
       const aTs = parseDateStringTimestampMs(a.value.lastSeenAt) ?? 0;
       const bTs = parseDateStringTimestampMs(b.value.lastSeenAt) ?? 0;
       const aId = getStoredConversationId(a.value) ?? a.key;
       const bId = getStoredConversationId(b.value) ?? b.key;
       return aTs - bTs || aId.localeCompare(bId);
     });
-    for (const row of sorted.slice(0, rows.length - MSTEAMS_MAX_CONVERSATIONS)) {
+    for (const row of rows.slice(0, rows.length - MSTEAMS_MAX_CONVERSATIONS)) {
       await conversationStore.delete(row.key);
     }
   };
@@ -110,7 +103,41 @@ export function createMSTeamsConversationStoreState(params?: {
   const findPreferredDmByUserId = async (
     id: string,
   ): Promise<MSTeamsConversationStoreEntry | null> => {
-    return findPreferredDmConversationByUserId(await list(), id);
+    const entries = await list();
+    const target = id.trim();
+    if (!target) {
+      return null;
+    }
+
+    // Shared conversations carry the sender's aadObjectId too; never return one
+    // for a user-targeted DM. Confirmed personal DMs outrank legacy unknown types.
+    let preferred: MSTeamsConversationStoreEntry | null = null;
+    let preferredIsPersonal = false;
+    let preferredTimestamp = 0;
+    for (const entry of entries) {
+      if (entry.reference.user?.aadObjectId !== target && entry.reference.user?.id !== target) {
+        continue;
+      }
+      const convType = normalizeLowercaseStringOrEmpty(
+        entry.reference.conversation?.conversationType,
+      );
+      if (convType === "channel" || convType === "groupchat") {
+        continue;
+      }
+      const isPersonal = convType === "personal";
+      const timestamp = parseDateStringTimestampMs(entry.reference.lastSeenAt) ?? 0;
+      if (
+        !preferred ||
+        (isPersonal && !preferredIsPersonal) ||
+        (isPersonal === preferredIsPersonal && timestamp > preferredTimestamp)
+      ) {
+        preferred = entry;
+        preferredIsPersonal = isPersonal;
+        preferredTimestamp = timestamp;
+      }
+    }
+
+    return preferred;
   };
 
   const upsert = async (
@@ -120,21 +147,28 @@ export function createMSTeamsConversationStoreState(params?: {
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
     await withMSTeamsSqliteMutationLock(namespace, async () => {
       const existing = await lookupStored(normalizedId);
-      await register(
-        normalizedId,
-        mergeStoredConversationReference(
-          existing ?? undefined,
-          reference,
-          new Date().toISOString(),
-        ),
-      );
+      const previous = existing ?? undefined;
+      const nowIso = new Date().toISOString();
+      await register(normalizedId, {
+        // Preserve fields from the previous entry that may not be present on every
+        // inbound activity. Without this, sparse activities (e.g. conversationUpdate,
+        // reactions) would clear previously captured values. Some fields are only
+        // populated opportunistically, such as timezone from clientInfo entities.
+        ...(previous?.timezone && !reference.timezone ? { timezone: previous.timezone } : {}),
+        ...(previous?.tenantId && !reference.tenantId ? { tenantId: previous.tenantId } : {}),
+        ...(previous?.aadObjectId && !reference.aadObjectId
+          ? { aadObjectId: previous.aadObjectId }
+          : {}),
+        ...reference,
+        lastSeenAt: nowIso,
+      });
     });
   };
 
   const remove = async (conversationId: string): Promise<boolean> => {
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
     return await withMSTeamsSqliteMutationLock(namespace, async () => {
-      return await conversationStore.delete(buildMSTeamsConversationStateKey(normalizedId));
+      return await conversationStore.delete(sha256Hex(normalizedId));
     });
   };
 

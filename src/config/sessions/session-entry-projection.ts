@@ -1,4 +1,5 @@
 import { clearAllCliSessions } from "./cli-session-binding.js";
+import { resolveSessionCreatorActor } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 import {
   SESSION_TOTAL_TOKENS_VERSION,
@@ -22,6 +23,8 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   restartRecoveryRequesterSource: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
+  priorWorkspace: undefined,
+  titleRefinement: undefined,
   sessionDiffBaselineCapture: undefined,
   transcriptByteCompactionLatch: undefined,
 } satisfies Partial<InternalSessionEntry>;
@@ -40,20 +43,30 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "restartRecoveryRequesterSource",
   "pendingProjectGitUrl",
   "pendingWorktree",
+  "priorWorkspace",
+  "titleRefinement",
   "sessionDiffBaselineCapture",
   "transcriptByteCompactionLatch",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 
-function stripPrivateSessionEntryFields(entry: InternalSessionEntry): SessionEntry;
+function stripPrivateSessionEntryFields(
+  entry: InternalSessionEntry,
+  identity: "public" | "execution",
+): SessionEntry;
 function stripPrivateSessionEntryFields(
   entry: Partial<InternalSessionEntry>,
+  identity: "public" | "execution",
 ): Partial<SessionEntry>;
 function stripPrivateSessionEntryFields(
   entry: Partial<InternalSessionEntry> & RetiredSessionMetadata,
+  identity: "public" | "execution",
 ): Partial<SessionEntry> {
   const projected = { ...entry };
   for (const key of PRIVATE_SESSION_ENTRY_KEYS) {
     delete projected[key];
+  }
+  if (identity === "public" && projected.createdActor) {
+    projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
   }
   delete projected.thinkingLevelSelection;
   delete projected.compactionCheckpoints;
@@ -66,14 +79,19 @@ function stripPrivateSessionEntryFields(
   return projected;
 }
 
+/** Internal execution retains the immutable sandbox actor, not its display projection. */
+export function projectExecutionSessionEntry(entry: InternalSessionEntry): SessionEntry {
+  return stripPrivateSessionEntryFields(entry, "execution");
+}
+
 export function projectPublicSessionEntry(entry: InternalSessionEntry): SessionEntry {
-  return stripPrivateSessionEntryFields(entry);
+  return stripPrivateSessionEntryFields(entry, "public");
 }
 
 export function projectPublicSessionEntryPatch(
   patch: Partial<InternalSessionEntry>,
 ): Partial<SessionEntry> {
-  return stripPrivateSessionEntryFields(patch);
+  return stripPrivateSessionEntryFields(patch, "public");
 }
 
 // A completed context rewrite invalidates the previous run snapshot, not the transcript ledger.

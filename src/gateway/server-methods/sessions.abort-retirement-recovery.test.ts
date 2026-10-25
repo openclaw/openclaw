@@ -7,7 +7,7 @@ import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/s
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import * as registry from "../../agents/subagents/registry/subagent-registry.js";
-import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { writeChildSession } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionEntry,
@@ -21,6 +21,7 @@ import {
 import * as lifecycleState from "../session-lifecycle-state.js";
 import {
   abortContext,
+  expectCancelledSession,
   registerYieldedChild,
   seedYieldedSession,
   stopSession,
@@ -28,10 +29,6 @@ import {
 
 const fixture = useSubagentControlFixture();
 
-beforeEach(async () => {
-  await captureRuntimeConfigAsyncReader()();
-  await completeChild();
-});
 const parentKey = "agent:main:dashboard:retirement-parent";
 const parentId = "retirement-parent-session";
 const parentRunId = "retirement-parent-run";
@@ -42,16 +39,11 @@ const target = { agentId: "main", sessionKey: parentKey };
 const parent = () => loadSessionEntry(target);
 const child = () => subagentRuns.get(childRunId);
 
-async function completeChild() {
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
   // Only external requester delivery is unavailable; registry and persistence stay real.
   fixture.wake.mockResolvedValue(false);
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: childKey,
-    defaultSessionId: childId,
-    lifecycleRevision: "original-incarnation",
-  });
+  await writeChildSession(fixture.stateDir, childKey, childId, "original-incarnation");
   const startedAt = await seedYieldedSession(fixture.stateDir, parentKey, parentId, parentRunId);
   await registerYieldedChild({
     parentKey,
@@ -75,12 +67,31 @@ async function completeChild() {
   await fixture.settle();
   expect(child()?.execution.outcome?.status).toBe("ok");
   expect(child()?.requesterSettleWake).toBeDefined();
-}
+});
 
 async function stopParent() {
   const respond = vi.fn();
   await stopSession(parentKey, respond, abortContext(), { clearQueued: true });
   return respond.mock.calls[0];
+}
+
+function expectStop(status = "aborted") {
+  return stopParent().then((response) => {
+    expect(response?.slice(0, 2)).toEqual([true, { ok: true, abortedRunId: null, status }]);
+  });
+}
+
+async function expectRetiredParent() {
+  expect(child()?.execution.outcome?.status).toBe("ok");
+  expect(child()?.requesterSettleWake).toBeUndefined();
+  expectCancelledSession(parent(), parentRunId);
+  await fixture.settle();
+  expect(
+    await markStartupOrphanedMainSessionsForRecovery({
+      cfg: getRuntimeConfig(),
+      stateDir: fixture.stateDir,
+    }),
+  ).toMatchObject({ marked: 0 });
 }
 
 function killChildren(beforeKill?: () => boolean) {
@@ -100,29 +111,10 @@ function killChildren(beforeKill?: () => boolean) {
 }
 
 it("persists the yielded parent's cancellation after retiring a successful child's wake", async () => {
-  expect((await stopParent())?.slice(0, 2)).toEqual([
-    true,
-    { ok: true, abortedRunId: null, status: "aborted" },
-  ]);
-  expect(child()?.execution.outcome?.status).toBe("ok");
-  expect(child()?.requesterSettleWake).toBeUndefined();
-  expect(parent()).toMatchObject({
-    status: "killed",
-    abortedLastRun: true,
-    lastRunId: parentRunId,
-  });
-  await fixture.settle();
-  expect(
-    await markStartupOrphanedMainSessionsForRecovery({
-      cfg: getRuntimeConfig(),
-      stateDir: fixture.stateDir,
-    }),
-  ).toMatchObject({ marked: 0 });
+  await expectStop();
+  await expectRetiredParent();
   const terminalParent = parent();
-  expect((await stopParent())?.slice(0, 2)).toEqual([
-    true,
-    { ok: true, abortedRunId: null, status: "no-active-run" },
-  ]);
+  await expectStop("no-active-run");
   expect(parent()).toEqual(terminalParent);
 });
 
@@ -176,7 +168,7 @@ it.each(["replacement revision", "unknown outcome"] as const)(
       "outcome-unknown",
     );
     // Controlled writer outcome; this does not claim a real lost SQLite reply.
-    const gate = vi
+    using gate = vi
       .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
       .mockImplementation(async (params) => {
         if (params.sessionKey === parentKey && params.expectedWriter) {
@@ -187,30 +179,26 @@ it.each(["replacement revision", "unknown outcome"] as const)(
         }
         await persist(params);
       });
-    try {
-      if (mode === "unknown outcome") {
-        const result = await stopParent().then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        expect(hasSqliteWorkerOutcomeUnknown(result)).toBe(true);
-        expect(gate).toHaveBeenCalledOnce();
-        expect(child()?.requesterSettleWake).toBeUndefined();
-      } else {
-        expect((await stopParent())?.[0]).toBe(true);
-      }
-      expect(parent()).toEqual(expected);
-      expect(child()?.execution.outcome?.status).toBe("ok");
-    } finally {
-      gate.mockRestore();
+    if (mode === "unknown outcome") {
+      const result = await stopParent().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(hasSqliteWorkerOutcomeUnknown(result)).toBe(true);
+      expect(gate).toHaveBeenCalledOnce();
+      expect(child()?.requesterSettleWake).toBeUndefined();
+    } else {
+      expect((await stopParent())?.[0]).toBe(true);
     }
+    expect(parent()).toEqual(expected);
+    expect(child()?.execution.outcome?.status).toBe("ok");
   },
 );
 
 it("full-session Stop retires a wake rearmed during retirement preparation", async () => {
   const oldGeneration = subagentRuns.get(childRunId)!.requesterSettleWake!.rearmGeneration ?? 0;
   const retire = registry.retireSubagentObligations;
-  const gate = vi
+  using gate = vi
     .spyOn(registry, "retireSubagentObligations")
     .mockImplementationOnce(async (entry, assertCurrent, options) => {
       // Parent pending-input selection already ran; the same completed child's
@@ -231,27 +219,7 @@ it("full-session Stop retires a wake rearmed during retirement preparation", asy
       );
       await retire(entry, assertCurrent, options);
     });
-  try {
-    expect((await stopParent())?.slice(0, 2)).toEqual([
-      true,
-      { ok: true, abortedRunId: null, status: "aborted" },
-    ]);
-    expect(gate).toHaveBeenCalledOnce();
-    expect(subagentRuns.get(childRunId)?.requesterSettleWake).toBeUndefined();
-    expect(subagentRuns.get(childRunId)?.execution.outcome?.status).toBe("ok");
-    expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
-      status: "killed",
-      abortedLastRun: true,
-      lastRunId: parentRunId,
-    });
-    await fixture.settle();
-    expect(
-      await markStartupOrphanedMainSessionsForRecovery({
-        cfg: getRuntimeConfig(),
-        stateDir: fixture.stateDir,
-      }),
-    ).toMatchObject({ marked: 0 });
-  } finally {
-    gate.mockRestore();
-  }
+  await expectStop();
+  expect(gate).toHaveBeenCalledOnce();
+  await expectRetiredParent();
 });

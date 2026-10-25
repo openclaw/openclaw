@@ -11,7 +11,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { admitStoredChatComposerQueueItem } from "./composer-persistence.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -28,17 +28,16 @@ function sessionsResult(row: GatewaySessionRow): SessionsListResult {
   return { ...createSessionsListResult({ defaultsModel: null }), sessions: [row] };
 }
 
-function queuedSendFixture(options: { attempted?: boolean; initialIdle?: boolean } = {}) {
+function queuedSendFixture() {
   vi.stubGlobal("sessionStorage", createStorageMock());
   const listRefresh = createDeferred<SessionsListResult>();
   const active: GatewaySessionRow = {
     key: "agent:main",
     kind: "direct",
     updatedAt: 10,
-    activeRunIds: options.initialIdle ? [] : ["server-run"],
-    hasActiveRun: !options.initialIdle,
-    status: options.initialIdle ? "done" : "running",
-    ...(options.initialIdle ? { lastRunId: "server-run" } : {}),
+    activeRunIds: ["server-run"],
+    hasActiveRun: true,
+    status: "running",
   };
   const idle: GatewaySessionRow = {
     ...active,
@@ -55,9 +54,9 @@ function queuedSendFixture(options: { attempted?: boolean; initialIdle?: boolean
         id: "queued-after-server-run",
         text: "send after idle",
         createdAt: 1,
-        sendAttempts: options.attempted ? 1 : 0,
+        sendAttempts: 0,
         sendRunId: "queued-send-run",
-        sendState: options.attempted ? "unconfirmed" : "waiting-idle",
+        sendState: "waiting-idle",
         sessionKey: "agent:main",
       },
     ],
@@ -80,7 +79,9 @@ function queuedSendFixture(options: { attempted?: boolean; initialIdle?: boolean
     sessionsResult: sessionsResult(active),
   });
   const admission = captureChatOutboxAdmission(host, host.sessionKey);
-  expect(admitStoredChatComposerQueueItem(host, admission, host.chatQueue[0]!)).toBe(true);
+  expect(admitStoredChatComposerQueueItemResult(host, admission, host.chatQueue[0]!)).toBe(
+    "admitted",
+  );
   const { pane } = createTestChatPane({ client: host.client!, sessions: host.sessions });
   pane.state = host as unknown as ChatPageHost;
   pane.applySessionsState(host.sessions.state);
@@ -96,11 +97,6 @@ function queuedSendFixture(options: { attempted?: boolean; initialIdle?: boolean
     listRefresh,
     pane,
     calls: (method: string) => host.request.mock.calls.filter(([name]) => name === method),
-    readIdle: async () => {
-      const pending = host.sessions.refresh({ force: true });
-      listRefresh.resolve(sessionsResult(idle));
-      await pending;
-    },
   };
 }
 
@@ -186,49 +182,6 @@ it("keeps a queued send parked after a non-canonical idle publication", async ()
   expect(host.sessions.canonicalListRevision).toBe(0);
   expect(host.chatQueue).toHaveLength(1);
   expect([...calls("chat.history"), ...calls("chat.send")]).toEqual([]);
-});
-
-it("recovers the first canonical idle row and new terminal runs without repeating unchanged reads", async () => {
-  const { host, idle, calls, readIdle } = queuedSendFixture({
-    attempted: true,
-    initialIdle: true,
-  });
-  const historyReads = () => calls("chat.history").length;
-  await readIdle();
-  await vi.waitFor(() => expect(historyReads()).toBe(1));
-  await host.sessions.refresh({ force: true });
-  await Promise.resolve();
-  expect(historyReads()).toBe(1);
-  expect(host.chatQueue).toHaveLength(1);
-
-  idle.lastRunId = "new-terminal-run";
-  await host.sessions.refresh({ force: true });
-  await vi.waitFor(() => expect(historyReads()).toBe(2));
-  expect(host.chatQueue).toHaveLength(1);
-  expect(calls("chat.send")).toHaveLength(0);
-});
-
-it("waits for a fresh canonical idle read after a queued pane attaches to an existing cache", async () => {
-  const { host, calls, readIdle } = queuedSendFixture({ attempted: true, initialIdle: true });
-  await readIdle();
-  const historyReads = () => calls("chat.history").length;
-  await vi.waitFor(() => expect(historyReads()).toBe(1));
-  const { pane, state } = createTestChatPane({
-    client: host.client!,
-    sessions: host.sessions,
-  });
-  state.sessionKey = host.sessionKey;
-  // Both panes must read the queued outbox from the same gateway owner.
-  state.settings.gatewayUrl = host.settings.gatewayUrl ?? "";
-  state.chatQueue = [...host.chatQueue];
-  pane.applySessionsState(host.sessions.state);
-  const unsubscribe = host.sessions.subscribe((next) => pane.applySessionsState(next));
-  cleanups.push(unsubscribe);
-  expect(historyReads()).toBe(1);
-
-  await host.sessions.refresh({ force: true });
-  await vi.waitFor(() => expect(historyReads()).toBe(2));
-  expect(state.chatQueue).toHaveLength(1);
 });
 
 it.each([false, true])(

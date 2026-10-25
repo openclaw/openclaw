@@ -1,8 +1,14 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 
-/** Capture native filename selection without resolving image-owned JavaScript at runtime. */
-export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths }) {
+const BUILTIN_MARKER = "__OPENCLAW_STANDALONE_BUILTIN_REQUIRES__";
+
+/**
+ * Capture native filename selection without resolving image-owned JavaScript at runtime.
+ * @param {{runtimeRoot: string, embeddedPaths: Record<string, string>,
+ *   pluginLoader?: {specifier: string}}} options
+ */
+export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, pluginLoader }) {
   const nativeRequire = createRequire(path.join(runtimeRoot, "package.json"));
   const requests = new Set();
   for (const entry of Object.keys(embeddedPaths)) {
@@ -36,8 +42,26 @@ export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths }) {
   }
   return {
     resolutions,
+    finalize(builtinModules) {
+      return {
+        search: JSON.stringify(BUILTIN_MARKER),
+        replacement:
+          "{" +
+          [...builtinModules]
+            // Image aliases such as ws retain their full-package implementation.
+            .filter((specifier) => !Object.hasOwn(embeddedPaths, specifier))
+            .toSorted((left, right) => left.localeCompare(right))
+            .map(
+              (specifier) =>
+                `${JSON.stringify(specifier)}: () => import.meta.require(${JSON.stringify(specifier)})`,
+            )
+            .join(",") +
+          "}",
+      };
+    },
     bootstrap: `globalThis.__openclawStandaloneCreateRequire = (() => {
   const resolutions = ${JSON.stringify(resolutions)};
+  const builtinRequires = ${JSON.stringify(BUILTIN_MARKER)};
   return (create, ...args) => {
     const require = create(...args);
     const parent = typeof args[0] === "string" && !args[0].startsWith("file:")
@@ -70,13 +94,47 @@ export function createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths }) {
       },
       apply(target, receiver, [specifier, ...rest]) {
         if (typeof specifier !== "string") return Reflect.apply(target, receiver, [specifier, ...rest]);
+        if (Object.hasOwn(builtinRequires, specifier)) return builtinRequires[specifier]();
         const resolved = globalThis.__openclawStandaloneNativeResolve(parent, specifier);
+        // AOT dynamic require refuses non-image modules; admitted addons use the native loader.
+        if (resolved?.endsWith(".node")) {
+          if (require.cache[resolved]) return require.cache[resolved].exports;
+          const module = new (require("node:module").Module)(resolved);
+          module.filename = resolved;
+          require.cache[resolved] = module;
+          try {
+            process.dlopen(module, resolved);
+            module.loaded = true;
+            return module.exports;
+          } catch (error) {
+            delete require.cache[resolved];
+            throw error;
+          }
+        }
         const entry = embedded(specifier) ?? embedded(resolved ?? imageFilename(specifier) ?? target.resolve(specifier));
-        const loaded = Reflect.apply(target, receiver, [entry ?? resolved ?? specifier, ...rest]);
+        const loaded = ${
+          pluginLoader
+            ? `!entry && globalThis.__openclawStandaloneBuildInfo.mode === "aot"
+          ? loadStandalonePluginRuntime().loadModule(parent, resolved ?? specifier)
+          : `
+            : ""
+        }Reflect.apply(target, receiver, [entry ?? resolved ?? specifier, ...rest]);
         return entry && commonJsEntries.has(entry) ? loaded.default ?? loaded : loaded;
       }
     });
   };
-})();\n`,
+})();
+${
+  pluginLoader
+    ? `const loadStandalonePluginRuntime = (() => {
+  let runtime;
+  return () => {
+    // The literal external edge admits disk code; the relocated parent owns package lookup.
+    return runtime ??= createRequire(path.join(root, "package.json"))(${JSON.stringify(pluginLoader.specifier)});
+  };
+})();
+globalThis.openclawStandaloneLoadJitiFactory = () => loadStandalonePluginRuntime().createJiti;\n`
+    : ""
+}`,
   };
 }

@@ -1,6 +1,6 @@
 import "../../test/dom.setup.ts";
 import { render } from "@solidjs/web";
-import { createComponent, flush } from "solid-js";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWorkboardCard } from "../../lib/workboard/test/index-helpers.ts";
 import { CardMeta } from "./view-card-content.tsx";
@@ -17,6 +17,7 @@ it("leaves settled labels untouched until their available width changes", () => 
         resize = callback;
       }
       observe() {}
+      unobserve() {}
       disconnect() {}
     },
   );
@@ -80,5 +81,133 @@ it("leaves settled labels untouched until their available width changes", () => 
   } finally {
     mutations.disconnect();
     root();
+  }
+});
+
+it("shares label resize observation and retires targets independently", () => {
+  const observers: TestResizeObserver[] = [];
+  class TestResizeObserver implements ResizeObserver {
+    readonly targets = new Set<Element>();
+    constructor(readonly callback: ResizeObserverCallback) {
+      observers.push(this);
+    }
+    observe(target: Element) {
+      this.targets.add(target);
+    }
+    unobserve(target: Element) {
+      this.targets.delete(target);
+    }
+    disconnect() {
+      this.targets.clear();
+    }
+  }
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  vi.stubGlobal("requestAnimationFrame", () => 1);
+  vi.stubGlobal("cancelAnimationFrame", () => {});
+  const first = document.createElement("div");
+  const second = document.createElement("div");
+  document.body.append(first, second);
+  const mountLabels = (container: HTMLElement, count: number) =>
+    render(
+      () =>
+        Array.from({ length: count }, (_, index) =>
+          createComponent(CardMeta, {
+            card: createWorkboardCard({ id: `label-${index}`, labels: ["alpha", "beta"] }),
+            archived: false,
+          }),
+        ),
+      container,
+    );
+  const disposeFirst = mountLabels(first, 100);
+  const disposeSecond = mountLabels(second, 20);
+  flush();
+  try {
+    expect(first.querySelectorAll(".workboard-card__labels")).toHaveLength(100);
+    expect(second.querySelectorAll(".workboard-card__labels")).toHaveLength(20);
+    expect(observers).toHaveLength(1);
+    expect(observers[0]!.targets.size).toBe(120);
+    expect(
+      [...observers[0]!.targets].every((target) => target.matches(".workboard-card__labels")),
+    ).toBe(true);
+    disposeFirst();
+    expect(observers[0]!.targets.size).toBe(20);
+    disposeSecond();
+    expect(observers[0]!.targets.size).toBe(0);
+  } finally {
+    disposeFirst();
+    disposeSecond();
+  }
+});
+
+it("ignores a repeated retired ref cleanup after a sibling creates the next pool", () => {
+  const observers: TestResizeObserver[] = [];
+  class TestResizeObserver implements ResizeObserver {
+    readonly targets = new Set<Element>();
+    constructor() {
+      observers.push(this);
+    }
+    observe(target: Element) {
+      this.targets.add(target);
+    }
+    unobserve(target: Element) {
+      this.targets.delete(target);
+    }
+    disconnect() {
+      this.targets.clear();
+    }
+  }
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  vi.stubGlobal("requestAnimationFrame", () => 1);
+  vi.stubGlobal("cancelAnimationFrame", () => {});
+  const [card, setCard] = createSignal(createWorkboardCard({ labels: ["retiring"] }));
+  const containers = Array.from({ length: 3 }, () => document.createElement("div"));
+  document.body.append(...containers);
+  const disposeFirst = render(
+    () =>
+      createComponent(CardMeta, {
+        get card() {
+          return card();
+        },
+        archived: false,
+      }),
+    containers[0]!,
+  );
+  const disposers = [disposeFirst];
+  try {
+    flush();
+    expect(observers).toHaveLength(1);
+    setCard(createWorkboardCard({ labels: [] }));
+    flush();
+    expect(observers[0]!.targets.size).toBe(0);
+    disposers.push(
+      render(
+        () =>
+          createComponent(CardMeta, {
+            card: createWorkboardCard({ labels: ["surviving"] }),
+            archived: false,
+          }),
+        containers[1]!,
+      ),
+    );
+    flush();
+    expect(observers).toHaveLength(2);
+    disposeFirst();
+    disposers.push(
+      render(
+        () =>
+          createComponent(CardMeta, {
+            card: createWorkboardCard({ labels: ["new sibling"] }),
+            archived: false,
+          }),
+        containers[2]!,
+      ),
+    );
+    flush();
+    expect(observers).toHaveLength(2);
+    expect(observers[1]!.targets.size).toBe(2);
+  } finally {
+    for (const dispose of disposers) {
+      dispose();
+    }
   }
 });

@@ -61,6 +61,7 @@ export function projectSource<S, T>(
   contract: SourceContract<S, T>,
 ): SourceProjection<S, T> {
   let source = initialSource;
+  // Reactive primitive: untrack keeps sampled owner reads outside revision tracking.
   const readSnapshot = () => untrack(() => contract.read(source));
   let value = readSnapshot();
   let lastRead = value;

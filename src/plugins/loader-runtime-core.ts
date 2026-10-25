@@ -39,6 +39,7 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import {
@@ -62,7 +63,10 @@ import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
-import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
+import {
+  getPluginRuntimeLoadContextState,
+  type PluginRuntimeLoadContextState,
+} from "./runtime/load-context-state.js";
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { hasKind } from "./slots.js";
@@ -173,6 +177,7 @@ function bindRuntimeLoadContext(
   context: PluginLoadCacheContext,
   manifestRegistry: PluginManifestRegistry,
   logger: NonNullable<PluginLoadOptions["logger"]>,
+  selectedContextEngine?: PluginRuntimeLoadContextState["selectedContextEngine"],
 ): void {
   setPluginRuntimeLoadContext(
     registry,
@@ -185,6 +190,7 @@ function bindRuntimeLoadContext(
       env: context.env,
       logger,
       manifestRegistry,
+      selectedContextEngine,
       metadataSnapshot:
         context.metadataSnapshot?.manifestRegistry === manifestRegistry
           ? context.metadataSnapshot
@@ -217,7 +223,7 @@ export function* loadOpenClawPluginsSteps(
   trackActivationCleanup?: (completion: Promise<void>) => void,
 ): Generator<(() => Promise<void>) | undefined, PluginRegistry> {
   if (getPluginCache().retirement) {
-    throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+    throw new PluginInventoryRetiredError();
   }
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
@@ -307,6 +313,7 @@ export function* loadOpenClawPluginsSteps(
             // SAFETY: bundled-capability-runtime uses this base only for uncached, non-activating registration.
             (overrides.runtime as PluginRuntime)
           : createLazyPluginRuntime({
+              inspectionResources,
               devSourceRoot: context.devSourceRoot,
               pluginSdkResolution: options.pluginSdkResolution,
               runtimeOptions: {
@@ -367,6 +374,7 @@ export function* loadOpenClawPluginsSteps(
         installRecords:
           Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
       });
+    const selectedContextEngine = context.selectContextEngineOwner(manifestRegistry.plugins);
     registry.diagnostics.push(...manifestRegistry.diagnostics);
     warnWhenAllowlistIsOpen({
       emitWarning: context.shouldActivate,
@@ -402,7 +410,15 @@ export function* loadOpenClawPluginsSteps(
       requestKey: context.cacheKey,
       resolvedKey: context.resolveManifestCacheKey(manifestRegistry),
     });
-    bindRuntimeLoadContext(registry, options, context, manifestRegistry, logger);
+    // Undeclared plugins can register engines too; the selected owner travels with the registry.
+    bindRuntimeLoadContext(
+      registry,
+      options,
+      context,
+      manifestRegistry,
+      logger,
+      selectedContextEngine,
+    );
     const replacedIds = new Set([
       ...(options.replacePluginIds ?? []),
       ...(options.moduleRecoveries?.keys() ?? []),
@@ -454,6 +470,8 @@ export function* loadOpenClawPluginsSteps(
         [installOwner, installOwner ? context.installRecords[installOwner] : undefined],
         { ...runtimeManifest, controlUi: controlUi !== undefined },
         activation,
+        // Undeclared plugins can register engines too; selection changes invalidate all closures.
+        selectedContextEngine,
         pendingStateMigrations.get(normalizePluginPolicyId(manifest.id)),
         entryPolicy,
         degradedPlugin && degradedPluginMatchesRoot(degradedPlugin, candidate.rootDir)
@@ -628,7 +646,7 @@ export function* loadOpenClawPluginsSteps(
       if (state.pluginLoadAttemptCount !== attemptedBefore) {
         yield;
         if (getPluginCache().retirement) {
-          throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+          throw new PluginInventoryRetiredError();
         }
       }
     }

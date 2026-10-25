@@ -34,11 +34,7 @@ it("rejects oversized traceparent values before parsing", () => {
 
 it("creates a normalized context from explicit fields or traceparent", () => {
   expect(
-    create({
-      traceId: TRACE_ID.toUpperCase(),
-      spanId: SPAN_ID.toUpperCase(),
-      traceFlags: "00",
-    }),
+    create({ traceId: TRACE_ID.toUpperCase(), spanId: SPAN_ID.toUpperCase(), traceFlags: "00" }),
   ).toEqual({ ...ROOT, traceFlags: "00" });
   expect(create({ traceparent: `00-${TRACE_ID}-${SPAN_ID}-01` })).toEqual(ROOT);
 });
@@ -61,7 +57,7 @@ it("freezes a defensive trace context copy", () => {
 });
 
 it("carries active trace context across async work and restores outer scopes", async () => {
-  const outer = create({ traceId: TRACE_ID, spanId: SPAN_ID });
+  const outer = create(ROOT);
   const inner = child(outer, { spanId: CHILD_SPAN_ID });
 
   await withTrace(outer, async () => {
@@ -88,7 +84,7 @@ it("creates child trace contexts from the active request scope", () => {
 
   withTrace(requestTrace, () => {
     expect(fromScope({ spanId: CHILD_SPAN_ID })).toEqual({
-      traceId: TRACE_ID,
+      ...ROOT,
       spanId: CHILD_SPAN_ID,
       parentSpanId: SPAN_ID,
       traceFlags: "00",

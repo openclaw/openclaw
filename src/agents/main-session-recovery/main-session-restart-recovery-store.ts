@@ -63,6 +63,7 @@ import {
   type ExpectedRestartRecoveryTarget,
   mainSessionRecoveryLog,
   MAX_RECOVERY_RETRIES,
+  readInterruptedRunId,
 } from "./main-session-restart-recovery-shared.js";
 import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
 
@@ -163,6 +164,16 @@ export async function recoverStore(params: {
       }
       const agentId = dispatchTarget.agentId;
       const target = { agentId, sessionKey, storePath: params.storePath };
+      const { getPrivateRequesterSettleRecoveryOwner } =
+        await import("../subagents/registry/subagent-registry.js");
+      const privateRecoveryOwner = await getPrivateRequesterSettleRecoveryOwner(
+        { ...target, canonicalKey: sessionKey, entry },
+        entry.restartRecoveryDeliverySourceRunId ?? readInterruptedRunId(entry),
+      );
+      if (privateRecoveryOwner === "owned") {
+        skip("already_handled");
+        continue;
+      }
       const workStartBlock = resolveSessionWorkStartBlock(
         sessionKey,
         entry,
@@ -196,6 +207,11 @@ export async function recoverStore(params: {
         continue;
       }
       const resumeDedupeKey = JSON.stringify([agentId, dispatchSessionKey]);
+      const recordSettled = (reason: string, nextOwner = "none") => {
+        params.handledSessionKeys.add(resumeDedupeKey);
+        decision = { decision: "settled", reason, nextOwner };
+        result.settled++;
+      };
       if (params.handledSessionKeys.has(resumeDedupeKey)) {
         skip("already_handled");
         continue;
@@ -294,9 +310,7 @@ export async function recoverStore(params: {
           preserveCompletedOutcome: true,
         });
         if (settled.outcome === "settled") {
-          params.handledSessionKeys.add(resumeDedupeKey);
-          decision = { decision: "settled", reason: "legacy_pending_delivery", nextOwner: "none" };
-          result.settled++;
+          recordSettled("legacy_pending_delivery");
         } else if (settled.outcome === "changed") {
           skip("state_changed");
         } else {
@@ -319,9 +333,7 @@ export async function recoverStore(params: {
           reason: "delivered-terminal-receipt",
         });
         if (completion.outcome === "completed") {
-          decision = { decision: "settled", reason: "terminal-evidence", nextOwner: "none" };
-          result.settled++;
-          params.handledSessionKeys.add(resumeDedupeKey);
+          recordSettled("terminal-evidence");
         } else {
           skip("state_changed");
         }
@@ -422,8 +434,8 @@ export async function recoverStore(params: {
       // historical inputs without it still need the cohort failure settlement.
       if (
         !harnessCompletion &&
-        !entry.restartRecoveryOperatorSource &&
-        !requesterOrigin &&
+        (privateRecoveryOwner === "unrestorable" ||
+          (!entry.restartRecoveryOperatorSource && !requesterOrigin)) &&
         entry.restartRecoverySourceIngress === "internal" &&
         expectedRecoverySourceRunId?.startsWith("announce:requester-settle:")
       ) {
@@ -442,13 +454,7 @@ export async function recoverStore(params: {
         });
         if (recovered.outcome !== "ready") {
           if (recovered.outcome === "settled") {
-            params.handledSessionKeys.add(resumeDedupeKey);
-            decision = {
-              decision: "settled",
-              reason: "operator_authority_unavailable",
-              nextOwner: "none",
-            };
-            result.settled++;
+            recordSettled("operator_authority_unavailable");
           } else if (recovered.outcome === "changed") {
             skip("state_changed");
           } else {
@@ -508,7 +514,7 @@ export async function recoverStore(params: {
         !requesterOrigin &&
         source !== "cron" &&
         expectedRecoverySourceRunId &&
-        requiresDelegatedRecoverySource(entry, source)
+        requiresDelegatedRecoverySource(entry, source, sessionKey)
       ) {
         const { prepareConsumedSessionSendSource } =
           await import("../../gateway/session-send-recovery-source.js");
@@ -535,8 +541,9 @@ export async function recoverStore(params: {
         !recoverableHarnessCompletion &&
         !completionSource &&
         (source === "cron" || !requesterOrigin) &&
-        requiresDelegatedRecoverySource(entry, source)
+        requiresDelegatedRecoverySource(entry, source, sessionKey)
       ) {
+        const cronOwned = source === "cron";
         const outcome = await finishDelegatedRestartRecovery({
           ...target,
           cfg: params.cfg,
@@ -544,7 +551,7 @@ export async function recoverStore(params: {
           gatewayRuntime: params.gatewayRuntime,
           observation: recoveryView.observation,
           reason: "delegated recovery sender authority is unavailable",
-          cronOwned: source === "cron",
+          cronOwned,
           assertCurrent: () => {
             if (stopped()) {
               throw new Error("Delegated restart recovery stopped before settlement");
@@ -552,13 +559,8 @@ export async function recoverStore(params: {
           },
         });
         if (outcome === "settled") {
-          params.handledSessionKeys.add(resumeDedupeKey);
-          decision = {
-            decision: "settled",
-            reason: source === "cron" ? "cron_interrupted" : "delegated_authority_unavailable",
-            nextOwner: source === "cron" ? "cron" : "none",
-          };
-          result.settled++;
+          const reason = cronOwned ? "cron_interrupted" : "delegated_authority_unavailable";
+          recordSettled(reason, cronOwned ? "cron" : "none");
         } else if (outcome === "notice_failed") {
           result.failed++;
         } else {
@@ -610,9 +612,7 @@ export async function recoverStore(params: {
               : { toolCallId: resumePolicy.toolCallId }),
           });
           if (completion.outcome === "completed") {
-            params.handledSessionKeys.add(resumeDedupeKey);
-            decision = { decision: "settled", reason: "terminal-evidence", nextOwner: "none" };
-            result.settled++;
+            recordSettled("terminal-evidence");
             continue;
           }
           if (completion.outcome === "changed") {

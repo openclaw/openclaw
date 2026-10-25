@@ -40,7 +40,7 @@ export type MatrixQaScenarioContext = {
   driverUserId: string;
   faultProxyObserver?: MatrixQaFaultProxyObserver;
   faultProxyTargetBaseUrl?: string;
-  installFaultRule?: (rule: MatrixQaFaultProxyRule) => MatrixQaFaultProxyRuleHandle;
+  installFaultRule: (rule: MatrixQaFaultProxyRule) => MatrixQaFaultProxyRuleHandle;
   observedEvents: MatrixQaObservedEvent[];
   observerAccessToken: string;
   observerDeviceId?: string;
@@ -49,21 +49,21 @@ export type MatrixQaScenarioContext = {
   gatewayRuntimeEnv?: NodeJS.ProcessEnv;
   gatewayStateDir?: string;
   gatewayWorkspaceDir?: string;
-  gatewayCall?: (
+  gatewayCall: (
     method: string,
     params?: Record<string, unknown>,
     opts?: { expectFinal?: boolean; timeoutMs?: number },
   ) => Promise<unknown>;
-  outputDir?: string;
+  outputDir: string;
   registrationToken?: string;
-  restartGateway?: () => Promise<void>;
-  restartGatewayAfterStateMutation?: (
+  restartGateway: () => Promise<void>;
+  restartGatewayAfterStateMutation: (
     mutateState: (context: { stateDir: string }) => Promise<void>,
     opts?: { timeoutMs?: number; waitAccountId?: string },
   ) => Promise<void>;
-  restartGatewayWithQueuedMessage?: (queueMessage: () => Promise<void>) => Promise<void>;
+  restartGatewayWithQueuedMessage: (queueMessage: () => Promise<void>) => Promise<void>;
   roomId: string;
-  interruptTransport?: () => Promise<void>;
+  interruptTransport: () => Promise<void>;
   sutAccessToken: string;
   sutAccountId?: string;
   sutDeviceId?: string;
@@ -72,12 +72,8 @@ export type MatrixQaScenarioContext = {
   sutUserId: string;
   timeoutMs: number;
   topology: MatrixQaProvisionedTopology;
-  patchGatewayConfig?: (
-    patch: Record<string, unknown>,
-    opts?: { replacePaths?: string[]; restartDelayMs?: number },
-  ) => Promise<void>;
-  readGatewayAccountStartAt?: (accountId: string) => Promise<number | undefined>;
-  waitGatewayAccountReady?: (
+  readGatewayAccountStartAt: (accountId: string) => Promise<number | undefined>;
+  waitGatewayAccountReady: (
     accountId: string,
     opts?: { afterStartAt?: number; timeoutMs?: number },
   ) => Promise<void>;

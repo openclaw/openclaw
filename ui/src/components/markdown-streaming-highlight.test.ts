@@ -1,18 +1,13 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 beforeAll(async () => {
   await waitForSolid(() =>
     expect(toSanitizedMarkdownHtml("```ts\nconst ready = true;\n```")).toContain("hljs-keyword"),
   );
 });
-
-function htmlFragment(html: string): HTMLElement {
-  const container = document.createElement("div");
-  container.innerHTML = html;
-  return container;
-}
 
 describe("toStreamingMarkdownParts code fences", () => {
   it.each([

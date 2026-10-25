@@ -76,19 +76,21 @@ const services: CronService[] = [];
 function createService(deps: Partial<CronServiceDeps> = {}, now = nowMs) {
   const clock = createGatewaySchedulerClock(now);
   const scheduler = deps.scheduler ?? createTestGatewayScheduler(clock.clock);
-  const enqueueSystemEvent = deps.enqueueSystemEvent ?? vi.fn();
+  const runSessionEvent =
+    deps.runSessionEvent ??
+    vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => ({ status: "ok" }));
   const service = createCronServiceWithStateForTest({
     scheduler,
     storePath,
     cronEnabled: true,
     log: createNoopLogger(),
-    enqueueSystemEvent,
-    requestHeartbeat: vi.fn(),
+    enqueueSystemEvent: vi.fn(),
+    runSessionEvent,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
   services.push(service.cron);
-  return { ...service, clock, scheduler, enqueueSystemEvent };
+  return { ...service, clock, scheduler, runSessionEvent };
 }
 
 async function readResponsiveCronSnapshot(cron: CronService) {
@@ -339,8 +341,10 @@ describe("CronService read operations", () => {
     expect(jobs[0]?.state.nextRunAtMs).toBe(nowMs + 120_000);
   });
   it("keeps sibling writes visible when separately loaded services mutate and run jobs", async () => {
-    const enqueueSystemEvent = vi.fn();
-    const { cron: cronA } = createService({ enqueueSystemEvent });
+    const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => ({
+      status: "ok",
+    }));
+    const { cron: cronA } = createService({ runSessionEvent });
     const { cron: cronB } = createService();
 
     await cronA.status();
@@ -354,14 +358,17 @@ describe("CronService read operations", () => {
       payload: { kind: "systemEvent", text: "updated by sibling" },
     });
     await expect(cronA.run("first", "force")).resolves.toEqual({ ok: true, ran: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("updated by sibling", expect.anything());
+    expect(runSessionEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "updated by sibling" }),
+    );
   });
 
   it("avoids duplicate runs across lexical aliases of one store", async () => {
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
+    const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => ({
+      status: "ok",
+    }));
     const now = Date.parse("2025-12-13T00:00:00.000Z");
-    const deps = { enqueueSystemEvent, requestHeartbeat };
+    const deps = { runSessionEvent };
     const first = createService(deps, now);
 
     await first.cron.start();
@@ -383,8 +390,7 @@ describe("CronService read operations", () => {
     await first.cron.status();
     await second.cron.status();
 
-    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeat).toHaveBeenCalledTimes(1);
+    expect(runSessionEvent).toHaveBeenCalledTimes(1);
   });
 
   it("re-arms a stale service after a missing remove reloads an earlier job", async () => {
@@ -414,7 +420,9 @@ describe("CronService read operations", () => {
     stale.clock.setTime(stale.clock.clock.now() + 10_000);
     await onTimer(stale.state);
 
-    expect(stale.enqueueSystemEvent).toHaveBeenCalledWith("earlier-job", expect.any(Object));
+    expect(stale.runSessionEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "earlier-job" }),
+    );
   });
   it("runs later due work while an earlier scheduled run is still executing", async ({
     signal,
@@ -441,7 +449,7 @@ describe("CronService read operations", () => {
         },
       ],
     });
-    const { cron, state, clock, scheduler, enqueueSystemEvent } = createService(
+    const { cron, state, clock, scheduler, runSessionEvent } = createService(
       {
         runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
         onEvent: (event) => {
@@ -465,7 +473,7 @@ describe("CronService read operations", () => {
       laterWake = onTimer(state);
       await withinTest(laterFinished.promise, signal);
 
-      expect(enqueueSystemEvent).toHaveBeenCalledWith("later work", expect.any(Object));
+      expect(runSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ text: "later work" }));
       expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
       expect(jobState("long-running-job")?.runningAtMs).toBe(now);
     } finally {

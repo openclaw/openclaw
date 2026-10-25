@@ -2,7 +2,10 @@ import { Show } from "solid-js";
 import type { McpServerForm } from "../../../components/mcp-server-form.ts";
 import { McpServersForm } from "../../../components/mcp-servers-form.tsx";
 import { SettingsSegmented } from "../../../components/solid/settings-ui.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export type ComposerAddServerDialogProps = {
   open: boolean;

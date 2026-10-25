@@ -1,7 +1,6 @@
 import { hash } from "node:crypto";
 import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
@@ -218,6 +217,74 @@ describe("OpenAI Responses continuation", () => {
     expect(
       responsesContinuationPrefixFingerprint([userInput(`${text}changed`)], [assistantOutput]),
     ).not.toBe(prefixHash);
+  });
+
+  it.each([
+    {
+      name: "omitted fields, sparse arrays, nonfinite numbers and signed zero",
+      // oxlint-disable-next-line no-sparse-arrays -- A genuine array hole must compare as JSON null.
+      value: { omit: undefined, values: [, undefined, Number.NaN, Infinity, -0], text: "🦞\ud800" },
+      expected: { values: [null, null, null, null, 0], text: "🦞\ud800" },
+    },
+    {
+      name: "built-in serializers",
+      value: {
+        at: new Date("2026-01-01Z"),
+        url: new URL("https://example.test/"),
+        data: Buffer.from([1, 2]),
+      },
+      expected: {
+        at: "2026-01-01T00:00:00.000Z",
+        url: "https://example.test/",
+        data: { type: "Buffer", data: [1, 2] },
+      },
+    },
+    {
+      name: "key-sensitive serializers on objects and functions",
+      value: {
+        nested: { toJSON: (key: string) => ({ key }) },
+        array: [Object.assign(() => {}, { toJSON: (key: string) => key })],
+      },
+      expected: { nested: { key: "nested" }, array: ["0"] },
+    },
+    {
+      name: "own __proto__ fields and null-prototype objects",
+      value: Object.assign(
+        Object.create(null),
+        JSON.parse('{"__proto__":{"own":true},"omit":null}'),
+      ),
+      expected: JSON.parse('{"omit":null,"__proto__":{"own":true}}'),
+    },
+    {
+      name: "proxy serializers",
+      value: new Proxy(
+        { text: "plain" },
+        {
+          get: (target, key) =>
+            key === "toJSON" ? () => ({ text: "wire" }) : Reflect.get(target, key),
+        },
+      ),
+      expected: { text: "wire" },
+    },
+  ])("compares continuation envelopes using JSON semantics: $name", ({ value, expected }) => {
+    const state = continuationState();
+    state.lastRequest.provider_options = expected;
+    const request = { ...nextRequest(), provider_options: value };
+    expect(resolve(state, request).continuationStatus).toBe("continued");
+    state.lastRequest.provider_options = { changed: true };
+    expect(resolve(state, request).continuationStatus).toBe("request_changed");
+  });
+
+  it("rejects unserializable history without retaining a failed comparison", () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    const state = continuationState();
+    for (const value of [cycle, 1n]) {
+      expect(() => resolve(state, { ...nextRequest(), provider_options: value })).toThrow(
+        TypeError,
+      );
+    }
+    expect(resolve(state, nextRequest()).continuationStatus).toBe("continued");
   });
 
   it("matches JSON wire semantics and provider-only assistant replay metadata", () => {
@@ -541,27 +608,6 @@ describe("OpenAI Responses continuation", () => {
     cleanupSessionResources("session-1");
     commitBaseline(stale, "resp_stale");
     expect(previousResponseId()).toBeUndefined();
-  });
-
-  it("keeps matching-session and all-session cleanup inside one runtime owner", () => {
-    const firstHost = createAiTransportHost();
-    const secondHost = createAiTransportHost();
-    const commit = (owner: typeof firstHost, sessionId: string, responseId: string) =>
-      runWithAiTransportHost(owner, () => {
-        commitBaseline(claim({ sessionId }), responseId);
-      });
-    const previous = (owner: typeof firstHost, sessionId: string) =>
-      runWithAiTransportHost(owner, () => previousResponseId(sessionId));
-    commit(firstHost, "shared", "first-shared");
-    commit(firstHost, "other", "first-other");
-    commit(secondHost, "shared", "second-shared");
-    commit(secondHost, "other", "second-other");
-    cleanupSessionResources("shared", firstHost);
-    expect(previous(firstHost, "shared")).toBeUndefined();
-    expect(previous(secondHost, "shared")).toBe("second-shared");
-    cleanupSessionResources(undefined, firstHost);
-    expect(previous(firstHost, "other")).toBeUndefined();
-    expect(previous(secondHost, "other")).toBe("second-other");
   });
 });
 

@@ -33,17 +33,19 @@ import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { holdSubagentExecution } from "../session-row-projection.read-fixture.test-support.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
+import { sessionTitleRequests } from "../session-title-state.js";
 import { reportPlacementTransition } from "../worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { sessionReader } from "./sessions-keyed-read.test-support.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
   listSessions,
   requestContext,
-  sessionReadHandlers,
 } from "./sessions-read-cache.test-support.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const targetKey = "agent:main:controller";
 const targetScope = { agentId: "main", sessionKey: targetKey };
@@ -92,18 +94,7 @@ async function describeSession(
   key = targetKey,
 ) {
   await initializeSessionReadContext(context);
-  const responses: Parameters<RespondFn>[] = [];
-  await sessionReadHandlers["sessions.describe"]!({
-    req: { type: "req", id: "describe-projection", method: "sessions.describe", params: { key } },
-    params: { key },
-    context,
-    client,
-    isWebchatConnect: () => false,
-    respond: (...response) => responses.push(response),
-  });
-  expect(responses).toHaveLength(1);
-  expect(responses[0]?.[0]).toBe(true);
-  return responses[0]?.[1];
+  return sessionReader(context, client, key)();
 }
 
 async function withFixture(
@@ -224,13 +215,49 @@ async function afterCommittedChange(
   }
 }
 
+it("reuses unchanged descriptions across readers while sampling pending titles live", () =>
+  withFixture(async ({ context, describe }) => {
+    await describe();
+    const projection = getSessionRowProjection(context)!;
+    using present = vi.spyOn(projection, "present");
+    const owner = identifiedClient(ensureProfileForEmail("owner@example.com").id);
+    const readOwner = () => describeSession(context, owner);
+    const viewerRow = await describe();
+    const ownerRow = await readOwner();
+    expect(viewerRow).toMatchObject({ session: { sharingRole: "viewer", titlePending: false } });
+    expect(ownerRow).toMatchObject({ session: { sharingRole: "owner", titlePending: false } });
+    for (let index = 0; index < 3; index++) {
+      expectSession(await describe(), { sharingRole: "viewer", titlePending: false });
+      expectSession(await readOwner(), { sharingRole: "owner", titlePending: false });
+    }
+    expect(present).toHaveBeenCalledTimes(1);
+    const record = projection.describe({ agentId: "main", key: targetKey })!;
+    const generation = createDeferredCore<boolean>();
+    const pending = sessionTitleRequests.run(
+      { storePath: record.storeTarget.storePath, sessionKey: targetKey, sessionId: "original" },
+      () => generation.promise,
+    );
+    try {
+      expectSession(await describe(), { titlePending: true, sharingRole: "viewer" });
+      expectSession(await readOwner(), { titlePending: true, sharingRole: "owner" });
+    } finally {
+      generation.resolve(false);
+      await pending;
+    }
+    expectSession(await describe(), { titlePending: false, sharingRole: "viewer" });
+    expectSession(await readOwner(), { titlePending: false, sharingRole: "owner" });
+    expect(viewerRow).toMatchObject({ session: { titlePending: false } });
+  }));
+
 it("captures current registry facts after list owner publications", () =>
   withFixture(async ({ context, viewer, retainedRunIds, describe }) => {
     await describe();
     const current = retainedRun("current-memory", {
       childSessionKey: targetKey,
       controllerSessionKey: "agent:main:current-controller",
+      execution: { status: "running", startedAt: Date.now() },
     });
+    using _ = holdSubagentExecution(current.runId, targetKey);
     try {
       const response = await whilePaused(
         context,
@@ -306,7 +333,7 @@ it("projects current target, lineage, children and placement after committed cha
       model: "gpt-5.5",
       modelOverrideSource: "inherited",
       placement: { state: "requested" },
-      childSessions: ["agent:main:subagent:run-0"],
+      childSessions: undefined,
       swarm: {
         groups: [
           {
@@ -486,11 +513,11 @@ it("projects elapsed runtime, status expiry and budget time after committed chan
     }
   }));
 
-it("refreshes retained control ownership after committed changes", () =>
+it("does not promote historical control after the current executor retires", () =>
   withFixture(async ({ describe, afterChange }) => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const older = retainedRun("expiring-owner", {
+    const older = retainedRun("current-executor", {
       childSessionKey: targetKey,
       controllerSessionKey: "agent:main:older-controller",
       requesterSessionKey: "agent:main:older-controller",
@@ -504,6 +531,8 @@ it("refreshes retained control ownership after committed changes", () =>
       createdAt: now - 1000,
       execution: { status: "terminal", startedAt: now - 1000, endedAt: now - 10 },
     });
+    subagentRuns.set(older.runId, older);
+    using execution = holdSubagentExecution(older.runId, targetKey);
     try {
       saveSubagentRegistryToSqlite(new Map([older, newer].map((run) => [run.runId, run])));
       clearSubagentRunsReadCacheForTest();
@@ -511,10 +540,12 @@ it("refreshes retained control ownership after committed changes", () =>
         controlOwnerSessionKey: older.controllerSessionKey,
       });
       const response = await afterChange(() => {
+        execution[Symbol.dispose]();
         clock.mockReturnValue(now + 1);
       });
-      expectSession(response, { controlOwnerSessionKey: newer.controllerSessionKey });
+      expectSession(response, { controlOwnerSessionKey: undefined });
     } finally {
+      subagentRuns.delete(older.runId);
       clock.mockRestore();
     }
   }));

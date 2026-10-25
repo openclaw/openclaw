@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
@@ -44,6 +45,7 @@ import {
   getSubagentRegistryPublicationRevision,
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
+import { createSubagentManagerTestOptions } from "./subagent-registry-queued-recovery.test-support.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import {
   loadSubagentRegistryFromSqlite,
@@ -56,6 +58,7 @@ import {
   prepareSubagentRegistrationRows,
   prepareSubagentRunsSnapshotForRunIds,
 } from "./subagent-registry-state.js";
+import { streamSubagentRegistryInWorker } from "./subagent-registry.store.restore.worker.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
@@ -200,6 +203,34 @@ it.each(["0", "1"])(
     expect(subagentRuns.get("retained-0")?.completion?.resultText).toBeUndefined();
   },
 );
+
+it("restores rows without an explicit read transaction", async () => {
+  seed(entry("autocommit-restore"));
+  const databasePath = openOpenClawStateDatabase().path;
+  const context = captureOpenClawStateWorkerContext();
+  const execute = vi.spyOn(DatabaseSync.prototype, "exec");
+  const request = vi.fn(async () => ({ input: undefined, consumed: () => {} }));
+  const count = await streamSubagentRegistryInWorker(
+    {
+      context,
+      databasePath,
+      location: databasePath,
+      checkFreshAdmission: true,
+      command: { type: "subagents.restore" },
+    },
+    { consumeInput: () => {}, notify: () => {}, request },
+    () => {},
+  );
+  expect(count).toBe(1);
+  expect(request).toHaveBeenCalledWith([
+    expect.objectContaining({ entry: expect.objectContaining({ runId: "autocommit-restore" }) }),
+  ]);
+  expect(
+    execute.mock.calls
+      .map(([sql]) => sql)
+      .filter((sql) => /^(BEGIN|COMMIT|ROLLBACK)\b/iu.test(sql)),
+  ).toEqual([]);
+});
 
 it("streams bounded restore batches in one read and retains one snapshot", async () => {
   const entries = [3, 1, 2].map((createdAt, index) =>
@@ -556,32 +587,11 @@ it("settles a requester cohort while many children finish and one is killed", as
     },
   });
   await register(...children, stopped);
-  const manager = createSubagentRunManager({
-    runs: subagentRuns,
-    getChildSessionCandidates: (key) =>
-      [...subagentRuns.values()].filter((row) => row.childSessionKey === key),
-    getRunsForChildSession: (key) =>
-      [...subagentRuns.values()].filter((row) => row.childSessionKey === key),
-    resumedRuns: new Set(),
-    acquireTerminalCompletionLock: async () => () => {},
-    callGateway: async () => {
+  const manager = createSubagentRunManager(
+    createSubagentManagerTestOptions(subagentRuns, async () => {
       throw new Error("Stress fixture unexpectedly called the Gateway");
-    },
-    getRuntimeConfig: () => ({}),
-    ensureListener: () => {},
-    startSweeper: () => {},
-    stopSweeper: () => {},
-    resumeSubagentRun: () => {},
-    clearPendingLifecycleError: () => {},
-    clearPendingLifecycleTimeout: () => {},
-    resolveSubagentWaitTimeoutMs: () => 100,
-    scheduleSweep: () => {},
-    resolveSubagentSessionCompletion: async () => null,
-    resolveSubagentSessionStartedAt: async () => undefined,
-    notifyContextEngineSubagentEnded: async () => {},
-    completeCleanupBookkeeping: async () => {},
-    completeSubagentRun: async () => {},
-  });
+    }),
+  );
   const context = captureOpenClawStateWorkerContext();
   const completions = children.map((child) =>
     change(child.runId, (row) => {

@@ -18,7 +18,6 @@ import {
   isMatrixQaVerifyStatusHealthy,
   loginMatrixQaRecoveryDevice,
   requireMatrixQaGatewayConfigPath,
-  requireMatrixQaE2eeOutputDir,
   runMatrixQaCliJson,
   type MatrixQaCliRuntime,
 } from "./scenario-runtime-e2ee-destructive-recovery.js";
@@ -73,17 +72,14 @@ async function registerMatrixQaDestructiveOwner(
   });
 }
 
-async function ensureMatrixQaOwnerReady(params: {
-  client: MatrixQaE2eeScenarioClient;
-  label: string;
-}) {
-  let bootstrap = await params.client.bootstrapOwnDeviceVerification({
+async function ensureMatrixQaOwnerReady(client: MatrixQaE2eeScenarioClient) {
+  let bootstrap = await client.bootstrapOwnDeviceVerification({
     allowAutomaticCrossSigningReset: false,
   });
   if (!bootstrap.success && isMatrixQaRepairableBackupBootstrapError(bootstrap.error)) {
-    const reset = await params.client.resetRoomKeyBackup();
+    const reset = await client.resetRoomKeyBackup();
     if (reset.success) {
-      bootstrap = await params.client.bootstrapOwnDeviceVerification({
+      bootstrap = await client.bootstrapOwnDeviceVerification({
         allowAutomaticCrossSigningReset: false,
       });
     }
@@ -95,15 +91,15 @@ async function ensureMatrixQaOwnerReady(params: {
     !bootstrap.verification.backupVersion
   ) {
     throw new Error(
-      `${params.label} Matrix E2EE bootstrap did not leave identity trust and backup ready: ${
+      `destructive owner Matrix E2EE bootstrap did not leave identity trust and backup ready: ${
         bootstrap.error ?? "unknown error"
       }`,
     );
   }
-  const recoveryKey = await params.client.getRecoveryKey();
+  const recoveryKey = await client.getRecoveryKey();
   const encodedRecoveryKey = recoveryKey?.encodedPrivateKey?.trim();
   if (!encodedRecoveryKey) {
-    throw new Error(`${params.label} Matrix E2EE bootstrap did not expose a recovery key`);
+    throw new Error("destructive owner Matrix E2EE bootstrap did not expose a recovery key");
   }
   return {
     backupVersion: bootstrap.verification.backupVersion,
@@ -144,14 +140,14 @@ async function prepareMatrixQaDestructiveSetup(
     baseUrl: context.baseUrl,
     deviceId: account.deviceId,
     observedEvents: context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(context),
+    outputDir: context.outputDir,
     password: account.password,
     scenarioId,
     timeoutMs: context.timeoutMs,
     userId: account.userId,
   });
   try {
-    const ready = await ensureMatrixQaOwnerReady({ client: owner, label: "destructive owner" });
+    const ready = await ensureMatrixQaOwnerReady(owner);
     const seededEventId = await owner.sendTextMessage({
       body: `E2EE destructive restore seed ${randomUUID().slice(0, 8)}`,
       roomId,
@@ -347,9 +343,8 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
       });
       const initial = await restore("initial-restore-stores-key", setup.encodedRecoveryKey);
       assertMatrixQaCliBackupRestoreSucceeded(initial.payload, "initial stored-key");
-      const mutation = await mutateMatrixQaCliStateLoss({
+      const accountRoot = await mutateMatrixQaCliStateLoss({
         deviceId: device.deviceId,
-        preserveRecoveryKey: true,
         runtime: cli,
         userId: device.userId,
       });
@@ -364,7 +359,7 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
       return {
         details: [
           "Matrix crypto/runtime state was deleted while recovery-key.json survived",
-          `account root: ${mutation.accountRoot}`,
+          `account root: ${accountRoot}`,
           `restore imported/total: ${restored.payload.imported ?? 0}/${restored.payload.total ?? 0}`,
           "restore command supplied recovery key: no",
           `recovery key stored after restore: ${status.payload.recoveryKeyStored ? "yes" : "no"}`,
@@ -730,7 +725,7 @@ export async function runMatrixQaE2eeServerDeviceDeletedReloginRecoversScenario(
 export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  if (!context.gatewayStateDir || !context.restartGatewayAfterStateMutation) {
+  if (!context.gatewayStateDir) {
     throw new Error("Matrix E2EE sync-state loss scenario requires gateway state restart support");
   }
   const restoreAccountId = context.sutAccountId ?? "sut";
@@ -810,10 +805,6 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
         waitAccountId: accountId,
       },
     );
-    await context.waitGatewayAccountReady?.(accountId, {
-      timeoutMs: context.timeoutMs,
-    });
-    requireMatrixQaE2eeOutputDir(context);
     driver = await createMatrixQaE2eeActorClient(
       context,
       "matrix-e2ee-sync-state-loss-crypto-intact",

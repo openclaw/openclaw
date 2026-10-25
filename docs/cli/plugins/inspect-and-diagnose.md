@@ -89,6 +89,23 @@ If a configured plugin is present on disk but blocked by the loader's path-safet
 
 For module-shape failures such as missing `register`/`activate` exports, rerun with `OPENCLAW_PLUGIN_LOAD_DEBUG=1` to include a compact export-shape summary in the diagnostic output.
 
+### Doctor priorities and repair steps
+
+The main `openclaw doctor` summary puts current plugin inspection and loading
+failures under **Fix now**. Run `openclaw plugins inspect <id> --runtime` for the
+named plugin, then repair its configured path, ownership, dependencies, or install
+according to that diagnostic. For an incompatible official plugin, run
+`openclaw plugins update <id>` and rerun Doctor. Preserve an enabled plugin's
+configuration while repairing its files.
+
+Legacy compatibility notices are **Recommended improvements**: update or replace
+the affected plugin to remove its dependence on legacy APIs. A plugin version
+mismatch includes a confirmed update command when one is available; update before
+restarting the Gateway. When no compatible registry release exists, keep the
+current install and check for a compatible release rather than attempting an
+unavailable version. These local findings do not replace the running Gateway's
+health check.
+
 ## Registry
 
 ```bash
@@ -103,10 +120,11 @@ When that registry is missing or stale, Gateway startup validates current plugin
 
 Use `plugins registry` to inspect whether the persisted registry is present, current, or stale. Use `--refresh` to rebuild it from the persisted plugin index, config policy, and manifest/package metadata. This is a repair path, not a runtime activation path.
 
-Inspection revalidates warnings for unavailable configured plugin load paths against
-the current config. Removing the final path removes its warning from the inspected
-view; a missing path that remains configured still produces a warning. Inspection
-does not rewrite the persisted registry. Use `--refresh` to update that ledger.
+Inspection revalidates warnings for unavailable or unreadable configured plugin load
+paths against the current config, including permission errors and symbolic link
+loops. Removing the final path removes its warning from the inspected view; a path
+that remains configured and unavailable or unreadable still produces a warning.
+Inspection does not rewrite the persisted registry. Use `--refresh` to update that ledger.
 
 When persisted and derived plugin records differ, the command lists each differing plugin with both sources. JSON output returns the same rows in `differences`. Policy staleness reports `policy-changed` in `refreshReasons` and leaves `differences` empty because policy validation runs before record comparison; a policy refresh can still update enabled fields. A refresh rereads and verifies its persisted replacement before it reports success. If plugin package files keep changing during verification, stop those updates and run `openclaw plugins registry --refresh` again.
 

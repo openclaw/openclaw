@@ -4,8 +4,8 @@ import type {
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
 } from "@openclaw/workboard-contract";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { ControlUiAgentPickerProps, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mountPage } from "./workboard-page.test-support.ts";
 
@@ -214,10 +214,7 @@ it("restores the destination board's saved people filter when boards change whil
   const page = sessionsPage();
   const boardB = { ...page.board, id: "sessions-b", name: "Sessions B" };
   const previous = expectDefined(page.request.getMockImplementation(), "request");
-  let releaseIdentity = () => {};
-  const identityGate = new Promise<void>((resolve) => {
-    releaseIdentity = resolve;
-  });
+  const { promise: identityGate, resolve: releaseIdentity } = createDeferred();
   page.request.mockImplementation(async (method, params) => {
     if (method === "gateway.identity.get" || method === "users.self") {
       await identityGate;

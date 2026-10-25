@@ -12,7 +12,7 @@ type FeishuBotIdentityCacheState = {
   fetchedAt: string;
 };
 
-type CachedFeishuBotIdentity = Pick<FeishuBotIdentityCacheState, "botOpenId" | "botName">;
+type CachedFeishuBotIdentity = Pick<FeishuBotIdentityCacheState, "botOpenId">;
 
 function openFeishuBotIdentityCache() {
   return getFeishuRuntime().state.openKeyedStore<FeishuBotIdentityCacheState>({
@@ -28,12 +28,11 @@ function parseCachedFeishuBotIdentity(value: unknown): FeishuBotIdentityCacheSta
   const state = value as Partial<FeishuBotIdentityCacheState>;
   const appId = normalizeOptionalString(state.appId);
   const botOpenId = normalizeOptionalString(state.botOpenId);
-  const botName = normalizeOptionalString(state.botName);
   const fetchedAt = normalizeOptionalString(state.fetchedAt);
   if (!appId || !botOpenId || !fetchedAt || Number.isNaN(Date.parse(fetchedAt))) {
     return null;
   }
-  return { appId, botOpenId, botName, fetchedAt };
+  return { appId, botOpenId, fetchedAt };
 }
 
 export async function readCachedFeishuBotIdentity(params: {
@@ -54,7 +53,6 @@ export async function readCachedFeishuBotIdentity(params: {
   }
   return {
     botOpenId: cached.botOpenId,
-    botName: cached.botName,
   };
 }
 

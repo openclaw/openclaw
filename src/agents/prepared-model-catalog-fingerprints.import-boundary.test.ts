@@ -24,7 +24,13 @@ registerHooks({
     if (specifier.includes("prepared-model-runtime.facts.") || specifier.includes("prepared-model-runtime.inbound-registry.")) {
       throw new Error("Catalog fingerprint imported runtime preparation: " + specifier);
     }
-    return nextResolve(specifier, context);
+    const resolved = nextResolve(specifier, context);
+    if (["/agents/workspace", "/agents/auth-profiles", "/agents/model-selection", "/gateway-protocol/src/index"].some(
+      (name) => [".ts", ".js"].some((extension) => resolved.url.endsWith(name + extension)),
+    )) {
+      throw new Error("Catalog imported an unrelated runtime barrel: " + resolved.url + " from " + context.parentURL);
+    }
+    return resolved;
   },
 });
 const { fingerprintPreparedModelCatalogPluginContext } = await import(${JSON.stringify(entry)});

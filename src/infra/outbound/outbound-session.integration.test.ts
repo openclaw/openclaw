@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildConversationIdentity } from "../../config/sessions/conversation-identity.js";
 import {
@@ -23,7 +22,6 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   deliveryContextFromSession,
@@ -38,6 +36,7 @@ import {
   resolveOutboundSessionRoute,
   type OutboundSessionRoute,
 } from "./outbound-session.js";
+import { routePlugin } from "./outbound-session.test-helpers.js";
 
 function makeRoute(
   sessionKey = "agent:helper:reef:direct:peer",
@@ -47,16 +46,6 @@ function makeRoute(
   kind: OutboundSessionRoute["chatType"] = "direct",
 ): OutboundSessionRoute {
   return { sessionKey, baseSessionKey: sessionKey, peer: { kind, id }, chatType: kind, from, to };
-}
-
-function routePlugin(
-  id: string,
-  resolve: NonNullable<ChannelPlugin["messaging"]>["resolveOutboundSessionRoute"],
-): ChannelPlugin {
-  return {
-    ...createChannelTestPluginBase({ id }),
-    messaging: { resolveOutboundSessionRoute: resolve },
-  };
 }
 
 function writeEntry(
@@ -353,23 +342,43 @@ describe("outbound session persistence", () => {
   });
 
   it.each([
-    ["existing alias", "agent:main:main", "@molty", true],
+    ["existing alias", "agent:main:main", "@molty", "discord"],
+    ["newer threadless address", "agent:main:main", "reef:peer-agent", "reef"],
     ["missing peer", "agent:main:reef:direct:peer-agent", "reef:peer-agent", false],
   ] as const)(
     "binds a discovered %s to its session",
-    async (_name, sessionKey, target, existing) => {
-      if (existing) {
+    async (_name, sessionKey, target, previousChannel) => {
+      const existing = Boolean(previousChannel);
+      if (previousChannel) {
+        const oldTarget = previousChannel === "reef" ? target : "user:operator";
         await seed(sessionKey, {
           delivery: normalizeSessionDeliveryState({
-            context: { channel: "discord", accountId: "default", to: "user:operator" },
-            origin: { provider: "discord", accountId: "default", from: "discord:operator" },
+            context: {
+              channel: previousChannel,
+              accountId: "default",
+              to: oldTarget,
+              threadId: "old-thread",
+            },
+            origin: {
+              provider: previousChannel,
+              accountId: "default",
+              chatType: "direct",
+              from: `${previousChannel}:peer-agent`,
+              to: oldTarget,
+              threadId: "old-thread",
+            },
           }),
         });
       }
-      const identity = await register({ deliveryTarget: target });
-      const discovered = await conversation(identity);
+      const identity = await register(
+        { deliveryTarget: target },
+        existing ? entry(sessionKey)!.entry.updatedAt + 1 : 200,
+      );
+      const discovered = (await listConversations(mainScope(), { channel: "reef" }))[0];
+      expect(discovered?.conversationRef).toBe(identity.conversationRef);
       expect(discovered).not.toMatchObject({ sessionId: expect.any(String) });
-      const workerGuard = existing
+      const guarded = previousChannel === "discord";
+      const workerGuard = guarded
         ? {
             conversation: {
               conversationRef: identity.conversationRef,
@@ -377,7 +386,7 @@ describe("outbound session persistence", () => {
             },
           }
         : undefined;
-      const sql = existing ? observeHostDataSql() : undefined;
+      const sql = guarded ? observeHostDataSql() : undefined;
       try {
         await bind(makeRoute(sessionKey, "peer-agent", "reef:peer-agent", target), workerGuard);
         if (sql) {
@@ -395,50 +404,11 @@ describe("outbound session persistence", () => {
         role: existing ? "participant" : "primary",
         target,
       });
+      const persisted = entry(sessionKey)?.entry;
+      expect(deliveryContextFromSession(persisted)?.threadId).toBeUndefined();
+      expect(sessionDeliveryOrigin(persisted)?.threadId).toBeUndefined();
     },
   );
-
-  it("binds a newer threadless address without restoring the established thread", async () => {
-    const sessionKey = "agent:main:main";
-    const peerId = "reef:contact-42";
-    const target = "reef:contact-42";
-    const threadId = "thread-7";
-    await seed(sessionKey, {
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "reef", accountId: "default", to: target, threadId },
-        origin: {
-          provider: "reef",
-          accountId: "default",
-          chatType: "direct",
-          from: peerId,
-          to: target,
-          threadId,
-        },
-      }),
-    });
-    const established = entry(sessionKey);
-    expect(established).toBeDefined();
-    const threadlessIdentity = await register(
-      { peerId, deliveryTarget: target, nativeDirectUserId: "contact-42" },
-      established!.entry.updatedAt + 1,
-    );
-
-    const discovered = await listConversations(mainScope(), { channel: "reef" });
-    expect(discovered[0]?.conversationRef).toBe(threadlessIdentity.conversationRef);
-    expect(discovered[0]).not.toMatchObject({ sessionId: expect.any(String) });
-
-    await bind(makeRoute(sessionKey, "contact-42", peerId, target));
-
-    expect(await conversation(threadlessIdentity)).toMatchObject({
-      sessionId: "shared-main-session",
-      sessionKey,
-      role: "participant",
-      target,
-    });
-    const persisted = entry(sessionKey);
-    expect(deliveryContextFromSession(persisted?.entry)?.threadId).toBeUndefined();
-    expect(sessionDeliveryOrigin(persisted?.entry)?.threadId).toBeUndefined();
-  });
 
   it("persists a group ingress origin without rewriting its native channel target", async () => {
     const channelId = "private-room-123";

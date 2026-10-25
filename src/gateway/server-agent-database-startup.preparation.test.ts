@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "../state/agent-database-admission-error.js";
 import {
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
@@ -538,6 +539,7 @@ it.for([
   "secrets preparation",
   "model runtime",
   "queued model runtime",
+  "schema admission",
 ] as const)(
   "retries a superseded publication after %s replacement",
   async (replacement, { signal }) => {
@@ -566,6 +568,9 @@ it.for([
         await release.promise;
         if (replacement === "model runtime") {
           throw new PreparedModelRuntimePublicationSupersededError("publication was superseded");
+        }
+        if (replacement === "schema admission") {
+          throw new AgentDatabaseSchemaAdmissionChangedError();
         }
       });
     }

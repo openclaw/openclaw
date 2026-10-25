@@ -3,7 +3,6 @@ import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
-import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
 import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
 import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
 import { admitCliRunParams } from "../../agents/cli-runner/run-admission.js";
@@ -17,6 +16,7 @@ import {
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as nodeRuntime from "../../gateway/node-agent-cli-runtime.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -166,7 +166,6 @@ it("reads cold CLI fallback metadata while another connection holds a shared-sta
 
 it.each([
   "ordinary",
-  "heartbeat",
   "preserved",
   "revised",
   "revision-established",
@@ -174,12 +173,7 @@ it.each([
   "rejected",
   "rejected-clear",
 ])("settles the %s reply's native binding before releasing placement", async (kind) => {
-  const sessionKey =
-    kind === "ordinary"
-      ? "main"
-      : kind === "heartbeat"
-        ? "global"
-        : "agent:main:cli-binding-settlement";
+  const sessionKey = kind === "ordinary" ? "main" : "agent:main:cli-binding-settlement";
   const rejected = kind === "rejected" || kind === "rejected-clear";
   const revisionChanged = kind === "revised" || kind === "revision-established";
   const placementRetired = kind === "retired-placement";
@@ -199,9 +193,7 @@ it.each([
   state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
     const first = await runInitialFallbackAttempt(params, CLI.provider, CLI.model);
     if (rejected) {
-      expect(first).toMatchObject({
-        classification: { code: "generic_external_run_failure" },
-      });
+      expect(first).toMatchObject({ classification: { code: "generic_external_run_failure" } });
       return {
         result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "format")),
         provider: "openai",
@@ -209,11 +201,7 @@ it.each([
         attempts: [{ provider: "claude-cli", model: "claude-sonnet-4-6", reason: "format" }],
       };
     }
-    return {
-      result: first,
-      ...CLI,
-      attempts: [],
-    };
+    return { result: first, ...CLI, attempts: [] };
   });
   const candidateResult = boundReply(settledBinding);
   state.runCliAgentMock.mockResolvedValueOnce(
@@ -250,10 +238,7 @@ it.each([
     }),
   );
   onTestFinished(uninstall);
-  const result = await executeAgentTurn({
-    ...turn,
-    isHeartbeat: kind === "heartbeat",
-  });
+  const result = await executeAgentTurn({ ...turn });
   if (revisionChanged || placementRetired) {
     expect(result.kind).toBe("final");
     expect(state.runCliAgentMock).not.toHaveBeenCalled();
@@ -446,13 +431,9 @@ it("carries the admitted session permission and placement into the CLI grant", a
         modelProvider: "anthropic",
         modelId: "claude-sonnet-4-6",
       }).execSession,
-    ).toMatchObject({
-      permissionMode: "read-only",
-      execHost: "node",
-      execNode: "node-a",
-    });
+    ).toMatchObject({ permissionMode: "read-only", execHost: "node", execNode: "node-a" });
 
-    const nodeInvoke = vi.fn<typeof executeDeps.invokeNodeClaudeCliRun>(async (request) => {
+    const nodeInvoke = vi.fn<typeof nodeRuntime.invokeNodeClaudeCliRun>(async (request) => {
       expect(request.nodeId).toBe("node-a");
       expect(request.argv).toContain("new-native-session");
       expect(request.argv).not.toContain("old-native-session");
@@ -461,7 +442,6 @@ it("carries the admitted session permission and placement into the CLI grant", a
         payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
       };
     });
-    const restoreNodeInvoke = executeDeps.invokeNodeClaudeCliRun;
     const backend = {
       command: "claude",
       args: ["-p"],
@@ -479,17 +459,16 @@ it("carries the admitted session permission and placement into the CLI grant", a
       sessionEntry: run.sessionEntry,
       backend,
     });
-    prepared.params = {
-      ...(await admitCliRunParams(run, "main")),
-      skillsSnapshot: undefined,
-    };
+    prepared.params = { ...(await admitCliRunParams(run, "main")), skillsSnapshot: undefined };
     prepared.cwd = run.cwd;
     prepared.reusableCliSession = { mode: "reuse", sessionId: observedCliSessionId };
-    executeDeps.invokeNodeClaudeCliRun = nodeInvoke;
+    const nodeInvokeSpy = vi
+      .spyOn(nodeRuntime, "invokeNodeClaudeCliRun")
+      .mockImplementation(nodeInvoke);
     try {
       await executePreparedCliRun(prepared, observedCliSessionId);
     } finally {
-      executeDeps.invokeNodeClaudeCliRun = restoreNodeInvoke;
+      nodeInvokeSpy.mockRestore();
     }
     expect(nodeInvoke).toHaveBeenCalledOnce();
     return { payloads: [{ text: "done" }], meta: {} };

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 /* @vitest-environment jsdom */
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 
@@ -34,6 +34,7 @@ function enter(input: HTMLInputElement, value: string, isComposing = false) {
 
 function show(
   options: { role?: string; persisted?: boolean; streaming?: boolean; writable?: boolean } = {},
+  initialReactions = new Map([["message-1", reactions]]),
 ) {
   host = document.body.appendChild(document.createElement("div"));
   const role = options.role ?? "user";
@@ -44,19 +45,18 @@ function show(
     timestamp: 1,
     ...(options.persisted === false ? {} : { __openclaw: { id: "message-1" } }),
   };
-  createMessageGroupHarness(host).render(
-    createMessageGroup(message, role, { isStreaming: options.streaming ?? false }),
-    {
+  const harness = createMessageGroupHarness(host);
+  const group = createMessageGroup(message, role, { isStreaming: options.streaming ?? false });
+  const render = (messageReactions: Map<string, MessageReactionSummary[]>) => {
+    harness.render(group, {
       showReasoning: false,
       userId: "self",
-      messageReactions: new Map([["message-1", reactions]]),
+      messageReactions,
       onReact: options.writable === false ? undefined : onReact,
-    },
-  );
-  return {
-    onReact,
-    pickers: [...host.querySelectorAll<HTMLElement>("openclaw-message-reaction-picker")],
+    });
+    return [...host.querySelectorAll<HTMLElement>("openclaw-message-reaction-picker")];
   };
+  return { onReact, pickers: render(initialReactions), render };
 }
 
 function pickerButton(picker: HTMLElement, label: string) {
@@ -72,7 +72,9 @@ async function customEntry() {
   flush();
   root.querySelector<HTMLButtonElement>(".trigger")!.click();
   root.querySelector<HTMLButtonElement>(".more")!.click();
-  flush();
+  await waitForSolid(() =>
+    expect(root.querySelector<HTMLInputElement>(".emoji-search-panel__search")).not.toBeNull(),
+  );
   return {
     root,
     onReact,
@@ -144,32 +146,14 @@ describe("transcript message reactions", () => {
   });
 
   it("moves the add-reaction picker from the action row to the chip row once reacted", () => {
-    host = document.body.appendChild(document.createElement("div"));
-    const harness = createMessageGroupHarness(host);
-    const group = createMessageGroup(
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "A shared reply" }],
-        timestamp: 1,
-        __openclaw: { id: "message-1" },
-      },
-      "assistant",
-    );
-    const render = (messageReactions: Map<string, MessageReactionSummary[]>) => {
-      harness.render(group, {
-        showReasoning: false,
-        userId: "self",
-        messageReactions,
-        onReact() {},
-      });
-      const pickers = [...host.querySelectorAll("openclaw-message-reaction-picker")];
-      return pickers.map((picker) =>
+    const { render } = show({ role: "assistant" }, new Map());
+    const locations = (messageReactions: Map<string, MessageReactionSummary[]>) =>
+      render(messageReactions).map((picker) =>
         picker.closest(".chat-message-reactions") ? "chips" : "actions",
       );
-    };
-    expect(render(new Map())).toEqual(["actions"]);
-    expect(render(new Map([["message-1", reactions]]))).toEqual(["chips"]);
-    expect(render(new Map([["message-1", []]]))).toEqual(["actions"]);
+    expect(locations(new Map())).toEqual(["actions"]);
+    expect(locations(new Map([["message-1", reactions]]))).toEqual(["chips"]);
+    expect(locations(new Map([["message-1", []]]))).toEqual(["actions"]);
   });
 
   it("searches emoji by name and selects the first match on Enter", async () => {

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { AgentJobTerminalSnapshot } from "../../../../src/gateway/agent-turn/types.js";
@@ -30,7 +30,6 @@ import {
   connectWireClient,
   createPairedNodeWorkerHost,
   createPublishedWireWorkspace,
-  createWireWorkspaceSettlementWaiter,
   startPairedNodeWorkerGateway,
   wireMessageText,
   type PairedNodeWorkerHost,
@@ -103,7 +102,6 @@ it.skipIf(process.platform === "win32")(
   "settles native A, deletes it, then runs B on the same one-slot node",
   async (context) => {
     const gatewayOwner = createQaGatewayChild();
-    const settlement = createWireWorkspaceSettlementWaiter();
     let providerResource: Awaited<ReturnType<typeof providerFixture>> | undefined;
     let publishedResource: Awaited<ReturnType<typeof createPublishedWireWorkspace>> | undefined;
     let node: PairedNodeWorkerHost | undefined;
@@ -152,7 +150,6 @@ it.skipIf(process.platform === "win32")(
           gateway,
           role: "operator",
           identity: null,
-          onEvent: settlement.onEvent,
         });
         await operator.request("sessions.subscribe", {});
         node = await createPairedNodeWorkerHost({
@@ -160,7 +157,6 @@ it.skipIf(process.platform === "win32")(
           operator,
           root,
           capacity: 1,
-          capacityWaitMs: 0,
           nodeConfig: config,
         });
         expect(node.identity.deviceId).toBe(identity.deviceId);
@@ -202,14 +198,23 @@ it.skipIf(process.platform === "win32")(
             { runId, timeoutMs: PROOF_TIMEOUT_MS },
             { timeoutMs: PROOF_TIMEOUT_MS + 5000 },
           );
+        // Terminal replies precede durable workspace settlement, including refused launches.
+        const expectSettled = (
+          suffix: keyof typeof keys,
+          placement: Record<string, unknown> = {},
+        ) =>
+          vi.waitFor(
+            () =>
+              expect(readPlacement(gateway, keys[suffix])).toMatchObject({
+                placement: { state: "active", turn_claim_id: null, ...placement },
+                pending: undefined,
+              }),
+            { timeout: PROOF_TIMEOUT_MS, interval: 100 },
+          );
         const finish = async (suffix: "A" | "B", placement: Record<string, unknown> = {}) => {
           provider.releases[suffix].resolve();
           expect(await wait("native-slot-" + suffix.toLowerCase())).toMatchObject({ status: "ok" });
-          await settlement.wait(operator!, keys[suffix], signal);
-          expect(readPlacement(gateway, keys[suffix])).toMatchObject({
-            placement: { state: "active", turn_claim_id: null, ...placement },
-            pending: undefined,
-          });
+          await expectSettled(suffix, placement);
           await node!.waitForWorkersIdle();
           expect(await node!.supervisor.hasActiveWork()).toBe(false);
         };
@@ -221,10 +226,7 @@ it.skipIf(process.platform === "win32")(
         expect(await wait("native-slot-b-at-capacity")).toMatchObject({ status: "error" });
         // agent.wait intentionally scrubs the internal refusal. The live claim and lack of a
         // second provider request prove that the occupied physical slot rejected this turn.
-        expect(readPlacement(gateway, keys.Busy)).toMatchObject({
-          placement: { state: "active", turn_claim_id: null },
-          pending: undefined,
-        });
+        await expectSettled("Busy");
         expect(provider.requests).toEqual(["A"]);
         expect(readPlacement(gateway, keys.A).placement?.turn_claim_id).toBeTruthy();
         await finish("A", { workspace_base_manifest_ref: expect.stringMatching(/^sha256:/u) });

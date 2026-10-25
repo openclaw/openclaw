@@ -11,6 +11,7 @@ import type {
   GatewayRequestHandlerOptions,
   RespondFn,
 } from "../../server-methods/types.js";
+import { gatewayConnect } from "../../server/client-fixtures.test-support.js";
 import { talkVoiceHandlers } from "./voice.js";
 
 export function voiceRuntimes() {
@@ -33,7 +34,7 @@ export function voiceRuntimes() {
       };
       return { authority, runId, client, connId: client.connId };
     },
-    cleanup() {
+    cleanup: () => {
       for (const authority of authorities.splice(0)) {
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext(authority.operationalRunInstance.runId);
@@ -45,13 +46,10 @@ export function voiceRuntimes() {
 export function voiceClient(connId: string): GatewayClient & { connId: string } {
   return {
     connId,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
-      role: "operator",
-      scopes: ["operator.admin"],
-    },
+    connect: gatewayConnect(["operator.admin"], {
+      id: "gateway-client",
+      mode: "backend",
+    }),
   };
 }
 
@@ -83,15 +81,10 @@ export function voiceRpc(
   }
   return {
     start,
-    async invoke(
-      this: void,
-      method: string,
-      params: Record<string, unknown>,
-      client = options().client,
-    ) {
-      const request = start(method, params, client);
-      await request.completed;
-      return request.respond;
+    invoke: async (...args: Parameters<typeof start>) => {
+      const { respond, completed } = start(...args);
+      await completed;
+      return respond;
     },
   };
 }
@@ -101,11 +94,9 @@ export function expectSuccess(respond: RespondFn, result: Record<string, unknown
 }
 
 export function expectFailure(respond: RespondFn, message?: string) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
+  const error =
     message === undefined
       ? expect.any(Object)
-      : expect.objectContaining({ message: expect.stringContaining(message) }),
-  );
+      : expect.objectContaining({ message: expect.stringContaining(message) });
+  expect(respond).toHaveBeenCalledWith(false, undefined, error);
 }

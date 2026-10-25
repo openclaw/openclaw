@@ -1,10 +1,9 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, expect, it, vi } from "vitest";
-import { createPluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
+import { pluginCliGatewayNodesRuntime as nodes } from "./cli-gateway-nodes-runtime.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 
 const callGatewayMock = vi.fn();
-const nodes = createPluginCliGatewayNodesRuntime();
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),

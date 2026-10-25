@@ -13,6 +13,7 @@ import {
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../../shared/worker-bundle-limits.js";
 import {
   buildId,
+  extract,
   useNodeBootstrapArtifactFixtures,
   version,
   write,
@@ -87,6 +88,7 @@ it.each([
   "truncated",
   "oversized",
   "symlink",
+  "duplicate entries",
   "extra entry",
   "missing entry",
   "permissions",
@@ -103,12 +105,20 @@ it.each([
     const target = path.join(root, "image-archive.tgz");
     await fs.rename(archive, target);
     await fs.symlink(target, archive);
+  } else if (failure === "duplicate entries") {
+    const header = Buffer.alloc(512);
+    new tar.Header({ path: "package/duplicate", type: "File", mode: 0o600, size: 0 }).encode(
+      header,
+    );
+    await fs.writeFile(archive, gzipSync(Buffer.concat([header, header, Buffer.alloc(1024)])));
   } else {
     await rewriteArchive(root, archive, failure);
   }
   const before = await fs.lstat(archive).catch(() => undefined);
   const suppliedBytes = before && failure !== "oversized" ? await fs.readFile(archive) : undefined;
-  const artifact = await createProvider(options).prepare();
+  const restarted = createProvider(options);
+  const [artifact, concurrent] = await Promise.all([restarted.prepare(), restarted.prepare()]);
+  expect(concurrent).toBe(artifact);
   expect(artifact.tarballSha256).toBe(built.tarballSha256);
   expect(await fs.readFile(artifact.tarballPath)).toEqual(builtBytes);
   if (!before) {
@@ -121,30 +131,8 @@ it.each([
       expect(await fs.readFile(archive)).toEqual(suppliedBytes);
     }
   }
-});
-
-it("rebuilds duplicate image entries for concurrent consumers and cleans up on close", async () => {
-  const { options, built, builtBytes, archive } = await retainArchive();
-  const header = Buffer.alloc(512);
-  new tar.Header({ path: "package/duplicate", type: "File", mode: 0o600, size: 0 }).encode(header);
-  const invalidBytes = gzipSync(Buffer.concat([header, header, Buffer.alloc(1024)]));
-  await fs.writeFile(archive, invalidBytes);
-  const restarted = createProvider(options);
-  const enrollment = new AbortController();
-  try {
-    const [artifact, concurrent] = await Promise.all([
-      restarted.prepare(enrollment.signal),
-      restarted.prepare(),
-    ]);
-    expect(concurrent).toBe(artifact);
-    expect(artifact.tarballSha256).toBe(built.tarballSha256);
-    expect(await fs.readFile(artifact.tarballPath)).toEqual(builtBytes);
-    await restarted.close();
-    await expect(fs.access(artifact.tarballPath)).rejects.toHaveProperty("code", "ENOENT");
-    expect(await fs.readFile(archive)).toEqual(invalidBytes);
-  } finally {
-    enrollment.abort();
-  }
+  await restarted.close();
+  await expect(fs.access(artifact.tarballPath)).rejects.toHaveProperty("code", "ENOENT");
 });
 
 it.each([
@@ -156,11 +144,9 @@ it.each([
   const artifact = await createProvider(options).prepare();
   expect(artifact).toMatchObject({ buildId, openclawVersion: version });
   expect(artifact.tarballSha256).not.toBe(sha256);
-  const installed = path.join(root, "updated-node");
-  await fs.mkdir(installed);
-  await tar.extract({ file: artifact.tarballPath, cwd: installed });
+  const installed = await extract(root, artifact);
   const { stdout } = await promisify(execFile)(process.execPath, [
-    path.join(installed, "package/openclaw.mjs"),
+    path.join(installed, "openclaw.mjs"),
   ]);
   expect(stdout.trim()).toBe("local-ai:changed-runtime");
   expect(await fs.readFile(archive)).toEqual(bytes);

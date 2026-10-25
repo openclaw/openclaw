@@ -1,20 +1,17 @@
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import type { BrowserContext, Frame, Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../../test-support/hanging-loopback-server.js";
 import { useAutoCleanupTempDirTracker } from "../../../test-support.js";
 import { resolveBrowserConfig } from "../config.js";
-import { getPlaywrightCore } from "../playwright-core.runtime.js";
 import { closePlaywrightBrowserConnection } from "../pw-session.js";
 import * as pageCdp from "../pw-session.page-cdp.js";
 import { createBrowserRouteContext, type BrowserServerState } from "../server-context.js";
-import { getFreePort } from "../test-port.js";
 import { atBarrier, gate, runRoute } from "./agent-route.test-support.js";
+import { launchChromiumRoutePage } from "./existing-session.test-support.js";
 import { registerBrowserRoutes } from "./index.js";
 import { createBrowserRouteApp } from "./test-helpers.js";
 
@@ -62,7 +59,7 @@ const buttons = (ids: string[]) =>
         `<button id="${id}" onclick="document.querySelector('output').textContent='${id}'">${id.toUpperCase()}</button>`,
     )
     .join("") + "<output></output>";
-const closeServer = (server: Server | WebSocketServer) =>
+const closeServer = (server: Server) =>
   new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
@@ -116,31 +113,12 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
         res.setHeader("Content-Type", "text/html");
         res.end(req.url === "/child" ? frameHtml : "<title>Scoped snapshot fixture</title>");
       });
-      await new Promise<void>((resolve) => {
-        fixture.listen(0, resolve);
-      });
-      const address = fixture.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing fixture port");
-      }
-      fixturePort = address.port;
-      const port = await getFreePort();
-      cdpUrl = `http://127.0.0.1:${port}`;
-      context = await getPlaywrightCore().chromium.launchPersistentContext(
+      fixturePort = await listenOnLoopback(fixture);
+      ({ context, page, cdpUrl, targetId } = await launchChromiumRoutePage(
         path.join(tempDirs.make("openclaw-scoped-refs-"), "profile"),
-        {
-          headless: true,
-          executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-          args: [`--remote-debugging-port=${port}`, "--site-per-process"],
-        },
-      );
-      page = context.pages()[0] ?? (await context.newPage());
+        ["--site-per-process"],
+      ));
       await page.goto(`http://127.0.0.1:${fixturePort}/`);
-      const session = await context.newCDPSession(page);
-      ({
-        targetInfo: { targetId },
-      } = await session.send("Target.getTargetInfo"));
-      await session.detach();
       routes = routeApp(cdpUrl, "scoped");
     }, 30_000);
 
@@ -180,6 +158,13 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
         refs: Record<string, { role: string; name?: string }>;
         nodes: { ref: string; role: string; name: string }[];
       };
+    }
+    const capture = async (query: Record<string, unknown>, signal?: AbortSignal) =>
+      ok(await snapshot(query, signal));
+    async function expectClick(ref: string | undefined, value: string) {
+      const action = await click(ref);
+      expect(action.statusCode, JSON.stringify(action.body)).toBe(200);
+      expect(await page.locator("output").textContent()).toBe(value);
     }
 
     it.each(cases)(
@@ -225,14 +210,12 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
             }
           });
         });
-        const result = ok(
-          await snapshot({
-            interactive: true,
-            selector: "#selected",
-            ...(fixtureCase.frame ? { frame: "#frame" } : {}),
-            depth: fixtureCase.depth,
-          }),
-        );
+        const result = await capture({
+          interactive: true,
+          selector: "#selected",
+          ...(fixtureCase.frame ? { frame: "#frame" } : {}),
+          depth: fixtureCase.depth,
+        });
         const refs = [...result.snapshot.matchAll(/\[ref=([^\]]+)\]/g)]
           .map((match) => match[1]!)
           .filter(
@@ -267,14 +250,9 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
         const marking = gate();
         const settled = createDeferred<void>();
         const nativeMark = pageCdp.markBackendDomRefsOnPage;
-        let first = true;
         const binding = vi
           .spyOn(pageCdp, "markBackendDomRefsOnPage")
-          .mockImplementation(async (options) => {
-            if (!first) {
-              return await nativeMark(options);
-            }
-            first = false;
+          .mockImplementationOnce(async (options) => {
             await marking.block();
             try {
               return await nativeMark(options);
@@ -302,12 +280,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
           } else {
             await older;
           }
-          const newerBody = ok(
-            await snapshot({
-              selector: "#b",
-              interactive: true,
-            }),
-          );
+          const newerBody = await capture({ selector: "#b", interactive: true });
           const ref = expectDefined(
             Object.entries(newerBody.refs).find(([, value]) => value.name === "B")?.[0],
             "B snapshot ref",
@@ -316,10 +289,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
           await settled.promise;
           await older;
           await markersGone();
-          const action = await click(ref);
-          const clicked = await page.locator("output").textContent();
-          expect(action.statusCode, JSON.stringify(action.body)).toBe(200);
-          expect(clicked).toBe("b");
+          await expectClick(ref, "b");
         } finally {
           marking.resolve();
           await older;
@@ -331,122 +301,39 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
 
     it("does not clear a newer binding after a delayed native pre-clear read", async () => {
       await load(buttons(["a", "b"]));
-      const version = (await fetch(`${cdpUrl}/json/version`).then((response) =>
-        response.json(),
-      )) as { webSocketDebuggerUrl: string };
-      let proxyUrl = "";
-      const proxyHttp = createServer((request, response) => {
-        void (async () => {
-          const upstream = await fetch(`${cdpUrl}${request.url}`);
-          const body = await upstream.json();
-          if (request.url?.startsWith("/json/version")) {
-            body.webSocketDebuggerUrl =
-              proxyUrl.replace("http:", "ws:") + "/devtools/browser/clear-proof";
-          }
-          response.writeHead(upstream.status, { "content-type": "application/json" });
-          response.end(JSON.stringify(body));
-        })().catch((error: unknown) =>
-          response.destroy(toErrorObject(error, "CDP proof proxy failed")),
-        );
-      });
-      const proxy = new WebSocketServer({ server: proxyHttp });
-      await new Promise<void>((resolve) => {
-        proxyHttp.listen(0, "127.0.0.1", resolve);
-      });
-      const address = proxyHttp.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing proxy address");
-      }
-      proxyUrl = `http://127.0.0.1:${address.port}`;
-      const sockets = new Set<WebSocket>();
-      const entered = createDeferred<void>();
-      let armed = false;
-      let heldKey: string | undefined;
-      let release = () => {};
-      proxy.on("connection", (downstream) => {
-        const upstream = new WebSocket(version.webSocketDebuggerUrl);
-        sockets.add(downstream);
-        sockets.add(upstream);
-        const queue: string[] = [];
-        upstream.on("open", () => {
-          for (const message of queue.splice(0)) {
-            upstream.send(message);
-          }
-        });
-        downstream.on("message", (data) => {
-          const raw = rawDataToString(data);
-          const message = JSON.parse(raw) as {
-            id: number;
-            sessionId?: string;
-            method: string;
-            params?: unknown;
+      await capture({ selector: "#b" });
+      const read = gate();
+      const nativeMark = pageCdp.markBackendDomRefsOnPage;
+      const binding = vi
+        .spyOn(pageCdp, "markBackendDomRefsOnPage")
+        .mockImplementationOnce(async (options) => {
+          const nativeSend = expectDefined(options.send, "scoped capture CDP session");
+          const send: typeof nativeSend = async (method, params) => {
+            const response = await nativeSend(method, params);
+            // Hold the real browser's reply before the owner can clear any markers.
+            if (method === "DOM.resolveNode") {
+              await read.block();
+            }
+            return response;
           };
-          const params = JSON.stringify(message.params);
-          if (
-            armed &&
-            ((message.method === "DOM.resolveNode" && !params.includes("executionContextId")) ||
-              (message.method === "Runtime.callFunctionOn" &&
-                params.includes("data-openclaw-browser-ref") &&
-                !params.includes("removeAttribute")))
-          ) {
-            armed = false;
-            heldKey = `${message.sessionId}:${message.id}`;
-          }
-          if (upstream.readyState === WebSocket.OPEN) {
-            upstream.send(raw);
-          } else {
-            queue.push(raw);
-          }
+          return await nativeMark({ ...options, send });
         });
-        upstream.on("message", (data) => {
-          const raw = rawDataToString(data);
-          const message = JSON.parse(raw) as { id?: number; sessionId?: string };
-          if (heldKey && `${message.sessionId}:${message.id}` === heldKey) {
-            heldKey = undefined;
-            release = () => {
-              if (downstream.readyState === WebSocket.OPEN) {
-                downstream.send(raw);
-              }
-            };
-            entered.resolve();
-          } else if (downstream.readyState === WebSocket.OPEN) {
-            downstream.send(raw);
-          }
-        });
-        downstream.on("close", () => upstream.close());
-        upstream.on("close", () => downstream.close());
-        downstream.on("error", () => upstream.close());
-        upstream.on("error", () => downstream.close());
-      });
-      const originalRoutes = routes;
-      routes = routeApp(proxyUrl, "clear");
       let older: ReturnType<typeof call> | undefined;
       try {
-        ok(await snapshot({ selector: "#b" }));
         const controller = new AbortController();
-        armed = true;
         older = snapshot({ selector: "#a", timeoutMs: 10_000 }, controller.signal);
-        await atBarrier(entered.promise, older, "missing native clear barrier");
+        await atBarrier(read.entered, older, "missing native clear barrier");
         controller.abort(new Error("cancel after native pre-clear read"));
-        const newer = ok(await snapshot({ selector: "#b" }));
+        const newer = await capture({ selector: "#b" });
         const ref = Object.keys(newer.refs)[0]!;
-        release();
+        read.resolve();
         await older;
         await markersGone();
-        const action = await click(ref);
-        const clicked = await page.locator("output").textContent();
-        expect(action.statusCode, JSON.stringify(action.body)).toBe(200);
-        expect(clicked).toBe("b");
+        await expectClick(ref, "b");
       } finally {
-        release();
+        read.resolve();
         await older;
-        routes = originalRoutes;
-        await closePlaywrightBrowserConnection({ cdpUrl: proxyUrl });
-        for (const socket of sockets) {
-          socket.terminate();
-        }
-        await closeServer(proxy);
-        await closeServer(proxyHttp);
+        binding.mockRestore();
       }
     }, 30_000);
 
@@ -488,7 +375,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
           });
           observer.observe(document.body, { attributes: true, subtree: true });
         });
-        const result = ok(await snapshot({ format, interactive: true }));
+        const result = await capture({ format, interactive: true });
         expect(await page.locator("#second").count()).toBe(0);
         const refs =
           format === "aria"
@@ -510,12 +397,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
           document.querySelector("output")!.textContent = "outside";
         }),
       );
-      const result = ok(
-        await snapshot({
-          selector: "#selected",
-          interactive: true,
-        }),
-      );
+      const result = await capture({ selector: "#selected", interactive: true });
       const ref = Object.keys(result.refs)[0];
       await page.locator("#selected").evaluate((el) => el.remove());
       const action = await click(ref);
@@ -530,12 +412,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
         `<a href="https://parent.test/docs">Parent docs</a><iframe id="frame" src="http://localhost:${fixturePort}/child"></iframe>`,
       );
       await page.frameLocator("#frame").getByRole("link").waitFor();
-      const result = ok(
-        await snapshot({
-          frame: "#frame",
-          urls: true,
-        }),
-      );
+      const result = await capture({ frame: "#frame", urls: true });
       expect(result.snapshot).toContain("Frame docs -> https://frame.test/docs");
       expect(result.snapshot).not.toContain("https://parent.test/docs");
     });

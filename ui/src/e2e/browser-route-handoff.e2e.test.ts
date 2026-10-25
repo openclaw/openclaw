@@ -106,10 +106,15 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["browser.request"],
         operatorScopes: ["operator.read", "operator.sessions.write"],
+        deferredMethods: ["connect"],
+        awaitInitialRoster: false,
       });
       await page.goto(
         `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=existing`,
       );
+      await page.locator("openclaw-browser-document .connect-splash").waitFor();
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
       await page
         .getByText(
           "Browser control is unavailable for this connection. Reconnect with browser access.",

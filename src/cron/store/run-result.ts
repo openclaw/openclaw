@@ -7,8 +7,7 @@ import {
 } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
 import { failureNotificationDeliveryFromJobState } from "../service/failure-alerts.js";
-import type { CronEvent } from "../service/state.js";
-import type { CronJob } from "../types.js";
+import type { CronEvent, CronJob } from "../types.js";
 import type { CronRunHistoryWrite } from "./run-history.types.js";
 import type { CronRunFinalizationOutcome } from "./runtime-worker.types.js";
 
@@ -26,6 +25,7 @@ export function cronRunResultEvent(
     completionStatus: quiet ? "failed" : result.completionStatus,
     error: quiet ? "queued manual run skipped: trigger condition not met" : result.error,
     summary: quiet ? undefined : result.summary,
+    result: quiet ? undefined : result.result,
     diagnostics: result.diagnostics,
     delivered: result.deliveryState.delivered,
     deliveryStatus: result.deliveryState.status,

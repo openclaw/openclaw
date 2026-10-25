@@ -20,19 +20,14 @@ import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
-import {
-  resolveAgentMainSessionKey,
-  resolveSessionStorePathCore,
-  type SessionEntry,
-} from "../config/sessions.js";
+import { resolveAgentMainSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { sessionDeliveryChannel } from "../utils/delivery-context.read.js";
@@ -46,68 +41,6 @@ type SandboxExplainOptions = {
 
 const SANDBOX_DOCS_URL = "https://docs.openclaw.ai/sandbox";
 
-function normalizeExplainSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  session?: string;
-}): string {
-  const raw = (params.session ?? "").trim();
-  if (!raw) {
-    return resolveAgentMainSessionKey({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
-  }
-  if (raw.includes(":") || raw === "global") {
-    // Fully-qualified session keys are already scoped; only short names need
-    // agent/main-key expansion.
-    return raw;
-  }
-  return buildAgentMainSessionKey({
-    agentId: params.agentId,
-    mainKey: normalizeMainKey(raw),
-  });
-}
-
-function inferProviderFromSessionKey(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-}): string | undefined {
-  const parsed = parseAgentSessionKey(params.sessionKey);
-  if (!parsed) {
-    return undefined;
-  }
-  const channel = parsed.rest.trim().split(":").find(Boolean);
-  const configuredMainKey = normalizeMainKey(params.cfg.session?.mainKey);
-  if (!channel || channel === configuredMainKey) {
-    return undefined;
-  }
-  // Legacy session keys embedded provider/channel in the first segment after
-  // agent id; use that as a fallback when the session store lacks channel data.
-  const candidate = normalizeOptionalLowercaseString(channel);
-  if (!candidate) {
-    return undefined;
-  }
-  if (candidate === INTERNAL_MESSAGE_CHANNEL) {
-    return INTERNAL_MESSAGE_CHANNEL;
-  }
-  return normalizeAnyChannelId(candidate) ?? undefined;
-}
-
-function resolveActiveChannel(params: {
-  cfg: OpenClawConfig;
-  entry?: SessionEntry;
-  sessionKey: string;
-}): string | undefined {
-  const normalizedCandidate = normalizeOptionalLowercaseString(
-    sessionDeliveryChannel(params.entry),
-  );
-  if (normalizedCandidate === INTERNAL_MESSAGE_CHANNEL) {
-    return INTERNAL_MESSAGE_CHANNEL;
-  }
-  return normalizeAnyChannelId(normalizedCandidate) ?? inferProviderFromSessionKey(params);
-}
-
 export async function sandboxExplainCommand(
   opts: SandboxExplainOptions,
   runtime: RuntimeEnv,
@@ -120,15 +53,6 @@ export async function sandboxExplainCommand(
     throw new Error("--agent must not be blank");
   }
   const requestedAgentId = requestedAgent ? normalizeAgentId(requestedAgent) : undefined;
-  const sessionAgentId =
-    requestedSession && requestedSession !== "global" && requestedSession.includes(":")
-      ? normalizeAgentId(resolveAgentIdFromSessionKey(requestedSession))
-      : undefined;
-  if (requestedAgentId && sessionAgentId && requestedAgentId !== sessionAgentId) {
-    throw new Error(
-      `Sandbox explain agent "${requestedAgentId}" does not match session agent "${sessionAgentId}".`,
-    );
-  }
   if (requestedAgentId) {
     resolveConfiguredAgentId(cfg, requestedAgentId);
   }
@@ -138,11 +62,17 @@ export async function sandboxExplainCommand(
     agentId: requestedAgentId,
   });
 
-  const sessionKey = normalizeExplainSessionKey({
-    cfg,
-    agentId: resolvedAgentId,
-    session: opts.session,
-  });
+  // Channel-prefixed aliases still need agent scope before lookup; only parsed
+  // agent keys and the global sentinel already name their store session.
+  const sessionKey = !requestedSession
+    ? resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId })
+    : requestedSession === "global"
+      ? requestedSession
+      : toAgentStoreSessionKey({
+          agentId: resolvedAgentId,
+          requestKey: requestedSession,
+          mainKey: cfg.session?.mainKey,
+        });
 
   const storePath = resolveSessionStorePathCore(cfg.session?.store, {
     agentId: resolvedAgentId,
@@ -227,11 +157,31 @@ export async function sandboxExplainCommand(
         })
       : [];
 
-  const channel = resolveActiveChannel({
-    cfg,
-    entry: sessionEntry,
-    sessionKey,
-  });
+  const normalizedCandidate = normalizeOptionalLowercaseString(
+    sessionDeliveryChannel(sessionEntry),
+  );
+  let channel: string | undefined =
+    normalizedCandidate === INTERNAL_MESSAGE_CHANNEL
+      ? INTERNAL_MESSAGE_CHANNEL
+      : (normalizeAnyChannelId(normalizedCandidate) ?? undefined);
+  if (channel === undefined) {
+    const parsed = parseAgentSessionKey(sessionKey);
+    if (parsed) {
+      const sessionChannel = parsed.rest.trim().split(":").find(Boolean);
+      const configuredMainKey = normalizeMainKey(cfg.session?.mainKey);
+      if (sessionChannel && sessionChannel !== configuredMainKey) {
+        // Legacy session keys embedded provider/channel in the first segment after
+        // agent id; use that as a fallback when the session store lacks channel data.
+        const candidate = normalizeOptionalLowercaseString(sessionChannel);
+        if (candidate) {
+          channel =
+            candidate === INTERNAL_MESSAGE_CHANNEL
+              ? INTERNAL_MESSAGE_CHANNEL
+              : (normalizeAnyChannelId(candidate) ?? undefined);
+        }
+      }
+    }
+  }
 
   const elevatedGlobal = cfg.tools?.elevated;
   const elevatedAgent = agentConfig?.tools?.elevated;

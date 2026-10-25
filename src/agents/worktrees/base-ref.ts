@@ -66,7 +66,7 @@ export async function resolveWorktreeCreationBase(
   repoRoot: string,
   params: Pick<
     CreateManagedWorktreeParams,
-    "baseRef" | "checkoutCommit" | "signal" | "commitGuard"
+    "baseRef" | "checkoutCommit" | "signal" | "commitGuard" | "onProgress"
   > & {
     prepareBase?: WorktreeBasePreparation;
   },
@@ -82,6 +82,10 @@ export async function resolveWorktreeCreationBase(
       fetchSucceeded: undefined,
       warning: undefined,
     };
+  }
+  if (!params.baseRef) {
+    // Only the default-branch base fetches; pinned commits and explicit refs resolve locally.
+    params.onProgress?.("base");
   }
   return params.prepareBase && !params.baseRef
     ? await params.prepareBase({

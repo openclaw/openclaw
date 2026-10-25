@@ -9,13 +9,11 @@ const BoardDocument = lazy(() => import("../../components/board/board-document.t
   export: "OpenClawBoardDocument",
 });
 
-export type DashboardPreviewProps = {
+export function DashboardPreview(props: {
   gatewaySnapshot?: ApplicationGatewaySnapshot;
   sessionKey?: string;
   agentId?: string;
-};
-
-export function DashboardPreview(props: DashboardPreviewProps) {
+}) {
   let host!: HTMLElement;
   const [nearVisible, setNearVisible] = createSignal(false);
   onSettled(() => {

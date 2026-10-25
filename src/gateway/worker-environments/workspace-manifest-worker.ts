@@ -15,6 +15,7 @@ import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { joinStagedWorkspaceManifestRead } from "./workspace-result-git.js";
 import {
   resolveStagedWorkspaceReadEntry,
   stagedWorkspaceEntryBytes,
@@ -47,8 +48,12 @@ function transferableManifestInput(command: GitWorkerCommand): ArrayBuffer[] {
     return [command.input.payload.buffer];
   }
   switch (command.type) {
+    case "workspace.manifest.paths":
     case "workspace.manifest.parse":
       return [command.input.raw.buffer];
+    case "workspace.manifest.base-refresh":
+      return [command.input.baseRaw.buffer];
+    case "workspace.manifest.equal":
     case "workspace.manifest.pair":
       return [command.input.baseRaw.buffer, command.input.currentRaw.buffer];
     case "workspace.manifest.stage-input":
@@ -89,7 +94,7 @@ async function computeValue(
   signal?: AbortSignal,
 ) {
   signal?.throwIfAborted();
-  return await computeWorkspaceManifest(
+  return computeWorkspaceManifest(
     { type, input: { payload: new TextEncoder().encode(JSON.stringify(input)) } },
     signal,
   );
@@ -105,7 +110,9 @@ function captureHashes(includeMemo = true) {
     : undefined;
   return {
     hashes,
-    accept<T>(result: WorkspaceComputationHashResult<T>): T {
+    accept<Result extends WorkspaceComputationHashResult<unknown>>(
+      result: Result,
+    ): Result["value"] {
       if (context) {
         for (const [identity, digest] of result.hashes) {
           context.memo.set(identity, digest);
@@ -121,7 +128,11 @@ function captureHashes(includeMemo = true) {
   };
 }
 
-type WorkspaceCaptureCommand = "workspace.manifest.capture" | "workspace.manifest.snapshot";
+type WorkspaceCaptureCommand =
+  | "workspace.manifest.capture"
+  | "workspace.manifest.snapshot"
+  | "workspace.manifest.document"
+  | "workspace.manifest.reference";
 
 function captureWorkspace<Type extends WorkspaceCaptureCommand>(
   type: Type,
@@ -132,9 +143,15 @@ async function captureWorkspace(type: WorkspaceCaptureCommand, params: Workspace
   if (hasGitWorkerContext()) {
     const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
     const snapshot = await readActualWorkspaceManifestImpl(params);
-    return type === "workspace.manifest.snapshot"
-      ? snapshot
-      : { manifest: snapshot.manifest, manifestRef: snapshot.manifestRef };
+    if (type === "workspace.manifest.document") {
+      const { manifestRef, rawManifest } = snapshot;
+      return { manifestRef, rawManifest };
+    }
+    return type === "workspace.manifest.reference"
+      ? snapshot.manifestRef
+      : type === "workspace.manifest.snapshot"
+        ? snapshot
+        : { manifest: snapshot.manifest, manifestRef: snapshot.manifestRef };
   }
   signal?.throwIfAborted();
   const hashes = captureHashes();
@@ -163,13 +180,68 @@ export async function captureWorkspaceSnapshot(params: WorkspaceCaptureArguments
   return await captureWorkspace("workspace.manifest.snapshot", params);
 }
 
+/** Keep complete source inventories in the worker; only the staged document returns. */
+export async function prepareWorkspaceBaseRefresh(
+  input: Omit<
+    WorkspaceManifestComputationOperations["workspace.manifest.base-refresh"]["input"],
+    "baseRaw" | "hashes"
+  > & { baseRaw: string },
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  const hashes = captureHashes();
+  return hashes.accept(
+    await computeWorkspaceManifest(
+      {
+        type: "workspace.manifest.base-refresh",
+        input: {
+          ...input,
+          baseRaw: new TextEncoder().encode(input.baseRaw),
+          hashes: hashes.hashes,
+        },
+      },
+      signal,
+    ),
+  );
+}
+
+export async function workspaceSnapshotsEqual(
+  left: { rawManifest: string; manifestRef: string },
+  right: { rawManifest: string; manifestRef: string },
+  buildCacheInputs?: string[],
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  const encoder = new TextEncoder();
+  return await computeWorkspaceManifest(
+    {
+      type: "workspace.manifest.equal",
+      input: {
+        baseRaw: encoder.encode(left.rawManifest),
+        baseRef: left.manifestRef,
+        currentRaw: encoder.encode(right.rawManifest),
+        currentRef: right.manifestRef,
+        buildCacheInputs,
+      },
+    },
+    signal,
+  );
+}
+
+export async function captureWorkspaceManifestDocument(params: WorkspaceCaptureArguments) {
+  return await captureWorkspace("workspace.manifest.document", params);
+}
+
+export async function captureWorkspaceManifestReference(params: WorkspaceCaptureArguments) {
+  return await captureWorkspace("workspace.manifest.reference", params);
+}
+
 export async function preflightWorkspaceApply(
   params: Omit<WorkspaceManifestValueInputs["workspace.reconcile.preflight"], "hashes"> & {
     signal?: AbortSignal;
   },
 ) {
-  const { root, base, current, signal } = params;
-  const input = { root, base, current };
+  const { signal, ...input } = params;
   if (hasGitWorkerContext()) {
     const { preflightWorkspaceApplyImpl } = await import("./workspace-reconcile-preflight.js");
     return await preflightWorkspaceApplyImpl(input);
@@ -185,26 +257,16 @@ export async function preflightWorkspaceApply(
   );
 }
 
-export async function computeWorkspaceFileSnapshot(
-  path: string,
-  maxBytes: number,
-  root?: string,
-  signal?: AbortSignal,
-) {
+export async function computeWorkspaceFileSnapshot(path: string, maxBytes: number, root?: string) {
   if (hasGitWorkerContext()) {
     const { readWorkspaceFileSnapshotWithLimit } = await import("./workspace-actual-manifest.js");
-    return await readWorkspaceFileSnapshotWithLimit(path, maxBytes, root, signal);
+    return await readWorkspaceFileSnapshotWithLimit(path, maxBytes, root);
   }
   // Bulk capture/preflight carries the memo once. A single verification must not
   // clone a placement's complete cache for every file it observes.
-  signal?.throwIfAborted();
   const hashes = captureHashes(false);
   return hashes.accept(
-    await computeValue(
-      "workspace.manifest.file",
-      { path, maxBytes, root, hashes: hashes.hashes },
-      signal,
-    ),
+    await computeValue("workspace.manifest.file", { path, maxBytes, root, hashes: hashes.hashes }),
   );
 }
 
@@ -230,6 +292,25 @@ export async function decodeWorkspaceManifest(
   );
 }
 
+export async function workspaceManifestPaths(
+  document: { rawManifest: string; manifestRef: string },
+  buildCacheInputs: string[],
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  return await computeWorkspaceManifest(
+    {
+      type: "workspace.manifest.paths",
+      input: {
+        raw: new TextEncoder().encode(document.rawManifest),
+        expectedRef: document.manifestRef,
+        buildCacheInputs,
+      },
+    },
+    signal,
+  );
+}
+
 export async function serializeWorkspaceManifest(
   manifest: WorkerWorkspaceManifest,
   signal?: AbortSignal,
@@ -246,24 +327,22 @@ export async function overlayWorkspaceManifest(
   return await computeValue("workspace.manifest.overlay", { source, prepared, incoming }, signal);
 }
 
-export async function parseWorkspaceManifestPair(
-  input: { baseRaw: string; baseRef: string; currentRaw: string; currentRef: string },
-  signal?: AbortSignal,
-) {
-  signal?.throwIfAborted();
+export async function parseWorkspaceManifestPair(input: {
+  baseRaw: string;
+  baseRef: string;
+  currentRaw: string;
+  currentRef: string;
+}) {
   const encoder = new TextEncoder();
-  return await computeWorkspaceManifest(
-    {
-      type: "workspace.manifest.pair",
-      input: {
-        baseRef: input.baseRef,
-        currentRef: input.currentRef,
-        baseRaw: encoder.encode(input.baseRaw),
-        currentRaw: encoder.encode(input.currentRaw),
-      },
+  return await computeWorkspaceManifest({
+    type: "workspace.manifest.pair",
+    input: {
+      baseRef: input.baseRef,
+      currentRef: input.currentRef,
+      baseRaw: encoder.encode(input.baseRaw),
+      currentRaw: encoder.encode(input.currentRaw),
     },
-    signal,
-  );
+  });
 }
 
 export async function loadStagedWorkspaceManifest(
@@ -272,23 +351,21 @@ export async function loadStagedWorkspaceManifest(
   signal?: AbortSignal,
   buildCacheInputs?: string[],
 ) {
-  return await computeWorkspaceManifest(
-    { type: "workspace.manifest.staged", input: { root, ref, buildCacheInputs } },
-    signal,
-  );
+  const input = { root, ref, buildCacheInputs };
+  const read = () => computeWorkspaceManifest({ type: "workspace.manifest.staged", input }, signal);
+  // A worker's host exchange context owns its policy and authority independently.
+  return hasGitWorkerContext()
+    ? await read()
+    : await joinStagedWorkspaceManifestRead(input, signal, read);
 }
 
-export async function* readStagedWorkspaceManifestEntries(
-  input: {
-    root: string;
-    entries: readonly WorkerWorkspaceManifestEntry[];
-    objectsByPath: StagedWorkerWorkspaceInventory["objectsByPath"];
-  },
-  signal?: AbortSignal,
-) {
+export async function* readStagedWorkspaceManifestEntries(input: {
+  root: string;
+  entries: readonly WorkerWorkspaceManifestEntry[];
+  objectsByPath: StagedWorkerWorkspaceInventory["objectsByPath"];
+}) {
   let nextEntry = 0;
   while (nextEntry < input.entries.length) {
-    signal?.throwIfAborted();
     const entries: StagedWorkerWorkspaceReadEntry[] = [];
     let bytes = 0;
     while (nextEntry < input.entries.length) {
@@ -305,13 +382,12 @@ export async function* readStagedWorkspaceManifestEntries(
       bytes += entryBytes;
       nextEntry++;
     }
-    const contents = await computeWorkspaceManifest(
-      { type: "workspace.manifest.entries", input: { root: input.root, entries } },
-      signal,
-    );
+    const contents = await computeWorkspaceManifest({
+      type: "workspace.manifest.entries",
+      input: { root: input.root, entries },
+    });
     let offset = 0;
     for (const { entry } of entries) {
-      signal?.throwIfAborted();
       const content =
         entry.type === "file" ? contents.subarray(offset, offset + entry.size) : undefined;
       offset += entry.type === "file" ? entry.size : 0;
@@ -320,41 +396,36 @@ export async function* readStagedWorkspaceManifestEntries(
   }
 }
 
-export async function prepareWorkspaceStageInput(
-  input: WorkspaceStageInput<string>,
-  signal?: AbortSignal,
-) {
-  signal?.throwIfAborted();
+export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<string>) {
   const encoder = new TextEncoder();
-  return await computeWorkspaceManifest(
-    {
-      type: "workspace.manifest.stage-input",
-      input: {
-        inputPath: input.inputPath,
-        stagingRoot: input.stagingRoot,
-        stagedResultRef: input.stagedResultRef,
-        buildCacheInputs: input.buildCacheInputs,
-        ...("publication" in input
-          ? {
-              publication: {
-                ...input.publication,
-                metadata: encoder.encode(input.publication.metadata),
-              },
-            }
-          : {
-              baseManifestRef: input.baseManifestRef,
-              currentManifestRef: input.currentManifestRef,
-              baseManifestRaw: encoder.encode(input.baseManifestRaw),
-              currentManifestRaw: encoder.encode(input.currentManifestRaw),
-            }),
-      },
+  return await computeWorkspaceManifest({
+    type: "workspace.manifest.stage-input",
+    input: {
+      inputPath: input.inputPath,
+      stagingRoot: input.stagingRoot,
+      stagedResultRef: input.stagedResultRef,
+      buildCacheInputs: input.buildCacheInputs,
+      gitHistory: input.gitHistory,
+      parentCommit: input.parentCommit,
+      ...("publication" in input
+        ? {
+            publication: {
+              ...input.publication,
+              metadata: encoder.encode(input.publication.metadata),
+            },
+          }
+        : {
+            baseManifestRef: input.baseManifestRef,
+            currentManifestRef: input.currentManifestRef,
+            baseManifestRaw: encoder.encode(input.baseManifestRaw),
+            currentManifestRaw: encoder.encode(input.currentManifestRaw),
+          }),
     },
-    signal,
-  );
+  });
 }
 
 export async function prepareWorkspaceTreeInput(
   input: WorkspaceManifestValueInputs["workspace.manifest.tree-input"],
 ): Promise<null> {
-  return await computeValue("workspace.manifest.tree-input", input);
+  return computeValue("workspace.manifest.tree-input", input);
 }

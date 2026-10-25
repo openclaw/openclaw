@@ -39,7 +39,11 @@ import {
 import { readVoiceSessionRecord } from "./client-voice-session-store.js";
 import { captureClientVoiceSessionWriter } from "./client-voice-session-write.js";
 import * as voiceWriters from "./client-voice-session-write.js";
-import { recordMutation, seedSession } from "./client-voice-session.fixture.test-support.js";
+import {
+  recordMutation,
+  recordMutationEvents,
+  seedSession,
+} from "./client-voice-session.fixture.test-support.js";
 import {
   appendClientVoiceTranscript,
   closeClientVoiceSession,
@@ -624,20 +628,7 @@ describe("client voice session worker contract", () => {
       setTestEnvValue("OPENCLAW_STATE_DIR", path.join(originalStateDir, "successor"));
       await createVoice({ voiceSessionId });
       gate = await holdWorker({ agentId: target.agentId, env: originalEnv });
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.started",
-        runId,
-        toolCallId: "call-original-source",
-        toolName: "message",
-        mutatingAction: true,
-      });
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.completed",
-        runId,
-        toolCallId: "call-original-source",
-        toolName: "message",
-        durationMs: 5,
-      });
+      recordMutationEvents(runId, "call-original-source");
       const expectedEffects = [
         expect.objectContaining({ runId, toolName: "message", status: "succeeded" }),
       ];

@@ -64,7 +64,7 @@ export const sidSchema = z
       !["S-1-5-18", "S-1-5-19", "S-1-5-20"].includes(value)
     );
   });
-export const originsSchema = z
+const originsSchema = z
   .array(z.string().regex(/^chrome-extension:\/\/[a-p]{32}\/$/))
   .min(1)
   .max(32)

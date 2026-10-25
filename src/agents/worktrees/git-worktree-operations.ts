@@ -83,7 +83,7 @@ export type GitWorktreeOperations = {
     output: { targetBytes: number; changedBytes: number; requiresFullCheckout: boolean };
   };
   "worktree.directory-size": {
-    input: { root: string; excludeGit?: boolean };
+    input: { root: string };
     output: number;
   };
   "worktree.cleanup-inspection": {

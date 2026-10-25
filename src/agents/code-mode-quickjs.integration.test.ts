@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, assert, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveCodeModeConfig } from "./code-mode-runtime.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
 import {
   createCatalogCodeModeHarness,
@@ -53,7 +54,7 @@ function snapshotFixture() {
 
 it("yields and resumes a direct executor call without an inline host", async () => {
   const { ctx } = createCodeModeHarness(quickjs);
-  const config = testing.resolveCodeModeHeadlessConfig(ctx);
+  const config = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
   const options = {
     executor: "quickjs" as const,
     runtimeConfig: ctx.config,

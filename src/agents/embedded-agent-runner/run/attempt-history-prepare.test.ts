@@ -120,32 +120,28 @@ beforeEach(() => {
 it.each([
   [
     false,
-    [
-      "[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.",
-      "Review the current state below and continue the conversation from where the previous model left off.",
-      "",
-      "CURRENT STATE SUMMARY:",
-      "Delegate the remaining work",
-    ],
+    `[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.
+Review the current state below and continue the conversation from where the previous model left off.
+
+CURRENT STATE SUMMARY:
+Delegate the remaining work`,
   ],
   [
     true,
-    [
-      "[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.",
-      "You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.",
-      "",
-      "ACTIVE SUBORDINATE UNITS:",
-      "- Subagent child-session (orchestrator): done",
-      "- Subagent worker-2 (leaf): running",
-      "",
-      "CURRENT STATE SUMMARY:",
-      "Delegate the remaining work",
-      "",
-      "INSTRUCTIONS:",
-      "1. Review the state and subordinate reports.",
-      "2. Provide strategic guidance and commands to subordinates.",
-      "3. Do not repeat work already performed by subordinates.",
-    ],
+    `[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.
+You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.
+
+ACTIVE SUBORDINATE UNITS:
+- Subagent child-session (orchestrator): done
+- Subagent worker-2 (leaf): running
+
+CURRENT STATE SUMMARY:
+Delegate the remaining work
+
+INSTRUCTIONS:
+1. Review the state and subordinate reports.
+2. Provide strategic guidance and commands to subordinates.
+3. Do not repeat work already performed by subordinates.`,
   ],
 ] as const)("publishes the complete recovery briefing with team=%s", async (team, expected) => {
   const fixture = createFixture();
@@ -163,7 +159,7 @@ it.each([
   await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
   expect(fixture.agent.state.messages.at(-1)).toMatchObject({
     role: "user",
-    content: expected.join("\n"),
+    content: expected,
   });
 });
 

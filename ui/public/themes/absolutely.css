@@ -1,6 +1,7 @@
 /* Absolutely palette; selected by index.html and app/theme.ts. */
 
 :root[data-theme="absolutely"] {
+  --shell-divider-size: calc(var(--resize-handle-line-size) / 2);
   /*
    * Accent — terracotta clay on warm graphite
    *
@@ -88,6 +89,7 @@
 }
 
 :root[data-theme="absolutely-light"] {
+  --shell-divider-size: calc(var(--resize-handle-line-size) / 2);
   /*
    * Accent — burnt clay on ivory paper
    *
@@ -131,6 +133,7 @@
   --muted-strong: #555047;
   --muted-foreground: #6b655b;
 
+  --resize-handle-rest-color: color-mix(in srgb, var(--text) 10%, transparent);
   --border: #e3dfd2;
   --border-strong: #cdc7b6;
   --border-hover: #ada694;

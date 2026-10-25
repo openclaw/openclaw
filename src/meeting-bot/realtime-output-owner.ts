@@ -1,3 +1,4 @@
+import { rememberBoundedKey } from "../infra/dedupe.js";
 import type { RealtimeVoiceBridgeEvent } from "../talk/provider-types.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
@@ -7,19 +8,27 @@ const AUDIO_DELTA_EVENTS = new Set([
   "response.audio.delta",
   "response.output_audio.delta",
 ]);
-const OUTPUT_MAX_PENDING_MS = 2_000;
+// Providers can stream far ahead of playback; keep that unplayed audio bounded.
+const OUTPUT_MAX_PENDING_MS = 120_000;
+const OUTPUT_MAX_PENDING_FRAMES = 6_000;
 const OUTPUT_MAX_WRITE_MS = 500;
-const OUTPUT_MAX_PENDING_FRAMES = 256;
+// A full pacat pipe can hold a healthy write for about 2 s. Recover only after
+// 5 s without progress and more than 2 s of unplayed audio.
+const OUTPUT_STALL_MS = 5_000;
+const OUTPUT_STALL_PENDING_MS = 2_000;
 
 /** Serializes native playback writes and fences queued audio across interruption. */
 export function createMeetingRealtimeOutputQueue(params: {
   transport: MeetingRealtimeAudioTransport;
   bytesPerMs: number;
   onFailure: (source: string, error: unknown) => void;
+  onStall: () => void;
 }) {
   let stopped = false;
   let generation = 0;
   let writePhase: "idle" | "scheduled" | "writing" = "idle";
+  let writeStartedAt = 0;
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
   let clearPending = 0;
   let clearAfterActive = false;
   let pendingBytes = 0;
@@ -37,9 +46,16 @@ export function createMeetingRealtimeOutputQueue(params: {
     generation: number;
   }> = [];
   const maxPendingBytes = params.bytesPerMs * OUTPUT_MAX_PENDING_MS;
+  const stallPendingBytes = params.bytesPerMs * OUTPUT_STALL_PENDING_MS;
   const maxWriteBytes = params.bytesPerMs * OUTPUT_MAX_WRITE_MS;
 
+  const isStalled = (incomingBytes = 0) =>
+    writePhase === "writing" &&
+    Date.now() - writeStartedAt >= OUTPUT_STALL_MS &&
+    pendingBytes + incomingBytes > stallPendingBytes;
   const reset = () => {
+    clearTimeout(stallTimer);
+    stallTimer = undefined;
     generation += 1;
     queue.length = 0;
     pendingBytes = 0;
@@ -107,6 +123,13 @@ export function createMeetingRealtimeOutputQueue(params: {
           params.transport.beginOutput?.();
         }
         writePhase = "writing";
+        writeStartedAt = Date.now();
+        // A finished provider cannot trigger another enqueue to detect stuck playback.
+        stallTimer = setTimeout(() => {
+          if (isStalled()) {
+            params.onStall();
+          }
+        }, OUTPUT_STALL_MS);
         await params.transport.writeOutput(audio);
         if (!stopped && next.generation === generation) {
           // Native write completion admits audio to playback; it does not mean it was heard.
@@ -125,6 +148,8 @@ export function createMeetingRealtimeOutputQueue(params: {
         }
       })
       .finally(() => {
+        clearTimeout(stallTimer);
+        stallTimer = undefined;
         writePhase = "idle";
         if (next.generation === generation) {
           pendingBytes -= batchBytes;
@@ -144,6 +169,7 @@ export function createMeetingRealtimeOutputQueue(params: {
     enqueue(audio: Buffer, audible: boolean, beginsOutput: boolean): boolean {
       if (
         stopped ||
+        isStalled(audio.byteLength) ||
         audio.byteLength > maxPendingBytes - pendingBytes ||
         pendingFrames >= OUTPUT_MAX_PENDING_FRAMES
       ) {
@@ -182,14 +208,7 @@ export function createMeetingRealtimeOutputOwner() {
 
   const rememberStale = (responseId: string) => {
     staleResponseIds.delete(responseId);
-    staleResponseIds.add(responseId);
-    while (staleResponseIds.size > STALE_RESPONSE_LIMIT) {
-      const oldest = staleResponseIds.values().next().value;
-      if (!oldest) {
-        break;
-      }
-      staleResponseIds.delete(oldest);
-    }
+    rememberBoundedKey(staleResponseIds, responseId, STALE_RESPONSE_LIMIT);
   };
 
   return {

@@ -1,4 +1,3 @@
-// Memory Core tests cover manager.vector dedupe plugin behavior.
 import { endianness } from "node:os";
 import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,38 +11,36 @@ function vectorHex(values: number[]): string {
 
 describe("memory vector dedupe", () => {
   let db: DatabaseSync;
+  const trigger = (name: string, event: "INSERT" | "DELETE", body: string, when = "") =>
+    db.exec(`CREATE TRIGGER ${name} BEFORE ${event} ON memory_index_chunks_vec
+      ${when} BEGIN ${body} END;`);
 
   beforeEach(() => {
     db = new DatabaseSync(":memory:");
     db.exec("CREATE TABLE memory_index_chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
-    db.exec(`
-      CREATE TRIGGER fail_if_vector_row_not_deleted
-      BEFORE INSERT ON memory_index_chunks_vec
-      WHEN EXISTS (SELECT 1 FROM memory_index_chunks_vec WHERE id = NEW.id)
-      BEGIN
-        SELECT RAISE(FAIL, 'vector row not deleted before insert');
-      END;
-    `);
+    trigger(
+      "fail_if_vector_row_not_deleted",
+      "INSERT",
+      "SELECT RAISE(FAIL, 'vector row not deleted before insert');",
+      "WHEN EXISTS (SELECT 1 FROM memory_index_chunks_vec WHERE id = NEW.id)",
+    );
   });
 
-  afterEach(() => {
-    db.close();
-  });
+  afterEach(() => db.close());
 
   const rows = () =>
     db
       .prepare("SELECT id, hex(embedding) AS embedding FROM memory_index_chunks_vec ORDER BY id")
       .all();
   const write = (id: string, embedding: number[]) => writeMemoryVectors(db, [{ id, embedding }]);
+  const expectVectors = (...entries: [string, number[]][]) =>
+    expect(rows()).toEqual(entries.map(([id, values]) => ({ id, embedding: vectorHex(values) })));
 
   it("deletes existing vector rows and binds each replacement independently", () => {
     write("chunk-1", [1, 0, 0]);
     write("chunk-2", [-0, 0.5, -1.25]);
     expect(write("chunk-1", [2, -3, 0.125])).toBeUndefined();
-    expect(rows()).toEqual([
-      { id: "chunk-1", embedding: vectorHex([2, -3, 0.125]) },
-      { id: "chunk-2", embedding: vectorHex([-0, 0.5, -1.25]) },
-    ]);
+    expectVectors(["chunk-1", [2, -3, 0.125]], ["chunk-2", [-0, 0.5, -1.25]]);
   });
 
   it("replaces a batch and keeps the final embedding for a repeated id", () => {
@@ -53,10 +50,7 @@ describe("memory vector dedupe", () => {
       { id: "chunk-2", embedding: [0, 0, 1] },
       { id: "chunk-1", embedding: [-1, 0, 0] },
     ]);
-    expect(rows()).toEqual([
-      { id: "chunk-1", embedding: vectorHex([-1, 0, 0]) },
-      { id: "chunk-2", embedding: vectorHex([0, 0, 1]) },
-    ]);
+    expectVectors(["chunk-1", [-1, 0, 0]], ["chunk-2", [0, 0, 1]]);
   });
 
   it("propagates DELETE preparation failure and permits a later retry", () => {
@@ -68,49 +62,36 @@ describe("memory vector dedupe", () => {
       }
       return constants.SQLITE_OK;
     });
-    try {
-      expect(() => write("chunk-1", [1, 0, 0])).toThrow(/not authorized/);
-      expect(denied).toBe(true);
-      expect(rows()).toEqual([]);
-      write("chunk-1", [0, 2, -0.5]);
-      expect(rows()).toEqual([{ id: "chunk-1", embedding: vectorHex([0, 2, -0.5]) }]);
-    } finally {
-      db.setAuthorizer(null);
+    expect(() => write("chunk-1", [1, 0, 0])).toThrow(/not authorized/);
+    expect(denied).toBe(true);
+    expectVectors();
+    write("chunk-1", [0, 2, -0.5]);
+    expectVectors(["chunk-1", [0, 2, -0.5]]);
+  });
+
+  it.each(["DELETE", "INSERT"] as const)("recovers after a %s step failure", (event) => {
+    const deleting = event === "DELETE";
+    write("chunk-1", [1, 0, 0]);
+    if (deleting) {
+      db.exec("CREATE TABLE delete_attempts (id TEXT)");
     }
-  });
-
-  it("propagates DELETE step failure and reuses the writer after recovery", () => {
-    write("chunk-1", [1, 0, 0]);
-    db.exec(`
-      CREATE TABLE delete_attempts (id TEXT);
-      CREATE TRIGGER fail_vector_delete
-      BEFORE DELETE ON memory_index_chunks_vec
-      BEGIN
-        INSERT INTO delete_attempts VALUES (OLD.id);
-        SELECT RAISE(FAIL, 'delete-step');
-      END;
-    `);
-    expect(() => write("chunk-1", [0, 1, 0])).toThrow("delete-step");
-    expect(db.prepare("SELECT id FROM delete_attempts").all()).toEqual([{ id: "chunk-1" }]);
-    expect(rows()).toEqual([{ id: "chunk-1", embedding: vectorHex([1, 0, 0]) }]);
-    db.exec("DROP TRIGGER fail_vector_delete");
-    write("chunk-1", [0, 1, 0]);
-    expect(rows()).toEqual([{ id: "chunk-1", embedding: vectorHex([0, 1, 0]) }]);
-  });
-
-  it("propagates INSERT failure after deletion without retaining stale bindings", () => {
-    write("chunk-1", [1, 0, 0]);
-    db.exec(`
-      CREATE TRIGGER refuse_vector_insert
-      BEFORE INSERT ON memory_index_chunks_vec
-      WHEN NEW.id = 'chunk-1'
-      BEGIN
-        SELECT RAISE(FAIL, 'insert refused');
-      END;
-    `);
-    expect(() => write("chunk-1", [0, 1, 0])).toThrow("insert refused");
-    expect(rows()).toEqual([]);
-    write("chunk-2", [0.25, -2, 3]);
-    expect(rows()).toEqual([{ id: "chunk-2", embedding: vectorHex([0.25, -2, 3]) }]);
+    trigger(
+      "refuse_write",
+      event,
+      `${deleting ? "INSERT INTO delete_attempts VALUES (OLD.id);" : ""} SELECT RAISE(FAIL, 'write refused');`,
+      deleting ? "" : "WHEN NEW.id = 'chunk-1'",
+    );
+    expect(() => write("chunk-1", [0, 1, 0])).toThrow("write refused");
+    if (deleting) {
+      expect(db.prepare("SELECT id FROM delete_attempts").all()).toEqual([{ id: "chunk-1" }]);
+      expectVectors(["chunk-1", [1, 0, 0]]);
+      db.exec("DROP TRIGGER refuse_write");
+    } else {
+      expectVectors();
+    }
+    const id = deleting ? "chunk-1" : "chunk-2";
+    const embedding = deleting ? [0, 1, 0] : [0.25, -2, 3];
+    write(id, embedding);
+    expectVectors([id, embedding]);
   });
 });

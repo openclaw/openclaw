@@ -3,6 +3,7 @@ import type { SessionParticipant } from "../../packages/gateway-protocol/src/sch
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { TranscriptSenderIdentity } from "../chat/sender-identity.js";
 import {
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
   type SessionCreatedActor as StoredSessionActor,
 } from "../config/sessions/session-entry-provenance.js";
@@ -123,7 +124,7 @@ function projectSourceActor(
   params: CatalogSourceIdentity & { actor: StoredSessionActor | undefined },
   resolveProfile: typeof readSourceProfileFacts,
 ): SessionCreatedActor | undefined {
-  const { actor } = params;
+  const actor = resolveSessionCreatorActor(params.actor);
   if (!actor) {
     return undefined;
   }

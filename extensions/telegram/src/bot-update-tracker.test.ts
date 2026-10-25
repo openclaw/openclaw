@@ -18,13 +18,6 @@ function begin(tracker: ReturnType<typeof createTelegramUpdateTracker>, id: numb
   return result.update;
 }
 
-const dispatchTracker = (options: Parameters<typeof createTelegramUpdateTracker>[0] = {}) =>
-  createTelegramUpdateTracker({
-    initialUpdateId: null,
-    ackPolicy: "after_agent_dispatch",
-    ...options,
-  });
-
 async function flushTrackerMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
@@ -33,7 +26,7 @@ async function flushTrackerMicrotasks() {
 describe("createTelegramUpdateTracker", () => {
   it("can persist offsets only after successful agent dispatch", async () => {
     const onAcceptedUpdateId = vi.fn();
-    const tracker = dispatchTracker({
+    const tracker = createTelegramUpdateTracker({
       initialUpdateId: 100,
       onAcceptedUpdateId,
     });
@@ -66,7 +59,7 @@ describe("createTelegramUpdateTracker", () => {
       onAcceptedUpdateId,
     });
 
-    begin(firstProcess, 101);
+    firstProcess.finishUpdate(begin(firstProcess, 101), { completed: true });
     await flushTrackerMicrotasks();
 
     const restartedProcess = createTelegramUpdateTracker({
@@ -81,7 +74,7 @@ describe("createTelegramUpdateTracker", () => {
 
   it("can keep a persistence floor while replaying older spooled updates", async () => {
     const onAcceptedUpdateId = vi.fn();
-    const tracker = dispatchTracker({
+    const tracker = createTelegramUpdateTracker({
       persistenceFloorUpdateId: 42,
       onAcceptedUpdateId,
     });
@@ -98,7 +91,7 @@ describe("createTelegramUpdateTracker", () => {
     { name: "below-floor replay", floor: 42, newer: [43], delayed: 42 },
     { name: "delayed cross-lane replay", floor: 100, newer: [102, 103], delayed: 101 },
   ])("dispatches $name exactly once after newer updates complete", ({ floor, newer, delayed }) => {
-    const tracker = dispatchTracker({ persistenceFloorUpdateId: floor });
+    const tracker = createTelegramUpdateTracker({ persistenceFloorUpdateId: floor });
     const updates = newer.map((id) => begin(tracker, id));
     for (const update of updates) {
       tracker.finishUpdate(update, { completed: true });
@@ -113,7 +106,7 @@ describe("createTelegramUpdateTracker", () => {
   });
 
   it("does not prune pending or failed accepted ids from the retention window", () => {
-    const tracker = dispatchTracker({ persistenceFloorUpdateId: 0 });
+    const tracker = createTelegramUpdateTracker({ persistenceFloorUpdateId: 0 });
     const pendingId = 1;
     const failedId = 2;
     begin(tracker, pendingId);
@@ -152,9 +145,9 @@ describe("createTelegramUpdateTracker", () => {
       onAcceptedUpdateId,
     });
 
-    begin(tracker, 101);
-    begin(tracker, 102);
-    begin(tracker, 103);
+    tracker.finishUpdate(begin(tracker, 101), { completed: true });
+    tracker.finishUpdate(begin(tracker, 102), { completed: true });
+    tracker.finishUpdate(begin(tracker, 103), { completed: true });
 
     await flushTrackerMicrotasks();
     expect(writes).toEqual([101]);
@@ -166,7 +159,7 @@ describe("createTelegramUpdateTracker", () => {
 
     secondWrite.resolve();
     await flushTrackerMicrotasks();
-    expect(tracker.beginUpdate(updateCtx(104)).accepted).toBe(true);
+    tracker.finishUpdate(begin(tracker, 104), { completed: true });
     await flushTrackerMicrotasks();
     expect(writes).toEqual([101, 103, 104]);
   });

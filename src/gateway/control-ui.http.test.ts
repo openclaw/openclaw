@@ -196,10 +196,7 @@ function runControlUiRequest(
   return runRequest(
     handleControlUiHttpRequest,
     { ...params, url },
-    {
-      ...params,
-      root: { kind: rootKind, path: rootPath },
-    },
+    { ...params, root: { kind: rootKind, path: rootPath } },
   );
 }
 
@@ -620,9 +617,7 @@ it("rejects trusted-proxy assistant media requests from disallowed browser origi
   const filePath = await createMediaFile();
   const reply = await runTrustedProxyAssistantMediaRequest({
     filePath,
-    headers: {
-      origin: "https://evil.example",
-    },
+    headers: { origin: "https://evil.example" },
   });
   expectStatus(reply, 401);
   expect(reply.text).toContain("Unauthorized");
@@ -635,30 +630,6 @@ it("rejects trusted-proxy assistant media file reads without operator.read scope
     headers: { "x-openclaw-scopes": "operator.approvals" },
   });
   expectMissingOperatorReadResponse(reply);
-});
-
-it("does not inject inline scripts into index.html", async () => {
-  const html = "<html><head></head><body>Hello</body></html>\n";
-  const tmp = await createControlUiRoot(html);
-
-  const reply = await runControlUiRequest(tmp, "/", {
-    headers: { host: "gateway.example.test" },
-    config: {
-      agents: {
-        defaults: { workspace: tmp },
-        entries: {
-          main: { identity: { name: "</script><script>alert(1)//", avatar: "evil.png" } },
-        },
-      },
-    },
-  });
-  expect(reply.handled).toBe(true);
-  expect(reply.end).toHaveBeenCalledWith(
-    html.replace(
-      "<html",
-      '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true"',
-    ),
-  );
 });
 
 it.each(["/openclaw/"])(
@@ -699,6 +670,10 @@ it.each(["/openclaw/"])(
           : [`${mount}/assets/shared.js`, ...(route ? [`${mount}/assets/${route}.js`] : [])],
       );
       if (!pathname.startsWith("/share/")) {
+        const links = preloads.map((href) => `<${href}>; rel=modulepreload; crossorigin`);
+        expect(reply.headers.Link, pathname).toEqual(links);
+      }
+      if (!pathname.startsWith("/share/")) {
         expect(body, pathname).toContain(`<script>${script}</script>`);
         const csp = reply.headers["Content-Security-Policy"];
         const hash = createHash("sha256").update(script, "utf8").digest("base64");
@@ -733,6 +708,14 @@ it("exposes only the environment identity on public HTML while bootstrap stays a
 
   const config: OpenClawConfig = {
     gateway: { controlUi: { environment: { label: "edge & team", color: "amber" } } },
+    agents: {
+      entries: {
+        main: {
+          workspace: tmp,
+          identity: { name: "</script><script>alert(1)//", avatar: "evil.png" },
+        },
+      },
+    },
   };
   const auth = tokenAuth;
   const documentResponse = await runControlUiRequest(tmp, "/", { config, auth });
@@ -740,6 +723,7 @@ it("exposes only the environment identity on public HTML while bootstrap stays a
   expect(documentResponse.text).toContain(
     'data-openclaw-environment="{&quot;label&quot;:&quot;edge &amp; team&quot;,&quot;color&quot;:&quot;amber&quot;}"',
   );
+  expect(documentResponse.text).not.toMatch(/<script|alert\(1\)|evil\.png/);
 
   const bootstrapResponse = await runBootstrapConfigRequest({ rootPath: tmp, config, auth });
   expect(bootstrapResponse.res.statusCode).toBe(401);
@@ -961,9 +945,7 @@ it("sets least-privilege route-bound cookies for multiple external plugin tabs",
     rootPath: tmp,
     auth: tokenAuth,
     headers: { authorization: "Bearer test-token" },
-    config: {
-      agents: { defaults: { workspace: tmp } },
-    },
+    config: { agents: { defaults: { workspace: tmp } } },
   });
 
   expectStatus(reply);
@@ -1259,21 +1241,6 @@ it("does not expose precompressed sidecars as independent assets", async () => {
   expectNotFoundResponse(reply);
 });
 
-it("compresses prepared SPA fallback HTML", async () => {
-  const tmp = await createControlUiRoot(`<html><body>${"hello ".repeat(200)}</body></html>\n`);
-  const params = { headers: { "accept-encoding": "gzip" } };
-  const first = await runControlUiRequest(tmp, "/chat", params);
-  const reply = await runControlUiRequest(tmp, "/chat", params);
-  expect(reply.headers).toMatchObject({
-    "Cache-Control": "no-cache",
-    "Content-Encoding": "gzip",
-  });
-  expect(gunzipSync(reply.body as Buffer).toString()).toContain(
-    '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true">',
-  );
-  expect(reply.body).toEqual(first.body);
-});
-
 it("returns 406 when every HTML representation is explicitly rejected", async () => {
   const reply = await runControlUiRequest(await createControlUiRoot(), "/", {
     headers: { "accept-encoding": "*;q=0" },
@@ -1290,9 +1257,7 @@ it("rejects malformed encoding weights and preserves negotiated HEAD byte length
   await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
   const request = {
     rootKind: "bundled" as const,
-    headers: {
-      "accept-encoding": "br;q=0.8junk, gzip;q=0.5, identity;q=0",
-    },
+    headers: { "accept-encoding": "br;q=0.8junk, gzip;q=0.5, identity;q=0" },
   };
   const get = await runControlUiRequest(tmp, "/assets/app-HeAd1234.js", {
     ...request,

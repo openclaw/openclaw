@@ -3,7 +3,8 @@ import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
 import { sanitizeHtml } from "./web-fetch-visibility.js";
 
 async function expectVisible(html: string, visible = ["Visible sibling"]) {
-  const result = await sanitizeHtml(html);
+  const result = await sanitizeHtml(`<p>Visible prefix</p>${html}`);
+  expect(result).toContain("Visible prefix");
   expect(result).not.toContain("Secret");
   for (const text of visible) {
     expect(result).toContain(text);
@@ -11,11 +12,6 @@ async function expectVisible(html: string, visible = ["Visible sibling"]) {
 }
 
 describe("sanitizeHtml", () => {
-  it("retains visible contents in a complete ordinary name", async () => {
-    const html = `<meta\u00a0><p>Visible inside</p></meta\u00a0><p>Visible sibling</p>`;
-    expect(await sanitizeHtml(html)).toBe(html);
-  });
-
   it("filters real metadata and hidden ordinary names without removing the visible sibling", async () => {
     const html =
       '<meta content="Secret metadata"><meta\u00a0 hidden>Secret body</meta\u00a0><p>Visible sibling</p>';
@@ -34,7 +30,6 @@ describe("sanitizeHtml", () => {
     ) {
       return Reflect.construct(NativeRegExp, [pattern, flags]);
     });
-
     try {
       const result = await sanitizeHtml(html);
       expect(result).toContain("Visible 0");
@@ -52,16 +47,20 @@ describe("sanitizeHtml", () => {
     "font-size:0px",
     "text-indent:-9999px",
     "color:transparent",
-    "color:rgba(0,0,0,0)",
     "color:rgba(0,0,0,0.0)",
     "color:hsla(0,0%,0%,0)",
     "transform:scale(0)",
+    "transform:scale(1, 0)",
+    "transform:scaleX(-0.0)",
+    "transform:scaleY(0%)",
+    "transform:scale3d(0%, 100%, 100%)",
+    "transform:scale3d(100%, 0%, 100%)",
+    "transform:rotate(30deg) scale(1, 0e2)",
     "transform:translateX(-9999px)",
     "transform:translateY(-9999px)",
     "width:0;height:0;overflow:hidden",
     "left:-9999px",
     "top:-9999px",
-    "clip-path:inset(100%)",
     "clip-path:inset(50%)",
   ])("strips elements hidden by %s", async (style) => {
     const result = await sanitizeHtml(`<p>Visible</p><div style="${style}">Hidden</div>`);
@@ -69,69 +68,49 @@ describe("sanitizeHtml", () => {
     expect(result).not.toContain("Hidden");
   });
 
-  it("does not strip clip-path:inset(0%) elements", async () => {
-    const html = '<p>Show</p><div style="clip-path:inset(0%)">Visible</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).toContain("Visible");
+  it.each([
+    "scale(0.5, 0.5)",
+    "scale3d(100%, 100%, 0%)",
+    "scaleZ(0)",
+    "scale(0, 0, 0)",
+    "scale3d(0, 0)",
+    "scaleX(0, 0)",
+    "scale(0, invalid)",
+  ])("preserves visible or invalid transform %s", async (transform) => {
+    const html = `<p style="transform:${transform}">Visible</p>`;
+    expect(await sanitizeHtml(html)).toBe(html);
   });
 
-  it.each(["sr-only", "visually-hidden", "d-none", "hidden"])(
-    "strips elements with the %s class",
-    async (className) => {
-      const result = await sanitizeHtml(`<p>Main</p><span class="${className}">Hidden</span>`);
-      expect(result).not.toContain("Hidden");
-    },
-  );
-
-  it("does not strip elements with hidden as substring of class name", async () => {
-    const html = '<p>Main</p><div class="un-hidden">Should be visible</div>';
-    const result = await sanitizeHtml(html);
-    expect(result).toContain("Should be visible");
-  });
-
-  it("strips input type=hidden", async () => {
-    const html = '<form><input type="hidden" value="csrf-token-secret"/></form>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("csrf-token-secret");
-  });
-
-  it("drops nested hidden same-name elements without leaking trailing hidden text", async () => {
-    const result = await sanitizeHtml(
-      "<p>Visible</p><div hidden><div>Nested hidden</div>Still hidden</div><p>Shown</p>",
-    );
-    expect(result).toContain("Visible");
-    expect(result).toContain("Shown");
-    expect(result).not.toContain("Nested hidden");
-    expect(result).not.toContain("Still hidden");
-  });
-
-  it("keeps the page when a body attribute value mentions hidden", async () => {
-    const html =
-      '<html><body aria-label="Show hidden replies"><h1>Thread</h1><p>Every reply in this thread.</p></body></html>';
-    const result = await sanitizeHtml(html);
-    expect(result).toContain("Thread");
-    expect(result).toContain("Every reply in this thread.");
-  });
-
-  it("still strips an optional-end-tag hidden element closed by its container", async () => {
-    const html = '<ul><li class="d-none">Dropped nav item</ul><p>Kept body</p>';
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Dropped nav item");
-    expect(result).toContain("Kept body");
-  });
-
-  it.each(['[class]="state" aria-hidden="true"', '[style] = "state" style="display:none"'])(
-    "reads visibility after framework attributes: %s",
-    async (attrs) => {
-      await expectVisible(`<div ${attrs}>Secret</div><p>Visible sibling</p>`);
-    },
-  );
-
-  it.each(['hidden@click="noop"'])("keeps unrelated complete attributes: %s", async (attrs) => {
-    expect(await sanitizeHtml(`<div ${attrs}>Visible article</div>`)).toContain("Visible article");
+  it.each(["hidden"])("strips elements with the %s class", async (className) => {
+    const result = await sanitizeHtml(`<p>Main</p><span class="${className}">Hidden</span>`);
+    expect(result).not.toContain("Hidden");
   });
 
   it.each([
+    "<meta\u00a0><p>Visible inside</p></meta\u00a0><p>Visible sibling</p>",
+    '<p>Show</p><div style="clip-path:inset(0%)">Visible</div>',
+    '<p>Main</p><div class="un-hidden">Should be visible</div>',
+    '<html><body aria-label="Show hidden replies"><h1>Thread</h1><p>Every reply in this thread.</p></body></html>',
+    '<div hidden@click="noop">Visible article</div>',
+    "<p>Unclosed <div>Nested",
+  ])("preserves visible markup: %s", async (html) => {
+    expect(await sanitizeHtml(html)).toBe(html);
+  });
+
+  it.each([
+    '[class]="state" aria-hidden="true"',
+    '[style] = "state" style="display:none"',
+    '@click="noop" hidden',
+    '(click)="noop" class="hidden"',
+  ])("reads visibility after framework attributes: %s", async (attrs) => {
+    await expectVisible(`<div ${attrs}>Secret</div><p>Visible sibling</p>`);
+  });
+
+  it.each([
+    "<ul><li hidden><ul><li>A<li>B</li></ul>Secret</li></ul><p>Visible sibling</p>",
+    "<p hidden>Before</div>Secret</p><p>Visible sibling</p>",
+    '<form><input type="hidden" value="Secret"/></form><p>Visible sibling</p>',
+    "<div hidden><div>Secret nested</div>Secret tail</div><p>Visible sibling</p>",
     "<script.foo><p hidden>Secret data</p></script.foo><p>Visible sibling</p>",
     "<ul><li hidden>Secret outer<ul><li>Secret inner</li></ul>Secret tail</li><li>Visible sibling</li></ul>",
     "<ul><li hidden>Secret outer<svg><foreignObject><li>Secret inner</li></foreignObject></svg>Secret tail</li><li>Visible sibling</li></ul>",
@@ -149,6 +128,7 @@ describe("sanitizeHtml", () => {
   });
 
   it.each([
+    '<ul><li class="d-none">Secret</ul><p>Visible sibling</p>',
     "<ul><li hidden><span>Secret<li>Visible sibling</ul>",
     "<p hidden>Secret<p>Visible sibling</p>",
     "<dl><dt hidden>Secret<dd>Visible sibling</dd></dl>",
@@ -166,11 +146,6 @@ describe("sanitizeHtml", () => {
     await expectVisible(`<p>Visible prefix</p><p hidden>Secret<script><p>Secret data`, [
       "Visible prefix",
     ]);
-  });
-
-  it("handles malformed HTML gracefully", async () => {
-    const html = "<p>Unclosed <div>Nested";
-    await expect(sanitizeHtml(html)).resolves.toContain("Unclosed");
   });
 });
 

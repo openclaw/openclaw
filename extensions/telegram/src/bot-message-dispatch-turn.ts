@@ -121,10 +121,11 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           record: context.turn.record,
           dispatchReplyFromConfig: turn.opts.dispatchReplyFromConfig,
           delivery: {
-            deliverWithProviderMessageSending: async (payload, info) =>
-              await deliverReply(turn, payload, info),
-            deliverPreparedWithProviderMessageSending: async (plan, info) =>
-              await deliverPreparedReply(turn, plan, info),
+            // Delivery owns its full draft mutation, including native questions and receipts.
+            deliverWithProviderMessageSending: (payload, info) =>
+              enqueueDraftEvent(turn, () => deliverReply(turn, payload, info), "delivery"),
+            deliverPreparedWithProviderMessageSending: (plan, info) =>
+              enqueueDraftEvent(turn, () => deliverPreparedReply(turn, plan, info), "delivery"),
             onError: (err, info) => handleReplyError(turn, err, info),
             onDelivered: (_payload, info, result) => {
               const reason = result?.suppression?.reason;
@@ -290,39 +291,43 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             shouldDeliverCommentaryPayloads:
               turn.progressPreambleEnabled === true ? () => false : undefined,
             reasoningPayloadsEnabled: turn.durableReasoningPayloadsEnabled,
-            onToolStart: (payload) => handleToolStart(turn, payload),
+            onToolStart: (payload) => enqueueDraftEvent(turn, () => handleToolStart(turn, payload)),
             onItemEvent: (payload) => handleItemEvent(turn, payload),
-            onPlanUpdate: (payload) => handlePlanUpdate(turn, payload),
-            onApprovalEvent: async (payload) =>
-              (await canPushToolProgress(turn))
-                ? await turn.progressCompositor.pushApprovalEvent(payload)
-                : false,
-            onToolResult: async (payload) => {
-              const text = payload.text?.trim();
-              if (!text) {
+            onPlanUpdate: (payload) =>
+              enqueueDraftEvent(turn, () => handlePlanUpdate(turn, payload)),
+            onApprovalEvent: (payload) =>
+              enqueueDraftEvent(turn, async () =>
+                (await canPushToolProgress(turn))
+                  ? await turn.progressCompositor.pushApprovalEvent(payload)
+                  : false,
+              ),
+            onToolResult: (payload) =>
+              enqueueDraftEvent(turn, async () => {
+                const text = payload.text?.trim();
+                if (!text) {
+                  return false;
+                }
+                const progressId = payload.channelData?.openclawToolProgressId;
+                const updatedDraft = await pushToolProgress(turn, text, {
+                  startImmediately: true,
+                  id: typeof progressId === "string" ? progressId : undefined,
+                });
+                if (updatedDraft) {
+                  return true;
+                }
+                if (isFastModeAutoProgressPayload(payload) && !(await canPushToolProgress(turn))) {
+                  return (await sendPayload(turn, payload)).visibleReplySent;
+                }
                 return false;
-              }
-              const progressId = payload.channelData?.openclawToolProgressId;
-              const updatedDraft = await pushToolProgress(turn, text, {
-                startImmediately: true,
-                id: typeof progressId === "string" ? progressId : undefined,
-              });
-              if (updatedDraft) {
-                return true;
-              }
-              if (isFastModeAutoProgressPayload(payload) && !(await canPushToolProgress(turn))) {
-                return (await sendPayload(turn, payload)).visibleReplySent;
-              }
-              return false;
-            },
+              }),
             // Ambient room events are intentionally invisible, including reactions.
             // User requests in group chats are not room_event turns and retain these callbacks.
             onCompactionStart: isRoomEvent
               ? undefined
-              : async () => await handleCompactionStart(turn),
+              : () => enqueueDraftEvent(turn, () => handleCompactionStart(turn)),
             onCompactionEnd: isRoomEvent
               ? undefined
-              : async (payload) => await handleCompactionEnd(turn, payload),
+              : (payload) => enqueueDraftEvent(turn, () => handleCompactionEnd(turn, payload)),
             onModelSelected,
           },
         }),

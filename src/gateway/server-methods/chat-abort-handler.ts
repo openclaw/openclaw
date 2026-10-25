@@ -48,7 +48,7 @@ import {
   resolveChatAbortTargetRejection,
   resolveChatAbortRequester,
 } from "./chat-abort-authorization.js";
-import { stopExactClientRun } from "./chat-abort-exact-run.js";
+import * as exactRun from "./chat-abort-exact-run.js";
 import {
   abortChatRunsForSessionKeyWithPartials,
   abortControlledSubagents,
@@ -63,12 +63,15 @@ import {
   type AbortedPartialSnapshot,
 } from "./chat-aborted-partial.js";
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatAbortLifecycle = {
+  /** Internal composition may advance only after this exact run was cancelled. */
+  onExactRunAborted?: (runId: string) => void;
   onDescendantsCancelled?: (
     result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
   ) => void;
@@ -93,10 +96,10 @@ export async function handleChatAbortRequestWithLifecycle(
   }
   const { sessionKey: rawSessionKey, runId, preserveSideRuns, discardPendingInput } = params;
   if (discardPendingInput && !runId) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "discardPendingInput requires an exact runId"),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      "discardPendingInput requires an exact runId",
     );
     return;
   }
@@ -118,15 +121,12 @@ export async function handleChatAbortRequestWithLifecycle(
     ? (agentIdOverride ?? normalizeAgentId(parsedAbortSessionKey.agentId))
     : bareSessionAgentResolution?.agentId;
   if (!abortAgentId) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        rawSessionKey.trim().toLowerCase() === "global"
-          ? "agentId is required for global chat.abort when no compatibility owner exists"
-          : "agentId is required for unscoped chat.abort when no compatibility owner exists",
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      rawSessionKey.trim().toLowerCase() === "global"
+        ? "agentId is required for global chat.abort when no compatibility owner exists"
+        : "agentId is required for unscoped chat.abort when no compatibility owner exists",
     );
     return;
   }
@@ -135,13 +135,10 @@ export async function handleChatAbortRequestWithLifecycle(
     parsedAbortSessionKey &&
     normalizeAgentId(parsedAbortSessionKey.agentId) !== normalizeAgentId(agentIdOverride)
   ) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `agentId "${agentIdOverride}" does not match session key "${rawSessionKey}"`,
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      `agentId "${agentIdOverride}" does not match session key "${rawSessionKey}"`,
     );
     return;
   }
@@ -151,13 +148,10 @@ export async function handleChatAbortRequestWithLifecycle(
     storeAgentId: abortAgentId,
   });
   if (discardPendingInput && isIncognitoSessionKey(canonicalAbortSessionKey)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Removing accepted queued input is unavailable in incognito sessions. Use Stop to cancel it.",
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      "Removing accepted queued input is unavailable in incognito sessions. Use Stop to cancel it.",
     );
     return;
   }
@@ -171,22 +165,18 @@ export async function handleChatAbortRequestWithLifecycle(
       admittedTarget.sessionKey !== canonicalAbortSessionKey ||
       admittedTarget.agentId !== normalizeAgentId(abortAgentId))
   ) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "session target is unavailable"),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, "session target is unavailable");
     return;
   }
   const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
   const ops = createChatAbortOps(context);
 
-  const prepareAbortSession = () =>
+  const prepareAbortSession = (key = canonicalAbortSessionKey, agentId = abortAgentId) =>
     prepareChatAbortSessionSnapshot({
       excludeInternalEffects: true,
       cfg: abortCfg,
-      key: canonicalAbortSessionKey,
-      agentId: abortAgentId,
+      key,
+      agentId,
     });
   const stopHookContext = lifecycle.hookContext ?? {
     sessionKey: canonicalAbortSessionKey,
@@ -217,7 +207,7 @@ export async function handleChatAbortRequestWithLifecycle(
       prepareAbortSession,
     );
     if (res.unauthorized) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "unauthorized");
       return;
     }
     if (res.descendants?.killed || res.descendants?.continuationRetired) {
@@ -261,7 +251,7 @@ export async function handleChatAbortRequestWithLifecycle(
           ? "unauthorized"
           : undefined;
     if (rejection) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, rejection));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, rejection);
       return;
     }
     // Routing has no physical session yet. Cancel only this captured source, never
@@ -303,7 +293,6 @@ export async function handleChatAbortRequestWithLifecycle(
         resolveGatewayContext,
       })
     : () => false;
-  const normalizedAgentIdOverride = normalizeAgentId(abortAgentId);
   // Runs the command Stop sequence when no exact run source was captured.
   const stopWithoutCapturedRun = (reason?: string, afterParent?: () => void) =>
     stopSession({
@@ -322,14 +311,14 @@ export async function handleChatAbortRequestWithLifecycle(
       requester,
       requestedSessionKey: rawSessionKey,
       canonicalSessionKey: canonicalAbortSessionKey,
-      requestedAgentId: normalizedAgentIdOverride,
+      requestedAgentId: normalizeAgentId(abortAgentId),
       defaultAgentId: compatibilityDefaultAgentId,
       requiredSessionId,
       discardPendingInput,
       narrow,
     });
     if (rejection) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, rejection));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, rejection);
     }
     return rejection === undefined;
   };
@@ -432,7 +421,10 @@ export async function handleChatAbortRequestWithLifecycle(
     assertCurrent();
     const settlement = workerCancellation.cancel({
       assertCurrent,
-      onCancelled: (id) => workerRunIds.add(id),
+      onCancelled: (id) => {
+        workerRunIds.add(id);
+        lifecycle.onExactRunAborted?.(id);
+      },
     });
     workerSettlement = settlement;
     void settlement.catch(() => undefined);
@@ -464,12 +456,22 @@ export async function handleChatAbortRequestWithLifecycle(
       ) {
         return;
       }
+      const assertReserved = exactRun.captureSourceAssertion(reserved, assertCurrent);
+      const selectedSession =
+        activeIdentity.sessionKey === rawSessionKey ||
+        activeIdentity.sessionKey === canonicalAbortSessionKey
+          ? abortSession
+          : await prepareAbortSession(
+              activeIdentity.sessionKey,
+              activeIdentity.agentId ?? abortAgentId,
+            );
+      const selectedEntry = selectedSession.ok ? selectedSession.value.entry : undefined;
       let aborted = false;
       let descendants: Awaited<ReturnType<typeof abortControlledSubagents>> | undefined;
       const stopped = stopSession({
         source: "client-run",
         capture: captureSessionControllerStop({ inputs: [reserved] }),
-        assertCurrent,
+        assertCurrent: assertReserved,
         reason: createAgentRunDirectAbortError(),
         hookContext: {
           ...stopHookContext,
@@ -492,7 +494,11 @@ export async function handleChatAbortRequestWithLifecycle(
             agentId: activeIdentity.agentId,
             requesterTurnRunId: runId,
             sessionId: activeIdentity.sessionId,
-            assertCurrent,
+            lifecycleRevision:
+              selectedEntry?.sessionId === activeIdentity.sessionId
+                ? selectedEntry.lifecycleRevision
+                : undefined,
+            assertCurrent: assertReserved,
           });
           return {
             stopped: descendants?.killed ?? 0,
@@ -524,7 +530,7 @@ export async function handleChatAbortRequestWithLifecycle(
           !identity.sessionId ||
           !canRequesterAbortChatRun(target, requester, { requireOwnerMatch: true })
         ) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "unauthorized");
           return;
         }
         if (!authorizeRunTarget(target)) {
@@ -566,7 +572,7 @@ export async function handleChatAbortRequestWithLifecycle(
       return;
     }
     if (!requester.isAdmin) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "unauthorized");
       return;
     }
     cancelWorker();
@@ -580,31 +586,29 @@ export async function handleChatAbortRequestWithLifecycle(
     return;
   }
   const { sessionKey, sessionId, agentId } = getRpcSourceIdentity(active);
-  const { controlUiVisible } = active.adapter;
   assertCurrent();
-  const partialSession =
-    controlUiVisible !== false
-      ? sessionKey === rawSessionKey || sessionKey === canonicalAbortSessionKey
-        ? abortSession
-        : await prepareChatAbortSessionSnapshot({
-            excludeInternalEffects: true,
-            cfg: abortCfg,
-            key: sessionKey,
-            agentId: agentId ?? abortAgentId,
-          })
-      : undefined;
+  const assertActive = exactRun.captureSourceAssertion(active.input, assertCurrent);
+  const selectedSession =
+    sessionKey === rawSessionKey || sessionKey === canonicalAbortSessionKey
+      ? abortSession
+      : await prepareAbortSession(sessionKey, agentId ?? abortAgentId);
   let snapshot: AbortedPartialSnapshot | undefined;
-  const { aborted, descendants, failure } = await stopExactClientRun({
+  const { aborted, descendants, failure } = await exactRun.stopExactClientRun({
     ops,
     cfg: abortCfg,
     runId,
     active,
-    assertCurrent,
+    lifecycleRevision:
+      selectedSession.ok && selectedSession.value.entry?.sessionId === sessionId
+        ? selectedSession.value.entry.lifecycleRevision
+        : undefined,
+    assertCurrent: assertActive,
     hookContext: stopHookContext,
     afterParent: cancelWorker,
+    onAborted: () => lifecycle.onExactRunAborted?.(runId),
     onAbortPrepared: () => {
       const text = context.chatRunState.resolveBuffer(runId, { final: true }).text;
-      if (!partialSession || !text?.trim()) {
+      if (active.adapter.controlUiVisible === false || !text?.trim()) {
         return undefined;
       }
       snapshot = captureAbortedPartial({
@@ -615,7 +619,7 @@ export async function handleChatAbortRequestWithLifecycle(
         text,
         abortOrigin: "rpc",
         resolveTerminalProducer: active.adapter.resolveTerminalProducer,
-        session: partialSession,
+        session: selectedSession,
       });
       return deferAbortedPartialPersistence(snapshot, context);
     },

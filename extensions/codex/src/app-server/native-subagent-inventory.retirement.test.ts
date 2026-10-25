@@ -26,11 +26,7 @@ describe("native parent retirement after rotation", () => {
       first.bindTurn("parent-turn");
       await f.spawn(client);
       await first.unregister();
-      await f.store.mutate(f.identity, {
-        kind: "replace-thread",
-        expectedThreadId: "parent-thread",
-        binding: { ...f.binding, threadId: "replacement-parent" },
-      });
+      await f.rotate("replacement-parent");
       client.setThreadRead(
         "child-thread",
         threadRead({ turnId: "child-turn", status: "inProgress" }),
@@ -64,7 +60,6 @@ describe("native parent retirement after rotation", () => {
     async (_difference, parentOverride, historyOverride) => {
       const releasePin = vi.fn();
       const { client, monitor } = createMonitorFixture({
-        recoveryPollDelaysMs: [],
         retainParentThread: () => releasePin,
       });
       const original = {

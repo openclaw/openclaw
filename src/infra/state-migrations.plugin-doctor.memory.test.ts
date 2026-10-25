@@ -3,19 +3,25 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { assertDatabasePortPluginMigrationsComplete } from "../commands/doctor-database-port-migrations.js";
-import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type {
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationEntry,
+} from "../plugins/doctor-contract-module.js";
+import { recordAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { runPluginDoctorStateMigrationPlans } from "./state-migrations.plugin-doctor.js";
 
 const registry = vi.hoisted(() => ({
-  entries: [] as Array<{
-    pluginId: string;
-    channelIds: string[];
-    migration: PluginDoctorStateMigration;
-  }>,
+  entries: [] as PluginDoctorStateMigrationEntry[],
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => ({
@@ -54,21 +60,21 @@ async function fixture() {
       INSERT INTO chunks VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 1, 'chunk-hash', 'fixture', 'Remember the violet observatory.', '[1,0,0]', 1);
     `);
   }
-  const { stateMigrations } = (await import(
-    /* @vite-ignore */ new URL(
-      "../../extensions/memory-core/doctor-contract-api.ts",
-      import.meta.url,
-    ).href
-  )) as { stateMigrations: PluginDoctorStateMigration[] };
+  const contract = new URL("../../extensions/memory-core/doctor-contract-api.ts", import.meta.url);
+  const { stateMigrations } = (await import(/* @vite-ignore */ contract.href)) as {
+    stateMigrations: PluginDoctorStateMigration[];
+  };
   const migration = stateMigrations.find(
     (entry) => entry.id === "memory-core-legacy-sidecar-index-to-agent-sqlite",
   );
-  if (!migration) {
-    throw new Error("Missing Memory Core legacy sidecar migration");
+  const independentMigration = stateMigrations.find(
+    (entry) => entry.id === "memory-core-qmd-workspace-retired",
+  );
+  if (!migration || !independentMigration) {
+    throw new Error("Missing Memory Core doctor migrations");
   }
   registry.entries = [{ pluginId: "memory-core", channelIds: [], migration }];
   return {
-    root,
     stateDir,
     legacyPath,
     agentPath,
@@ -76,8 +82,46 @@ async function fixture() {
     env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_HOME: root },
     config: { agents: { entries: { main: { workspace: path.dirname(memoryPath) } } } },
     detected: { stateDir, oauthDir: path.join(stateDir, "oauth"), doctorOnlyStateMigrations: true },
+    independentMigration,
   };
 }
+
+it("keeps held memory sidecars advisory while completing independent repairs", async () => {
+  const state = await fixture();
+  openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+  runOpenClawStateWriteTransaction(
+    (database) =>
+      recordAgentDeletionRecoveryHolds(database, [{ agentId: "main", path: state.agentPath }]),
+    { env: state.env },
+  );
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  const originals = [state.legacyPath, state.agentPath, state.memoryPath].map(
+    (file) => [file, fs.readFileSync(file)] as const,
+  );
+  const retiredWorkspace = path.join(state.stateDir, "agents", "main", "qmd");
+  fs.mkdirSync(retiredWorkspace);
+  registry.entries.push({
+    pluginId: "memory-core",
+    channelIds: [],
+    migration: state.independentMigration,
+  });
+
+  const result = await runPluginDoctorStateMigrationPlans(state);
+
+  expect(result.warningDisposition).toBe("recoverable");
+  expect(result.warnings).toEqual([
+    expect.stringContaining("held after deletion journal reconstruction"),
+  ]);
+  expect(result.changes).toContain(
+    `Removed empty retired Memory Core QMD workspace: ${retiredWorkspace}`,
+  );
+  expect(fs.existsSync(retiredWorkspace)).toBe(false);
+  for (const [file, bytes] of originals) {
+    expect(fs.readFileSync(file)).toEqual(bytes);
+  }
+  expect(fs.existsSync(`${state.legacyPath}.migrated`)).toBe(false);
+});
 
 it("retains a legacy memory sidecar without opening the PostgreSQL agent anchor", async () => {
   const state = await fixture();
@@ -96,20 +140,18 @@ it("retains a legacy memory sidecar without opening the PostgreSQL agent anchor"
     throw new Error("The skipped migration must not open SQLite");
   });
   const result = await runPluginDoctorStateMigrationPlans({
-    config: {
-      ...state.config,
-      database: { engine: "postgres" },
-    },
-    env: state.env,
-    detected: state.detected,
+    ...state,
+    config: { ...state.config, database: { engine: "postgres" } },
   });
-  expect(result.changes).toEqual([]);
-  expect(result.warnings).toEqual([]);
-  expect(result.notices).toEqual([
-    expect.stringContaining(
-      "legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port",
-    ),
-  ]);
+  expect(result).toMatchObject({
+    changes: [],
+    warnings: [],
+    notices: [
+      expect.stringContaining(
+        "legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port",
+      ),
+    ],
+  });
   expect(result.notices?.[0]).toContain("sidecar is retained unchanged");
   expect(result.notices?.[0]).toContain("may re-embed");
   expect(open).not.toHaveBeenCalled();
@@ -131,11 +173,7 @@ it("requires the real memory sidecar repair before porting the agent family", as
   const source = fs.readFileSync(state.legacyPath);
   await expect(preflight()).rejects.toThrow("memory-core-legacy-sidecar-index-to-agent-sqlite");
   expect(fs.readFileSync(state.legacyPath)).toEqual(source);
-  const repaired = await runPluginDoctorStateMigrationPlans({
-    config: state.config,
-    env: state.env,
-    detected: state.detected,
-  });
+  const repaired = await runPluginDoctorStateMigrationPlans(state);
   expect(repaired.warnings).toEqual([]);
   expect(repaired.changes).toContainEqual(
     expect.stringContaining("Migrated Memory Core legacy memory index"),

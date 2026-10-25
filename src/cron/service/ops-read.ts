@@ -21,6 +21,7 @@ import { sortCronJobs } from "./list-page-sort.js";
 import type { CronListPageOptions, CronListPageResult } from "./list-page-types.js";
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
+import { reloadProvisionedCronJobs } from "./ops-lifecycle.js";
 import { ensureLoadedForRead, resolveCurrentDefaultAgentId } from "./ops-shared.js";
 import type { CronServiceState } from "./state.js";
 import { captureCronJobMutationSource, ensureLoaded } from "./store.js";
@@ -55,33 +56,38 @@ async function readSnapshot(
 
 /** Returns the current scheduler generation's immutable aggregate status. */
 export async function status(state: CronServiceState) {
-  return await locked(state, async () => (await readSnapshot(state)).status, { readOnly: true });
+  return await locked(state, async () => (await readSnapshot(state)).status);
 }
 
 /** Lists cron jobs sorted by next run time, excluding disabled jobs unless requested. */
 export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
-  return await locked(
-    state,
-    async () => {
-      await ensureLoadedForRead(state);
-      const includeDisabled = opts?.includeDisabled === true;
-      const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || isJobEnabled(j));
-      return sortCronJobs(jobs, "nextRunAtMs", "asc");
-    },
-    { readOnly: true },
-  );
+  return await locked(state, async () => {
+    await ensureLoadedForRead(state);
+    const includeDisabled = opts?.includeDisabled === true;
+    const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || isJobEnabled(j));
+    return sortCronJobs(jobs, "nextRunAtMs", "asc");
+  });
 }
 
 /** Reads one cron job by id without advancing due schedules. */
 export async function readJob(state: CronServiceState, id: string) {
-  return await locked(
-    state,
-    async () => {
+  return await locked(state, async () => {
+    if (
+      state.deps.cronEnabled &&
+      state.schedulerStarted &&
+      !state.stopped &&
+      !state.store?.jobs.some((job) => job.id === id)
+    ) {
+      // Setup acknowledges its newly committed ID through cron.get; no tick exists in an empty scheduler.
+      const generation = state.lifecycleGeneration;
+      const previousIds = new Set(state.store?.jobs.map((job) => job.id));
+      await ensureLoaded(state, { forceReload: true });
+      await reloadProvisionedCronJobs(state, generation, previousIds);
+    } else {
       await ensureLoadedForRead(state);
-      return state.store?.jobs.find((job) => job.id === id);
-    },
-    { readOnly: true },
-  );
+    }
+    return state.store?.jobs.find((job) => job.id === id);
+  });
 }
 
 /** Reads one job's private scratch state after proving the job exists in this store. */
@@ -182,119 +188,115 @@ export async function listPage(
   let sourceCount: number | undefined;
   let result: CronListPageResult | undefined;
   try {
-    return await locked(
-      state,
-      async () => {
-        enteredAt = performance.now();
-        try {
-          const read = await readSnapshot(state);
-          const query = normalizeLowercaseStringOrEmpty(opts?.query);
-          const enabledFilter = opts?.enabled ?? (opts?.includeDisabled ? "all" : "enabled");
-          const scheduleKindFilter = opts?.scheduleKind ?? "all";
-          const lastRunStatusFilter = opts?.lastRunStatus ?? "all";
-          const triggerFilter = opts?.trigger ?? "all";
-          const sortBy = opts?.sortBy ?? "nextRunAtMs";
-          const sortDir = opts?.sortDir ?? "asc";
-          const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
-          const source = state.store?.jobs ?? [];
-          sourceCount = source.length;
-          const defaultAgentId = requestedAgentId ? resolveCurrentDefaultAgentId(state) : undefined;
-          const filtered = source.filter((job) => {
-            if (enabledFilter === "enabled" && !isJobEnabled(job)) {
-              return false;
-            }
-            if (enabledFilter === "disabled" && isJobEnabled(job)) {
-              return false;
-            }
-            if (
-              requestedAgentId &&
-              tryResolveCronJobEffectiveAgentId(job, defaultAgentId) !== requestedAgentId
-            ) {
-              return false;
-            }
-            if (scheduleKindFilter !== "all" && job.schedule.kind !== scheduleKindFilter) {
-              return false;
-            }
-            if (
-              lastRunStatusFilter !== "all" &&
-              (resolveJobLastRunStatus(job) ?? "unknown") !== lastRunStatusFilter
-            ) {
-              return false;
-            }
-            if (triggerFilter === "conditional" && !job.trigger) {
-              return false;
-            }
-            if (triggerFilter === "unconditional" && job.trigger) {
-              return false;
-            }
-            if (query) {
-              const haystack = normalizeLowercaseStringOrEmpty(
-                [
-                  job.id,
-                  job.name,
-                  job.description ?? "",
-                  job.agentId ?? "",
-                  ...(job.displayName ? [job.displayName] : []),
-                ].join(" "),
-              );
-              if (!haystack.includes(query)) {
-                return false;
-              }
-            }
-            // In-process visibility must share the sorted snapshot and its revision.
-            return !matchesJob || matchesJob(job);
-          });
-          // Recheck visibility per request; passive readers still reload and repair.
-          // Empty visibility prepasses must not evict the prepared nonempty list.
-          let snapshot = read.list;
+    return await locked(state, async () => {
+      enteredAt = performance.now();
+      try {
+        const read = await readSnapshot(state);
+        const query = normalizeLowercaseStringOrEmpty(opts?.query);
+        const enabledFilter = opts?.enabled ?? (opts?.includeDisabled ? "all" : "enabled");
+        const scheduleKindFilter = opts?.scheduleKind ?? "all";
+        const lastRunStatusFilter = opts?.lastRunStatus ?? "all";
+        const triggerFilter = opts?.trigger ?? "all";
+        const sortBy = opts?.sortBy ?? "nextRunAtMs";
+        const sortDir = opts?.sortDir ?? "asc";
+        const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
+        const source = state.store?.jobs ?? [];
+        sourceCount = source.length;
+        const defaultAgentId = requestedAgentId ? resolveCurrentDefaultAgentId(state) : undefined;
+        const filtered = source.filter((job) => {
+          if (enabledFilter === "enabled" && !isJobEnabled(job)) {
+            return false;
+          }
+          if (enabledFilter === "disabled" && isJobEnabled(job)) {
+            return false;
+          }
           if (
-            !snapshot ||
-            snapshot.sortBy !== sortBy ||
-            snapshot.sortDir !== sortDir ||
-            snapshot.filteredJobs.length !== filtered.length ||
-            !snapshot.filteredJobs.every((job, index) => job === filtered[index])
+            requestedAgentId &&
+            tryResolveCronJobEffectiveAgentId(job, defaultAgentId) !== requestedAgentId
           ) {
-            const jobs = sortCronJobs([...filtered], sortBy, sortDir);
-            snapshot = {
-              filteredJobs: filtered,
-              sortBy,
-              sortDir,
-              jobs,
-              snapshotRevision: resolveCronListSnapshotRevision(jobs),
-            };
-            if (jobs.length > 0 || !read.list) {
-              read.list = snapshot;
+            return false;
+          }
+          if (scheduleKindFilter !== "all" && job.schedule.kind !== scheduleKindFilter) {
+            return false;
+          }
+          if (
+            lastRunStatusFilter !== "all" &&
+            (resolveJobLastRunStatus(job) ?? "unknown") !== lastRunStatusFilter
+          ) {
+            return false;
+          }
+          if (triggerFilter === "conditional" && !job.trigger) {
+            return false;
+          }
+          if (triggerFilter === "unconditional" && job.trigger) {
+            return false;
+          }
+          if (query) {
+            const haystack = normalizeLowercaseStringOrEmpty(
+              [
+                job.id,
+                job.name,
+                job.description ?? "",
+                job.agentId ?? "",
+                ...(job.displayName ? [job.displayName] : []),
+              ].join(" "),
+            );
+            if (!haystack.includes(query)) {
+              return false;
             }
           }
-          const { jobs: sortedJobs, snapshotRevision } = snapshot;
-          const total = sortedJobs.length;
-          const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
-          const defaultLimit = total === 0 ? 50 : total;
-          const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-          const jobs = sortedJobs.slice(offset, offset + limit).map((job) => {
-            let frozenJob = read.readJobs.get(job);
-            if (!frozenJob) {
-              frozenJob = freezeJsonSnapshot(structuredClone(job));
-              read.readJobs.set(job, frozenJob);
-            }
-            return frozenJob;
-          });
-          const nextOffset = offset + jobs.length;
-          return (result = {
+          // In-process visibility must share the sorted snapshot and its revision.
+          return !matchesJob || matchesJob(job);
+        });
+        // Recheck visibility per request; passive readers still reload and repair.
+        // Empty visibility prepasses must not evict the prepared nonempty list.
+        let snapshot = read.list;
+        if (
+          !snapshot ||
+          snapshot.sortBy !== sortBy ||
+          snapshot.sortDir !== sortDir ||
+          snapshot.filteredJobs.length !== filtered.length ||
+          !snapshot.filteredJobs.every((job, index) => job === filtered[index])
+        ) {
+          const jobs = sortCronJobs([...filtered], sortBy, sortDir);
+          snapshot = {
+            filteredJobs: filtered,
+            sortBy,
+            sortDir,
             jobs,
-            snapshotRevision,
-            total,
-            offset,
-            limit,
-            hasMore: nextOffset < total,
-            nextOffset: nextOffset < total ? nextOffset : null,
-          } satisfies CronListPageResult);
-        } finally {
-          finishedAt = performance.now();
+            snapshotRevision: resolveCronListSnapshotRevision(jobs),
+          };
+          if (jobs.length > 0 || !read.list) {
+            read.list = snapshot;
+          }
         }
-      },
-      { readOnly: true },
-    );
+        const { jobs: sortedJobs, snapshotRevision } = snapshot;
+        const total = sortedJobs.length;
+        const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
+        const defaultLimit = total === 0 ? 50 : total;
+        const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
+        const jobs = sortedJobs.slice(offset, offset + limit).map((job) => {
+          let frozenJob = read.readJobs.get(job);
+          if (!frozenJob) {
+            frozenJob = freezeJsonSnapshot(structuredClone(job));
+            read.readJobs.set(job, frozenJob);
+          }
+          return frozenJob;
+        });
+        const nextOffset = offset + jobs.length;
+        return (result = {
+          jobs,
+          snapshotRevision,
+          total,
+          offset,
+          limit,
+          hasMore: nextOffset < total,
+          nextOffset: nextOffset < total ? nextOffset : null,
+        } satisfies CronListPageResult);
+      } finally {
+        finishedAt = performance.now();
+      }
+    });
   } finally {
     const completedAt = performance.now();
     const elapsedMs = completedAt - startedAt;

@@ -56,6 +56,16 @@ function configuredGitHub(token: string): OpenClawConfig {
 }
 
 const json = (value: unknown) => new Response(JSON.stringify(value));
+const previewUnavailable =
+  "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.";
+const degradedPreview = {
+  ownerKind: "capability" as const,
+  ownerId: "control-ui-github",
+  state: "unavailable" as const,
+  paths: ["gateway.controlUi.github.token"],
+  refKeys: [],
+  reason: "secret reference was not found",
+};
 
 function expectReply(respond: RespondFn, payload: unknown) {
   expect(respond).toHaveBeenCalledWith(true, payload, undefined);
@@ -101,6 +111,75 @@ describe("controlUi.githubPreview", () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
+
+  it("returns a progressive detail overview without loading optional endpoints", async () => {
+    const cfg = configuredGitHub("progressive-service-token");
+    setRuntimeConfigSnapshot(cfg);
+    const revision = "a".repeat(40);
+    const optional = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+        if (path.endsWith("/pulls/7")) {
+          return json(
+            issueFields("Early body", {
+              body: "Available before CI",
+              comments: 1,
+              review_comments: 1,
+              changed_files: 1,
+              head: { sha: revision },
+            }),
+          );
+        }
+        if (path.endsWith("/progressive-adapter")) {
+          return Response.json({ id: 771, private: false, visibility: "public" });
+        }
+        optional();
+        return new Response(null, { status: 503 });
+      }),
+    );
+    const { respond, send } = fixture("githubDetail");
+    await send(
+      {
+        kind: "pull",
+        owner: "octocat",
+        repo: "progressive-adapter",
+        number: 7,
+        section: "overview",
+      },
+      runtime(() => cfg),
+    );
+    expectReply(
+      respond,
+      expect.objectContaining({
+        title: "Early body",
+        body: "Available before CI",
+        revision,
+        deferredSections: ["checks", "files", "discussion"],
+        partial: false,
+      }),
+    );
+    expect(optional).not.toHaveBeenCalled();
+    for (const field of ["checks", "comments", "files"]) {
+      expect(respond.mock.calls[0]?.[1]).not.toHaveProperty(field);
+    }
+  });
+
+  it.each(["invalid", null, 1])(
+    "rejects invalid detail section %j before upstream access",
+    async (section) => {
+      const fetch = vi.fn<typeof globalThis.fetch>();
+      vi.stubGlobal("fetch", fetch);
+      const { respond, send } = fixture("githubDetail");
+      await send({ kind: "issue", owner: "octocat", repo: "repo", number: 1, section });
+      expectError(respond, {
+        code: "INVALID_REQUEST",
+        message: "invalid controlUi.githubDetail params",
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["revoked", "copied", "aborted", "aborted-after-preparation"] as const)(
     "rejects %s requests before GitHub",
@@ -189,20 +268,14 @@ describe("controlUi.githubPreview", () => {
       if (mode === "anonymous") {
         return anonymousResponse;
       }
-      const authorization = new Headers(init?.headers).get("Authorization");
-      if (mode === "managed" && authorization !== `Bearer ${identity.token}`) {
-        return new Response(JSON.stringify({ message: "Bad credentials" }), { status: 401 });
-      }
-      if (mode === "service" && authorization !== "Bearer configured-reader-token") {
-        return new Response(null, { status: 403, headers: { "x-ratelimit-remaining": "0" } });
-      }
+      expect(new Headers(init?.headers).get("Authorization")).toBe(
+        `Bearer ${mode === "managed" ? identity.token : "configured-reader-token"}`,
+      );
       const url = input instanceof Request ? input.url : input.toString();
       const issue = mode === "managed" ? url.endsWith("/issues/88120") : url.includes("/issues/");
       return json(
         issue
           ? issueFields(mode === "service" ? "Authenticated reader" : title, {
-              created_at: mode === "service" ? "2026-09-20T08:00:00Z" : "2026-09-01T08:00:00Z",
-              updated_at: mode === "service" ? "2026-09-20T09:00:00Z" : "2026-09-01T09:00:00Z",
               ...(mode === "managed"
                 ? { repository_url: "https://api.github.com/repos/openclaw/openclaw" }
                 : {}),
@@ -303,13 +376,9 @@ describe("controlUi.githubPreview", () => {
     expectReply(respond, expect.objectContaining({ title: "Cached preview" }));
     setActiveDegradedSecretOwners([
       {
-        ownerKind: "capability",
-        ownerId: "control-ui-github",
-        state: "unavailable",
+        ...degradedPreview,
         degradationState: "cold",
-        paths: ["gateway.controlUi.github.token"],
         refKeys: ["store:default:PREVIEW_TOKEN"],
-        reason: "secret reference was not found",
       },
     ]);
     respond.mockClear();
@@ -319,8 +388,7 @@ describe("controlUi.githubPreview", () => {
     );
     expectError(respond, {
       code: "UNAVAILABLE",
-      message:
-        "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.",
+      message: previewUnavailable,
       retryable: false,
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -399,79 +467,58 @@ describe("controlUi.githubPreview", () => {
   });
 
   it.each([
-    [
-      "managed identity unavailable",
-      true,
-      new githubIdentity.GitHubIdentityError("unavailable"),
-      "The selected GitHub credential is unavailable; reconnect the agent's GitHub identity in Settings.",
-      false,
-    ],
-    ...(["unverified", "rate_limited"] as const).map(
-      (reason) =>
-        [
-          "managed identity " + reason,
-          true,
-          new githubIdentity.GitHubIdentityError(reason),
-          new githubIdentity.GitHubIdentityError(reason).message,
-          false,
-        ] as const,
-    ),
-    [
-      "GitHub quota",
-      false,
-      new gitHubPublicApi.ControlUiGitHubError(429, "rate limited"),
-      "GitHub API rate limit exceeded (HTTP 429). Wait and retry.",
-      true,
-    ],
-    [
-      "configured-unavailable preview credential",
-      false,
-      new SecretSurfaceUnavailableError({
-        ownerKind: "capability",
-        ownerId: "control-ui-github",
-        state: "unavailable",
-        paths: ["gateway.controlUi.github.token"],
-        refKeys: [],
-        reason: "secret reference was not found",
-      }),
-      "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.",
-      false,
-    ],
-  ] as const)(
-    "preserves the %s diagnostic",
-    async (_failure, managed, error, message, retryable) => {
-      const loadPreview = vi.spyOn(gitHubPublicApi, "loadControlUiGitHubPreview");
-      if (managed) {
-        vi.spyOn(githubIdentity, "prepareGitHubReadIdentity").mockRejectedValue(error);
-      } else {
-        loadPreview.mockRejectedValue(error);
-      }
-      const { respond, send } = fixture("githubPreview");
-      await send(
-        {
-          kind: managed ? "issue" : "pull",
-          number: managed ? 88125 : 99816,
-          owner: "openclaw",
-          repo: "openclaw",
-          ...(managed ? { agentId: "main" } : {}),
-        },
-        managed
-          ? runtime(() => ({
-              ...configuredGitHub("existing-preview-service-token"),
-              tools: { github: { profileId: `ghp_${"b".repeat(32)}` } },
-            }))
-          : {},
-      );
-      if (managed) {
-        expect(loadPreview).not.toHaveBeenCalled();
-      }
-      expectError(respond, {
-        code: "UNAVAILABLE",
-        message,
-        retryable,
-      });
+    ...(["unavailable", "unverified", "rate_limited"] as const).map((reason) => ({
+      failure: `managed identity ${reason}`,
+      managed: true,
+      error: new githubIdentity.GitHubIdentityError(reason),
+      message:
+        reason === "unavailable"
+          ? "The selected GitHub credential is unavailable; reconnect the agent's GitHub identity in Settings."
+          : new githubIdentity.GitHubIdentityError(reason).message,
+      retryable: false,
+    })),
+    {
+      failure: "GitHub quota",
+      managed: false,
+      error: new gitHubPublicApi.ControlUiGitHubError(429, "rate limited"),
+      message: "GitHub API rate limit exceeded (HTTP 429). Wait and retry.",
+      retryable: true,
     },
-  );
+    {
+      failure: "configured-unavailable preview credential",
+      managed: false,
+      error: new SecretSurfaceUnavailableError(degradedPreview),
+      message: previewUnavailable,
+      retryable: false,
+    },
+  ])("preserves the $failure diagnostic", async ({ managed, error, message, retryable }) => {
+    const loadPreview = vi.spyOn(gitHubPublicApi, "loadControlUiGitHubPreview");
+    if (managed) {
+      vi.spyOn(githubIdentity, "prepareGitHubReadIdentity").mockRejectedValue(error);
+    } else {
+      loadPreview.mockRejectedValue(error);
+    }
+    const { respond, send } = fixture("githubPreview");
+    await send(
+      {
+        kind: managed ? "issue" : "pull",
+        number: managed ? 88125 : 99816,
+        owner: "openclaw",
+        repo: "openclaw",
+        ...(managed ? { agentId: "main" } : {}),
+      },
+      managed
+        ? runtime(() => ({
+            ...configuredGitHub("existing-preview-service-token"),
+            tools: { github: { profileId: `ghp_${"b".repeat(32)}` } },
+          }))
+        : {},
+    );
+    if (managed) {
+      expect(loadPreview).not.toHaveBeenCalled();
+    }
+    expectError(respond, { code: "UNAVAILABLE", message, retryable });
+  });
 });
 
 describe("controlUi.sessionPullRequests.subscribe", () => {

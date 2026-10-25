@@ -110,7 +110,17 @@ final class ScreenSnapshotService {
             for: display,
             referenceWidth: maxWidth)
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        // ScreenCaptureKit needs explicit exclusions as well as NSWindow's sharing policy.
+        let content = try await SCShareableContent.current
+        let excludedApplications = ApprovalPromptState.shared.isPending ? content.applications.filter {
+            $0.processID == ProcessInfo.processInfo.processIdentifier
+        } : []
+        let excludesApplication = !excludedApplications.isEmpty
+        try ApprovalPromptState.shared.checkScreenCapture(excludesApplication: excludesApplication)
+        let filter = SCContentFilter(
+            display: display,
+            excludingApplications: excludedApplications,
+            exceptingWindows: [])
         let config = SCStreamConfiguration()
         let targetSize = Self.targetSize(
             width: display.width,
@@ -128,6 +138,8 @@ final class ScreenSnapshotService {
         } catch {
             throw PermissionManager.screenCaptureFailure(error)
         }
+        // Reject a prompt that appeared after enumeration unless its app was excluded.
+        try ApprovalPromptState.shared.checkScreenCapture(excludesApplication: excludesApplication)
         // Geometry is part of the coordinate contract. If it changed while the
         // pixels were captured, no stable frame exists to authorize later input.
         let finalDisplayFrameId = try Self.displayFrameId(

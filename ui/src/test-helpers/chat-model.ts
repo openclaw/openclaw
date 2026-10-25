@@ -12,7 +12,6 @@ const catalogModel = (id: string, name: string, provider = "openai"): ModelCatal
 });
 
 export const OPENAI_GPT5_MINI_MODEL = catalogModel("gpt-5-mini", "GPT-5 Mini");
-export const DEEPSEEK_CHAT_MODEL = catalogModel("deepseek-chat", "DeepSeek Chat", "deepseek");
 
 export const DEFAULT_CHAT_MODEL_CATALOG = [
   catalogModel("gpt-5", "GPT-5"),
@@ -48,19 +47,9 @@ export function createSessionsListResult({
   thinkingLevels?: GatewaySessionRow["thinkingLevels"];
   omitSessionFromList?: boolean;
 } = {}): SessionsListResult {
-  return {
-    ts: 0,
-    path: "",
-    count: omitSessionFromList ? 0 : 1,
-    defaults: {
-      modelProvider: defaultsProvider,
-      model: defaultsModel,
-      contextTokens: null,
-      ...(defaultsThinkingLevels ? { thinkingLevels: defaultsThinkingLevels } : {}),
-      ...(defaultsThinkingOptions ? { thinkingOptions: defaultsThinkingOptions } : {}),
-      ...(defaultsThinkingDefault ? { thinkingDefault: defaultsThinkingDefault } : {}),
-    },
-    sessions: omitSessionFromList
+  return sessionListResult(
+    0,
+    omitSessionFromList
       ? []
       : [
           {
@@ -74,7 +63,15 @@ export function createSessionsListResult({
             ...(thinkingLevels === undefined ? {} : { thinkingLevels }),
           },
         ],
-  };
+    {
+      modelProvider: defaultsProvider,
+      model: defaultsModel,
+      contextTokens: null,
+      ...(defaultsThinkingLevels ? { thinkingLevels: defaultsThinkingLevels } : {}),
+      ...(defaultsThinkingOptions ? { thinkingOptions: defaultsThinkingOptions } : {}),
+      ...(defaultsThinkingDefault ? { thinkingDefault: defaultsThinkingDefault } : {}),
+    },
+  );
 }
 
 export function createResolvedModelPatch(
@@ -88,4 +85,16 @@ export function createResolvedModelPatch(
     entry: { sessionId: "main" },
     resolved: { model, modelProvider: modelProvider ?? undefined },
   };
+}
+
+export function sessionListResult(
+  ts: number,
+  sessions: SessionsListResult["sessions"],
+  defaults: SessionsListResult["defaults"] = {
+    modelProvider: null,
+    model: null,
+    contextTokens: null,
+  },
+): SessionsListResult {
+  return { ts, path: "", count: sessions.length, defaults, sessions };
 }

@@ -19,14 +19,17 @@ async function swipe(
   direction: -1 | 1,
 ) {
   const distance = 240;
+  const moveCount = 12;
+  const moveSeconds = 0.016;
   const before = await thread.evaluate((element) => element.scrollTop);
   const scroll = await thread.evaluateHandle((element) => {
     const offsets = [
       { time: performance.timeOrigin + performance.now(), offset: element.scrollTop },
     ];
-    const record = (event: Event) =>
+    // Observe delivery independently of the synthetic touch-event clock.
+    const record = () =>
       offsets.push({
-        time: performance.timeOrigin + event.timeStamp,
+        time: performance.timeOrigin + performance.now(),
         offset: element.scrollTop,
       });
     let finish!: () => void;
@@ -50,8 +53,8 @@ async function swipe(
     page.frames().map((frame) =>
       frame.evaluateHandle(() => {
         const state = { time: null as number | null };
-        const record = (event: TouchEvent) => {
-          state.time = performance.timeOrigin + event.timeStamp;
+        const record = () => {
+          state.time = performance.timeOrigin + performance.now();
         };
         window.addEventListener("touchend", record, { capture: true, once: true, passive: true });
         return {
@@ -64,17 +67,42 @@ async function swipe(
   try {
     // Use Chromium's touch emulator on every platform; synthetic scroll gestures
     // bypass Aura's touch recognizer. Keep layout reads out of the input sequence.
+    // Explicit timestamps keep gesture velocity independent of CDP round trips.
+    const timestamp = Date.now() / 1000;
     await cdp.send("Input.dispatchTouchEvent", {
       type: "touchStart",
       touchPoints: [{ ...point, id: 0 }],
+      timestamp,
     });
-    for (let step = 1; step <= 12; step++) {
+    for (let step = 1; step <= moveCount; step++) {
       await cdp.send("Input.dispatchTouchEvent", {
         type: "touchMove",
-        touchPoints: [{ x: point.x, y: point.y + (direction * distance * step) / 12, id: 0 }],
+        touchPoints: [
+          { x: point.x, y: point.y + (direction * distance * step) / moveCount, id: 0 },
+        ],
+        timestamp: timestamp + step * moveSeconds,
       });
     }
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+      timestamp: timestamp + moveCount * moveSeconds + 0.002,
+    });
+    // The CDP response does not guarantee delivery to the document's listener.
+    await expect
+      .poll(
+        async () =>
+          (
+            await Promise.all(
+              releases.map((release) => release.evaluate(({ state }) => state.time)),
+            )
+          ).some((time) => time !== null),
+        {
+          timeout: 10_000,
+          message: "Native touch gesture did not release in the page or its frames",
+        },
+      )
+      .toBe(true);
     const releaseTimes = await Promise.all(
       releases.map((release) => release.evaluate(({ state }) => state.time)),
     );
@@ -89,45 +117,7 @@ async function swipe(
       return { moves: beforeRelease, released: beforeRelease.at(-1) ?? offsets[0]!.offset };
     }, releasedAt);
     const dragDistance = direction * (before - released);
-    let dragFailureDetails: string | undefined;
-    if (!(dragDistance > 120)) {
-      // Preserve the failed sample while recording whether native scrolling continued.
-      const [recordedOffsets, current, frameClocks] = await Promise.allSettled([
-        scroll.evaluate(({ offsets }) => offsets),
-        thread.evaluate((element, coordinates) => {
-          const hit = document.elementFromPoint(coordinates.x, coordinates.y);
-          return {
-            scrollTop: element.scrollTop,
-            scrollHeight: element.scrollHeight,
-            clientHeight: element.clientHeight,
-            timeOrigin: performance.timeOrigin,
-            now: performance.timeOrigin + performance.now(),
-            hit: hit ? { tag: hit.tagName, classes: hit.getAttribute("class") } : null,
-          };
-        }, point),
-        Promise.all(
-          releases.map((release) =>
-            release.evaluate(({ state }) => ({
-              releaseTime: state.time,
-              timeOrigin: performance.timeOrigin,
-            })),
-          ),
-        ),
-      ]);
-      dragFailureDetails = JSON.stringify({
-        point,
-        direction,
-        before,
-        released,
-        releasedAt,
-        releaseTimes,
-        moves,
-        offsets: recordedOffsets,
-        current,
-        frameClocks,
-      });
-    }
-    expect(dragDistance, dragFailureDetails).toBeGreaterThan(120);
+    expect(dragDistance).toBeGreaterThan(120);
     // A quiet timer window can occur during native inertia; wait for its actual end.
     const completed = await page.waitForFunction(
       async ({ done }) => {
@@ -214,7 +204,6 @@ suite.define(() => {
           .getByRole("heading", { name: "Synthetic visualization" })
           .waitFor({ state: "attached" });
         const cdp = await context.newCDPSession(page);
-        const samples = [];
         await scrollChatThreadToTop(page);
         await waitForChatScrollIdle(page);
         for (const target of ["text", "widget"]) {
@@ -244,8 +233,6 @@ suite.define(() => {
             },
             -1,
           );
-          samples.push({ target, ...sample });
-          console.info("Mobile widget native scroll proof", JSON.stringify(samples));
           // A finger moving in one direction must never drive the transcript backward.
           let previous = sample.before;
           for (const offset of sample.moves) {

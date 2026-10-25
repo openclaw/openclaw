@@ -3,11 +3,6 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sleepWithAbort } from "./backoff.js";
 
-type TransportReadyResult = {
-  ok: boolean;
-  error?: string | null;
-};
-
 export type WaitForTransportReadyParams = {
   label: string;
   timeoutMs: number;
@@ -16,7 +11,7 @@ export type WaitForTransportReadyParams = {
   pollIntervalMs?: number;
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
-  check: () => Promise<TransportReadyResult>;
+  check: () => Promise<{ ok: boolean; error?: string | null }>;
 };
 
 /** Polls until ready, timed out, or aborted, with bounded logging through the runtime sink. */

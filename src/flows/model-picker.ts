@@ -101,9 +101,7 @@ type PromptDefaultModelParams = {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   runtime?: RuntimeEnv;
-  message?: string;
 };
 
 type PromptDefaultModelResult = { model?: string; config?: OpenClawConfig };
@@ -169,7 +167,6 @@ async function resolvePickerLogicalCatalog(params: {
     defaultModel: params.defaultModel,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     view: "all",
-    routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants: params.routeVariants,
     evaluateEntry: async (entry, routeVariants) => {
       const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
@@ -182,7 +179,6 @@ async function resolvePickerLogicalCatalog(params: {
       });
       return resolveLogicalModelCatalogEntryState({
         evaluation,
-        routePolicy: openAIModelCatalogRoutePolicy,
       });
     },
   });
@@ -417,74 +413,12 @@ function createPreferredProviderMatcher(params: {
   };
 }
 
-async function promptManualModel(params: {
-  prompter: WizardPrompter;
-  allowBlank: boolean;
-  initialValue?: string;
-}): Promise<PromptDefaultModelResult> {
-  const modelInput = await params.prompter.text({
-    message: params.allowBlank
-      ? t("wizard.model.defaultModelBlankToKeep")
-      : t("wizard.model.defaultModel"),
-    initialValue: params.initialValue,
-    placeholder: "provider/model",
-    validate: params.allowBlank
-      ? undefined
-      : (value) => (normalizeOptionalString(value) ? undefined : t("common.required")),
-  });
-  const model = normalizeAgentModelRefForConfig(modelInput ?? "");
-  return model ? { model } : {};
-}
-
-async function maybeFilterModelsByProvider(params: {
-  models: ModelCatalogEntry[];
-  matchesPreferredProvider?: (provider: string) => boolean;
-  prompter: WizardPrompter;
-  isVisibleProvider: (provider: string) => boolean;
-}): Promise<typeof params.models> {
-  let next = params.models.filter((entry) => params.isVisibleProvider(entry.provider));
-  const providerCounts = new Map<string, number>();
-  for (const { provider } of next) {
-    providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
-  }
-  const { matchesPreferredProvider } = params;
-  const shouldPromptProvider =
-    !matchesPreferredProvider && providerCounts.size > 1 && next.length > PROVIDER_FILTER_THRESHOLD;
-  if (shouldPromptProvider) {
-    const selection = await params.prompter.select({
-      message: t("wizard.model.filterByProvider"),
-      options: [
-        { value: "*", label: t("wizard.model.allProviders") },
-        ...sortUniqueStrings(providerCounts.keys()).map((provider) => {
-          const count = providerCounts.get(provider)!;
-          return {
-            value: provider,
-            label: provider,
-            hint: t("wizard.model.modelCount", { count, plural: count === 1 ? "" : "s" }),
-          };
-        }),
-      ],
-      searchable: true,
-    });
-    if (selection !== "*") {
-      next = next.filter((entry) => entry.provider === selection);
-    }
-  }
-  if (matchesPreferredProvider) {
-    const filtered = next.filter((entry) => matchesPreferredProvider(entry.provider));
-    if (filtered.length > 0) {
-      next = filtered;
-    }
-  }
-  return next;
-}
-
 export async function promptDefaultModel(
   params: PromptDefaultModelParams,
 ): Promise<PromptDefaultModelResult> {
   const cfg = params.config;
   const pickerConfig = resolveModelPickerConfig(cfg, params.agentId);
-  const pickerAgentDir = params.agentDir ?? resolveDefaultAgentDir(cfg, params.env ?? process.env);
+  const pickerAgentDir = params.agentDir ?? resolveDefaultAgentDir(cfg);
   const allowKeep = params.allowKeep ?? true;
   const includeProviderPluginSetups = params.includeProviderPluginSetups ?? false;
   const loadCatalog = params.loadCatalog ?? true;
@@ -501,19 +435,26 @@ export async function promptDefaultModel(
   });
   const resolvedKey = modelKey(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
-  const promptManual = (allowBlank = allowKeep) =>
-    promptManualModel({
-      prompter: params.prompter,
-      allowBlank,
+  const promptManual = async (allowBlank = allowKeep): Promise<PromptDefaultModelResult> => {
+    const modelInput = await params.prompter.text({
+      message: allowBlank
+        ? t("wizard.model.defaultModelBlankToKeep")
+        : t("wizard.model.defaultModel"),
       initialValue: configuredRaw || resolvedKey || undefined,
+      placeholder: "provider/model",
+      validate: allowBlank
+        ? undefined
+        : (value) => (normalizeOptionalString(value) ? undefined : t("common.required")),
     });
+    const model = normalizeAgentModelRefForConfig(modelInput ?? "");
+    return model ? { model } : {};
+  };
   let literalPrefixProvidersCache: Set<string> | undefined;
   const resolveCachedLiteralPrefixProviders = async () => {
     if (!literalPrefixProvidersCache) {
       literalPrefixProvidersCache = await resolveLiteralPrefixProviderIds({
         cfg,
         workspaceDir: params.workspaceDir,
-        env: params.env,
         ...(providerScopedCatalog && preferredProvider
           ? { providerRefs: [preferredProvider] }
           : {}),
@@ -569,7 +510,7 @@ export async function promptDefaultModel(
       });
     }
     const selection = await params.prompter.select({
-      message: params.message ?? t("wizard.model.defaultModel"),
+      message: t("wizard.model.defaultModel"),
       options,
       initialValue: allowKeep ? KEEP_VALUE : configuredKey || MANUAL_VALUE,
       searchable: false,
@@ -597,7 +538,6 @@ export async function promptDefaultModel(
         providerScoped: providerScopedCatalog,
         agentDir: pickerAgentDir,
         ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-        ...(params.env !== undefined ? { env: params.env } : {}),
       })
     ).snapshot;
   } finally {
@@ -617,11 +557,9 @@ export async function promptDefaultModel(
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     agentDir: pickerAgentDir,
-    env: params.env,
   });
   const resolveModelRouteRuntime = createModelRouteRuntimeResolver({
     config: cfg,
-    env: params.env,
   });
   const models = await resolvePickerLogicalCatalog({
     cfg: pickerConfig,
@@ -637,7 +575,6 @@ export async function promptDefaultModel(
 
   const isVisibleProvider = createModelPickerVisibleProviderPredicate({
     config: cfg,
-    env: params.env,
     includeSetupRegistry: !providerScopedCatalog,
   });
   const matchesPreferredProvider = preferredProvider
@@ -645,15 +582,44 @@ export async function promptDefaultModel(
         preferredProvider,
         cfg,
         workspaceDir: params.workspaceDir,
-        env: params.env,
       })
     : undefined;
-  const filteredModels = await maybeFilterModelsByProvider({
-    models,
-    matchesPreferredProvider,
-    prompter: params.prompter,
-    isVisibleProvider,
-  });
+  const prompter = params.prompter;
+  let filteredModels = models.filter((entry) => isVisibleProvider(entry.provider));
+  const providerCounts = new Map<string, number>();
+  for (const { provider } of filteredModels) {
+    providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
+  }
+  const shouldPromptProvider =
+    !matchesPreferredProvider &&
+    providerCounts.size > 1 &&
+    filteredModels.length > PROVIDER_FILTER_THRESHOLD;
+  if (shouldPromptProvider) {
+    const selection = await prompter.select({
+      message: t("wizard.model.filterByProvider"),
+      options: [
+        { value: "*", label: t("wizard.model.allProviders") },
+        ...sortUniqueStrings(providerCounts.keys()).map((provider) => {
+          const count = providerCounts.get(provider)!;
+          return {
+            value: provider,
+            label: provider,
+            hint: t("wizard.model.modelCount", { count, plural: count === 1 ? "" : "s" }),
+          };
+        }),
+      ],
+      searchable: true,
+    });
+    if (selection !== "*") {
+      filteredModels = filteredModels.filter((entry) => entry.provider === selection);
+    }
+  }
+  if (matchesPreferredProvider) {
+    const filtered = filteredModels.filter((entry) => matchesPreferredProvider(entry.provider));
+    if (filtered.length > 0) {
+      filteredModels = filtered;
+    }
+  }
   if (filteredModels.length === 0) {
     return promptManual();
   }
@@ -682,7 +648,6 @@ export async function promptDefaultModel(
       ...(await resolveProviderPluginSetupOptions({
         cfg,
         workspaceDir: params.workspaceDir,
-        env: params.env,
       })),
     );
   }
@@ -727,7 +692,7 @@ export async function promptDefaultModel(
   }
 
   const selection = await params.prompter.select({
-    message: params.message ?? t("wizard.model.defaultModel"),
+    message: t("wizard.model.defaultModel"),
     options,
     initialValue,
     searchable: true,
@@ -746,7 +711,6 @@ export async function promptDefaultModel(
     prompter: params.prompter,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
-    env: params.env,
     runtime: params.runtime,
   });
   if (providerPluginResult) {
@@ -761,7 +725,6 @@ export async function promptDefaultModel(
     prompter: params.prompter,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
-    env: params.env,
   });
   return { model };
 }

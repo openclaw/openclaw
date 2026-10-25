@@ -1,9 +1,11 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
+import { FILE_FETCH_CHUNK_BYTES } from "../shared/file-fetch-protocol.js";
 import { handleFileFetch } from "./file-fetch.js";
-import { useFiles } from "./node-host.test-support.js";
+import { duplexPeer, observeFileOpen, useFiles } from "./node-host.test-support.js";
 
-const { at, file: makeFile } = useFiles("file-fetch-test-", vi.restoreAllMocks);
+const { at, file: makeFile, replacement } = useFiles("file-fetch-test-", vi.restoreAllMocks);
 type FetchResult = Awaited<ReturnType<typeof handleFileFetch>>;
 function expectFailureCode(
   result: FetchResult,
@@ -15,76 +17,70 @@ function expectSuccess(result: FetchResult): asserts result is Extract<FetchResu
   expect(result.ok).toBe(true);
 }
 async function fetchFile(name: string, content: string | Buffer) {
-  const result = await handleFileFetch({ path: await makeFile(name, content) });
+  const peer = duplexPeer();
+  const result = await handleFileFetch({ path: await makeFile(name, content) }, peer.io);
   expectSuccess(result);
+  expect(result).not.toHaveProperty("transport");
+  expect(peer.send).not.toHaveBeenCalled();
+  expect(peer.onMessage).not.toHaveBeenCalled();
   return result;
 }
 describe("handleFileFetch", () => {
-  it("rejects relative paths", async () => {
-    const r = await handleFileFetch({ path: "relative/file.txt" });
+  it.each([
+    ["relative/file.txt", /absolute/],
+    ["/tmp/foo\0bar", /NUL/],
+  ])("rejects invalid path %j", async (path, message) => {
+    const r = await handleFileFetch({ path });
     expectFailureCode(r, "INVALID_PATH");
-    expect(r.message).toMatch(/absolute/);
-  });
-
-  it("rejects paths with NUL bytes", async () => {
-    const r = await handleFileFetch({ path: "/tmp/foo\0bar" });
-    expectFailureCode(r, "INVALID_PATH");
-    expect(r.message).toMatch(/NUL/);
+    expect(r.message).toMatch(message);
   });
   it("returns IS_DIRECTORY when the path resolves to a directory", async () => {
     const r = await handleFileFetch({ path: at() });
     expectFailureCode(r, "IS_DIRECTORY");
     expect(r.canonicalPath).toBe(at());
   });
-  it("fetches an empty image-named file with extension-derived MIME", async () => {
-    expect(await fetchFile("empty.png", "")).toMatchObject({
-      size: 0,
-      mimeType: "image/png",
-      base64: "",
-      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  it.each([
+    ["empty.png", "", "image/png"],
+    ["LICENSE", "Permission is hereby granted\n", "text/plain"],
+    ["opaque", Buffer.from([0x00, 0x01, 0x02, 0xff]), "application/octet-stream"],
+  ])("fetches %s with detected MIME and exact bytes", async (name, content, mimeType) => {
+    const result = await fetchFile(name, content);
+    expect(result).toMatchObject({
+      mimeType,
+      size: Buffer.byteLength(content),
+      base64: Buffer.from(content).toString("base64"),
     });
+    if (name === "empty.png") {
+      expect(result.sha256).toBe(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      );
+    }
   });
   it.runIf(process.platform !== "win32")(
     "rejects a retargeted path before reading file bytes",
     async () => {
-      const first = at("first.txt");
-      const second = at("second.txt");
-      const link = at("current.txt");
-      await fs.writeFile(first, "approved");
-      await fs.writeFile(second, "not approved");
-      await fs.symlink(first, link);
-
-      const preflight = await handleFileFetch({
-        path: link,
-        followSymlinks: true,
-        preflightOnly: true,
-      });
+      const fixture = await replacement("symlink");
+      const params = { path: fixture.target, followSymlinks: true };
+      const preflight = await handleFileFetch({ ...params, preflightOnly: true });
       expectSuccess(preflight);
-      await fs.unlink(link);
-      await fs.symlink(second, link);
-
+      await fixture.swap();
       const result = await handleFileFetch({
-        path: link,
-        followSymlinks: true,
+        ...params,
         expectedCanonicalPath: preflight.path,
       });
-
       expectFailureCode(result, "CANONICAL_PATH_CHANGED");
-      expect(result.canonicalPath).toBe(second);
+      expect(result.canonicalPath).toBe(fixture.canonical);
     },
   );
 
   it("rejects a replacement at the same canonical pathname before reading bytes", async () => {
-    const target = at("target.txt");
-    const moved = at("moved.txt");
-    await fs.writeFile(target, "approved");
+    const { target, swap } = await replacement("inode");
     const readFileSpy = vi.spyOn(fs, "readFile");
     const preflight = await handleFileFetch({ path: target, preflightOnly: true });
     expectSuccess(preflight);
     expect(preflight).toMatchObject({ base64: "", sha256: "", preflightOnly: true });
     expect(readFileSpy).not.toHaveBeenCalled();
-    await fs.rename(target, moved);
-    await fs.writeFile(target, "not approved");
+    await swap();
 
     const result = await handleFileFetch({
       path: target,
@@ -96,33 +92,13 @@ describe("handleFileFetch", () => {
     expect(await fs.readFile(target, "utf8")).toBe("not approved");
   });
 
-  it("detects extensionless plain text as text/plain", async () => {
-    const contents = "Permission is hereby granted\n";
-    const r = await fetchFile("LICENSE", contents);
-    expect(r.mimeType).toBe("text/plain");
-    expect(Buffer.from(r.base64, "base64").toString("utf-8")).toBe(contents);
-  });
-
-  it("does not classify extensionless binary content as text/plain", async () => {
-    const r = await fetchFile("opaque", Buffer.from([0x00, 0x01, 0x02, 0xff]));
-    expect(r.mimeType).toBe("application/octet-stream");
-  });
   it("bounds bytes consumed when a file grows after the size check", async () => {
     const target = await makeFile("growing.txt", "small");
-    const realOpen = fs.open.bind(fs);
     let bytesRead = 0;
     let grown = false;
-    const grow = async () => {
-      if (!grown) {
-        grown = true;
-        await fs.appendFile(target, Buffer.alloc(1024));
-      }
-    };
-    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await realOpen(file, flags, mode);
+    observeFileOpen((handle, file) => {
       if (String(file) === target) {
         const read = handle.read.bind(handle);
-        const readFile = handle.readFile.bind(handle);
         // Keep real filesystem reads; append only after the handler has checked size.
         handle.read = (async (
           buffer: Buffer,
@@ -130,19 +106,15 @@ describe("handleFileFetch", () => {
           length: number,
           position: number | null,
         ) => {
-          await grow();
+          if (!grown) {
+            grown = true;
+            await fs.appendFile(target, Buffer.alloc(1024));
+          }
           const result = await read(buffer, offset, length, position);
           bytesRead += result.bytesRead;
           return result;
         }) as typeof handle.read;
-        handle.readFile = (async (...args: Parameters<typeof handle.readFile>) => {
-          await grow();
-          const result = await readFile(...args);
-          bytesRead += Buffer.byteLength(result);
-          return result;
-        }) as typeof handle.readFile;
       }
-      return handle;
     });
 
     expectFailureCode(await handleFileFetch({ path: target, maxBytes: 8 }), "FILE_TOO_LARGE");
@@ -171,13 +143,83 @@ describe("handleFileFetch", () => {
     }
   });
   it("refuses to follow a symlink by default (SYMLINK_REDIRECT)", async () => {
-    const real = at("real.txt");
+    const real = await makeFile("real.txt", "data");
     const link = at("link.txt");
-    await fs.writeFile(real, "data");
     await fs.symlink(real, link);
 
     const r = await handleFileFetch({ path: link });
     expectFailureCode(r, "SYMLINK_REDIRECT");
     expect(r.canonicalPath).toBe(real);
   });
+});
+
+async function binaryFixture(bytes = Buffer.from("output")) {
+  const target = await makeFile("output.bin", bytes);
+  const params = { path: target, transport: "binary", maxBytes: bytes.length };
+  const preflight = await handleFileFetch({ ...params, preflightOnly: true });
+  assert(preflight.ok, JSON.stringify(preflight));
+  const peer = duplexPeer();
+  const chunks: Buffer[] = [];
+  const onChunk = vi.fn(async () => {});
+  peer.send.mockImplementation(async (message) => {
+    expect(message.byteLength).toBeLessThanOrEqual(FILE_FETCH_CHUNK_BYTES);
+    chunks.push(Buffer.from(message));
+    await onChunk();
+    await peer.receive(Buffer.from("ack"));
+  });
+  const { binding: expectedBinding, path: expectedCanonicalPath } = preflight;
+  const send = (control: string) => peer.receive(Buffer.from(control));
+  const start = () =>
+    handleFileFetch({ ...params, expectedBinding, expectedCanonicalPath }, peer.io);
+  return { ...peer, target, bytes, preflight, chunks, onChunk, send, start };
+}
+
+it("preflights without a stream and sends bounded chunks from the authorized handle after START", async () => {
+  const value = await binaryFixture(Buffer.alloc(17 * 1024 * 1024, 0x5a));
+  expect(value.preflight).toMatchObject({ preflightOnly: true, base64: "", sha256: "" });
+  const pending = value.start();
+  await value.ready;
+  expect(value.chunks).toHaveLength(0);
+  await fs.rename(value.target, `${value.target}.old`);
+  await fs.writeFile(value.target, "other");
+  await value.send("start");
+  expect(await pending).toMatchObject({
+    ok: true,
+    transport: "binary",
+    base64: "",
+    size: value.bytes.length,
+    sha256: crypto.createHash("sha256").update(value.bytes).digest("hex"),
+  });
+  expect(Buffer.concat(value.chunks).equals(value.bytes)).toBe(true);
+  await expect(value.send("ack")).rejects.toThrow("No receiver");
+});
+
+it.each([
+  ["growth", "FILE_TOO_LARGE", FILE_FETCH_CHUNK_BYTES],
+  ["cancellation", "READ_ERROR", 0],
+] as const)("bounds output and releases the stream after %s", async (mode, code, size) => {
+  const value = await binaryFixture(Buffer.alloc(FILE_FETCH_CHUNK_BYTES));
+  const closes: ReturnType<typeof vi.spyOn>[] = [];
+  observeFileOpen((handle) => {
+    closes.push(vi.spyOn(handle, "close"));
+  });
+  value.onChunk.mockImplementationOnce(() => fs.appendFile(value.target, "x"));
+  const pending = value.start();
+  await value.ready;
+  if (mode === "growth") {
+    await value.send("start");
+  } else {
+    value.controller.abort(new Error("revoked"));
+  }
+  expect(await pending).toMatchObject({ ok: false, code });
+  expect(closes.length).toBeGreaterThan(0);
+  closes.forEach((close) => expect(close).toHaveBeenCalledOnce());
+  await expect(value.send("start")).rejects.toThrow("No receiver");
+  expect(Buffer.concat(value.chunks)).toHaveLength(size);
+  expect(value.chunks.length > 0).toBe(mode === "growth");
+});
+
+it.each([undefined, -1, Number.MAX_SAFE_INTEGER + 1])("invalid budget: %s", async (maxBytes) => {
+  const result = await handleFileFetch({ path: "/unused", transport: "binary", maxBytes });
+  expect(result).toMatchObject({ ok: false, code: "INVALID_PARAMS" });
 });

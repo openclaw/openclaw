@@ -127,7 +127,7 @@ export function registerCronSessionCompletionEventTests({
 
         const liveEvent = await liveEventPromise;
         const livePayload = requireRecord(liveEvent.payload, "background completion event");
-        expect(livePayload.message).toMatchObject({
+        const completionMessage = {
           __openclaw: {
             idempotencyKey: "cron-current-completion:cron:job-webchat:3000",
           },
@@ -140,7 +140,8 @@ export function registerCronSessionCompletionEventTests({
             runId: "cron:job-webchat:3000",
           },
           role: "assistant",
-        });
+        };
+        expect(livePayload.message).toMatchObject(completionMessage);
         await expect(dispatchCronDelivery(deliveryParams)).resolves.toMatchObject({
           delivered: true,
         });
@@ -155,20 +156,12 @@ export function registerCronSessionCompletionEventTests({
         expect(history.payload?.messages).toHaveLength(1);
         expect(history.payload?.messages).toContainEqual(
           expect.objectContaining({
+            ...completionMessage,
             __openclaw: expect.objectContaining({
               id: livePayload.messageId,
               idempotencyKey: "cron-current-completion:cron:job-webchat:3000",
               seq: 1,
             }),
-            content: [
-              { type: "text", text: "The detached cron finished without another user message." },
-            ],
-            openclawAutomation: {
-              kind: "cron",
-              jobId: "job-webchat",
-              runId: "cron:job-webchat:3000",
-            },
-            role: "assistant",
           }),
         );
       } finally {

@@ -193,6 +193,32 @@ describe("browser server-context existing-session profile", () => {
     expect(state.profiles.get("chrome-live")?.tabAliases).toEqual(aliasesBefore);
   });
 
+  it("retains failed MCP cleanup for an explicit stop retry", async () => {
+    const { live } = setup();
+    await live.ensureBrowserAvailable();
+    chromeMcp.closeChromeMcpSession
+      .mockReset()
+      .mockRejectedValueOnce(new Error("MCP cleanup failed"))
+      .mockRejectedValueOnce(new Error("MCP cleanup failed"))
+      .mockResolvedValue(false);
+    try {
+      await expect(live.stopRunningBrowser()).rejects.toThrow("MCP cleanup failed");
+      expect(chromeMcp.closeChromeMcpSession.mock.calls).toEqual([
+        ["chrome-live"],
+        ["chrome-live"],
+      ]);
+      await expect(live.stopRunningBrowser()).resolves.toEqual({ stopped: true });
+      expect(chromeMcp.closeChromeMcpSession.mock.calls).toEqual([
+        ["chrome-live"],
+        ["chrome-live"],
+        ["chrome-live"],
+        ["chrome-live"],
+      ]);
+    } finally {
+      chromeMcp.closeChromeMcpSession.mockReset().mockResolvedValue(true);
+    }
+  });
+
   it("expires Chrome MCP aliases instead of transferring them to a replacement tab", async () => {
     const originalTab = tab("TARGET-A", "https://shop.example/checkout", "Checkout");
     const replacementTab = { ...originalTab, targetId: "TARGET-B" };

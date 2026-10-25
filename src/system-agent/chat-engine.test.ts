@@ -77,12 +77,15 @@ describe("SystemAgentChatEngine facade", () => {
       observedGenerations.push(getPreparedModelRuntimePluginGeneration());
       return null;
     });
+    vi.spyOn(
+      await import("./assistant.js"),
+      "planSystemAgentGreetingWithConfiguredModel",
+    ).mockImplementation(planGreeting);
     vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
     mocks.readConfigFileSnapshot.mockImplementation(async () => configSnapshot(config));
     const engine = new SystemAgentChatEngine({
       requesterAgentId: requester,
       verifiedInference: inference.binding,
-      planGreeting,
       runAgentTurn: runSystemAgentTurn,
       deps: {
         loadOverview: fakeOverviewLoader(),

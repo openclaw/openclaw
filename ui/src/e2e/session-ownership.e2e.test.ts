@@ -7,11 +7,16 @@ import {
   pauseVirtualClock,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import { closeChatDetails, openChatDetailsPeople } from "./chat-details.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { replaceGatewayClient } from "./new-session-page.test-support.ts";
+import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 import {
   collaborativeSessionsList,
   draftSessionsList,
+  ownerRoster,
+  sessionPerson,
   sessionsList,
 } from "./session-ownership-fixtures.test-support.ts";
 import {
@@ -31,7 +36,7 @@ const suite = createControlUiE2eSuite({
 
 let activePage: Page | undefined;
 
-function ownerSessions(visibility: "draft" | "shared", single = false) {
+function ownerSessions(visibility: "draft" | "shared" | "read-only", single = false) {
   const sessions = visibility === "draft" ? draftSessionsList() : sessionsList();
   const active = sessions.sessions[0];
   if (!active) {
@@ -201,6 +206,138 @@ suite.define(() => {
     expect(collaborative?.titleLeft).toBeCloseTo(single?.titleLeft ?? 0, 5);
   });
 
+  it.each([1200, 390])("keeps inline-owner activity last at %ipx", async (width) => {
+    const patrick = sessionPerson("profile-patrick", "Patrick");
+    const mira = sessionPerson("profile-mira", "Mira");
+    const states: Array<[string, Record<string, unknown>]> = [
+      ["idle", {}],
+      ["unread", { unread: true }],
+      ["running", { hasActiveRun: true, status: "running", activeRunIds: ["run-1"] }],
+      ["parent", { hasActiveRun: true, status: "running", childSessions: ["agent:main:child"] }],
+    ];
+    const rows = states.map(([id, state], index) =>
+      Object.assign(
+        {
+          key: `agent:main:${id}`,
+          kind: "direct",
+          label: `Inline ${id} session`,
+          createdActor: patrick,
+          owner: { actor: patrick },
+          updatedAt: 10 - index,
+        },
+        state,
+      ),
+    );
+    rows.push({
+      key: "agent:main:child",
+      kind: "direct",
+      label: "Inline child session",
+      createdActor: patrick,
+      owner: { actor: patrick },
+      spawnedBy: "agent:main:parent",
+      updatedAt: 2,
+    });
+    rows.push({
+      key: "agent:main:mira",
+      kind: "direct",
+      label: "Mira session",
+      createdActor: mira,
+      owner: { actor: mira },
+      updatedAt: 1,
+    });
+    const { page } = await openSession(
+      ownerRoster(rows, [patrick, mira]),
+      {
+        sessionKey: "agent:main:mira",
+        presenceUsers: [{ self: true, id: "profile-patrick", name: "Patrick" }],
+      },
+      { width },
+    );
+    if (width === 390) {
+      await navigationDrawerToggle(page).click();
+    }
+    await page.getByText("Inline idle session", { exact: true }).waitFor();
+    await chooseSidebarMenuOption(page, "Group by", "Person");
+    await closeSidebarMenu(page);
+    await chooseOwner(page, "owner:profile-patrick");
+    // The picker helper's Escape also dismisses the mobile drawer.
+    if (width === 390) {
+      await navigationDrawerToggle(page).click();
+      await waitForMobileSidebarDrawerOpen(page);
+    }
+    const group = page.locator(".sidebar-recent-sessions__group--inline-owner");
+    const row = (id: string) => group.locator(`[data-session-key="agent:main:${id}"]`);
+    await row("running").locator(".session-glyph__ring").waitFor();
+    await row("unread").locator(".session-unread-dot").waitFor();
+    // Park the pointer away from the list so no row shows hover actions.
+    await page.mouse.move(1100, 700);
+
+    const rowGeometry = (id: string) =>
+      row(id).evaluate((element) => {
+        const box = (selector: string) => element.querySelector(selector)?.getBoundingClientRect();
+        return {
+          top: element.getBoundingClientRect().top,
+          right: element.getBoundingClientRect().right,
+          text: box(".sidebar-recent-session__text"),
+          indicator: box(".sidebar-session-indicator:not(:empty)"),
+          actions: box(".session-row-actions"),
+          toggle: box("[data-child-session-toggle]"),
+        };
+      });
+    const header = await page
+      .locator("#sidebar-session-owner-title")
+      .evaluate((element) => element.getBoundingClientRect().bottom);
+    const [idle, unread, running] = await Promise.all([
+      rowGeometry("idle"),
+      rowGeometry("unread"),
+      rowGeometry("running"),
+    ]);
+    expect(idle.top - header).toBeLessThanOrEqual(12);
+    expect(idle.indicator).toBeUndefined();
+    for (const status of [unread, running]) {
+      expect(status.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
+      expect(status.indicator?.left).toBeGreaterThanOrEqual(status.text?.right ?? Infinity);
+    }
+
+    // Hover actions must appear before the fixed trailing status, not push it left.
+    await row("running").hover();
+    await expectBrowser(row("running").locator(".session-row-actions button").first()).toHaveCSS(
+      "opacity",
+      "1",
+    );
+    const hovered = await rowGeometry("running");
+    expect(hovered.indicator?.left).toBeGreaterThanOrEqual(hovered.actions?.right ?? Infinity);
+    expect(hovered.right - (hovered.indicator?.right ?? 0)).toBeCloseTo(
+      running.right - (running.indicator?.right ?? 0),
+      5,
+    );
+    await page.mouse.move(1100, 700);
+    await row("running").locator("a").focus();
+    const focused = await rowGeometry("running");
+    expect(focused.indicator?.left).toBeGreaterThanOrEqual(focused.actions?.right ?? Infinity);
+    expect(focused.right - (focused.indicator?.right ?? 0)).toBeCloseTo(
+      running.right - (running.indicator?.right ?? 0),
+      5,
+    );
+    await page.locator("#sidebar-session-owner-title").focus();
+    await page.mouse.move(width - 10, 700);
+    await expectBrowser(page.locator(".session-progress-hovercard")).toBeHidden();
+    await row("parent").hover();
+    const parent = await rowGeometry("parent");
+    expect(parent.toggle).toBeDefined();
+    expect(parent.indicator?.left).toBeGreaterThanOrEqual(parent.toggle?.right ?? Infinity);
+    expect(parent.right - (parent.indicator?.right ?? 0)).toBeCloseTo(
+      running.right - (running.indicator?.right ?? 0),
+      5,
+    );
+    const toggle = row("parent").locator("[data-child-session-toggle]");
+    await toggle.click();
+    await expectBrowser(group.locator('[data-session-key="agent:main:child"]')).toContainText(
+      "Inline child session",
+    );
+    await expectBrowser(toggle).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("derives People controls and owner filtering from current session owners", async () => {
     const { page, gateway } = await openSession(
       sessionsList(["profile-ada", "profile-bob"], true),
@@ -228,7 +365,14 @@ suite.define(() => {
     await page.getByText("Bob operations", { exact: true }).first().waitFor();
     await page.locator('[data-session-key="agent:main:ada"] a').click();
     await page.getByText("Ready.", { exact: true }).waitFor();
-    await expect.poll(() => page.locator("openclaw-session-owner-chip").count()).toBe(3);
+    for (const sessionKey of ["agent:main:ada", "agent:main:bob"]) {
+      await expectBrowser(
+        page.locator('[data-session-key="' + sessionKey + '"] openclaw-session-owner-chip'),
+      ).toHaveCount(1);
+    }
+    const people = await openChatDetailsPeople(page);
+    await expectBrowser(people.getByRole("link", { name: "Ada Owner", exact: true })).toBeVisible();
+    await closeChatDetails(page);
 
     const ownerMenu = await openSidebarSortMenu(page);
     for (const [control, name] of [
@@ -514,9 +658,11 @@ suite.define(() => {
     await expect
       .poll(() => panel.evaluate((element) => element.matches(":popover-open")))
       .toBe(true);
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-title")).toHaveCount(3);
-    await page.getByText("Publish draft", { exact: true }).click();
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-permissions")).toHaveCount(0);
+    await dropdown.getByRole("menuitem", { name: "Session access" }).click();
+    await dropdown.getByRole("menuitemradio", { name: "Shared", exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
+    await page.getByRole("button", { name: "Session sharing" }).click();
     await expect
       .poll(() => panel.evaluate((element) => element.matches(":popover-open")))
       .toBe(false);
@@ -535,7 +681,7 @@ suite.define(() => {
   });
 
   it("lets a read-scoped owner inspect sharing but blocks mutations", async () => {
-    const { page, gateway } = await openSession(ownerSessions("draft"), {
+    const { page, gateway } = await openSession(ownerSessions("read-only"), {
       featureMethods: [...visibilityMethods, ...memberMethods],
       operatorScopes: ["operator.read"],
       methodResponses: {
@@ -543,6 +689,7 @@ suite.define(() => {
           sessionKey: "agent:main:ada",
           members: [],
           identities: [{ type: "human", id: "profile-bob", label: "Bob" }],
+          permissions: [{ identityId: "profile-bob", level: "read", options: ["read", "send"] }],
           role: "owner",
           allowedVisibilities: ["shared", "draft"],
         },
@@ -553,22 +700,21 @@ suite.define(() => {
     await page.getByRole("button", { name: "Session sharing", exact: true }).click();
     await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = page.locator(".chat-pane__sharing-menu");
-    const publish = dropdown.locator('button[value="visibility:shared"]');
-    const member = dropdown.locator('button[value="member:profile-bob"]');
-    await expectBrowser(publish).toBeVisible();
-    await expectBrowser(publish).toBeDisabled();
+    const member = dropdown.getByRole("menuitem", { name: "Bob, Can read", exact: true });
     await expectBrowser(member).toBeVisible();
     await expectBrowser(member).toBeDisabled();
-    await dropdown.evaluate((element) => {
-      element.querySelector<HTMLButtonElement>('button[value="visibility:shared"]')?.click();
-      element.querySelector<HTMLButtonElement>('button[value="member:profile-bob"]')?.click();
-    });
+    await member.evaluate((element) => (element as HTMLButtonElement).click());
+    await dropdown.getByRole("menuitem", { name: "Session access" }).click();
+    const publish = dropdown.getByRole("menuitemradio", { name: "Shared", exact: true });
+    await expectBrowser(publish).toBeVisible();
+    await expectBrowser(publish).toBeDisabled();
+    await publish.evaluate((element) => (element as HTMLButtonElement).click());
 
     expect(await gateway.getRequests("session.visibility.set")).toHaveLength(0);
     expect(await gateway.getRequests("session.members.add")).toHaveLength(0);
   });
 
-  it("scrolls the complete sharing directory through one compact menu", async () => {
+  it("scrolls the complete sharing directory while keeping access controls visible", async () => {
     const longMemberLabel =
       "Alexandria Montgomery-Santiago from the International Collaboration Working Group";
     const longMemberId = `profile:${"member-without-a-display-name-".repeat(6)}`;
@@ -586,7 +732,7 @@ suite.define(() => {
       { type: "system" as const, id: "system-operations", label: "Operations" },
     ];
     const { page, gateway } = await openSession(
-      ownerSessions("shared", true),
+      ownerSessions("read-only", true),
       {
         hasMultipleSessionSharingIdentities: true,
         featureMethods: [...chatMethods, ...memberMethods, "session.visibility.set"],
@@ -596,6 +742,11 @@ suite.define(() => {
             sessionKey: "agent:main:ada",
             members: [{ identityId: longMemberId, addedBy: "profile-ada", addedAt: 1 }],
             identities: [...humanIdentities, ...nonHumanIdentities],
+            permissions: humanIdentities.map((identity) => ({
+              identityId: identity.id,
+              level: identity.id === longMemberId ? "send" : "read",
+              options: ["read", "send"],
+            })),
             role: "owner",
             allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
           },
@@ -608,112 +759,91 @@ suite.define(() => {
     await page.locator(".chat-pane__sharing-trigger").click();
     await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = page.locator(".chat-pane__sharing-menu");
-    await dropdown.locator('button[value="member:profile-member-0"]').waitFor();
-    await dropdown.evaluate(async (element) => {
-      const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel");
-      const animations = [...element.getAnimations(), ...(menu?.getAnimations() ?? [])];
-      await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
-    });
-    const longNameItem = dropdown.locator('button[value="member:profile-long-name"]');
-    const longIdItem = dropdown.locator(`button[value="member:${longMemberId}"]`);
-
+    const roster = dropdown.locator(".chat-pane__sharing-roster");
+    const people = roster.locator(".chat-pane__sharing-person");
+    await expectBrowser(people).toHaveCount(30);
+    const longNameItem = people.filter({ hasText: longMemberLabel });
+    const longIdItem = people.filter({ hasText: longMemberId });
     await longIdItem.scrollIntoViewIfNeeded();
-    const selectedIndicator = longIdItem.locator(".session-menu__check");
-    await expectBrowser(selectedIndicator).toBeVisible();
-    const selectedIndicatorContained = await longIdItem.evaluate((item) => {
-      const indicator = item.querySelector<HTMLElement>(".session-menu__check");
-      const itemRect = item.getBoundingClientRect();
-      const indicatorRect = indicator?.getBoundingClientRect();
-      return Boolean(
-        indicatorRect &&
-        indicatorRect.left >= itemRect.left &&
-        indicatorRect.right <= itemRect.right,
-      );
+    const selectedControl = longIdItem.getByRole("menuitem", {
+      name: `${longMemberId}, Can send`,
+      exact: true,
     });
-    expect(selectedIndicatorContained).toBe(true);
+    await expectBrowser(selectedControl).toBeVisible();
+    expect(
+      await selectedControl.evaluate((control) => {
+        const row = control.closest(".chat-pane__sharing-person")!.getBoundingClientRect();
+        const rect = control.getBoundingClientRect();
+        return rect.left >= row.left && rect.right <= row.right;
+      }),
+    ).toBe(true);
 
-    const panel = dropdown.locator(".chat-pane__sharing-panel");
-    const measure = (selector: string, index = 0) =>
-      dropdown.locator(`.chat-pane__sharing-${selector}`).nth(index).evaluate(geometry);
-    await panel.evaluate((element) => {
+    for (const item of [longNameItem, longIdItem]) {
+      const label = item.locator(".chat-pane__sharing-member-label");
+      const labelGeometry = await label.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const menu = element.closest(".chat-pane__sharing-panel")!.getBoundingClientRect();
+        return {
+          contained: rect.left >= menu.left && rect.right <= menu.right,
+          overflow: element.scrollWidth > element.clientWidth,
+          ellipsis: getComputedStyle(element).textOverflow,
+        };
+      });
+      expect(labelGeometry).toEqual({ contained: true, overflow: true, ellipsis: "ellipsis" });
+    }
+
+    await roster.evaluate((element) => {
       element.scrollTop = 0;
     });
-    const [
-      menu,
-      visibilityTitle,
-      membersTitle,
-      firstMember,
-      previousVisibility,
-      lastVisibility,
-      label1,
-      label2,
-    ] = await Promise.all([
-      panel.evaluate(geometry),
-      measure("visibility-title"),
-      measure("members-title"),
-      measure("member"),
-      measure("visibility-item", -2),
-      measure("visibility-item", -1),
-      measure("member-label"),
-      measure("member-label", 1),
-    ]);
-    const nestedScrollers = await panel.evaluate(
-      (element) =>
-        [...element.children].filter(
-          (node) =>
-            node.scrollHeight > node.clientHeight &&
-            ["auto", "scroll"].includes(getComputedStyle(node).overflowY),
-        ).length,
-    );
-    expect(menu.height).toBeLessThanOrEqual(421);
-    expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
-    expect(menu.scrollWidth).toBe(menu.clientWidth);
-    for (const label of [label1, label2]) {
-      expect(label.left).toBeGreaterThanOrEqual(menu.left);
-      expect(label.right).toBeLessThanOrEqual(menu.right);
-      expect(label.scrollWidth).toBeGreaterThan(label.clientWidth);
-    }
-    expect(membersTitle.padding).toBe(firstMember.padding);
-    const groupGap = membersTitle.top - lastVisibility.bottom;
-    expect(groupGap).toBeGreaterThanOrEqual(8);
-    expect(groupGap).toBeGreaterThan(lastVisibility.top - previousVisibility.bottom + 6);
-    expect(visibilityTitle.position).not.toBe("sticky");
-    expect(membersTitle.position).not.toBe("sticky");
-    expect(nestedScrollers).toBe(0);
-    await panel.evaluate(async (element) => {
-      element.scrollTop = element.scrollHeight;
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
+    const readGeometry = () =>
+      dropdown.evaluate((element) => {
+        const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel")!;
+        const list = element.querySelector<HTMLElement>(".chat-pane__sharing-roster")!;
+        const rows = list.querySelectorAll<HTMLElement>(".chat-pane__sharing-person");
+        const menuRect = menu.getBoundingClientRect();
+        const listRect = list.getBoundingClientRect();
+        return {
+          menuTop: menuRect.top,
+          menuBottom: menuRect.bottom,
+          viewportHeight: innerHeight,
+          menuScrollTop: menu.scrollTop,
+          scrollTop: list.scrollTop,
+          scrollHeight: list.scrollHeight,
+          clientHeight: list.clientHeight,
+          scrollWidth: list.scrollWidth,
+          clientWidth: list.clientWidth,
+          firstTop: rows[0]!.getBoundingClientRect().top,
+          lastBottom: rows[rows.length - 1]!.getBoundingClientRect().bottom,
+          listBottom: listRect.bottom,
+          accessTop: element
+            .querySelector<HTMLElement>('[data-value="access"]')!
+            .getBoundingClientRect().top,
+          permissionsTop: element
+            .querySelector<HTMLElement>(
+              ".chat-pane__sharing-permissions .chat-pane__sharing-section-label",
+            )!
+            .getBoundingClientRect().top,
+        };
       });
-    });
-    const [scrolledMenu, scrolledVisibility, scrolledMembers, scrolledFirst] = await Promise.all([
-      panel.evaluate(geometry),
-      measure("visibility-title"),
-      measure("members-title"),
-      measure("member"),
-    ]);
-    expect(scrolledMenu.scrollTop).toBeGreaterThan(0);
-    expect(scrolledVisibility.bottom).toBeLessThan(menu.top);
-    expect(scrolledMembers.top).toBeLessThan(menu.top);
-    expect(scrolledFirst.top).toBeLessThan(firstMember.top);
+    const beforeScroll = await readGeometry();
+    await people.last().scrollIntoViewIfNeeded();
+    const afterScroll = await readGeometry();
+    expect(beforeScroll.menuTop).toBeGreaterThanOrEqual(0);
+    expect(beforeScroll.menuBottom).toBeLessThanOrEqual(beforeScroll.viewportHeight);
+    expect(beforeScroll.scrollHeight).toBeGreaterThan(beforeScroll.clientHeight);
+    expect(beforeScroll.scrollWidth).toBe(beforeScroll.clientWidth);
+    expect(afterScroll.scrollTop).toBeGreaterThan(0);
+    expect(afterScroll.firstTop).toBeLessThan(beforeScroll.firstTop);
+    expect(afterScroll.lastBottom).toBeLessThanOrEqual(afterScroll.listBottom + 1);
+    expect(afterScroll.menuScrollTop).toBe(0);
+    expect(afterScroll.accessTop).toBeCloseTo(beforeScroll.accessTop, 1);
+    expect(afterScroll.permissionsTop).toBeCloseTo(beforeScroll.permissionsTop, 1);
+    await expectBrowser(roster.locator("openclaw-session-owner-chip")).toHaveCount(30);
+    await expectBrowser(roster.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(0);
+    await expectBrowser(dropdown.getByRole("button", { name: "Next", exact: true })).toHaveCount(0);
     await expectBrowser(
-      dropdown.locator(".chat-pane__sharing-member openclaw-session-owner-chip"),
-    ).toHaveCount(30);
-    for (const [item, title] of [
-      [longNameItem, longMemberLabel],
-      [longIdItem, longMemberId],
-    ] as const) {
-      await expect
-        .poll(() => tooltipTitleText(item.locator(".chat-pane__sharing-member-label")))
-        .toBe(title);
-    }
-    await expectBrowser(selectedIndicator).toHaveCount(1);
-    expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
-    // All identities share one list; owner-chip presentation remains human-only.
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
-    for (const name of ["Next", "Previous"]) {
-      await expectBrowser(dropdown.getByRole("button", { name, exact: true })).toHaveCount(0);
-    }
+      dropdown.getByRole("button", { name: "Previous", exact: true }),
+    ).toHaveCount(0);
   });
 
   it("clears a selected draft mode when sharing policy becomes unavailable", async () => {
@@ -747,35 +877,30 @@ suite.define(() => {
     expect(await draftToggle.isChecked()).toBe(false);
   });
 
-  it("aligns the Share trigger with the neighboring Layout trigger", async () => {
+  it("aligns the sharing and Details icons in the session toolbar", async () => {
     const { page } = await openSession(ownerSessions("shared"), {
       featureMethods: visibilityMethods,
+
       operatorScopes: ["operator.write"],
     });
     await page.getByText("Ready.", { exact: true }).waitFor();
     const share = page.locator(".chat-pane__sharing-trigger");
-    const layout = page.locator(".chat-pane__layout-trigger");
+    const details = page.locator(".chat-details-toggle");
     await share.waitFor();
-    await layout.waitFor();
+    await details.waitFor();
     const measure = (trigger: typeof share) =>
       trigger.evaluate((button) => {
         const bounds = button.getBoundingClientRect();
         const icon = button.querySelector("svg")!.getBoundingClientRect();
-        const range = document.createRange();
-        const label = document.createTreeWalker(button, NodeFilter.SHOW_TEXT, (node) =>
-          node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
-        );
-        range.selectNodeContents(label.nextNode()!);
-        const text = range.getBoundingClientRect();
         return {
-          height: bounds.height,
-          gap: text.left - icon.right,
+          center: icon.top + icon.height / 2,
           iconOffset: icon.top + icon.height / 2 - (bounds.top + bounds.height / 2),
         };
       });
-    const [shareMetrics, layoutMetrics] = await Promise.all([measure(share), measure(layout)]);
-    expect(shareMetrics.height).toBeCloseTo(layoutMetrics.height, 1);
-    expect(shareMetrics.gap).toBeCloseTo(layoutMetrics.gap, 1);
-    expect(shareMetrics.iconOffset).toBeCloseTo(layoutMetrics.iconOffset, 1);
+    const [shareMetrics, detailsMetrics] = await Promise.all([measure(share), measure(details)]);
+    expect(shareMetrics.center).toBeCloseTo(detailsMetrics.center, 1);
+    expect(shareMetrics.iconOffset).toBeCloseTo(detailsMetrics.iconOffset, 1);
+    await share.click({ trial: true });
+    await details.click({ trial: true });
   });
 });

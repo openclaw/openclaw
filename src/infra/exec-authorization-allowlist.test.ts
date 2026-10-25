@@ -31,6 +31,29 @@ function expectInlineEval(segments: Parameters<typeof detectInlineEvalInSegments
   );
 }
 
+function expectOneShot(
+  result: Awaited<ReturnType<typeof evaluate>>,
+  commandText: string,
+  reason: string,
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; strictInlineEval?: boolean } = {},
+) {
+  const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
+    segments: result.segments,
+    commandText,
+    platform: process.platform,
+    authorizationPlan: result.authorizationPlan,
+    ...options,
+  });
+  expect(allowAlwaysPersistence).toEqual({
+    kind: "one-shot",
+    reasons: expect.arrayContaining([reason]),
+  });
+  expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence })).toEqual([
+    "allow-once",
+    "deny",
+  ]);
+}
+
 describe("authorization-backed exec allowlist", () => {
   it.each([
     { command: `echo "$HOME"; python3 -c 'print(1)'`, analysisOk: false, first: ["echo", "$HOME"] },
@@ -52,7 +75,6 @@ describe("authorization-backed exec allowlist", () => {
     if (process.platform === "win32") {
       return;
     }
-
     const dir = makeExecApprovalsTempDir();
     const pythonPath = makeExecutable(dir, "python3");
     const env = makePathEnv(dir);
@@ -68,31 +90,17 @@ describe("authorization-backed exec allowlist", () => {
     expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-xcprint"]]);
     expectInlineEval(result.segments);
 
-    const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
-      segments: result.segments,
-      commandText: command,
+    expectOneShot(result, command, "no-reusable-pattern", {
       cwd: dir,
       env,
-      platform: process.platform,
       strictInlineEval: true,
-      authorizationPlan: result.authorizationPlan,
     });
-
-    expect(allowAlwaysPersistence).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["no-reusable-pattern"]),
-    });
-    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence })).toEqual([
-      "allow-once",
-      "deny",
-    ]);
   });
 
   it("does not satisfy path-scoped shell wrappers from trusted inner payloads", async () => {
     if (process.platform === "win32") {
       return;
     }
-
     const result = await evaluate(`./sh -c 'git status'`, { safeBins: new Set(["git"]) });
 
     expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: false });
@@ -104,10 +112,7 @@ describe("authorization-backed exec allowlist", () => {
     if (process.platform === "win32") {
       return;
     }
-
-    const result = await evaluate("sleep 10 & echo done", {
-      safeBins: new Set(["sleep", "echo"]),
-    });
+    const result = await evaluate("sleep 10 & echo done", { safeBins: new Set(["sleep", "echo"]) });
 
     expect(result).toMatchObject({ analysisOk: false, allowlistSatisfied: false });
     expect(result.segments.map((segment) => segment.argv)).toEqual([
@@ -123,7 +128,6 @@ describe("authorization-backed exec allowlist", () => {
     if (process.platform === "win32") {
       return;
     }
-
     const command = "echo safe \\\nunsafe";
     const result = await evaluate(command, { safeBins: new Set(["echo"]) });
 
@@ -132,28 +136,13 @@ describe("authorization-backed exec allowlist", () => {
       expect.objectContaining({ ok: false, reason: "line-continuation" }),
     );
 
-    const allowAlwaysPersistence = resolveAllowAlwaysPersistenceDecision({
-      segments: result.segments,
-      commandText: command,
-      platform: process.platform,
-      authorizationPlan: result.authorizationPlan,
-    });
-
-    expect(allowAlwaysPersistence).toEqual({
-      kind: "one-shot",
-      reasons: expect.arrayContaining(["unplanned"]),
-    });
-    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence })).toEqual([
-      "allow-once",
-      "deny",
-    ]);
+    expectOneShot(result, command, "unplanned");
   });
 
   it("does not satisfy allowlist policy for escaped word-boundary newlines", async () => {
     if (process.platform === "win32") {
       return;
     }
-
     const result = await evaluate("tr x\n\\id", { safeBins: new Set(["tr"]) });
 
     expect(result).toMatchObject({ analysisOk: false, allowlistSatisfied: false });

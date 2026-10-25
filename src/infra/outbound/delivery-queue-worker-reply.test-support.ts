@@ -7,9 +7,15 @@ import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
 
 /** Hold one exact committed response without changing its database operation. */
 export function holdDeliveryQueueReply<T>(
-  type: "deliveryQueue.ack" | "deliveryQueue.claimPlatformSend" | "deliveryQueue.failPending",
-  id: string,
+  type:
+    | "deliveryQueue.ack"
+    | "deliveryQueue.enqueue"
+    | "deliveryQueue.claimPlatformSend"
+    | "deliveryQueue.failPending"
+    | "deliveryQueue.renewPlatformSendLease",
+  id: string | undefined,
   readResult: (value: unknown) => T | undefined,
+  missingReplyMessage = "Expected a committed queue reply before loss",
 ) {
   const posted = createDeferredCore();
   const held = createDeferredCore<T>();
@@ -29,8 +35,7 @@ export function holdDeliveryQueueReply<T>(
       if (
         isRecord(command) &&
         command.type === type &&
-        isRecord(command.input) &&
-        command.input.id === id
+        (id === undefined || (isRecord(command.input) && command.input.id === id))
       ) {
         target = { worker: this, requestId: request.id };
         attempts += 1;
@@ -73,7 +78,7 @@ export function holdDeliveryQueueReply<T>(
     },
     lose: async () => {
       if (!captured || !target) {
-        throw new Error("Expected a committed queue reply before loss");
+        throw new Error(missingReplyMessage);
       }
       publish = undefined;
       await target.worker.terminate();
@@ -83,6 +88,15 @@ export function holdDeliveryQueueReply<T>(
       emit.mockRestore();
     },
   };
+}
+
+export function holdEnqueueReply() {
+  return holdDeliveryQueueReply(
+    "deliveryQueue.enqueue",
+    undefined,
+    (value) => (typeof value === "string" ? value : undefined),
+    "Expected a committed enqueue reply before loss",
+  );
 }
 
 export function holdAcknowledgementReply(id: string) {

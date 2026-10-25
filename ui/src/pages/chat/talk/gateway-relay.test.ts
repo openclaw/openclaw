@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { consultRunResult } from "./consult.test-support.ts";
 import {
   audioClock,
   listeners,
@@ -18,7 +19,11 @@ import {
   createTransport,
   startTransport,
   emitGatewayFrame,
-  emitTalkEvent,
+  emitAudio,
+  pumpSpeech,
+  emitFinal,
+  relayEvent,
+  expectClose,
   emitConsultAndWait,
   pumpMicrophone,
   zeroPcmBase64,
@@ -42,12 +47,7 @@ function consultReply(method: string, reply: () => Promise<unknown>) {
   );
   return client;
 }
-const consultResult = {
-  runId: "run-1",
-  idempotencyKey: "run-1",
-  agentId: "main",
-  agentSessionKey: "agent:main:main",
-};
+const consultResult = consultRunResult();
 const readyResultCall = [
   "talk.session.submitToolResult",
   {
@@ -56,9 +56,6 @@ const readyResultCall = [
     result: { result: "ready" },
   },
 ] as const;
-function relayEvent(payload: Record<string, unknown>) {
-  emitTalkEvent({ relaySessionId: "relay-1", ...payload });
-}
 function emitForcedConsult() {
   relayEvent({
     type: "toolCall",
@@ -66,21 +63,6 @@ function emitForcedConsult() {
     name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
     forced: true,
     args: { question: "status?" },
-  });
-}
-function emitAudio(audioBase64 = "AAAA") {
-  relayEvent({ type: "audio", audioBase64 });
-}
-function pumpSpeech() {
-  const samples = new Float32Array(4096).fill(0.25);
-  for (let frame = 0; frame < 3; frame += 1) {
-    pumpMicrophone(samples);
-  }
-}
-function emitFinal(text: string) {
-  emitGatewayFrame({
-    event: "chat",
-    payload: { runId: "run-1", state: "final", message: { text } },
   });
 }
 async function startRelay(client = createClient(), callbacks: RealtimeTalkCallbacks = {}) {
@@ -91,11 +73,6 @@ async function startRelay(client = createClient(), callbacks: RealtimeTalkCallba
 function expectCancellation(client: ReturnType<typeof createClient>, reason: string) {
   expect(requestCallsFor(client, "talk.session.cancelOutput")).toEqual([
     ["talk.session.cancelOutput", { sessionId: "relay-1", reason, turnId: "turn-1" }],
-  ]);
-}
-function expectClose(client: ReturnType<typeof createClient>, disposition: "abort" | "detach") {
-  expect(requestCallsFor(client, "talk.session.close")).toEqual([
-    ["talk.session.close", { sessionId: "relay-1", disposition }, { timeoutMs: 8_000 }],
   ]);
 }
 
@@ -1128,4 +1105,3 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

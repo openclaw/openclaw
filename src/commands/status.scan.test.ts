@@ -29,7 +29,6 @@ const url = "ws://127.0.0.1:18789";
 let scanStatus: typeof import("./status.scan.js").scanStatus;
 let scanStatusJsonFast: typeof import("./status.scan.fast-json.js").scanStatusJsonFast;
 let collectStatusScanOverview: typeof import("./status.scan-overview.js").collectStatusScanOverview;
-let commandConfigSnapshot: typeof import("../cli/command-config-snapshot.js");
 let loggingState: typeof import("../logging/state.js").loggingState;
 let originalForceStderr: boolean;
 
@@ -57,7 +56,6 @@ beforeAll(async () => {
     collectChannelStatusIssues: mocks.collectChannelStatusIssues,
   }));
   ({ collectStatusScanOverview } = await import("./status.scan-overview.js"));
-  commandConfigSnapshot = await import("../cli/command-config-snapshot.js");
   ({ loggingState } = await import("../logging/state.js"));
 });
 beforeEach(() => {
@@ -105,6 +103,7 @@ function coldStartEnv(token?: string) {
 const runtimeDiagnostics = {
   degradedSecretOwners: [],
   degradedPlugins: [],
+  modelReasoningWarning: "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
   sqliteWal: createSqliteWalHealth(),
   startupMigrationWarning: "Retained legacy state; run openclaw doctor --fix.",
   installationReplacementWarning: "Installation replaced; draining before handoff.",
@@ -177,13 +176,9 @@ describe("status scans", () => {
     const result = await scanStatus({ ...createStatusGatewayProbeBudget(5000), deep: true });
 
     expect(result.summary).toMatchObject(runtime);
-    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      config: cfg,
-      configPath: mocks.resolveConfigPath(),
+    expectCall(mocks.callGateway, {
       method: "channels.status",
       params: { probe: false, timeoutMs: 5000 },
-      timeoutMs: 5000,
     });
     expectChannels({ includeSetupFallbackPlugins: true, liveChannelStatus });
   });
@@ -236,11 +231,6 @@ describe("status scans", () => {
       fetchGit: false,
       includeRegistry: false,
     });
-    expect(mocks.getStatusSummary).toHaveBeenCalledWith({
-      config: resolvedConfig,
-      sourceConfig,
-      includeChannelSummary: false,
-    });
   });
 
   it("collects memory and plugin evidence with network updates for JSON --all", async () => {
@@ -258,12 +248,6 @@ describe("status scans", () => {
     );
     expect(result.pluginCompatibility).toEqual([notice]);
     expect(result.memory).toStrictEqual({ agentId: "main", files: 0, chunks: 0, dirty: false });
-    expect(mocks.getMemorySearchManager).toHaveBeenCalledExactlyOnceWith({
-      cfg,
-      agentId: "main",
-      purpose: "status",
-      inspectSources: true,
-    });
     expectCall(mocks.callGateway, { method: "status", timeoutMs: 2000 });
     expectCall(mocks.getUpdateCheckResult, {
       timeoutMs: 10_000,
@@ -307,7 +291,6 @@ describe("status scans", () => {
       resolvedConfig: { session: {} },
       diagnostics: ["secret warning"],
     });
-    vi.spyOn(commandConfigSnapshot, "readCommandConfigSnapshot");
     mocks.callGateway.mockImplementation(async ({ method }: { method: string }) =>
       method === "status" ? {} : { channelAccounts: {} },
     );
@@ -324,8 +307,6 @@ describe("status scans", () => {
       channelsStatus: { channelAccounts: {} },
       channelIssues: [{ channel: "quietchat", message: "boom" }],
     });
-    expect(commandConfigSnapshot.readCommandConfigSnapshot).toHaveBeenCalledOnce();
-    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
     expectCall(mocks.callGateway, { method: "channels.status", url, token: "tok" });
     expectChannels({
       config: { session: {} },

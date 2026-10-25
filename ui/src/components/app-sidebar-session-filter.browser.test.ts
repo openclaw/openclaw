@@ -1,4 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { i18n, t } from "../i18n/index.ts";
+import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
@@ -15,6 +17,7 @@ import {
   loadStoredSidebarSessionsShowPreview,
   loadStoredSidebarSessionsShowSystem,
 } from "./app-sidebar-session-types.ts";
+import { setSessionsGrouping } from "./session-organizer-menu.runtime.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/settings-controls.css";
 import "../styles/settings-native-controls.css";
@@ -157,6 +160,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       const occlusionTail = () => occlusion.slice(occlusionAfterOpening);
       await expect.element(search).toHaveFocus();
       expect(getComputedStyle(query(".picker-select__search")!).boxShadow).not.toBe("none");
+      await expect.poll(() => query(".picker-select__option[data-active]")).not.toBeNull();
       expect(ringStyle(sidebar, ".picker-select__option[data-active]")).not.toBe("none");
       await userEvent.keyboard("bo");
       await expect.poll(() => ownerOptions(sidebar)).toEqual(["Bob"]);
@@ -222,6 +226,38 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     },
   );
 
+  it("moves long translated status options onto their own line instead of cutting them", async () => {
+    onTestFinished(captureI18nStateForTesting());
+    await i18n.setLocale("de");
+    const { sidebar, page } = await mountFilters(1440);
+    await page.getByRole("button", { name: t("chat.sidebar.sortSessions"), exact: true }).click();
+    const row = sidebar.querySelector<HTMLElement>("#sidebar-sessions-status")!;
+    await expect.element(row).toBeVisible();
+    const rowBounds = row.getBoundingClientRect();
+    const group = row.querySelector<HTMLElement>(".sidebar-session-menu-segmented")!;
+    const groupBounds = group.getBoundingClientRect();
+    const options = [...group.querySelectorAll<HTMLElement>(".settings-segmented__btn")];
+    expect(options.map((option) => option.textContent)).toEqual([
+      "Aktiv",
+      "Zurückgestellt",
+      "Archiviert",
+      "Alle",
+    ]);
+    for (const option of options) {
+      const bounds = option.getBoundingClientRect();
+      expect(option.scrollWidth).toBeLessThanOrEqual(option.clientWidth);
+      expect(bounds.top).toBeGreaterThanOrEqual(groupBounds.top);
+      expect(bounds.bottom).toBeLessThanOrEqual(groupBounds.bottom);
+      expect(bounds.right).toBeLessThanOrEqual(groupBounds.right);
+    }
+    // The control takes the full row below its label and the next row starts after it.
+    expect(groupBounds.top).toBeGreaterThan(row.firstElementChild!.getBoundingClientRect().top);
+    expect(groupBounds.bottom).toBeLessThanOrEqual(rowBounds.bottom);
+    expect(row.nextElementSibling!.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      rowBounds.bottom,
+    );
+  });
+
   it("isolates keyboard filters from a previous sidebar's hovered control", async () => {
     mockNative();
     const previous = await mountFilters(390);
@@ -246,23 +282,23 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
 
   it("opens display submenus on mouse hover and leaves touch on click", async () => {
     const { role, query, userEvent } = await mountFilters(1440);
-    const settle = () =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, 300);
-      });
     await role("button", "Filter & sort").click();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const settle = () => vi.advanceTimersByTimeAsync(300);
     const sort = role("button", "Sort by: Created");
     const sortRow = query("#sidebar-sessions-sort")!.parentElement!;
     sortRow.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "touch" }));
     await settle();
     await expect.element(sort).toHaveAttribute("aria-expanded", "false");
     await userEvent.hover(sort);
+    await settle();
     await expect.element(sort).toHaveAttribute("aria-expanded", "true");
     await userEvent.hover(role("option", "Last updated"));
     await settle();
     await sort.click();
     await expect.element(sort).toHaveAttribute("aria-expanded", "true");
     await userEvent.hover(role("heading", "Filters"));
+    await settle();
     await expect.element(sort).toHaveAttribute("aria-expanded", "false");
     await sort.click();
     await expect.element(sort).toHaveAttribute("aria-expanded", "true");
@@ -401,7 +437,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       const original = sessions.sessions.state.result!;
       const grouping = hiddenBy === "roster" ? "project" : "person";
       if (hiddenBy === "roster") {
-        sidebar.sessionOrganizer.setSessionsGrouping(grouping);
+        setSessionsGrouping(sidebar.sessionOrganizer, grouping);
         await role("button", "Filter & sort").click();
         await choose(/^Hide empty groups:/, "Never");
         sidebar.dismissTransientMenus();

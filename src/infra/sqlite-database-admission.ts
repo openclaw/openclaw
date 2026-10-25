@@ -38,7 +38,7 @@ import {
 } from "./sqlite-database-admission-seal.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
-import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
 
 export {
   readSqliteDatabaseAdmissions,
@@ -130,6 +130,7 @@ export const {
   getSqliteDatabaseAdmission,
   getSqliteDatabaseSchemaRevision,
   getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForPath,
   getSqliteDatabaseAdmissionIdentityForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
@@ -346,9 +347,10 @@ export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: s
     state.unproven.add(database);
     return;
   }
-  const record = state.registry.records.get(observed);
-  if (record && !isRetired(record)) {
-    retainConnection(database, record);
+  // Restore descriptor-held facts before schema tracking initializes the new handle.
+  const known = state.registry.records.get(observed);
+  if ((known && !isRetired(known)) || state.registry.descriptors.get(observed)?.facts.size) {
+    admission(database);
   }
 }
 
@@ -482,13 +484,20 @@ export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = fals
   }
 }
 
-/** Native settlement invalidates row caches, including failed or rolled-back writes. */
-export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
+/** Failed writes invalidate too, unless the prepared native owner certifies no effect. */
+export function finishSqliteDatabaseWrite(database: DatabaseSync, noEffect = false): void {
   if (!state.dataWriters.has(database)) {
     return;
   }
   const record = state.dataWriters.get(database);
   state.dataWriters.delete(database);
+  if (noEffect) {
+    scopedWrites.cancel(database);
+    if (record) {
+      Atomics.sub(new Int32Array(record.references.get(threadId)!), 1, 1);
+    }
+    return;
+  }
   state.localWriteRevisions.set(database, (state.localWriteRevisions.get(database) ?? 0) + 1);
   scopedWrites.finish(database, record);
   if (record) {
@@ -571,7 +580,7 @@ export function publishSqliteDatabaseAdmission<T>(
     ? undefined
     : getSqliteNativeAdmissionFacts(database);
   const admitted = admitSqliteDatabaseFactValue(key, value);
-  if (!native && !database.isTransaction) {
+  if (!native && !database.isTransaction && !hasSqlitePostCommitScope(database)) {
     publishFact(record, key, admitted, revision);
     return;
   }

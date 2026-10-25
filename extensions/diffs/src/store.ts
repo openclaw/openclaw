@@ -4,8 +4,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { sha256Hex as hashToken } from "openclaw/plugin-sdk/node-crypto-runtime";
-import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  resolveTimestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   PluginBlobEntryInfo,
@@ -48,15 +52,6 @@ type CreateStandaloneFileArtifactParams = {
   ttlMs?: number;
   context?: DiffArtifactContext;
 };
-
-function isBlobLimitError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "PLUGIN_BLOB_LIMIT_EXCEEDED"
-  );
-}
 
 export class DiffArtifactStore {
   private readonly rootDir: string;
@@ -210,7 +205,7 @@ export class DiffArtifactStore {
     const entries = await fs
       .readdir(this.rootDir, { withFileTypes: true })
       .catch((error: unknown) => {
-        if (isFileNotFound(error)) {
+        if (extractErrorCode(error) === "ENOENT") {
           return [];
         }
         throw error;
@@ -262,7 +257,7 @@ export class DiffArtifactStore {
     try {
       return await this.blobStore.registerIfAbsentWithReceipt(id, bytes, metadata, { ttlMs });
     } catch (error) {
-      if (!isBlobLimitError(error)) {
+      if (extractErrorCode(error) !== "PLUGIN_BLOB_LIMIT_EXCEEDED") {
         throw error;
       }
       // Expired rows retain cleanup metadata and count toward physical fuses.
@@ -318,11 +313,7 @@ function viewerEntryToMeta(
 }
 
 function resolveEntryExpiresAt(entry: { expiresAt?: number }): string {
-  return (
-    timestampMsToIsoString(entry.expiresAt ?? MAX_DATE_TIMESTAMP_MS) ??
-    timestampMsToIsoString(MAX_DATE_TIMESTAMP_MS) ??
-    "1970-01-01T00:00:00.000Z"
-  );
+  return resolveTimestampMsToIsoString(entry.expiresAt, MAX_DATE_TIMESTAMP_MS);
 }
 
 function normalizeTtlMs(value?: number): number {
@@ -381,8 +372,4 @@ function isArtifactContext(value: unknown): value is DiffArtifactContext | undef
   return Object.entries(context).every(
     ([key, entry]) => allowed.has(key) && (entry === undefined || typeof entry === "string"),
   );
-}
-
-function isFileNotFound(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

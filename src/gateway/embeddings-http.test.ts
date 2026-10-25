@@ -23,6 +23,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { startGenericEmbeddingServer } from "./embeddings-http.test-helpers.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
+import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import {
   installGatewayTestHooks,
   resetTestPluginRegistry,
@@ -387,7 +388,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
             inputType: "default",
             queryInputType: "query",
             documentInputType: "document",
-            outputDimensionality: 768,
+            outputDimensionality: 2,
             remote: { baseUrl: genericEmbeddingServer.baseUrl },
           },
         },
@@ -403,8 +404,40 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       expect(json.usage).toEqual({ prompt_tokens: 777, total_tokens: 778 });
       expect(genericEmbeddingServer.requests.at(-1)?.body).toMatchObject({
         model: override ?? model,
-        dimensions: 768,
+        dimensions: 2,
         input_type: "document",
+      });
+    },
+  );
+
+  it.each([
+    { name: "configured", body: { input: ["a", "b"] }, requested: 768 },
+    { name: "requested", body: { input: ["a", "b"], dimensions: 512 }, requested: 512 },
+  ])(
+    "reports $name dimensions the provider ignores without serving vectors",
+    async ({ body, requested }) => {
+      await writeEmbeddingConfig({
+        memory: {
+          search: {
+            provider: "openai-compatible",
+            model: "nomic-embed-text",
+            outputDimensionality: 768,
+            remote: { baseUrl: genericEmbeddingServer.baseUrl },
+          },
+        },
+      });
+
+      const res = await post(body);
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { data?: unknown; error?: unknown };
+      expect(json.data).toBeUndefined();
+      expect(json.error).toEqual({
+        type: "invalid_request_error",
+        code: "embedding_dimensions_mismatch",
+        message: `The embedding provider returned 2 dimensions, but ${requested} were requested. Omit \`dimensions\` and \`memory.search.outputDimensionality\`, or use a model and server that support them.`,
+      });
+      expect(genericEmbeddingServer.requests.at(-1)?.body).toMatchObject({
+        dimensions: requested,
       });
     },
   );
@@ -427,14 +460,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
       async () => {
         const previousAuth = testState.gatewayAuth;
-        const auth = {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        };
+        const auth = browserProxyAuth();
         testState.gatewayAuth = auth;
         let server: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>> | undefined;
         try {

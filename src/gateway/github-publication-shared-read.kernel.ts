@@ -96,7 +96,7 @@ function readSharedGitHubPublicationWorkspace(
   return {
     kind: "worktree" as const,
     worktreeId: worktree.id,
-    branch: worktree.branch,
+    branch: entry.worktree.githubPullRequest?.head.branch ?? worktree.branch,
     repositoryFingerprint: worktree.repo_fingerprint,
   };
 }

@@ -35,6 +35,7 @@ import {
 } from "./manager-embedding-cache-ops.js";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
+  embedMemoryQuery,
   runMemoryEmbeddingBatchTimeoutRetry,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -47,7 +48,6 @@ import {
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import {
-  assertMemorySessionNotForgotten,
   retainIndexedSessionChunks,
   type PreparedMemoryIndexEntry,
 } from "./manager-session-delta.js";
@@ -56,7 +56,7 @@ import type {
   MemoryIndexWorkItem,
   MemorySemanticProviderGeneration,
   MemorySyncProviderGeneration,
-} from "./manager-sync-ops.js";
+} from "./manager-sync-base.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 import { runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
@@ -126,16 +126,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       cacheKeyData: runtime?.cacheKeyData,
       aliases: runtime?.indexIdentityAliases,
     });
-    const providerKey = expectDefined(
-      identities.at(0),
-      "primary memory provider identity",
-    ).providerKey;
-    const database = this.database;
     const generation = {
-      database,
+      database: this.database,
       cacheWritesInvalidated: false,
-      providerKey,
+      providerKey: expectDefined(identities.at(0), "primary memory provider identity").providerKey,
       identities,
+      ...(provider ? { embeddingDimensions: provider.dimensions } : {}),
     };
     this.syncProviderGeneration = provider
       ? { ...generation, kind: "semantic", provider, ...(runtime ? { runtime } : {}) }
@@ -389,9 +385,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         message: `memory embedding probe timed out after ${Math.round(timeoutMs / 1000)}s`,
         deadlineControl,
         run: (signal) =>
-          provider.embed(formatEmbeddingModelInput("ping", provider.model, "query"), {
+          embedMemoryQuery(provider, "ping", this.settings.queryInstruction, {
             signal,
-            inputType: "query",
             [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
           }),
       });
@@ -428,9 +423,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
             signal,
             deadlineControl,
             run: async (opSignal) =>
-              await provider.embed(formatEmbeddingModelInput(text, provider.model, "query"), {
+              await embedMemoryQuery(provider, text, this.settings.queryInstruction, {
                 signal: opSignal,
-                inputType: "query",
                 ...(deadlineControl ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl } : {}),
               }),
           });
@@ -518,14 +512,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       };
       const activeItems = [...items];
       const replacements = activeItems.map((item) => this.sourceReplacement(item, generation));
-      if (database !== sourceDatabase) {
-        // The published index owns forget authority, including for shadow rebuilds.
-        for (const replacement of replacements) {
-          if (replacement.source === "sessions") {
-            await assertMemorySessionNotForgotten(sourceDatabase, replacement, assertCurrent);
-          }
-        }
-      }
       const prepare = async (): Promise<boolean> => {
         for (let index = activeItems.length - 1; index >= 0; index--) {
           const {

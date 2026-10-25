@@ -64,14 +64,17 @@ async function fixture() {
   return { config, agentDir, state };
 }
 
+const readModels = async (dir: string) =>
+  JSON.parse(await fs.readFile(path.join(dir, "models.json"), "utf8"));
+
 it("loads cold config and Claw consent without host provenance SQL", async () => {
   const { agentDir } = await fixture();
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
   const contents = await withPluginCache(createPluginCache(), async () => {
     await ensureOpenClawModelsJson(undefined, agentDir);
-    return fs.readFile(path.join(agentDir, "models.json"), "utf8");
+    return readModels(agentDir);
   });
-  expect(JSON.parse(contents ?? "null")).toEqual({
+  expect(contents).toEqual({
     providers: CUSTOM_PROXY_MODELS_CONFIG.models?.providers,
   });
   const tools = getRuntimeConfigSnapshot()?.agents?.entries?.worker?.tools;
@@ -84,32 +87,21 @@ it("loads cold config and Claw consent without host provenance SQL", async () =>
       profile: "full",
     }),
   ).toEqual({ frozen: true });
-  const hostQueries = prepare.mock.calls.map(([sql]) => sql);
-  expect(hostQueries.filter((sql) => /from\s+"?claw_installs/i.test(sql))).toEqual([]);
+  expect(prepare.mock.calls.filter(([sql]) => /from\s+"?claw_installs/i.test(sql))).toEqual([]);
 });
 
 it("keeps source secret markers when the same runtime is republished before continuation", async () => {
   const { config, agentDir } = await fixture();
   const provider = CUSTOM_PROXY_MODELS_CONFIG.models!.providers!["custom-proxy"]!;
-  const sourceFor = (id: string) => ({
-    ...config,
-    models: {
-      providers: {
-        "custom-proxy": {
-          ...provider,
-          apiKey: { source: "env" as const, provider: "default", id },
-        },
-      },
-    },
-  });
+  const sourceFor = (id: string) => {
+    const apiKey = { source: "env" as const, provider: "default", id };
+    return { ...config, models: { providers: { "custom-proxy": { ...provider, apiKey } } } };
+  };
   setRuntimeConfigSnapshot(config, sourceFor("MODEL_ORIGINAL_KEY"));
   const pending = ensureOpenClawModelsJson(undefined, agentDir);
   setRuntimeConfigSnapshot(config, sourceFor("MODEL_REPLACEMENT_KEY"));
   await pending;
-  const contents = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
-  expect(JSON.parse(contents ?? "null").providers["custom-proxy"].apiKey).toBe(
-    "MODEL_ORIGINAL_KEY",
-  );
+  expect((await readModels(agentDir)).providers["custom-proxy"].apiKey).toBe("MODEL_ORIGINAL_KEY");
 });
 
 it("retains the pinned model directory after an environment change", async () => {
@@ -117,5 +109,10 @@ it("retains the pinned model directory after an environment change", async () =>
   setRuntimeConfigSnapshot(config);
   const pending = ensureOpenClawModelsJson();
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state, "replacement-state"));
-  expect((await pending).agentDir).toBe(agentDir);
+  await pending;
+  expect(await readModels(agentDir)).toEqual({ providers: config.models?.providers });
+  const replacementAgentDir = path.join(state, "replacement-state", "agents", "worker", "agent");
+  await expect(fs.access(path.join(replacementAgentDir, "models.json"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
 });

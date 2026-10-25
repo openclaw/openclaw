@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
@@ -10,6 +11,7 @@ import type { SessionEntryCurrentFacts } from "../../config/sessions/session-ent
 import { withSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { preparePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
+import { bindInProcessSessionRun } from "../../gateway/in-process-session-run.js";
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -44,6 +46,7 @@ import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {
   rollbackRestartRecoveryReservation,
   settleAcceptedRestartRecovery,
+  settleRejectedRestartRecovery,
 } from "./main-session-restart-dispatch-settlement.js";
 import {
   dispatchRestartRecoveryUntilStarted,
@@ -142,9 +145,8 @@ export async function resumeMainSession(
       },
     );
   }
-  const isCurrent = () => {
-    return source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
-  };
+  const isCurrent = () =>
+    source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
   if (!isCurrent()) {
     return "skipped";
   }
@@ -253,6 +255,7 @@ async function resumeMainSessionWithinAdmission(
     expectedRecoveryRunId: recoveryRunId,
     expectedRecoverySourceRunId: sourceRunId,
     expectedSessionId: params.entry.sessionId,
+    pendingFinalDelivery: params.entry.pendingFinalDelivery,
     lifecycleGeneration,
     sessionKeys: Array.from(new Set([dispatchSessionKey, params.sessionKey])),
     shouldContinue: params.shouldContinue,
@@ -489,7 +492,13 @@ async function resumeMainSessionWithinAdmission(
       ? { ...target, sessionId: params.entry.sessionId, sourceRunId, recoveryRunId }
       : undefined;
     const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
-      agentParams,
+      // Preserve own-session admission without granting broader operator scopes.
+      agentParams: bindInProcessSessionRun(agentParams, {
+        sessionKey: dispatchSessionKey,
+        sessionId: params.entry.sessionId,
+        lifecycleRevision: params.entry.lifecycleRevision ?? null,
+        runId: recoveryRunId,
+      }),
       controllerInput,
       gatewayRuntime: params.gatewayRuntime,
       restartRecoveryRequesterTarget: params.entry.restartRecoveryRequesterSource
@@ -692,8 +701,18 @@ async function resumeMainSessionWithinAdmission(
       log.info(`stopped interrupted main session resend before execution: ${params.sessionKey}`);
       return "settled";
     }
+    const rejected = await settleRejectedRestartRecovery({
+      ...params,
+      ...target,
+      error,
+      dispatchAccepted,
+      rollback,
+    });
+    if (rejected) {
+      return rejected;
+    }
     log.warn(
-      `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+      `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? formatErrorStackWithMessage(error) : String(error)}`,
     );
     return "failed";
   } finally {

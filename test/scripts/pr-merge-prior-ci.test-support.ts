@@ -77,6 +77,17 @@ export function createPriorCiFixtureState(head: string) {
     evidencePath: "",
     mutateEvidence: false,
     otherCheck: "",
+    nativeChecks: [] as Array<{
+      name: string;
+      kind: "check" | "status";
+      required: boolean;
+      state: "success" | "failure" | "pending";
+      previousFailure?: boolean;
+    }>,
+    nativeOptionalCount: 0,
+    nativeMissingResult: false,
+    nativeResultApp: 15368,
+    nativePageFault: "",
     security: {
       enabled: false,
       fault: "",
@@ -143,20 +154,26 @@ const securityResponse=()=>{
     const earlier={...statuses.find(status=>status.context==="openclaw/security-sensitive-review"),id:701,context:"openclaw/security-sensitive-review",state:"failure",created_at:"2026-09-19T00:00:00Z",updated_at:"2026-09-19T00:00:00Z"};
     reply(config.fault==="missing-guard"?statuses:[...statuses,earlier]);
   } else if(endpoint.includes("/status?")) {
-    const statuses=securityStatuses().map(({creator,...status})=>status);
+    const statuses=[...securityStatuses().map(({creator,...status})=>status),...nativeChecks().filter(check=>check.kind==="status").map((check,index)=>({id:900+index,context:check.name,state:check.state}))];
     const state=statuses.some(status=>["failure","error"].includes(status.state))?"failure":statuses.some(status=>status.state==="pending")?"pending":"success";
     reply({total_count:statuses.length,sha:s.pr.headRefOid,state,statuses});
   } else if(endpoint.startsWith("repos/fixture/repo/actions/runs/901")&&endpoint.includes("/jobs?")) {
-    const jobs=[{id:902,run_id:901,head_sha:source,name:"review (123, "+s.pr.headRefOid+")",status:"completed",conclusion:"success",
+    const headName="review (123, "+s.pr.headRefOid+")";
+    const attemptName="review (123, "+s.pr.headRefOid+", "+(config.fault==="wrong-ci-run"?502:501)+", "+(config.fault==="wrong-ci-attempt"?3:2)+")";
+    const jobs=[{id:902,run_id:901,head_sha:source,name:config.fault==="head-only-enforcement"?headName:attemptName,status:"completed",conclusion:"success",
       steps:config.fault==="missing-enforcement"?[]:[{name:"Enforce security review",status:"completed",conclusion:"success",started_at:"2026-09-20T00:00:00Z",completed_at:"2026-09-20T00:01:00Z"}]}];
-    reply({total_count:config.fault==="incomplete-publisher"?2:1,jobs});
+    if(config.fault==="duplicate-enforcement") jobs.push({...jobs[0],id:903,name:headName});
+    reply({total_count:jobs.length+(config.fault==="incomplete-publisher"?1:0),jobs});
   } else if(endpoint.startsWith("repos/fixture/repo/actions/runs/901")) {
     reply(endpoint.includes("/attempts/")?{...publisher,run_attempt:1}:publisher);
   } else if(endpoint.startsWith("repos/fixture/repo/contents/")) {
     const path=endpoint.slice("repos/fixture/repo/contents/".length).split("?")[0];
-    const bytes=fs.readFileSync(process.env.FIXTURE_SCRIPTS+"/../"+path);
+    const revision=new URLSearchParams(endpoint.split("?")[1]).get("ref");
+    const bytes=execFileSync("git",["--git-dir="+process.env.FIXTURE_REMOTE,"show",revision+":"+path],{env:process.env});
     const sha=createHash("sha1").update("blob "+bytes.length+"\0").update(bytes).digest("hex");
-    reply({type:"file",path,sha:config.fault==="changed-publisher-source"?"0".repeat(40):sha});
+    reply({type:"file",path,sha:config.fault==="changed-publisher-source"&&path!==publisher.path?"0".repeat(40):sha,
+      encoding:config.fault==="malformed-workflow"?"utf8":"base64",
+      content:config.fault==="changed-workflow-bytes"?Buffer.from("different bytes").toString("base64"):bytes.toString("base64")});
   } else if(endpoint.startsWith("repos/fixture/repo/compare/")) {
     reply({base_commit:{sha:source},merge_base_commit:{sha:config.fault==="untrusted-publisher-source"?"0".repeat(40):source},status:endpoint.includes("..."+source+"?")?"identical":"ahead"});
   } else if(endpoint==="repos/fixture/repo/pulls/152415") {

@@ -1,8 +1,7 @@
-import "./account-usage.tsx";
-import { createMemo, For, onCleanup, Show } from "solid-js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
@@ -10,21 +9,9 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createPointerDrag } from "../../lib/reactive/pointer-drag.ts";
 import { showToast } from "../../lib/toast.ts";
-import type { ModelAccountUsageElement } from "./account-usage.tsx";
+import { AccountLimits, type AccountUsageScope } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
 import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-model-account-usage": HTMLAttributes<ModelAccountUsageElement> & {
-        "prop:client": GatewayBrowserClient | null;
-        "prop:agentId": string;
-        "prop:profileId": string;
-      };
-    }
-  }
-}
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -48,15 +35,13 @@ export function showProfileLogoutSuccess(warning?: string): void {
 type ProviderProfile = ModelProviderCard["profiles"][number];
 
 export type ProviderProfilesViewProps = {
-  usageClient?: GatewayBrowserClient | null;
-  usageAgentId?: string;
-  registerAccountUsage?: (element: ModelAccountUsageElement) => () => void;
+  /** Present when this operator may read per-account Codex limits. */
+  accountUsage?: AccountUsageScope | null;
   busy: Record<string, boolean>;
+  logoutSaving?: Record<string, boolean>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   profileOrders: Record<string, string[]>;
-  onAddAccount: (() => void) | undefined;
-  addAccountDisabled: boolean;
   onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onRequestLogout: (pending: ModelProviderPendingLogout) => void;
 };
@@ -96,6 +81,9 @@ function profileMeta(profile: ProviderProfile): string {
   if (profile.email && profile.displayName && profile.displayName !== source) {
     parts.push(profile.displayName);
   }
+  if (profile.expiry) {
+    parts.push(t("modelProviders.expiresIn", { time: profile.expiry.label }));
+  }
   if (profile.lastUsedAt) {
     parts.push(
       t("modelProviders.profiles.lastUsed", {
@@ -116,13 +104,17 @@ function profileInitials(identity: string): string {
   return initials.toLocaleUpperCase() || "?";
 }
 
-function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean) {
+/** `quiet` drops a healthy status where the surrounding row already reports one. */
+function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean, quiet = false) {
   const status =
     profile.externallyManaged && (profile.status === "expired" || profile.status === "expiring")
       ? "ok"
       : profile.status;
   switch (status) {
     case "ok":
+      if (quiet && !providerAuthRejected) {
+        return undefined;
+      }
       return (
         <SettingsStatus
           kind={providerAuthRejected ? "muted" : "ok"}
@@ -132,7 +124,9 @@ function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean) 
         />
       );
     case "static":
-      return <SettingsStatus kind={"ok"} label={t("modelProviders.status.configured")} />;
+      return quiet ? undefined : (
+        <SettingsStatus kind={"ok"} label={t("modelProviders.status.configured")} />
+      );
     case "expiring":
       return <SettingsStatus kind={"warn"} label={t("modelProviders.status.expiring")} />;
     case "expired":
@@ -292,85 +286,101 @@ function startPointerDrag(params: {
   }
 }
 
-function profileIdentity(profile: ProviderProfile, index: number): string {
-  return (
-    profile.email ||
-    profile.displayName ||
-    t("modelProviders.profiles.account", { number: String(index + 1) })
+const PROFILE_KIND_KEYS = {
+  api_key: "modelProviders.profiles.kindApiKey",
+  token: "modelProviders.profiles.kindToken",
+  oauth: "modelProviders.profiles.kindOauth",
+} as const;
+
+// Identities stay hidden from non-admin viewers; name the credential kind instead
+// of an opaque "Account N". Numbers follow saved inventory order within a kind.
+export function profileIdentity(
+  profile: ProviderProfile,
+  profiles: readonly ProviderProfile[],
+): string {
+  const named = profile.email || profile.displayName;
+  if (named) {
+    return named;
+  }
+  const kind = t(PROFILE_KIND_KEYS[profile.type]);
+  const sameKind = profiles.filter(
+    (candidate) => candidate.type === profile.type && !candidate.email && !candidate.displayName,
   );
+  return sameKind.length > 1
+    ? t("modelProviders.profiles.kindNumbered", {
+        kind,
+        number: String(sameKind.indexOf(profile) + 1),
+      })
+    : kind;
 }
 
-function ProfileIdentity(props: {
-  profile: ProviderProfile;
-  identity: string;
-  showDetails: boolean;
-}) {
+function ProfileIdentity(props: { profile: ProviderProfile; identity: string }) {
   const meta = () => profileMeta(props.profile);
   return (
     <>
       <span class="model-providers__profile-avatar" aria-hidden="true">
-        {profileInitials(props.identity)}
+        {props.profile.type === "oauth" ? profileInitials(props.identity) : <Icon name="key" />}
       </span>
       <div class="model-providers__profile-copy">
-        <strong>{props.identity}</strong>
+        <strong title={props.profile.profileId}>{props.identity}</strong>
         {meta() ? <span>{meta()}</span> : undefined}
-        <Show when={props.showDetails}>
-          <details>
-            <summary>{t("modelProviders.profiles.details")}</summary>
-            <div>{props.profile.profileId}</div>
-            {props.profile.expiry ? (
-              <span>{t("modelProviders.expiresIn", { time: props.profile.expiry.label })}</span>
-            ) : undefined}
-          </details>
-        </Show>
       </div>
     </>
   );
 }
 
-export function renderProviderAccountSummary(
-  cards: ModelProviderCard[],
+export function ProviderAccountSummary(props: {
+  cards: ModelProviderCard[];
   recovery?: {
     authProvider: string;
     disabled: boolean;
     onUse: (profileId: string) => void;
-  },
-) {
-  const profiles = cards.flatMap((card) =>
-    card.profiles.map((profile) => ({
-      profile,
-      authRejected: card.catalogStatus === "auth-rejected",
-      // A display card can combine providers whose credentials are not interchangeable.
-      canUse:
-        card.profileProviderIds[profile.profileId] === recovery?.authProvider &&
-        (profile.source === "saved" || profile.source === "inherited"),
-    })),
+  };
+}) {
+  const profiles = createMemo(() =>
+    props.cards.flatMap((card) =>
+      card.profiles.map((profile) => ({
+        key: JSON.stringify([
+          card.id,
+          card.profileProviderIds[profile.profileId],
+          profile.profileId,
+        ]),
+        profile,
+        authRejected: card.catalogStatus === "auth-rejected",
+        // A display card can combine providers whose credentials are not interchangeable.
+        canUse:
+          card.profileProviderIds[profile.profileId] === props.recovery?.authProvider &&
+          (profile.source === "saved" || profile.source === "inherited"),
+      })),
+    ),
   );
-  const sources = [...new Set(cards.map(apiKeySource).filter(Boolean))];
+  const sources = createMemo(() => [...new Set(props.cards.map(apiKeySource).filter(Boolean))]);
   return (
     <section class="model-provider-login__accounts" aria-label={t("modelProviders.login.accounts")}>
       <h3>{t("modelProviders.login.accounts")}</h3>
-      {profiles.length ? (
+      {profiles().length ? (
         <div role="list">
-          <For each={profiles}>
-            {(entry, index) => (
+          <For each={profiles()} keyed={(entry) => entry.key}>
+            {(entry) => (
               <div
                 class="model-provider-login__account"
                 role="listitem"
-                data-profile-id={entry.profile.profileId}
+                data-profile-id={entry().profile.profileId}
               >
                 <ProfileIdentity
-                  profile={entry.profile}
-                  identity={profileIdentity(entry.profile, index())}
-                  showDetails={false}
+                  profile={entry().profile}
+                  identity={profileIdentity(
+                    entry().profile,
+                    profiles().map((candidate) => candidate.profile),
+                  )}
                 />
-                {profileStatus(entry.profile, entry.authRejected)}
-                {entry.canUse && recovery ? (
+                {profileStatus(entry().profile, entry().authRejected)}
+                {entry().canUse && props.recovery ? (
                   <button
                     class="btn"
                     data-models-use-account
-                    disabled={recovery.disabled}
-                    onClick={() => recovery.onUse(entry.profile.profileId)}
+                    disabled={props.recovery.disabled}
+                    onClick={() => props.recovery?.onUse(entry().profile.profileId)}
                   >
                     {t("modelProviders.login.useAccount")}
                   </button>
@@ -380,8 +390,8 @@ export function renderProviderAccountSummary(
           </For>
         </div>
       ) : undefined}
-      <For each={sources}>{(source) => <p class="muted">{source}</p>}</For>
-      {!profiles.length && !sources.length ? (
+      <For each={sources()}>{(source) => <p class="muted">{source}</p>}</For>
+      {!profiles().length && !sources().length ? (
         <p class="muted">{t("modelProviders.login.noAccounts")}</p>
       ) : undefined}
     </section>
@@ -397,9 +407,9 @@ export function ProviderProfiles(props: ProviderProfilesViewProps & { card: Mode
   const identities = createMemo(
     () =>
       new Map(
-        card().profiles.map((profile, index) => [
+        card().profiles.map((profile) => [
           profile.profileId,
-          profileIdentity(profile, index),
+          profileIdentity(profile, card().profiles),
         ]),
       ),
   );
@@ -419,51 +429,55 @@ export function ProviderProfiles(props: ProviderProfilesViewProps & { card: Mode
         ref={(element) => (section = element)}
         aria-label={`${t("modelProviders.profiles.title")}: ${card().displayName}`}
       >
-        <div class="model-providers__profiles-heading">
-          <div class="model-providers__profiles-heading-copy">
-            <strong>{t("modelProviders.profiles.title")}</strong>
-            <span>
-              {t(
-                rows().length === 1
-                  ? "modelProviders.profiles.accountOne"
-                  : "modelProviders.profiles.accounts",
-                { count: String(rows().length) },
-              )}
-              {additionalCredentialSource() ? ` · ${additionalCredentialSource()}` : ""}
-            </span>
-            {reorderOffered() ? <span>{t("modelProviders.profiles.reorderHint")}</span> : undefined}
-            <For each={explanations()}>{(explanation) => <span>{explanation}</span>}</For>
+        <Show
+          when={
+            rows().length > 1 ||
+            additionalCredentialSource() ||
+            reorderOffered() ||
+            explanations().length > 0 ||
+            card().profileOrderStoredProviders.length > 0
+          }
+        >
+          <div class="model-providers__profiles-heading">
+            <div class="model-providers__profiles-heading-copy">
+              <Show when={rows().length > 1 || additionalCredentialSource()}>
+                <span>
+                  {[
+                    rows().length > 1
+                      ? t("modelProviders.profiles.accounts", { count: String(rows().length) })
+                      : "",
+                    additionalCredentialSource() ?? "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              </Show>
+              {reorderOffered() ? (
+                <span>{t("modelProviders.profiles.reorderHint")}</span>
+              ) : undefined}
+              <For each={explanations()}>{(explanation) => <span>{explanation}</span>}</For>
+            </div>
+            <div class="model-providers__profiles-heading-actions">
+              <For each={card().profileOrderStoredProviders}>
+                {(provider) => (
+                  <button
+                    type="button"
+                    class="btn btn--sm btn--ghost"
+                    disabled={!props.canMutate}
+                    title={
+                      !props.canMutate
+                        ? (props.mutationBlockedReason ?? "")
+                        : t("modelProviders.profiles.resetOrderHint")
+                    }
+                    onClick={() => props.onProfileOrderChange(card().id, provider, null)}
+                  >
+                    {t("modelProviders.profiles.resetOrder")}
+                  </button>
+                )}
+              </For>
+            </div>
           </div>
-          <div class="model-providers__profiles-heading-actions">
-            <For each={card().profileOrderStoredProviders}>
-              {(provider) => (
-                <button
-                  type="button"
-                  class="btn btn--sm btn--ghost"
-                  disabled={!props.canMutate}
-                  title={
-                    !props.canMutate
-                      ? (props.mutationBlockedReason ?? "")
-                      : t("modelProviders.profiles.resetOrderHint")
-                  }
-                  onClick={() => props.onProfileOrderChange(card().id, provider, null)}
-                >
-                  {t("modelProviders.profiles.resetOrder")}
-                </button>
-              )}
-            </For>
-            {props.onAddAccount ? (
-              <button
-                type="button"
-                class="btn btn--sm"
-                disabled={props.addAccountDisabled}
-                onClick={() => props.onAddAccount?.()}
-              >
-                {t("modelProviders.profiles.addAccount")}
-              </button>
-            ) : undefined}
-          </div>
-        </div>
+        </Show>
         <div class="model-providers__profile-list" role="list">
           <For each={rows()} keyed={(row) => row.profile.profileId}>
             {(row) => (
@@ -492,16 +506,14 @@ function ProviderProfileRow(
   },
 ) {
   let rowElement!: HTMLElement;
-  let registeredId: string | undefined;
   const drag = createPointerDrag();
-  let releaseUsage: (() => void) | undefined;
-  onCleanup(() => {
-    releaseUsage?.();
-    if (registeredId) {
-      props.rowElements.delete(registeredId);
-    }
-  });
   const profile = () => props.row.profile;
+  onSettled(() => {
+    const initialProfileId = profile().profileId;
+    const rowElements = props.rowElements;
+    rowElements.set(initialProfileId, rowElement);
+    return () => rowElements.delete(initialProfileId);
+  });
   const group = () => props.row.group;
   const provider = () => group().provider;
   const order = () => group().order;
@@ -548,11 +560,7 @@ function ProviderProfileRow(
   return (
     <div
       class="model-providers__profile"
-      ref={(element) => {
-        rowElement = element;
-        registeredId = profile().profileId;
-        props.rowElements.set(registeredId, element);
-      }}
+      ref={(element) => (rowElement = element)}
       role="listitem"
       data-profile-id={profile().profileId}
       data-profile-provider={provider()}
@@ -611,17 +619,14 @@ function ProviderProfileRow(
           </span>
         ) : undefined}
       </span>
-      <ProfileIdentity profile={profile()} identity={props.identity} showDetails />
-      {provider() === "openai" && profile().type !== "api_key" ? (
-        <openclaw-model-account-usage
-          ref={(element) => (releaseUsage = props.registerAccountUsage?.(element))}
-          prop:client={props.usageClient ?? null}
-          prop:agentId={props.usageAgentId ?? ""}
-          prop:profileId={profile().profileId}
-        />
-      ) : undefined}
+      <ProfileIdentity profile={profile()} identity={props.identity} />
       <span class="model-providers__profile-status">
-        {profileStatus(profile(), props.card.catalogStatus === "auth-rejected")}
+        {profileStatus(
+          profile(),
+          props.card.catalogStatus === "auth-rejected",
+          // A ready row already says the credential works; other rows need the account's word.
+          props.card.catalogStatus === "ready",
+        )}
       </span>
       <span class="model-providers__profile-actions">
         {profile().logoutSupported === true && logoutProvider() ? (
@@ -630,7 +635,11 @@ function ProviderProfileRow(
             class="model-providers__profile-logout"
             aria-label={logoutLabel()}
             title={logoutBlocked()}
-            disabled={!props.canMutate || props.busy[`logout:${props.card.id}`]}
+            disabled={
+              props.logoutSaving?.[props.card.id] ||
+              !props.canMutate ||
+              props.busy[`logout:${props.card.id}`]
+            }
             onClick={() => {
               const targetProvider = logoutProvider();
               if (targetProvider) {
@@ -642,21 +651,17 @@ function ProviderProfileRow(
               }
             }}
           >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
+            <StrokeIcon>
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
               <polyline points="16 17 21 12 16 7" />
               <line x1="21" x2="9" y1="12" y2="12" />
-            </svg>
+            </StrokeIcon>
           </button>
         ) : undefined}
       </span>
+      <Show when={provider() === "openai" && profile().type !== "api_key" && props.accountUsage}>
+        {(scope) => <AccountLimits scope={scope()} profileId={profile().profileId} />}
+      </Show>
     </div>
   );
 }

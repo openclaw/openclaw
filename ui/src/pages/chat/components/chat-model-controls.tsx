@@ -1,7 +1,8 @@
-import { createMemo, type Accessor } from "solid-js";
+import { createMemo, type Element, type Accessor } from "solid-js";
 import type { ChatAccountSelection } from "../../../../../packages/gateway-protocol/src/index.ts";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import type {
+  CyberAccessProgram,
   ModelAuthStatusResult,
   ModelCatalogEntry,
   SessionsListResult,
@@ -12,6 +13,7 @@ import {
   resolvePreferredServerChatModelValue,
 } from "../../../lib/chat/model-ref.ts";
 import {
+  prepareChatModelSelectCatalog,
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
   type ChatFastModeSelectValue,
@@ -62,6 +64,8 @@ export type ChatModelControlsProps = {
   loading: boolean;
   modelCatalog: ModelCatalogEntry[];
   modelCatalogState: ChatModelCatalogState;
+  /** Lets a lazy route wrap catalog status without adding its read to Chat boot. */
+  renderModelCatalogStatus?: (render: () => Element) => Element;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
   modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
@@ -72,6 +76,9 @@ export type ChatModelControlsProps = {
   effortMutationDisabledReason?: string;
   contextWindowMutationDisabledReason?: string;
   fastModeTarget?: ChatFastModeTarget;
+  accessProgramMutationDisabledReason?: string;
+  requestedAccessProgram?: CyberAccessProgram;
+  onAccessProgramSelect?: (value: CyberAccessProgram | null, sessionKey: string) => unknown;
   sending: boolean;
   sessionKey: string;
   selectedSession: SessionsListResult["sessions"][number] | undefined;
@@ -225,8 +232,11 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   model: ChatModelPickerParams;
   effort: ChatEffortPickerParams;
 }> {
+  const catalogEntries = createMemo(() => props.modelCatalog);
+  const catalogIndex = createMemo(() => prepareChatModelCatalog(catalogEntries()));
+  const selectCatalog = createMemo(() => prepareChatModelSelectCatalog(catalogEntries()));
   return createMemo(() => {
-    const catalog = prepareChatModelCatalog(props.modelCatalog);
+    const catalog = catalogIndex();
     const catalogState = props.modelCatalogState;
     const policy = catalogState.modelSelectionPolicy;
     const retired = catalogState.retired === true;
@@ -262,17 +272,20 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       defaultLabel,
       modelOverrideSource,
       options: selectOptions,
-    } = resolveChatModelSelectState({
-      activeSession: props.selectedSession,
-      agentDefaultModel: props.agentDefaultModel,
-      chatModelCatalog: props.modelCatalog,
-      modelOverrides: props.modelOverrides ?? {},
-      sessionKey: props.sessionKey,
-      sessionsResult: props.sessionsResult,
-      modelSelectionPolicy: policy,
-      catalogRetired: retired,
-      catalogInitialized: catalogState.initialized,
-    });
+    } = resolveChatModelSelectState(
+      {
+        activeSession: props.selectedSession,
+        agentDefaultModel: props.agentDefaultModel,
+        chatModelCatalog: props.modelCatalog,
+        modelOverrides: props.modelOverrides ?? {},
+        sessionKey: props.sessionKey,
+        sessionsResult: props.sessionsResult,
+        modelSelectionPolicy: policy,
+        catalogRetired: retired,
+        catalogInitialized: catalogState.initialized,
+      },
+      selectCatalog(),
+    );
     const currentOverride = catalogModelValue(rawCurrentOverride);
     const thinking = resolveChatThinkingSelectState({
       catalog: props.modelCatalog,
@@ -331,6 +344,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         isDefault,
         value: option.value,
         label: resolveChatModelPickerLabel(catalogEntry, option.label),
+        contextTokens: catalogEntry?.contextTokens,
         contextWindow: catalogEntry?.contextWindow,
         supportsTools: catalogEntry?.supportsTools,
         recommended: catalogEntry?.recommended,
@@ -370,6 +384,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           agentRuntime: choice.agentRuntime.id,
           runtimeOverride: choice.agentRuntime.id,
           agentRuntimeId: choice.agentRuntime.id,
+          contextTokens: choice.contextTokens,
           contextWindow: choice.contextWindow,
           supportsTools: choice.supportsTools,
           disabled: choice.available === false,
@@ -412,6 +427,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     ) {
       modelOptions.push({
         commitValue: currentOverride,
+        contextTokens: currentCatalogEntry?.contextTokens,
         contextWindow: currentCatalogEntry?.contextWindow,
         supportsTools: currentCatalogEntry?.supportsTools,
         disabled: currentCatalogEntry?.available === false,
@@ -515,7 +531,8 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       catalogState.hasSnapshot &&
       (catalogState.status === "ready" ||
         catalogState.status === "error" ||
-        catalogState.status === "loading") &&
+        catalogState.status === "loading" ||
+        catalogState.status === "offline") &&
       activeModelOption?.disabled !== true &&
       modelOptions.some((option) => !option.disabled);
     const busy = props.sending || Boolean(props.activeRunId) || props.stream !== null;
@@ -540,15 +557,39 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const selectedContextWindow =
       contextWindowOwner?.contextWindow ?? contextWindowOwner?.contextWindowDefault ?? "";
     const defaultContextWindow = contextWindowOwner?.contextWindowDefault;
+    const accessPrograms =
+      props.connected &&
+      catalogState.hasSnapshot &&
+      catalogState.status === "ready" &&
+      !retired &&
+      !uninitialized &&
+      !props.modelSwitching
+        ? (resolveModelRuntimeEntry(catalog.entry(currentOverride || defaultModel), triggerRuntime)
+            ?.availableAccessPrograms?.cyber ?? [])
+        : [];
+    const showAccessProgram =
+      Boolean(props.onAccessProgramSelect) &&
+      accessPrograms.some((program) => program !== "standard");
+    const accessProgramDisabled =
+      commonDisabled || Boolean(props.accessProgramMutationDisabledReason);
     const effortDisabled =
       commonDisabled ||
-      effortMutationDisabled ||
       !hasResolvableModel ||
-      (thinking.options.length === 0 && fastMode.disabled);
+      ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
+        (!showAccessProgram || accessProgramDisabled));
     // Keep the effort control mounted but hidden until its catalog resolves.
     const reserveEffortPicker = !hasResolvableModel;
     return {
       model: {
+        accessProgramRecovery:
+          props.requestedAccessProgram !== undefined &&
+          !showAccessProgram &&
+          props.onAccessProgramSelect
+            ? {
+                disabled: accessProgramDisabled,
+                onClear: (sessionKey) => props.onAccessProgramSelect?.(null, sessionKey),
+              }
+            : undefined,
         providerAuth: props.modelAuthStatusResult ? providerAuth : undefined,
         accountSection: props.renderAccountSection?.(currentOverride || defaultModel),
         contextWindow:
@@ -567,6 +608,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
         modelCatalogState: catalogState,
+        renderModelCatalogStatus: props.renderModelCatalogStatus,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
         selectionScopeDescription: policy?.restricted
@@ -597,6 +639,16 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         onTargetSelect: props.onModelPickerTargetSelect,
       },
       effort: {
+        accessProgram:
+          showAccessProgram && props.onAccessProgramSelect
+            ? {
+                requested: props.requestedAccessProgram,
+                programs: accessPrograms,
+                disabled: accessProgramDisabled,
+                sessionKey: props.sessionKey,
+                onSelect: props.onAccessProgramSelect,
+              }
+            : undefined,
         disabled: effortDisabled,
         disabledReason: props.effortMutationDisabledReason,
         fastMode: {

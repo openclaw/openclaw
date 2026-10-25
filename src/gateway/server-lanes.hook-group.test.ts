@@ -9,6 +9,7 @@
  * feature existed.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as gate } from "../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../process/command-queue.js";
@@ -24,14 +25,6 @@ const HOOKS_ON = {
   hooks: { enabled: true, token: "t" },
 } as unknown as OpenClawConfig;
 const HOOKS_OFF = {} as OpenClawConfig;
-
-function gate() {
-  let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { promise, release };
-}
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 5; i++) {
@@ -89,7 +82,7 @@ describe("cron+hook capacity group", () => {
     expect(getCommandLaneSnapshot(CommandLane.CronNested).queuedCount).toBe(0);
 
     for (const g of gates) {
-      g.release();
+      g.resolve();
     }
     await Promise.all(runs);
     expect(getCommandLaneSnapshot(CommandLane.CronNested).blockedBy).toBeNull();
@@ -144,7 +137,7 @@ describe("cron+hook capacity group", () => {
     expect(lateHookStarted).toBe(false);
     expect(getCommandLaneSnapshot(CommandLane.HookDispatch).queuedCount).toBe(1);
 
-    hookGate.release();
+    hookGate.resolve();
     await hookRun;
     await settle();
 
@@ -158,7 +151,7 @@ describe("cron+hook capacity group", () => {
     expect(lateHookStarted).toBe(false);
 
     for (const g of cronGates) {
-      g.release();
+      g.resolve();
     }
     await Promise.all(cronRuns);
 

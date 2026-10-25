@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -29,7 +29,7 @@ export function AboutPage() {
   let disposed = false;
   const copyReset = createTimeout(() => setCopyState("idle"), COPY_RESULT_VISIBLE_MS);
   const waveReset = createTimeout(() => setClawdWaving(false), CLAWD_WAVE_MS);
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
   });
 

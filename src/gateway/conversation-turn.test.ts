@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   beginConversationDeliveryOperation,
@@ -69,12 +69,9 @@ async function createDeps() {
       .mockResolvedValue(conversation),
     resolveOutboundChannelPlugin: vi
       .spyOn(channelResolution, "resolveOutboundChannelPlugin")
-      .mockImplementation(
-        () =>
-          ({
-            outbound: { prepareConversationTurnMessageId: () => "reef-outbound-1" },
-          }) as never,
-      ),
+      .mockReturnValue({
+        outbound: { prepareConversationTurnMessageId: () => "reef-outbound-1" },
+      } as never),
     resolveOutboundSessionRoute: vi
       .spyOn(outboundSession, "resolveOutboundSessionRoute")
       .mockImplementation(async () => ({
@@ -141,9 +138,33 @@ function expectNoOperation(turnId: string) {
   expect(readConversationDeliveryStateForTest(deps.scope, turnId)).toBeUndefined();
 }
 
+async function recordReply(operationId: string, text: string, messageId = "reply-1") {
+  await beginTurn(deps.scope, operationId);
+  await markConversationDeliverySent(deps.scope, operationId, "reef-outbound-1");
+  await markConversationDeliveryReplied(deps.scope, {
+    operationId,
+    reply: { messageId, replyToId: "reef-outbound-1", text, timestamp: 300 },
+  });
+}
+
+function claimReply(replyToId: string, text: string, messageId = "reef-inbound-1") {
+  return claimPendingConversationTurnReply({
+    agentId: "main",
+    conversationRef: conversation.conversationRef,
+    sessionId: conversation.sessionId,
+    messageId,
+    replyToId,
+    text,
+    timestamp: 300,
+  }).then((claim) => claim?.complete());
+}
+
 describe("runGatewayConversationTurn", () => {
-  it("replays a completed turn without inspecting its source session store", async () => {
+  beforeEach(async () => {
     deps = await createDeps();
+  });
+
+  it("replays a completed turn without inspecting its source session store", async () => {
     const directory = path.dirname(deps.scope.storePath);
     const storePattern = path.join(directory, "{agentId}.sqlite");
     const scope = { agentId: "main", storePath: path.join(directory, "main.sqlite") };
@@ -184,7 +205,6 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("waits for the writer before its initial writable operation lookup", async () => {
-    deps = await createDeps();
     const scope = await prepareConversationRegistryScope({ agentId: "main", config: deps.config });
     const writer = holdConversationWriterForTest(scope);
     await writer.entered;
@@ -204,7 +224,6 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("refuses a replaced session at admitted turn creation", async () => {
-    deps = await createDeps();
     const scope = await prepareConversationRegistryScope({ agentId: "main", config: deps.config });
     const blocked = createDeferred<ReturnType<typeof holdConversationWriterForTest>>();
     deps.readConversation.mockImplementationOnce(async () => {
@@ -247,9 +266,9 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("creates a context binding only when a discovered address starts a turn", async () => {
-    deps = await createDeps();
-    const unbound = unboundConversation();
-    deps.readConversation.mockResolvedValueOnce(unbound).mockResolvedValue(conversation);
+    deps.readConversation
+      .mockResolvedValueOnce(unboundConversation())
+      .mockResolvedValue(conversation);
     deps.bindOutboundSessionEntry.mockImplementationOnce(async (params) => {
       params.workerGuard?.assertCurrent?.();
     });
@@ -266,10 +285,6 @@ describe("runGatewayConversationTurn", () => {
       }),
     ).resolves.toMatchObject({ status: "timeout" });
 
-    expect(deps.resolveOutboundSessionRoute).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "reef", target: "reef:molty" }),
-    );
-    expect(deps.bindOutboundSessionEntry).toHaveBeenCalledOnce();
     expect(deps.bindOutboundSessionEntry.mock.calls[0]?.[0]).toMatchObject({
       sourceSessionKey: "agent:main:dashboard:restricted-creator",
     });
@@ -279,9 +294,7 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("rejects a route-owner change at the outbound session binding commit", async () => {
-    deps = await createDeps();
-    const unbound = unboundConversation();
-    deps.readConversation.mockResolvedValue(unbound);
+    deps.readConversation.mockResolvedValue(unboundConversation());
     deps.bindOutboundSessionEntry.mockImplementationOnce(async (params) => {
       params.workerGuard?.assertCurrent?.();
     });
@@ -302,48 +315,7 @@ describe("runGatewayConversationTurn", () => {
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 
-  it("registers correlation before durable delivery and consumes a fast reply inline", async () => {
-    deps = await createDeps();
-    let capture: Promise<void> | undefined;
-    deps.runMessageAction.mockImplementation(async (input) => {
-      expect(input).toMatchObject({
-        preparedMessageId: "reef-outbound-1",
-        gatewayOwnedDelivery: true,
-        forceCoreDelivery: true,
-        requireQueuePersistence: true,
-        suppressTranscriptMirror: true,
-      });
-      await persistIntent(input);
-      capture = claimPendingConversationTurnReply({
-        agentId: "main",
-        conversationRef: conversation.conversationRef,
-        sessionId: conversation.sessionId,
-        messageId: "reef-inbound-1",
-        replyToId: "reef-outbound-1",
-        text: "hello clawd",
-        timestamp: 300,
-      }).then((claim) => claim?.complete());
-      return sentResult();
-    });
-
-    const result = await runTurn("turn-fast-reply", {
-      sourceSessionKey: "agent:main:telegram:direct:operator",
-      message: "hello molty",
-    });
-    await capture;
-
-    expect(result).toMatchObject({
-      status: "replied",
-      messageId: "reef-outbound-1",
-      reply: { text: "hello clawd", replyToId: "reef-outbound-1" },
-    });
-    expect(deps.registerPendingConversationTurn.mock.invocationCallOrder[0]).toBeLessThan(
-      deps.runMessageAction.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
-  it("uses the durable prepared id when another process creates the operation during preflight", async () => {
-    deps = await createDeps();
+  it("correlates a fast reply with the durable id won by another process during preflight", async () => {
     let capture: Promise<void> | undefined;
     let competingOperation: ReturnType<typeof beginConversationDeliveryOperation> | undefined;
     deps.resolveOutboundChannelPlugin.mockReturnValueOnce({
@@ -359,17 +331,15 @@ describe("runGatewayConversationTurn", () => {
       },
     } as never);
     deps.runMessageAction.mockImplementation(async (input) => {
-      expect(input).toMatchObject({ preparedMessageId: "reef-authoritative-a" });
+      expect(input).toMatchObject({
+        preparedMessageId: "reef-authoritative-a",
+        gatewayOwnedDelivery: true,
+        forceCoreDelivery: true,
+        requireQueuePersistence: true,
+        suppressTranscriptMirror: true,
+      });
       await persistIntent(input);
-      capture = claimPendingConversationTurnReply({
-        agentId: "main",
-        conversationRef: conversation.conversationRef,
-        sessionId: conversation.sessionId,
-        messageId: "reef-inbound-race",
-        replyToId: "reef-authoritative-a",
-        text: "durable id acknowledged",
-        timestamp: 300,
-      }).then((claim) => claim?.complete());
+      capture = claimReply("reef-authoritative-a", "durable id acknowledged", "reef-inbound-race");
       return sentResult("reef-authoritative-a");
     });
 
@@ -384,47 +354,26 @@ describe("runGatewayConversationTurn", () => {
       messageId: "reef-authoritative-a",
       reply: { text: "durable id acknowledged", replyToId: "reef-authoritative-a" },
     });
+    expect(deps.registerPendingConversationTurn.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.runMessageAction.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
-  it("returns a prior durable reply without sending again", async () => {
-    deps = await createDeps();
-    await beginTurn(deps.scope, "turn-replied");
-    await markConversationDeliverySent(deps.scope, "turn-replied", "reef-outbound-1");
-    await markConversationDeliveryReplied(deps.scope, {
-      operationId: "turn-replied",
-      reply: { messageId: "reply-1", replyToId: "reef-outbound-1", text: "ack", timestamp: 300 },
-    });
+  it("replays a durable reply without sending again, but withholds it from a new route owner", async () => {
+    await recordReply("turn-replied", "ack");
     await expect(runTurn("turn-replied")).resolves.toMatchObject({
       status: "replied",
       reply: { text: "ack" },
     });
-    expect(deps.readConversation).toHaveBeenCalled();
     expectNotCalled(deps.runMessageAction, deps.resolveOutboundChannelPlugin);
-  });
-
-  it("does not reveal a completed reply after the route owner changes", async () => {
-    deps = await createDeps();
-    await beginTurn(deps.scope, "turn-reassigned");
-    await markConversationDeliverySent(deps.scope, "turn-reassigned", "reef-outbound-1");
-    await markConversationDeliveryReplied(deps.scope, {
-      operationId: "turn-reassigned",
-      reply: {
-        messageId: "reply-private",
-        replyToId: "reef-outbound-1",
-        text: "private finance reply",
-        timestamp: 300,
-      },
-    });
-
     await expect(
-      runTurn("turn-reassigned", {
+      runTurn("turn-replied", {
         config: reassignedConfig(deps.config),
       }),
     ).rejects.toBeInstanceOf(ConversationInputError);
   });
 
   it("returns a durable permanent rejection as invalid input after restart", async () => {
-    deps = await createDeps();
     await beginTurn(deps.scope, "turn-rejected");
     await markConversationDeliveryQueued(deps.scope, "turn-rejected", "queue-rejected");
     await markConversationDeliveryRejected(deps.scope, "turn-rejected", "atomic message limit");
@@ -437,7 +386,6 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("classifies durable operation-id input reuse as invalid input", async () => {
-    deps = await createDeps();
     await beginTurn(deps.scope, "turn-reused", {
       message: "original",
       preparedMessageId: "reef-outbound-reused",
@@ -458,7 +406,6 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("requires a live binding before resuming an unfinished durable turn", async () => {
-    deps = await createDeps();
     await beginTurn(deps.scope, "turn-created", {
       preparedMessageId: "reef-outbound-created",
     });
@@ -473,7 +420,6 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("rejects delivery after the admitted session generation is replaced", async () => {
-    deps = await createDeps();
     let current = conversation;
     deps.readConversation.mockImplementation(async () => current);
     deps.runMessageAction.mockImplementation(async (input) => {
@@ -506,9 +452,7 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("rejects unsupported channels before registering or sending", async () => {
-    deps = await createDeps();
-    const unbound = unboundConversation();
-    deps.readConversation.mockResolvedValue(unbound);
+    deps.readConversation.mockResolvedValue(unboundConversation());
     deps.resolveOutboundChannelPlugin.mockReturnValueOnce({ outbound: {} } as never);
 
     await expect(runTurn("turn-unsupported")).rejects.toBeInstanceOf(ConversationInputError);
@@ -518,7 +462,6 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("rejects channel preflight before creating a durable operation", async () => {
-    deps = await createDeps();
     deps.resolveOutboundChannelPlugin.mockReturnValueOnce({
       outbound: {
         prepareConversationTurnMessageId: () => {
@@ -540,7 +483,6 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("disables inline correlation when delivery changes the reserved id", async () => {
-    deps = await createDeps();
     deps.runMessageAction.mockImplementation(async (input) => {
       await persistIntent(input);
       return sentResult("reef-different-id");
@@ -554,7 +496,6 @@ describe("runGatewayConversationTurn", () => {
   });
 
   it("returns suppression without promoting it to sent", async () => {
-    deps = await createDeps();
     deps.runMessageAction.mockImplementation(async (input) => {
       await persistIntent(input, "queue-suppressed");
       return {

@@ -22,10 +22,7 @@ import {
   type UserProfileAvatarInspection,
 } from "./user-profiles-avatar.types.js";
 import { UserProfileNotFoundError } from "./user-profiles-schema.js";
-import {
-  fetchTailscaleAvatar,
-  type TailscaleAvatarFetchOptions,
-} from "./user-profiles-tailscale-avatar.js";
+import { fetchTailscaleAvatar } from "./user-profiles-tailscale-avatar.js";
 import type { ProfileDisplayRow, UserProfile } from "./user-profiles.types.js";
 
 type PreparedProfileAvatar = UserProfileAvatarInspection & {
@@ -262,7 +259,6 @@ export async function adoptTailscaleProfileAvatar(
   profileId: string,
   profilePic: string | undefined,
   options: OpenClawStateDatabaseOptions = {},
-  fetchOptions: TailscaleAvatarFetchOptions = {},
 ) {
   const first = captureOpenClawStateWorkerContext({
     ...options,
@@ -278,7 +274,7 @@ export async function adoptTailscaleProfileAvatar(
   if (before.hasAvatar || !profilePic) {
     return initial;
   }
-  const avatar = await fetchTailscaleAvatar(profilePic, fetchOptions);
+  const avatar = await fetchTailscaleAvatar(profilePic);
   // Fetching does not retain database admission; close/reopen preserves the selected path.
   const context = captureOpenClawStateWorkerContext({
     ...options,

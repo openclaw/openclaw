@@ -1,5 +1,3 @@
-// Ambient trusted caller context for model-mediated Gateway tool calls.
-import { AsyncLocalStorage } from "node:async_hooks";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
@@ -25,6 +23,9 @@ import {
 } from "../../plugins/runtime/gateway-context-binding.js";
 import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import type { SessionControllerWatchdogAttempt } from "../../sessions/session-controller.watchdog.js";
+// Ambient trusted caller context for model-mediated Gateway tool calls.
+import { AsyncContext } from "../../shared/async-context.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
 import {
   captureAdmittedRunActiveAssertion,
   getAdmittedRunDelegatedAuthority,
@@ -38,7 +39,11 @@ import {
   captureActiveEmbeddedRunPersonalToolParticipants,
   type EmbeddedRunToolAuthorityBinding,
 } from "../embedded-agent-runner/run-state.js";
-import { captureRequesterOrigin, type RequesterOrigin } from "../requester-origin.js";
+import {
+  captureRequesterOrigin,
+  requesterCreatorProfileId,
+  type RequesterOrigin,
+} from "../requester-origin.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
@@ -86,6 +91,8 @@ type GatewayToolCallerIdentity = {
   workerTurnClaim?: WorkerSessionTurnClaim;
   /** Prepared caller sandbox for the explicit current-workspace base refresh; never RPC data. */
   workspaceBaseRefreshSandbox?: import("../sandbox/types.js").SandboxContext;
+  /** Host handoff selects the exact settled conversation; never accepted from RPC input. */
+  workspacePrAdoptionSessionId?: string;
   /** Current tool's filesystem owner for inspected PR evidence; never serialized in RPC data. */
   workspaceEvidenceSandbox?: import("../sandbox/types.js").SandboxContext;
   /** Closure-bound Gateway capability; revalidates both owners at child admission. */
@@ -124,11 +131,13 @@ type GatewayToolCallerSource = {
   agentThreadId?: string | number;
 };
 
-const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
+const gatewayToolCallerStorage = new AsyncContext<GatewayToolCallerIdentity>(
+  Symbol("gatewayToolCaller"),
+);
 
-const receiptAdmissionStorage = new AsyncLocalStorage<
+const receiptAdmissionStorage = new AsyncContext<
   ReadonlyMap<GatewayToolCallerReceiptAdmission, () => boolean>
->();
+>(Symbol("gatewayToolReceiptAdmission"));
 
 export function evaluateGatewayToolCallerReceiptAdmission(
   admission: GatewayToolCallerReceiptAdmission,
@@ -168,6 +177,7 @@ function composeReceiptAuthority(
     (predicate, index): predicate is ReceiptAuthority =>
       predicate !== undefined && predicates.indexOf(predicate) === index,
   );
+  const sources = checks.map((check) => captureGatewayToolReceiptAssertion(check));
   return checks.length === 0
     ? undefined
     : Object.assign(
@@ -182,9 +192,14 @@ function composeReceiptAuthority(
           }
           return active;
         },
-        composeSessionSourceAssertion(
-          checks.map((check) => captureGatewayToolReceiptAssertion(check)),
-        ),
+        composeSessionSourceAssertion(sources),
+        {
+          assertScopeCurrent: () => {
+            for (const source of sources) {
+              (source.assertScopeCurrent ?? source)();
+            }
+          },
+        },
       );
 }
 
@@ -286,7 +301,8 @@ export async function withGatewayPersonalToolUser<T>(
     }
     return await run();
   }
-  return await gatewayToolCallerStorage.run(
+  return await runWithAsyncStore(
+    gatewayToolCallerStorage,
     {
       ...caller,
       personalToolUser: user,
@@ -311,9 +327,16 @@ export function resolveGatewayToolOperatorSelection(options?: {
     const operatorAuthority = selectedParticipant?.operatorAuthority ?? caller?.operatorAuthority;
     selection = Object.freeze({
       operatorAuthority,
-      requesterOrigin: selectedParticipant
-        ? selectedParticipant.requesterOrigin
-        : caller?.requesterOrigin,
+      requesterOrigin: selectedParticipant?.requesterOrigin
+        ? captureRequesterOrigin({
+            requesterOrigin: {
+              ...selectedParticipant.requesterOrigin,
+              delegatedCreatorProfileId: requesterCreatorProfileId(caller?.requesterOrigin) ?? null,
+            },
+          })
+        : selectedParticipant
+          ? undefined
+          : caller?.requesterOrigin,
       assertCurrent: composeSessionSourceAssertion([
         participant?.assertCurrent,
         operatorAuthority?.assertCurrent,
@@ -345,7 +368,8 @@ export function withGatewayToolOperatorContinuation<T>(
   }
   const { operatorAuthority, requesterOrigin } = selection;
   operatorAuthority?.assertCurrent();
-  return gatewayToolCallerStorage.run(
+  return runWithAsyncStore(
+    gatewayToolCallerStorage,
     {
       ...caller,
       personalToolParticipants: undefined,
@@ -363,28 +387,23 @@ export function withGatewayToolOperatorContinuation<T>(
 
 export function resolveGatewayPersonalToolParticipant(
   runtimeIdentity?: AgentRuntimeIdentity,
-  options?: {
-    requireSingleParticipant?: boolean;
-    allowTurnOwner?: () => boolean;
-    allowMissingRegistry?: boolean;
-  },
+  options?: { requireSingleParticipant?: boolean },
 ) {
   const caller = getGatewayToolCallerIdentity();
   if (caller?.personalToolParticipants) {
     return caller.personalToolParticipants.resolve(
       options?.requireSingleParticipant ? undefined : caller.personalToolUser,
-      options,
     );
   }
   if (caller?.personalToolUser !== undefined) {
     throw new Error("Selecting user requires an active personal-tool turn.");
   }
   if (runtimeIdentity) {
-    const registered = captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity, options);
+    const registered = captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity);
     if (!registered) {
       return undefined;
     }
-    const participant = registered.participants?.resolve(undefined, options);
+    const participant = registered.participants?.resolve();
     return (
       participant && {
         ...participant,
@@ -419,7 +438,10 @@ export function captureGatewayToolCallerAssertion(
   const assertCurrent = composeSessionSourceAssertion(
     [
       selection?.assertCurrent,
-      caller.operatorAuthority?.assertCurrent,
+      // Selection already checks its exact operator source in this synchronous guard.
+      selection?.operatorAuthority === caller.operatorAuthority
+        ? undefined
+        : caller.operatorAuthority?.assertCurrent,
       composeSessionSourceAssertion(
         isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
         (assertReceipt) => {
@@ -465,7 +487,7 @@ export async function prepareGatewayToolCallerAssertion(): Promise<{
     if (!active) {
       throw new Error("agent tool caller admission is no longer active");
     }
-    receiptAdmissionStorage.run(predicates, () => assertion?.());
+    runWithAsyncStore(receiptAdmissionStorage, predicates, () => assertion?.());
   };
   assertCurrent();
   return {
@@ -559,7 +581,8 @@ export async function withGatewayToolCallerIdentity<T>(
   const approvalSignals = [
     ...new Set([...(inheritedOwner?.approvalSignals ?? []), ...(identity.approvalSignals ?? [])]),
   ];
-  return await gatewayToolCallerStorage.run(
+  return await runWithAsyncStore(
+    gatewayToolCallerStorage,
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
@@ -583,6 +606,7 @@ export async function withGatewayToolCallerIdentity<T>(
             )
           : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
       workspaceBaseRefreshSandbox: inheritedValue("workspaceBaseRefreshSandbox"),
+      workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
       workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),
       personalToolParticipants: inheritedValue("personalToolParticipants"),
       personalToolUser: inheritedValue("personalToolUser"),

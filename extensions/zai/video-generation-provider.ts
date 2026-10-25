@@ -49,18 +49,6 @@ const MODE_CAPABILITIES: VideoGenerationModeCapabilities = {
   providerOptions: { quality: "string", fps: "number" },
 };
 
-function resolveVideoBaseUrl(configured: string | undefined): string {
-  const baseUrl = normalizeOptionalString(configured)?.replace(/\/+$/u, "") ?? resolveZaiBaseUrl();
-  // Video uses the general API in the same region, even with Coding Plan chat auth.
-  if (baseUrl === ZAI_CODING_CN_BASE_URL) {
-    return resolveZaiBaseUrl("cn");
-  }
-  if (baseUrl === ZAI_CODING_GLOBAL_BASE_URL) {
-    return resolveZaiBaseUrl("global");
-  }
-  return baseUrl;
-}
-
 function readTaskStatus(payload: Record<string, unknown>): string {
   const status = normalizeOptionalString(payload.task_status);
   if (status !== "PROCESSING" && status !== "SUCCESS" && status !== "FAIL") {
@@ -145,11 +133,20 @@ export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
         }
       }
       const providerConfig = req.cfg.models?.providers?.zai;
+      let videoBaseUrl =
+        normalizeOptionalString(providerConfig?.baseUrl)?.replace(/\/+$/u, "") ??
+        resolveZaiBaseUrl();
+      // Video uses the general API in the same region, even with Coding Plan chat auth.
+      if (videoBaseUrl === ZAI_CODING_CN_BASE_URL) {
+        videoBaseUrl = resolveZaiBaseUrl("cn");
+      } else if (videoBaseUrl === ZAI_CODING_GLOBAL_BASE_URL) {
+        videoBaseUrl = resolveZaiBaseUrl("global");
+      }
       const { baseUrl, headers, allowPrivateNetwork, dispatcherPolicy } =
         await resolveProviderApiKeyHttpRequestConfig({
           req,
           missingApiKeyMessage: "Z.AI API key missing",
-          baseUrl: resolveVideoBaseUrl(providerConfig?.baseUrl),
+          baseUrl: videoBaseUrl,
           defaultBaseUrl: resolveZaiBaseUrl(),
           provider: "zai",
           capability: "video",
@@ -187,7 +184,7 @@ export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
         deadline,
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
-        allowPrivateNetwork,
+        ssrfPolicy: { allowPrivateNetwork },
         dispatcherPolicy,
         maxAttempts: 120,
         pollIntervalMs: POLL_INTERVAL_MS,

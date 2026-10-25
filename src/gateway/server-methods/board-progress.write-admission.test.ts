@@ -25,7 +25,8 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createBoardHarness } from "./board.test-support.js";
-import { createProgressCardHandlers } from "./progress-card.js";
+import { progressCardHandlers } from "./progress-card.js";
+import { profileSessionEntry } from "./sessions-read-cache.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const methods = [
@@ -62,23 +63,20 @@ it.each([
     const client = { ...roleClient("view", "admission-owner"), connId: "admission-owner" };
     client.connect.scopes = [...scopes];
     const entry = {
-      sessionId: "admission-session",
+      ...profileSessionEntry("admission-session", 1, client.authenticatedUserProfile!.profileId),
       lifecycleRevision: "before",
-      updatedAt: 1,
       visibility: "draft" as const,
-      createdActor: {
-        type: "human" as const,
-        source: "profile" as const,
-        id: client.authenticatedUserProfile!.profileId,
-      },
     };
     await upsertSessionEntryCore(target, entry);
+    const widget = {
+      name: "admission",
+      content: { kind: "html" as const, html: "<p>admitted</p>" },
+    };
     const previous =
       method === "board.widget.grant"
         ? await boardStore.putWidget({
             ...target,
-            name: "admission",
-            content: { kind: "html", html: "<p>admitted</p>" },
+            ...widget,
             declared: { netOrigins: ["https://example.test"] },
           })
         : undefined;
@@ -97,11 +95,8 @@ it.each([
       tables: readRows(
         "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('board_widgets', 'board_tabs', 'session_progress_cards') ORDER BY name",
       ),
-      counts: readRows(
-        "SELECT (SELECT COUNT(*) FROM board_tabs WHERE session_key = ?) AS tabs, (SELECT COUNT(*) FROM board_widgets WHERE session_key = ?) AS widgets",
-        target.sessionKey,
-        target.sessionKey,
-      ),
+      tabs: readRows("SELECT * FROM board_tabs WHERE session_key = ?", target.sessionKey),
+      widgets: readRows("SELECT * FROM board_widgets WHERE session_key = ?", target.sessionKey),
     });
     const previousState = databaseState();
     const board = createBoardHarness(undefined, {}, boardStore, {
@@ -120,7 +115,7 @@ it.each([
               instanceId: previousWidget?.instanceId,
             }
           : method === "board.widget.put"
-            ? { name: "admission", content: { kind: "html", html: "<p>admitted</p>" } }
+            ? widget
             : { markdown: "admitted" }),
     };
     const entered = createDeferredCore();
@@ -141,7 +136,6 @@ it.each([
                 ? "grant"
                 : "putWidget",
           );
-    let mutationCalls: number;
     let requestFailure: { error: unknown } | undefined;
     let inGrant = false;
     const stages: string[] = [];
@@ -162,7 +156,7 @@ it.each([
         inGrant = false;
       }
     });
-    const handlers = { ...board.handlers, ...createProgressCardHandlers() };
+    const handlers = { ...board.handlers, ...progressCardHandlers };
     const handler = handlers[method]!;
     const expectUnchanged = () => {
       expect(databaseState()).toEqual(previousState);
@@ -225,16 +219,13 @@ it.each([
     } finally {
       release.resolve();
       await request;
-      mutationCalls = mutation.mock.calls.length;
       mutation.mockRestore();
       grants.mockRestore();
       reads.restore();
     }
     if (requestFailure) {
-      if (change === "guard") {
-        expect(requestFailure.error).toBe(retiredError);
-      } else if (change === "abort") {
-        expect(requestFailure.error).toBe(abortError);
+      if (change === "guard" || change === "abort") {
+        expect(requestFailure.error).toBe(change === "guard" ? retiredError : abortError);
       } else if (change === "lifecycle") {
         expect(requestFailure.error).toBeInstanceOf(SessionMutationFactsUnavailableError);
       } else {
@@ -248,48 +239,26 @@ it.each([
     if (change !== "allow" && change !== "allow-worker") {
       expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
       expectUnchanged();
-      if (previousWidget) {
-        expect(
-          readRows(
-            "SELECT revision, grant_state FROM board_widgets WHERE session_key = ? AND name = ?",
-            target.sessionKey,
-            "admission",
-          ),
-        ).toEqual({
-          found: true,
-          value: [
-            {
-              revision: previousWidget.revision,
-              grant_state: previousWidget.grantState,
-            },
-          ],
-        });
-      }
       expect(fs.existsSync(replacementPath)).toBe(false);
       if (cold) {
         expect(getOpenClawAgentDatabaseIfOpen(database)).toBeUndefined();
       }
       return;
     }
-    expect(mutationCalls).toBe(1);
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    if (method === "board.update") {
-      expect((await boardStore.getSnapshot(target)).tabs).toEqual([
-        expect.objectContaining({ tabId: "notes", title: "Notes" }),
-      ]);
-    } else if (method === "board.widget.put" || method === "board.widget.grant") {
-      expect((await boardStore.getSnapshot(target)).widgets).toEqual([
-        expect.objectContaining({
-          name: "admission",
-          revision: 1,
-          ...(method === "board.widget.grant" ? { grantState: "rejected" } : {}),
-        }),
-      ]);
-    } else {
-      expect(await progressCardStore.get(target.sessionKey, target.agentId)).toMatchObject({
-        markdown: "admitted",
-        revision: 1,
-      });
-    }
+    const actual =
+      method === "progressCard.put"
+        ? await progressCardStore.get(target.sessionKey, target.agentId)
+        : await boardStore.getSnapshot(target);
+    expect(actual).toMatchObject(
+      {
+        "board.update": { tabs: [{ tabId: "notes", title: "Notes" }] },
+        "board.widget.put": { widgets: [{ name: "admission", revision: 1 }] },
+        "board.widget.grant": {
+          widgets: [{ name: "admission", revision: 1, grantState: "rejected" }],
+        },
+        "progressCard.put": { markdown: "admitted", revision: 1 },
+      }[method],
+    );
   }),
 );

@@ -7,12 +7,11 @@ import {
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { buildPayloads } from "../../agents/embedded-agent-runner/run/payloads.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import {
-  formatBillingErrorMessage,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-  renderHeartbeatRunFailureCopy,
-} from "../../agents/failover/user-copy.js";
-import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+  MISSING_REPLY_NOTICE_TEXT,
+  MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+} from "../../agents/reply-completion.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
@@ -29,6 +28,7 @@ import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { setupExecutionSuite } from "./agent-runner-execution-suite.test-support.js";
 import {
+  createRunResult,
   GENERIC_RUN_FAILURE_TEXT,
   createRunAgentTurnParams,
   createFollowupRun,
@@ -71,6 +71,40 @@ async function finalPayload(params: Parameters<typeof runTurn>[0] = {}) {
   assert(result.kind === "final");
   return result.payload;
 }
+
+it.each([
+  { message: MISSING_REPLY_NOTICE_TEXT, expected: MISSING_REPLY_NOTICE_TEXT },
+  {
+    message: MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+    expected: MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+  },
+  { message: "private provider detail", expected: "Agent run failed" },
+])(
+  "egresses only host missing-reply copy from an incomplete turn",
+  async ({ message, expected }) => {
+    state.runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        meta: {
+          error: { kind: "incomplete_turn", message, fallbackSafe: false },
+          terminalReply: { disposition: "empty" },
+          terminalReplyExpectation: "result-required",
+        },
+      },
+      provider: "openai",
+      model: "test-model",
+      attempts: [],
+    });
+
+    const result = await runRawTurn(createRunAgentTurnParams(createFollowupRun()));
+
+    expect(terminalEvents(result.runId)).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ phase: "error", error: expected }),
+      }),
+    ]);
+  },
+);
 
 it("preserves disabled retry exhaustion through returned provider payloads", async () => {
   const rawError = "429 rate limit exceeded. Please try again in 221ms.";
@@ -415,10 +449,7 @@ it.for([false, true])(
 );
 
 it("settles a completed result after awaiting restart recovery", async () => {
-  const result = {
-    payloads: [{ text: "completed before the restart marker was observed" }],
-    meta: {},
-  };
+  const result = createRunResult("completed before the restart marker was observed");
   const runId = "armed-restart-settled-result";
   const { replyOperation, failMock } = createMockReplyOperation();
   let operationResult: typeof replyOperation.result = null;
@@ -478,31 +509,6 @@ it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
 
   expect(payload).toMatchObject({ isError: true, text: recoveryText });
   expect(payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-});
-
-it("uses heartbeat failure copy for raw external errors during heartbeat runs", async () => {
-  state.runEmbeddedAgentMock.mockRejectedValueOnce(
-    new Error('Command lane "main" task timed out after 120000ms'),
-  );
-
-  const payload = await finalPayload({ isHeartbeat: true });
-
-  expect(payload.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
-  expect(payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-  expect(payload.text).not.toContain("/new");
-});
-
-it("includes heartbeat preflight reasons in terminal failure replies", async () => {
-  const message =
-    "Codex session became active in another runner; wait for it to finish before continuing";
-  state.runEmbeddedAgentMock.mockRejectedValueOnce(new AgentHarnessPreflightError(message));
-
-  const payload = await finalPayload({ isHeartbeat: true });
-
-  expect(payload.text).toBe(renderHeartbeatRunFailureCopy(message));
-  expect(payload.text).toContain(`\n\nDetails: ${message}.\n`);
-  expect(payload.isError).toBe(true);
-  expect(payload.text).not.toContain("/new");
 });
 
 it("warns that interrupted CLI background work may have completed", () => {

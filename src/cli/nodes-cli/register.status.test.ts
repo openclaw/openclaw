@@ -3,11 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NodeHostStats } from "../../shared/node-host-stats.js";
 import { registerNodesStatusCommands } from "./register.status.js";
 
-const mocks = vi.hoisted(() => ({
-  call: vi.fn(),
-  log: vi.fn(),
-  writeJson: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ call: vi.fn(), log: vi.fn(), writeJson: vi.fn() }));
 
 vi.mock("./rpc.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./rpc.js")>()),
@@ -32,6 +28,12 @@ const hostStats: NodeHostStats = {
   diskAvailableBytes: Math.round(1.2 * 1024 ** 4),
   updatedAtMs: now - 27 * 24 * 60 * 60 * 1000,
 };
+const memoryStats: NodeHostStats = {
+  cpuCount: 2,
+  memoryTotalBytes: 1024 ** 3,
+  memoryFreeBytes: 512 * 1024 ** 2,
+  updatedAtMs: now,
+};
 
 describe.each(["status", "describe"])("nodes %s rendering", (command) => {
   beforeEach(() => {
@@ -41,69 +43,48 @@ describe.each(["status", "describe"])("nodes %s rendering", (command) => {
   afterEach(() => vi.restoreAllMocks());
 
   it.each([
-    { label: "connected", connected: true, stats: hostStats, version: "1.2.3", display: "v1.2.3" },
-    {
-      label: "last known",
-      connected: false,
-      stats: hostStats,
-      version: "v1.2.3",
-      display: "v1.2.3",
-    },
-    {
-      label: "memory only",
-      connected: true,
-      version: "canary",
-      display: "canary",
-      stats: {
-        cpuCount: 2,
-        memoryTotalBytes: 1024 ** 3,
-        memoryFreeBytes: 512 * 1024 ** 2,
-        updatedAtMs: now,
-      },
-    },
-    {
-      label: "unavailable",
-      connected: false,
-      stats: undefined,
-      version: "  V1.2.3  ",
-      display: "V1.2.3",
-    },
-  ])("renders $label details and preserves JSON", async (nodeCase) => {
-    const { connected, stats, version, display } = nodeCase;
-    const node = {
-      nodeId: "node-1",
-      paired: true,
-      connected,
-      hostStats: stats,
-      coreVersion: version,
-      uiVersion: version,
-    };
-    mocks.call.mockResolvedValue(command === "status" ? { nodes: [node] } : node);
-    const nodes = new Command("nodes");
-    registerNodesStatusCommands(nodes);
-    const args = command === "status" ? [command] : [command, "--node", "node-1"];
-    await nodes.parseAsync(args, { from: "user" });
+    ["connected", true, hostStats, "1.2.3", "v1.2.3"],
+    ["last known", false, hostStats, "v1.2.3", "v1.2.3"],
+    ["memory only", true, memoryStats, "canary", "canary"],
+    ["unavailable", false, undefined, "  V1.2.3  ", "V1.2.3"],
+  ] as const)(
+    "renders %s details and preserves JSON",
+    async (_label, connected, stats, version, display) => {
+      const node = {
+        nodeId: "node-1",
+        paired: true,
+        connected,
+        hostStats: stats,
+        coreVersion: version,
+        uiVersion: version,
+      };
+      mocks.call.mockResolvedValue(command === "status" ? { nodes: [node] } : node);
+      const nodes = new Command("nodes");
+      registerNodesStatusCommands(nodes);
+      const args = command === "status" ? [command] : [command, "--node", "node-1"];
+      await nodes.parseAsync(args, { from: "user" });
 
-    const output = mocks.log.mock.calls.map(([line]) => String(line)).join("\n");
-    expect(output).toContain(`core ${display} · ui ${display}`);
-    if (stats === hostStats) {
-      expect(output).toContain("load 3.2/24 · mem 151/192 GB · disk 1.2 TB free");
-    } else if (stats) {
-      expect(output).toContain("mem 512 MB/1.0 GB");
-      expect(output).not.toContain("load ");
-      expect(output).not.toContain("disk ");
-    } else {
-      expect(output).not.toContain("mem ");
-    }
-    if (stats && !connected) {
-      expect(output).toContain("(last known 27d ago)");
-    } else {
-      expect(output).not.toContain("last known");
-    }
+      const output = mocks.log.mock.calls.map(([line]) => String(line)).join("\n");
+      expect(output).toContain(`core ${display} · ui ${display}`);
+      if (stats === hostStats) {
+        expect(output).toContain("load 3.2/24 · mem 151/192 GB · disk 1.2 TB free");
+      } else if (stats) {
+        expect(output).toContain("mem 512 MB/1.0 GB");
+        expect(output).not.toContain("load ");
+        expect(output).not.toContain("disk ");
+      } else {
+        expect(output).not.toContain("mem ");
+      }
+      if (stats && !connected) {
+        expect(output).toContain("(last known 27d ago)");
+      } else {
+        expect(output).not.toContain("last known");
+      }
 
-    await nodes.parseAsync([...args, "--json"], { from: "user" });
-    expect(mocks.writeJson).toHaveBeenCalledWith(
-      command === "status" ? { ts: now, nodes: [node] } : node,
-    );
-  });
+      await nodes.parseAsync([...args, "--json"], { from: "user" });
+      expect(mocks.writeJson).toHaveBeenCalledWith(
+        command === "status" ? { ts: now, nodes: [node] } : node,
+      );
+    },
+  );
 });

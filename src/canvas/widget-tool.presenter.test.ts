@@ -7,9 +7,8 @@ import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
-import { registerTestWidgetContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
-import { createBoardPutCaller } from "./widget-tool.test-support.js";
+import { createBoardPutCaller, currentPresenter } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -22,11 +21,14 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("show_widget current-channel presentation", () => {
   it.each([false, true])("prefers the channel presenter (inline=%s)", async (inlineClient) => {
     const stateDir = tempDirs.make("openclaw-widget-presenter-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const present = vi.fn(async () => ({
       ok: true as const,
       value: {
@@ -47,16 +49,12 @@ describe("show_widget current-channel presentation", () => {
       currentMessagingTarget: "discord:channel:channel-1",
       sessionKey: "agent:main:discord",
     };
-    const presenter: WidgetPresenter = {
-      target: "current_channel",
+    const presenter: WidgetPresenter = currentPresenter(present, {
       description: "Post in the current channel",
       capabilities: { sourceKinds: ["html"], maxSourceBytes: 48 * 1024 },
       match: (candidate) => candidate.messageChannel === "discord",
-      availability: async () => ({ ok: true, value: { available: true } }),
-      present,
-    };
+    });
     const tool = createShowWidgetTool({
-      stateDir,
       sessionId: "current-channel",
       inlineClientAvailable: inlineClient,
       presenters: [presenter],
@@ -88,17 +86,10 @@ describe("show_widget current-channel presentation", () => {
   it.each(["pending", "rejected", "granted"] as const)(
     "reports the owner's %s capability outcome",
     async (grantState) => {
-      const { mock, callGateway } = createBoardPutCaller();
-      const original = mock.getMockImplementation()!;
-      mock.mockImplementation(async (...args) => {
-        const snapshot = await original(...args);
-        snapshot.widgets[0]!.grantState = grantState;
-        return snapshot;
-      });
+      createBoardPutCaller(grantState);
       const tool = createShowWidgetTool({
         agentSessionKey: "agent:main:approval",
         inlineHostEnabled: false,
-        callGateway,
       });
       const result = await tool.execute("pin", {
         title: "Runs",
@@ -115,15 +106,14 @@ describe("show_widget current-channel presentation", () => {
     },
   );
   it("keeps scheduled widget authoring pinned-only without an inline client", async () => {
-    const { mock: callGatewayMock, callGateway } = createBoardPutCaller();
+    const { mock: callGatewayMock } = createBoardPutCaller();
     const stateDir = tempDirs.make("openclaw-scheduled-widget-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const tool = createShowWidgetTool({
-      stateDir,
       sessionId: "scheduled-board-only",
       agentSessionKey: "agent:main:dashboard:scheduled",
       inlineClientAvailable: false,
       pinnedOnly: true,
-      callGateway,
     });
     const schema = tool.parameters as {
       properties?: {
@@ -177,14 +167,13 @@ describe("show_widget current-channel presentation", () => {
   });
   it("rejects broken scripts before any side effect", async () => {
     const stateDir = tempDirs.make("openclaw-widget-syntax-");
-    const { mock: gateway, callGateway } = createBoardPutCaller();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const { mock: gateway } = createBoardPutCaller();
     const present = vi.fn<WidgetPresenter["present"]>();
     const availability = vi.fn<WidgetPresenter["availability"]>();
     const tool = createShowWidgetTool({
-      stateDir,
       sessionId: "syntax",
       agentSessionKey: "agent:main:syntax",
-      callGateway,
       presenters: [{ target: "node_panel", description: "Test panel", availability, present }],
     });
     const result = tool.execute("broken", {
@@ -200,22 +189,5 @@ describe("show_widget current-channel presentation", () => {
     expect(present).not.toHaveBeenCalled();
     expect(availability).not.toHaveBeenCalled();
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
-  });
-
-  it("leaves registered source validation to the content kind", async () => {
-    registerTestWidgetContentKind("diagram", () => "<p>Rendered diagram</p>");
-    const stateDir = tempDirs.make("openclaw-widget-syntax-");
-    const tool = createShowWidgetTool({ stateDir, sessionId: "registered-syntax" });
-    expect(tool.description).toContain(
-      "Keep one-off visualizations inline; pin for explicit dashboard requests or multiple non-code visualizations.",
-    );
-    expect(tool.description).toContain('Default videos to controls playsinline preload="auto"');
-    expect(tool.description).toContain("do not autoplay");
-    const result = await tool.execute("registered", {
-      title: "Diagram",
-      kind: "diagram",
-      widget_code: "diagram:<script>const =</script>",
-    });
-    expect(payload(result)).toMatchObject({ kind: "canvas" });
   });
 });

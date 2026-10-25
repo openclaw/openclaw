@@ -268,11 +268,15 @@ export type CliBackendResolveExecutionArgsContext = Omit<
   CliBackendPrepareExecutionContext,
   "agentDir" | "contextWindow" | "contextTokenBudget" | "env"
 > & {
+  /** Agent identity used to resolve per-agent execution policy. */
+  agentId?: string;
   /** Effective fast mode at spawn, after queue admission and backend preparation. */
   fastMode?: boolean;
   /** Canonical tools routed through OpenClaw; disable equivalent native tools. */
   hostOwnedTools?: readonly string[];
   useResume: boolean;
+  /** The backend process is executing a native control operation. */
+  controlOperation?: "compact";
   baseArgs: readonly string[];
 };
 
@@ -522,6 +526,17 @@ type CliBackendPluginBase = {
    * Core rejects other names before grant/capture and excludes node/tool-disabled runs.
    */
   projectNativeToolAuthority?: (nativeTools: readonly string[]) => readonly string[];
+  /**
+   * Operator-selected native tools kept on OpenClaw-mediated agent turns, which
+   * otherwise expose no native tools. Core applies the same list to ordinary and
+   * verified completion turns, so return only tools that confer no capability
+   * through `projectNativeToolAuthority`; caller caps, restricted senders,
+   * delegated execution, and workspace-only runs still receive none.
+   */
+  resolveManagedNativeTools?: (ctx: {
+    config?: OpenClawConfig;
+    agentId: string;
+  }) => readonly string[];
   /**
    * Backend-owned JSONL line parser for provider-specific stream formats.
    *

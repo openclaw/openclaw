@@ -5,6 +5,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts"
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createGatewayEvent } from "../../app/gateway-store.test-support.ts";
+import { loadSettings } from "../../app/settings.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -12,7 +13,95 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { createActivityPageState } from "./activity-page-state.ts";
 import { ActivityPageView } from "./activity-page-view.tsx";
 
+export function activitySettings(): ReturnType<typeof loadSettings> {
+  return {
+    ...loadSettings(),
+    gatewayUrl: "wss://activity.example.test",
+    token: "",
+    sessionKey: "main",
+    lastActiveSessionKey: "main",
+  };
+}
+
 export type TestActivityPage = ReturnType<typeof createActivityPage>;
+
+export function createActivityContext(
+  source: ApplicationContext["gateway"],
+  capabilities: Pick<ApplicationContext, "sessions" | "agents" | "agentIdentity">,
+  basePath = "",
+): ApplicationContext {
+  return {
+    gateway: source,
+    ...capabilities,
+    basePath,
+    resourceBasePath: "",
+    replace: vi.fn(),
+    navigate: vi.fn(),
+    navigateAndWait: vi.fn(async () => {}),
+    revalidate: vi.fn(async () => {}),
+    preload: vi.fn(async () => {}),
+    nativeDeviceSettings: null,
+    nativeNotifications: null,
+    // These tests exercise Activity only; unexpected capability reads must fail.
+    get router(): never {
+      throw new Error("Activity fixture does not provide router");
+    },
+    get connectionBootstrap(): never {
+      throw new Error("Activity fixture does not provide connectionBootstrap");
+    },
+    get agentSelection(): never {
+      throw new Error("Activity fixture does not provide agentSelection");
+    },
+    get settingsAgentSelection(): never {
+      throw new Error("Activity fixture does not provide settingsAgentSelection");
+    },
+    get channels(): never {
+      throw new Error("Activity fixture does not provide channels");
+    },
+    get config(): never {
+      throw new Error("Activity fixture does not provide config");
+    },
+    get scopeUpgrade(): never {
+      throw new Error("Activity fixture does not provide scopeUpgrade");
+    },
+    get sidebarAttention(): never {
+      throw new Error("Activity fixture does not provide sidebarAttention");
+    },
+    get runtimeConfig(): never {
+      throw new Error("Activity fixture does not provide runtimeConfig");
+    },
+    get placementStartup(): never {
+      throw new Error("Activity fixture does not provide placementStartup");
+    },
+    get plugins(): never {
+      throw new Error("Activity fixture does not provide plugins");
+    },
+    get assistantDock(): never {
+      throw new Error("Activity fixture does not provide assistantDock");
+    },
+    get overlays(): never {
+      throw new Error("Activity fixture does not provide overlays");
+    },
+    get navigation(): never {
+      throw new Error("Activity fixture does not provide navigation");
+    },
+    get theme(): never {
+      throw new Error("Activity fixture does not provide theme");
+    },
+    get nativeChatDrafts(): never {
+      throw new Error("Activity fixture does not provide nativeChatDrafts");
+    },
+    get webPush(): never {
+      throw new Error("Activity fixture does not provide webPush");
+    },
+    get chatSubmissions(): never {
+      throw new Error("Activity fixture does not provide chatSubmissions");
+    },
+    get chatAttachmentHandoff(): never {
+      throw new Error("Activity fixture does not provide chatAttachmentHandoff");
+    },
+  };
+}
 
 export function createActivityPage(context: ApplicationContext, initial?: RouteLocation) {
   const [location, setLocation] = createSignal(initial);

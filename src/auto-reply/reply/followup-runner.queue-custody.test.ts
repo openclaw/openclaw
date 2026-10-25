@@ -8,6 +8,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import {
+  getCurrentSessionControllerOwner,
+  withSessionControllerOwner,
+} from "../../sessions/session-controller.context.js";
 import {
   createReplyOperation,
   markReplyOperationExecutionStarted,
@@ -50,7 +55,6 @@ vi.mock("./followup-delivery.js", async (importOriginal) => ({
 vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
   resolveQueuedReplyExecutionConfig: state.config,
-  resolveQueuedReplyRuntimeConfig: (config: unknown) => config,
 }));
 installQueueRuntimeErrorSilencer();
 afterEach(() => vi.clearAllMocks());
@@ -116,6 +120,10 @@ it("acquires fresh required placement for a queued successor after its predecess
     return admitted(queued, successor, "required-placement-successor");
   });
   state.execute.mockImplementation(async () => {
+    expect(getCurrentSessionControllerOwner()).toBe(successor);
+    await withSessionTurn(identity, async (borrowed) => {
+      expect(borrowed).toBe(successor);
+    });
     markReplyOperationExecutionStarted(successor!);
     try {
       await withRequiredSessionPlacement(identity, options, async () => {
@@ -143,18 +151,17 @@ it("acquires fresh required placement for a queued successor after its predecess
   });
   try {
     setRuntimeConfigSnapshot(queued.run.config);
-    await withRequiredSessionPlacement(identity, options, async () => {
-      enqueueFollowupRun(identity.sessionKey, queued, { mode: "followup", debounceMs: 0 });
-      scheduleFollowupDrain(
-        identity.sessionKey,
-        createFollowupRunner({ typing, typingMode: "never", defaultModel: "gpt-test" }),
-      );
-      // Settlement wakes the successor from the predecessor's retained async context.
-      retirement = (async () => {
-        await releasePredecessor.promise;
-        predecessor.complete();
-      })();
-    });
+    await withSessionControllerOwner(predecessor, () =>
+      withRequiredSessionPlacement(identity, options, async () => {
+        enqueueFollowupRun(identity.sessionKey, queued, { mode: "followup", debounceMs: 0 });
+        scheduleFollowupDrain(
+          identity.sessionKey,
+          createFollowupRunner({ typing, typingMode: "never", defaultModel: "gpt-test" }),
+        );
+        // Settlement wakes the successor from the predecessor's retained async context.
+        retirement = releasePredecessor.promise.then(() => predecessor.complete());
+      }),
+    );
     expect(events).toEqual(["admit:1", "release:1"]);
     releasePredecessor.resolve();
     await retirement;
@@ -204,10 +211,8 @@ it.each([
     const source = createQueueTestRun({ prompt });
     source.run.sessionKey = key;
     source.turnAdoptionLifecycle = { onAdopted: vi.fn(), onSettled: vi.fn() };
-    if (phase === "adopted preparation" && prompt === "first") {
-      source.abortSignal = olderCancel.signal;
-    } else if (phase === "adopted preparation") {
-      source.abortSignal = new AbortController().signal;
+    if (phase === "adopted preparation") {
+      source.abortSignal = prompt === "first" ? olderCancel.signal : new AbortController().signal;
     }
     sources.push(source);
     enqueueFollowupRun(key, source, { mode: "collect", debounceMs: 0 }, "none", undefined, false);

@@ -44,8 +44,48 @@ function ciRunState(run) {
   }
 }
 
+function assertCiRunIdentity(current, expected) {
+  if (
+    current.id !== expected.id ||
+    current.head_sha !== expected.head_sha ||
+    current.head_branch !== expected.head_branch ||
+    current.path !== expected.path ||
+    current.event !== expected.event ||
+    current.repository?.id !== expected.repository?.id ||
+    (expected.event === "workflow_dispatch" && current.display_title !== expected.display_title)
+  ) {
+    throw new Error("The CI run identity changed during security review.");
+  }
+}
+
 async function ciState(review) {
   const { api, owner, repo, pullRequest } = review;
+  const completedRunId = Number(process.env.OPENCLAW_SECURITY_REVIEW_CI_RUN_ID || 0);
+  const completedAttempt = Number(process.env.OPENCLAW_SECURITY_REVIEW_CI_RUN_ATTEMPT || 0);
+  if (
+    !Number.isSafeInteger(completedRunId) ||
+    completedRunId < 0 ||
+    !Number.isSafeInteger(completedAttempt) ||
+    completedAttempt < 0 ||
+    Boolean(completedRunId) !== Boolean(completedAttempt)
+  ) {
+    throw new Error("Invalid completed CI run identity.");
+  }
+  function assertCompletedRunObserved(observed) {
+    if (
+      completedRunId &&
+      (!observed ||
+        observed.id < completedRunId ||
+        (observed.id === completedRunId &&
+          (observed.run_attempt < completedAttempt ||
+            (observed.run_attempt === completedAttempt && observed.status !== "completed"))))
+    ) {
+      // A successful scheduled pass advances its window; do not strand this completed run.
+      throw new GitHubDiffDataError(
+        "The completed CI run is missing or stale in the current observation.",
+      );
+    }
+  }
   const root = `/repos/${owner}/${repo}/actions`;
   const response = await api.request(
     `${root}/workflows/ci.yml/runs?head_sha=${pullRequest.head.sha}&per_page=100`,
@@ -73,24 +113,27 @@ async function ciState(review) {
   let run;
   for (const candidate of candidates.toSorted((left, right) => right.id - left.id)) {
     if (
-      candidate.event !== "pull_request" ||
-      candidate.status !== "completed" ||
-      candidate.conclusion !== "skipped"
+      candidate.status === "completed" &&
+      (candidate.event !== "pull_request" || candidate.conclusion !== "skipped")
     ) {
       run = candidate;
       break;
     }
-    // Reruns retain their ID; a skipped list entry can already have a new attempt.
+    // Completion events can precede the run-list projection. Refresh the exact
+    // run before waiting; skipped entries can also already have a new attempt.
     const current = await api.request(`${root}/runs/${candidate.id}`);
     const currentState = ciRunState(current);
-    if (current.id !== candidate.id || current.head_sha !== candidate.head_sha) {
-      throw new Error("The CI run identity changed during security review.");
-    }
-    if (currentState !== "completed" || current.conclusion !== "skipped") {
+    assertCiRunIdentity(current, candidate);
+    if (
+      current.event !== "pull_request" ||
+      currentState !== "completed" ||
+      current.conclusion !== "skipped"
+    ) {
       run = current;
       break;
     }
   }
+  assertCompletedRunObserved(run);
   if (!run || run.status !== "completed") {
     return "pending";
   }
@@ -128,9 +171,8 @@ async function ciState(review) {
   }
   const current = await api.request(`${root}/runs/${run.id}`);
   const currentState = ciRunState(current);
-  if (current.id !== run.id || current.head_sha !== run.head_sha) {
-    throw new Error("The CI run identity changed during security review.");
-  }
+  assertCiRunIdentity(current, run);
+  assertCompletedRunObserved(current);
   if (currentState === "pending") {
     return "pending";
   }

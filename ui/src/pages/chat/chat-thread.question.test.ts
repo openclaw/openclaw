@@ -3,7 +3,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
-import { buildCachedChatItems, coalesceStreamRuns, resetChatThreadState } from "./chat-thread.ts";
+import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import { coalesceStreamRuns } from "./chat-turn-presentation.ts";
 import { ChatQuestionSummary } from "./components/chat-question-summary.tsx";
 
 function prompt(status: QuestionPrompt["status"]): QuestionPrompt {

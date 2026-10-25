@@ -15,7 +15,10 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
-import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
+import {
+  resolveSessionCreatorActor,
+  sessionCreatorProfileId,
+} from "../../config/sessions/session-entry-provenance.js";
 import { withSessionHistoryWorkerDatabases } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -119,7 +122,7 @@ export function projectUsageCreator(
   config: OpenClawConfig,
 ): SessionUsageCreator {
   const entry = session.storeEntry ?? session.creatorEntry;
-  const actor = entry?.createdActor;
+  const actor = resolveSessionCreatorActor(entry?.createdActor);
   if (!actor) {
     return { key: UNKNOWN_USAGE_CREATOR_KEY };
   }

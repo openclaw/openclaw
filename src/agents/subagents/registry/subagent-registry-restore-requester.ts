@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { measureStartup, type GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
 import { waitForAgentDatabasePreparation } from "../../../state/agent-database-preparation-context.js";
+import type { AgentRecoveryProgress } from "../../../state/agent-database-preparation-recovery.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
@@ -29,12 +30,15 @@ export function createRestoredRequesterActivator(config: {
     assertCurrent: () => void,
     startupTrace?: GatewayStartupTrace,
   ) => Promise<void>;
-  recoverInterruptedRuns: (entries: readonly SubagentRunRecord[]) => Promise<void>;
+  recoverInterruptedRuns: (
+    entries: readonly SubagentRunRecord[],
+    startupTrace?: GatewayStartupTrace,
+  ) => Promise<void>;
 }) {
   // Repeated activation retries transfers without enqueuing restored collectors again.
   let groups: Array<{ entries: SubagentRunRecord[]; resumed: boolean }> | undefined;
   return {
-    async activate({
+    activate({
       cfg,
       stateContext,
       assertCurrent,
@@ -46,7 +50,7 @@ export function createRestoredRequesterActivator(config: {
       assertCurrent: () => void;
       startupTrace?: GatewayStartupTrace;
       alreadyActivated: boolean;
-    }): Promise<{ resumeNeeded: boolean; failures: unknown[] }> {
+    }): AgentRecoveryProgress<{ resumeNeeded: boolean; failures: unknown[] }> {
       if (!groups || alreadyActivated) {
         const requesters = new Map<string, SubagentRunRecord[]>();
         for (const entry of getSubagentActivationRuns(config.runs)) {
@@ -66,19 +70,11 @@ export function createRestoredRequesterActivator(config: {
           groups.push({ entries: [], resumed: false });
         }
       }
-      const activateGroup = async (group: NonNullable<typeof groups>[number]) => {
-        const agentIds = new Set(
-          group.entries.flatMap((entry) => [
-            resolveSubagentRequesterAgentId(cfg, entry),
-            resolveSubagentChildAgentId(entry),
-          ]),
-        );
-        await Promise.all(
-          [...agentIds].flatMap((agentId) => {
-            const preparation = agentId ? waitForAgentDatabasePreparation(agentId) : undefined;
-            return preparation ? [preparation] : [];
-          }),
-        );
+      const activateGroup = async (
+        group: NonNullable<typeof groups>[number],
+        preparation: Promise<void>[],
+      ) => {
+        await Promise.all(preparation);
         assertCurrent();
         const currentEntries = () =>
           group.entries.flatMap((entry) => {
@@ -191,10 +187,8 @@ export function createRestoredRequesterActivator(config: {
             config.resumeRuns(currentEntries(), assertCurrent, startupTrace),
           );
           assertCurrent();
-          await measureStartup(startupTrace, "sidecars.subagent-interrupted", () =>
-            config.recoverInterruptedRuns(currentEntries()),
-          );
-          assertCurrent();
+          // Source custody and ordered reservations are ready; the sweeper owns orphan settlement.
+          void config.recoverInterruptedRuns(currentEntries(), startupTrace);
           group.resumed = true;
         }
         if (failures.length > 0) {
@@ -202,13 +196,56 @@ export function createRestoredRequesterActivator(config: {
         }
       };
       const resumeNeeded = groups.some((group) => !group.resumed);
-      const results = await Promise.allSettled(groups.map(activateGroup));
-      return {
+      const preparations = groups.map((group) => {
+        const agentIds = new Set(
+          group.entries
+            .flatMap((entry) => [
+              resolveSubagentRequesterAgentId(cfg, entry),
+              resolveSubagentChildAgentId(entry),
+            ])
+            .filter((agentId): agentId is string => Boolean(agentId)),
+        );
+        const preparation = [...agentIds].flatMap((agentId) => {
+          const wait = waitForAgentDatabasePreparation(agentId);
+          return wait ? [wait] : [];
+        });
+        return { group, agentIds, preparation };
+      });
+      const initialGroups: Promise<void>[] = [];
+      const pendingGroups = new Map<string, Promise<void>[]>();
+      const activation = preparations.map(({ group, agentIds, preparation }) => {
+        const operation = activateGroup(group, preparation);
+        if (preparation.length === 0) {
+          initialGroups.push(operation);
+        } else {
+          // A requester and every child share the group's restored mailbox custody.
+          for (const agentId of agentIds) {
+            const pending = pendingGroups.get(agentId) ?? [];
+            pending.push(operation);
+            pendingGroups.set(agentId, pending);
+          }
+        }
+        return operation;
+      });
+      const initial = Promise.all(initialGroups).then(() => undefined);
+      const pending = new Map(
+        [...pendingGroups].map(([agentId, operations]) => [
+          agentId,
+          Promise.all(operations).then(() => undefined),
+        ]),
+      );
+      // Full-settlement callers may ignore progress while the original failure stays observable.
+      void initial.catch(() => {});
+      for (const operation of pending.values()) {
+        void operation.catch(() => {});
+      }
+      const settled = Promise.allSettled(activation).then((results) => ({
         resumeNeeded,
         failures: results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         ),
-      };
+      }));
+      return { initial, pending, settled };
     },
     reset() {
       groups = undefined;

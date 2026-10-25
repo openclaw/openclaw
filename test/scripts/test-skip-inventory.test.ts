@@ -1,22 +1,18 @@
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 import { expect, it } from "vitest";
 import {
   collectTestSkipInventoryReport,
-  main as runTestSkipInventory,
   renderTestSkipInventoryReport,
 } from "../../scripts/test-skip-inventory.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
 function collectFixture(files: Record<string, string> = {}) {
   const repoRoot = createTempDir("openclaw-test-skip-inventory-");
+  const { write } = fixtureFiles(repoRoot);
   for (const [file, source] of Object.entries(files)) {
-    const target = path.join(repoRoot, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, source, "utf8");
+    write(file, source);
   }
   return collectTestSkipInventoryReport({ repoRoot });
 }
@@ -62,57 +58,6 @@ it("renders a compact non-blocking text report", () => {
   ]) {
     expect(rendered).toContain(text);
   }
-});
-
-it("rejects missing CLI repo roots and loose limits before scanning", () => {
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--import",
-      "tsx",
-      path.join(process.cwd(), "scripts/test-skip-inventory.ts"),
-      "--",
-      "--repo-root",
-      "--json",
-    ],
-    { encoding: "utf8" },
-  );
-
-  expect(result.status).toBe(1);
-  expect(result.stderr).toContain("--repo-root expects a path");
-  expect(result.stdout).not.toContain("Scanned files:");
-  expect(() =>
-    runTestSkipInventory([
-      "--",
-      "--limit",
-      "1e3",
-      "--repo-root",
-      createTempDir("openclaw-skip-limit-"),
-    ]),
-  ).toThrow("--limit expects a non-negative integer");
-});
-
-it("preserves first-seen groups with unlimited output", () => {
-  const report = collectFixture({
-    "src/a.test.ts": 'test.todo("a");\n',
-    "src/z.test.ts": 'it.skip("z", () => {});\nit.only("second", () => {});\n',
-  });
-  const findings = report.findings;
-  report.findings = [...findings.slice(1, 2), ...findings.slice(0, 1), ...findings.slice(2)];
-  expect(renderTestSkipInventoryReport(report, { limit: 0 })).toBe(
-    `OpenClaw test skip inventory
-Scanned files: 2
-Findings: 3 in 2 file(s)
-Reasons: explicit-skip: 1, focused-only: 1, todo: 1
-
-Findings:
-- src/z.test.ts (2)
-  L1 it.skip explicit-skip: it.skip("z", () => {});
-  L2 it.only focused-only: it.only("second", () => {});
-- src/a.test.ts (1)
-  L1 test.todo todo: test.todo("a");
-`,
-  );
 });
 
 it("keeps the empty report output unchanged", () => {

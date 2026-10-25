@@ -1,130 +1,97 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   extractErrorHttpStatus,
-  formatProviderRefusalText,
-  formatRawAssistantErrorForUi,
-  formatTransportErrorCopy,
+  formatProviderRefusalText as formatRefusal,
+  formatRawAssistantErrorForUi as formatError,
+  formatTransportErrorCopy as transportError,
   isKnownTransportErrorCode,
-  parseApiErrorInfo,
+  parseApiErrorInfo as parseError,
 } from "./assistant-error-format.js";
 
-describe("formatTransportErrorCopy", () => {
-  it("does not treat dns inside a generated path as a network failure", () => {
-    expect(
-      formatTransportErrorCopy(
-        "git checkout has no commits: /tmp/openclaw-session-worktree-source-recovery-0Dns0Y/workspace. Create an initial commit, then retry.",
-      ),
-    ).toBeUndefined();
-  });
+const apiError = (error: unknown, prefix = "") => `${prefix}${JSON.stringify({ error })}`;
+const attempt = (status: number, type: string, message: string) => ({
+  status,
+  details: { error: { type, message } },
+});
 
-  it.each(["dns: no response from resolver"])(
-    "retains connection guidance for %s without treating DNS as an error code",
-    (message) => {
-      expect(formatTransportErrorCopy(message)).toContain("Couldn't connect to the AI service.");
-      expect(isKnownTransportErrorCode("DNS")).toBe(false);
-    },
+it("does not treat dns inside a generated path as a network failure", () => {
+  const raw =
+    "git checkout has no commits: /tmp/openclaw-session-worktree-source-recovery-0Dns0Y/workspace. Create an initial commit, then retry.";
+  expect(transportError(raw)).toBeUndefined();
+});
+
+it("retains connection guidance without treating DNS as an error code", () => {
+  expect(transportError("dns: no response from resolver")).toContain(
+    "Couldn't connect to the AI service.",
+  );
+  expect(isKnownTransportErrorCode("DNS")).toBe(false);
+});
+
+it.each([
+  ["misalignment", "Chat stopped as a precaution. Review the findings in chat before continuing."],
+  ["bio", "The provider refused this request (category: bio). Revise the request and try again."],
+])("formats %s refusal guidance", (category, expected) => {
+  const diagnostics = [{ type: "provider_refusal", details: { category } }];
+  expect(formatRefusal({ diagnostics })).toBe(expected);
+});
+
+it("extracts guarded upstream status", () => {
+  expect(extractErrorHttpStatus("unexpected status 503 from upstream")?.code).toBe(503);
+});
+
+it.each([
+  [{ error: "missing model" }, { message: "missing model", type: undefined }],
+  [
+    { error: "invalid_client", message: "Sign in again" },
+    { message: "Sign in again", type: "invalid_client" },
+  ],
+])("distinguishes string error messages from codes: %j", (payload, expected) => {
+  expect(parseError(JSON.stringify(payload))).toMatchObject(expected);
+});
+
+it("preserves distinct validation type and code after HTTP 502", () => {
+  const error = {
+    type: "invalid_request_error",
+    code: "unknown_parameter",
+    message: "Unsupported parameter: timeout",
+  };
+  expect(parseError(apiError(error, "HTTP 502: "))).toMatchObject(error);
+});
+
+it("extracts the final upstream rejection from a proxy failure envelope", () => {
+  const error = {
+    type: "invalid_request_error",
+    message: "A maximum of 4 blocks with cache_control may be provided. Found 5.",
+  };
+  const attempts = [attempt(503, "api_error", "Unavailable"), { status: 400, details: { error } }];
+  const raw = apiError({ message: "All target providers failed.", attempts }, "400: ");
+  expect(parseError(raw)).toMatchObject({ httpCode: "400", ...error });
+});
+
+it("does not return raw HTML after an HTTP reason phrase", () => {
+  const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body><h1>502</h1></body></html>";
+  expect(formatError(raw)).toBe(
+    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
   );
 });
 
-describe("formatProviderRefusalText", () => {
-  it("directs a misalignment stop to review instead of another ordinary retry", () => {
-    expect(
-      formatProviderRefusalText({
-        diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }],
-      }),
-    ).toBe("Chat stopped as a precaution. Review the findings in chat before continuing.");
-  });
-  it("formats a sanitized refusal category", () => {
-    expect(
-      formatProviderRefusalText({
-        diagnostics: [{ type: "provider_refusal", details: { category: "bio" } }],
-      }),
-    ).toBe("The provider refused this request (category: bio). Revise the request and try again.");
-  });
+it.each([
+  ["100 Continue", "HTTP 100: Continue"],
+  ["599 Provider Error", "HTTP 599: Provider Error"],
+  ["000 Invalid", "000 Invalid"],
+  ["600 Invalid", "600 Invalid"],
+  ["999 Invalid", "999 Invalid"],
+])("formats only status lines inside the HTTP range: %s", (raw, expected) => {
+  expect(formatError(raw)).toBe(expected);
 });
 
-describe("extractErrorHttpStatus", () => {
-  it.each([["unexpected status 503 from upstream", 503]])(
-    "extracts guarded status from %s",
-    (message, code) => {
-      expect(extractErrorHttpStatus(message)?.code).toBe(code);
-    },
-  );
-});
-
-describe("HTTP status consumers", () => {
-  it.each([
-    [{ error: "missing model" }, { message: "missing model", type: undefined }],
-    [
-      { error: "invalid_client", message: "Sign in again" },
-      { message: "Sign in again", type: "invalid_client" },
-    ],
-  ])("distinguishes string error messages from codes: %j", (payload, expected) => {
-    expect(parseApiErrorInfo(JSON.stringify(payload))).toMatchObject(expected);
-  });
-
-  it.each(["HTTP 502: "])("preserves distinct validation type and code after %s", (prefix) => {
-    const error = {
-      type: "invalid_request_error",
-      code: "unknown_parameter",
-      message: "Unsupported parameter: timeout",
-    };
-    expect(parseApiErrorInfo(`${prefix}${JSON.stringify({ error })}`)).toMatchObject(error);
-  });
-
-  it("extracts the final upstream rejection from a proxy failure envelope", () => {
-    const message = "A maximum of 4 blocks with cache_control may be provided. Found 5.";
-    const raw = `400: ${JSON.stringify({
-      error: {
-        message: "All target providers failed.",
-        attempts: [
-          { status: 503, details: { error: { type: "api_error", message: "Unavailable" } } },
-          { status: 400, details: { error: { type: "invalid_request_error", message } } },
-        ],
-      },
-    })}`;
-    expect(parseApiErrorInfo(raw)).toMatchObject({
-      httpCode: "400",
-      type: "invalid_request_error",
-      message,
-    });
-  });
-
-  it("does not return raw HTML after an HTTP reason phrase", () => {
-    const raw = [
-      "HTTP 502 Bad Gateway",
-      "",
-      "<!doctype html><html><body><h1>502</h1></body></html>",
-    ].join("\n");
-
-    expect(formatRawAssistantErrorForUi(raw)).toBe(
-      "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
-    );
-  });
-
-  it("formats only status lines inside the HTTP range", () => {
-    expect(formatRawAssistantErrorForUi("100 Continue")).toBe("HTTP 100: Continue");
-    expect(formatRawAssistantErrorForUi("599 Provider Error")).toBe("HTTP 599: Provider Error");
-    expect(formatRawAssistantErrorForUi("000 Invalid")).toBe("000 Invalid");
-    expect(formatRawAssistantErrorForUi("600 Invalid")).toBe("600 Invalid");
-    expect(formatRawAssistantErrorForUi("999 Invalid")).toBe("999 Invalid");
-  });
-
-  it("does not attach invalid status prefixes to API payloads", () => {
-    const payload = '{"type":"error","error":{"type":"server_error","message":"Provider failed."}}';
-
-    expect(parseApiErrorInfo(`599 ${payload}`)).toMatchObject({
-      httpCode: "599",
-      type: "server_error",
-      message: "Provider failed.",
-    });
-    expect(formatRawAssistantErrorForUi(`599 ${payload}`)).toBe(
-      "HTTP 599 server_error: Provider failed.",
-    );
-
-    for (const code of ["000", "600", "999"]) {
-      expect(parseApiErrorInfo(`${code} ${payload}`)).toBeNull();
-      expect(formatRawAssistantErrorForUi(`${code} ${payload}`)).toBe(`${code} ${payload}`);
-    }
-  });
+it("does not attach invalid status prefixes to API payloads", () => {
+  const error = { type: "server_error", message: "Provider failed." };
+  const payload = JSON.stringify({ type: "error", error });
+  expect(parseError(`599 ${payload}`)).toMatchObject({ httpCode: "599", ...error });
+  expect(formatError(`599 ${payload}`)).toBe("HTTP 599 server_error: Provider failed.");
+  for (const code of ["000", "600", "999"]) {
+    expect(parseError(`${code} ${payload}`)).toBeNull();
+    expect(formatError(`${code} ${payload}`)).toBe(`${code} ${payload}`);
+  }
 });

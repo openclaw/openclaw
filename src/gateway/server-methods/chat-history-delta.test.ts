@@ -18,8 +18,8 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { chatHistoryActivityBytes } from "../chat-history-budget.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
-import { chatHistoryActivityBytes } from "./chat-history-budget.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
@@ -111,7 +111,6 @@ const sessionKey = "agent:main:delta-budget";
 const sessionId = "delta-budget-session";
 const sessionSnapshot = buildGatewaySessionSnapshot({
   agentId: "main",
-  includeSession: true,
   sessionRow: { key: sessionKey, sessionId, kind: "direct", updatedAt: 42 },
 });
 

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -68,17 +69,22 @@ suite.define(() => {
         const response = await page.goto(suite.server.baseUrl);
         expect(response?.status()).toBe(200);
         if (viewport.hasTouch) {
-          await page
-            .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-            .first()
-            .click();
+          await navigationDrawerToggle(page).click();
         }
         const sidebar = page.locator("openclaw-app-sidebar .sidebar");
         const body = sidebar.locator(".sidebar-shell__body");
         await body.waitFor();
         await sidebar.locator(".sidebar-identity-card").waitFor();
         await sidebar.getByRole("button", { name: "Show more", exact: true }).click();
-        await sidebar.getByText("CI timer", { exact: true }).waitFor();
+        const last = sidebar.getByText("CI timer", { exact: true });
+        await expect
+          .poll(async () => {
+            await body.evaluate((element) => {
+              element.scrollTop = element.scrollHeight;
+            });
+            return last.isVisible();
+          })
+          .toBe(true);
         await takeControlUiScreenshotFrame(page, sidebar, [body], {
           animations: "disabled",
           scrollTo: sidebar.getByText("CI timer", { exact: true }),

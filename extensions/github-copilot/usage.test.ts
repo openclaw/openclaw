@@ -1,16 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
+import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import plugin from "./index.js";
+import { registerProviderWithPluginConfig } from "./provider.test-support.js";
 import { fetchCopilotUsage } from "./usage.js";
 
-function registerProvider() {
-  const registerProviderMock = vi.fn<OpenClawPluginApi["registerProvider"]>();
-  plugin.register(createTestPluginApi({ registerProvider: registerProviderMock }));
-  return expectDefined(registerProviderMock.mock.calls[0]?.[0], "Copilot provider registration");
-}
+const registerProvider = () => registerProviderWithPluginConfig({});
 
 type UsageOptions = Parameters<
   NonNullable<ReturnType<typeof registerProvider>["fetchUsageSnapshot"]>
@@ -155,36 +151,13 @@ describe("fetchCopilotUsage", () => {
   });
 
   it("bounds the usage read and cancels the stream when the body exceeds the JSON byte cap", async () => {
-    // Advertise twice the shared 16 MiB cap to prove cancellation before the full read.
-    const ONE_MIB = 1024 * 1024;
-    const TOTAL_CHUNKS = 32;
-    const chunk = new Uint8Array(ONE_MIB);
-
-    let bytesPulled = 0;
-    let canceled = false;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
-          controller.close();
-          return;
-        }
-        bytesPulled += chunk.length;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    const response = new Response(body, {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-    const mockFetch = createProviderUsageFetch(async () => response);
+    const body = oversizedJsonResponse({ chunkCount: 32, chunkSize: 1024 * 1024 });
+    const mockFetch = createProviderUsageFetch(async () => body.response);
 
     await expect(fetchCopilotUsage("token", 5000, mockFetch)).rejects.toThrow(
       /github-copilot-usage: JSON response exceeds/,
     );
-    expect(canceled).toBe(true);
-    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+    expect(body.wasCanceled()).toBe(true);
+    expect(body.getReadCount()).toBeLessThan(32);
   });
 });

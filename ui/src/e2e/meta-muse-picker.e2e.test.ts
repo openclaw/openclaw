@@ -37,7 +37,7 @@ suite.define(() => {
           await picker.locator("[data-chat-model-select]").click();
           const meta = page.getByRole("region", { name: "Meta models", exact: true });
           const wonder = picker.locator('[data-chat-model-option="meta/muse-wonder-1.0"]').first();
-          await revealChatModelOption(wonder);
+          await revealChatModelOption(picker, "meta/muse-wonder-1.0");
           expect(await wonder.locator(".chat-controls__model-option-name").textContent()).toBe(
             "Muse Wonder",
           );
@@ -57,7 +57,7 @@ suite.define(() => {
           const full = meta
             .locator('[data-chat-model-option="meta/muse-wonder-full-1.0-contributor"]')
             .first();
-          await revealChatModelOption(full);
+          await revealChatModelOption(picker, "meta/muse-wonder-full-1.0-contributor");
           expect(await full.textContent()).toContain("Muse Wonder Full Contributor");
           expect(await meta.locator("[data-chat-model-option]").count()).toBe(8);
           const frame = await takeControlUiScreenshotFrame(page, menu, [full], {
@@ -69,7 +69,7 @@ suite.define(() => {
             path.join(suite.artifactDir, "meta-muse-after.png"),
             frame.elements[0]!.png,
           );
-          await selectChatModelOption(full);
+          await selectChatModelOption(picker, "meta/muse-wonder-full-1.0-contributor");
           expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
             key,
             model: "meta/muse-wonder-full-1.0-contributor",
@@ -78,9 +78,9 @@ suite.define(() => {
           const router = picker
             .locator('[data-chat-model-option="openrouter/meta/muse-wonder"]')
             .first();
-          await revealChatModelOption(router);
+          await revealChatModelOption(picker, "openrouter/meta/muse-wonder");
           expect(await router.textContent()).toContain("Meta: Muse Wonder");
-          await selectChatModelOption(router);
+          await selectChatModelOption(picker, "openrouter/meta/muse-wonder");
           await expect
             .poll(async () => (await gateway.getRequests("sessions.patch")).length)
             .toBe(2);

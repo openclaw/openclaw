@@ -14,7 +14,6 @@ type ScheduledRequest<TData> = {
   method: string;
   path: string;
   data?: TData;
-  generation: number;
   priority: RequestPriority;
   query?: RequestQuery;
   routeKey: string;
@@ -66,7 +65,6 @@ export class RestScheduler<TData> {
     standard: 0,
     background: 0,
   };
-  private queueGeneration = 0;
   private queuedRequests = 0;
   private routeBuckets = new Map<string, string>();
 
@@ -89,7 +87,6 @@ export class RestScheduler<TData> {
       this.queuedByLane[params.priority] += 1;
       bucket.pending[params.priority].push({
         ...params,
-        generation: this.queueGeneration,
         routeKey,
         retryCount: 0,
         resolve,
@@ -97,15 +94,6 @@ export class RestScheduler<TData> {
       });
       this.drainQueues();
     });
-  }
-
-  clearQueue(): void {
-    this.queueGeneration += 1;
-    if (this.drainTimer) {
-      clearTimeout(this.drainTimer);
-      this.drainTimer = undefined;
-    }
-    this.rejectPending(new Error("Discord request queue cleared"));
   }
 
   private getBucket(key: string): BucketState<TData> {
@@ -121,10 +109,6 @@ export class RestScheduler<TData> {
     };
     this.buckets.set(key, bucket);
     return bucket;
-  }
-
-  private isBucketRateLimited(bucket: BucketState<TData>, now = Date.now()): boolean {
-    return bucket.remaining === 0 && bucket.resetAt > now;
   }
 
   private bindRouteToBucket(routeKey: string, bucketKey: string): BucketState<TData> {
@@ -164,7 +148,7 @@ export class RestScheduler<TData> {
     if (response.status !== 429) {
       return;
     }
-    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response, 1) * 1000);
+    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response) * 1000);
     const retryAt = resolveRateLimitResetAt(retryAfterMs);
     if (retryAt === undefined) {
       return;
@@ -198,7 +182,7 @@ export class RestScheduler<TData> {
       },
       resolveTimerTimeoutMs(delayMs, 0, 0),
     );
-    this.drainTimer.unref?.();
+    this.drainTimer.unref();
   }
 
   private drainQueues(): void {
@@ -227,7 +211,20 @@ export class RestScheduler<TData> {
     if (this.globalRateLimitUntil > now) {
       return { waitMs: this.globalRateLimitUntil - now };
     }
-    this.pruneIdleBuckets(now);
+    for (const [key, bucket] of this.buckets) {
+      if (bucket.active !== 0 || countPending(bucket) > 0) {
+        continue;
+      }
+      if (bucket.remaining === 0 && bucket.resetAt > now) {
+        continue;
+      }
+      for (const routeKey of bucket.routeKeys) {
+        if (this.routeBuckets.get(routeKey) === key) {
+          this.routeBuckets.delete(routeKey);
+        }
+      }
+      this.buckets.delete(key);
+    }
     let nextDelayMs: number | undefined;
     const buckets = Array.from(this.buckets.values()).filter((bucket) => countPending(bucket) > 0);
     if (buckets.length === 0) {
@@ -260,23 +257,6 @@ export class RestScheduler<TData> {
     return { waitMs: nextDelayMs };
   }
 
-  private pruneIdleBuckets(now = Date.now()): void {
-    for (const [key, bucket] of this.buckets) {
-      if (bucket.active !== 0 || countPending(bucket) > 0) {
-        continue;
-      }
-      if (this.isBucketRateLimited(bucket, now)) {
-        continue;
-      }
-      for (const routeKey of bucket.routeKeys) {
-        if (this.routeBuckets.get(routeKey) === key) {
-          this.routeBuckets.delete(routeKey);
-        }
-      }
-      this.buckets.delete(key);
-    }
-  }
-
   private async runQueuedRequest(
     queued: ScheduledRequest<TData>,
     bucket: BucketState<TData>,
@@ -296,19 +276,12 @@ export class RestScheduler<TData> {
       if (!requeued) {
         this.queuedRequests = Math.max(0, this.queuedRequests - 1);
       }
-      if (bucket.active === 0 && countPending(bucket) === 0) {
-        for (const routeKey of bucket.routeKeys) {
-          if (this.routeBuckets.get(routeKey) === routeKey) {
-            this.routeBuckets.delete(routeKey);
-          }
-        }
-      }
       this.drainQueues();
     }
   }
 
   private requeueRateLimitedRequest(queued: ScheduledRequest<TData>): boolean {
-    if (queued.generation !== this.queueGeneration || queued.retryCount >= MAX_RATE_LIMIT_RETRIES) {
+    if (queued.retryCount >= MAX_RATE_LIMIT_RETRIES) {
       return false;
     }
     const bucketKey = this.routeBuckets.get(queued.routeKey) ?? queued.routeKey;
@@ -318,18 +291,6 @@ export class RestScheduler<TData> {
     });
     this.queuedByLane[queued.priority] += 1;
     return true;
-  }
-
-  private rejectPending(error: Error | DOMException): void {
-    for (const bucket of this.buckets.values()) {
-      for (const lane of requestPriorities) {
-        for (const queued of bucket.pending[lane].splice(0)) {
-          queued.reject(error);
-          this.queuedRequests = Math.max(0, this.queuedRequests - 1);
-          this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
-        }
-      }
-    }
   }
 }
 

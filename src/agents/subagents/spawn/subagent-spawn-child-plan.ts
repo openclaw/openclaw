@@ -1,10 +1,14 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { inheritSessionCreationPolicy } from "../../../config/sessions/session-entry-provenance.js";
+import {
+  attributeDelegatedSessionCreator,
+  inheritSessionCreationPolicy,
+} from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
+import { resolveRunEntryCliRuntime } from "../../embedded-agent-runner/run-entry-runtime.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
 import {
   resolveRequesterOriginForChild,
@@ -46,6 +50,8 @@ export async function resolveSubagentChildPlan(params: {
   /** Active requester sandbox classification from the spawn tool, preferred over key-derived
    * status so durable-lineage key substitution does not weaken sandbox admission. */
   requesterSandboxed?: boolean;
+  /** Captured by the trusted caller before any spawn preparation awaits. */
+  creatorProfileId?: string;
 }) {
   const requestedCwd = normalizeOptionalString(params.request.cwd);
   const senderRestricted = params.ctx.inheritedToolPolicySource === "sender";
@@ -107,6 +113,11 @@ export async function resolveSubagentChildPlan(params: {
       createdActor: requesterRuntime.createdActor,
     },
     { type: "agent", id: params.requesterAgentId },
+  );
+  creationPolicy.actor = attributeDelegatedSessionCreator(
+    creationPolicy.actor,
+    params.creatorProfileId,
+    params.requesterAgentId,
   );
   // A fresh child has no stored row yet; admission must include its inherited isolation.
   const childRuntimeSandboxed =
@@ -190,6 +201,27 @@ export async function resolveSubagentChildPlan(params: {
     };
   }
   const { resolvedModel } = modelPlan;
+  // A sandbox-classified child must not dispatch to a host-executed CLI backend:
+  // the CLI runs as the Gateway OS user outside the configured container while
+  // the session would still be reported sandboxed. The spawn sandbox gate above
+  // decides before model resolution, so re-check admission once the runtime is
+  // knowable, mirroring the cron seam guard. The run seam enforces the same
+  // invariant for fallback candidates and post-spawn runtime overrides.
+  if (childRuntimeSandboxed) {
+    const { useCliExecution, cliExecutionProvider } = resolveRunEntryCliRuntime({
+      config: params.cfg,
+      provider: modelPlan.modelRef.provider,
+      model: modelPlan.modelRef.model,
+      agentId: params.targetAgentId,
+      authProfileId: modelPlan.initialSessionPatch.authProfileOverride,
+    });
+    if (useCliExecution) {
+      return rejectSubagentSpawnRequest(
+        "forbidden",
+        `This spawn targets a sandboxed child, but model "${resolvedModel}" runs on host-executed CLI backend "${cliExecutionProvider}" and cannot honor the sandbox. Choose a sandbox-compatible (embedded/API) model for the child, or change the agent's sandbox policy explicitly.`,
+      );
+    }
+  }
   if (params.swarmEnabled && params.request.fastMode === undefined) {
     const fastMode = resolveRequesterFastMode({
       ...params,

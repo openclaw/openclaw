@@ -225,7 +225,6 @@ describe("reply directive resolution", () => {
         typingSignals: createTypingSignaler({
           typing: makeTypingController(),
           mode: "never",
-          isHeartbeat: false,
         }),
         blockStreamingEnabled: resolved.blockStreamingEnabled,
         blockReplyPipeline: null,

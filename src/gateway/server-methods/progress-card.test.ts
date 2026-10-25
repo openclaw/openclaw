@@ -7,7 +7,9 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ProgressCardStore } from "../../session-cards/progress-card-store.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createProgressCardHandlers } from "./progress-card.js";
+import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
+import { progressCardStore } from "../progress-card-store.js";
+import { progressCardHandlers } from "./progress-card.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const defaultSessionKey = "agent:main:main";
@@ -51,22 +53,25 @@ function createHarness() {
     cards.set(sessionKey, card);
     return { card };
   });
-  const handlers = createProgressCardHandlers({ get, put });
   const broadcast = vi.fn();
   const invoke = async (
     operation: "get" | "put",
     params: Record<string, unknown> = {},
     respond = vi.fn<RespondFn>(),
   ) => {
-    await handlers[`progressCard.${operation}`]!({
-      params: { sessionKey: defaultSessionKey, ...params },
-      respond,
-      context: {
-        broadcast,
-        getRuntimeConfig: () => ({ agents: { entries: { main: {}, work: {} } } }),
-      } as unknown as GatewayRequestContext,
-    } as never);
-    return respond;
+    const getSpy = vi.spyOn(progressCardStore, "get").mockImplementation(get);
+    const putSpy = vi.spyOn(progressCardStore, "put").mockImplementation(put);
+    return await withRestoredMocks([getSpy, putSpy], async () => {
+      await progressCardHandlers[`progressCard.${operation}`]!({
+        params: { sessionKey: defaultSessionKey, ...params },
+        respond,
+        context: {
+          broadcast,
+          getRuntimeConfig: () => ({ agents: { entries: { main: {}, work: {} } } }),
+        } as unknown as GatewayRequestContext,
+      } as never);
+      return respond;
+    });
   };
   return { broadcast, invoke, get, put };
 }

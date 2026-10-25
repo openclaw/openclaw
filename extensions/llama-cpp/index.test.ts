@@ -7,13 +7,13 @@ import type {
   OpenClawPluginApi,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import {
   clearEmbeddingProviders,
+  createCapturedPluginRegistration,
   createEmptyPluginRegistry,
   getActivePluginRegistry,
   getRegisteredEmbeddingProvider,
@@ -108,13 +108,8 @@ afterEach(() => {
 });
 
 function registerTextProvider(): ProviderPlugin {
-  const providers: ProviderPlugin[] = [];
-  llamaCppPlugin.register(
-    createTestPluginApi({
-      id: PROVIDER_ID,
-      registerProvider: (provider) => providers.push(provider),
-    }),
-  );
+  const { api, providers } = createCapturedPluginRegistration({ id: PROVIDER_ID });
+  llamaCppPlugin.register(api);
   expect(providers.map((provider) => provider.id)).toEqual([PROVIDER_ID]);
   return expectDefined(providers[0], "llama.cpp provider");
 }
@@ -327,6 +322,53 @@ describe("llama.cpp provider plugin", () => {
       });
     },
   );
+
+  it.each([
+    { dimensions: undefined, expected: [3 / 13, 4 / 13, 12 / 13] },
+    { dimensions: 2, expected: [0.6, 0.8] },
+    { dimensions: 3, expected: [3 / 13, 4 / 13, 12 / 13] },
+  ])(
+    "projects and normalizes local vectors with dimensions=$dimensions",
+    async ({ dimensions, expected }) => {
+      mocks.genericCreate.mockResolvedValueOnce({
+        provider: {
+          embed: async () => [3, 4, 12],
+          embedBatch: async () => [
+            [3, 4, 12],
+            [3, 4, 12],
+          ],
+        },
+      });
+      const result = await createEmbedding({ ...fixture.options, dimensions });
+      const provider = expectDefined(result.provider, "local embedding provider");
+
+      await expect(provider.embed("query")).resolves.toEqual(expected);
+      await expect(provider.embedBatch(["first", "second"])).resolves.toEqual([expected, expected]);
+      expect(provider.dimensions).toBe(dimensions);
+      expectCall(mocks.genericCreate, { dimensions: undefined });
+      expect(result.runtime?.cacheKeyData).toEqual({
+        provider: "local",
+        model: DEFAULT_MODEL,
+        ...(dimensions === undefined ? {} : { outputDimensionality: dimensions }),
+      });
+    },
+  );
+
+  it("rejects local vectors shorter than the requested dimensions", async () => {
+    const result = await createEmbedding({ ...fixture.options, dimensions: 3 });
+    const provider = expectDefined(result.provider, "local embedding provider");
+    for (const operation of [
+      () => provider.embed("query"),
+      () => provider.embedBatch(["document"]),
+    ]) {
+      await expect(operation()).rejects.toMatchObject({
+        code: "INVALID_EMBEDDING_RESPONSE",
+        expectedDimensions: 3,
+        actualDimensions: 2,
+        message: expect.stringContaining("reduce or remove memory.search.outputDimensionality"),
+      });
+    }
+  });
 
   it("keeps media preset sections and residency when refreshing embeddings", async () => {
     const { options, providerConfig: provider } = fixture;

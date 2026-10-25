@@ -23,6 +23,7 @@ import {
   prepareGatewaySkillAuthoring,
   prepareGatewaySkillLibraryTurn,
 } from "./skill-library-authoring.js";
+import { createWorkerConnectionIdentity } from "./worker-environments/connection-identity.test-support.js";
 
 const catalogReleases: Array<() => void> = [];
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
@@ -358,18 +359,10 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       },
     }),
   });
-  const identity = {
-    environmentId: "environment",
+  const identity = createWorkerConnectionIdentity(claim, {
     credentialHash: "synthetic",
-    bundleHash: "a".repeat(64),
-    sessionId: claim.sessionId,
-    runId: claim.runId,
-    turnClaim: claim,
-    ownerEpoch: 1,
-    rpcSetVersion: 1,
-    protocolFeatures: [],
     credentialExpiresAtMs: 1,
-  };
+  });
   const proxy = createWorkerGatewayToolProxies(await runtime.getSurface(identity), {
     invokeGatewayTool: async (input, options) => ({
       type: "res",
@@ -447,12 +440,14 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
         expect.objectContaining({ path: "data.bin", content: "AP+A", encoding: "base64" }),
         expect.objectContaining({
           path: "scripts/keep.sh",
-          content: Buffer.from("#!/bin/sh\nprintf preserved").toString("base64"),
+          content: "#!/bin/sh\nprintf preserved",
+          encoding: "utf8",
           executable: true,
         }),
         expect.objectContaining({
           path: "scripts/edit.sh",
-          content: Buffer.from("#!/bin/sh\nprintf changed").toString("base64"),
+          content: "#!/bin/sh\nprintf changed",
+          encoding: "utf8",
           executable: true,
         }),
       ]),

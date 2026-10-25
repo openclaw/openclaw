@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./onboarding-memory-import-solid.tsx";
@@ -43,18 +45,16 @@ function createProvider(providerId: string, fingerprint: string) {
     source: `/tmp/${providerId}`,
     target: "/tmp/openclaw-research",
     summary: summary(0, 0, 1, 1),
-    items: [
-      {
-        id: `memory:${providerId}:MEMORY.md`,
-        status: "planned" as const,
-        source: `/tmp/${providerId}/MEMORY.md`,
-      },
-      {
-        id: `memory:${providerId}:existing.md`,
-        status: "conflict" as const,
-        source: `/tmp/${providerId}/existing.md`,
-      },
-    ],
+    items: (
+      [
+        ["MEMORY.md", "planned"],
+        ["existing.md", "conflict"],
+      ] as const
+    ).map(([file, status]) => ({
+      id: `memory:${providerId}:${file}`,
+      status,
+      source: `/tmp/${providerId}/${file}`,
+    })),
   };
 }
 
@@ -77,9 +77,14 @@ function createApplyResult(providerId: string, migrated = 1, skipped = 0) {
   };
 }
 
-function successfulRequest() {
-  return vi.fn(async (method: string) =>
-    method === "migrations.memory.plan" ? createPlan() : createApplyResult("codex"),
+function successfulRequest(
+  providerIds = ["codex"],
+  apply = (providerId: string) => Promise.resolve(createApplyResult(providerId)),
+) {
+  return vi.fn(async (method: string, params?: { providerId?: string }) =>
+    method === "migrations.memory.plan"
+      ? createPlan(providerIds)
+      : await apply(params?.providerId ?? "unknown"),
   );
 }
 
@@ -95,11 +100,9 @@ function createContext(
 ) {
   const connected = options.connected ?? true;
   const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client: connected ? client : null,
     phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: {
       auth: {
         role: "operator",
@@ -108,9 +111,7 @@ function createContext(
     } as ApplicationGatewaySnapshot["hello"],
     assistantAgentId: "research",
     sessionKey: "agent:research:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const listeners = new Set<() => void>();
   const subscribe = (listener: () => void) => {
     listeners.add(listener);
@@ -163,6 +164,12 @@ async function mount(
   return element;
 }
 
+async function startImport(request: ReturnType<typeof vi.fn>) {
+  const element = await mount(createContext(request));
+  (await waitForAction(element)).click();
+  return element;
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   sessionStorage.clear();
@@ -187,13 +194,11 @@ describe("OnboardingMemoryImport", () => {
     const context = createContext(request, { agentsLoaded: false });
     const notify = contextNotifications.get(context)!;
     const ensureList = vi.mocked(context.agents.ensureList);
-    let finishList!: () => void;
+    const pendingList = createDeferred();
     ensureList.mockImplementationOnce(async () => {
       context.agents.state.agentsLoading = true;
       notify();
-      await new Promise<void>((resolve) => {
-        finishList = resolve;
-      });
+      await pendingList.promise;
       context.agents.state.agentsLoading = false;
       context.agents.state.agentsError = "Agent list unavailable";
       notify();
@@ -203,7 +208,7 @@ describe("OnboardingMemoryImport", () => {
     await waitForSolid(() => expect(ensureList).toHaveBeenCalledTimes(1));
     expect(request).not.toHaveBeenCalled();
     notify();
-    finishList();
+    pendingList.resolve();
     await ensureList.mock.results[0]!.value;
     await element.updateComplete;
     expect(ensureList).toHaveBeenCalledTimes(1);
@@ -255,32 +260,25 @@ describe("OnboardingMemoryImport", () => {
   });
 
   it("discards a plan when its gateway changes before display", async () => {
-    let resolvePlan!: (plan: ReturnType<typeof createPlan>) => void;
-    const request = vi.fn(
-      async () =>
-        await new Promise<ReturnType<typeof createPlan>>((resolve) => {
-          resolvePlan = resolve;
-        }),
-    );
+    const pendingPlan = createDeferred<ReturnType<typeof createPlan>>();
+    const request = vi.fn(() => pendingPlan.promise);
     const context = createContext(request);
     const element = await mount(context);
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
     context.gateway.snapshot.client = createContext(vi.fn()).gateway.snapshot.client;
-    resolvePlan(createPlan());
+    pendingPlan.resolve(createPlan());
     await Promise.resolve();
     await element.updateComplete;
     expectUnOffered(element);
   });
 
   it("aborts pending planning when onboarding deactivates without completing the guard", async () => {
-    let resolvePlan!: (plan: ReturnType<typeof createPlan>) => void;
+    const pendingPlan = createDeferred<ReturnType<typeof createPlan>>();
     let signal!: AbortSignal;
     const request = vi.fn(
       async (_method: string, _params: unknown, options: { signal: AbortSignal }) => {
         signal = options.signal;
-        return await new Promise<ReturnType<typeof createPlan>>((resolve) => {
-          resolvePlan = resolve;
-        });
+        return await pendingPlan.promise;
       },
     );
     const element = await mount(createContext(request));
@@ -290,7 +288,7 @@ describe("OnboardingMemoryImport", () => {
     await element.updateComplete;
     await waitForSolid(() => expect(signal.aborted).toBe(true));
 
-    resolvePlan(createPlan([]));
+    pendingPlan.resolve(createPlan([]));
     await request.mock.results[0]!.value;
     await element.updateComplete;
     expectUnOffered(element);
@@ -298,53 +296,33 @@ describe("OnboardingMemoryImport", () => {
   });
 
   it("sends frozen provider plans with fresh idempotency keys", async () => {
-    const request = vi.fn(async (method: string, params?: { providerId?: string }) => {
-      if (method === "migrations.memory.plan") {
-        return createPlan(["codex", "claude"]);
-      }
-      return createApplyResult(params?.providerId ?? "unknown");
-    });
+    const request = successfulRequest(["codex", "claude"]);
     const randomUuid = vi
       .spyOn(globalThis.crypto, "randomUUID")
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000001")
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000002");
-    const element = await mount(createContext(request));
-    (await waitForAction(element)).click();
+    await startImport(request);
 
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
     const applyCalls = request.mock.calls.filter(
       ([method]) => method === "migrations.memory.apply",
     );
-    expect(applyCalls.map(([, params]) => params)).toEqual([
-      {
-        idempotencyKey: "00000000-0000-4000-8000-000000000001",
+    expect(applyCalls.map(([, params]) => params)).toEqual(
+      ["codex", "claude"].map((providerId, index) => ({
+        idempotencyKey: `00000000-0000-4000-8000-00000000000${index + 1}`,
         agentId: "research",
-        providerId: "codex",
-        planFingerprint: "a".repeat(64),
-        itemIds: ["memory:codex:MEMORY.md"],
+        providerId,
+        planFingerprint: (index === 0 ? "a" : "b").repeat(64),
+        itemIds: [`memory:${providerId}:MEMORY.md`],
         overwrite: false,
-      },
-      {
-        idempotencyKey: "00000000-0000-4000-8000-000000000002",
-        agentId: "research",
-        providerId: "claude",
-        planFingerprint: "b".repeat(64),
-        itemIds: ["memory:claude:MEMORY.md"],
-        overwrite: false,
-      },
-    ]);
+      })),
+    );
     expect(randomUuid).toHaveBeenCalledTimes(2);
   });
 
   it("uses same-turn selection and admits only one import while completion is pending", async () => {
-    let resolveApply!: (result: ReturnType<typeof createApplyResult>) => void;
-    const request = vi.fn(async (method: string) =>
-      method === "migrations.memory.plan"
-        ? createPlan(["codex", "claude"])
-        : await new Promise<ReturnType<typeof createApplyResult>>((resolve) => {
-            resolveApply = resolve;
-          }),
-    );
+    const pendingApply = createDeferred<ReturnType<typeof createApplyResult>>();
+    const request = successfulRequest(["codex", "claude"], () => pendingApply.promise);
     const element = await mount(createContext(request));
     const button = await waitForAction(element);
     const codex = element.querySelector<HTMLInputElement>("[data-provider-id='codex'] input")!;
@@ -360,7 +338,7 @@ describe("OnboardingMemoryImport", () => {
     const cancel = new Event("modal-cancel", { bubbles: true, cancelable: true });
     element.querySelector("openclaw-modal-dialog")!.dispatchEvent(cancel);
     expect(cancel.defaultPrevented).toBe(true);
-    resolveApply(createApplyResult("claude"));
+    pendingApply.resolve(createApplyResult("claude"));
     await waitForAction(element, "continue");
     expect(element.textContent).toContain("Migrated 1, skipped 0");
   });
@@ -396,45 +374,56 @@ describe("OnboardingMemoryImport", () => {
   });
 
   it("shows partial apply failures inline", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "migrations.memory.plan") {
-        return createPlan();
-      }
+    const request = successfulRequest(undefined, async () => {
       const result = createApplyResult("codex");
       result.summary.errors = 1;
       result.summary.total = 2;
       return result;
     });
-    const element = await mount(createContext(request));
-    (await waitForAction(element)).click();
+    const element = await startImport(request);
     await waitForSolid(() => expect(element.textContent).toContain("1 failed"));
     expect(element.textContent).toContain("Migrated 1");
   });
 
   it("restores pending import results after reactivation without exposing them to another gateway", async () => {
-    let resolveApply!: (result: ReturnType<typeof createApplyResult>) => void;
-    const request = vi.fn(async (method: string) =>
-      method === "migrations.memory.plan"
-        ? createPlan()
-        : await new Promise<ReturnType<typeof createApplyResult>>((resolve) => {
-            resolveApply = resolve;
-          }),
-    );
-    const element = await mount(createContext(request));
-    (await waitForAction(element)).click();
+    const pendingApply = createDeferred<ReturnType<typeof createApplyResult>>();
+    const request = successfulRequest(undefined, () => pendingApply.promise);
+    const element = await startImport(request);
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
     element.active = false;
     await element.updateComplete;
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
     element.active = true;
     await element.updateComplete;
-    resolveApply(createApplyResult("codex"));
+    pendingApply.resolve(createApplyResult("codex"));
     await waitForAction(element, "continue");
     expect(element.textContent).toContain("Migrated 1, skipped 0");
     expect(request).toHaveBeenCalledTimes(2);
     element.context = createContext(vi.fn(async () => createPlan()));
     await element.updateComplete;
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
+  it("shows a completed provider while the next import is pending", async () => {
+    const pendingApply = createDeferred<ReturnType<typeof createApplyResult>>();
+    const request = successfulRequest(["codex", "claude"], async (providerId) =>
+      providerId === "claude" ? await pendingApply.promise : createApplyResult("codex"),
+    );
+    const element = await startImport(request);
+    try {
+      await waitForSolid(() => {
+        expect(request).toHaveBeenCalledTimes(3);
+        expect(element.querySelector("[data-provider-id='codex']")?.textContent).toContain(
+          "Migrated 1, skipped 0",
+        );
+        expect(element.querySelector("[data-provider-id='claude']")?.textContent).toContain(
+          "Importing",
+        );
+      });
+    } finally {
+      pendingApply.resolve(createApplyResult("claude"));
+    }
+    await waitForAction(element, "continue");
   });
 
   it("sets the guard when skipped", async () => {
@@ -451,21 +440,17 @@ describe("OnboardingMemoryImport", () => {
   });
 
   it("continues with later providers after a provider error", async () => {
-    const request = vi.fn(async (method: string, params?: { providerId?: string }) => {
-      if (method === "migrations.memory.plan") {
-        return createPlan(["codex", "claude"]);
-      }
-      if (params?.providerId === "codex") {
+    const request = successfulRequest(["codex", "claude"], async (providerId) => {
+      if (providerId === "codex") {
         throw new Error("Codex import unavailable: OPENAI_API_KEY=sk-1234567890abcdef");
       }
       return createApplyResult("claude", 1, 0);
     });
-    const element = await mount(createContext(request));
-    (await waitForAction(element)).click();
+    const element = await startImport(request);
     await waitForAction(element, "continue");
     const applyProviders = request.mock.calls
       .filter(([method]) => method === "migrations.memory.apply")
-      .map(([, params]) => (params as { providerId: string }).providerId);
+      .map(([, params]) => params?.providerId);
     expect(applyProviders).toEqual(["codex", "claude"]);
     expect(element.textContent).toContain("Codex import unavailable: OPENAI_API_KEY=sk-123...cdef");
     expect(element.textContent).not.toContain("sk-1234567890abcdef");

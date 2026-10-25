@@ -1,8 +1,11 @@
 import { createMemo, Show } from "solid-js";
 import type { UpdateAvailable, UpdateScheduleState } from "../../api/types.ts";
 import { getUpdateGitRevisions } from "../../app/update-schedule-projection.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/update-git-revisions.css";
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 export function UpdateGitRevisions(props: {
   schedule: UpdateScheduleState | null | undefined;

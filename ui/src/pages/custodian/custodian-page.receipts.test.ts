@@ -73,6 +73,9 @@ describe("custodian page owner receipts", () => {
     page.onboarding = true;
     await page.updateComplete;
     expect(context.channels.refresh).toHaveBeenCalledOnce();
+    await waitForFast(() =>
+      expect(page.querySelector<HTMLButtonElement>(".custodian__nudge-cta")?.disabled).toBe(false),
+    );
     page.querySelector<HTMLButtonElement>(".custodian__nudge-cta")!.click();
     expect(context.channels.refresh).toHaveBeenCalledTimes(2);
 

@@ -19,39 +19,23 @@ import { waitForSessionRunEnd } from "../../sessions/session-controller.native-r
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
-import {
-  acknowledgeCompletedWorkerTurn,
-  attachedEnvironment,
-  cleanupWorkerTurnLauncherTest,
-  createWorkerSessionTurnPlacementProvider,
-  createWorkerTurnTunnel,
-  credential,
-  openSessionManager,
-  placements,
-  reconcileUnchangedLocalWorkspace,
-  seedActivePlacement,
-  SESSION_ID,
-  sessionTarget,
-  setupWorkerTurnLauncherTest,
-  turn,
-  unusedEnvironments,
-} from "./worker-turn-launcher.test-support.js";
+import * as worker from "./worker-turn-launcher.test-support.js";
 
-beforeEach(setupWorkerTurnLauncherTest);
-afterEach(cleanupWorkerTurnLauncherTest);
+beforeEach(worker.setupWorkerTurnLauncherTest);
+afterEach(worker.cleanupWorkerTurnLauncherTest);
 afterEach(resetGlobalHookRunner);
 
 it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", async (owner) => {
   const events: string[] = [];
   const record = (event: string) => async () => void events.push(event);
-  await seedActivePlacement();
-  const input = turn(`context-engine-${owner}`);
+  await worker.seedActivePlacement();
+  const input = worker.turn(`context-engine-${owner}`);
   const acceptedFile = path.join(input.workspaceDir, "accepted-project.txt");
   const followUpFile = path.join(input.workspaceDir, "engine-follow-up.txt");
   await writeFile(acceptedFile, "previous Gateway content");
   const engineId = `worker-context-${owner}`;
   const config = { ...input.config, plugins: { slots: { contextEngine: engineId } } };
-  const previous = await openSessionManager();
+  const previous = await worker.openSessionManager();
   await previous.appendMessageAsync(
     makeAgentUserMessage({ content: "Unassembled history", timestamp: 1 }),
   );
@@ -62,19 +46,19 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
     timestamp: 3,
   });
   const recorder = createUserTurnTranscriptRecorder({
-    target: { ...sessionTarget, sessionEntry: undefined },
+    target: { ...worker.sessionTarget, sessionEntry: undefined },
     input: { text: input.prompt },
   });
   let claim: WorkerSessionTurnClaim | undefined;
   const fences: Array<ReturnType<typeof resolveSessionTranscriptReadFence>> = [];
   const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => {
     events.push("bootstrap");
-    fences.push(resolveSessionTranscriptReadFence(sessionTarget));
+    fences.push(resolveSessionTranscriptReadFence(worker.sessionTarget));
     return { bootstrapped: true };
   });
   const assemble = vi.fn<ContextEngine["assemble"]>(async () => {
     events.push("assemble");
-    fences.push(resolveSessionTranscriptReadFence(sessionTarget));
+    fences.push(resolveSessionTranscriptReadFence(worker.sessionTarget));
     return {
       messages: [assembledHistory],
       estimatedTokens: 10,
@@ -89,7 +73,7 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
     const content = await readFile(path.join(cwd, "accepted-project.txt"), "utf8");
     expect(cwd).toBe(input.workspaceDir);
     expect(content).toBe("accepted node content");
-    expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
+    expect(worker.placements.validateWorkspaceResultClaim(claim)).toBe(true);
     await writeFile(path.join(cwd, "engine-follow-up.txt"), content);
   });
   const dispose = vi.fn(record("dispose"));
@@ -150,33 +134,29 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
     events.push("launch");
     claim = request.turnClaim;
     request.onDispatchReady?.();
-    const completed = await openSessionManager();
+    const completed = await worker.openSessionManager();
     terminal = await completed.appendMessageWithTranscriptAnchorAsync(answer);
-    return await acknowledgeCompletedWorkerTurn(request.turnClaim, terminal.entryId);
+    return await worker.acknowledgeCompletedWorkerTurn(request.turnClaim, terminal.entryId);
   });
-  const tunnel = createWorkerTurnTunnel({
+  const tunnel = worker.createWorkerTurnTunnel({
     launchTurn,
     reconcileWorkspace: vi.fn(async (request) => {
       events.push("reconcile");
       await writeFile(acceptedFile, "accepted node content");
-      return { ...(await reconcileUnchangedLocalWorkspace(request)), changed: true };
+      return { ...(await worker.reconcileUnchangedLocalWorkspace(request)), changed: true };
     }),
   });
   const published = vi.fn(record("publish"));
-  const provider = createWorkerSessionTurnPlacementProvider({
-    placements,
+  const provider = worker.createWorkerSessionTurnPlacementProvider({
+    placements: worker.placements,
     publishAcceptedWorkspace: published,
-    environments: {
-      ...unusedEnvironments(),
-      get: attachedEnvironment,
-      acquireTurnCredential: async () => credential(),
-      startTunnel: async () => tunnel,
+    environments: worker.workerTurnEnvironments(tunnel, {
       acknowledgeCredentialDelivery: async () => true,
-    },
+    }),
   });
   try {
     const result = await provider.executeTurn(
-      { ...sessionTarget, runId: input.runId },
+      { ...worker.sessionTarget, runId: input.runId },
       {
         ...input,
         config,
@@ -192,11 +172,11 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
     );
     expect(result.payloads).toEqual([{ text: "Fresh worker answer" }]);
     assert(claim);
-    expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
-    await waitForSessionRunEnd(SESSION_ID, null);
+    expect(worker.placements.validateWorkspaceResultClaim(claim)).toBe(true);
+    await waitForSessionRunEnd(worker.SESSION_ID, null);
     expect(published).toHaveBeenCalledExactlyOnceWith(claim);
-    expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
-    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    expect(worker.placements.validateWorkspaceResultClaim(claim)).toBe(false);
+    expect(worker.placements.get(worker.SESSION_ID)?.turnClaim).toBeNull();
     const admission = recorder.getAdmissionReceipt();
     expect(admission).toBeDefined();
     expect(fences).toEqual([admission, admission]);

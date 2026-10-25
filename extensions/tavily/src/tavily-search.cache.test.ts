@@ -59,6 +59,29 @@ it.each(["web_search", "tavily_search", "tavily_extract"] as const)(
 );
 
 describe("Tavily search cache TTL", () => {
+  it("keeps extraction on its default TTL when search caching is disabled", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({
+        results: [{ url: "https://example.com/extract-ttl", raw_content: "Body" }],
+      }),
+    );
+    const tool = captureTavilyTools({
+      tools: { web: { search: { cacheTtlMinutes: 0 } } },
+      plugins: { entries: { tavily: { config: { webSearch: { apiKey: "extract-ttl-key" } } } } },
+    })("tavily_extract");
+    const extract = async () =>
+      (await tool.execute("extract-cache", { urls: ["https://example.com/extract-ttl"] })).details;
+
+    expect(await extract()).not.toHaveProperty("cached");
+    expect(await extract()).toMatchObject({ cached: true });
+    expect(fetch).toHaveBeenCalledOnce();
+    now += 15 * 60_000;
+    expect(await extract()).not.toHaveProperty("cached");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     { kind: "web_search", cacheTtlMinutes: 1 },
     { kind: "tavily_search", cacheTtlMinutes: 0 },

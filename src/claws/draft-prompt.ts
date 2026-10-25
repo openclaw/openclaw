@@ -1,5 +1,3 @@
-import { clawDraftRelativePath } from "./draft.js";
-
-export function clawDraftPrompt(draftId: string): string {
-  return `/skill create-claw Turn this agent into a shareable Claw. Draft: ${clawDraftRelativePath(draftId)}.`;
+export function clawDraftPrompt(): string {
+  return "$create-claw Create a Claw from this agent and turn it into a shareable Claw.";
 }

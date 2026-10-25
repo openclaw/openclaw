@@ -4,20 +4,115 @@ import {
   protectCodexAppServerLiveThread,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
+import { createNativeSubagentAssignmentStore } from "./native-subagent-assignment-store.js";
+import { createNativeSubagentCompletionCustodyFixture } from "./native-subagent-custody.test-support.js";
+import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import {
   CodexNativeSubagentMonitor,
+  childTurnCompletedNotification,
   createClient,
+  createCompletionScope,
   createRuntime,
   nativeCompletionNotification,
   notifyChildStarted,
   registerParent,
+  threadRead,
+  turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
+import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import { releaseCodexBoundLiveThread } from "./thread-lifecycle-warm.js";
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it("keeps an interrupted assignment resumable without pinning its restored parent", async () => {
+  const identity = { kind: "session" as const, agentId: "main", sessionId: "parent-session" };
+  const binding = {
+    threadId: "parent-thread",
+    cwd: "/workspace",
+    appServerRuntimeFingerprint: "runtime",
+  };
+  const store = createCodexTestBindingStore();
+  await store.mutate(identity, { kind: "set", binding });
+  const historyOwner = createCodexNativeSubagentHistoryOwner({
+    parentThreadId: binding.threadId,
+    sessionId: identity.sessionId,
+    binding,
+  });
+  if (!historyOwner) {
+    throw new Error("Expected a native history owner.");
+  }
+  const assignment = {
+    runId: "codex-thread:child-thread",
+    childThreadId: "child-thread",
+    nativeTurnId: "interrupted-turn",
+    nativeParentThreadId: binding.threadId,
+    owner: historyOwner,
+  };
+  await store.mutate(
+    identity,
+    { kind: "record-native-subagent-assignment", owner: historyOwner, assignment },
+    () => undefined,
+  );
+  const client = createClient();
+  client.setThreadRead(
+    "child-thread",
+    threadRead({ turnId: "interrupted-turn", status: "interrupted", threadStatus: "notLoaded" }),
+  );
+  ensureCodexAppServerClientRuntime(client.client, { agentDir: "/workspace/agent" });
+  await retainCodexAppServerLiveThread(client.client, binding.threadId);
+  const runtime = createRuntime();
+  const custody = createNativeSubagentCompletionCustodyFixture();
+  runtime.captureAgentHarnessCompletionCustody.mockImplementation(async () =>
+    custody.root.retain(),
+  );
+  const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
+    retainParentThread: (threadId) => protectCodexAppServerLiveThread(client.client, threadId),
+  });
+  onTestFinished(async () => {
+    await monitor.retireParent(binding.threadId);
+    await monitor.dispose();
+    custody.root.release();
+    client.close();
+  });
+  const parent = await monitor.registerParent({
+    parentThreadId: binding.threadId,
+    agentId: "main",
+    requesterSessionKey: "agent:main:main",
+    completionScope: createCompletionScope("agent:main:main"),
+    historyOwner,
+    assignmentStore: createNativeSubagentAssignmentStore({
+      bindingStore: store,
+      readBinding: () => binding,
+      identity,
+      owner: historyOwner,
+    }),
+  });
+  await parent.ready;
+  await parent.unregister();
+  const releaseForResume = () =>
+    releaseCodexBoundLiveThread({
+      client: client.client,
+      threadId: binding.threadId,
+      lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
+    });
+  await expect(releaseForResume()).resolves.toBe(true);
+  expect(await store.readNativeSubagentAssignments?.(identity, historyOwner)).toEqual([assignment]);
+  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+
+  await retainCodexAppServerLiveThread(client.client, binding.threadId);
+  const continued = await registerParent(monitor, binding.threadId, "agent:main:main");
+  await client.notify(turnStartedNotification("continued-turn"));
+  await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
+  await client.notify(
+    childTurnCompletedNotification({ turnId: "continued-turn", status: "interrupted" }),
+  );
+  await expect(releaseForResume()).resolves.toBe(true);
+  expect(await store.readNativeSubagentAssignments?.(identity, historyOwner)).toHaveLength(1);
+  await continued.unregister();
 });
 
 it("permits parent cold resume once every child is terminal, while preserving undelivered results", async () => {
@@ -33,7 +128,6 @@ it("permits parent cold resume once every child is terminal, while preserving un
   await retainCodexAppServerLiveThread(client.client, "parent-thread");
   const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
     retainParentThread: (threadId) => protectCodexAppServerLiveThread(client.client, threadId),
-    recoveryPollDelaysMs: [],
   });
   onTestFinished(async () => {
     await monitor.retireParent("parent-thread");
@@ -48,7 +142,7 @@ it("permits parent cold resume once every child is terminal, while preserving un
     releaseCodexBoundLiveThread({
       client: client.client,
       threadId: "parent-thread",
-      lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+      lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
     });
 
   await client.notify(

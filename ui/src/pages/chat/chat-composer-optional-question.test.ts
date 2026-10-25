@@ -3,8 +3,8 @@ import { createComponent, createRoot, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
-import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
 import { createComposerQuestionPanel } from "./components/chat-composer-question.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { ChatQuestionPanel } from "./components/chat-question-panel.tsx";
 
@@ -13,12 +13,16 @@ const question = (itemId: string, options?: string[]) => ({
   itemId,
   questions: [{ title: `Which ${itemId}?`, ...(options ? { options } : {}) }],
 });
-function questionReader(props: ReturnType<typeof createComposerProps>) {
+type QuestionProps = ReturnType<typeof createComposerProps> & {
+  onAsyncQuestionSubmit?: () => Promise<boolean>;
+};
+function questionReader(props: QuestionProps) {
   return createRoot((dispose) => {
     onTestFinished(dispose);
     const [current, refresh] = createSignal(props, { equals: false });
-    const panel = createComposerQuestionPanel(current, getChatComposerState(props.paneId));
-    return (collapsed?: boolean, text?: string) => {
+    const questions = createComposerQuestions(props.paneId, current);
+    const panel = createComposerQuestionPanel(() => questions);
+    const read = (collapsed?: boolean, text?: string) => {
       refresh(props);
       flush();
       const value = panel();
@@ -30,17 +34,14 @@ function questionReader(props: ReturnType<typeof createComposerProps>) {
       }
       return value;
     };
+    return Object.assign(read, { questions: () => questions.source()!.asyncQuestions });
   });
 }
 function optionalQuestion(draft = "Keep writing", withOptions = true) {
   const textarea = document.body.appendChild(document.createElement("textarea"));
-  const props = createComposerProps({ draft });
-  getChatComposerState(props.paneId).composerTextarea = textarea;
-  props.asyncQuestions = createAsyncQuestionPresentation(
-    { asyncQuestionDrafts: new Map(), asyncQuestionRevision: 0, transcriptRenderContext: {} },
-    {
-      sessionKey: props.sessionKey,
-      onAsyncQuestionSubmit: async () => true,
+  const props: QuestionProps = {
+    ...createComposerProps({
+      draft,
       messages: [
         {
           role: "assistant",
@@ -51,25 +52,25 @@ function optionalQuestion(draft = "Keep writing", withOptions = true) {
           ),
         },
       ],
-    },
-  );
-  return { textarea, props, questions: props.asyncQuestions };
+    }),
+    onAsyncQuestionSubmit: async () => true,
+  };
+  getChatComposerState(props.paneId).composerTextarea = textarea;
+  return { textarea, props };
 }
 
 it.each(["draft", "focus"])(
   "keeps optional questions compact while editing via %s",
   async (editing) => {
-    const { textarea, props, questions } = optionalQuestion(
-      editing === "draft" ? "Keep writing" : "",
-    );
+    const { textarea, props } = optionalQuestion(editing === "draft" ? "Keep writing" : "");
     if (editing === "focus") {
       textarea.focus();
     }
     // Persistence can initialize an untouched draft before the dock renders.
-    questions.drafts.set("audience", {
+    const readPanel = questionReader(props);
+    readPanel.questions().drafts.set("audience", {
       answers: new Map([["0", { selected: new Set(["Everyone"]), freeText: "" }]]),
     });
-    const readPanel = questionReader(props);
     let panel = readPanel(true)!;
     expect(panel.model).toMatchObject({ nonBlocking: true, autoFocus: false });
     const container = document.body.appendChild(document.createElement("div"));
@@ -86,21 +87,21 @@ it.each(["draft", "focus"])(
     }
 
     // Owner readiness/reconnect must not reset the operator's disclosure choice.
-    questions.scope += ":owner-ready";
+    props.connectionEpoch = 1;
     readPanel(true);
     if (editing === "focus") {
       expect(document.activeElement).toBe(textarea);
     }
-    const submit = questions.submit;
-    questions.submit = undefined;
+    const submit = props.onAsyncQuestionSubmit;
+    props.onAsyncQuestionSubmit = undefined;
     expect(readPanel()).toBeNull();
-    questions.scope += ":reconnected";
-    questions.submit = submit;
+    props.connectionEpoch = 2;
+    props.onAsyncQuestionSubmit = submit;
     panel = readPanel(true)!;
     panel.onCollapsedChange?.(false);
     panel = readPanel(false)!;
     textarea.focus();
-    questions.scope += ":reconnected";
+    props.connectionEpoch = 3;
     readPanel(false);
     document.body.appendChild(document.createElement("button")).focus();
     panel.onCollapsedChange?.(true);
@@ -110,16 +111,22 @@ it.each(["draft", "focus"])(
 );
 
 it("keeps unseen queued questions compact but expands explicit navigation", () => {
-  const { textarea, props, questions } = optionalQuestion("Keep writing", false);
+  const { textarea, props } = optionalQuestion("Keep writing", false);
   textarea.focus();
   const readPanel = questionReader(props);
   readPanel(true);
-  questions.pending.push(question("format"));
+  props.messages = [
+    ...props.messages,
+    { role: "assistant", openclawAsyncDelivery: question("format") },
+  ];
   readPanel(true, "Which audience?");
-  questions.pending.shift();
+  props.messages = props.messages.slice(1);
   readPanel(true, "Which format?");
   expect(document.activeElement).toBe(textarea);
-  questions.pending.push(question("tone"));
+  props.messages = [
+    ...props.messages,
+    { role: "assistant", openclawAsyncDelivery: question("tone") },
+  ];
   readPanel()!.onNextRequest?.();
   readPanel(false, "Which tone?");
 });

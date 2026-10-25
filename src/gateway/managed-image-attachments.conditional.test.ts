@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { buffer } from "node:stream/consumers";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   closeHttpServer,
@@ -18,6 +17,7 @@ import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import {
   createFixture,
   prepareManagedSessionStore,
+  requestManagedImageHttp,
   usePreparedManagedImageState,
 } from "./managed-image-attachments.test-support.js";
 import { resolveManagedImageThumbnail } from "./managed-image-thumbnail-cache.js";
@@ -61,6 +61,10 @@ function expectThumbnail(result: { status: number; body: Buffer }, width: number
   expect(result.status).toBe(200);
   expect(readImageProbeFromHeader(result.body)).toMatchObject({ format: "webp", width, height });
 }
+function expectNotModified(result: { status: number; body: Buffer }) {
+  expect(result.status).toBe(304);
+  expect(result.body).toHaveLength(0);
+}
 
 describe("managed thumbnail conditional HTTP", () => {
   let stateDir: string;
@@ -102,24 +106,13 @@ describe("managed thumbnail conditional HTTP", () => {
   afterAll(() => closeHttpServer(server));
 
   async function request(pathName: string, method = "GET", tag?: string) {
-    const response = await new Promise<http.IncomingMessage>((resolve, reject) => {
-      http
-        .get(
-          `${origin}${pathName}`,
-          {
-            method,
-            headers: tag === undefined ? {} : { "If-None-Match": tag },
-            agent: false,
-          },
-          resolve,
-        )
-        .on("error", reject);
-    });
-    return {
-      status: response.statusCode ?? 0,
-      headers: response.headers,
-      body: await buffer(response),
-    };
+    const result = await requestManagedImageHttp(
+      origin,
+      pathName,
+      method,
+      tag === undefined ? {} : { "If-None-Match": tag },
+    );
+    return { ...result, status: result.statusCode };
   }
 
   async function prepare(client?: GatewayClient, body = png()) {
@@ -167,15 +160,15 @@ describe("managed thumbnail conditional HTTP", () => {
       "referrer-policy": "no-referrer",
     });
     const head = await request(fixture.url, "HEAD");
-    expect(head.headers.etag).toBe(etag);
-    expect(head.headers["content-length"]).toBe(String(first.body.byteLength));
+    expect(head.headers).toMatchObject({ etag, "content-length": String(first.body.byteLength) });
     expect(head.body).toHaveLength(0);
     for (const method of ["GET", "HEAD"]) {
       const unchanged = await request(fixture.url, method, `"other", W/${etag}`);
-      expect(unchanged.status).toBe(304);
-      expect(unchanged.headers.etag).toBe(etag);
-      expect(unchanged.headers["cache-control"]).toBe(first.headers["cache-control"]);
-      expect(unchanged.body).toHaveLength(0);
+      expectNotModified(unchanged);
+      expect(unchanged.headers).toMatchObject({
+        etag,
+        "cache-control": first.headers["cache-control"],
+      });
       expect(unchanged.headers["content-length"]).toBeUndefined();
     }
     const stale = await request(fixture.url, "GET", '"stale"');
@@ -193,11 +186,9 @@ describe("managed thumbnail conditional HTTP", () => {
     expect(small.headers.etag).toBe(etagFor(small.body));
     expect(small.headers.etag).not.toBe(normal.headers.etag);
     const unchanged = await request(smallUrl, "GET", small.headers.etag);
-    expect(unchanged.status).toBe(304);
-    expect(unchanged.body).toHaveLength(0);
+    expectNotModified(unchanged);
     const defaultWidth = await request(`${fixture.url}?width=960`, "HEAD", normal.headers.etag);
-    expect(defaultWidth.status).toBe(304);
-    expect(defaultWidth.body).toHaveLength(0);
+    expectNotModified(defaultWidth);
   });
 
   it("keeps validators byte-stable across eviction and changes them with the rendition", async () => {

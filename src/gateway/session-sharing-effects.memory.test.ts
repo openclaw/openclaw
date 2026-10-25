@@ -167,40 +167,33 @@ it("adds and lists current incognito suggestions through Gateway effects without
   expectRefused(refused, "FORBIDDEN");
 });
 
-it.each(["current", "revoked"] as const)(
-  "checks unbound companion disclosure with a %s transport",
-  async (transport) => {
-    const { call, client, context } = await fixture("companion");
-    const entered = createDeferredCore();
-    const finish = createDeferredCore();
-    const ask = vi.fn<SessionCompanionService["ask"]>(async (request) => {
-      request.assertSourceCurrent?.();
-      entered.resolve();
-      await finish.promise;
-      return { answer: "Private answer", ts: 1 };
-    });
-    context.sessionCompanion = {
-      ask,
-      state: vi.fn<SessionCompanionService["state"]>(),
-      reset: vi.fn(),
-      dispose: vi.fn(),
-    };
-    const response = call("sessions.companion.ask", { question: "Explain the private session" });
-    await Promise.race([
-      entered.promise,
-      response.then(() => {
-        throw new Error("Companion request ended before reaching its effect");
-      }),
-    ]);
-    client.invalidated = transport === "revoked";
-    finish.resolve();
-    const reply = await response;
-    expect(ask).toHaveBeenCalledOnce();
-    if (transport === "revoked") {
-      expectRefused(reply, "UNAVAILABLE");
-      expect(reply.mock.calls.some(([ok]) => ok)).toBe(false);
-    } else {
-      expect(reply).toHaveBeenCalledWith(true, { answer: "Private answer", ts: 1 });
-    }
-  },
-);
+it("withholds unbound companion disclosure after transport revocation", async () => {
+  const { call, client, context } = await fixture("companion");
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  const ask = vi.fn<SessionCompanionService["ask"]>(async (request) => {
+    request.assertSourceCurrent?.();
+    entered.resolve();
+    await finish.promise;
+    return { answer: "Private answer", ts: 1 };
+  });
+  context.sessionCompanion = {
+    ask,
+    state: vi.fn<SessionCompanionService["state"]>(),
+    reset: vi.fn(),
+    dispose: vi.fn(),
+  };
+  const response = call("sessions.companion.ask", { question: "Explain the private session" });
+  await Promise.race([
+    entered.promise,
+    response.then(() => {
+      throw new Error("Companion request ended before reaching its effect");
+    }),
+  ]);
+  client.invalidated = true;
+  finish.resolve();
+  const reply = await response;
+  expect(ask).toHaveBeenCalledOnce();
+  expectRefused(reply, "UNAVAILABLE");
+  expect(reply.mock.calls.some(([ok]) => ok)).toBe(false);
+});

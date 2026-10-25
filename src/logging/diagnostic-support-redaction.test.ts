@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   redactPublicSupportDiagnosticLine,
   redactSupportDiagnosticLine,
@@ -9,6 +9,9 @@ import {
   sanitizeSupportConfigValue,
   sanitizeSupportSnapshotValue,
 } from "./diagnostic-support-redaction.js";
+import * as textRedaction from "./redact.js";
+import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 
 function fakeAwsSecretAccessKey(): string {
   return fakeRepeatedToken(["A", "b", "9", "/"]);
@@ -46,6 +49,23 @@ describe("diagnostic support redaction", () => {
   const tempDir = path.join(os.tmpdir(), "openclaw-support-redaction-test");
   const npmLayoutRefusal =
     "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
+
+  it("checks repeated field names once per capture and rechecks newly registered secrets", () => {
+    const context = { env: {}, stateDir: tempDir };
+    const redact = vi.spyOn(textRedaction, "redactText");
+    try {
+      const values = [{ source: "workspace" }, { source: "bundled" }, { source: "project" }];
+      expect(sanitizeSupportSnapshotValue(values, context)).toEqual(values);
+      expect(redact.mock.calls.filter(([text]) => text === "source")).toHaveLength(1);
+      registerSecretValueForRedaction("source");
+      expect(sanitizeSupportSnapshotValue({ source: "workspace" }, context)).toEqual({
+        "<identifier#1>": "workspace",
+      });
+    } finally {
+      redact.mockRestore();
+      resetSecretRedactionRegistryForTest();
+    }
+  });
 
   it.each([
     "schema migration required",
@@ -435,6 +455,25 @@ describe("diagnostic support redaction", () => {
     ).toBe(`${redactedPathPrefix}abcd${truncationSuffix}`);
   });
 
+  it("redacts absolute path prefixes after the working directory disappears", () => {
+    const home = path.join(os.tmpdir(), "support-redaction-home");
+    const stateDir = path.join(home, ".openclaw");
+    const redaction = { env: { HOME: home }, stateDir };
+    // Post-update failure diagnostics run after the old install root may be removed.
+    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("uv_cwd"), { code: "ENOENT" });
+    });
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        expect(redactSupportString(`failed at ${stateDir}/logs/gateway.log`, redaction)).toBe(
+          "failed at $OPENCLAW_STATE_DIR/logs/gateway.log",
+        );
+      }
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
   it("redacts Windows USERPROFILE paths when HOME is unset", () => {
     const userProfile = "C:\\Users\\support-user";
     const stateDir = `${userProfile}\\AppData\\Roaming\\openclaw`;
@@ -492,7 +531,7 @@ describe("diagnostic support redaction", () => {
 it("preserves exact typed lease guidance without widening maintenance prose", () => {
   const context = { env: {}, stateDir: "/synthetic/state" };
   const guidance =
-    "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.";
+    "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.";
   expect(redactPublicSupportDiagnosticLine(guidance, context)).toBe(guidance);
   for (const input of [
     guidance + " /private/state.db token=fixture-only-token alice@example.invalid",

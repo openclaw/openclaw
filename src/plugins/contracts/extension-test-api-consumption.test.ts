@@ -128,14 +128,13 @@ function orphanTestApis(): string[] {
     }
     for (const sourceFile of parser.parseSourceFiles(pendingSources.splice(0))) {
       const references = collectReferences(sourceFile);
-      const pluginIds = [
+      for (const pluginId of [
         ...references.pluginIds,
         ...references.moduleSpecifiers.map((specifier) =>
           resolveTestApiPluginId(specifier, sourceFile.fileName, testApis),
         ),
-      ];
-      for (const pluginId of pluginIds) {
-        if (pluginId && testApis.some((testApi) => testApi.pluginId === pluginId)) {
+      ]) {
+        if (pluginId) {
           consumed.add(pluginId);
         }
       }

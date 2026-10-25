@@ -249,7 +249,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         "failed to retry subagent completion after gateway restart",
       );
     }, GATEWAY_ADMISSION_RETRY_DELAY_MS);
-    timer.unref?.();
+    timer.unref();
     retryTimers.add(timer);
   }
 
@@ -598,6 +598,5 @@ export function createSubagentResumeReader(params: {
       pendingResumeChecks.has(getSubagentRunRuntimeKey(entry)),
     retirePending: (entry: SubagentRunRecord) =>
       pendingResumeChecks.delete(getSubagentRunRuntimeKey(entry)),
-    reset: () => pendingResumeChecks.clear(),
   };
 }

@@ -1,5 +1,4 @@
 import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
-// Mattermost tests cover thread participation cache plugin behavior.
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import * as initialStateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
@@ -22,12 +21,12 @@ function setRuntime(openKeyedStoreV2: (options: OpenKeyedStoreOptions) => unknow
   } as unknown as PluginRuntime);
 }
 
-function setPersistentRuntime(): void {
-  setRuntime((options) =>
-    stateRuntime.createPluginStateKeyedStoreV2ForTests("mattermost", options, {
-      assertCurrent() {},
-    }),
-  );
+function hasParticipation(accountId = "acct", threadRootId = "root-1") {
+  return hasMattermostThreadParticipationWithPersistence({
+    accountId,
+    channelId: "chan",
+    threadRootId,
+  });
 }
 
 describe("mattermost thread participation", () => {
@@ -40,7 +39,11 @@ describe("mattermost thread participation", () => {
     ({ setMattermostRuntime } = await import("../runtime.js"));
     ({ hasMattermostThreadParticipationWithPersistence, recordMattermostThreadParticipation } =
       await import("./thread-participation.js"));
-    setPersistentRuntime();
+    setRuntime((options) =>
+      stateRuntime.createPluginStateKeyedStoreV2ForTests("mattermost", options, {
+        assertCurrent() {},
+      }),
+    );
   });
 
   afterEach(() => {
@@ -51,13 +54,7 @@ describe("mattermost thread participation", () => {
 
   it("remembers a thread the bot replied in", async () => {
     await recordMattermostThreadParticipation("acct", "chan", "root-1");
-    await expect(
-      hasMattermostThreadParticipationWithPersistence({
-        accountId: "acct",
-        channelId: "chan",
-        threadRootId: "root-1",
-      }),
-    ).resolves.toBe(true);
+    await expect(hasParticipation()).resolves.toBe(true);
   });
 
   it("isolates participation by account, channel, and thread", async () => {
@@ -73,13 +70,7 @@ describe("mattermost thread participation", () => {
 
   it("ignores empty identifiers", async () => {
     await recordMattermostThreadParticipation("", "chan", "root-1");
-    await expect(
-      hasMattermostThreadParticipationWithPersistence({
-        accountId: "",
-        channelId: "chan",
-        threadRootId: "root-1",
-      }),
-    ).resolves.toBe(false);
+    await expect(hasParticipation("")).resolves.toBe(false);
   });
 
   it("restores participation after a restart without extending its original expiry", async () => {
@@ -89,43 +80,41 @@ describe("mattermost thread participation", () => {
     now.mockReturnValue(repliedAt + 7 * 24 * 60 * 60 * 1000 - 1000);
     // Simulate a restart near expiry: memory is lost, but the SQLite row is still valid.
     threadParticipationMemory.clear();
-    await expect(
-      hasMattermostThreadParticipationWithPersistence({
-        accountId: "acct",
-        channelId: "chan",
-        threadRootId: "root-1",
-      }),
-    ).resolves.toBe(true);
+    await expect(hasParticipation()).resolves.toBe(true);
 
     now.mockReturnValue(repliedAt + 7 * 24 * 60 * 60 * 1000 + 1000);
-    await expect(
-      hasMattermostThreadParticipationWithPersistence({
-        accountId: "acct",
-        channelId: "chan",
-        threadRootId: "root-1",
-      }),
-    ).resolves.toBe(false);
+    await expect(hasParticipation()).resolves.toBe(false);
   });
 
   it("degrades to in-memory only when the persistent store fails", async () => {
     setRuntime(() => {
       throw new Error("sqlite unavailable");
     });
-    // record + read must not throw; the in-memory cache still answers.
     await recordMattermostThreadParticipation("acct", "chan", "root-1");
+    await expect(hasParticipation()).resolves.toBe(true);
+    await expect(hasParticipation("acct", "missing")).resolves.toBe(false);
+  });
+
+  it("restores historical participation carrying an optional agent identity", async () => {
+    const store = stateRuntime.createPluginStateKeyedStoreV2ForTests(
+      "mattermost",
+      {
+        namespace: "mattermost.thread-participation",
+        maxEntries: 1000,
+        defaultTtlMs: 7 * 24 * 60 * 60 * 1000,
+      },
+      { assertCurrent() {} },
+    );
+    await store.register("acct:chan:historic-root", {
+      agentId: "historic-agent",
+      repliedAt: Date.now(),
+    });
     await expect(
       hasMattermostThreadParticipationWithPersistence({
         accountId: "acct",
         channelId: "chan",
-        threadRootId: "root-1",
+        threadRootId: "historic-root",
       }),
     ).resolves.toBe(true);
-    await expect(
-      hasMattermostThreadParticipationWithPersistence({
-        accountId: "acct",
-        channelId: "chan",
-        threadRootId: "missing",
-      }),
-    ).resolves.toBe(false);
   });
 });

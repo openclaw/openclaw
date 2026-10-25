@@ -3,6 +3,7 @@ import timersPromises from "node:timers/promises";
 import { promisify } from "node:util";
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult as spawnResult } from "../../test-support/command-result.test-support.js";
 
 const runCommandMock = vi.hoisted(() =>
   vi.fn<(argv: string[], options: CommandOptions) => Promise<SpawnResult>>(),
@@ -43,16 +44,7 @@ import {
 } from "./suite-runtime-agent-process.js";
 
 function commandResult(stdout = "", overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    cleanup: "normal",
-    ...overrides,
-  };
+  return spawnResult({ stdout, cleanup: "normal", ...overrides });
 }
 
 const captureError = (error: unknown) => error;
@@ -234,19 +226,17 @@ describe("qa suite runtime agent process helpers", () => {
 
   it.each([true, false])("routes agent delivery with task tracking=%s", async (taskTracking) => {
     const sessionKey = taskTracking ? "session-1" : "agent:qa:main";
-    const gatewayCall = vi.fn(async () =>
-      taskTracking ? { runId: "run-1" } : { runId: "run-chat", status: "started" },
-    );
-    const buildAgentDelivery = vi.fn(() =>
-      taskTracking
-        ? { ...delivery, to: "transport-target", threadId: "adapter-thread" }
-        : {
-            channel: "qa-channel",
-            replyChannel: "qa-channel",
-            replyTo: "dm:qa-operator",
-            threadId: "provider-topic-42",
-          },
-    );
+    const started = taskTracking ? { runId: "run-1" } : { runId: "run-chat", status: "started" };
+    const gatewayCall = vi.fn(async () => started);
+    const route = taskTracking
+      ? { ...delivery, to: "transport-target", threadId: "adapter-thread" }
+      : {
+          channel: "qa-channel",
+          replyChannel: "qa-channel",
+          replyTo: "dm:qa-operator",
+          threadId: "provider-topic-42",
+        };
+    const buildAgentDelivery = vi.fn(() => route);
     const env = agentEnv(gatewayCall, buildAgentDelivery);
     await expect(
       startAgentRun(env, {
@@ -254,29 +244,23 @@ describe("qa suite runtime agent process helpers", () => {
         message: "hello",
         ...(!taskTracking ? { threadId: "topic-42", taskTracking: false } : {}),
       }),
-    ).resolves.toEqual(
-      taskTracking ? { runId: "run-1" } : { runId: "run-chat", status: "started" },
-    );
+    ).resolves.toEqual(started);
     expect(gatewayCall).toHaveBeenCalledWith(
       taskTracking ? "agent" : "chat.send",
       taskTracking
         ? expect.objectContaining({
             sessionKey,
             message: "hello",
-            channel: "qa-channel",
-            to: "transport-target",
-            replyChannel: "reply-channel",
-            replyTo: "reply-target",
-            threadId: "adapter-thread",
+            ...route,
           })
         : {
             idempotencyKey: expect.any(String),
             sessionKey,
             message: "hello",
             deliver: true,
-            originatingChannel: "qa-channel",
-            originatingTo: "dm:qa-operator",
-            originatingThreadId: "provider-topic-42",
+            originatingChannel: route.replyChannel,
+            originatingTo: route.replyTo,
+            originatingThreadId: route.threadId,
           },
       taskTracking ? expect.any(Object) : { timeoutMs: 30_000 },
     );

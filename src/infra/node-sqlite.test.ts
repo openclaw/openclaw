@@ -24,6 +24,7 @@ async function loadNodeSqliteWithVersion(
   extensionLoadingOmitted?: number,
   storage: { sourceId?: string | null; compileOptions?: string | null } = {},
 ) {
+  const executions: string[] = [];
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
     this: DatabaseSync,
     sql,
@@ -31,17 +32,32 @@ async function loadNodeSqliteWithVersion(
     if (sql.startsWith("SELECT sqlite_version() AS version")) {
       const statement = originalPrepare.call(this, sql);
       const capabilities = statement.get();
-      vi.spyOn(statement, "get").mockReturnValue({
+      const row = {
         ...capabilities,
         version,
         ...storage,
         ...(extensionLoadingOmitted === undefined ? {} : { omitted: extensionLoadingOmitted }),
+      };
+      vi.spyOn(statement, "get").mockImplementation(() => {
+        executions.push("get");
+        return row;
+      });
+      const iterate = statement.iterate.bind(statement);
+      vi.spyOn(statement, "iterate").mockImplementation(() => {
+        executions.push("iterate");
+        const rows = iterate();
+        const next = rows.next.bind(rows);
+        vi.spyOn(rows, "next").mockImplementation(() => {
+          const result = next();
+          return result.done ? result : { ...result, value: row };
+        });
+        return rows;
       });
       return statement;
     }
     return originalPrepare.call(this, sql);
   });
-  return { ...(await import("./node-sqlite.js")), prepare };
+  return { ...(await import("./node-sqlite.js")), prepare, executions };
 }
 
 async function withNodeSharedSqliteValue(value: unknown, run: () => Promise<void>): Promise<void> {
@@ -69,7 +85,7 @@ function expectedUnsafeSqliteError(version: string, shared: boolean): string {
   const wording = shared ? "uses shared system" : "embeds";
   const remediation = shared
     ? "Upgrade the system SQLite library to one of those safe versions, or use a Node build embedding a safe version."
-    : "Upgrade to Node 24.16.0+ or 26.1.0+ before retrying.";
+    : "Upgrade to Node 24.22.1+ or 26.12.1+ before retrying.";
   return (
     "SQLite support is unavailable or unsafe in this Node runtime. " +
     "OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x for WAL safety; " +
@@ -233,10 +249,14 @@ describe("node SQLite safety", () => {
   });
 
   it.each([0, 1])(
-    "detects the loaded library's extension capability (omitted=%s)",
+    "detects and reuses the loaded library's extension capability with two executions (omitted=%s)",
     async (omitted) => {
-      const { captureSqliteNativeRuntimeAdmission, supportsNodeSqliteExtensionLoading, prepare } =
-        await loadNodeSqliteWithVersion("3.51.3", omitted);
+      const {
+        captureSqliteNativeRuntimeAdmission,
+        supportsNodeSqliteExtensionLoading,
+        prepare,
+        executions,
+      } = await loadNodeSqliteWithVersion("3.51.3", omitted);
       expect(captureSqliteNativeRuntimeAdmission()).toBeUndefined();
       expect(prepare).not.toHaveBeenCalled();
       expect(supportsNodeSqliteExtensionLoading()).toBe(omitted === 0);
@@ -248,7 +268,9 @@ describe("node SQLite safety", () => {
           returnAfterDoneIsInert: expect.any(Boolean),
         },
       });
+      expect(supportsNodeSqliteExtensionLoading()).toBe(omitted === 0);
       expect(prepare).toHaveBeenCalledOnce();
+      expect(executions).toEqual(["iterate", "iterate"]);
     },
   );
 
@@ -263,13 +285,10 @@ describe("node SQLite safety", () => {
     if (storage.sourceId === null || storage.compileOptions === null) {
       expect(identity).toBeUndefined();
     } else {
-      expect(JSON.parse(identity!)).toEqual([
-        "3.53.4",
-        "different source",
-        "different options",
-        process.versions.node,
-        process.versions.bun ?? null,
-      ]);
+      expect(identity).toEqual({
+        sourceId: "different source",
+        compileOptions: "different options",
+      });
     }
     expect(native.prepare).toHaveBeenCalledOnce();
   });

@@ -25,6 +25,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 
 afterEach(async () => {
   await drainGlobalSingletonLifecycleState();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   logs.info.mockClear();
 });
@@ -46,46 +47,49 @@ it("reuses concurrent Git readers across polling intervals and releases them whe
       ),
     );
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-  try {
+  await expect(poll()).resolves.toEqual([[], []]);
+  expect(starts() - before).toBe(2);
+  for (const pollMs of [45_000, 60_001, 90_000]) {
+    await vi.advanceTimersByTimeAsync(pollMs);
     await expect(poll()).resolves.toEqual([[], []]);
     expect(starts() - before).toBe(2);
-    for (const pollMs of [45_000, 60_001, 90_000]) {
-      await vi.advanceTimersByTimeAsync(pollMs);
-      await expect(poll()).resolves.toEqual([[], []]);
-      expect(starts() - before).toBe(2);
-    }
-    await vi.advanceTimersByTimeAsync(120_000);
-    await vi.waitFor(() => expect(idleExits() - exitsBefore).toBe(2));
-    await expect(poll()).resolves.toEqual([[], []]);
-    expect(starts() - before).toBe(4);
-  } finally {
-    await drainGlobalSingletonLifecycleState();
-    vi.useRealTimers();
   }
+  await vi.advanceTimersByTimeAsync(120_000);
+  await vi.waitFor(() => expect(idleExits() - exitsBefore).toBe(2));
+  await expect(poll()).resolves.toEqual([[], []]);
+  expect(starts() - before).toBe(4);
 });
 
+const cwd = "/private/checkouts/diagnostic-fixture";
+const branchFacts = {
+  type: "pull-request.branch-facts",
+  input: {
+    root: cwd,
+    branch: "fixture",
+    mergedHeads: [],
+    refreshIndex: true,
+    comparison: { statsBase: null, creatable: true, equalPushedTips: false, complete: true },
+  },
+} as const;
+const checkoutDiff = { type: "checkout.diff", input: { cwd, summaryOnly: true } } as const;
+
 it.each([
-  {
-    operation: "pull-request.branch-facts",
-    args: ["--no-lazy-fetch", "-c", "diff.private=secret", "diff", "--shortstat"],
-    command: "diff",
-    diffMode: "--shortstat",
-  },
-  {
-    operation: "pull-request.branch-facts",
-    args: ["diff", "--patch", "--no-index"],
-    command: "diff",
-    diffMode: "--no-index",
-  },
-  { operation: "pull-request.branch-facts", args: ["private-command"], command: "other" },
-  { operation: "checkout.diff", args: ["diff", "--raw"], command: "diff", diffMode: "--raw" },
-])(
-  "prints $operation attribution and a $command $diffMode timeout in the journal message",
-  async ({ operation, args: slowArgs, command, diffMode }) => {
+  [
+    branchFacts,
+    ["--no-lazy-fetch", "-c", "diff.private=secret", "diff", "--shortstat"],
+    "diff",
+    "--shortstat",
+  ],
+  [branchFacts, ["diff", "--patch", "--no-index"], "diff", "--no-index"],
+  [branchFacts, ["private-command"], "other", undefined],
+  [checkoutDiff, ["diff", "--raw"], "diff", "--raw"],
+] as const)(
+  "prints %j attribution and a %j %s %s timeout in the journal message",
+  async (request, slowArgs, command, diffMode) => {
+    const operation = request.type;
     let clock = 1_000_000;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     vi.spyOn(diagnostics, "areDiagnosticsEnabledForProcess").mockReturnValue(true);
-    const cwd = "/private/checkouts/diagnostic-fixture";
     const privateRef = "refs/heads/private-branch";
     const value =
       operation === "checkout.diff"
@@ -128,29 +132,7 @@ it.each([
       return { ok: true, value };
     });
     await expect(
-      runGitWorkerOperation(
-        operation === "checkout.diff"
-          ? {
-              type: "checkout.diff",
-              input: { cwd, summaryOnly: true },
-            }
-          : {
-              type: "pull-request.branch-facts",
-              input: {
-                root: cwd,
-                branch: "fixture",
-                mergedHeads: [],
-                refreshIndex: true,
-                comparison: {
-                  statsBase: null,
-                  creatable: true,
-                  equalPushedTips: false,
-                  complete: true,
-                },
-              },
-            },
-        { git: { text: run, buffered: run } },
-      ),
+      runGitWorkerOperation(request, { git: { text: run, buffered: run } }),
     ).resolves.toEqual(value);
 
     expect(logs.info).toHaveBeenCalledOnce();
@@ -159,6 +141,7 @@ it.each([
     expect(JSON.parse(message.slice("slow Git content read ".length))).toEqual(fields);
     expect(fields).toMatchObject({
       operation,
+      ...(operation === "checkout.diff" ? { scope: "all", summaryOnly: true } : {}),
       checkoutId: expect.stringMatching(/^[a-f0-9]{16}$/),
       checkoutClass: operation === "checkout.diff" ? "unspecified" : "managed",
       workerQueueWaitMs: 400,
@@ -179,12 +162,11 @@ it.each([
       },
       outcome: "returned",
     });
-    if (operation === "checkout.diff") {
-      expect(fields).toMatchObject({ scope: "all", summaryOnly: true });
-    } else {
+    if (operation !== "checkout.diff") {
       expect(fields).not.toHaveProperty("scope");
       expect(fields).not.toHaveProperty("summaryOnly");
     }
+    const journal = `${message}\n${JSON.stringify(fields)}`;
     for (const privateValue of [
       cwd,
       privateRef,
@@ -193,8 +175,7 @@ it.each([
       "fixture output",
       "private-command",
     ]) {
-      expect(message).not.toContain(privateValue);
-      expect(JSON.stringify(fields)).not.toContain(privateValue);
+      expect(journal).not.toContain(privateValue);
     }
   },
 );

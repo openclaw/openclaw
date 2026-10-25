@@ -36,40 +36,18 @@ type ImageRuntimeParams = Omit<
   "buffer" | "fileName" | "mime" | "prompt" | "maxTokens" | "timeoutMs"
 >;
 
-type ResolvedImageRuntimeContext = {
-  cfg: ImageRuntimeParams["cfg"];
-  agentDir: string;
-  workspaceDir?: string;
-};
-
-type PreparedImageRuntime = {
-  runtimeValue: string;
-  model: Model;
-};
-
 type ImageRuntimeResources = AsyncDisposable & {
   assertResourcesOpen?: () => void;
 };
 
-const resolvedImageRuntimeContexts = new WeakMap<Model, ResolvedImageRuntimeContext>();
-
-export function getResolvedImageRuntimeContext(
-  model: Model,
-): ResolvedImageRuntimeContext | undefined {
-  return resolvedImageRuntimeContexts.get(model);
-}
-
-function bindResolvedImageRuntime(
-  params: ImageRuntimeParams,
-  apiKey: string,
-  model: Model,
-): PreparedImageRuntime {
-  resolvedImageRuntimeContexts.set(model, {
+function bindResolvedImageRuntime(params: ImageRuntimeParams, apiKey: string, model: Model) {
+  return {
+    runtimeValue: apiKey,
+    model,
     cfg: params.cfg,
     agentDir: params.agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  return { runtimeValue: apiKey, model };
+  };
 }
 
 function formatModelInputCapabilities(input: Model["input"] | undefined): string {
@@ -102,7 +80,7 @@ function requireImageCapableModel(params: {
 export async function resolveImageRuntime(
   params: ImageRuntimeParams,
   onAcquired: (resources: ImageRuntimeResources) => void,
-): Promise<PreparedImageRuntime> {
+) {
   const workspaceDir =
     params.workspaceDir ??
     (params.agentId ? resolveAgentWorkspaceDir(params.cfg ?? {}, params.agentId) : undefined);
@@ -134,6 +112,7 @@ export async function resolveImageRuntime(
           config: params.cfg ?? {},
           ...(runtimeParams.workspaceDir ? { workspaceDir: runtimeParams.workspaceDir } : {}),
           loadRuntimePlugins: true,
+          runtimePluginPurpose: "isolated-completion",
         },
         // The request already chose a model; full inventory discovery must stay outside setup.
         {

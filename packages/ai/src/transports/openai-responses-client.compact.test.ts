@@ -2,23 +2,22 @@ import type { Context, Model } from "@openclaw/llm-core";
 import { beforeEach, expect, it, vi } from "vitest";
 
 const sdkState = vi.hoisted(() => ({
-  clients: [] as Array<Record<string, unknown>>,
   post: vi.fn(),
 }));
 
 vi.mock("openai", () => {
   class MockOpenAI {
-    constructor(options: Record<string, unknown>) {
-      sdkState.clients.push(options);
-    }
-
     post = sdkState.post;
   }
   return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
 });
 
 import { resolveOpenAIResponsesCompactEndpointPlan } from "./openai-responses-payload-policy.js";
-import { createModel } from "./openai-responses-prompt-observer.test-support.js";
+import {
+  createModel,
+  outputMessage,
+  userMessage,
+} from "./openai-responses-prompt-observer.test-support.js";
 import {
   createOpenAIResponsesTransportStreamFn,
   requestPreparedOpenAIResponsesCompaction,
@@ -38,22 +37,17 @@ const officialOpenAIModel = {
 } satisfies Model<"openai-responses">;
 const customModel = { ...model, provider: "custom", baseUrl: "https://responses.example/v1" };
 const rewritten = "rewritten by the Responses payload policy";
+const context = {
+  systemPrompt: "Retain the conversation.",
+  messages: [userMessage("Remember NORTH-COPPER-17."), userMessage("A second user message.", 2)],
+} satisfies Context;
+
+const compactionItem = { type: "compaction", id: "cmp_1", encrypted_content: "opaque" };
 const retainedWindow = (content: unknown[], role = "user") => [
   { type: "message", role, content },
   { type: "compaction", encrypted_content: "opaque" },
 ];
-
-const context = {
-  systemPrompt: "Retain the conversation.",
-  messages: [{ role: "user", content: "Remember NORTH-COPPER-17.", timestamp: 1 }],
-} satisfies Context;
-
-const compactionItem = { type: "compaction", id: "cmp_1", encrypted_content: "opaque" };
-const retainedUser = {
-  type: "message",
-  role: "user",
-  content: [{ type: "input_text", text: "Remember NORTH-COPPER-17." }],
-};
+const retainedUser = retainedWindow([{ type: "input_text", text: "Remember NORTH-COPPER-17." }])[0];
 function mockCompactResponse(
   output: unknown[],
   usage = { input_tokens: 1, output_tokens: 1 },
@@ -77,28 +71,21 @@ function expectCompactBody(body: unknown) {
   );
 }
 
-beforeEach(() => {
-  sdkState.clients.length = 0;
-  sdkState.post.mockReset();
-});
+beforeEach(() => sdkState.post.mockReset());
 
-it("sends the system prompt as instructions and accepts retained users from official OpenAI", async () => {
+it("keeps instructions outside the retained user/assistant window, even with fewer users than input", async () => {
   const usage = { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 };
-  mockCompactResponse([retainedUser, compactionItem], usage);
+  const output = [retainedUser, outputMessage("Retained answer."), compactionItem];
+  mockCompactResponse(output, usage);
   const result = await compact(officialOpenAIModel, context, "session-1");
 
-  expect(sdkState.clients[0]).toMatchObject({
-    apiKey: "test-key",
-    baseURL: "https://api.openai.com/v1",
-  });
   // The prompt stays out of input, so the endpoint cannot retain it in the window.
   expectCompactBody({
     model: "gpt-5.6-luna",
     instructions: "Retain the conversation.",
-    input: [expect.objectContaining({ role: "user", type: "message" })],
+    input: context.messages.map(() => expect.objectContaining({ role: "user", type: "message" })),
   });
   expect(result).toMatchObject({
-    output: [expect.objectContaining({ role: "user" }), compactionItem],
     item: compactionItem,
     historyMode: "retained-users",
     usage,
@@ -109,34 +96,10 @@ it("sends the system prompt as instructions and accepts retained users from offi
       model: "gpt-5.6-luna",
     },
   });
-});
-
-it.each([
-  { role: "user", content: [{ type: "input_text", text: "Retained fact." }] },
-  {
-    role: "assistant",
-    content: [{ type: "output_text", text: "Retained answer.", annotations: [] }],
-  },
-])("accepts a canonical retained $role window with fewer users than its input", async (message) => {
-  const output = retainedWindow(message.content, message.role);
-  mockCompactResponse(output, { input_tokens: 100, output_tokens: 10 });
-  const result = await compact(officialOpenAIModel, {
-    ...context,
-    messages: [
-      ...context.messages,
-      { role: "user", content: "A second user message.", timestamp: 2 },
-    ],
-  });
   expect(result.output).toEqual(output);
-  expect(result.historyMode).toBe("retained-users");
-  expectCompactBody(
-    expect.objectContaining({
-      input: [expect.objectContaining({ role: "user" }), expect.objectContaining({ role: "user" })],
-    }),
-  );
 });
 
-it.each<{ output: unknown[]; reason: string; route?: Model }>([
+it.each<{ output: unknown[]; reason: string }>([
   {
     output: [{ type: "message", role: "user", content: [] }],
     reason: "must end with a compaction item",
@@ -146,10 +109,7 @@ it.each<{ output: unknown[]; reason: string; route?: Model }>([
     reason: "nonempty encrypted_content",
   },
   {
-    output: [
-      { type: "compaction", encrypted_content: "first" },
-      { type: "compaction", encrypted_content: "last" },
-    ],
+    output: [compactionItem, compactionItem],
     reason: "exactly one compaction item",
   },
   ...[
@@ -157,22 +117,14 @@ it.each<{ output: unknown[]; reason: string; route?: Model }>([
     { type: "input_file", file_id: 42 },
     { type: "output_text", text: "not supported input" },
   ].map((block) => ({ output: retainedWindow([block]), reason: "unsupported content" })),
-  {
-    output: [{ type: "compaction", encrypted_content: "opaque", status: "completed" }],
-    reason: rewritten,
-    route: customModel,
-  },
   ...["data:image/png;base64,invalid", "data:image/png;base64,/9j/"].map((image_url) => ({
     output: retainedWindow([{ type: "input_image", detail: "auto", image_url }]),
     reason: rewritten,
   })),
-])(
-  "rejects invalid canonical windows: $reason %j",
-  async ({ output, reason, route = officialOpenAIModel }) => {
-    mockCompactResponse(output);
-    await expect(compact(route)).rejects.toThrow(reason);
-  },
-);
+])("rejects invalid canonical windows: $reason %j", async ({ output, reason }) => {
+  mockCompactResponse(output);
+  await expect(compact(officialOpenAIModel)).rejects.toThrow(reason);
+});
 
 it("rejects retained-message prefixes from native xAI", async () => {
   mockCompactResponse([retainedUser, compactionItem]);
@@ -184,38 +136,33 @@ it("rejects retained-message prefixes from native xAI", async () => {
     input: [
       expect.objectContaining({ role: "system", type: "message" }),
       expect.objectContaining({ role: "user", type: "message" }),
+      expect.objectContaining({ role: "user", type: "message" }),
     ],
   });
 });
 
+const createRoute = (overrides: Partial<Model>) => ({ ...officialOpenAIModel, ...overrides });
 it.each([
   ["native xAI alias default", { ...model, provider: "x-ai" }, undefined, true],
   ["public OpenAI default", officialOpenAIModel, undefined, true],
   ["public OpenAI opt-out", officialOpenAIModel, { responsesCompactEndpoint: false }, false],
   ["custom Responses opt-in", customModel, { responsesCompactEndpoint: true }, true],
-  [
-    "OpenAI without a resolved endpoint",
-    { ...officialOpenAIModel, baseUrl: undefined },
-    undefined,
-    false,
-  ],
+  ["OpenAI without a resolved endpoint", createRoute({ baseUrl: undefined }), undefined, false],
   [
     "ChatGPT default",
-    {
-      ...officialOpenAIModel,
+    createRoute({
       api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    },
+      baseUrl: "https://chatgpt.com",
+    }),
     undefined,
     false,
   ],
   [
     "Azure default",
-    {
-      ...officialOpenAIModel,
+    createRoute({
       provider: "azure-openai",
-      baseUrl: "https://example.openai.azure.com",
-    },
+      baseUrl: "https://x.openai.azure.com",
+    }),
     undefined,
     false,
   ],

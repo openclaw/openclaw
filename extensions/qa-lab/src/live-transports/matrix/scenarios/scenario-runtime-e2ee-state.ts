@@ -11,7 +11,7 @@ import {
 import { loadMatrixQaE2eeRuntime } from "../substrate/e2ee-client.js";
 import { requestMatrixJson } from "../substrate/request.js";
 import type { MatrixQaCliRuntime } from "./scenario-runtime-e2ee-destructive-recovery.js";
-import { findFilesByName } from "./scenario-runtime-find-files.js";
+import { findMatrixStateDatabases } from "./scenario-runtime-find-files.js";
 
 function withMatrixQaStateStore<T>(
   options: OpenKeyedStoreOptions,
@@ -30,11 +30,7 @@ async function findMatrixQaCliAccountRoot(params: {
   userId: string;
 }) {
   const storageMetadataRuntime = await loadMatrixQaE2eeRuntime();
-  const sqlitePaths = await findFilesByName({
-    filename: "openclaw.sqlite",
-    rootDir: params.runtime.stateDir,
-    maxDepth: 10,
-  });
+  const sqlitePaths = await findMatrixStateDatabases(params.runtime.stateDir);
   for (const sqlitePath of sqlitePaths) {
     if (path.basename(path.dirname(sqlitePath)) !== "state") {
       continue;
@@ -58,33 +54,24 @@ async function findMatrixQaCliAccountRoot(params: {
 
 export async function mutateMatrixQaCliStateLoss(params: {
   deviceId: string;
-  preserveRecoveryKey: boolean;
   runtime: Pick<MatrixQaCliRuntime, "stateDir">;
   userId: string;
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
   const matrixRuntime = await loadMatrixQaE2eeRuntime();
   const recoveryKeyStoreOptions = matrixRuntime.openMatrixRecoveryKeyStoreOptions(accountRoot);
-  let recoveryKeyState: unknown = null;
-  if (params.preserveRecoveryKey) {
-    recoveryKeyState = withMatrixQaStateStore(recoveryKeyStoreOptions, (store) =>
-      store.lookup("current"),
-    );
-    if (!recoveryKeyState) {
-      throw new Error("Matrix CLI recovery key state was not created");
-    }
+  const recoveryKeyState = withMatrixQaStateStore(recoveryKeyStoreOptions, (store) =>
+    store.lookup("current"),
+  );
+  if (!recoveryKeyState) {
+    throw new Error("Matrix CLI recovery key state was not created");
   }
   await rm(accountRoot, { force: true, recursive: true });
-  if (recoveryKeyState) {
-    await mkdir(accountRoot, { recursive: true });
-    withMatrixQaStateStore(recoveryKeyStoreOptions, (store) =>
-      store.register("current", recoveryKeyState),
-    );
-  }
-  return {
-    accountRoot,
-    recoveryKeyPreserved: Boolean(recoveryKeyState),
-  };
+  await mkdir(accountRoot, { recursive: true });
+  withMatrixQaStateStore(recoveryKeyStoreOptions, (store) =>
+    store.register("current", recoveryKeyState),
+  );
+  return accountRoot;
 }
 
 export async function corruptMatrixQaCliIdbSnapshot(params: {

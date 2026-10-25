@@ -26,12 +26,8 @@ export function formatClawDiagnostics(diagnostics: readonly ClawDiagnostic[]): s
     .join("\n");
 }
 
-function logClawPlanNotices(diagnostics: ClawDiagnostic[]): void {
-  for (const diagnostic of diagnostics.filter((entry) => entry.level === "warning")) {
+export function logClawAgentConfiguration(plan: ClawAddPlan): void {
+  for (const diagnostic of plan.diagnostics.filter((entry) => entry.level === "warning")) {
     runtime.log(redactSensitiveText(`Notice: ${diagnostic.message}`));
   }
-}
-
-export function logClawAgentConfiguration(plan: ClawAddPlan): void {
-  logClawPlanNotices(plan.diagnostics);
 }

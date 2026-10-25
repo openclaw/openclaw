@@ -1,7 +1,7 @@
 import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { expect, it } from "vitest";
 import { z } from "zod";
-import { mapSensitivePaths, testApi } from "./schema.hints.js";
+import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
 import { buildConfigSchemaCore } from "./schema.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
@@ -22,18 +22,20 @@ function expectSensitive(hints: ReturnType<typeof mapSensitivePaths>, paths: str
 
 it("accounts for every root config section", () => {
   // Sections without beginner-facing docs still require an explicit decision.
-  const urls = testApi.SECTION_DOCS_URLS;
-  const known = new Set([...Object.keys(urls), "$schema", "meta", "attachments"]);
+  const docs = Object.entries(buildBaseHints()).filter(([, hint]) => hint.docsUrl !== undefined);
+  const known = new Set([...docs.map(([path]) => path), "$schema", "meta", "attachments"]);
   expect(Object.keys(OpenClawSchemaShape).filter((key) => !known.has(key))).toEqual([]);
 });
 
 it("describes omitted settings without adding them to authored config", () => {
   const { uiHints } = buildConfigSchemaCore();
-  const config = OpenClawSchema.parse({ cron: {}, plugins: {} });
+  const config = OpenClawSchema.parse({ cron: { triggers: {} }, plugins: {} });
   for (const section of ["cron", "plugins"] as const) {
     expect(uiHints[`${section}.enabled`]).toMatchObject({ placeholder: "Default: On" });
     expect(config[section]).not.toHaveProperty("enabled");
   }
+  expect(uiHints["cron.triggers.enabled"]).toMatchObject({ placeholder: "Default: On" });
+  expect(config.cron?.triggers).not.toHaveProperty("enabled");
 });
 
 it("maps sensitive fields through every structural Zod type", () => {

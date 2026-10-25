@@ -81,7 +81,14 @@ describe("resolveChannelGroupPolicy", () => {
     expect(policy.allowed).toBe(false);
   });
 
-  it("allows groups when groupPolicy=allowlist with hasGroupAllowFrom but no groups", () => {
+  it.each([
+    ["allows groups when groupPolicy=allowlist with hasGroupAllowFrom but no groups", true, true],
+    [
+      "still fails closed when groupPolicy=allowlist without groups or groupAllowFrom",
+      false,
+      false,
+    ],
+  ] as const)("%s", (_name, hasGroupAllowFrom, allowed) => {
     const cfg = {
       channels: {
         whatsapp: {
@@ -94,31 +101,11 @@ describe("resolveChannelGroupPolicy", () => {
       cfg,
       channel: "whatsapp",
       groupId: "123@g.us",
-      hasGroupAllowFrom: true,
+      hasGroupAllowFrom,
     });
 
     expect(policy.allowlistEnabled).toBe(true);
-    expect(policy.allowed).toBe(true);
-  });
-
-  it("still fails closed when groupPolicy=allowlist without groups or groupAllowFrom", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          groupPolicy: "allowlist",
-        },
-      },
-    } as OpenClawConfig;
-
-    const policy = resolveChannelGroupPolicy({
-      cfg,
-      channel: "whatsapp",
-      groupId: "123@g.us",
-      hasGroupAllowFrom: false,
-    });
-
-    expect(policy.allowlistEnabled).toBe(true);
-    expect(policy.allowed).toBe(false);
+    expect(policy.allowed).toBe(allowed);
   });
 
   it("can default explicitly configured groups to no mention for channels that opt in", () => {

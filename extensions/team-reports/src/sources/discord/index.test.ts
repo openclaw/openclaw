@@ -1,14 +1,18 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { DiscordMessage, SourceRuntime } from "../../types.js";
+import { bindReportFetch } from "../../report-network.test-support.js";
+import type { DiscordMessage } from "../../types.js";
 import { config, json, message, runtime, thread, window } from "./discord.fixtures.js";
 import { createDiscordSource } from "./index.js";
 
 const { sinceMs, untilMs } = window;
 
-async function collect(context: SourceRuntime, sourceConfig = config) {
+async function collect(context: ReturnType<typeof runtime>, sourceConfig = config) {
   const messages = new Map<string, DiscordMessage>();
   const batchSizes: number[] = [];
-  const source = createDiscordSource(context);
+  const source = bindReportFetch(
+    createDiscordSource({ logger: context.logger }),
+    context.fetchImpl,
+  );
   const status = await source.collect(sourceConfig, window, async (entries) => {
     batchSizes.push(entries.length);
     for (const { key, value } of entries) {

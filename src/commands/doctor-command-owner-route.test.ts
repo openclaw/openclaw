@@ -8,7 +8,7 @@ import { readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import { resolveHeartbeatDeliveryTargetWithSessionRoute } from "../infra/outbound/targets.js";
+import { resolveProactiveDeliveryTargetWithSessionRoute } from "../infra/outbound/targets.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -37,7 +37,7 @@ const registry = createTestRegistry([
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const heartbeat = (cfg: OpenClawConfig) =>
-  resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, agentId: "main" });
+  resolveProactiveDeliveryTargetWithSessionRoute({ cfg, agentId: "main" });
 const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
 const owner = "100000000000000001";
 const typedOwner = `discord:user:${owner}`;

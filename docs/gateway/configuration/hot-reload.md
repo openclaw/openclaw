@@ -17,6 +17,9 @@ including JSON5, `$include`, and environment substitutions.
 Startup waits for the config watcher's initial reconciliation, queued file-stability
 checks, and any resulting reload attempt before completing. Initial config
 publication cannot race the first request after startup.
+Plugin lifecycle requests such as `plugins.reload` that arrive while startup is
+still settling wait only for that initial reconciliation, then apply the current
+config, including an edit the watcher had queued. Startup completes after them.
 Credential refreshes that leave the effective config unchanged preserve pending
 work instead of invalidating its config snapshot.
 
@@ -162,7 +165,7 @@ Reload planning classifies each changed path as one of three outcomes:
 - **Gateway restart (`restart`)**: restart the Gateway process.
 - **Hot reload (`hot`)**: apply the change while keeping the Gateway process
   running. This can include restarting the owning subsystem, such as a channel,
-  cron, or heartbeat.
+  or cron.
 - **No reload action (`none`)**: update the runtime config snapshot without
   scheduling a reload action for that path. Consumers that read the current
   config can observe the new value on a later read.
@@ -223,7 +226,7 @@ notification handoff.
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
 | Channels                  | `channels.*`, `web` (WhatsApp)                                                                                                                                                                                                                                     | Depends on setting and loaded plugin                                                           |
 | Agent & models            | `agents`, `models`, `auth.order`, `auth.profiles`, `broadcast`, `worktreeRoot`, `worktreeAcceleration`                                                                                                                                                             | No                                                                                             |
-| Automation                | `hooks`, `cron`, `agents.defaults.heartbeat`                                                                                                                                                                                                                       | No (reloads the owning subsystem)                                                              |
+| Automation                | `hooks`, `cron`                                                                                                                                                                                                                                                    | No (reloads the owning subsystem)                                                              |
 | Sessions & messages       | `session`, `messages`                                                                                                                                                                                                                                              | No                                                                                             |
 | Tools & media             | `tools`, `skills`, `mcp` except Apps listener settings, `audio`, `talk`, `tts`, `memory.citations`, `attachments.ttlHours`                                                                                                                                         | No                                                                                             |
 | Plugin config             | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled`, `plugins.slots`, `plugins.load`, legacy `plugins.installs`                                                                                                                                | No (reloads plugin runtime by default)                                                         |
@@ -266,7 +269,7 @@ Discord, Matrix, Signal, Slack, Telegram, or WhatsApp. Other channel plugins
 refresh unless they declare that they read the policy live. Per-channel and
 per-account overrides still take precedence; admitted turns retain their policy.
 
-`diagnostics.enabled` updates diagnostic dispatch and heartbeat ownership live.
+`diagnostics.enabled` updates diagnostic dispatch and its diagnostic heartbeat live.
 With `diagnostics-otel` loaded, `diagnostics.otel` restarts only its exporter service,
 flushing the old generation before starting the new one. Externally preloaded
 OpenTelemetry providers retain their transport and shutdown ownership.

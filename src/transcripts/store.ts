@@ -229,14 +229,10 @@ export class TranscriptsStore {
     return this.readWorker("transcripts.latest", { params: undefined });
   }
 
-  async readNotes(
-    session: TranscriptSessionDescriptor,
-    purpose: read.TranscriptReadPurpose = "page",
-  ) {
+  async readNotes(session: TranscriptSessionDescriptor) {
     return this.readWorker("transcripts.notes", {
       params: {
         session: { sessionId: session.sessionId, startedAt: session.startedAt },
-        purpose,
       },
     });
   }
@@ -510,12 +506,10 @@ export class TranscriptsStore {
 
   async readUtterancesForSession(
     session: TranscriptSessionDescriptor,
-    options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
     return this.readWorker("transcripts.utterances", {
       params: {
         session: { sessionId: session.sessionId, startedAt: session.startedAt },
-        maxUtterances: options.maxUtterances,
       },
     });
   }
@@ -688,7 +682,6 @@ export class TranscriptsStore {
           sessionDir,
           metadataPath: path.join(sessionDir, "metadata.json"),
           transcriptPath: path.join(sessionDir, "transcript.jsonl"),
-          summaryJsonPath: path.join(sessionDir, "summary.json"),
           summaryPath: path.join(sessionDir, "summary.md"),
           hasSummary: storedSummary.summary !== undefined || storedSummary.markdown !== undefined,
         };

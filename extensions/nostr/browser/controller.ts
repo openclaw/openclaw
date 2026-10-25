@@ -2,10 +2,47 @@ import type {
   ControlUiChannelSettingsContext,
   ControlUiChannelSettingsSnapshot,
 } from "openclaw/plugin-sdk/control-ui";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Translator } from "./i18n/index.ts";
 import { createNostrProfileFormState, type NostrProfileFormState } from "./profile-form.tsx";
-import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./profile-ops.ts";
 import type { NostrProfile } from "./types.ts";
+
+const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
+
+function parseValidationErrors(
+  details: unknown,
+  formatExternalText: (text: string) => string,
+): Record<string, string> {
+  if (!Array.isArray(details)) {
+    return {};
+  }
+  const errors: Record<string, string> = {};
+  for (const entry of details) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const [rawField, ...rest] = entry.split(":");
+    if (!rawField || rest.length === 0) {
+      continue;
+    }
+    const field = rawField.trim();
+    const message = rest.join(":").trim();
+    if (field && message) {
+      errors[field] = formatExternalText(message);
+    }
+  }
+  return errors;
+}
+
+function isNostrProfile(value: unknown): value is NostrProfile {
+  return (
+    isRecord(value) &&
+    ["name", "displayName", "about", "picture", "banner", "website", "nip05", "lud16"].every(
+      (field) =>
+        value[field] === undefined || value[field] === null || typeof value[field] === "string",
+    )
+  );
+}
 
 /** Form identity settles synchronously; rendering consumes this plugin-owned state. */
 export function createProfileController(
@@ -54,15 +91,49 @@ export function createProfileController(
       ...(action === "save" ? { fieldErrors: {} } : {}),
     }));
     try {
-      const request = {
-        context,
-        accountId: accountId ?? snapshot.accounts[0]?.accountId ?? "default",
-        signal: current.signal,
-      };
+      const targetAccountId = accountId ?? snapshot.accounts[0]?.accountId ?? "default";
+      async function requestProfile(
+        method: "PUT" | "POST",
+        body: unknown,
+        suffix: readonly string[] = [],
+      ) {
+        const controller = new AbortController();
+        const timeout = setTimeout(
+          () =>
+            controller.abort(
+              new DOMException("Nostr profile request timed out after 30 seconds", "TimeoutError"),
+            ),
+          NOSTR_PROFILE_REQUEST_TIMEOUT_MS,
+        );
+        try {
+          return await context.request({
+            accountId: targetAccountId,
+            path: ["profile", ...suffix],
+            method,
+            body,
+            signal: AbortSignal.any([current.signal, controller.signal]),
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+      async function importProfile() {
+        const result = await requestProfile("POST", { autoMerge: true }, ["import"]);
+        return {
+          ...result,
+          data: result.data && {
+            ...result.data,
+            ok: result.data.ok,
+            saved: result.data.saved,
+            imported: isNostrProfile(result.data.imported) ? result.data.imported : undefined,
+            merged: isNostrProfile(result.data.merged) ? result.data.merged : undefined,
+          },
+        };
+      }
       const result =
         action === "save"
-          ? { action, ...(await putNostrProfile({ ...request, values: submitted.values })) }
-          : { action, ...(await importNostrProfile(request)) };
+          ? { action, ...(await requestProfile("PUT", submitted.values)) }
+          : { action, ...(await importProfile()) };
       if (!isCurrent() || !form) {
         return;
       }

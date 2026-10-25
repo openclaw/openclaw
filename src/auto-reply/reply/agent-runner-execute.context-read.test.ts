@@ -21,7 +21,7 @@ import { createReplyRestartRecoveryClaimController } from "./restart-recovery-cl
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
-// mock-isolation: The fixture replaces model execution with the real session queue and reply boundary.
+// mock-isolation: Isolate model execution, compaction, delivery, and plugins; retain queue/transcript admission.
 vi.mock("./agent-runner-execution.js", () => ({ executeAgentTurn: vi.fn() }));
 // mock-isolation: Compaction is outside this source-admission race.
 vi.mock("./agent-runner-memory.js", () => ({
@@ -46,11 +46,12 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
       storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
     let entry: InternalSessionEntry = { sessionId: target.sessionId, updatedAt: 1 };
+    const sourceTurnId = "channel-user:v1:synthetic-dm";
     await replaceSessionEntry(target, entry);
     const manager = await SessionManager.openAsync(target);
     await manager.appendMessageAsync({ role: "user", content: "prior turn", timestamp: 1 });
     const recorder = createUserTurnTranscriptRecorder({
-      input: { text: "incoming DM", idempotencyKey: "channel-user:v1:synthetic-dm" },
+      input: { text: "incoming DM", idempotencyKey: sourceTurnId },
       target: { ...target, sessionEntry: entry },
     });
     const inputAbort = new AbortController();
@@ -76,7 +77,7 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
       ...target,
       acquireSessionActor: async () => input,
       admissionRunId: "inbound-run",
-      sourceTurnId: "channel-user:v1:synthetic-dm",
+      sourceTurnId,
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       getEntry: () => entry,
       getSessionId: () => target.sessionId,
@@ -148,7 +149,7 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
       cfg: {},
       commandBody: "incoming DM",
       defaultModel: "test",
-      isHeartbeat: false,
+
       queueKey: target.sessionKey,
       resolvedQueue: { mode: "followup" },
       sessionCtx: { Provider: "telegram" },
@@ -164,7 +165,7 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
       replyToChannel: "telegram",
       replyToMode: "off",
       typingMode: "never",
-      typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+      typingSignals: createTypingSignaler({ typing, mode: "never" }),
       applyReplyToMode: (payload) => payload,
       getActiveSessionEntry: () => entry,
       isRestartRecoveryArmed: recovery.isArmed,
@@ -187,9 +188,7 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
       expect(inboundStarted).toHaveBeenCalledOnce();
       const messages = await SessionManager.readSessionContextAsync(target, (rows) => [...rows]);
       expect(messages.filter((message) => message.role === "user")).toHaveLength(2);
-      expect(loadSessionEntry(target)?.restartRecoveryDeliverySourceRunId).toBe(
-        "channel-user:v1:synthetic-dm",
-      );
+      expect(loadSessionEntry(target)?.restartRecoveryDeliverySourceRunId).toBe(sourceTurnId);
     } finally {
       releaseRead.resolve();
       await Promise.allSettled([cron, inbound]);

@@ -35,6 +35,7 @@ export async function preflightAgentDatabasesBounded<T>(
       reason: string,
     ) => AgentDatabaseAdmissionRefusal[];
   },
+  takePrestartedReader?: () => ReturnType<typeof createAgentSchemaInspectionWorker> | undefined,
 ): Promise<AgentDatabasePreflightStats> {
   const inspectedAgentPaths = new Set<string>();
   const inspectedAgentTargets = new Set<string>();
@@ -95,7 +96,7 @@ export async function preflightAgentDatabasesBounded<T>(
   };
 
   const worker = async () => {
-    await using reader = createAgentSchemaInspectionWorker();
+    await using reader = takePrestartedReader?.() ?? createAgentSchemaInspectionWorker();
     readers.push(reader);
     while (true) {
       if (inspectionSignal?.aborted || failures.size > 0) {

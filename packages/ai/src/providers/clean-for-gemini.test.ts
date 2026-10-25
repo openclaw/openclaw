@@ -30,6 +30,17 @@ describe("cleanSchemaForGemini", () => {
       { type: "string", description: "nullable field" },
     ],
     [
+      "selects the first non-null type from a mixed type array",
+      { type: ["null", "string", "number"], description: "table cell", default: "" },
+      { type: "string", description: "table cell", default: "" },
+    ],
+    [
+      "omits type when a type array contains only null",
+      { type: ["null"], description: "empty choice" },
+      { description: "empty choice" },
+    ],
+    ["omits an empty type array", { type: [], title: "Empty" }, { title: "Empty" }],
+    [
       "stringifies an integer const before type without changing the schema type",
       { const: 42, type: "integer" },
       { enum: ["42"], type: "integer" },
@@ -41,6 +52,30 @@ describe("cleanSchemaForGemini", () => {
     ],
   ])("%s", (_name, input, expected) => {
     expect(cleanSchemaForGemini(input)).toStrictEqual(expected);
+  });
+
+  it.each(["anyOf", "oneOf"])("simplifies %s without losing outer metadata", (keyword) => {
+    for (const { variants, expected } of [
+      {
+        variants: [
+          { type: "string", const: "compact" },
+          { type: "string", const: "wide" },
+        ],
+        expected: { type: "string", enum: ["compact", "wide"] },
+      },
+      {
+        variants: [{ type: "null" }, { type: "string", description: "inner" }],
+        expected: { type: "string", description: "outer" },
+      },
+      {
+        variants: [{ type: "string" }, { type: "integer" }],
+        expected: { type: "string" },
+      },
+    ]) {
+      expect(
+        cleanSchemaForGemini({ [keyword]: variants, description: "outer", title: "Choice" }),
+      ).toStrictEqual({ ...expected, description: "outer", title: "Choice" });
+    }
   });
 
   it("strips empty required arrays in nested schemas", () => {

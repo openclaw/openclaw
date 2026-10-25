@@ -2,14 +2,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
-import {
-  resolveFirecrawlApiKey,
-  resolveFirecrawlBaseUrl,
-  resolveFirecrawlMaxAgeMs,
-  resolveFirecrawlOnlyMainContent,
-  resolveFirecrawlScrapeTimeoutSeconds,
-  resolveFirecrawlSearchTimeoutSeconds,
-} from "./config.js";
 
 const { runFirecrawlSearch, runFirecrawlScrape } = vi.hoisted(() => ({
   runFirecrawlSearch: vi.fn(async (params: Record<string, unknown>) => params),
@@ -625,16 +617,61 @@ describe("firecrawl tools", () => {
     expect(result.details).toEqual({ ok: true, params: expected });
   });
 
-  it("falls back to environment and defaults for fetch config values", () => {
+  it.each([
+    ["search", 30_000],
+    ["scrape", 60_000],
+  ] as const)("uses environment and request defaults for %s", async (operation, timeoutMs) => {
     vi.stubEnv("FIRECRAWL_API_KEY", "env-key");
-    vi.stubEnv("FIRECRAWL_BASE_URL", "https://env.firecrawl.test");
-
-    expect(resolveFirecrawlApiKey()).toBe("env-key");
-    expect(resolveFirecrawlBaseUrl()).toBe("https://env.firecrawl.test");
-    expect(resolveFirecrawlOnlyMainContent()).toBe(true);
-    expect(resolveFirecrawlMaxAgeMs()).toBe(172_800_000);
-    expect(resolveFirecrawlScrapeTimeoutSeconds()).toBe(60);
-    expect(resolveFirecrawlSearchTimeoutSeconds()).toBe(30);
+    vi.stubEnv("FIRECRAWL_BASE_URL", "http://127.0.0.1:8787");
+    ssrfMock?.mockRestore();
+    ssrfMock = mockPinnedHostnameResolution(["127.0.0.1"]);
+    const controller = new AbortController();
+    const started = Promise.withResolvers<RequestInit>();
+    const fetchSpy = vi.fn<typeof fetch>((_url, init) => {
+      started.resolve(init ?? {});
+      return new Promise((_resolve, reject) => {
+        const signal = AbortSignal.any([...(init?.signal ? [init.signal] : []), controller.signal]);
+        signal.addEventListener(
+          "abort",
+          () =>
+            reject(signal.reason instanceof Error ? signal.reason : new Error("request aborted")),
+          { once: true },
+        );
+      });
+    });
+    global.fetch = fetchSpy;
+    vi.useFakeTimers();
+    const outcome = runOperation(operation, {}, { signal: controller.signal }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      const init = await started.promise;
+      expect(fetchSpy).toHaveBeenCalledExactlyOnceWith(
+        `http://127.0.0.1:8787/v2/${operation}`,
+        expect.anything(),
+      );
+      expect(new Headers(init.headers).get("authorization")).toBe("Bearer env-key");
+      if (operation === "scrape") {
+        if (typeof init.body !== "string") {
+          throw new Error("Expected a JSON request body");
+        }
+        expect(JSON.parse(init.body)).toMatchObject({
+          onlyMainContent: true,
+          maxAge: 172_800_000,
+          timeout: 60_000,
+        });
+      }
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(init.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(init.signal?.aborted).toBe(true);
+      expect(await outcome).toMatchObject({ name: "TimeoutError" });
+    } finally {
+      controller.abort();
+      await outcome;
+      vi.useRealTimers();
+    }
   });
 
   it.each<
@@ -656,7 +693,7 @@ describe("firecrawl tools", () => {
       { source: "env", provider: "firecrawl-env", id: "FIRECRAWL_API_KEY" },
       { "firecrawl-env": { source: "file", path: "/tmp/secrets.json" } },
     ],
-  ])("fails closed for %s", (_name, apiKey, providers) => {
+  ])("fails closed for %s", async (_name, apiKey, providers) => {
     vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-fallback");
     vi.stubEnv("UNRELATED_SECRET", "should-not-be-read");
     const cfg = firecrawlConfig(
@@ -664,7 +701,9 @@ describe("firecrawl tools", () => {
       providers ? { secrets: { providers } } : {},
     );
 
-    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+    const { fetchSpy } = mockJsonResponse({ success: true, data: [] });
+    await expect(search({ cfg })).rejects.toThrow("needs a Firecrawl API key");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it.each([

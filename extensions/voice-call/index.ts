@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
@@ -11,6 +10,7 @@ import { resolvePluginServiceScheduler } from "openclaw/plugin-sdk/runtime";
 import {
   asNonArrayRecord as asParamRecord,
   asOptionalRecord,
+  isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
@@ -32,7 +32,6 @@ import {
   type VoiceCallConfig,
 } from "./src/config.js";
 import { TELEPHONY_DEFAULT_TTS_TIMEOUT_MS } from "./src/telephony-tts.js";
-import { resolveActiveVoiceCallToolScope } from "./src/tool-call-scope.js";
 import { VoiceCallToolSchema } from "./src/tool-schema.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
@@ -113,8 +112,7 @@ export default definePluginEntry({
           runtimePromise ??= createVoiceCallRuntime({
             scheduler,
             config,
-            coreConfig: api.config as OpenClawConfig,
-            fullConfig: api.config,
+            coreConfig: api.config,
             agentRuntime: api.runtime.agent,
             stateRuntime: api.runtime.state,
             ttsRuntime: api.runtime.tts,
@@ -390,14 +388,39 @@ export default definePluginEntry({
           try {
             // Preserve tool error precedence: runtime availability is checked before model input.
             const rt = await ensureRuntime();
-            const callScope = await resolveActiveVoiceCallToolScope({
-              action: rawParams.action,
-              binding: toolContext.toolBindings?.voice_call,
-              requestedCallId: rawParams.callId,
-              runtime: rt,
-              assertAuthority: assertActiveCallAuthority,
-              signal,
-            });
+            const callScope = await (async () => {
+              const binding = toolContext.toolBindings?.voice_call;
+              if (!isRecord(binding)) {
+                return undefined;
+              }
+              const callId = normalizeOptionalString(binding.callId);
+              if (binding.kind !== "active-call" || !callId) {
+                return undefined;
+              }
+              if (rawParams.action !== "end_call") {
+                throw new VoiceCallCommandInputError("This realtime consult may only end_call.");
+              }
+              const requestedCallId = normalizeOptionalString(rawParams.callId);
+              if (requestedCallId && requestedCallId !== callId) {
+                throw new VoiceCallCommandInputError(
+                  `This realtime consult is bound to call ${callId}.`,
+                );
+              }
+              // Admit call control before awaiting lookup. The service owns accepted actions;
+              // cancelling the consult must not interrupt their delivery or settlement.
+              assertActiveCallAuthority();
+              signal?.throwIfAborted();
+              const activeCall = await rt.manager.getCallForStream(callId);
+              if (!activeCall || activeCall.callId !== callId) {
+                throw new VoiceCallCommandInputError(
+                  "The bound realtime call is no longer active.",
+                );
+              }
+              return {
+                callId,
+                execution: { runtime: rt, assertAuthority: assertActiveCallAuthority },
+              };
+            })();
             const initiateParams = {
               to: normalizeOptionalString(rawParams.to),
               message: normalizeOptionalString(rawParams.message),
