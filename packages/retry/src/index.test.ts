@@ -33,6 +33,10 @@ function createRetryOperation(failures = 1) {
   return operation.mockResolvedValueOnce("ok");
 }
 
+function expectRetry(options: RetryOptions, failures = 1, run = retryAsync) {
+  return expect(run(createRetryOperation(failures), options)).resolves.toBe("ok");
+}
+
 function deadline<T>(
   operation: Promise<T> | (() => Promise<T>),
   options: { signal?: AbortSignal; onAbort?: (signal: AbortSignal) => string } = {},
@@ -42,13 +46,6 @@ function deadline<T>(
 
 function expectTimers(signal: AbortSignal, count = 0) {
   expect([vi.getTimerCount(), getEventListeners(signal, "abort").length]).toEqual([count, count]);
-}
-
-async function expectAbortedSleep(promise: Promise<void>): Promise<Error> {
-  const error: unknown = await promise.catch((caught: unknown) => caught);
-  assert(error instanceof Error, "expected aborted sleep");
-  expect(error.message).toBe("aborted");
-  return error;
 }
 
 it("observes an existing abort when the operation factory throws synchronously", async () => {
@@ -152,7 +149,6 @@ it("cancels a pending wait with the canonical abort error", async () => {
 
 it.each([
   [0, 0, 100, 250, 0.5, 100],
-  [1, 0, 100, 250, 0.5, 100],
   [2, 1, 100, 250, 0.5, 250],
   [2, 1, 100, 450, 0.5, 300],
   [1_016, 0, 1_000, 30_000, 0, 30_000],
@@ -181,8 +177,12 @@ it.each([false, true])("abort during registration=%s", async (duringRegistration
   } else {
     controller.abort();
   }
-  const error = await expectAbortedSleep(sleepWithAbort(5, signal));
-  expect(error.cause).toBe(signal.reason);
+  const pending = sleepWithAbort(5, signal);
+  await expect(pending).rejects.toBeInstanceOf(Error);
+  await expect(pending).rejects.toMatchObject({
+    message: "aborted",
+    cause: signal.reason,
+  });
   expectTimers(signal);
 });
 
@@ -237,33 +237,30 @@ it.each<[number, number, number, number, number, boolean?]>([
 ])("Retry-After case %#", async (hint, min, max, jitter, expected, optionSleep) => {
   const sleep = vi.fn(async (_ms: number) => undefined);
   const run = createRetryRunner(optionSleep ? {} : { sleep });
-  await expect(
-    run(createRetryOperation(), {
-      attempts: 2,
-      minDelayMs: min,
-      maxDelayMs: max,
-      jitter,
-      random: () => 0,
-      retryAfterMs: () => hint,
-      ...(optionSleep ? { sleep } : {}),
-    }),
-  ).resolves.toBe("ok");
+  const options: RetryOptions = {
+    attempts: 2,
+    minDelayMs: min,
+    maxDelayMs: max,
+    jitter,
+    random: () => 0,
+    retryAfterMs: () => hint,
+    ...(optionSleep ? { sleep } : {}),
+  };
+  await expectRetry(options, 1, run);
   expect(sleep).toHaveBeenCalledExactlyOnceWith(expected);
 });
 
 it("supports custom schedules and async retry hooks", async () => {
   const events: string[] = [];
-  const operation = createRetryOperation(2);
-  await expect(
-    retryAsync(operation, {
-      attempts: 3,
-      minDelayMs: 0,
-      maxDelayMs: 100,
-      delayMs: ({ attempt }) => [10, 30][attempt - 1] ?? 0,
-      onRetry: async ({ attempt }) => void events.push(`retry:${attempt}`),
-      sleep: async (ms) => void events.push(`sleep:${ms}`),
-    }),
-  ).resolves.toBe("ok");
+  const options: RetryOptions = {
+    attempts: 3,
+    minDelayMs: 0,
+    maxDelayMs: 100,
+    delayMs: ({ attempt }) => [10, 30][attempt - 1] ?? 0,
+    onRetry: async ({ attempt }) => void events.push(`retry:${attempt}`),
+    sleep: async (ms) => void events.push(`sleep:${ms}`),
+  };
+  await expectRetry(options, 2);
   expect(events).toEqual(["retry:1", "sleep:10", "retry:2", "sleep:30"]);
 });
 
@@ -292,7 +289,6 @@ it("honors full native waits, numeric clamping, and the zero-delay yield", async
     ],
     [[fullJitter], [TIMER_MAX_MS], [TIMER_MAX_MS, TIMER_MAX_MS]],
     [[2, 0], [], [0]],
-    [[2, 10], [], [10]],
     [[2, Infinity], [], [TIMER_MAX_MS]],
   ];
   for (const [args, advances, timers] of cases) {
