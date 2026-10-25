@@ -389,7 +389,7 @@ finally:
         for state in owned_states:
             gateway_log = state / "gateway.log"
             if gateway_log.is_file():
-                shutil.copyfile(gateway_log, evidence / (state.name + "-gateway.log"))
+                shutil.copyfile(gateway_log, evidence / (state.name.removeprefix(".") + "-gateway.log"))
         results["retainedTaskStates"] = [str(x) for x in owned_states]
         results["retiredLaunchAgents"] = []
         for label, env in labels:
