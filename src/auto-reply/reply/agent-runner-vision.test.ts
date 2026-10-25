@@ -8,6 +8,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerTunnelHandle } from "../../gateway/worker-environments/tunnel-contract.js";
 import { prepareWorkerTurnMedia } from "../../gateway/worker-environments/worker-turn-media.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import type { Model } from "../../llm/types.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
@@ -132,10 +133,9 @@ describe("ordinary reply model capability at cloud media admission", () => {
         reconcileWorkspace: unexpected,
         stop: unexpected,
         stageAttachments: async ({ localPath }) => {
-          for (const entry of await fs.readdir(localPath, {
-            recursive: true,
-            withFileTypes: true,
-          })) {
+          for (const entry of (await listDirectoryTreeStrict(localPath)).map(
+            (walkEntry) => walkEntry.dirent,
+          )) {
             if (entry.isFile()) {
               staged.push(await fs.readFile(path.join(entry.parentPath, entry.name)));
             }

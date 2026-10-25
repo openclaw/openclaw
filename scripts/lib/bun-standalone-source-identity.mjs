@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 function identityPath(value, sourceRoot) {
@@ -31,4 +32,40 @@ export function standaloneSourceContextIdentity(sourceRoot, context) {
       ? { tsconfig: identityPath(context.tsconfig, sourceRoot) }
       : {}),
   };
+}
+
+function stableValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(stableValue);
+  }
+  if (value instanceof RegExp) {
+    return { regexp: value.source, flags: value.flags };
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .toSorted()
+        .map((key) => [key, stableValue(value[key])]),
+    );
+  }
+  return value;
+}
+
+const compare = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+
+/** Bind recorded typed source inputs before build identity is stamped into the graph. */
+export function standaloneSourceGraphSha256(sourceRoot, manifest) {
+  const identity = {
+    contexts: manifest.contexts
+      .map((context) => standaloneSourceContextIdentity(sourceRoot, context))
+      .toSorted((left, right) => compare(left.id, right.id)),
+    roots: manifest.roots.toSorted(),
+    files: manifest.files.toSorted(
+      (left, right) => compare(left.source, right.source) || compare(left.context, right.context),
+    ),
+  };
+  return createHash("sha256")
+    .update("openclaw-standalone-source-v1\0")
+    .update(JSON.stringify(stableValue(identity)))
+    .digest("hex");
 }

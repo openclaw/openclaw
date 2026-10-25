@@ -18,7 +18,7 @@ import {
   type McpAppFileOpenEventDetail,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
-import { mountView } from "./mcp-app-view.test-support.ts";
+import { mockMcpSandboxProxyReady, mountView } from "./mcp-app-view.test-support.ts";
 
 const transportMocks = vi.hoisted(() => ({ next: undefined as (() => unknown) | undefined }));
 const recordSchema = z.record(z.string(), z.unknown());
@@ -295,22 +295,7 @@ it("routes vendor links through the mounted view and AppBridge only for its focu
     subscribe: () => () => {},
     subscribeEvents: () => () => {},
   };
-  vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
-  const frameSource = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src")!;
-  vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function (
-    this: HTMLIFrameElement,
-    value,
-  ) {
-    frameSource.set!.call(this, value);
-    queueMicrotask(() =>
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: window,
-          data: { method: "ui/notifications/sandbox-proxy-ready" },
-        }),
-      ),
-    );
-  });
+  mockMcpSandboxProxyReady();
   const { view, unmount } = mountView(
     { sessionKey: "agent:main:one", agentId: "main", viewId: "current-view" },
     { gateway, navigate, theme: { subscribe: () => () => {} } },

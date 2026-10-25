@@ -187,8 +187,10 @@ reproducing an issue. Matching a version string alone is insufficient.
 default JIT artifact from the same commit.
 
 The build identity is derived from compiled modules, retained resources, compiler,
-target, and compilation options. Independent builds of identical prepared inputs
-share that identity; changing compiled code or native resources invalidates it.
+target, and compilation options. Source AOT also includes recorded original and
+transformed source inputs and checkout-relative build contexts. Independent builds
+of identical prepared inputs share that identity; changing compiled code or native
+resources invalidates it.
 For reproducible preparation, set the same `OPENCLAW_BUILD_TIMESTAMP` when running
 `pnpm build` in each checkout. Local cache freshness stamps are omitted from the
 standalone runtime. Compare executable hashes before timestamped signing;

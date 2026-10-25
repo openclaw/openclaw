@@ -7,11 +7,11 @@ import {
   resolvePackageSetupSource,
   validatePackageExtensionEntriesForInstall,
 } from "./package-entry-resolution.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
 import {
   clearPluginRuntimeArtifactResolutionMemo,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const temp = createTempDirTracker();
 type Resolution = Parameters<typeof resolvePackageRuntimeExtensionSources>[0] &

@@ -2,6 +2,7 @@
 
 import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { findButton } from "../test-helpers/dom-probe.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
   showConfirmChoiceDialog,
@@ -23,16 +24,6 @@ function setCheckbox(selector: string, checked: boolean) {
 async function show(options: Partial<ConfirmDialogOptions> = {}) {
   const result = showConfirmDialog({ message: "Continue?", ...options });
   return { result, ...(await getRenderedModalDialog(document.body)) };
-}
-
-function findButton(label: string): HTMLButtonElement {
-  const button = [...document.body.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent?.trim() === label,
-  );
-  if (!(button instanceof HTMLButtonElement)) {
-    throw new Error(`Expected ${label} button`);
-  }
-  return button;
 }
 
 describe("showConfirmDialog", () => {

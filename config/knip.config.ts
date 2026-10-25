@@ -55,6 +55,8 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   // The scheduled-run execution context design invokes this development replay by path.
   "scripts/dev/cron-context-replay.mts!",
+  // #183131 invokes this fresh-process cron flake workload by path.
+  "scripts/perf/repeat-cron-test.mjs!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
@@ -109,6 +111,7 @@ const repositoryScriptEntries = [
   "scripts/perf/database-page-cache-measure.ts!",
   // The ACP eviction PR invokes this isolated stdio/Gateway workload by path.
   "scripts/perf/acp-ledger-eviction-measure.ts!",
+  "scripts/perf/plugin-blob-registration-measure.ts!",
   // The source header documents this GitHub reader benchmark's Node command.
   "scripts/perf/github-reader-measure.ts!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.

@@ -382,6 +382,7 @@ src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
+src/infra/directory-walk.ts
 src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/capability-unavailable.ts

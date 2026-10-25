@@ -442,6 +442,7 @@
     "scripts/openclaw-immutable-launcher.mjs",
     "scripts/prepare-git-hooks.mjs",
     "scripts/prepare-native-protocol.mjs",
+    "src/infra/directory-walk.ts",
     "scripts/runtime-postbuild-shared.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
     "scripts/lib/official-external-channel-catalog.json",

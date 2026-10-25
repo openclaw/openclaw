@@ -1319,6 +1319,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-sdk/runtime-doctor-migrations.test.ts",
   "src/plugin-state/plugin-blob-store.test.ts",
   "src/plugin-state/plugin-blob-store.admission.test.ts",
+  "src/infra/database-engine/plugin-blob-registration.conformance.test.ts",
   "src/plugin-state/plugin-state-store.test.ts",
   "src/plugin-state/plugin-state-store.retained.test.ts",
   "src/plugin-state/plugin-state-store.runtime.test.ts",
