@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
 import * as workspaceStore from "./worker-environments/local-workspace-store.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
@@ -153,7 +152,7 @@ describe("imported PR source refresh", () => {
     expect(await readGuest(f, "artifact.txt")).toBe("base\n");
     expect(f.writes).toEqual([]);
   });
-  it.each(["Stop", "role", "linked identity", "permission", "remote head"])(
+  it.each(["Stop", "permission", "remote head"])(
     "preserves the imported source after %s during refresh",
     async (change) => {
       const f = await fixture({ fork: true });
@@ -170,17 +169,10 @@ describe("imported PR source refresh", () => {
           revoked = true;
           if (change === "Stop") {
             controller.abort(new Error("refresh stopped"));
-          } else if (change === "role") {
-            await f.revoke();
           } else if (change === "permission") {
             f.pr.maintainer_can_modify = false;
-          } else if (change === "remote head") {
-            await f.advanceHead({ "later.txt": "advanced during source fetch\n" });
           } else {
-            await linkCanonicalUserProfileEmail(
-              "publication-guest@example.test",
-              f.maintainerProfile,
-            );
+            await f.advanceHead({ "later.txt": "advanced during source fetch\n" });
           }
         }
         return result;

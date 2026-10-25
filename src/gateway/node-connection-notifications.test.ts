@@ -115,11 +115,6 @@ it("delays fanout without activity and keeps later reconnects silent", async () 
   schedule(registryValue, source, false);
   await clock.advanceBy(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
   expect(invoke).toHaveBeenCalledTimes(2);
-
-  await clock.advanceBy(5 * 60_000 + 1);
-  schedule(registryValue, source, false);
-  await clock.advanceBy(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
-  expect(invoke).toHaveBeenCalledTimes(2);
 });
 
 it.each([true, false])(

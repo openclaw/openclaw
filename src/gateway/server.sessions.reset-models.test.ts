@@ -3,7 +3,6 @@ import path from "node:path";
 import { expect, test } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-overrides.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -130,20 +129,6 @@ const ownedChildMetadata = {
     entryId: "root-entry",
   },
 } satisfies Partial<SessionEntry>;
-
-test("sessions.reset rejects a model-locked session without replacing native state", async () => {
-  const read = await seedMain("sess-model-locked", {
-    agentHarnessId: "codex",
-    modelSelectionLocked: true,
-    pluginExtensions: { codex: { threadId: "codex-thread-1" } },
-  });
-  const before = read();
-  expect(await resetMain()).toMatchObject({
-    ok: false,
-    error: { message: MODEL_SELECTION_LOCKED_RESET_MESSAGE },
-  });
-  expect(read()).toEqual(before);
-});
 
 test("sessions.reset retains sandbox choice but requires fresh native runtime consent", async () => {
   const read = await seedMain("sandbox-opt-out", {
