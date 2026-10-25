@@ -24,15 +24,25 @@ import {
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 beforeEach(() => {
-  vi.useFakeTimers();
   vi.stubEnv("GH_TOKEN", "");
   vi.stubEnv("GITHUB_TOKEN", "");
 });
 afterEach(() => {
-  vi.unstubAllEnvs();
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
+
+function withPrState(run: Parameters<typeof withOpenClawTestState>[1]) {
+  return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
+    try {
+      return await run(state);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+}
 
 function holdGitContext(context = testGitContext) {
   const entered = createDeferred();
@@ -51,63 +61,54 @@ function holdGitContext(context = testGitContext) {
   return { entered, release, spy };
 }
 
-it("marks retained PR data unavailable after a refresh fails, then recovers", async () => {
-  vi.useRealTimers();
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    await captureRuntimeConfigAsyncReader()();
+it("marks retained PR data unavailable after a refresh fails, then recovers", () =>
+  withPrState(async () => {
     const sessionKey = "agent:main:stale-preview";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
       { sessionId: "stale-preview-session", updatedAt: 1 },
     );
     vi.useFakeTimers();
-    try {
-      let failed = false;
-      const fetchImpl = routedFetch([
+    let failed = false;
+    const fetchImpl = routedFetch([
+      {
+        match: "/pulls?head=",
+        response: () =>
+          failed
+            ? githubJson({ message: "Unavailable" }, 503)
+            : githubJson([pullListItem({ state: "closed", merged_at: "2026-09-01T00:00:00Z" })]),
+      },
+    ]);
+    vi.stubGlobal("fetch", fetchImpl);
+    const load = () =>
+      loadControlUiSessionPullRequests(
+        { sessionKey },
         {
-          match: "/pulls?head=",
-          response: () =>
-            failed
-              ? githubJson({ message: "Unavailable" }, 503)
-              : githubJson([pullListItem({ state: "closed", merged_at: "2026-09-01T00:00:00Z" })]),
+          resolveGitContext: async () => ({ ...testGitContext, branch: "stale-preview" }),
         },
-      ]);
-      vi.stubGlobal("fetch", fetchImpl);
-      const load = () =>
-        loadControlUiSessionPullRequests(
-          { sessionKey },
-          {
-            resolveGitContext: async () => ({ ...testGitContext, branch: "stale-preview" }),
-          },
-        );
-      const fresh = await load();
-      expect(fresh.pullRequests[0]?.state).toBe("merged");
-      failed = true;
-      vi.advanceTimersByTime(91_000);
-      const stale = await load();
-      expect(stale.pullRequests).toEqual(fresh.pullRequests);
-      expect(stale.status).toBe("unavailable");
-      expect(stale.rateLimited).toBe(false);
-      const calls = fetchImpl.mock.calls.length;
-      expect(await load()).toEqual(stale);
-      expect(fetchImpl.mock.calls).toHaveLength(calls);
-      failed = false;
-      vi.advanceTimersByTime(31_000);
-      const recovered = await load();
-      expect(recovered.status).not.toBe("unavailable");
-      expect(recovered.pullRequests).toEqual(fresh.pullRequests);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
+      );
+    const fresh = await load();
+    expect(fresh.pullRequests[0]?.state).toBe("merged");
+    failed = true;
+    vi.advanceTimersByTime(91_000);
+    const stale = await load();
+    expect(stale.pullRequests).toEqual(fresh.pullRequests);
+    expect(stale.status).toBe("unavailable");
+    expect(stale.rateLimited).toBe(false);
+    const calls = fetchImpl.mock.calls.length;
+    expect(await load()).toEqual(stale);
+    expect(fetchImpl.mock.calls).toHaveLength(calls);
+    failed = false;
+    vi.advanceTimersByTime(31_000);
+    const recovered = await load();
+    expect(recovered.status).not.toBe("unavailable");
+    expect(recovered.pullRequests).toEqual(fresh.pullRequests);
+  }));
 
 it.each(["replacement", "metadata"] as const)(
   "keeps PR reads and warm caches bound to the session across %s updates",
-  async (change) => {
-    vi.useRealTimers();
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await captureRuntimeConfigAsyncReader()();
+  (change) =>
+    withPrState(async (state) => {
       const replaced = change === "replacement";
       const owner = replaced ? ensureProfileForEmail("original-pr-reader@example.test") : undefined;
       const replacementOwner = replaced
@@ -197,14 +198,11 @@ it.each(["replacement", "metadata"] as const)(
         await pending;
         gitRead.mockRestore();
       }
-    });
-  },
+    }),
 );
 
-it("retires a repository-only target without falling back to its local workspace", async () => {
-  vi.useRealTimers();
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await captureRuntimeConfigAsyncReader()();
+it("retires a repository-only target without falling back to its local workspace", () =>
+  withPrState(async (state) => {
     const sessionKey = "agent:main:repository-only";
     const repositories = getSessionRepositoryWorkspaceStore();
     const repository = await repositories.create({
@@ -255,12 +253,10 @@ it("retires a repository-only target without falling back to its local workspace
     } finally {
       git.mockRestore();
     }
-  });
-});
+  }));
 
-it("discards pending PR work after same-file reopen even when persisted rows are identical", async () => {
-  vi.useRealTimers();
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("discards pending PR work after same-file reopen even when persisted rows are identical", () =>
+  withPrState(async (state) => {
     const sessionKey = "agent:main:physical-pr-source";
     const original = state.statePath("original", "sessions.sqlite");
     const aliasDirectory = state.statePath("selected");
@@ -301,5 +297,4 @@ it("discards pending PR work after same-file reopen even when persisted rows are
       await pending;
       gitRead.mockRestore();
     }
-  });
-});
+  }));

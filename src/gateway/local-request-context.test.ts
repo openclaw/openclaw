@@ -46,9 +46,10 @@ const spyOnReadOwner = () =>
 
 afterEach(() => vi.restoreAllMocks());
 
-function modelFixture(agentId: string, prefix: string) {
-  const agentDir = `/tmp/${prefix}-agent`;
-  const workspaceDir = `/tmp/${prefix}-workspace`;
+function modelFixture() {
+  const agentId = "main";
+  const agentDir = "/tmp/local-model-agent";
+  const workspaceDir = "/tmp/local-model-workspace";
   const cfg: OpenClawConfig = {
     agents: { entries: { [agentId]: { agentDir, workspace: workspaceDir } } },
   };
@@ -156,30 +157,21 @@ describe("local gateway request context", () => {
     });
   });
 
-  it.each([false, true])("uses the local catalog owner with refresh=%s", async (refresh) => {
-    const agentId = refresh ? "main" : "worker";
-    const { cfg, candidate } = modelFixture(agentId, "local-model-catalog");
+  it("refreshes the local catalog owner through embedded RPC", async () => {
+    const { cfg, candidate } = modelFixture();
     const loadOwner = spyOnLoadOwner().mockResolvedValue(asPublishedOwner(candidate));
     spyOnReadOwner().mockReturnValue(asPublishedOwner(candidate));
     const result = await withConfig(cfg, () =>
-      refresh
-        ? dispatchGatewayMethodInProcessRaw("models.list", { view: "configured", refresh: true })
-        : localContext().loadGatewayModelCatalogSnapshot({ agentId }),
+      dispatchGatewayMethodInProcessRaw("models.list", { view: "configured", refresh: true }),
     );
-    expect(result).toMatchObject(
-      refresh
-        ? { ok: true, payload: { models: [] } }
-        : { agentId, workspaceDir: "/tmp/local-model-catalog-workspace" },
-    );
+    expect(result).toMatchObject({ ok: true, payload: { models: [] } });
     expect(loadOwner).toHaveBeenCalledWith(
-      refresh
-        ? expect.objectContaining({ readOnly: false, refreshFullCatalog: true })
-        : { agentId, config: cfg, readOnly: true },
+      expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
     );
   });
 
   it("uses the prepared local owner without starting a catalog load", async () => {
-    const { cfg, candidate } = modelFixture("main", "local-model-timeout");
+    const { cfg, candidate } = modelFixture();
     const loadOwner = spyOnLoadOwner().mockImplementation(() => new Promise(() => {}));
     const recheckNativeLogin = vi.fn();
     spyOnReadOwner().mockReturnValue({

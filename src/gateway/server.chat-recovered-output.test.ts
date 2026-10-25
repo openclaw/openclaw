@@ -27,9 +27,7 @@ const prefix = "The answer is";
 const answer = "The answer is 42.";
 const scenarios = ["continuation", "fallback", "terminal", "no-fallback", "settled-write"];
 const requests = new Map<string, Record<string, unknown>[]>();
-const events: ChatEvent[] = [];
 const displayFrames: ChatDisplayFrame[] = [];
-const publishedMessages = new Map<string, unknown[]>();
 let home: Awaited<ReturnType<typeof setupGatewayTempHome>>;
 let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
 let provider: ReturnType<typeof createTrackedProvider>;
@@ -43,6 +41,14 @@ function assistantTexts(messages: unknown[]): string[] {
     .filter(isRecord)
     .filter((message) => message.role === "assistant")
     .map(messageText);
+}
+
+function publishedMessages(sessionKey: string): unknown[] {
+  return displayFrames.flatMap(({ event, payload }) =>
+    event === "session.message" && isRecord(payload) && payload.sessionKey === sessionKey
+      ? [payload.message]
+      : [],
+  );
 }
 
 function writeResponse(response: ServerResponse, model: string, attempt: number): void {
@@ -175,22 +181,10 @@ beforeAll(async () => {
     onEvent: (event) => {
       const payload = event.payload;
       if (event.event === "chat") {
-        events.push(payload as ChatEvent);
         displayFrames.push({ event: "chat", payload: payload as ChatEvent });
       }
       if (event.event === "session.message") {
         displayFrames.push({ event: "session.message", payload });
-      }
-      if (
-        event.event === "session.message" &&
-        isRecord(payload) &&
-        typeof payload.sessionKey === "string" &&
-        isRecord(payload.message) &&
-        payload.message.role === "assistant"
-      ) {
-        const messages = publishedMessages.get(payload.sessionKey) ?? [];
-        messages.push(payload.message);
-        publishedMessages.set(payload.sessionKey, messages);
       }
     },
   });
@@ -234,12 +228,16 @@ it.each(scenarios)(
       limit: 20,
     });
     const failed = scenario === "terminal" || scenario === "no-fallback";
-    const terminal = events.filter(
-      (event) => event.runId === runId && ["final", "error"].includes(event.state),
+    const terminal = displayFrames.flatMap((frame) =>
+      frame.event === "chat" &&
+      frame.payload.runId === runId &&
+      ["final", "error"].includes(frame.payload.state)
+        ? [frame.payload]
+        : [],
     );
     if (failed) {
       expect(completed.status).toBe("error");
-      for (const messages of [history.messages, publishedMessages.get(sessionKey) ?? []]) {
+      for (const messages of [history.messages, publishedMessages(sessionKey)]) {
         const records = messages.filter(isRecord);
         const partial = records.findLast((message) => message.role === "assistant");
         expect(messageText(partial)).toBe(prefix);

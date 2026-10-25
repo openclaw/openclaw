@@ -79,11 +79,8 @@ async function expectHeldRegistration<T>(
     return register(...args);
   });
   const ready = start();
-  const settled = vi.fn();
-  void ready.then(settled, settled);
   try {
-    await Promise.race([gate.reached, ready]);
-    expect(settled).not.toHaveBeenCalled();
+    await awaitGateBeforeSettlement(gate.reached, ready, "Request ended before registration");
     beforeRelease();
     gate.release();
     const { record, pending } = await ready;
@@ -173,12 +170,11 @@ it("does not expose a registered approval before publication", async (testContex
     vi.useFakeTimers();
     const pending = start();
     try {
-      const id = await Promise.race([
+      const id = await awaitGateBeforeSettlement(
         registration.reached,
-        pending.then(() => {
-          throw new Error("Approval request completed before registration");
-        }),
-      ]);
+        pending,
+        "Approval request completed before registration",
+      );
       const readiness = track(
         pendingApproval(manager, context, () => pending).then((result) => {
           expect(publication).toHaveBeenCalled();
@@ -262,7 +258,6 @@ it("joins a late outer handler before releasing its database after an assertion 
   const database = openOpenClawStateDatabase(fixture.databaseOptions);
   const unwinding = holdPoint();
   const failure = new Error("inspection failed");
-  const settled = vi.fn();
   let pending: Promise<void> | undefined;
   const body = fixture.run(async () => {
     const record = fixture.manager.create({ command: "echo fixture" }, 60_000);
@@ -282,10 +277,12 @@ it("joins a late outer handler before releasing its database after an assertion 
     );
     throw failure;
   });
-  void body.then(settled, settled);
   try {
-    await Promise.race([unwinding.reached, body]);
-    expect(settled).not.toHaveBeenCalled();
+    await awaitGateBeforeSettlement(
+      unwinding.reached,
+      body,
+      "Fixture ended before handler unwound",
+    );
     expect(database.db.isOpen).toBe(true);
     unwinding.release();
     await expect(body).rejects.toBe(failure);
