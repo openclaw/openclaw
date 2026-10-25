@@ -89,7 +89,7 @@ async function computeValue(
   signal?: AbortSignal,
 ) {
   signal?.throwIfAborted();
-  return await computeWorkspaceManifest(
+  return computeWorkspaceManifest(
     { type, input: { payload: new TextEncoder().encode(JSON.stringify(input)) } },
     signal,
   );
@@ -353,5 +353,5 @@ export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<stri
 export async function prepareWorkspaceTreeInput(
   input: WorkspaceManifestValueInputs["workspace.manifest.tree-input"],
 ): Promise<null> {
-  return await computeValue("workspace.manifest.tree-input", input);
+  return computeValue("workspace.manifest.tree-input", input);
 }
