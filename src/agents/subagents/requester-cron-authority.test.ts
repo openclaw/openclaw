@@ -197,15 +197,19 @@ async function finishPause(batch: Batch) {
   requesterCron.revokeRequesterCronAuthorityBatch([batch[0]!], 1);
 }
 
-function mark(batch: Batch, persistOrThrow: () => void = () => {}) {
+async function mark(batch: Batch, persistOrThrow: () => void = () => {}) {
   const target = { ...requester, requesterTurnRunId: batch[0]!.requesterTurnRunId! };
   const preparedAuthority = requesterCron.prepareRequesterCronAuthority(target);
-  return markRequesterTurnYieldedInRuns({
-    ...target,
-    preparedAuthority: preparedAuthority ?? null,
-    runs,
-    transfer: ownBatchTransfer(batch, persistOrThrow, () => preparedAuthority?.assertCurrent()),
-  }).finally(() => preparedAuthority?.release());
+  try {
+    return await markRequesterTurnYieldedInRuns({
+      ...target,
+      preparedAuthority: preparedAuthority ?? null,
+      runs,
+      transfer: ownBatchTransfer(batch, persistOrThrow, () => preparedAuthority?.assertCurrent()),
+    });
+  } finally {
+    await preparedAuthority?.release();
+  }
 }
 
 function settle(batch: Batch) {

@@ -40,6 +40,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   saveRemoteMedia: (params: Parameters<typeof SaveRemoteMedia>[0]) => saveRemoteMedia(params),
 }));
 
+// mock-isolation: resolve uncached media without opening persistent sticker state.
 vi.mock("../sticker-cache.js", () => ({
   cacheSticker: () => {},
   getCachedSticker: () => null,

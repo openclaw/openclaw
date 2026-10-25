@@ -165,7 +165,7 @@ function cookieSnapshot(values: Partial<CookieSync>) {
 }
 
 function expectCookieWrite(
-  capability: Capability,
+  capability: ReturnType<typeof createCapability>["capability"],
   field: "domains" | "targetProfile",
   value: string | string[],
 ) {

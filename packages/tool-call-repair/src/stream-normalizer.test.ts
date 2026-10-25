@@ -300,7 +300,7 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
 
   it("scans complete under-cap call sequences linearly", () => {
     const callCount = 64;
-    const hasExactName = vi.fn(matcher.hasExactName);
+    const hasExactName = vi.fn((name: string) => matcher.hasExactName(name));
     const text = Array.from({ length: callCount }, () => functionCall).join("\n");
     expect(
       scrubMessage({ matcher: { ...matcher, hasExactName }, message: assistant(text) }),

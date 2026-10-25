@@ -56,12 +56,17 @@ vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
 }));
+// mock-isolation: authority fixtures must not inspect or mutate a native checkout.
 vi.mock("../agents/worktrees/git.js", () => fixture.forbid("insideGitCheckout", "runGit"));
+// mock-isolation: the worker fixture owns registry operations without native SQLite.
 vi.mock("./project-registry.kernel.js", () =>
   fixture.forbid("ensureProjectRegistrySchema", "removeProjectCheckoutReferenceInDatabase"),
 );
+// mock-isolation: fail if authority-only proof attempts to open a native database.
 vi.mock("../infra/node-sqlite.js", () => fixture.forbid("openNodeSqliteDatabase"));
+// mock-isolation: worker receipts replace native state transactions in this fixture.
 vi.mock("../state/openclaw-state-db.js", () => fixture.forbid("runOpenClawStateWriteTransaction"));
+// mock-isolation: database admission is supplied by the fixture, not native storage.
 vi.mock("../state/openclaw-state-db-readonly.js", () =>
   fixture.forbid("withExistingOpenClawStateDatabaseArtifactPreservingReadOnly"),
 );
