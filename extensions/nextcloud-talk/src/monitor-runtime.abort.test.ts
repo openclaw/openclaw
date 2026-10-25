@@ -34,12 +34,6 @@ type ChannelConfig = NonNullable<NonNullable<CoreConfig["channels"]>["nextcloud-
 type Endpoint = NextcloudTalkWebhookTarget["legacyListener"];
 type Mode = "default" | "inherited" | "override";
 type ListenerCase = [string, ChannelConfig["legacyWebhook"], Endpoint, Mode];
-function monitorConfig(settings: ChannelConfig, gateway?: { port: number }) {
-  return {
-    gateway,
-    channels: { "nextcloud-talk": { ...defaults, ...settings } },
-  };
-}
 
 function createMonitorFixture() {
   const core = createPluginRuntimeMock();
@@ -65,7 +59,7 @@ function createMonitorFixture() {
     statusSink,
     logger,
     start: (settings: ChannelConfig = {}, accountId?: string, gateway?: { port: number }) => {
-      const cfg = monitorConfig(settings, gateway);
+      const cfg = { gateway, channels: { "nextcloud-talk": { ...defaults, ...settings } } };
       const startAccount = expectDefined(nextcloudTalkPlugin.gateway?.startAccount, "startAccount");
       const ready = createDeferred<void>();
       const task = startAccount(

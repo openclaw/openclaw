@@ -90,6 +90,24 @@ function ocsResponse(data: unknown, finalUrl: string, release = vi.fn(async () =
 
 const userUrl = "https://nextcloud.example/ocs/v1.php/cloud/user?format=json";
 const historyUrl = "https://nextcloud.example/ocs/v2.php/apps/spreed/api/v1/chat/room-token";
+function mockLookups(messages = history(), user = "alice", fileId = "9001", status = 207) {
+  return mocks.fetchGuarded
+    .mockReset()
+    .mockResolvedValueOnce(ocsResponse({ id: user }, userUrl))
+    .mockResolvedValueOnce(ocsResponse(messages, historyUrl))
+    .mockResolvedValueOnce({
+      response: webDavFileIdResponse(fileId, status),
+      release: vi.fn(async () => undefined),
+    });
+}
+
+function attachmentReference(
+  shareUrl: string,
+  fileName = "receipt.pdf",
+  baseUrl = "https://nextcloud.example",
+) {
+  return resolveNextcloudTalkAttachmentReference({ baseUrl, shareUrl, fileName });
+}
 
 describe("Nextcloud Talk inbound media policy", () => {
   it.each([
@@ -103,11 +121,11 @@ describe("Nextcloud Talk inbound media policy", () => {
     ["subpath short file link", "/cloud/", "f/9001"],
   ])("validates the Talk share reference for a %s", (_label, basePath, route) => {
     expect(
-      resolveNextcloudTalkAttachmentReference({
-        baseUrl: `https://nextcloud.example${basePath}`,
-        shareUrl: `https://nextcloud.example${basePath || "/"}${route}`,
-        fileName: "receipt 1.pdf",
-      }),
+      attachmentReference(
+        `https://nextcloud.example${basePath || "/"}${route}`,
+        "receipt 1.pdf",
+        `https://nextcloud.example${basePath}`,
+      ),
     ).toEqual(reference("receipt 1.pdf"));
   });
 
@@ -121,13 +139,7 @@ describe("Nextcloud Talk inbound media policy", () => {
     ["extra short file path", "https://nextcloud.example/f/9001/extra"],
     ["extra share path", "https://nextcloud.example/s/redacted-token/extra"],
   ])("rejects a %s share link as invalid", (_label, shareUrl) => {
-    expect(
-      resolveNextcloudTalkAttachmentReference({
-        baseUrl: "https://nextcloud.example",
-        shareUrl,
-        fileName: "receipt.pdf",
-      }),
-    ).toEqual({ ok: false, reason: "media_invalid_link" });
+    expect(attachmentReference(shareUrl)).toEqual({ ok: false, reason: "media_invalid_link" });
   });
 
   it.each([
@@ -135,22 +147,12 @@ describe("Nextcloud Talk inbound media policy", () => {
     { label: "hostname", shareUrl: "https://files.example/s/redacted-token" },
     { label: "effective port", shareUrl: "https://nextcloud.example:8443/s/redacted-token" },
   ])("rejects a different $label as an origin mismatch", ({ shareUrl }) => {
-    expect(
-      resolveNextcloudTalkAttachmentReference({
-        baseUrl: "https://nextcloud.example",
-        shareUrl,
-        fileName: "receipt.pdf",
-      }),
-    ).toEqual({ ok: false, reason: "media_origin_mismatch" });
+    expect(attachmentReference(shareUrl)).toEqual({ ok: false, reason: "media_origin_mismatch" });
   });
 
   it("sanitizes the untrusted filename before URL derivation", () => {
     expect(
-      resolveNextcloudTalkAttachmentReference({
-        baseUrl: "https://nextcloud.example",
-        shareUrl: "https://nextcloud.example/s/redacted-token",
-        fileName: "../evil/re<po|rt?.pdf",
-      }),
+      attachmentReference("https://nextcloud.example/s/redacted-token", "../evil/re<po|rt?.pdf"),
     ).toEqual(reference("report.pdf"));
   });
 
@@ -203,41 +205,26 @@ describe("Nextcloud Talk inbound media policy", () => {
       "https://nextcloud.example/cloud/ocs/v2.php/apps/spreed/api/v1/chat/room-token?lookIntoFuture=0&limit=1&lastKnownMessageId=4242&includeLastKnown=1&setReadMarker=0&noStatusUpdate=1&markNotificationsAsRead=0",
       "https://nextcloud.example/cloud/remote.php/dav/files/users%2Falice/Talk/Receipts/receipt%201.pdf",
     ]);
-    for (const [call] of fetchGuarded.mock.calls.slice(0, 2)) {
-      expect(call).toEqual(
-        expect.objectContaining({
-          maxRedirects: 0,
-          requireHttps: true,
-          policy: {
-            allowPrivateNetwork: true,
-            hostnameAllowlist: ["nextcloud.example"],
-          },
-          init: expect.objectContaining({
-            method: "GET",
-            headers: expect.objectContaining({
-              Authorization: expect.stringMatching(/^Basic /u),
-              "OCS-APIRequest": "true",
-            }),
-          }),
-        }),
-      );
-    }
-    expect(fetchGuarded.mock.calls[2]?.[0]).toEqual(
-      expect.objectContaining({
+    for (const [index, [call]] of fetchGuarded.mock.calls.entries()) {
+      expect(call).toMatchObject({
         maxRedirects: 0,
         requireHttps: true,
-        init: expect.objectContaining({
-          method: "PROPFIND",
-          headers: expect.objectContaining({
-            Depth: "0",
+        init: {
+          method: index === 2 ? "PROPFIND" : "GET",
+          headers: {
             Authorization: expect.stringMatching(/^Basic /u),
-          }),
-        }),
-      }),
-    );
-    expect(releaseUser).toHaveBeenCalledOnce();
-    expect(releaseHistory).toHaveBeenCalledOnce();
-    expect(releaseWebDav).toHaveBeenCalledOnce();
+            ...(index === 2 ? { Depth: "0" } : { "OCS-APIRequest": "true" }),
+          },
+        },
+      });
+      expect(call.policy).toEqual({
+        allowPrivateNetwork: true,
+        hostnameAllowlist: ["nextcloud.example"],
+      });
+    }
+    for (const release of [releaseUser, releaseHistory, releaseWebDav]) {
+      expect(release).toHaveBeenCalledOnce();
+    }
   });
 
   it("stops authenticated metadata lookup when the ingress claim is cancelled", async () => {
@@ -271,50 +258,22 @@ describe("Nextcloud Talk inbound media policy", () => {
   ])(
     "preserves authenticated native voice intent declared as $declaredMimeType",
     async ({ declaredMimeType, expectedOverride }) => {
-      mocks.fetchGuarded
-        .mockReset()
-        .mockResolvedValueOnce(ocsResponse({ id: "alice" }, userUrl))
-        .mockResolvedValueOnce(
-          ocsResponse(
-            history(
-              {
-                id: "9010",
-                name: "voice-note.mp3",
-                size: "18351",
-                path: "Talk/voice-note.mp3",
-                mimetype: declaredMimeType,
-                "hide-download": "no",
-              },
-              { id: 4250, messageType: "voice-message" },
-            ),
-            historyUrl,
-          ),
-        )
-        .mockResolvedValueOnce({
-          response: webDavFileIdResponse("9010"),
-          release: vi.fn(async () => undefined),
-        });
+      mockLookups(
+        history(
+          { mimetype: declaredMimeType, "hide-download": "no" },
+          { messageType: "voice-message" },
+        ),
+      );
 
       const result = await resolveNextcloudTalkAuthenticatedMediaSource(
-        mediaParams({
-          messageId: "4250",
-          attachment: {
-            fileId: "9010",
-            name: "voice-note.mp3",
-            mimeType: declaredMimeType,
-            declaredSizeBytes: 18_351,
-          },
-          reference: reference("voice-note.mp3"),
-        }),
+        mediaParams({ attachment: { mimeType: declaredMimeType } }),
       );
 
-      expect(result).toEqual(
-        expect.objectContaining({
-          ok: true,
-          sourceModality: "voice",
-          ...(expectedOverride ? { contentTypeOverride: expectedOverride } : {}),
-        }),
-      );
+      expect(result).toMatchObject({
+        ok: true,
+        sourceModality: "voice",
+        ...(expectedOverride ? { contentTypeOverride: expectedOverride } : {}),
+      });
     },
   );
 
@@ -355,19 +314,12 @@ describe("Nextcloud Talk inbound media policy", () => {
   ] as const)(
     "uses the recipient collision-renamed mount only with matching WebDAV identity (%s/%s)",
     async (webDavId, status, failure) => {
-      const fetchGuarded = mocks.fetchGuarded
-        .mockReset()
-        .mockResolvedValueOnce(ocsResponse({ id: "bob" }, userUrl))
-        .mockResolvedValueOnce(
-          ocsResponse(
-            history({ name: "receipt (2).pdf", path: "Talk/receipt (2).pdf" }),
-            historyUrl,
-          ),
-        )
-        .mockResolvedValueOnce({
-          response: webDavFileIdResponse(webDavId, status),
-          release: vi.fn(),
-        });
+      const fetchGuarded = mockLookups(
+        history({ name: "receipt (2).pdf", path: "Talk/receipt (2).pdf" }),
+        "bob",
+        webDavId,
+        status,
+      );
 
       const result = await resolveNextcloudTalkAuthenticatedMediaSource(
         mediaParams({

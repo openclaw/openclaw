@@ -96,17 +96,13 @@ describe("Nextcloud Talk account resolution", () => {
     const secretFile = path.join(directory, "bot-secret");
     fs.writeFileSync(secretFile, "file-secret\n", "utf8");
 
-    const config = {
-      botSecret: "plaintext-secret",
-      botSecretFile: secretFile,
-    };
     for (const [env, file, secret, secretSource] of [
       ["ambient-secret", secretFile, "ambient-secret", "env"],
       ["", secretFile, "file-secret", "secretFile"],
       ["", undefined, "plaintext-secret", "config"],
     ] as const) {
       vi.stubEnv("NEXTCLOUD_TALK_BOT_SECRET", env);
-      const cfg = accountConfig({ ...config, botSecretFile: file });
+      const cfg = accountConfig({ botSecret: "plaintext-secret", botSecretFile: file });
       expect(resolveNextcloudTalkAccount({ cfg })).toMatchObject({ secret, secretSource });
     }
   });
@@ -213,9 +209,8 @@ describe("nextcloud talk setup", () => {
   it("clears stored bot secret fields when the wizard switches to env", async () => {
     const credential = expectDefined(credentials[0], "Nextcloud Talk credential");
     const next = await credential.applyUseEnv?.({
-      cfg: talkConfig({
+      cfg: accountConfig({
         enabled: true,
-        baseUrl,
         botSecret: "stored-secret",
         botSecretFile: "/tmp/secret.txt",
       }),
@@ -358,12 +353,7 @@ describe("nextcloud-talk channel status", () => {
   });
 
   it("keeps API credential inspection off runtime resolution", async () => {
-    const cfg = talkConfig({
-      baseUrl: "https://cloud.example.com",
-      botSecret: "bot-secret",
-      apiUser: "bot",
-      apiPasswordFile,
-    });
+    const cfg = accountConfig({ apiUser: "bot", apiPasswordFile });
     const account = nextcloudTalkPlugin.config.resolveAccount(cfg, "default");
     expect(account.apiCredentialStatus).toBeUndefined();
     expect(account.credentialDiagnostics).toBeUndefined();

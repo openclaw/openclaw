@@ -34,6 +34,8 @@ function mockResponse(response: Response) {
   fetchWithSsrFGuard.mockResolvedValue({ response, release });
   return release;
 }
+const malformedResponse = () =>
+  new Response("{ nope", { headers: { "content-type": "application/json" } });
 function lookup(account: string | ResolvedNextcloudTalkAccount, runtime?: RuntimeEnv) {
   return resolveNextcloudTalkRoomKind({
     account: typeof account === "string" ? lookupAccount(account) : account,
@@ -100,25 +102,21 @@ describe("nextcloud talk room info", () => {
       writeFileSync(passwordFile, "file-secret\n", "utf-8");
       const release = mockResponse(new Response(null, { status: 403 }));
 
-      const kind = await resolveNextcloudTalkRoomKind({
-        account: {
+      const kind = await lookup(
+        {
           ...lookupAccount("acct-group"),
           config: { apiUser: "bot", apiPasswordFile: passwordFile },
         },
-        roomToken: "room-group",
         runtime,
-      });
+      );
 
       expect(kind).toBeUndefined();
-      expect(fetchWithSsrFGuard).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          init: expect.objectContaining({
-            headers: expect.objectContaining({ Authorization: "Basic Ym90OmZpbGUtc2VjcmV0" }),
-          }),
-        }),
-      );
+      expect(fetchWithSsrFGuard.mock.calls).toHaveLength(1);
+      expect(fetchWithSsrFGuard.mock.calls[0]?.[0]).toMatchObject({
+        init: { headers: { Authorization: "Basic Ym90OmZpbGUtc2VjcmV0" } },
+      });
       expect(runtime.log).toHaveBeenCalledWith(
-        "nextcloud-talk: room lookup failed (403) token=room-group",
+        "nextcloud-talk: room lookup failed (403) token=shared-room",
       );
       expect(release).toHaveBeenCalledTimes(1);
     });
@@ -126,12 +124,7 @@ describe("nextcloud talk room info", () => {
 
   it("reports malformed room info JSON with a stable channel error", async () => {
     const runtime = createRuntimeSpies();
-    const release = mockResponse(
-      new Response("{ nope", {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    const release = mockResponse(malformedResponse());
     await expect(lookup("acct-malformed", runtime)).resolves.toBeUndefined();
     expect(runtime.error).toHaveBeenCalledWith(
       "nextcloud-talk: room lookup error: Error: Nextcloud Talk room info failed: malformed JSON response",
@@ -224,12 +217,7 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
   });
 
   it("reports malformed bot admin JSON with a stable channel error", async () => {
-    mockBotResponse(
-      new Response("{ nope", {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+    mockBotResponse(malformedResponse());
 
     await expect(probe()).resolves.toEqual({
       ok: false,
