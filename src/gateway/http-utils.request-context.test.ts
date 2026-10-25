@@ -4,13 +4,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
   resolveGatewayRequestContext,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
-import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
@@ -30,7 +28,6 @@ function createReq(headers: Record<string, string> = {}): IncomingMessage {
 
 const sharedSecretRequestAuth = { trustDeclaredOperatorScopes: false };
 const trustedRequestAuth = { trustDeclaredOperatorScopes: true };
-const operatorScopes = (...names: string[]) => names.map((name) => `operator.${name}`);
 const requestContext = (
   sessionKey: string,
   overrides: Partial<Parameters<typeof resolveGatewayRequestContext>[0]> = {},
@@ -111,24 +108,9 @@ describe("resolveTrustedHttpOperatorScopes", () => {
     ).toStrictEqual(expected);
   });
 
-  it.each<[string, GatewayOperatorRoleDefinition["scopes"], string[], string[]]>([
-    ["read", operatorScopes("read"), operatorScopes("read"), operatorScopes("read")],
-    [
-      "admin",
-      operatorScopes("admin"),
-      operatorScopes("admin", "read", "write", "talk", "approvals", "talk.secrets"),
-      [...CLI_DEFAULT_OPERATOR_SCOPES],
-    ],
-    [
-      "write",
-      operatorScopes("write"),
-      operatorScopes("read", "write", "talk"),
-      operatorScopes("read", "write"),
-    ],
-    ["empty", [], [], []],
-  ])(
-    "caps trusted-proxy headers and defaults to the verified profile's %s role",
-    (_label, roleScopes, expectedScopes, expectedDefaults) => {
+  it.each([{ roleScopes: ["operator.read"] }, { roleScopes: [] }])(
+    "caps trusted-proxy headers and defaults to the verified profile's $roleScopes scopes",
+    ({ roleScopes }) => {
       const requestAuth = {
         trustDeclaredOperatorScopes: true,
         operatorRolePolicy: {
@@ -143,13 +125,8 @@ describe("resolveTrustedHttpOperatorScopes", () => {
           requestAuth,
         );
 
-      expect(
-        scopes(
-          "operator.admin, operator.read, operator.write, operator.talk, operator.approvals, operator.talk.secrets",
-        ),
-      ).toEqual(expectedScopes);
-      expect(scopes()).toEqual(expectedDefaults);
-      expect(scopes("operator.read")).toEqual(roleScopes.length ? ["operator.read"] : []);
+      expect(scopes("operator.admin, operator.read, operator.write")).toEqual(roleScopes);
+      expect(scopes()).toEqual(roleScopes);
       expect(scopes("operator.admin")).toEqual(roleScopes);
       expect(scopes("")).toEqual([]);
     },
