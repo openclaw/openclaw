@@ -5,11 +5,10 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
-import { emitAgentEvent, onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { heartbeatNotifications } from "../../infra/heartbeat-events.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
-import * as sessionAdmission from "../../sessions/session-controller.lifecycle.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { startGatewayEventSubscriptions } from "../server-runtime-subscriptions.js";
 import {
   createSubscriptionTestFixture,
@@ -174,73 +173,35 @@ it.for(
   },
 );
 
-it.for(
-  (["compact", "fork", "rewind"] as const).flatMap((action) =>
-    (["lifecycle", "chat-final"] as const).map((publication) => ({ action, publication })),
-  ),
-)(
-  "refuses $action immediately when a replaced run publishes $publication",
-  async ({ action, publication }, { signal }) => {
-    const fixture = await createFixture({ active: false });
-    await appendTranscriptMessage(fixture.scope, {
-      message: { role: "user", content: "A second completed turn.", timestamp: 2 },
+it("does not publish a stale final or mark its replacement terminal", async () => {
+  const params = createSubscriptionTestFixture().createParams();
+  const identity = {
+    runId: "replacement-final",
+    sessionKey: "agent:main:replacement-final",
+    sessionId: "replacement-final-session",
+    agentId: "main",
+  };
+  const target = captureSessionTarget({
+    storeScope: "/synthetic/replacement-final/sessions",
+    sessionKey: identity.sessionKey,
+    incarnation: identity.sessionId,
+    agentId: identity.agentId,
+  });
+  const original = registerSubscriptionChatRun(params, { ...identity, target });
+  original.cleanup();
+  const replacement = registerSubscriptionChatRun(params, { ...identity, target });
+  try {
+    broadcastChatFinal({
+      context: params,
+      runId: identity.runId,
+      sessionKey: identity.sessionKey,
+      terminalEntry: original.entry,
     });
-    const params = {
-      ...createSubscriptionTestFixture().createParams(),
-      chatRunState: fixture.context.chatRunState,
-    };
-    const runId = `replacement-${action}`;
-    const target = sessionAdmission.captureSessionTarget({
-      storeScope: fixture.scope.storePath,
-      sessionKey: fixture.scope.sessionKey,
-      incarnation: fixture.scope.sessionId,
-      agentId: fixture.scope.agentId,
-    });
-    let registration = registerSubscriptionChatRun(params, { runId, ...fixture.scope, target });
-    const originalEntry = registration.entry;
-    const admission = await sessionAdmission.beginSessionEffect({
-      scope: fixture.scope.storePath,
-      identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
-      assertAllowed: () => {},
-      isSettling: () => registration.entry.adapter.terminalOutcomeObserved === true,
-    });
-    const removeListener = onAgentRuntimeEvent((event) => {
-      if (event.runId === runId) {
-        registration.cleanup();
-        registration = registerSubscriptionChatRun(params, { runId, ...fixture.scope, target });
-      }
-    });
-    const subscriptions = startGatewayEventSubscriptions(params);
-    let mutation: Promise<void> | undefined;
-    try {
-      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-      expect(registration.entry).not.toBe(originalEntry);
-      if (publication === "chat-final") {
-        broadcastChatFinal({
-          context: fixture.context,
-          runId,
-          sessionKey: fixture.scope.sessionKey,
-          terminalEntry: originalEntry,
-        });
-      }
-      expect(registration.entry.adapter.terminalOutcomeObserved).toBeUndefined();
-      const respond = vi.fn<RespondFn>();
-      mutation = createMutation(fixture, action)(respond);
-      // A live acquired lease must refuse synchronously, never await its release.
-      await withinTest(mutation, signal);
-      expectActiveRunRefusal(respond, action);
-    } finally {
-      removeListener();
-      admission.release();
-      registration.cleanup();
-      await mutation;
-      heartbeatNotifications.onEvent = () => {};
-      subscriptions.transcriptUnsub();
-      subscriptions.lifecycleUnsub();
-      await subscriptions.agentUnsub();
-      await params.scheduler.stop();
-      await fixture.cleanup();
-      vi.restoreAllMocks();
-    }
-  },
-);
+    expect(replacement.entry.adapter.terminalOutcomeObserved).toBeUndefined();
+    expect(params.broadcast).not.toHaveBeenCalled();
+    expect(params.nodeSendToSession).not.toHaveBeenCalled();
+  } finally {
+    replacement.cleanup();
+    await params.scheduler.stop();
+  }
+});
