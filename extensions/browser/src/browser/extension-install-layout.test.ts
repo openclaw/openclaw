@@ -36,28 +36,26 @@ function statsWithUid<T extends Awaited<ReturnType<typeof fs.lstat>>>(info: T, u
   });
 }
 
+function mockOwnedFile(target: string, uid: number, mode = 0o100644) {
+  vi.spyOn(process, "getuid").mockReturnValue(1000);
+  vi.spyOn(fs, "lstat").mockResolvedValue({
+    isDirectory: () => false,
+    isFile: () => true,
+    isSymbolicLink: () => false,
+    mode,
+    uid,
+  } as Awaited<ReturnType<typeof fs.lstat>>);
+  vi.spyOn(fs, "realpath").mockResolvedValue(target);
+}
+
 describe.runIf(process.platform !== "win32")("extension install ownership policy", () => {
   it("allows only explicit read-only root-owned inputs", async () => {
     const target = "/opt/openclaw/native-host-entry.js";
-    const getuidSpy = vi.spyOn(process, "getuid").mockReturnValue(1000);
-    const lstatSpy = vi.spyOn(fs, "lstat").mockResolvedValue({
-      isDirectory: () => false,
-      isFile: () => true,
-      isSymbolicLink: () => false,
-      mode: 0o100644,
-      uid: 0,
-    } as Awaited<ReturnType<typeof fs.lstat>>);
-    const realpathSpy = vi.spyOn(fs, "realpath").mockResolvedValue(target);
-    try {
-      await expect(
-        assertOwnedPath(target, "file", { allowRootOwner: true }),
-      ).resolves.toBeUndefined();
-      await expect(assertOwnedPath(target, "file")).rejects.toThrow("foreign owner");
-    } finally {
-      realpathSpy.mockRestore();
-      lstatSpy.mockRestore();
-      getuidSpy.mockRestore();
-    }
+    mockOwnedFile(target, 0);
+    await expect(
+      assertOwnedPath(target, "file", { allowRootOwner: true }),
+    ).resolves.toBeUndefined();
+    await expect(assertOwnedPath(target, "file")).rejects.toThrow("foreign owner");
   });
 
   it.each([
@@ -66,24 +64,10 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
     { label: "user-owned world-writable input", uid: 1000, mode: 0o100602, allowRootOwner: false },
   ])("rejects $label", async ({ uid, mode, allowRootOwner }) => {
     const target = "/opt/openclaw/unsafe";
-    const getuidSpy = vi.spyOn(process, "getuid").mockReturnValue(1000);
-    const lstatSpy = vi.spyOn(fs, "lstat").mockResolvedValue({
-      isDirectory: () => false,
-      isFile: () => true,
-      isSymbolicLink: () => false,
-      mode,
-      uid,
-    } as Awaited<ReturnType<typeof fs.lstat>>);
-    const realpathSpy = vi.spyOn(fs, "realpath").mockResolvedValue(target);
-    try {
-      await expect(assertOwnedPath(target, "file", { allowRootOwner })).rejects.toThrow(
-        uid !== 1000 && !(allowRootOwner && uid === 0) ? "foreign owner" : "group/world-writable",
-      );
-    } finally {
-      realpathSpy.mockRestore();
-      lstatSpy.mockRestore();
-      getuidSpy.mockRestore();
-    }
+    mockOwnedFile(target, uid, mode);
+    await expect(assertOwnedPath(target, "file", { allowRootOwner })).rejects.toThrow(
+      uid !== 1000 && !(allowRootOwner && uid === 0) ? "foreign owner" : "group/world-writable",
+    );
   });
 
   it("installs from a package-shaped root-owned tree into user-owned state", async () => {
@@ -94,25 +78,16 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
     const packageRoot = path.join(value.root, "package");
     const canonicalNodePath = await fs.realpath(value.deps.nodePath);
     const realLstat = fs.lstat.bind(fs);
-    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
+    vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
       const info = await realLstat(target);
       const resolved = path.resolve(String(target));
       const rootOwned =
         resolved.startsWith(`${packageRoot}${path.sep}`) || resolved === canonicalNodePath;
       return statsWithUid(info, rootOwned ? 0 : userUid);
     });
-    try {
-      const status = await value.install({
-        deps: withAdvancingInstallClock(value.deps),
-      });
-
-      expect(status.installedCopy).toMatchObject({ present: true, owned: true });
-      expect(status.registrations.find((entry) => entry.product === "chromium")?.state).toBe(
-        "owned",
-      );
-    } finally {
-      lstatSpy.mockRestore();
-    }
+    const status = await value.install({ deps: withAdvancingInstallClock(value.deps) });
+    expect(status.installedCopy).toMatchObject({ present: true, owned: true });
+    expect(status.registrations.find((entry) => entry.product === "chromium")?.state).toBe("owned");
   });
 });
 
