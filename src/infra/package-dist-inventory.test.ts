@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 import {
   isLegacyPluginDependencyInstallStagePath as isInstallStage,
-  LOCAL_BUILD_METADATA_DIST_PATHS,
   writePackageDistInventory,
   writePackageDistInventoryForPublish,
 } from "../../scripts/lib/package-dist-inventory.ts";

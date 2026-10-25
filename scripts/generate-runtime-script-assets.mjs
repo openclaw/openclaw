@@ -71,7 +71,7 @@ for (const entry of Object.values(runtimeProcessScriptEntrypoints)) {
 }
 
 /** Build complete, self-contained programs without reflecting on runtime functions. */
-export async function generateRuntimeScriptAssets(rootDir = ROOT) {
+async function generateRuntimeScriptAssets(rootDir = ROOT) {
   const programs = new Map();
   const assets = ASSETS.map((asset) => {
     const result = buildSync({

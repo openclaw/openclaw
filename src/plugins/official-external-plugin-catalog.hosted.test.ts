@@ -204,9 +204,10 @@ describe("official external plugin catalog", () => {
       snapshotStore: null,
     });
 
-    expectSource(result, "bundled-fallback");
-    expect(result.entries).toEqual([]);
-    expect(result.error).toContain(
+    expectSource(
+      result,
+      "bundled-fallback",
+      [],
       'feed id "openclaw-official-external-plugins" did not match expected "clawhub-official"',
     );
   });
@@ -423,11 +424,8 @@ describe("official external plugin catalog", () => {
       snapshotStore,
     });
 
-    expect(acceptedCurrent.source, JSON.stringify(acceptedCurrent)).toBe("hosted");
-    expect(acceptedCurrent.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v9"]);
-    if (acceptedCurrent.source === "hosted") {
-      expect(acceptedCurrent.trust?.signedBy).toBe("acme-root-2026-q3");
-    }
+    expectSource(acceptedCurrent, "hosted", ["@openclaw/signed-v9"]);
+    expect(acceptedCurrent.trust?.signedBy).toBe("acme-root-2026-q3");
 
     const rolledBack = signedFeed(7, "@openclaw/signed-v7", { keyId: "acme-root-2026-q4" });
     const rejectedRollback = await loadSigned(rolledBack, {
@@ -435,9 +433,7 @@ describe("official external plugin catalog", () => {
       snapshotStore,
     });
 
-    expectSource(rejectedRollback, "bundled-fallback");
-    expect(rejectedRollback.entries).toEqual([]);
-    expect(rejectedRollback.error).toContain("signed feed sequence is older");
+    expectSource(rejectedRollback, "bundled-fallback", [], "signed feed sequence is older");
     expect(rejectedRollback.error).toContain("snapshot fallback failed");
 
     const retainedCurrent = await loadSigned(current, { offline: true, snapshotStore });
@@ -465,8 +461,7 @@ describe("official external plugin catalog", () => {
 
     const result = await loadSigned(repaired, { snapshotStore });
 
-    expect(result.source, JSON.stringify(result)).toBe("hosted");
-    expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/repaired-current"]);
+    expectSource(result, "hosted", ["@openclaw/repaired-current"]);
     await expect(snapshotStore.read(FEED_URL)).resolves.toMatchObject({ body: repaired.body });
   });
 

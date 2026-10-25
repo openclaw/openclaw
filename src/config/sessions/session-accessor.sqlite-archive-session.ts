@@ -3,6 +3,8 @@ import path from "node:path";
 import { MessageChannel, type Worker } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -19,6 +21,11 @@ import type {
   SqliteArchiveSessionRequest,
   SqliteArchiveSessionResponse,
 } from "./session-accessor.sqlite-archive-types.js";
+import {
+  joinSqliteArchiveWorkerCleanup,
+  SQLITE_ARCHIVE_TASK_TIMEOUT_MS,
+  watchSqliteWorkerSettlement,
+} from "./session-accessor.sqlite-archive-worker-lifetime.js";
 import type {
   SqliteMutationWorkerTransport,
   WorkerCleanup,
@@ -175,12 +182,28 @@ class ArchiveSession {
       createWorker,
       (connection) =>
         new Promise<SqliteArchiveSessionResponse>((resolve, reject) => {
+          const deadline = setTimeout(() => {
+            connection.failure ??= new WorkerTaskError(
+              "Session archiving took longer than 3 minutes. Wait for it to stop, then retry; if it remains stuck, restart the Gateway.",
+              "timeout",
+            );
+            createSubsystemLogger("session-sqlite").warn(connection.failure.message);
+            // Keep the FIFO and database resources until the native worker actually exits.
+            watchSqliteWorkerSettlement(connection.exited);
+            void connection.worker.terminate().catch(() => {});
+          }, SQLITE_ARCHIVE_TASK_TIMEOUT_MS);
           const cleanup = () => {
+            clearTimeout(deadline);
             connection.worker.off("message", receive);
             connection.worker.off("exit", exit);
           };
           // The FIFO has one request in flight on this private, paired worker port.
-          const receive = (response: SqliteArchiveSessionResponse) => {
+          const receive = (
+            response: SqliteArchiveSessionResponse | { type: "archive-temporary-file" },
+          ) => {
+            if (response.type === "archive-temporary-file" || connection.failure) {
+              return;
+            }
             cleanup();
             resolve(response);
           };
@@ -383,6 +406,7 @@ class ArchiveSession {
         }
       }
       await connection.exited;
+      await joinSqliteArchiveWorkerCleanup(connection.worker);
       connection.worker.removeAllListeners();
       if (this.connection === connection) {
         this.connection = undefined;
