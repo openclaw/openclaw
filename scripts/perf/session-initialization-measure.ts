@@ -18,7 +18,7 @@ const { values } = parseArgs({
 assert(values.harness && values.hashes && values.out, "Pass --harness, --hashes and --out");
 const hashes: Record<string, string> = JSON.parse(readFileSync(values.hashes, "utf8"));
 for (const [name, expected] of Object.entries(hashes)) {
-  const actual = createHash("sha256")
+  const actual: string = createHash("sha256")
     .update(readFileSync(path.join(values.harness, name)))
     .digest("hex");
   assert.equal(actual, expected, `Frozen harness changed: ${name}`);
