@@ -59,12 +59,8 @@ function waitForReady(transaction: ReturnType<typeof spawnTransaction>, signal: 
 
 async function writeGate(gate: string, value = "release\n", nonblocking = false) {
   const flags = nonblocking ? fsConstants.O_WRONLY | fsConstants.O_NONBLOCK : "w";
-  const writer = await fs.open(gate, flags);
-  try {
-    await writer.write(value);
-  } finally {
-    await writer.close();
-  }
+  await using writer = await fs.open(gate, flags);
+  await writer.write(value);
 }
 
 async function receiverFixture(rsync: string, preloadSource: string) {

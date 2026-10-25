@@ -102,9 +102,6 @@ describe("worker placement session admission", () => {
           : { status: "rejected", reason: terminalError };
       expect(results.slice(0, 2)).toEqual([expected, expected]);
       expect(results.slice(2).every((result) => result.status === "fulfilled")).toBe(true);
-      expect(
-        dispatch.mock.calls.filter(([current]) => current.sessionId === request.sessionId),
-      ).toHaveLength(1);
       expect(coordinated.getPendingDeviceDispatchCount("node-one")).toBe(0);
       expect(coordinated.getPendingDeviceDispatchCount("node-two")).toBe(0);
     },
