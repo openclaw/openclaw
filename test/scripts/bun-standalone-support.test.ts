@@ -78,11 +78,11 @@ fs.writeFileSync(output, JSON.stringify({aot: args.includes('--aot'), source: fs
   return { root, outputRoot, compileRoot, runtimeRoot, mainEntry, source, compiler };
 }
 
-function compile(
+async function compile(
   input: ReturnType<typeof fixture>,
   overrides: Partial<Parameters<typeof compileStandaloneArtifacts>[0]> = {},
 ) {
-  return compileStandaloneArtifacts({
+  const artifacts = await compileStandaloneArtifacts({
     runtimeRoot: input.runtimeRoot,
     outputRoot: input.outputRoot,
     destination: path.join(input.root, "aot"),
@@ -113,6 +113,11 @@ function compile(
     },
     ...overrides,
   });
+  const [standard, support] = artifacts;
+  if (!standard || !support || artifacts.length !== 2) {
+    throw new Error("Expected the standard and support fixture artifacts");
+  }
+  return [standard, support] satisfies [typeof standard, typeof support];
 }
 
 describe("matched standalone support artifacts", () => {

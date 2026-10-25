@@ -76,7 +76,9 @@ describe("standalone WebAssembly registration", () => {
         outputRoot,
         parse,
       });
-      if (!registrationPath) throw new Error("missing WASM registration");
+      if (!registrationPath) {
+        throw new Error("missing WASM registration");
+      }
       const entry = path.join(outputRoot, "nested/entry.js");
       fs.mkdirSync(path.dirname(entry));
       fs.writeFileSync(entry, standaloneWasmImport(entry, registrationPath));
@@ -85,7 +87,7 @@ describe("standalone WebAssembly registration", () => {
         source: fs.readFileSync(entry, "utf8"),
       };
     });
-    expect(copies[0].source).toMatch(/^import "\.\.\/standalone-wasm-/);
+    expect(copies[0]?.source).toMatch(/^import "\.\.\/standalone-wasm-/);
     expect(copies[1]).toEqual(copies[0]);
   });
 
