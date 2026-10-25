@@ -266,6 +266,7 @@ export function planCronJobMutation(
         mutation.kind === "add"
           ? resolveCronOperatorExecutionRevision(nextJob)
           : options.operatorSourceExecutionRevision,
+      defaultAgentId,
     });
     plan.created = !previousJob;
     plan.updated =

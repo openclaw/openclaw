@@ -217,7 +217,8 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
       true,
       {
         ...cronJobReadView(bound),
-        bound: { operatorSource: capture.operatorSource !== undefined },
+        // Report what was stored: the store drops a capture that does not fit the job.
+        bound: { operatorSource: context.cron.getJob(jobId)?.operatorSource !== undefined },
       },
       undefined,
     );

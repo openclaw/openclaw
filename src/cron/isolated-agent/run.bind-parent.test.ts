@@ -98,16 +98,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Seeds a pre-#172590 shape: an account policy naming the parent by key, no incarnation. */
+/**
+ * Seeds a pre-#172590 shape: an account policy naming the parent by key, no incarnation.
+ * Older jobs may omit agentId and run as the configured default agent.
+ */
 async function seedKeyOnlyJob(
   cron: ReturnType<typeof createCronFixture>["context"]["cron"],
   parentSessionKey = SESSION,
+  options: { omitAgentId?: boolean } = {},
 ) {
   const created = await cron.add(
     {
       name: "Check the deploy",
       enabled: true,
-      agentId: "main",
+      ...(options.omitAgentId ? {} : { agentId: "main" }),
       owner: { agentId: "main", sessionKey: parentSessionKey, accountId: "default" },
       schedule: { kind: "every", everyMs: 180_000 },
       sessionTarget: "isolated",
@@ -241,6 +245,8 @@ it.each([
   "unbound",
   "control ui owner binds",
   "control ui owner binds, then the device is revoked",
+  "control ui owner binds without an agent id",
+  "control ui owner binds without an agent id, then the device is revoked",
   "channel owner binds",
 ] as const)("a key-only automation that is %s", async (scenario) => {
   const config = await prepareAuthorityConfig({ tools: { allow: [AUTOMATIONS_TOOL_NAME] } });
@@ -260,11 +266,15 @@ it.each([
   recovery.entry.status = "done";
   recovery.entry.abortedLastRun = false;
   await accessor.replaceSessionEntry(recovery.target, recovery.entry);
-  const seeded = await seedKeyOnlyJob(context.cron);
+  const seeded = await seedKeyOnlyJob(context.cron, SESSION, {
+    omitAgentId: scenario.includes("without an agent id"),
+  });
+  expect(seeded.agentId).toBe(scenario.includes("without an agent id") ? undefined : "main");
   expect(resolveScheduledPrincipal(seeded, { trigger: "cron", agentId: "main" })).toEqual({
     kind: "unbound-parent",
     parentSessionKey: SESSION,
   });
+  let bindResult: unknown;
   try {
     if (scenario.startsWith("control ui owner binds")) {
       const original = expectDefined(
@@ -276,7 +286,7 @@ it.each([
         "Control UI operator authority",
       );
       try {
-        await withPluginRuntimeGatewayRequestScope(
+        bindResult = await withPluginRuntimeGatewayRequestScope(
           { client: recovery.client, context, isWebchatConnect: () => false },
           () =>
             bindFromParent({
@@ -292,7 +302,7 @@ it.each([
         original.release();
       }
     } else if (scenario === "channel owner binds") {
-      await bindFromParent({
+      bindResult = await bindFromParent({
         config,
         context,
         runId: "channel-owner-binds",
@@ -308,8 +318,9 @@ it.each([
     (await fixture.read()).find((entry) => entry.id === seeded.id),
     "stored automation",
   );
-  // Binding never rewrites the job's requester attribution or tool policy.
+  // Binding never rewrites the job's requester attribution, agent, or tool policy.
   expect(job.createdActor).toEqual(CREATOR);
+  expect(job.agentId).toBe(seeded.agentId);
   expect(job.scheduledToolPolicy).toEqual(seeded.scheduledToolPolicy);
   if (scenario === "unbound") {
     expect(job.sourceConversation).toBeUndefined();
@@ -330,8 +341,14 @@ it.each([
   } else {
     expect(job.operatorSource).toBeUndefined();
   }
+  if (scenario !== "unbound") {
+    // The reply describes the stored job, not what the turn captured.
+    expect(bindResult).toMatchObject({
+      details: { bound: { operatorSource: job.operatorSource !== undefined } },
+    });
+  }
 
-  if (scenario === "control ui owner binds, then the device is revoked") {
+  if (scenario.endsWith("then the device is revoked")) {
     persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, stateDir, "both");
     // The bound occurrence rechecks the stored operator source and refuses before any effect.
     const refused = await runOccurrence(config, job, context as never, "error");
@@ -346,7 +363,7 @@ it.each([
     // Unbound jobs keep the run-session decisions: no parent memory, no operator source.
     expect(occurrence.memoryParent).toBeUndefined();
     expect(occurrence.operatorAdmitted).toBe(false);
-  } else if (scenario === "control ui owner binds") {
+  } else if (scenario.startsWith("control ui owner binds")) {
     expect(occurrence.operatorAdmitted).toBe(true);
     expect(occurrence.memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: true });
   } else {
