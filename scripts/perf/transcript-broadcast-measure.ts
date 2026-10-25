@@ -6846,7 +6846,6 @@ try {
     workloadCpuProfile: values["workload-cpu-profile"],
     captureResponses: values["capture-responses"],
     listFilterChurn: values["list-filter-churn"],
-    pollBetweenRounds,
     traceGc: values["trace-gc"] || values.allocations || values["stream-start-allocations"],
     streamStartDiagnostics: values["stream-start-diagnostics"],
     streamStartAllocations: values["stream-start-allocations"],
