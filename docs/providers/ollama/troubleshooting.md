@@ -231,6 +231,14 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
+  <Accordion title="Memory search times out on the first query after a pause">
+    The embedding model was unloaded, and reloading it used up the
+    `memory_search` deadline. Keep it loaded: set `OLLAMA_KEEP_ALIVE=-1` on the
+    Ollama server, or try [llmman](/providers/llmman#advanced-configuration), which
+    can preload the embedding model and never unload it.
+
+  </Accordion>
+
   <Accordion title="Large-context model is too slow or runs out of memory">
     Many models advertise contexts larger than your hardware can run
     comfortably. Native requests forward the effective `contextTokens` unless
