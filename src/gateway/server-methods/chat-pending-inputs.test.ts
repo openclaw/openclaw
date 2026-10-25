@@ -139,13 +139,7 @@ describe("pending input read boundary", () => {
       await using inputs = pendingInputs(scope);
       for (const runId of [
         "followup",
-        "steer",
-        "review",
-        "build",
-        "docs",
-        "tests",
-        "assets",
-        "verify",
+        ...Array.from({ length: 7 }, (_, index) => `queued-${index}`),
       ]) {
         await inputs.stage(runId, {
           content: "Synthetic pending project instructions. ".repeat(780),
@@ -340,26 +334,26 @@ describe("pending input read boundary", () => {
         expect(initial.filter((item) => item.queued).map((item) => item.runId)).toEqual([
           "pending-display-run-0",
         ]);
-        expect(initial).toEqual(
+        expect(initial).toMatchObject(
           receipts.map((receipt, index) => {
             const acceptedAt = expectDefined(
               acceptanceTimes.get(receipt.inputId),
               "stored acceptance time",
             );
             expect(acceptedAt).not.toBe(1_000 + index);
-            return expect.objectContaining({
+            return {
               id: receipt.inputId,
               acceptedAt,
-              message: expect.objectContaining({
+              message: {
                 content: `Pending input ${index}`,
                 timestamp: acceptedAt,
-                __openclaw: expect.objectContaining({
+                __openclaw: {
                   senderIdentity: { type: "profile", id: profile.id },
                   senderName: "Historical sender",
                   senderProfileAvatarUrl: expect.stringContaining(profile.id),
-                }),
-              }),
-            });
+                },
+              },
+            };
           }),
         );
         const initialBytes = JSON.stringify(initial);
@@ -371,21 +365,15 @@ describe("pending input read boundary", () => {
             ?.senderProfileAvatarUrl;
         const updatedAvatar = avatar(updated);
         expect(updatedAvatar).not.toBe(avatar(initial));
-        expect(updated).toEqual(
-          initial.map((item) => {
-            const message = expectDefined(asOptionalRecord(item.message), "pending message");
-            return {
-              ...item,
-              message: {
-                ...message,
-                __openclaw: {
-                  ...asOptionalRecord(message["__openclaw"]),
-                  senderProfileAvatarUrl: updatedAvatar,
-                },
-              },
-            };
-          }),
-        );
+        const expected = structuredClone(initial);
+        for (const item of expected) {
+          const metadata = expectDefined(
+            asOptionalRecord(asOptionalRecord(item.message)?.["__openclaw"]),
+            "sender metadata",
+          );
+          metadata.senderProfileAvatarUrl = updatedAvatar;
+        }
+        expect(updated).toEqual(expected);
         expect(JSON.stringify(initial)).toBe(initialBytes);
       } finally {
         readDisplay.mockRestore();

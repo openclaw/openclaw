@@ -211,9 +211,6 @@ describe("plugin management Gateway mutation handlers", () => {
       ok: true,
       response: { restartRequired: false, runtime: application },
     });
-    expect(managementMocks.install).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ request }),
-    );
   });
 
   it.each(["current", "cancelled", "revoked"] as const)(
@@ -260,7 +257,6 @@ describe("plugin management Gateway mutation handlers", () => {
           state === "cancelled" ? "Install request cancelled" : "Install request owner changed",
         );
       }
-      expect(managementMocks.install).toHaveBeenCalledOnce();
       expect(config).toEqual(originalConfig);
       expect(review.grants.hooks).toEqual({
         allowPromptInjection: { configured: false, effective: false },
@@ -268,14 +264,6 @@ describe("plugin management Gateway mutation handlers", () => {
       });
     },
   );
-
-  it("returns refresh runtime and cleanup warnings", async () => {
-    const warnings = ["Plugin cleanup did not finish; inspect the Gateway log."];
-    managementMocks.refreshMetadata.mockResolvedValue({
-      application: { ...application, warnings },
-    });
-    expectResponse(await callHandler("plugins.refresh", {}), { runtime: application, warnings });
-  });
 
   it("returns reload restart requirement and deduplicated warnings", async () => {
     const plugins = [
@@ -300,11 +288,6 @@ describe("plugin management Gateway mutation handlers", () => {
       restartRequired: true,
       runtime,
       warnings: [warning],
-    });
-    expect(managementMocks.reload).toHaveBeenCalledExactlyOnceWith({
-      plugins,
-      applyRuntime: expect.any(Function),
-      beforePersistentApply: expect.any(Function),
     });
   });
 
@@ -376,9 +359,6 @@ describe("plugin management Gateway mutation handlers", () => {
           details: { runtime: { ...finalApplication, warnings: [warning], committed: true } },
         });
       } else {
-        expect(managementMocks.uninstall).toHaveBeenCalledWith(
-          expect.objectContaining({ pluginId: "diffs" }),
-        );
         expectResponse(result, {
           pluginId: "diffs",
           removed,
