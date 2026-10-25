@@ -209,28 +209,6 @@ describe("workspace service", () => {
     },
   );
 
-  it("denies bundles aliasing a forbidden child", async () => {
-    const { directory: skillDir } = await writeSkill(f.remote, "local-tool");
-    const privatePath = path.join(skillDir, "private.txt");
-    await fs.writeFile(privatePath, "Private bytes");
-    await fs.symlink("private.txt", path.join(skillDir, "alias.txt"));
-    f.nodePolicy.followSymlinks = true;
-    const output = captureOutput();
-    const reader = (await f.start()).skillResources!;
-    const skill = await reader.resolveExplicitSkill({
-      name: "local-tool",
-      path: path.join(skillDir, "SKILL.md"),
-    });
-    const files = await reader.readSkillFiles(skill!, { allowMissingRoot: false });
-    expect(files?.some((file) => file.path === "private.txt")).toBe(true);
-    f.nodePolicy.denyPaths = [privatePath];
-    await expectDenied(
-      output,
-      () => reader.readSkillFiles(skill!, { allowMissingRoot: false }),
-      "denied by the node file read policy",
-    );
-  });
-
   it.each(["explicit Skill", "Memory maintenance"])(
     "rejects raw traversal for %s",
     async (operation) => {
@@ -298,20 +276,28 @@ describe("workspace service", () => {
     );
   });
 
-  it("reads discovered Skills under overlapping roots", async () => {
+  it("reads overlapping-root Skills and denies aliased private resources", async () => {
     f.local = path.dirname(f.remote);
-    const { instructions } = await writeSkill(f.remote, "overlap-tool");
-    const access = await startStream();
+    const { directory, instructions } = await writeSkill(f.remote, "overlap-tool");
+    const privatePath = path.join(directory, "private.txt");
+    await fs.writeFile(privatePath, "Private bytes");
+    await fs.symlink("private.txt", path.join(directory, "alias.txt"));
+    f.nodePolicy.followSymlinks = true;
+    const output = captureOutput();
+    const access = await f.start();
     const sources = await access.loadSkills!(skillRequest());
     const skill = sources.entries.find((entry) => entry.skill.name === "overlap-tool")!.skill;
     const reader = access.skillResources!;
     expect(await reader.readInstructions(skill.filePath, {})).toBe(instructions);
-    expect(
-      await reader.resolveExplicitSkill({ name: skill.name, path: skill.filePath }),
-    ).toMatchObject({ filePath: skill.filePath });
+    const explicit = await reader.resolveExplicitSkill({ name: skill.name, path: skill.filePath });
+    expect(explicit).toMatchObject({ filePath: skill.filePath });
     expect(await reader.readSkillFiles(skill, { allowMissingRoot: false })).toContainEqual(
       expect.objectContaining({ path: "SKILL.md" }),
     );
+    const readFiles = () => reader.readSkillFiles(explicit!, { allowMissingRoot: false });
+    expect((await readFiles())?.some((file) => file.path === "private.txt")).toBe(true);
+    f.nodePolicy.denyPaths = [privatePath];
+    await expectDenied(output, readFiles, "denied by the node file read policy");
   });
 
   it("reads, maintains and watches remote Memory", async () => {
@@ -601,18 +587,26 @@ describe("workspace service", () => {
       `${f.remote}/media/inbound/openclaw-staged-*/**`,
     ];
     f.nodePolicy.allowWritePaths.push(`${f.remote}/media/inbound/openclaw-staged-*/**`);
-    return { bytes, target, turn: { media: [{ path: saved.path }], timeoutMs: 60_000 } };
+    return {
+      bytes,
+      target,
+      params: {
+        workspaceDir: f.local,
+        turn: { media: [{ path: saved.path }], timeoutMs: 60_000 },
+        assertCurrent: () => {},
+      },
+    };
   }
 
   it("stages large attachments without overwriting remote edits", async () => {
     const input = await attachmentInput(17);
     await startStream();
-    const params = { workspaceDir: f.local, turn: input.turn, assertCurrent: () => {} };
-    const original = JSON.stringify(input.turn);
+    const { params } = input;
+    const original = JSON.stringify(params.turn);
     const note = await prepareAttachments(params);
     expect(note).toBe(`[media attached: ${input.target}]`);
     expect(sha256(await fs.readFile(input.target))).toBe(sha256(input.bytes));
-    expect(JSON.stringify(input.turn)).toBe(original);
+    expect(JSON.stringify(params.turn)).toBe(original);
     expect(await textFile(local("AGENTS.md"))).toBe("Gateway decoy");
     await expectMissing(local("media"));
     await fs.writeFile(input.target, "Harness edit");
@@ -624,13 +618,7 @@ describe("workspace service", () => {
     const input = await attachmentInput(1);
     f.nodePolicy.allowWritePaths = [`${f.remote}/AGENTS.md`];
     await startStream();
-    await expect(
-      prepareAttachments({
-        workspaceDir: f.local,
-        turn: input.turn,
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow();
+    await expect(prepareAttachments(input.params)).rejects.toThrow();
     expect(await fs.readdir(f.remote)).toEqual(["AGENTS.md"]);
   });
 
@@ -643,8 +631,7 @@ describe("workspace service", () => {
     await f.service.start(f.context());
     await expect(
       prepareAttachments({
-        workspaceDir: f.local,
-        turn: input.turn,
+        ...input.params,
         assertCurrent() {
           if (!current) {
             throw new Error("turn ended");
