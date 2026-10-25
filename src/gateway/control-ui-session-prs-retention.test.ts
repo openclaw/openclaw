@@ -128,16 +128,13 @@ describe("watched session PR retention", () => {
       }
     };
     const expectDelivered = (connId: string, sessionKey: string, expectedAdditions: number) => {
+      const snapshot = expect.objectContaining({
+        status: "ready",
+        branch: expect.objectContaining({ additions: expectedAdditions }),
+      });
       expect(broadcastToConnIds).toHaveBeenCalledWith(
         "controlUi.sessionPullRequests.changed",
-        {
-          sessions: {
-            [sessionKey]: expect.objectContaining({
-              status: "ready",
-              branch: expect.objectContaining({ additions: expectedAdditions }),
-            }),
-          },
-        },
+        { sessions: { [sessionKey]: snapshot } },
         new Set([connId]),
         expect.anything(),
       );
@@ -254,14 +251,13 @@ describe("watched session PR retention", () => {
 
   it("releases obsolete GitHub snapshots when a watched checkout changes or disappears", async () => {
     const cacheLifetime = new AbortController();
-    let root: string | null = "/retained/first";
-    let branch: string | null = "feature-a";
-    let rootFailure = false;
-    let fetchFailure = false;
-    stubPulls(() => githubJson(fetchFailure ? {} : [], fetchFailure ? 503 : 200), true);
+    let root: string | null = null;
+    let branch: string | null = null;
+    let response: 200 | 503 | "throws" = 200;
+    stubPulls(() => githubJson(response === 503 ? {} : [], response === 503 ? 503 : 200), true);
     mockCheckout(
       () => {
-        if (rootFailure) {
+        if (response === "throws") {
           throw new Error("session unavailable");
         }
         return branch;
@@ -278,40 +274,35 @@ describe("watched session PR retention", () => {
       );
     const pins = () => listenerCount(cacheLifetime.signal);
     try {
-      for (const [nextRoot, nextBranch, expectedPins] of [
-        [root, branch, 1],
-        ["/retained/second", "feature-b", 1],
-        [null, "feature-b", 0],
+      // Walk the same watch through moves, absent roots, failures, recovery and detach.
+      for (const [nextRoot, nextBranch, result, elapsed, expectedPins] of [
+        ["/retained/first", "feature-a", 200, 0, 1],
+        ["/retained/second", "feature-b", 200, 0, 1],
+        [null, "feature-b", 200, 0, 0],
+        ["/retained/third", "feature-c", 503, 0, 1],
+        ["/retained/third", "feature-c", 200, 30_001, 1],
+        ["/retained/third", null, 200, 0, 0],
+        ["/retained/third", "feature-c", 200, 0, 1],
+        ["/retained/third", "feature-c", "throws", 0, 0],
       ] as const) {
         root = nextRoot;
         branch = nextBranch;
-        await load();
+        response = result;
+        vi.setSystemTime(Date.now() + elapsed);
+        if (result === "throws") {
+          await expect(load()).rejects.toThrow("session unavailable");
+        } else if (result === 503) {
+          await expect(load()).resolves.toEqual({
+            pullRequests: [],
+            repository: { owner: "openclaw", repo: "openclaw" },
+            rateLimited: false,
+            status: "unavailable",
+          });
+        } else {
+          await load();
+        }
         expect(pins()).toBe(expectedPins);
       }
-      root = "/retained/third";
-      branch = "feature-c";
-      fetchFailure = true;
-      await expect(load()).resolves.toEqual({
-        pullRequests: [],
-        repository: { owner: "openclaw", repo: "openclaw" },
-        rateLimited: false,
-        status: "unavailable",
-      });
-      // Keep the GitHub failure expiry pinned until this watch retires.
-      expect(pins()).toBe(1);
-      fetchFailure = false;
-      vi.setSystemTime(Date.now() + 30_001);
-      await load();
-      expect(pins()).toBe(1);
-      branch = null;
-      await load();
-      expect(pins()).toBe(0);
-      branch = "feature-c";
-      await load();
-      expect(pins()).toBe(1);
-      rootFailure = true;
-      await expect(load()).rejects.toThrow("session unavailable");
-      expect(pins()).toBe(0);
     } finally {
       cacheLifetime.abort();
     }

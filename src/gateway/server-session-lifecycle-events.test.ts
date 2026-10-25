@@ -124,7 +124,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
 
   it("publishes lifecycle changes to plugins without websocket subscribers", async () => {
     const received = vi.fn();
-    const unsubscribe = subscribePluginSessionsChanged(received);
+    onTestFinished(subscribePluginSessionsChanged(received));
     const { broadcastToConnIds } = createGatewayBroadcaster({
       clients: new GatewayClientRegistry(),
     });
@@ -133,22 +133,14 @@ describe("createLifecycleEventBroadcastHandler", () => {
       sessionEventSubscribers: { getAll: () => new Set() },
     });
 
-    try {
-      await handler({
-        sessionKey: "agent:main:main",
-        reason: "rename",
-        label: "Renamed session",
-      });
-      await Promise.resolve();
-      expect(received).toHaveBeenCalledWith({
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        label: "Renamed session",
-        reason: "rename",
-      });
-    } finally {
-      unsubscribe();
-    }
+    await handler({ sessionKey: "agent:main:main", reason: "rename", label: "Renamed session" });
+    await Promise.resolve();
+    expect(received).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      label: "Renamed session",
+      reason: "rename",
+    });
   });
 
   it.each([
