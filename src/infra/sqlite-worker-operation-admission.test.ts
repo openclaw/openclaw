@@ -91,6 +91,23 @@ function captureInline(facts: unknown) {
   return captured;
 }
 
+function jobFixture(custody = new SqliteWorkerSlotCustody(), overrides: Partial<Job> = {}): Job {
+  const request = custody.createRequest();
+  request.activate();
+  request.accept();
+  return {
+    custody: request,
+    observation: { started() {}, completed() {} },
+    request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
+    bytes: 0,
+    result: new Promise(() => {}),
+    resolve: vi.fn(),
+    reject: vi.fn(),
+    detach: vi.fn(),
+    ...overrides,
+  };
+}
+
 it("preserves nested finish order and error precedence on repeated calls", () => {
   const admission = createAdmission((_request, grant) => grant());
   const finish = admission.finish.bind(admission);
@@ -526,20 +543,12 @@ it.each(
       events.push("reject");
       completion.reject(error);
     });
-    const custody = new SqliteWorkerSlotCustody().createRequest();
-    custody.activate();
-    custody.accept();
-    const job: Job = {
-      custody,
-      observation: { started() {}, completed() {} },
-      request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
-      bytes: 0,
+    const job = jobFixture(undefined, {
       result: completion.promise,
       operationAdmission: { admission, releaseService() {} },
       resolve,
       reject,
-      detach() {},
-    };
+    });
     write(1);
     settleOperation(owner, "completed");
     expect(posted).toHaveBeenLastCalledWith(
@@ -562,7 +571,7 @@ it.each(
       payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
       unmeasuredMessages: before?.unmeasuredMessages ?? 0,
     });
-    expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
+    expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(false);
     expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
     expect(publish).toHaveBeenCalledOnce();
     expect(rows()).toEqual([{ value: 1 }]);

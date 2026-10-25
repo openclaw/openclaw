@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePublicSessionShareToken } from "../gateway/control-ui-public-session-token.js";
@@ -52,6 +53,40 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { detectLegacyDeviceAuth, migrateLegacyDeviceAuth } from "./state-migrations.device-auth.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const row = (db: DatabaseSync, sql: string) => db.prepare(sql).get();
+const readIdentity = (env: NodeJS.ProcessEnv, readOnly = false) =>
+  runClientCredentialOperation(
+    env,
+    { kind: "identity.read", identity_key: "primary" },
+    { readOnly },
+  );
+const expectRetired = (db: DatabaseSync, table = "device_identities") =>
+  expect(row(db, `SELECT name FROM sqlite_schema WHERE name='${table}'`)).toBeUndefined();
+
+function legacyAuth(f: ReturnType<typeof nativeFixture>, token: string) {
+  const root = f.env.OPENCLAW_STATE_DIR;
+  const legacyPath = path.join(root, "identity", "device-auth.json");
+  const raw = JSON.stringify({
+    version: 1,
+    deviceId: f.identity.deviceId,
+    tokens: { operator: { token, scopes: [], updatedAtMs: 10 } },
+  });
+  fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+  fs.writeFileSync(legacyPath, raw);
+  const importLegacy = () =>
+    migrateLegacyDeviceAuth({
+      env: f.env,
+      stateDir: root,
+      detected: detectLegacyDeviceAuth({ stateDir: root, doctorOnlyStateMigrations: true }),
+    });
+  return {
+    legacyPath,
+    raw,
+    importLegacy,
+    key: { device_id: f.identity.deviceId, role: "operator" },
+  };
+}
+
 function fixture(customKeys = false, credentialRowCount = 1) {
   return createClientCredentialMigrationFixture(
     dirs.make("client-migration-"),
@@ -146,15 +181,7 @@ describe("local client credential extraction", () => {
         using source = openNodeSqliteDatabase(f.sourcePath);
         source.exec("DROP TABLE device_auth_tokens");
       }
-      const root = f.env.OPENCLAW_STATE_DIR;
-      const legacyPath = path.join(root, "identity", "device-auth.json");
-      const raw = JSON.stringify({
-        version: 1,
-        deviceId: f.identity.deviceId,
-        tokens: { operator: { token: "same-root-json-token", scopes: [], updatedAtMs: 10 } },
-      });
-      fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-      fs.writeFileSync(legacyPath, raw);
+      const { legacyPath, raw, importLegacy, key } = legacyAuth(f, "same-root-json-token");
       const maintenance = await captureClientCredentialMigrationFixture(f.sourcePath);
       try {
         upgradeNative(f, maintenance);
@@ -164,18 +191,8 @@ describe("local client credential extraction", () => {
             readClientCredentialReceipt(local.database)?.receipt.legacyImports["auth:primary"],
           ).toEqual(authTablePresent ? { sha256: null } : undefined);
         }
-        const imported = await migrateLegacyDeviceAuth({
-          env: f.env,
-          stateDir: root,
-          detected: detectLegacyDeviceAuth({ stateDir: root, doctorOnlyStateMigrations: true }),
-        });
-        expect(imported.warnings).toEqual([]);
-        expect(
-          runClientCredentialOperation(f.env, {
-            kind: "token.read",
-            key: { device_id: f.identity.deviceId, role: "operator" },
-          }),
-        ).toMatchObject({
+        expect((await importLegacy()).warnings).toEqual([]);
+        expect(runClientCredentialOperation(f.env, { kind: "token.read", key })).toMatchObject({
           kind: "token",
           token: authTablePresent ? null : { token: "same-root-json-token" },
         });
@@ -217,12 +234,8 @@ describe("local client credential extraction", () => {
     }
     try {
       const shared = openOpenClawStateDatabase({ env });
-      expect(
-        shared.db.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
-      ).toBeUndefined();
-      expect(
-        runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
-      ).toEqual({ kind: "identity", identity });
+      expectRetired(shared.db);
+      expect(readIdentity(env)).toEqual({ kind: "identity", identity });
     } finally {
       closeOpenClawStateDatabaseForTest();
     }
@@ -262,15 +275,7 @@ describe("local client credential extraction", () => {
       ).toThrow(/ECONNREFUSED/);
       expect(entered).toBe(false);
       expect(fs.existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(true);
-      expect(
-        runClientCredentialOperation(
-          env,
-          { kind: "identity.read", identity_key: "primary" },
-          {
-            readOnly: true,
-          },
-        ),
-      ).toEqual({ kind: "identity", identity });
+      expect(readIdentity(env, true)).toEqual({ kind: "identity", identity });
     } finally {
       closeOpenClawStateDatabaseForTest();
       await reservation.claim.release();
@@ -297,9 +302,7 @@ describe("local client credential extraction", () => {
           writeClientCredentialReceipt(local.database, stored.receipt, phase);
         }
         repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true });
-        expect(
-          runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
-        ).toEqual({ kind: "identity", identity });
+        expect(readIdentity(env)).toEqual({ kind: "identity", identity });
         {
           using local = openMigrationCredentials(env);
           const stored = readClientCredentialReceipt(local.database)!;
@@ -321,18 +324,14 @@ describe("local client credential extraction", () => {
         );
         const localPath = resolveClientCredentialStorePath(env);
         const before = fs.readFileSync(localPath);
-        expect(() =>
-          runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
-        ).toThrow("migration is incomplete or stale");
+        expect(() => readIdentity(env)).toThrow("migration is incomplete or stale");
         const repair = repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true });
         expect(repair.changes).toEqual([]);
         expect(repair.warnings).toEqual([
           expect.stringContaining("Local credentials do not match the shared database"),
         ]);
         expect(fs.readFileSync(localPath)).toEqual(before);
-        expect(() =>
-          runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
-        ).toThrow("migration is incomplete or stale");
+        expect(() => readIdentity(env)).toThrow("migration is incomplete or stale");
       } finally {
         await closeOpenClawStateDatabaseAsync();
       }
@@ -356,19 +355,14 @@ describe("local client credential extraction", () => {
     }
     expect(readClientCredentialReceipt(target.database)?.phase).toBe("complete");
     expect(f.source.prepare("SELECT value FROM unaffected").get()).toEqual({ value: "preserve" });
+    expectRetired(f.source);
     expect(
-      f.source.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
-    ).toBeUndefined();
-    expect(
-      target.database
-        .prepare("SELECT socket_path,socket_token FROM native_exec_socket_credentials")
-        .get(),
+      row(target.database, "SELECT socket_path,socket_token FROM native_exec_socket_credentials"),
     ).toEqual({ socket_path: "/socket", socket_token: "socket-token" });
-    const policy = f.source
-      .prepare(
-        "SELECT raw_json,socket_path,has_socket_token,updated_at_ms FROM exec_approvals_config",
-      )
-      .get()!;
+    const policy = row(
+      f.source,
+      "SELECT raw_json,socket_path,has_socket_token,updated_at_ms FROM exec_approvals_config",
+    )!;
     expect({ ...policy, raw_json: JSON.parse(String(policy.raw_json)) }).toEqual({
       raw_json: {
         version: 1,
@@ -395,8 +389,8 @@ describe("local client credential extraction", () => {
         throw new Error("interrupt before shared commit");
       }),
     ).toThrow("interrupt before shared commit");
-    const target = openMigrationCredentials(f.env);
-    try {
+    {
+      using target = openMigrationCredentials(f.env);
       expect(readClientCredentialReceipt(target.database)?.phase).toBe("copied");
       runSqliteImmediateTransactionSync(target.database, () =>
         target.database.exec(
@@ -413,8 +407,6 @@ describe("local client credential extraction", () => {
           observedToken: legacyToken.token,
         }),
       ).toEqual({ kind: "changed", changed: true });
-    } finally {
-      target.close();
     }
     expect(f.source.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
       token: "token-original",
@@ -423,8 +415,8 @@ describe("local client credential extraction", () => {
       { identity_key: "primary" },
     ]);
     f.migrate();
-    const current = openMigrationCredentials(f.env);
-    try {
+    {
+      using current = openMigrationCredentials(f.env);
       expect(current.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
         token: "token-original",
       });
@@ -440,8 +432,6 @@ describe("local client credential extraction", () => {
         token: null,
       });
       expect(fs.readFileSync(legacyPath, "utf8")).toBe(legacyJson);
-    } finally {
-      current.close();
     }
   });
 
@@ -461,12 +451,8 @@ describe("local client credential extraction", () => {
         receipt: { legacyImports: { "identity:primary": { sha256: null } } },
       });
     }
-    expect(
-      f.source.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
-    ).toBeUndefined();
-    expect(() =>
-      runClientCredentialOperation(f.env, { kind: "identity.read", identity_key: "primary" }),
-    ).toThrow(/invalid persisted device identity/);
+    expectRetired(f.source);
+    expect(() => readIdentity(f.env)).toThrow(/invalid persisted device identity/);
   });
 
   it("retains shared credentials and socket material when token scope validation fails", async () => {
@@ -587,9 +573,7 @@ it("promotes an unchanged independent native source without losing refreshed loc
         legacyImports: { "auth:primary": { sha256: "b".repeat(64) } },
       },
     });
-    expect(
-      source.prepare("SELECT name FROM sqlite_schema WHERE name='device_auth_tokens'").get(),
-    ).toBeUndefined();
+    expectRetired(source, "device_auth_tokens");
   } finally {
     await maintenance.close();
   }
@@ -602,24 +586,9 @@ it("rebuilds large changed native sources without reimporting revoked JSON crede
     source.exec("DROP TABLE device_auth_tokens");
   }
   const snapshot = readIndependentClientCredentialSource(f.sourcePath);
-  const root = f.env.OPENCLAW_STATE_DIR;
-  const legacyPath = path.join(root, "identity", "device-auth.json");
-  const raw = JSON.stringify({
-    version: 1,
-    deviceId: f.identity.deviceId,
-    tokens: { operator: { token: "revoked-json-token", scopes: [], updatedAtMs: 10 } },
-  });
-  fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-  fs.writeFileSync(legacyPath, raw);
+  const { legacyPath, raw, importLegacy, key } = legacyAuth(f, "revoked-json-token");
   seedIndependent(f, snapshot);
-  const importLegacy = () =>
-    migrateLegacyDeviceAuth({
-      env: f.env,
-      stateDir: root,
-      detected: detectLegacyDeviceAuth({ stateDir: root, doctorOnlyStateMigrations: true }),
-    });
   expect((await importLegacy()).warnings).toEqual([]);
-  const key = { device_id: f.identity.deviceId, role: "operator" };
   expect(
     runClientCredentialOperation(f.env, {
       kind: "token.remove",
