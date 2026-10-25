@@ -274,7 +274,8 @@ describe("conversation registry", () => {
           route: {
             channel: delivery.channel,
             accountId: delivery.accountId,
-            target: { to: delivery.target, threadId: delivery.threadId },
+            target: { to: delivery.target },
+            thread: { id: delivery.threadId },
           },
           context: {
             channel: delivery.channel,
