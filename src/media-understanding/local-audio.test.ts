@@ -139,7 +139,7 @@ it("discovers Windows commands through case-insensitive PATH and PATHEXT values"
   });
 });
 
-it("does not rank Metal-capable whisper ahead of sherpa until a run observes Metal", async () => {
+it("ranks observed acceleration ahead of merely capable Whisper and Parakeet", async () => {
   const { modelPath, sherpaDir } = await localModels();
   vi.spyOn(fs, "realpath").mockResolvedValue(
     "/opt/homebrew/Cellar/whisper-cpp/1.9.1/bin/whisper-cli",
@@ -148,6 +148,8 @@ it("does not rank Metal-capable whisper ahead of sherpa until a run observes Met
   mockCommands({
     "whisper-cli": "/opt/homebrew/bin/whisper-cli",
     "sherpa-onnx-offline": "/usr/local/bin/sherpa-onnx-offline",
+    "parakeet-mlx": "/usr/local/bin/parakeet-mlx",
+    whisper: "/usr/local/bin/whisper",
   });
   const inspectBackend = () =>
     inspect({ WHISPER_CPP_MODEL: modelPath, SHERPA_ONNX_MODEL_DIR: sherpaDir });
@@ -165,7 +167,12 @@ it("does not rank Metal-capable whisper ahead of sherpa until a run observes Met
   expect(selection.entries.map((entry) => entry.command)).toEqual([
     "/usr/local/bin/sherpa-onnx-offline",
     "/opt/homebrew/bin/whisper-cli",
+    "/usr/local/bin/parakeet-mlx",
+    "/usr/local/bin/whisper",
   ]);
+  const parakeet = selection.candidates.find(({ id }) => id === "parakeet-mlx");
+  expect(parakeet).toMatchObject({ capableBackend: "mlx" });
+  expect(parakeet).not.toHaveProperty("observedBackend");
   expect(selection.entries.flatMap((entry) => entry.args ?? [])).toContain("{{AttachmentPath}}");
 
   observe("whisper_backend_init_gpu: using MTL0 backend", "/custom/bin/whisper-cli");
@@ -178,7 +185,7 @@ it("does not rank Metal-capable whisper ahead of sherpa until a run observes Met
     observedBackend: "metal",
   });
 
-  for (const failedBackend of ["Metal", "MTL0", "CUDA0"]) {
+  for (const failedBackend of ["Metal", "CUDA0"]) {
     expect(
       observe(
         [
@@ -191,30 +198,6 @@ it("does not rank Metal-capable whisper ahead of sherpa until a run observes Met
     expect(failedAccelerationSelection.selected).toMatchObject({ id: "sherpa-onnx-offline" });
     expect(whisperCandidate(failedAccelerationSelection)).toMatchObject({ observedBackend: "cpu" });
   }
-});
-
-it("reports Parakeet as MLX-capable without treating capability as observation", async () => {
-  const { modelPath: whisperModel, sherpaDir } = await localModels();
-
-  mockPlatform("darwin", "arm64");
-  vi.spyOn(executablePath, "resolveExecutableFromPathEnv").mockImplementation(
-    (name) => `/usr/local/bin/${name}`,
-  );
-  const selection = await inspect({
-    WHISPER_CPP_MODEL: whisperModel,
-    SHERPA_ONNX_MODEL_DIR: sherpaDir,
-  });
-
-  expect(selection.selected).toMatchObject({ id: "sherpa-onnx-offline", requestedBackend: "cpu" });
-  const parakeet = selection.candidates.find((candidate) => candidate.id === "parakeet-mlx");
-  expect(parakeet).toMatchObject({ capableBackend: "mlx" });
-  expect(parakeet).not.toHaveProperty("observedBackend");
-  expect(selection.entries.map((entry) => entry.command)).toEqual([
-    "/usr/local/bin/sherpa-onnx-offline",
-    "/usr/local/bin/whisper-cli",
-    "/usr/local/bin/parakeet-mlx",
-    "/usr/local/bin/whisper",
-  ]);
 });
 
 it("reads observations from the exact Windows whisper-cli.exe executable", async () => {

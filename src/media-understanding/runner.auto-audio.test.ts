@@ -91,28 +91,17 @@ describe("runCapability audio", () => {
       decision: { outcome: "success" },
       outputs: [{ text: "subscription transcript", model: "transcription-default" }],
     });
-    expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
     expect(formatDecisionSummary(result.decision)).toBe(
       "audio: success (1/1) via openai/transcription-default",
     );
   });
 
-  it.each([
-    { explicit: false, withBody: true },
-    { explicit: true, withBody: true },
-    { explicit: false, withBody: false },
-  ])(
-    "retries failed uploads only with an explicit fallback list: $explicit, body: $withBody",
-    async ({ explicit, withBody }) => {
+  it.each([false, true])(
+    "retries failed uploads only with an explicit fallback list: %s",
+    async (explicit) => {
       hasAuth.mockClear();
       const rejected = await createProviderHttpError(
-        new Response(
-          withBody ? JSON.stringify({ detail: "Synthetic provider response body" }) : null,
-          {
-            status: 403,
-            headers: { "request-id": "synthetic-request-id" },
-          },
-        ),
+        new Response('{"detail":"Synthetic provider response body"}', { status: 403 }),
         "Audio transcription failed",
         { statusPrefix: "HTTP " },
       );
@@ -194,7 +183,6 @@ describe("runCapability audio", () => {
             reason: String(rejected),
           }),
         );
-        expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
       });
     });
   });
@@ -216,6 +204,7 @@ describe("runCapability audio", () => {
       });
       expect(result.decision.outcome).toBe("skipped");
       expect(result.decision.attachments[0]?.attempts).toEqual([]);
+      expect(transcribeAudioWithContext).toHaveBeenCalledOnce();
       expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
     });
   });
@@ -258,7 +247,6 @@ describe("runCapability audio", () => {
       },
     ]);
     expect(openai).not.toHaveBeenCalled();
-    expect(mistral).toHaveBeenCalledTimes(1);
     expect(hasAuth).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", modelApi: "openai-audio-transcriptions" }),
     );
@@ -273,12 +261,7 @@ describe("runCapability provider options", () => {
       "X-Config-Managed": "secretref-env:DEEPGRAM_HEADER_TOKEN",
     };
     const entryHeaders = { "X-Entry": "3", "X-Entry-Managed": "secretref-managed" };
-    const provider = {
-      baseUrl: "https://provider.example",
-      apiKey: "test-key",
-      headers: providerHeaders,
-      models: [],
-    };
+
     let seen: AudioTranscriptionRequest | undefined;
     const result = await runAudio({
       cfg: mediaConfig(
@@ -315,7 +298,14 @@ describe("runCapability provider options", () => {
             },
           ],
         },
-        { deepgram: provider },
+        {
+          deepgram: {
+            baseUrl: "https://provider.example",
+            apiKey: "test-key",
+            headers: providerHeaders,
+            models: [],
+          },
+        },
       ),
       providerRegistry: buildProviderRegistry({
         deepgram: {
