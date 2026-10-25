@@ -702,48 +702,67 @@ export class GatewayClient {
       useLegacyNodeProtocolEnvelope,
     );
 
-    return {
-      params: {
-        minProtocol,
-        maxProtocol,
-        client: {
-          id: clientId,
-          displayName: this.opts.clientDisplayName,
-          version: this.opts.clientVersion ?? DEFAULT_CLIENT_VERSION,
-          buildId: this.opts.clientBuildId,
-          platform,
-          deviceFamily,
-          modelIdentifier,
-          mode: clientMode,
-          instanceId: this.opts.instanceId,
-        },
-        ...resolveModelCatalogConnect({
-          caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
-          modelCatalog: useLegacyNodeProtocolEnvelope ? undefined : this.opts.modelCatalog,
-          serverCapabilities: params.serverCapabilities,
-        }),
-        commands: Array.isArray(this.opts.commands) ? this.opts.commands : undefined,
-        computerUse: useLegacyNodeProtocolEnvelope ? undefined : this.opts.computerUse,
-        workerRuns: useLegacyNodeProtocolEnvelope ? undefined : this.opts.workerRuns,
-        permissions:
-          this.opts.permissions && typeof this.opts.permissions === "object"
-            ? this.opts.permissions
-            : undefined,
-        pathEnv: this.opts.pathEnv,
-        auth,
+    const connectParams: ConnectParams = {
+      minProtocol,
+      maxProtocol,
+      client: {
+        id: clientId,
+        displayName: this.opts.clientDisplayName,
+        version: this.opts.clientVersion ?? DEFAULT_CLIENT_VERSION,
+        buildId: this.opts.clientBuildId,
+        platform,
+        deviceFamily,
+        modelIdentifier,
+        mode: clientMode,
+        instanceId: this.opts.instanceId,
+      },
+      ...resolveModelCatalogConnect({
+        caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
+        modelCatalog: useLegacyNodeProtocolEnvelope ? undefined : this.opts.modelCatalog,
+        serverCapabilities: params.serverCapabilities,
+      }),
+      commands: Array.isArray(this.opts.commands) ? this.opts.commands : undefined,
+      computerUse: useLegacyNodeProtocolEnvelope ? undefined : this.opts.computerUse,
+      workerRuns: useLegacyNodeProtocolEnvelope ? undefined : this.opts.workerRuns,
+      permissions:
+        this.opts.permissions && typeof this.opts.permissions === "object"
+          ? this.opts.permissions
+          : undefined,
+      pathEnv: this.opts.pathEnv,
+      auth,
+      role,
+      scopes,
+      device: undefined,
+    };
+    if (this.opts.deviceIdentity) {
+      // The signed payload mirrors server verification exactly; keep metadata
+      // normalized here so different hosts sign the same logical device facts.
+      const payload = buildDeviceAuthPayloadV3({
+        deviceId: this.opts.deviceIdentity.deviceId,
+        clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        clientMode,
         role,
         scopes,
-        device: this.buildDeviceConnectParams({
-          nonce,
-          role,
-          scopes,
-          signatureToken,
-          signedAtMs,
-          platform,
-          deviceFamily,
-          clientMode,
-        }),
-      },
+        signedAtMs,
+        token: signatureToken ?? null,
+        nonce,
+        platform,
+        deviceFamily,
+      });
+      const signature = this.deps.signDevicePayload(
+        this.opts.deviceIdentity.privateKeyPem,
+        payload,
+      );
+      connectParams.device = {
+        id: this.opts.deviceIdentity.deviceId,
+        publicKey: this.deps.publicKeyRawBase64UrlFromPem(this.opts.deviceIdentity.publicKeyPem),
+        signature,
+        signedAt: signedAtMs,
+        nonce,
+      };
+    }
+    return {
+      params: connectParams,
       authApprovalRuntimeToken,
       authAgentRuntimeIdentityToken,
       resolvedDeviceToken,
@@ -769,45 +788,6 @@ export class GatewayClient {
       (detailCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
         normalizeGatewayErrorText(error.message).includes("protocol mismatch"))
     );
-  }
-
-  private buildDeviceConnectParams(params: {
-    nonce: string;
-    role: string;
-    scopes: string[];
-    signatureToken: string | undefined;
-    signedAtMs: number;
-    platform: string;
-    deviceFamily: string | undefined;
-    clientMode: GatewayClientMode;
-  }): ConnectParams["device"] {
-    if (!this.opts.deviceIdentity) {
-      return undefined;
-    }
-    const { nonce, role, scopes, signatureToken, signedAtMs, platform, deviceFamily, clientMode } =
-      params;
-    // The signed payload mirrors server verification exactly; keep metadata
-    // normalized here so different hosts sign the same logical device facts.
-    const payload = buildDeviceAuthPayloadV3({
-      deviceId: this.opts.deviceIdentity.deviceId,
-      clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientMode,
-      role,
-      scopes,
-      signedAtMs,
-      token: signatureToken ?? null,
-      nonce,
-      platform,
-      deviceFamily,
-    });
-    const signature = this.deps.signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
-    return {
-      id: this.opts.deviceIdentity.deviceId,
-      publicKey: this.deps.publicKeyRawBase64UrlFromPem(this.opts.deviceIdentity.publicKeyPem),
-      signature,
-      signedAt: signedAtMs,
-      nonce,
-    };
   }
 
   private handleConnectHello(
