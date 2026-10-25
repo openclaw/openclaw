@@ -6,6 +6,7 @@ import {
   getAcpSessionKysely,
   readPublishedAcpSessionRows,
 } from "../../acp/runtime/session-meta-keys.js";
+import type { AcpSessionReadCommand } from "../../acp/runtime/session-meta-read.types.js";
 import { readAcpSessionCommand } from "../../acp/runtime/session-meta-read.worker.js";
 import {
   applyAcpSessionMutation,
@@ -17,12 +18,13 @@ import { agentEngineSchema } from "../../state/openclaw-agent-db-engine.js";
 import { stateEngineSchema } from "../../state/openclaw-state-db-engine.js";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import type { StoreSchema } from "../database-engine/contract.js";
-import { openPostgresEngineTestStore } from "../database-engine/engine-store.test-support.js";
+import { openEngineStore, readEngineAnchor } from "../database-engine/open.js";
 import { getPostgresPhysicalFacts } from "../database-engine/physical-facts.js";
 import { executeSqliteQuerySync } from "../kysely-sync.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-connection.js";
 import { readSqliteDatabaseWriteRevision } from "../sqlite-database-admission.js";
+import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../sqlite-transaction.js";
 import { usePostgresTestHarness } from "./postgres.test-support.js";
 import { failAfterStatement } from "./sql.test-support.js";
@@ -33,21 +35,28 @@ type StoreFixture = ReturnType<typeof openStore>;
 
 function openStore(schema: StoreSchema) {
   const pathname = path.join(directories.make("pg-read-facts-"), "anchor.sqlite");
+  const handles: {
+    db: PostgresSqlConnection;
+    anchor: ReturnType<typeof openNodeSqliteDatabase>;
+  }[] = [];
   const open = () => {
     const anchor = openNodeSqliteDatabase(pathname);
     try {
-      const db = openPostgresEngineTestStore({
+      const db = openEngineStore({
         anchor,
         schema,
         input: { connection: connection!, schemaPrefix: prefix },
+        openSqlite: () => {
+          throw new Error("Expected PostgreSQL store");
+        },
+        prepareAnchor: () => {},
+        inspectSqlite: () => {
+          admitSqliteSchema(anchor);
+          return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
+        },
       });
       assert(isPostgresSqlConnection(db), "Expected PostgreSQL connection");
-      harness.onClose(() =>
-        withEngineStoreAdmission(() => {
-          db.close();
-          anchor.close();
-        }),
-      );
+      handles.push({ db, anchor });
       return db;
     } catch (error) {
       anchor.close();
@@ -56,6 +65,14 @@ function openStore(schema: StoreSchema) {
   };
   const writer = open();
   assert(getPostgresPhysicalFacts(writer), "Expected production schema admission");
+  harness.onClose(() =>
+    withEngineStoreAdmission(() => {
+      for (const { db, anchor } of handles) {
+        db.close();
+        anchor.close();
+      }
+    }),
+  );
   return { pathname, writer, open };
 }
 
@@ -68,6 +85,16 @@ function metadata(runtimeSessionName: string): SessionAcpMeta {
     state: "idle",
     lastActivityAt: 100,
   };
+}
+
+function commandFor(...names: string[]) {
+  return {
+    type: "acpSessions.metadata",
+    entries: names.map((name) => ({
+      keys: [buildAcpDatabaseSessionKey(`agent:main:acp:${name}`, "main")],
+      entry: { sessionId: "session", lifecycleRevision: "generation" },
+    })),
+  } satisfies AcpSessionReadCommand;
 }
 
 function seedAcp(db: PostgresSqlConnection, name: string, value: string) {
@@ -103,17 +130,14 @@ function expectRows(rows: unknown, ...names: (string | null)[]) {
 }
 
 function acpReader(store: StoreFixture, ...names: string[]) {
-  const entries = names.map((name) => ({
-    keys: [buildAcpDatabaseSessionKey(`agent:main:acp:${name}`, "main")],
-    entry: { sessionId: "session", lifecycleRevision: "generation" },
-  }));
+  const input = commandFor(...names);
   const reader = store.open();
-  const read = () => readAcpSessionCommand(reader, { type: "acpSessions.metadata", entries }).rows;
+  const read = () => readAcpSessionCommand(reader, input).rows;
   return {
     reader,
     read,
     snapshot: (body: () => unknown = read) => runSqliteReadSnapshotSync(reader, body),
-    published: () => readPublishedAcpSessionRows(store.pathname, entries),
+    published: () => readPublishedAcpSessionRows(store.pathname, input.entries),
   };
 }
 
@@ -126,31 +150,31 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
     });
   });
 
-  it("publishes ACP facts after snapshot close and isolates pinned reads from newer postimages", () => {
+  it("publishes positive and absent ACP rows after snapshot close and consumes typed postimages", () => {
     withEngineStoreAdmission(() => {
       seedAcp(state.writer, "published", "initial");
       const { reader, read, snapshot, published } = acpReader(state, "published", "absent");
       using query = vi.spyOn(reader, "query");
+      using exec = vi.spyOn(reader, "exec");
       const metadataReads = () =>
         query.mock.calls.filter(([sql]) => /\b(?:from|join)\s+"?acp_sessions\b/iu.test(sql));
       snapshot(() => {
         expectRows(snapshot(read), "initial", null);
         expect(published()).toBeUndefined();
       });
+      expect(exec.mock.calls).toEqual([
+        ["BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"],
+        ["ROLLBACK"],
+      ]);
       expect(reader.isTransaction).toBe(false);
       expect(metadataReads()).toHaveLength(1);
       expectRows(published(), "initial", null);
       query.mockClear();
       const revision = readSqliteDatabaseWriteRevision(reader);
-      snapshot(() => {
-        expectRows(read(), "initial", null);
-        writeAcp(state.writer, "absent", "created");
-        writeAcp(state.writer, "published", null);
-        expect(readSqliteDatabaseWriteRevision(reader)).not.toBe(revision);
-        expectRows(published(), null, "created");
-        expectRows(read(), "initial", null);
-      });
-      expectRows(published(), null, "created");
+      writeAcp(state.writer, "absent", "created");
+      expect(readSqliteDatabaseWriteRevision(reader)).not.toBe(revision);
+      expectRows(snapshot(), "initial", "created");
+      writeAcp(state.writer, "published", null);
       expectRows(snapshot(), null, "created");
       expect(metadataReads()).toHaveLength(0);
     });
@@ -188,6 +212,26 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
     },
   );
 
+  it("keeps old ACP snapshots isolated from newer positive and negative postimages", () => {
+    withEngineStoreAdmission(() => {
+      seedAcp(state.writer, "overlap-positive", "before");
+      const { read, snapshot, published } = acpReader(
+        state,
+        "overlap-positive",
+        "overlap-negative",
+      );
+      snapshot(() => {
+        expectRows(read(), "before", null);
+        writeAcp(state.writer, "overlap-positive", null);
+        writeAcp(state.writer, "overlap-negative", "after");
+        expectRows(published(), null, "after");
+        expectRows(read(), "before", null);
+      });
+      expectRows(published(), null, "after");
+      expectRows(snapshot(), null, "after");
+    });
+  });
+
   it.each([
     { initial: "before", updated: "after" },
     { initial: undefined, updated: "created" },
@@ -197,16 +241,16 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
       withEngineStoreAdmission(() => {
         const agent = openStore(agentEngineSchema);
         const key = `agent:main:read-facts:${updated}`;
-        const write = (sessionId: string) =>
+        const insert = (sessionId: string) =>
           agent.writer.runTransaction(() =>
             agent.writer
               .prepare(
-                "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(session_key) DO UPDATE SET current_session_id = excluded.current_session_id",
+                "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
               )
               .run(key, sessionId, JSON.stringify({ sessionId, updatedAt: 100 }), 100),
           );
         if (initial) {
-          write(initial);
+          insert(initial);
         }
         const reader = agent.open();
         const queries = getExactSessionEntryQueries(reader);
@@ -221,7 +265,15 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
         runSqliteReadSnapshotSync(reader, () => {
           expectRow(initial);
           expectRow(initial);
-          write(updated);
+          if (initial) {
+            agent.writer.runTransaction(() =>
+              agent.writer
+                .prepare("UPDATE session_nodes SET current_session_id = ? WHERE session_key = ?")
+                .run(updated, key),
+            );
+          } else {
+            insert(updated);
+          }
           expectRow(initial);
           expect(rowReads()).toHaveLength(1);
         });
