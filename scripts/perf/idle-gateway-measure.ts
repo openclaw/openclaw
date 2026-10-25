@@ -144,12 +144,12 @@ const env = createGatewayBenchEnv(path.join(state ?? output, "home"), configPath
     OPENCLAW_SYSTEMD_UNIT: `openclaw-idle-measure-${port}`,
     OPENCLAW_IDLE_MEASURE_CHANNEL: channel,
     OPENCLAW_IDLE_MEASURE_TIMERS: values.timers ? "1" : "0",
+    OPENCLAW_BENCH_TRACE_GC: traceGc ? "1" : "0",
     NODE_DISABLE_COMPILE_CACHE: "1",
   },
 });
 const args = [
   ...gatewayBenchCpuProfileArgs(values["cpu-profile-dir"]),
-  ...(traceGc ? ["--trace-gc-nvp"] : []),
   "--import",
   path.resolve("scripts/tsx.mjs"),
   "--import",
