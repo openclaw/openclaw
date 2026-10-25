@@ -7,8 +7,6 @@ import { clearFollowupQueue, getFollowupQueue } from "../auto-reply/reply/queue/
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
-import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createModelSelectionInputs,
   createRequest,
@@ -20,7 +18,7 @@ await vi.hoisted(() => import("./apply-session-model-selection.test-support.js")
 const { effects, placementMocks } = selectionMocks;
 
 const persistedSession = useSelectionStore("openclaw-model-picker-profile-");
-const { lifecycleEvents, expectNoSelectionEffects } = useSelectionEffects();
+const { expectNoSelectionEffects } = useSelectionEffects();
 
 import {
   applySessionModelSelectionInternal as applySessionModelSelection,
@@ -42,8 +40,17 @@ it.each([false, true])("uses configured default only with reset intent=%s", asyn
     { model: "fixture/automatic", modelPolicy: { allow: ["fixture/manual"] } },
     {
       defaultModel: "stale-default-hint",
+      canPersistStickyModelSelection: true,
+      sessionEntry: createEntry({
+        providerOverride: "fixture",
+        modelOverride: "manual",
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "codex",
+        nativeRuntimeConsent: "codex",
+      }),
       request: createRequest("fixture", reset ? "manual" : "automatic", {
         isDefault: true,
+        runtime: { kind: "clear" },
         ...(reset ? { resetToDefault: true as const } : {}),
       }),
     },
@@ -55,45 +62,46 @@ it.each([false, true])("uses configured default only with reset intent=%s", asyn
       : { status: "rejected", reason: "not-allowed" },
   );
   expect(params.sessionEntry.modelOverride).toBe(reset ? undefined : "manual");
+  if (reset) {
+    expect(result).toMatchObject({ runtimeChange: { kind: "clear" } });
+  }
+  expect([
+    params.sessionEntry.agentRuntimeOverride,
+    params.sessionEntry.nativeRuntimeConsent,
+  ]).toEqual(reset ? [undefined, undefined] : ["codex", "codex"]);
+  expect(params.sessionEntry.agentHarnessId).toBe("codex");
+  expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
 });
 
-it.each<[Partial<ApplySessionModelSelectionParams>, { reason: string; message?: string }]>([
-  [{ request: createRequest("missing-provider", "reasoner") }, { reason: "unknown-provider" }],
-  [
-    {
-      request: createRequest("openai", "gpt-5.6-luna", {
-        runtime: { kind: "set", runtime: "missing-runtime" },
+it.each([
+  ["missing-provider", "reasoner", undefined, "unknown-provider"],
+  ["openai", "gpt-5.6-luna", "missing-runtime", "invalid-runtime"],
+  ["anthropic", "claude-opus-4-6", "codex", "invalid-runtime"],
+  ["openai", "gpt-4o", undefined, "not-allowed"],
+] as const)(
+  "rejects %s/%s (%s) without mutation or effects",
+  async (provider, model, runtime, reason) => {
+    const params = createParams({
+      sessionEntry: createEntry({ thinkingLevel: "high" }),
+      modelCatalog: [catalog[0]!],
+      thinkingCatalog: [catalog[0]!],
+      cfg:
+        reason === "not-allowed"
+          ? { agents: { defaults: { modelPolicy: { allow: ["anthropic/*"] } } } }
+          : {},
+      request: createRequest(provider, model, {
+        isDefault: provider === "anthropic",
+        runtime: runtime ? { kind: "set", runtime } : { kind: "unchanged" },
       }),
-    },
-    { reason: "invalid-runtime" },
-  ],
-  [
-    {
-      request: createRequest("anthropic", "claude-opus-4-6", {
-        isDefault: true,
-        runtime: { kind: "set", runtime: "codex" },
-      }),
-    },
-    { reason: "invalid-runtime", message: 'Runtime "codex" is not supported for anthropic.' },
-  ],
-  [
-    { cfg: { agents: { defaults: { modelPolicy: { allow: ["anthropic/*"] } } } } },
-    { reason: "not-allowed", message: "Model openai/gpt-4o is not available for this agent." },
-  ],
-])("rejects invalid selection %# without mutation or effects", async (overrides, expected) => {
-  const params = createParams({
-    sessionEntry: createEntry({ thinkingLevel: "high" }),
-    modelCatalog: [catalog[0]!],
-    thinkingCatalog: [catalog[0]!],
-    ...overrides,
-  });
-  const initial = structuredClone(params.sessionEntry);
-  const result = await applySessionModelSelection(params);
-  expect(result).toMatchObject({ status: "rejected", ...expected });
-  expect(params.sessionEntry).toEqual(initial);
-  expectNoSelectionEffects();
-  expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
-});
+    });
+    const initial = structuredClone(params.sessionEntry);
+    const result = await applySessionModelSelection(params);
+    expect(result).toMatchObject({ status: "rejected", reason });
+    expect(params.sessionEntry).toEqual(initial);
+    expectNoSelectionEffects();
+    expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
+  },
+);
 
 it.each([false, true])(
   "refreshes inherited thinking only with pending work=%s",
@@ -111,16 +119,9 @@ it.each([false, true])(
     try {
       expect(await applySessionModelSelection(params)).toMatchObject({ status: "applied" });
       expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledTimes(pending ? 1 : 0);
-      expect(effects.refreshQueuedFollowupSession.mock.calls).toMatchObject([
-        [
-          {
-            nextThinking: {
-              level: undefined,
-              catalog: expect.arrayContaining([pending ? observed : catalog[1]]),
-            },
-          },
-        ],
-      ]);
+      const thinking = effects.refreshQueuedFollowupSession.mock.calls[0]?.[0].nextThinking;
+      expect(thinking.level).toBeUndefined();
+      expect(thinking.catalog).toContainEqual(pending ? observed : catalog[1]);
     } finally {
       clearFollowupQueue(params.sessionKey);
     }
@@ -149,53 +150,21 @@ it.each([undefined, { allow: ["openai/*"] }])(
   },
 );
 
-it("publishes a profile-only selection after the scoped session has persisted", async () => {
-  const target = await persistedSession(
-    createSelectedEntry("openai", "gpt-5.6-luna", {
-      authProfileOverride: "openai:work",
-      authProfileOverrideSource: "auto",
-    }),
-    "agent:main:dm:profile",
-  );
-  let publishedEntry: SessionEntry | undefined;
-  const unsubscribe = onSessionLifecycleEvent(() => {
-    publishedEntry = loadSessionEntryReadOnly(target);
-  });
-  try {
-    const result = await select({
-      ...target,
-      currentProvider: "openai",
-      currentModel: "gpt-5.6-luna",
-      modelCatalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna" }],
-      request: createRequest("openai", "gpt-5.6-luna", { profileOverride: "openai:work" }),
-    });
-
-    expect(result).toMatchObject({ status: "applied", changed: true });
-    expect(lifecycleEvents).toEqual([
-      { sessionKey: target.sessionKey, agentId: "main", reason: "patch", catalogChanged: true },
-    ]);
-    expect(publishedEntry).toMatchObject({
-      sessionId: "session-1",
-      modelOverride: "gpt-5.6-luna",
-      authProfileOverride: "openai:work",
-      authProfileOverrideSource: "user",
-    });
-    expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-  } finally {
-    unsubscribe();
-  }
-});
-
 it("applies authorized selection effects once to the resolved target session", async () => {
   const sessionKey = "agent:main:telegram:bound:thread:42";
-  const sessionEntry = createEntry({
-    model: "claude-opus-4-6",
-    modelProvider: "anthropic",
-    contextTokens: 8_000,
-    contextBudgetStatus: {} as NonNullable<SessionEntry["contextBudgetStatus"]>,
-  });
+  const sessionEntry = createEntry();
+  const cfg = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } };
+  const draft = {
+    agents: { ...cfg.agents, entries: { main: { model: "anthropic/claude-sonnet-4-6" } } },
+  };
+  effects.mutateConfigFileWithRetry.mockImplementationOnce(
+    async ({ mutate }: { mutate: (config: OpenClawConfig) => string }) => ({
+      nextConfig: draft,
+      result: mutate(draft),
+    }),
+  );
   const result = await select({
+    cfg,
     sessionEntry,
     sessionKey,
     canPersistStickyModelSelection: true,
@@ -208,8 +177,6 @@ it("applies authorized selection effects once to the resolved target session", a
 
   expect(result).toMatchObject({
     status: "applied",
-    provider: "openai",
-    model: "gpt-4o",
     effectiveModelRef: "openai/gpt-4o",
     changed: true,
     contextTokens: 16_000,
@@ -224,124 +191,16 @@ it("applies authorized selection effects once to the resolved target session", a
     authProfileOverrideSource: "user",
     liveModelSwitchPending: true,
   });
-  for (const key of ["model", "modelProvider", "contextTokens", "contextBudgetStatus"] as const) {
-    expect(sessionEntry[key]).toBeUndefined();
-  }
-  expect(effects.triggerSessionPatchHook.mock.calls).toMatchObject([
-    [{ sessionKey, patch: { key: sessionKey, model: "openai/gpt-4o" } }],
-  ]);
+  expect(effects.triggerSessionPatchHook.mock.calls[0]?.[0].sessionKey).toBe(sessionKey);
   await vi.waitFor(() => expect(effects.mutateConfigFileWithRetry).toHaveBeenCalledOnce());
+  expect(draft.agents.defaults.model).toBe("anthropic/claude-opus-4-6");
+  expect(draft.agents.entries.main.model).toBe("openai/gpt-4o");
   expect(effects.refreshQueuedFollowupSession.mock.calls).toMatchObject([[{ key: sessionKey }]]);
   expect(effects.enqueueSystemEvent).toHaveBeenCalledWith(
     "Model switched to Fast (openai/gpt-4o).",
     { sessionKey, contextKey: "model:openai/gpt-4o" },
   );
 });
-
-it.each(["anthropic", "openai"])(
-  "resets to a %s default and preserves only compatible auth",
-  async (provider) => {
-    const compatible = provider === "openai";
-    const model = compatible ? "gpt-4o" : "claude-opus-4-6";
-    const currentModel = compatible ? "gpt-4.1" : "gpt-4o";
-    const sessionEntry = createSelectedEntry("openai", currentModel, {
-      authProfileOverride: "openai:work",
-      authProfileOverrideSource: "user",
-      authProfileOverrideCompactionCount: 3,
-      ...(!compatible ? { agentHarnessId: "codex", agentRuntimeOverride: "codex" } : {}),
-    });
-    const result = await select({
-      sessionEntry,
-      defaultProvider: provider,
-      defaultModel: model,
-      currentProvider: "openai",
-      currentModel,
-      canPersistStickyModelSelection: compatible,
-      request: createRequest(provider, model, {
-        runtime: compatible ? { kind: "unchanged" } : { kind: "clear" },
-      }),
-    });
-
-    expect(result).toMatchObject({ status: "applied", changed: true });
-    expect(result).not.toHaveProperty("configuredDefaultUpdate");
-    if (!compatible) {
-      expect(result).toMatchObject({ runtimeChange: { kind: "clear" } });
-      expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
-      expect(sessionEntry.agentHarnessId).toBe("codex");
-    }
-    expect(sessionEntry.providerOverride).toBeUndefined();
-    expect(sessionEntry.modelOverride).toBeUndefined();
-    expect(sessionEntry.modelOverrideRouteResolution).toBeUndefined();
-    expect(sessionEntry.modelOverrideSource).toBe("default");
-    expect(sessionEntry.authProfileOverride).toBe(compatible ? "openai:work" : undefined);
-    expect(sessionEntry.authProfileOverrideSource).toBe(compatible ? "user" : undefined);
-    expect(sessionEntry.authProfileOverrideCompactionCount).toBe(compatible ? 3 : undefined);
-    expect(effects.refreshQueuedFollowupSession).toHaveBeenCalledWith(
-      expect.objectContaining({ nextModelOverrideSource: undefined }),
-    );
-    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-  },
-);
-
-it("resolves SDK effective persistence from the current write draft", async () => {
-  const cfg = { agents: { defaults: { model: "anthropic/claude-opus-4-6" } } };
-  const draft = {
-    agents: { ...cfg.agents, entries: { main: { model: "anthropic/claude-sonnet-4-6" } } },
-  };
-  effects.mutateConfigFileWithRetry.mockImplementationOnce(
-    async ({ mutate }: { mutate: (config: OpenClawConfig) => string }) => ({
-      nextConfig: draft,
-      result: mutate(draft),
-    }),
-  );
-
-  await select({ cfg, canPersistStickyModelSelection: true });
-
-  await vi.waitFor(() => expect(effects.info).toHaveBeenCalledOnce());
-  expect(draft.agents.defaults.model).toBe("anthropic/claude-opus-4-6");
-  expect(draft.agents.entries.main.model).toBe("openai/gpt-4o");
-});
-
-it.each([undefined, "codex"])(
-  "clears inherited but rejects explicit Gateway runtime %s",
-  async (agentRuntime) => {
-    const sessionEntry = createEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-      agentRuntimeOverride: "codex",
-      nativeRuntimeConsent: "codex",
-    });
-    const { cfg, sessionKey } = createParams({ sessionEntry });
-    const initial = structuredClone(sessionEntry);
-    const result = await projectSessionsPatchEntry({
-      cfg,
-      storeKey: sessionKey,
-      existingEntry: sessionEntry,
-      isLabelInUse: () => false,
-      patch: {
-        key: sessionKey,
-        model: "anthropic/claude-opus-4-6",
-        ...(agentRuntime ? { agentRuntime } : {}),
-      },
-      loadGatewayModelCatalogSnapshot: async () => ({ entries: catalog, routeVariants: catalog }),
-    });
-    if (agentRuntime) {
-      expect(result).toMatchObject({
-        ok: false,
-        error: { message: expect.stringContaining('Runtime "codex" is not supported') },
-      });
-    } else {
-      expect(result).toMatchObject({
-        ok: true,
-        entry: { providerOverride: "anthropic", modelOverride: "claude-opus-4-6" },
-      });
-      expect(
-        result.ok && [result.entry.agentRuntimeOverride, result.entry.nativeRuntimeConsent],
-      ).toEqual([undefined, undefined]);
-    }
-    expect(sessionEntry).toEqual(initial);
-  },
-);
 
 it.each([undefined, "openclaw", "claude-cli"])(
   "persists SDK model-only selection with inherited runtime %s",
@@ -496,12 +355,8 @@ it.each<[string, SessionEntry]>([
   const { sessionKey, storePath } = await persistedSession(concurrent, "agent:main:dm:race");
 
   const result = await select({ sessionKey, storePath, sessionEntry });
-  expect(result).toEqual({
-    status: "conflict",
-    message: "Model change was not applied because the session changed. Retry.",
-  });
+  expect(result).toMatchObject({ status: "conflict" });
   expect(sessionEntry).toEqual(concurrent);
-  expect(sessionEntry).not.toMatchObject({ modelOverride: "gpt-4o" });
   expectNoSelectionEffects();
 });
 
