@@ -221,9 +221,9 @@ try {
   };
   // Provision the stored account through the CLI before Gateway takes custody.
   const account = spawn(
-    "pnpm",
+    process.execPath,
     [
-      "openclaw",
+      path.resolve(values.entry),
       "models",
       "auth",
       "paste-api-key",
