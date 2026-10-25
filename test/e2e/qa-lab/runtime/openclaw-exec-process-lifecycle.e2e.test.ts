@@ -140,7 +140,11 @@ test.for([
       const childCommand = nodeCommand("console.log(process.pid); setInterval(() => {}, 1000);");
       const killedSession = track(
         await execTool.execute("kill-background", {
-          command: process.platform === "win32" ? childCommand : `exec ${childCommand}`,
+          // PowerShell remains the command process; POSIX exec replaces the shell.
+          command:
+            process.platform === "win32"
+              ? `Write-Output $PID; ${childCommand}`
+              : `exec ${childCommand}`,
           background: true,
         }),
       );
