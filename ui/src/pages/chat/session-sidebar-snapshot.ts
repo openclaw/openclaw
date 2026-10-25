@@ -12,7 +12,7 @@ const sidebarRecordsSchema = json.array(
     {
       savedAt: json.refine(json.number, (value) => value >= 0),
       sessionKey: json.refine(json.text, (value) => value.length > 0),
-      projectionVersion: json.literal(1),
+      projectionVersion: json.literal(2),
       model: json.unknown,
     },
     true,

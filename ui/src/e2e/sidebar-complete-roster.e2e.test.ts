@@ -16,6 +16,7 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../test-helpers/control-ui-sidebar-list-fixture.ts";
+import { installTeamScaleSidebarPresentation } from "../test-helpers/control-ui-sidebar-presentation.test-support.ts";
 import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiTeamScaleFixture } from "../test-helpers/control-ui-team-scale-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -34,6 +35,7 @@ suite.define(() => {
       const fixture = createControlUiTeamScaleFixture({
         baseUrl: suite.server.baseUrl,
         sidebarPersistentChildren: true,
+        sidebarPresentation: true,
       });
       const { parentKey, childKeys } = fixture.sidebarPersistentChildren!;
       const owner = fixture.sidebarListInput.rows[0]!.owner!;
@@ -95,6 +97,9 @@ suite.define(() => {
           );
           await page.addInitScript({
             content: `{ const __name = (fn) => fn; (${warmReloadProbe.toString()})(); }`,
+          });
+          await page.addInitScript({
+            content: `(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});`,
           });
           await page.goto(
             controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, face),
@@ -171,7 +176,22 @@ suite.define(() => {
           // The selected pin is retained offscreen; wait for an unretained top
           // row to prove the scroll event has published the new visible window.
           await sidebar.locator(`[data-session-key="${fixture.pinnedKeys[1]}"]`).waitFor();
+          await sidebar.locator(".session-row-badge--pull-request").nth(6).waitFor();
           const beforeReload = await geometry();
+          const indicators = () =>
+            sidebar.locator(".sidebar-recent-session").evaluateAll((rows) =>
+              rows.map((row) => ({
+                key: row.getAttribute("data-session-key"),
+                unread: row.querySelectorAll(".session-unread-dot,.session-glyph__badge--unread")
+                  .length,
+                badges: [...row.querySelectorAll(".session-row-badge")].map((badge) => ({
+                  class: badge.className,
+                  state: badge.getAttribute("data-pull-request-state"),
+                })),
+              })),
+            );
+          const beforeIndicators = await indicators();
+          expect(beforeIndicators.some((row) => row.unread > 0)).toBe(true);
           await writeFile(
             path.join(suite.artifactDir, `${face}-before-reload-geometry.json`),
             JSON.stringify(beforeReload, null, 2),
@@ -192,6 +212,9 @@ suite.define(() => {
             layout.rows.filter((row) => row.top + row.height > commonTop && row.top < commonBottom);
           const expectedGeometry = visibleGeometry(beforeReload);
           const expected = expectedGeometry.map((row) => row.key);
+          expect((await indicators()).filter((row) => expected.includes(row.key))).toEqual(
+            beforeIndicators.filter((row) => expected.includes(row.key)),
+          );
           expect(expected.length).toBeGreaterThan(10);
           expect(visibleGeometry(cachedGeometry)).toEqual(expectedGeometry);
           const rowKeys = () =>

@@ -341,9 +341,10 @@ export function buildReconciledSidebarZone(input: {
 }) {
   if (input.snapshot) {
     const { model, selectedKey } = input.snapshot;
-    const restoredRows = [...model.sessions, ...model.pinnedSessions].map((row) =>
-      restoreSnapshotSession(row, selectedKey),
-    );
+    const restoredRows = [
+      ...model.sections.flatMap((section) => section.rows),
+      ...model.pinnedSessions,
+    ].map((row) => restoreSnapshotSession(row, selectedKey));
     return {
       entries: model.entries.flatMap((entry) => {
         const parsed = parseSidebarEntry(entry);

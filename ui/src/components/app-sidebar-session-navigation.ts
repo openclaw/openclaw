@@ -654,7 +654,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       const model = this.sidebarSnapshot;
       return this.rowsMemo.read(
         () => [model, this.getRouteSessionKey()],
-        () => model.sessions.map((row) => restoreSnapshotSession(row, this.getRouteSessionKey())),
+        () =>
+          model.sections.flatMap((section) =>
+            section.rows.map((row) => restoreSnapshotSession(row, this.getRouteSessionKey())),
+          ),
       );
     }
     return this.rowsMemo.read(

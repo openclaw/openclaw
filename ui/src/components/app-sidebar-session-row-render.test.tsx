@@ -448,17 +448,49 @@ it("keeps the rendered preview slot after caching without restoring live run aut
   const [cached] = snapshotSessions([session], (row) => ({
     snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
   }));
-  host.sidebarSnapshot = parseSidebarSnapshot({ ...emptySnapshot, sessions: [cached] });
+  host.sidebarSnapshot = parseSidebarSnapshot({ ...emptySnapshot, pinnedSessions: [cached] });
   expect(host.sidebarSnapshot).not.toBeNull();
-  const restored = restoreSnapshotSession(host.sidebarSnapshot!.sessions[0]!, session.key);
+  const restored = restoreSnapshotSession(host.sidebarSnapshot!.pinnedSessions[0]!, session.key);
   setCurrent(restored);
   update();
   expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
   expect(dom.query(".sidebar-recent-session--single-line")).toBeNull();
+  host.releaseSidebarSnapshot();
+  update();
+  expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
   expect([restored.hasActiveRun, restored.attention]).toEqual([false, { kind: "none" }]);
   expect(
     dom.all("[data-sidebar-session-pin]:enabled, [data-sidebar-session-archive]:enabled"),
   ).toHaveLength(0);
+});
+
+it("keeps a restored pin's badges after roster handoff until its own descriptor replaces it", () => {
+  const { host, container, dom } = createHost("chip");
+  const saved = {
+    key: "agent:main:pin",
+    label: "Saved pin",
+    pinned: true,
+    isChild: false,
+    children: [],
+    state: {
+      hasApproval: true,
+      pullRequestCount: 3,
+      pullRequest: { numbers: [17], state: "open" as const },
+    },
+  };
+  host.restoreSidebarSnapshot({ ...emptySnapshot, pinnedSessions: [saved] });
+  const [current, setCurrent] = createSignal(restoreSnapshotSession(saved, saved.key));
+  const update = mountObservedHost(host, container, (observedHost) => (
+    <RecentSession host={observedHost} session={current()} />
+  ));
+  host.releaseSidebarSnapshot();
+  update();
+  expect(host.sidebarSnapshot).toBeNull();
+  expect(dom.all(".session-row-badge--approval")).toHaveLength(1);
+  expect(dom.text(".session-row-badge--pull-request")).toBe("3");
+  setCurrent(projectSidebarSession({ key: saved.key, label: "Current pin", pinned: true }));
+  update();
+  expect(dom.all(".session-row-badge")).toHaveLength(0);
 });
 
 it("keeps Users visible despite a cached legacy collapse preference", () => {

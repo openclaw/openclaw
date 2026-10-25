@@ -99,6 +99,8 @@ export function createSidebarPinnedSessions(
     | "navigationCatalog"
     | "sidebarEntries"
     | "sessionNavigationAgentId"
+    | "getSessionNavigationState"
+    | "getRouteSessionKey"
   > & {
     readonly isConnected: boolean;
     readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
@@ -111,7 +113,7 @@ export function createSidebarPinnedSessions(
     settled: boolean;
   };
   const reads = new Map<string, Read | "invalidated">();
-  const seeds = new Map<string, GatewaySessionRow>();
+  const seeds = new Map<string, () => SidebarRecentSession>();
   function retire(key: string) {
     const read = reads.get(key);
     if (read && read !== "invalidated") {
@@ -157,12 +159,7 @@ export function createSidebarPinnedSessions(
     }
     return source;
   }
-  function seed(
-    snapshot: readonly Pick<
-      GatewaySessionRow,
-      "key" | "agentId" | "label" | "icon" | "color" | "pinned" | "archived" | "boardFace"
-    >[],
-  ): void {
+  function seed(snapshot: readonly SidebarRecentSession[]): void {
     synchronizeSource();
     if (!scope) {
       return;
@@ -170,22 +167,15 @@ export function createSidebarPinnedSessions(
     for (const row of snapshot) {
       const read = reads.get(row.key);
       if (!seeds.has(row.key) && (read === "invalidated" || !read?.settled)) {
-        seeds.set(row.key, {
-          key: row.key,
-          kind: "direct",
-          updatedAt: null,
-          agentId: row.agentId,
-          label: row.label,
-          icon: row.icon,
-          color: row.color,
-          pinned: row.pinned,
-          archived: row.archived,
-          boardFace: row.boardFace,
-        });
+        seeds.set(row.key, () => ({
+          ...row,
+          active: row.key === host.getRouteSessionKey(),
+          visuallyActive: row.key === host.getRouteSessionKey(),
+        }));
       }
     }
   }
-  function get(key: string): GatewaySessionRow | undefined {
+  function get(key: string): SidebarRecentSession | undefined {
     const context = host.sessionDataContext;
     const currentSource = synchronizeSource();
     const currentScope = scope;
@@ -280,7 +270,12 @@ export function createSidebarPinnedSessions(
       };
       void context.connectionBootstrap.run(describe, describe, { background: true });
     }
-    return read.observation?.row ?? (read.settled ? undefined : seeds.get(key));
+    const row = read.observation?.row;
+    return row
+      ? host.getSessionNavigationState().toSidebarSession(row)
+      : read.settled
+        ? undefined
+        : seeds.get(key)?.();
   }
   return { synchronize, seed, get, dispose };
 }
@@ -304,7 +299,7 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
       return [live];
     }
     const snapshot = host.pinnedSessions.get(entry.key);
-    return snapshot ? [navigation.toSidebarSession(snapshot)] : [];
+    return snapshot ? [snapshot] : [];
   });
   if (livePins.length) {
     // A query replacement must not collapse visible pins while their descriptors load.

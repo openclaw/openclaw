@@ -59,7 +59,7 @@ async function seededStore() {
   return store;
 }
 
-async function putSidebar(value: unknown, savedAt: number, projectionVersion = 1) {
+async function putSidebar(value: unknown, savedAt: number, projectionVersion = 2) {
   const database = await openSessionSnapshotDatabase();
   assert(database, "expected snapshot database");
   const transaction = database.transaction(SIDEBAR, "readwrite");
@@ -141,7 +141,7 @@ it("retires a legacy hierarchy without evicting valid sidebars or transcripts", 
       projectSidebarSession({ key: `agent:main:${name}`, label: name }),
     ),
   );
-  const legacy = { ...sidebarSnapshot, sessions: [{ ...parent!, children: [child!] }] };
+  const legacy = { ...sidebarSnapshot, pinnedSessions: [{ ...parent!, children: [child!] }] };
   expect(parseSidebarSnapshot(legacy)).toBeNull();
   await putSidebar(legacy, 2000);
 
