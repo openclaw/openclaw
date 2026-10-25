@@ -145,6 +145,22 @@ fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
+Explicit PostgreSQL index keys use native ordering for canonical NOT NULL and
+primary-key columns. Nullable columns and expression keys retain SQLite's
+`ASC NULLS FIRST` / `DESC NULLS LAST` placement. This lets default PostgreSQL
+`ORDER BY` use non-null indexes without changing observable nullable ordering.
+State schema 32, agent schema 34, Workboard schema 4, Logbook schema 2, and
+Team Reports schema 2 rebuild only changed explicit indexes through versioned
+schema admission under its existing advisory lock. Absent first-use fragments
+stay absent. SQLite advances version metadata without changing canonical DDL.
+Historical admission and backup descriptors retain the preceding index definitions;
+rollback restores the verified pre-upgrade backup. Update and Doctor retain their
+existing migration progress and recovery handling.
+
+The worker-only `openclaw/plugin-sdk/database-engine-worker-runtime` helpers
+`postgresIndexOrderingMigration` and `withLegacyPostgresIndexOrdering` let store
+owners share that cutover and exact predecessor reconstruction for generated DDL.
+
 The transcript navigation CHECK keeps its JSON validation for present metadata.
 Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
 calling the helper. A fixed `pg_catalog` search path avoids repeatedly parsing

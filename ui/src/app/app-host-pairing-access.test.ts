@@ -27,6 +27,7 @@ import {
   createApplicationContextProvider,
   createNavigationPreferencesFixture,
 } from "../test-helpers/application-context.ts";
+import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { settleLitElements } from "../test-helpers/lit-settle.ts";
 import "../components/app-sidebar.tsx";
 // A preceding shard file can register the palette before the pairing shell mounts.
@@ -321,12 +322,7 @@ describe("application shell pairing access", () => {
       const topbarText = topbar.textContent;
       const sidebarUpdates: MutationRecord[] = [];
       const observer = new MutationObserver((records) => sidebarUpdates.push(...records));
-      observer.observe(sidebar, {
-        subtree: true,
-        childList: true,
-        attributes: true,
-        characterData: true,
-      });
+      observer.observe(sidebar, allMutationObserverOptions());
       onTestFinished(() => observer.disconnect());
       const topbarFrame = topbar.querySelector(".topbar");
       const topbarToggle = topbar.querySelector(".topbar-nav-toggle");

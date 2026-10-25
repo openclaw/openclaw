@@ -2,6 +2,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -18,11 +19,7 @@ import {
 } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-} from "./gateway-provider-fixture.test-support.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import * as subscriptions from "./server-runtime-subscriptions.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
@@ -51,7 +48,7 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
   const observeSubscriptions = vi.spyOn(subscriptions, "startGatewayEventSubscriptions");
   const providerServer = createServer((request, response) => {
     void (async () => {
-      requestBodies.push(await readProviderBody(request));
+      requestBodies.push(await readRequestText(request));
       if (requestBodies.length > 1) {
         writeOpenAiResponsesText(response, {
           text: "The same conversation resumed.",

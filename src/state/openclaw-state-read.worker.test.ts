@@ -8,6 +8,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
@@ -211,16 +212,7 @@ it("starts its PG bridge while the first command module is still loading", async
     facts,
   );
   const selection: DatabaseEngineSelection = {
-    effectiveEngines: {
-      state: "postgres",
-      agent: "sqlite",
-      workboard: "sqlite",
-      logbook: "sqlite",
-      "team-reports": "sqlite",
-      quarantine: "sqlite",
-      "managed-update": "sqlite",
-      "package-activation": "sqlite",
-    },
+    effectiveEngines: createSqliteFamilyEngines({ state: "postgres" }),
     postgres: { connection: "postgresql://[unused", schemaPrefix: "fixture" },
   };
   const reading = mock.handler({

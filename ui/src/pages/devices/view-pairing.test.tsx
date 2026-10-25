@@ -9,6 +9,7 @@ import {
   refreshDevicePairSetup,
   type DevicePairSetupLifecycle,
 } from "../../lib/device-pair-setup.ts";
+import { createWaitingNodePairSetup } from "../../test-helpers/devices-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -206,22 +207,7 @@ describe("device pairing dialog", () => {
   });
 
   it("renders the node one-paste command and quiet expiry countdown", () => {
-    const container = renderPairing(
-      {
-        phase: "waiting",
-        access: "node",
-        setup: {
-          setupId: "setup-node",
-          setupCode: "AbC_123",
-          gatewayUrl: "wss://gateway.example",
-          auth: "token",
-          urlSource: "test",
-          access: "node",
-          expiresAtMs: 70_000,
-        },
-      },
-      10_000,
-    );
+    const container = renderPairing(createWaitingNodePairSetup(), 10_000);
 
     expect(container.querySelectorAll('input[name="device-pair-access"]')).toHaveLength(3);
     expect(container.querySelector(".device-pair-setup__command code")?.textContent).toBe(
@@ -237,19 +223,7 @@ describe("device pairing dialog", () => {
     const view = mountSolid(() =>
       createComponent(DevicePairSetup, {
         open: true,
-        lifecycle: {
-          phase: "waiting",
-          access: "node",
-          setup: {
-            setupId: "setup-node",
-            setupCode: "AbC_123",
-            gatewayUrl: "wss://gateway.example",
-            auth: "token",
-            urlSource: "test",
-            access: "node",
-            expiresAtMs: 70_000,
-          },
-        },
+        lifecycle: createWaitingNodePairSetup(),
         nowMs: 10_000,
         get pendingCount() {
           return pendingCount();

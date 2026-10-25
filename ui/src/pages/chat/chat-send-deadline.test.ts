@@ -9,6 +9,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { requestChatSend } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { startupAdmissionResponse } from "./chat-startup-response.test-support.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
 
@@ -110,22 +111,7 @@ async function startPreparingSend(
         return;
       }
     }
-    pending.handleResponse({
-      type: "res",
-      id: request.id,
-      ok: ready,
-      ...(ready
-        ? { payload: { status: "ok", runId: "started" } }
-        : {
-            error: {
-              code: "UNAVAILABLE",
-              message: "Agent is preparing",
-              retryable: true,
-              retryAfterMs: 1_000,
-              details: { reason: "startup-sidecars", method: request.method },
-            },
-          }),
-    });
+    pending.handleResponse(startupAdmissionResponse(request, ready));
     issued.resolve();
   });
   host.chatMessage = message;

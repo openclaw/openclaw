@@ -30,11 +30,16 @@ function measurementClock() {
   }
   class ControlledIntersectionObserver {
     readonly targets = new Set<Element>();
-    constructor(readonly callback: (entries: { isIntersecting: boolean }[]) => void) {
+    constructor(
+      readonly callback: (entries: { target: Element; isIntersecting: boolean }[]) => void,
+    ) {
       visibilityObservers.add(this);
     }
     observe(target: Element) {
       this.targets.add(target);
+    }
+    unobserve(target: Element) {
+      this.targets.delete(target);
     }
     disconnect() {
       this.targets.clear();
@@ -57,7 +62,11 @@ function measurementClock() {
     visible(isIntersecting: boolean, target?: Element) {
       for (const observer of visibilityObservers) {
         if (target ? observer.targets.has(target) : observer.targets.size > 0) {
-          observer.callback([{ isIntersecting }]);
+          observer.callback(
+            [...observer.targets]
+              .filter((element) => !target || element === target)
+              .map((element) => ({ target: element, isIntersecting })),
+          );
         }
       }
       flushFrames();
@@ -70,7 +79,8 @@ function measurementClock() {
       for (const target of targets) {
         for (const observer of observers) {
           if (observer.targets.has(target)) {
-            observer.callback([], observer);
+            // SAFETY: Only target is consumed by the resize delivery router.
+            observer.callback([{ target } as ResizeObserverEntry], observer);
           }
         }
       }
@@ -251,13 +261,18 @@ describe("hover marquee measurement budget", () => {
   });
 
   it("skips unchanged titles but refreshes content, class, direction, and viewport changes", async () => {
-    const { clock, show, labels, operations } = denseTitles(100);
+    const { clock, show, labels, operations, host } = denseTitles(100);
     reveal(clock);
     operations.length = 0;
     for (let index = 0; index < 5; index += 1) {
       show();
       await clock.settle();
     }
+    expect(operations).toHaveLength(0);
+    const elapsed = document.createElement("span");
+    host.append(elapsed);
+    elapsed.textContent = "1s";
+    await clock.settle();
     expect(operations).toHaveLength(0);
     show("Short");
     await clock.settle();

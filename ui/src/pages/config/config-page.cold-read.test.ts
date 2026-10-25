@@ -97,9 +97,11 @@ describe("ConfigPage cold reads", () => {
         deps: "",
         cause: "navigation",
       });
-      // Both owner reads start before the page chunk can mount and request missing data.
-      expect(request).toHaveBeenCalledWith("config.get", {});
-      expect(request).toHaveBeenCalledWith("config.schema", {});
+      // The lazy editor admits both reads independently before page presentation.
+      await waitForSolid(() => {
+        expect(request).toHaveBeenCalledWith("config.get", {});
+        expect(request).toHaveBeenCalledWith("config.schema", {});
+      });
       const productionModule = await route.component();
       const provider = createSolidApplicationContextProvider(context);
       const render = productionModule.renderSolid;

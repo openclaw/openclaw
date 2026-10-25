@@ -127,19 +127,13 @@ describe("anthropic-vertex provider plugin", () => {
     });
 
     it("repairs missing or retired pricing and leaves current pricing unchanged", async () => {
-      const model = {
-        id: "claude-sonnet-5",
+      const model = staleModel("claude-sonnet-5", {
         name: "Claude Sonnet 5",
-        api: "anthropic-messages",
-        provider: "anthropic-vertex",
         baseUrl,
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 1_000_000,
-        contextTokens: 1_000_000,
-        maxTokens: 128_000,
-        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      };
+        ...currentMetadata,
+        input: [...currentMetadata.input],
+        thinkingLevelMap: { ...opusThinking },
+      });
       for (const staleCost of [undefined, retiredCost]) {
         const normalized = provider.normalizeResolvedModel?.({
           provider: "anthropic-vertex",

@@ -569,6 +569,13 @@ export function migrateBoundedStateSchema(
     stateClientCredentialMigration,
     stateAutomationPolicyMigration,
     stateLocalWorkspaceManifestMigration,
+    {
+      version: 32,
+      tables: [],
+      columns: [],
+      migrate: () => false,
+      applied: "Aligned PostgreSQL non-null index ordering (v32)",
+    },
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.

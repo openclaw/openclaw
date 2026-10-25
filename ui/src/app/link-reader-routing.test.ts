@@ -25,6 +25,12 @@ const reader: ControlUiLinkReaderDescriptor = {
     detailMethod: "forge.item",
   },
 };
+const readerCapabilities = (controlUiLinkReaders = [reader]) => ({
+  ok: true as const,
+  descriptors: [],
+  methods: ["forge.item"],
+  controlUiLinkReaders,
+});
 const itemUrl = "https://forge.example/items/123";
 afterEach(() => {
   document.body.replaceChildren();
@@ -36,12 +42,7 @@ function setup(shouldOpenExternally?: () => boolean) {
     phase: "connected",
     client: createTestGatewayClient(vi.fn()),
     hello: gatewayHelloForMethods(["forge.item"], ["operator.read"]),
-    pluginCapabilities: {
-      ok: true,
-      descriptors: [],
-      methods: ["forge.item"],
-      controlUiLinkReaders: [reader],
-    },
+    pluginCapabilities: readerCapabilities(),
   });
   const router = startLinkReaderRouting(() => snapshot, { shouldOpenExternally });
   onTestFinished(router.dispose);
@@ -72,23 +73,13 @@ describe("Plugin reader link routing", () => {
     snapshot.pluginCapabilities = null;
     expect(availableLinkReaders(snapshot)).toEqual([reader]);
     snapshot.phase = "connected";
-    snapshot.pluginCapabilities = {
-      ok: true,
-      descriptors: [],
-      methods: ["forge.item"],
-      controlUiLinkReaders: [structuredClone(reader)],
-    };
+    snapshot.pluginCapabilities = readerCapabilities([structuredClone(reader)]);
     expect(availableLinkReaders(snapshot)[0]).toBe(reader);
     snapshot.phase = "reconnecting";
     snapshot.client = createTestGatewayClient(vi.fn());
     expect(availableLinkReaders(snapshot)).toEqual([]);
     snapshot.phase = "connected";
-    snapshot.pluginCapabilities = {
-      ok: true,
-      descriptors: [],
-      methods: ["forge.item"],
-      controlUiLinkReaders: [reader],
-    };
+    snapshot.pluginCapabilities = readerCapabilities();
     snapshot.hello = gatewayHelloForMethods(["forge.item"], []);
     expect(availableLinkReaders(snapshot)).toEqual([]);
   });

@@ -92,7 +92,7 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
         source={props.markdown}
         messageKey={props.messageKey}
         options={props.options}
-        parts={presentation().parts}
+        parts={presentation().parts()}
       >
         {(elementRef) => (
           <MarkdownText

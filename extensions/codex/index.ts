@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -107,7 +106,6 @@ export default definePluginEntry({
       const enabled = resolveEffectiveEnableState({
         id: "codex",
         origin: "bundled",
-        config: normalizePluginsConfig(liveConfig.plugins),
         rootConfig: liveConfig,
         // Core auto-enables this bundled plugin whenever the operator declares a
         // codex config block, so a live block is the plugin-side default. Gating

@@ -159,6 +159,49 @@ it("keeps fractional observer sizes as the sole skipped-row sizing input", async
   }
 });
 
+it("keeps a displaced smooth end command smooth during row growth", async () => {
+  const flushFrames = stubAnimationFrames();
+  const transcript = createChatTranscript(() => "smooth-end-recovery", {
+    canFollowEnd: () => true,
+  });
+  const rows = contentRows(1);
+  const { container, renderRows } = await mountTestTranscript(
+    "smooth-end-recovery",
+    rows,
+    transcript,
+  );
+  let scrollHeight = 2000;
+  setTranscriptViewport(container, () => scrollHeight);
+  const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+    if (typeof options === "object" && options.behavior !== "smooth") {
+      container.scrollTop = options.top ?? container.scrollTop;
+    }
+  });
+  container.scrollTo = scrollTo;
+  try {
+    const row = requireElement(container, ".chat-virtual-row");
+    emitTranscriptResize(row, 800, scrollHeight);
+    renderRows(rows);
+    flushFrames();
+    transcript.cancelScroll();
+    container.scrollTop = 800;
+    transcript.scrollToEnd({ source: "manual", behavior: "smooth" });
+    scrollTo.mockClear();
+    scrollHeight += 100;
+    emitTranscriptResize(row, 800, scrollHeight);
+    renderRows(rows);
+    flushFrames();
+    expect(
+      scrollTo.mock.calls.some(
+        ([options]) => typeof options === "object" && options.behavior === "auto",
+      ),
+    ).toBe(false);
+    expect(container.scrollTop).toBe(800);
+  } finally {
+    transcript.dispose();
+  }
+});
+
 it.each([false, true])(
   "coalesces end geometry across commits and retires disconnected work=%s",
   async (disconnect) => {

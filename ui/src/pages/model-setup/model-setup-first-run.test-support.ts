@@ -56,17 +56,6 @@ export const runningStep = (step: NonNullable<WizardNextResult["step"]>) => ({
   step,
 });
 
-export function configSnapshot(config: Record<string, unknown> = {}, hash = "hash-1") {
-  return {
-    config,
-    sourceConfig: config,
-    raw: JSON.stringify(config),
-    hash,
-    valid: true,
-    issues: [],
-  };
-}
-
 export const detection: SystemAgentSetupDetectResult = {
   candidates: [],
   unavailableCandidates: [],

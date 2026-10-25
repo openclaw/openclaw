@@ -100,7 +100,6 @@ export function finalizeEmbeddedAttempt(
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns) ||
       (result.clientToolCalls?.length ?? 0) > 0 ||
       result.yieldDetected === true ||
-      result.lastToolError !== undefined ||
       hasAsyncActivity(result.toolMetas) ||
       (stopReason !== "toolUse" &&
         (params.hasTerminalOutput ||
@@ -233,6 +232,7 @@ export async function completeEmbeddedAttemptAfterTurn(
     }
     await finalizeHarnessContextEngineTurn({
       ...attempt,
+      abortSignal: input.runAbortController.signal,
       contextEngine: activeContextEngine,
       promptError: Boolean(promptError),
       aborted: lifecycleState.aborted,

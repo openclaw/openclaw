@@ -11,17 +11,16 @@ import {
   seedSessionActorTranscriptContext as seed,
 } from "./session-actor-transcript-replica.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 type Bounded = Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
 const limits = { maxBytes: 4096, maxEvents: 8 };
 const sessionKey = "agent:main:test";
-const message = (id: string, parentId: string | null, role: string) => ({
-  type: "message",
-  id,
-  parentId,
-  timestamp: "2026-10-12T00:00:00.000Z",
-  message: { role, content: [{ type: "text", text: id }] },
-});
+const message = (id: string, parentId: string | null, role: string) =>
+  timedMessageEvent(id, parentId, "2026-10-12T00:00:00.000Z", {
+    role,
+    content: [{ type: "text", text: id }],
+  });
 
 function fixture() {
   const rows: SessionActorTranscriptRow[] = [

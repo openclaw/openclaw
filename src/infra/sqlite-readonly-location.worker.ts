@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import { hostname } from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { deserialize } from "node:v8";
@@ -8,11 +6,7 @@ import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs"
 import type { AuthProfileReadDatabaseOpener } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
-import { GatewayLockNamespaceError, parseGatewayLockPayload } from "./gateway-lock-payload.js";
-import {
-  assertStateDatabaseAccessAllowed,
-  resolveGatewayStateOwnerPath,
-} from "./gateway-state-owner.js";
+import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { jsonFieldBatches } from "./json-field-transfer.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
@@ -23,6 +17,7 @@ import {
   formatSqliteReadOnlyInspectionFailure,
   isSqliteLockError,
 } from "./sqlite-error-diagnostics.js";
+import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import {
   forkSqlitePrivateSnapshotInProcess,
   readSqlitePrivateSnapshotFamily,
@@ -60,33 +55,8 @@ import {
   readDatabaseFileIdentity,
 } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
-import { readStateLeaseProcessOwnerStatus } from "./state-lease-process-owner.js";
 
 const stagingTokens = new Map<string, SqliteStagingToken>();
-
-// Only this database's recorded process identity can authorize native live reads.
-function hasVerifiedLiveSqliteOwner(databasePath: string): boolean {
-  const ownerPath = resolveGatewayStateOwnerPath(databasePath);
-  let owner;
-  try {
-    owner = parseGatewayLockPayload(fs.readFileSync(ownerPath, "utf8"));
-  } catch {
-    return false;
-  }
-  if (!owner || (owner.role && owner.role !== "gateway" && owner.role !== "agent-embedded")) {
-    return false;
-  }
-  const ownerStatus = readStateLeaseProcessOwnerStatus({
-    pid: owner.pid,
-    host: owner.processNamespace?.host ?? hostname(),
-    startedAt: owner.startTime ?? null,
-    processNamespace: owner.processNamespace,
-  });
-  if (ownerStatus === "unknown") {
-    throw new GatewayLockNamespaceError(owner, ownerPath);
-  }
-  return ownerStatus === "live";
-}
 
 // Artifact-preserving sync requests must not open SQLite on the source. Live
 // async backups pin committed pages with a read transaction and may update SHM.

@@ -14,7 +14,7 @@ import {
 /** @typedef {Artifact & {build: NonNullable<BuildInfo["build"]>}} CompiledArtifact */
 
 /** @param {string[]} pluginIds */
-export function standalonePluginSetSha256(pluginIds) {
+function standalonePluginSetSha256(pluginIds) {
   return createHash("sha256")
     .update(JSON.stringify([...new Set(pluginIds)].toSorted()))
     .digest("hex");
@@ -108,7 +108,7 @@ export const STANDALONE_BUILD_MARKER = "__OPENCLAW_STANDALONE_BUILD_INFO__";
  * Flavor stamps are the sole intentional difference in the staged module graph.
  * @param {string[]} entries @param {unknown} buildInfo
  */
-export function stampStandaloneBuild(entries, buildInfo) {
+function stampStandaloneBuild(entries, buildInfo) {
   const marker = JSON.stringify(STANDALONE_BUILD_MARKER);
   /** @type {Map<string, string>} */
   const originals = new Map();
@@ -168,10 +168,11 @@ function stageSupportRuntime({ runtimeRoot, outputRoot, bunExecutable, omittedDi
  * @param {{runtimeRoot: string, outputRoot: string, destination: string, supportDestination?: string, mode: BuildInfo["mode"], compileFlags: string[],
  * compileRoot: string, compileCwd: string, mainEntry: string, compiledEntries: string[], compileEntries: Set<string>, external: string[],
  * bunExecutable: string, bun: BuildInfo["bun"], openclaw: BuildInfo["openclaw"], plugins: NonNullable<BuildInfo["plugins"]> & {omittedDirs: string[]},
- * nativeModules: NativeModules, sqlite: {path?: string}, buildId: string}} options
- * @returns {CompiledArtifact[]}
+ * nativeModules: NativeModules, sqlite: {path?: string},
+ * resourcePlan: {files: {source: string, destination: string}[], directories: Iterable<string>}}} options
+ * @returns {Promise<CompiledArtifact[]>}
  */
-export function compileStandaloneArtifacts({
+export async function compileStandaloneArtifacts({
   runtimeRoot,
   outputRoot,
   destination,
@@ -190,13 +191,43 @@ export function compileStandaloneArtifacts({
   plugins,
   nativeModules,
   sqlite,
-  buildId,
+  resourcePlan,
 }) {
   const provenance = {
-    id: buildId,
     pluginSetSha256: standalonePluginSetSha256(plugins.embedded),
     moduleGraphSha256: standaloneModuleGraphSha256(compileRoot, compiledEntries),
   };
+  const resources = [];
+  for (const { source, destination: name } of resourcePlan.files.toSorted((a, b) =>
+    a.destination < b.destination ? -1 : a.destination > b.destination ? 1 : 0,
+  )) {
+    resources.push({
+      name,
+      mode: fs.statSync(source).mode & 0o777,
+      sha256: await sha256File(source),
+    });
+  }
+  // Hash the unstamped graph once; both flavors share this immutable identity.
+  const id = createHash("sha256")
+    .update("openclaw-standalone-build-v1\0")
+    .update(
+      JSON.stringify({
+        ...provenance,
+        bun,
+        openclaw,
+        target: { platform: process.platform, arch: process.arch },
+        mode,
+        compileFlags,
+        external: [...external].toSorted(),
+        entry: path.relative(compileRoot, mainEntry).split(path.sep).join("/"),
+        entries: [...compileEntries]
+          .map((entry) => path.relative(compileRoot, entry).split(path.sep).join("/"))
+          .toSorted(),
+        resources,
+        directories: [...resourcePlan.directories].toSorted(),
+      }),
+    )
+    .digest("hex");
   /** @type {Artifact[]} */
   const flavors = [
     { mode, flavor: "standard", destination, outputRoot, compileFlags },
@@ -226,6 +257,7 @@ export function compileStandaloneArtifacts({
     fs.mkdirSync(artifact.outputRoot, { recursive: true });
     const build = {
       ...provenance,
+      id,
       flavor: artifact.flavor,
       ...(artifact.flavor === "support" ? { debugEntry: "debug/entry.mjs" } : {}),
     };

@@ -1,8 +1,9 @@
 import { EventEmitter } from "node:events";
 import http from "node:http";
 import { createServer as createTcpServer } from "node:net";
-import type { AddressInfo } from "node:net";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { CHROME_STOP_PROBE_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { withMockChromeCdpServer } from "./chrome.cdp.test-support.js";
 import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnostics.js";
@@ -16,13 +17,6 @@ import {
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
 type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
-function jsonResponse(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
 async function getChromeWebSocketUrl(
   ...args: Parameters<typeof getChromeWebSocketEndpoint>
 ): Promise<string | null> {
@@ -201,13 +195,9 @@ describe("browser chrome helpers", () => {
     // A broken portproxy accepts the WSL-side socket and closes it without an
     // HTTP body. The host checks must survive the full probe/format path.
     const portproxy = createTcpServer((socket) => socket.destroy());
-    await new Promise<void>((resolve, reject) => {
-      portproxy.listen(0, "127.0.0.1", () => resolve());
-      portproxy.once("error", reject);
-    });
+    const port = await listenOnLoopback(portproxy);
     try {
-      const addr = portproxy.address() as AddressInfo;
-      const diagnostic = await diagnoseChromeCdp(`http://127.0.0.1:${addr.port}`, 500, 50);
+      const diagnostic = await diagnoseChromeCdp(`http://127.0.0.1:${port}`, 500, 50);
       expect(diagnostic).toMatchObject({ ok: false, code: "http_unreachable" });
       const formatted = formatChromeCdpDiagnostic(diagnostic);
       expect(formatted).toContain("netstat -ano");

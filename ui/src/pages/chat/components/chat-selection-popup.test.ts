@@ -1,9 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  handleChatSelectionPointerUp,
-  removeChatSelectionPopup,
-  showChatAnnotationEditor,
-} from "./chat-selection-popup.tsx";
+import { showChatAnnotationEditor } from "./chat-annotation-editor.tsx";
+import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.tsx";
 
 // JSDOM ranges have no layout; give the popup a fixed anchor.
 beforeAll(() => {

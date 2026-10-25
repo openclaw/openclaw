@@ -12,7 +12,6 @@ import {
 import type { HeldAgentDatabase } from "../state/agent-deletion-journal.types.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -25,6 +24,7 @@ import { restoreDoctorMissingJournalStores } from "./doctor-agent-deletion-journ
 import { repairDoctorAgentDeletionJournal } from "./doctor-agent-deletion-journal.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import * as migrationBackup from "./doctor-migration-backup.js";
+import { withMaintenance } from "./doctor-schema-migrations.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -92,18 +92,6 @@ async function withFixture(
     agent.close();
     await run({ env, agentPath, sharedPath, root, configPath: env.OPENCLAW_CONFIG_PATH });
   });
-}
-
-async function withMaintenance<T>(run: () => Promise<T>) {
-  const maintenance = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent: () => {},
-  });
-  try {
-    return await maintenance.run(run);
-  } finally {
-    await maintenance.close();
-  }
 }
 
 const repair = (env: NodeJS.ProcessEnv) =>

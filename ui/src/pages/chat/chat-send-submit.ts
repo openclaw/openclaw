@@ -49,7 +49,7 @@ import {
   canSendVolatileQueueItem,
   reconnectSafeQueuedSendState,
   waitForPendingChatSettings,
-} from "./chat-send-queue-state.ts";
+} from "./chat-send-eligibility.ts";
 import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import {
   chatSendAdmissionHoldReason,

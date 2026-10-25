@@ -147,27 +147,6 @@ export function readMessageSenderSession(value: unknown): NormalizedMessage["sen
     : undefined;
 }
 
-function normalizeOmittedMediaContentBlock(
-  item: Record<string, unknown>,
-): Extract<MessageContentItem, { type: "omitted_media" }> | null {
-  if (
-    item.type !== "image" ||
-    item.omitted !== true ||
-    normalizeOptionalString(item.artifactId) !== undefined ||
-    normalizeOptionalString(item.url) !== undefined
-  ) {
-    return null;
-  }
-  const sizeBytes = asNonNegativeFiniteNumber(item.bytes);
-  return {
-    type: "omitted_media",
-    media: {
-      kind: "image",
-      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
-    },
-  };
-}
-
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
   if (["user", "assistant", "system"].includes(lower)) {
@@ -510,14 +489,27 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   if (typeof contentRaw === "string") {
     content = normalizeText(contentRaw);
   } else if (contentItems) {
-    content = contentItems.flatMap((value) => {
+    content = contentItems.flatMap((value): MessageContentItem[] => {
       const item = asOptionalRecord(value);
       if (!item) {
         return [];
       }
-      const omittedMedia = normalizeOmittedMediaContentBlock(item);
-      if (omittedMedia) {
-        return [omittedMedia];
+      if (
+        item.type === "image" &&
+        item.omitted === true &&
+        normalizeOptionalString(item.artifactId) === undefined &&
+        normalizeOptionalString(item.url) === undefined
+      ) {
+        const sizeBytes = asNonNegativeFiniteNumber(item.bytes);
+        return [
+          {
+            type: "omitted_media",
+            media: {
+              kind: "image",
+              ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+            },
+          },
+        ];
       }
       const image = normalizeImageContentBlock(item);
       if (image) {

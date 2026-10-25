@@ -10,6 +10,7 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
+  createPluginCapabilities,
   createClient,
   createContext,
   createGateway,
@@ -144,15 +145,7 @@ describe("ClawHub chat recommendations", () => {
         harness.emit(client, true);
       } else {
         harness.emit(client, true, {
-          pluginCapabilities: {
-            ok: true,
-            generation: 1,
-            descriptors: [],
-            methods: [],
-            controlUiTabs: [],
-            controlUiWidgetKinds: [],
-            pluginSurfaceUrls: {},
-          },
+          pluginCapabilities: createPluginCapabilities(1),
         });
       }
       await vi.waitFor(() =>
@@ -227,15 +220,7 @@ describe("ClawHub chat recommendations", () => {
       } else {
         pending = false;
         harness.emit(client, true, {
-          pluginCapabilities: {
-            ok: true,
-            generation: 1,
-            descriptors: [],
-            methods: [],
-            controlUiTabs: [],
-            controlUiWidgetKinds: [],
-            pluginSurfaceUrls: {},
-          },
+          pluginCapabilities: createPluginCapabilities(1),
         });
       }
       await vi.waitFor(() =>
@@ -291,15 +276,7 @@ describe("ClawHub chat recommendations", () => {
     await vi.advanceTimersByTimeAsync(0);
     response = refresh.promise;
     harness.emit(client, true, {
-      pluginCapabilities: {
-        ok: true,
-        generation: 1,
-        descriptors: [],
-        methods: [],
-        controlUiTabs: [],
-        controlUiWidgetKinds: [],
-        pluginSurfaceUrls: {},
-      },
+      pluginCapabilities: createPluginCapabilities(1),
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(card.querySelector(".chat-clawhub-card__status-skeleton")).not.toBeNull();

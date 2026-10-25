@@ -35,6 +35,10 @@ export function connectNavigationPrefetch(options: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let idle: number | undefined;
   let intent: string | undefined;
+  // New Session is the common next step. Other routes warm on hover/focus/touch
+  // rather than fetching every optional route after an ordinary chat load.
+  const nextPending = () =>
+    intent && pending.has(intent) ? intent : pending.has("new-session") ? "new-session" : undefined;
   const available = () => {
     const state = options.router.getState();
     return (
@@ -57,7 +61,7 @@ export function connectNavigationPrefetch(options: {
   };
   const schedule = () => {
     cancel();
-    if (!available() || running || (manifest && pending.size === 0)) {
+    if (!available() || running || (manifest && !nextPending())) {
       return;
     }
     // Readiness can precede first paint. Leave a quiet window, then ask for idle
@@ -102,7 +106,7 @@ export function connectNavigationPrefetch(options: {
       if (currentRoute) {
         pending.delete(currentRoute);
       }
-      const key = intent && pending.has(intent) ? intent : pending.values().next().value;
+      const key = nextPending();
       intent = undefined;
       if (!key) {
         return;

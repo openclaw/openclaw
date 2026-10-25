@@ -59,6 +59,11 @@ const enModelControls = {
       ultrafast: "Ultrafast",
       tierDowngrade: "{requested} requested, currently served as {served}",
       tierRejected: "{requested} requested, currently unavailable",
+      switchTitle: "Switch to {new}?",
+      switchWarning:
+        "This conversation is cached for {current}. Switching models means it reprocesses the whole conversation on your next message, which can spend more tokens. Longer conversations may also be compacted.",
+      switchConfirm: "Switch model",
+      dontAskAgain: "Don’t ask again",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
       configureModels: "Configure models",

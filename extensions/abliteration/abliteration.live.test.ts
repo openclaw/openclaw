@@ -8,17 +8,21 @@ import {
   requireLiveToolCall,
 } from "../test-support/live-value-tool.test-support.js";
 import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
-import { buildAbliterationProvider, ABLITERATION_DEFAULT_MODEL_ID } from "./models.js";
+import { ABLITERATION_DEFAULT_MODEL_REF, buildAbliterationProvider } from "./models.js";
 
 const ABLITERATION_API_KEY = process.env.ABLITERATION_API_KEY?.trim() ?? "";
 const LIVE = isLiveTestEnabled(["ABLITERATION_LIVE_TEST"]) && ABLITERATION_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
 
-function resolveLiveModel(modelId = ABLITERATION_DEFAULT_MODEL_ID): Model<"openai-completions"> {
+function resolveLiveModel(modelId?: string): Model<"openai-completions"> {
   const provider = buildAbliterationProvider();
-  const model = provider.models?.find((entry) => entry.id === modelId);
+  const model = provider.models?.find((entry) =>
+    modelId ? entry.id === modelId : ABLITERATION_DEFAULT_MODEL_REF === `abliteration/${entry.id}`,
+  );
   if (!model) {
-    throw new Error(`Abliteration catalog does not include ${modelId}`);
+    throw new Error(
+      `Abliteration catalog does not include ${modelId ?? ABLITERATION_DEFAULT_MODEL_REF}`,
+    );
   }
   return {
     provider: "abliteration",
@@ -29,9 +33,12 @@ function resolveLiveModel(modelId = ABLITERATION_DEFAULT_MODEL_ID): Model<"opena
 }
 
 describeLive("abliteration plugin live", () => {
-  it.each([ABLITERATION_DEFAULT_MODEL_ID, "abliterated-model-large-v2"])(
-    "completes a short text request with %s",
-    async (modelId) => {
+  it.each([
+    { label: ABLITERATION_DEFAULT_MODEL_REF, modelId: undefined },
+    { label: "abliterated-model-large-v2", modelId: "abliterated-model-large-v2" },
+  ])(
+    "completes a short text request with $label",
+    async ({ modelId }) => {
       const response = await completeSimple(
         resolveLiveModel(modelId),
         { messages: [{ role: "user", content: "Reply with exactly: ok", timestamp: Date.now() }] },

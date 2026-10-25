@@ -7,6 +7,7 @@ import { clearSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { writeSecretStoreEntry } from "../../secrets/store/secret-store.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
+import { createTestModelDefinition } from "../test-runtime-config-helpers.js";
 import { runAuthProbes } from "./list.probe.js";
 
 it("probes account SecretRefs without persisting resolved credentials or sending unresolved refs", async () => {
@@ -57,15 +58,7 @@ it("probes account SecretRefs without persisting resolved credentials or sending
             api: "openai-completions",
             baseUrl: `http://127.0.0.1:${server.claim.port}/v1`,
             models: [
-              {
-                id: "probe-model",
-                name: "Probe model",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 64,
-              },
+              createTestModelDefinition("probe-model", { name: "Probe model", maxTokens: 64 }),
             ],
           },
         },

@@ -6,6 +6,7 @@ import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.
 import { RouteElements, type RouteElementEvent } from "../../../app/route-elements.ts";
 import { SHELL_NAV_DRAWER_TOGGLE_EVENT } from "../../../components/command-palette-contract.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
+import { allMutationObserverOptions } from "../../../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
@@ -464,12 +465,7 @@ describe("chat pane header", () => {
     await facepile.updateComplete;
     const updates: MutationRecord[] = [];
     const observer = new MutationObserver((records) => updates.push(...records));
-    observer.observe(facepile, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      characterData: true,
-    });
+    observer.observe(facepile, allMutationObserverOptions());
     onTestFinished(() => observer.disconnect());
     mounted.renderHeader();
     await facepile.updateComplete;

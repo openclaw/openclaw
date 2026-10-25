@@ -65,7 +65,10 @@ import {
   assertOpenClawAgentDatabaseIdentity,
   registerOpenClawAgentDatabaseIdentity,
 } from "./openclaw-agent-db-identity.js";
-import { agentDatabaseAdmissionProvenanceRefusal } from "./openclaw-agent-db-lease-provenance.js";
+import {
+  agentDatabaseAdmissionProvenanceRefusal,
+  readAgentDatabaseLeaseProvenance,
+} from "./openclaw-agent-db-lease-provenance.js";
 import {
   hasAgentDatabaseMaintenanceAuthority,
   assertOpenClawAgentDatabaseLease,
@@ -268,7 +271,7 @@ function* openOpenClawAgentDatabaseSteps(
     throw new Error("Prepared agent database lease belongs to another store");
   }
   let reuseIntegrity = false;
-  let liveOwnerAdmitted = false;
+  let liveOwnerProvenance: string | undefined;
   let integrityRevoked = false;
   const diagnostics: SqliteIntegrityDiagnostics = {};
   const validation = pending?.validation ?? preparedLease?.validation;
@@ -276,10 +279,10 @@ function* openOpenClawAgentDatabaseSteps(
     runtimeIntegrityAllowed,
     invalidated,
     because,
-    admittedByLiveOwner = false,
+    admittedFileProvenance,
   ) => {
     reuseIntegrity = runtimeIntegrityAllowed;
-    liveOwnerAdmitted = admittedByLiveOwner;
+    liveOwnerProvenance = admittedFileProvenance;
     // A host refusal may have no positive validation receipt to transfer.
     integrityRevoked =
       invalidated || preparedLease?.integrityRevoked === true || pending?.integrityRevoked === true;
@@ -446,7 +449,10 @@ function* openOpenClawAgentDatabaseSteps(
           diagnostics,
           verification,
           (isValidatedReopen && reuseAdmittedIntegrity) ||
-            (liveOwnerAdmitted && diagnostics.integrityGateReason === "lease-class"),
+            (diagnostics.integrityGateReason === "lease-class" &&
+              liveOwnerProvenance !== undefined &&
+              // Re-read after the native open: the claim's file must be the one this handle opened.
+              readAgentDatabaseLeaseProvenance(pathname) === liveOwnerProvenance),
           reusedSchema,
           integrityCheck,
           repairAdmission?.integrityTables ?? [],

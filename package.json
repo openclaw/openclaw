@@ -15,8 +15,8 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 31,
-      "agent": 33
+      "state": 32,
+      "agent": 34
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -1770,6 +1770,7 @@
     "bench:agent-database-holds": "node --import ./scripts/tsx.mjs scripts/bench-agent-database-holds.ts",
     "bench:plugins:invocation": "node --import ./scripts/tsx.mjs scripts/bench-plugin-invocation.ts",
     "bench:plugins:stream": "node --expose-gc --import ./scripts/tsx.mjs scripts/bench-plugin-stream.ts",
+    "bench:transcript-turn": "node --import ./scripts/tsx.mjs scripts/bench-transcript-turn.ts",
     "bench:ui:copies": "node --import ./scripts/tsx.mjs scripts/bench-control-ui-copies.ts",
     "bench:usage-refresh-memory": "node --import ./scripts/tsx.mjs scripts/bench-usage-refresh-memory.ts",
     "build": "node --import ./scripts/tsx.mjs scripts/build-all.mts",
@@ -2425,6 +2426,7 @@
     "partial-json": "0.1.7",
     "pg": "8.23.1",
     "playwright-core": "1.64.1",
+    "proxy-from-env": "2.1.0",
     "qrcode": "1.5.4",
     "rastermill": "0.4.0",
     "semver": "7.8.5",

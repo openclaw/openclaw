@@ -101,3 +101,19 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
     ...overrides,
   };
 }
+
+export function createWaitingNodePairSetup() {
+  return {
+    phase: "waiting",
+    access: "node",
+    setup: {
+      setupId: "setup-node",
+      setupCode: "AbC_123",
+      gatewayUrl: "wss://gateway.example",
+      auth: "token",
+      urlSource: "test",
+      access: "node",
+      expiresAtMs: 70_000,
+    },
+  } as const;
+}

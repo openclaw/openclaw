@@ -33,6 +33,21 @@ export function projectChatSystemNotice(
       },
     ];
   }
+  if (raw?.role === "custom" && raw.customType === "session-model-change") {
+    const details = asRecord(raw.details);
+    if (typeof details?.from === "string" && typeof details.to === "string") {
+      return [
+        {
+          kind: "notice",
+          key: item.key,
+          timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
+          icon: "brain",
+          label: t("chat.systemNotice.modelChanged", { from: details.from, to: details.to }),
+          text: "",
+        },
+      ];
+    }
+  }
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
   const pendingText =

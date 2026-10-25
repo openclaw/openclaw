@@ -29,7 +29,7 @@ const liveProvider = LIVE
 
 export type NativeFixture = Awaited<ReturnType<typeof createNativeFixture>>;
 export type Cleanup = () => Promise<void>;
-type NativePhase = "probe" | "action" | "side" | "hold" | "summary" | "health";
+type NativePhase = "probe" | "action" | "side" | "hold" | "overload" | "summary" | "health";
 
 const sseHeaders = { "Content-Type": "text/event-stream" };
 function event(type: string, fields: JsonObject) {
@@ -92,6 +92,22 @@ async function createNativeFixture(
         response.writeHead(200, sseHeaders);
         response.write(
           event("response.created", { response: { id: `response-${requests.length}` } }),
+        );
+        return;
+      }
+      if (phase === "overload") {
+        // A capacity failure before any output: the provider fails the response.
+        const id = `response-${requests.length}`;
+        response.writeHead(200, sseHeaders);
+        response.end(
+          event("response.created", { response: { id } }) +
+            event("response.failed", {
+              response: {
+                id,
+                status: "failed",
+                error: { code: "server_is_overloaded", message: "Synthetic provider overload." },
+              },
+            }),
         );
         return;
       }

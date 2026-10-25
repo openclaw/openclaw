@@ -41,15 +41,10 @@ import {
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 function transcriptMessage(id: string, content: string, timestamp = 1) {
-  return {
-    type: "message",
-    id,
-    parentId: null,
-    timestamp,
-    message: { role: "assistant", content },
-  };
+  return timedMessageEvent(id, null, timestamp, { role: "assistant", content });
 }
 
 async function searchFixture(

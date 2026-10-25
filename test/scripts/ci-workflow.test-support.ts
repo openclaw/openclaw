@@ -17,7 +17,6 @@ export const UPLOAD_ARTIFACT_V7 =
   "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9";
 export const DOWNLOAD_ARTIFACT_V8 =
   "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
-export const MANTIS_GITHUB_APP_CLIENT_ID = "Iv23liPJCozR0uHm6P7G";
 const SETUP_ANDROID_TOOLCHAIN_ACTION = ".github/actions/setup-android-toolchain/action.yml";
 export const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 export const AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC =

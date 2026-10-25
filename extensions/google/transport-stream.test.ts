@@ -825,34 +825,30 @@ describe("google transport stream", () => {
       },
     );
 
-    const streamFn = createGoogleGenerativeAiTransportStreamFn();
-    const stream = await Promise.resolve(
-      streamFn(
-        model,
-        {
-          systemPrompt: "Follow policy.",
-          messages: [{ role: "user", content: "hello", timestamp: 0 }],
-          tools: [
-            {
-              name: "lookup",
-              description: "Look up a value",
-              parameters: {
-                type: "object",
-                properties: { q: { type: "string" } },
-                required: ["q"],
-              },
+    const result = await runGeminiStreamResult({
+      model,
+      context: {
+        systemPrompt: "Follow policy.",
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: {
+              type: "object",
+              properties: { q: { type: "string" } },
+              required: ["q"],
             },
-          ],
-        } as unknown as Parameters<typeof streamFn>[1],
-        {
-          apiKey: "gemini-api-key",
-          cachedContent: " cachedContents/request-cache ",
-          reasoning: "medium",
-          toolChoice: "auto",
-        } as Parameters<typeof streamFn>[2],
-      ),
-    );
-    const result = await stream.result();
+          },
+        ],
+      } as unknown as Parameters<ReturnType<typeof createGoogleGenerativeAiTransportStreamFn>>[1],
+      options: {
+        apiKey: "gemini-api-key",
+        cachedContent: " cachedContents/request-cache ",
+        reasoning: "medium",
+        toolChoice: "auto",
+      },
+    });
 
     expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model);
     const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
@@ -1730,10 +1726,7 @@ describe("google transport stream", () => {
         onCancel: cancel,
       }),
     );
-    let markHookStarted!: () => void;
-    const hookStarted = new Promise<void>((resolve) => {
-      markHookStarted = resolve;
-    });
+    const { promise: hookStarted, resolve: markHookStarted } = Promise.withResolvers<void>();
     const onResponse = vi.fn(() => {
       markHookStarted();
       return new Promise<void>(() => {});
@@ -1775,10 +1768,7 @@ describe("google transport stream", () => {
       }),
     );
     mockGoogleTextResponse("recovered");
-    let markHookStarted!: () => void;
-    const hookStarted = new Promise<void>((resolve) => {
-      markHookStarted = resolve;
-    });
+    const { promise: hookStarted, resolve: markHookStarted } = Promise.withResolvers<void>();
     const onResponse = vi.fn<() => void | Promise<void>>().mockImplementationOnce(() => {
       markHookStarted();
       return new Promise<void>(() => {});
@@ -1845,10 +1835,7 @@ describe("google transport stream", () => {
   it("does not retry when an external abort interrupts a stalled Gemini 3 response body", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "1000");
     const controller = new AbortController();
-    let resolveBodyRead!: () => void;
-    const bodyRead = new Promise<void>((resolve) => {
-      resolveBodyRead = resolve;
-    });
+    const { promise: bodyRead, resolve: resolveBodyRead } = Promise.withResolvers<void>();
     const cancel = vi.fn();
     guardedFetchMock.mockResolvedValueOnce(
       new Response(
@@ -1922,20 +1909,7 @@ describe("google transport stream", () => {
       guardedFetchMock.mockResolvedValueOnce(
         buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
       );
-      const streamFn = createGoogleVertexTransportStreamFn();
-      const stream = await Promise.resolve(
-        streamFn(
-          buildGoogleVertexModel(),
-          { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
-            typeof streamFn
-          >[1],
-          {
-            apiKey: "gcp-vertex-credentials",
-            fetch: vi.fn(),
-          } as Parameters<typeof streamFn>[2],
-        ),
-      );
-      await stream.result();
+      await runGoogleVertexStreamResult({ fetch: vi.fn() });
 
       const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
       expect(String(url)).toBe(

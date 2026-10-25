@@ -28,7 +28,7 @@ function fixture(sql = "") {
   seedPortSqlite(
     sourcePath,
     `${metadata.sqlite};
-    INSERT INTO workboard_schema_migrations VALUES ('schema-3', 17);
+    INSERT INTO workboard_schema_migrations VALUES ('schema-${metadata.version}', 17);
     INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', ' {"a":1,"a":2} ', 1, 2);
     ${sql}`,
   );
@@ -184,7 +184,7 @@ it("inspects without writing and refuses changed canonical SQLite data", async (
   expect(inspected).toMatchObject({
     family: "workboard",
     engine: "sqlite",
-    version: 3,
+    version: metadata.version,
     migrationRequired: false,
     verification: { tables: { workboard_boards: { rows: 1 } } },
   });

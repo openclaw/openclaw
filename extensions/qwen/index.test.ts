@@ -10,6 +10,7 @@ import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth"
 import type { ProviderCatalogResult } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import {
   QWEN_BASE_URL,
   QWEN_TOKEN_PLAN_CN_BASE_URL as CN_URL,
@@ -163,12 +164,7 @@ describe("qwen provider plugin", () => {
     expect(runtimeChoiceIds).toEqual(["qwen-token-plan", "qwen-token-plan-cn"]);
     expect(manifestChoiceIds).toEqual(runtimeChoiceIds);
 
-    const result = await provider.staticCatalog?.run({
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({}),
-    } as never);
-    const catalogProvider = requireCatalogProvider(result);
+    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
     expect(catalogProvider.baseUrl).toBe(GLOBAL_URL);
     expect(catalogProvider.models.map((model) => model.id)).toEqual(
       expect.arrayContaining(["qwen3.7-plus", "qwen3.8-max", "qwen3.8-flash"]),

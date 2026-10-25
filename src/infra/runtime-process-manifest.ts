@@ -560,7 +560,7 @@ export const runtimeProcessGatewayEntrypointNames = [
   "gatewayEntryModule",
 ] as const satisfies readonly (keyof typeof runtimeProcessExternalPackageEntrypoints)[];
 
-export const runtimeProcessStandaloneModules = [
+const runtimeProcessStandaloneModules = [
   "../openclaw.mjs",
   "../node-compile-cache.mjs",
   "tooling/managed-memory-launcher.js",

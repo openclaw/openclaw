@@ -17,7 +17,7 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./lifecycle-sync.js";
-import { createDeferred, createLinkedCard } from "./lifecycle-sync.test-support.js";
+import { createLinkedCard } from "./lifecycle-sync.test-support.js";
 import { workboardSessionKeyForCard } from "./session-link.js";
 import type { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
@@ -700,8 +700,8 @@ describe("Workboard lifecycle service", () => {
     await createLinkedCard(store, { sessionKey: "agent:main:dashboard:draining" });
     const runOperation = vi.spyOn(store, "runOperation");
     const lifetime = new AbortController();
-    const readEntered = createDeferred<void>();
-    const readResult = createDeferred<{ sessions: []; complete: boolean }>();
+    const readEntered = Promise.withResolvers<void>();
+    const readResult = Promise.withResolvers<{ sessions: []; complete: boolean }>();
     const readSessions = vi.fn(async () => {
       readEntered.resolve();
       return await readResult.promise;

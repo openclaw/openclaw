@@ -36,7 +36,7 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
-function createLiveSessionContext(client: GatewayBrowserClient, sessions: SessionCapability) {
+function createLiveSessionContext(client: GatewayBrowserClient, sessions?: SessionCapability) {
   const initial = createInitializationContext();
   const live = createSessionContext(client, sessions);
   return {
@@ -146,21 +146,27 @@ describe("chat pane assistant identity snapshots", () => {
   });
 
   it("rebinds approval delivery when the selected global agent changes", async () => {
-    const subscribeMessages = vi.fn(
-      async (key: string, options?: { agentId?: string | null; includeApprovals?: boolean }) => ({
-        key,
-        agentId: options?.agentId ?? null,
-      }),
+    const request = vi.fn(
+      async (
+        method: string,
+        params?: { key?: string; agentId?: string; initialHistory?: unknown },
+      ) => {
+        if (method === "sessions.messages.subscribe") {
+          return {
+            key: params?.key,
+            agentId: params?.agentId,
+            ...(params?.initialHistory
+              ? { initialHistory: { ok: true, payload: { messages: [] } } }
+              : {}),
+          };
+        }
+        return method === "chat.history" || method === "chat.startup" ? { messages: [] } : {};
+      },
     );
-    const sessions = createSessionCapabilityFixture({
-      refresh: vi.fn().mockResolvedValue(undefined),
-      subscribeMessages,
-      unsubscribeMessages: vi.fn(async () => undefined),
-    });
-    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-    const context = createLiveSessionContext(client, sessions);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = createLiveSessionContext(client);
     Object.assign(context.agents, { ensureList: vi.fn(async () => null) });
-    const { pane } = createTestChatPane({ client, sessions });
+    const { pane } = createTestChatPane({ client, sessions: context.sessions });
     pane.context = context;
     pane.connectedClient = null;
     pane.sessionKey = "global";
@@ -177,12 +183,14 @@ describe("chat pane assistant identity snapshots", () => {
       );
       pane.state.loadAssistantIdentity = vi.fn(async () => undefined);
       context.agentSelection.set("research");
-      await vi.waitFor(() =>
-        expect(subscribeMessages).toHaveBeenCalledWith("global", {
-          agentId: "research",
-          includeApprovals: true,
-        }),
-      );
+      await vi.waitFor(() => {
+        expect(pane.state.chatSessionMessageSubscription?.agentId).toBe("research");
+        expect(request).toHaveBeenCalledWith(
+          "sessions.messages.subscribe",
+          expect.objectContaining({ key: "global", agentId: "research", includeApprovals: true }),
+          expect.anything(),
+        );
+      });
     } finally {
       pane.disconnectedCallback();
     }

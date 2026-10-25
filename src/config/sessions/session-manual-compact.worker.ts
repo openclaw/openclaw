@@ -20,7 +20,6 @@ import type {
   SessionSourceValidation,
 } from "./session-source-authority.js";
 import { createSessionSourceConversationMatches } from "./session-source-conversation-matches.js";
-import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 
 export type ManualCompactInput = {
   scope: ResolvedTranscriptScope;
@@ -82,8 +81,6 @@ export function compactManualTranscript(
           events,
           nowMs: input.nowMs,
         });
-        // Finish the retained projection before the next turn can use this generation.
-        reconcileSessionTranscriptIndexInTransaction(current.db, input.scope.sessionId);
         candidate.publication = prepareSessionEntryReplacementPublication(
           {
             ...identity,

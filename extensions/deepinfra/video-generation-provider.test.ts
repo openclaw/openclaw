@@ -1,5 +1,6 @@
 // Deepinfra tests cover video generation provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -173,18 +174,8 @@ describe("deepinfra video generation provider", () => {
     };
     const dispatcherPolicy = { mode: "env-proxy" as const };
     resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
-      const headers = new Headers(omitNullRequestHeaders(params.defaultHeaders));
-      for (const [key, value] of Object.entries(params.request?.headers ?? {})) {
-        if (value === null) {
-          headers.delete(key);
-        } else {
-          headers.set(key, value);
-        }
-      }
       return {
-        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-        allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
-        headers,
+        ...resolveProviderHttpRequestConfigWithOriginTrust(params),
         dispatcherPolicy,
       };
     });
@@ -551,4 +542,3 @@ describe("deepinfra video generation provider", () => {
     ).rejects.toThrow("DeepInfra video response returned malformed data URL base64");
   });
 });
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

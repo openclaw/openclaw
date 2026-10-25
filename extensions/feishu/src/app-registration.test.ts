@@ -103,6 +103,30 @@ describe("Feishu app registration", () => {
     );
   });
 
+  it("ends the registration poll at its monotonic deadline when the wall clock rewinds", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => Response.json({ error: "authorization_pending" }));
+    mockRegistrationFetch({ fetchImpl: withFetchPreconnect(fetchMock) });
+    // Settlement observer is attached before fake time advances, so the
+    // recorded outcome can be asserted without leaving real timers behind.
+    let outcome: string | undefined;
+    const poll = pollAppRegistration({ ...pollParams, interval: 5, expireIn: 30 }).then(
+      (result) => {
+        outcome = `settled:${result.status}`;
+      },
+      () => {
+        outcome = "settled:rejected";
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    // NTP correction or VM resume rewinds the wall clock mid-poll.
+    vi.setSystemTime(Date.now() - 10 * 60_000);
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(outcome).toBe("settled:timeout");
+    await poll;
+    vi.useRealTimers();
+  });
+
   it("clamps unsafe poll sleeps from provider intervals", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
