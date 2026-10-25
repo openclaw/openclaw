@@ -87,12 +87,6 @@ async function persistentSession(label: string) {
 }
 
 describe("stripSessionsYieldArtifacts", () => {
-  it("leaves a continuable suffix unchanged", async () => {
-    const session = buildSession([user], SessionManager.inMemory());
-    await stripSessionsYieldArtifacts(session);
-    expect(session.agent.state.messages).toEqual([user]);
-  });
-
   it.each([false, true])(
     "caps persisted assistant removal independently of persisted interrupt=%s",
     async (includeInterrupt) => {
@@ -145,6 +139,11 @@ describe("stripSessionsYieldArtifacts", () => {
     await stripSessionsYieldArtifacts(session);
     expect(session.agent.state.messages).toEqual([toolResult]);
     expect(readSessionTranscriptWatermark(scope).generation).not.toBe(generationBefore);
+    const generationAfter = readSessionTranscriptWatermark(scope).generation;
+    session.messages = session.agent.state.messages;
+    await stripSessionsYieldArtifacts(session);
+    expect(session.agent.state.messages).toEqual([toolResult]);
+    expect(readSessionTranscriptWatermark(scope).generation).toBe(generationAfter);
     const reopened = await SessionManager.openAsync(scope, dir);
     expect(reopened.buildSessionContext().messages).toEqual([toolResult]);
     expect(reopened.getEntries()).toContainEqual(
