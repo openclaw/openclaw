@@ -68,7 +68,7 @@ function bounds(parent: ParentNode, selector: string) {
   return element(parent, selector).getBoundingClientRect();
 }
 
-function element<T extends HTMLElement = HTMLElement>(parent: ParentNode, selector: string) {
+function element<T extends HTMLElement = HTMLElement>(parent: ParentNode, selector: string): T {
   const found = parent.querySelector<T>(selector);
   expect(found).toBeInstanceOf(HTMLElement);
   return found!;
