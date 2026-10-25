@@ -16,6 +16,7 @@ import {
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nestedToolActivityFixture } from "../test/nested-tool-activity-fixture.js";
 import {
   createSession,
   readEffectiveTools,
@@ -141,25 +142,16 @@ describe("qa suite runtime agent session helpers", () => {
     input: Pick<NestedDetails, "toolCallId" | "toolName" | "parentToolCallId" | "timestamp"> &
       Partial<NestedDetails>,
   ) {
-    const details = {
-      runId: "run-1",
-      scopeId: "scope-1",
-      afterEntryId: null,
-      startOrder: 0,
-      isError: false,
-      startedAt: 100,
+    const fixture = nestedToolActivityFixture({
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
       input: {},
-      result: { content: [] },
-      ...input,
-    };
+      text: "",
+    });
     return {
-      role: "custom",
-      customType: "openclaw.nested-tool.v1",
-      display: true,
-      excludeFromContext: true,
-      content: "",
-      details,
-      timestamp: details.timestamp,
+      ...fixture,
+      details: { ...fixture.details, afterEntryId: null, result: { content: [] }, ...input },
+      timestamp: input.timestamp,
     };
   }
 
@@ -274,11 +266,11 @@ describe("qa suite runtime agent session helpers", () => {
 
   it("seeds multi-agent session entries through the canonical accessor", async () => {
     const parentSessionKey = "agent:qa:main";
+    const entry = (sessionId: string, updatedAt: number) => ({ sessionId, updatedAt });
     const qaEntries = {
-      [parentSessionKey]: { sessionId: "session-main", updatedAt: 300 },
+      [parentSessionKey]: entry("session-main", 300),
       "agent:qa:subagent:child": {
-        sessionId: "session-child",
-        updatedAt: 200,
+        ...entry("session-child", 200),
         spawnedBy: parentSessionKey,
         status: "done" as const,
         endedAt: 250,
@@ -286,8 +278,7 @@ describe("qa suite runtime agent session helpers", () => {
     };
     const claudeEntries = {
       "agent:claude:acp:child": {
-        sessionId: "session-acp-child",
-        updatedAt: 100,
+        ...entry("session-acp-child", 100),
         parentSessionKey,
       },
     };
@@ -301,8 +292,7 @@ describe("qa suite runtime agent session helpers", () => {
     }
     const updated = {
       [parentSessionKey]: {
-        sessionId: "session-main",
-        updatedAt: 400,
+        ...entry("session-main", 400),
         label: "Updated after the first read",
         compactionCount: 1,
       },
@@ -525,32 +515,24 @@ describe("qa suite runtime agent session helpers", () => {
     const transcript = await createQaTranscript();
     const readPending = (pendingCodeModeExecNeedle: string) =>
       transcript.read({ pendingCodeModeExecNeedle });
-
+    const pending = (id: string, code: string) => [
+      assistantToolCall(`${id}-exec`, "exec", { code }),
+      toolResult(`${id}-exec`, "exec", { status: "waiting", runId: `${id}-run` }),
+      assistantToolCall(`${id}-wait`, "wait", { runId: `${id}-run` }),
+    ];
     await transcript.appendMany([
-      assistantToolCall("checkpoint-1-exec", "exec", {
-        code: "await qa_restart_wait(); return 'CHECKPOINT-1';",
-      }),
-      toolResult("checkpoint-1-exec", "exec", { status: "waiting", runId: "checkpoint-1-run" }),
-      assistantToolCall("checkpoint-1-wait", "wait", { runId: "checkpoint-1-run" }),
+      ...pending("checkpoint-1", "await qa_restart_wait(); return 'CHECKPOINT-1';"),
       toolResult("checkpoint-1-wait", "wait", { status: "completed" }),
-      assistantToolCall("audit-exec", "exec", {
-        code: "return await catalog.search('qa_restart_unsafe_probe');",
-      }),
-      toolResult("audit-exec", "exec", { status: "waiting", runId: "audit-run" }),
-      assistantToolCall("audit-wait", "wait", { runId: "audit-run" }),
+      ...pending("audit", "return await catalog.search('qa_restart_unsafe_probe');"),
     ]);
 
     await expect(readPending("CHECKPOINT-1")).resolves.toMatchObject({
       hasPendingCodeModeWait: false,
     });
 
-    await transcript.appendMany([
-      assistantToolCall("checkpoint-2-exec", "exec", {
-        code: "await qa_restart_wait(); return 'CHECKPOINT-2';",
-      }),
-      toolResult("checkpoint-2-exec", "exec", { status: "waiting", runId: "checkpoint-2-run" }),
-      assistantToolCall("checkpoint-2-wait", "wait", { runId: "checkpoint-2-run" }),
-    ]);
+    await transcript.appendMany(
+      pending("checkpoint-2", "await qa_restart_wait(); return 'CHECKPOINT-2';"),
+    );
 
     await expect(readPending("CHECKPOINT-2")).resolves.toMatchObject({
       hasPendingCodeModeWait: true,

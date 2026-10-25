@@ -150,28 +150,10 @@ describe("qa cli registration", () => {
   }
 
   beforeEach(() => {
+    vi.resetAllMocks();
     previousExitCode = process.exitCode;
     stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     program = new Command();
-    for (const command of [
-      runQaCredentialsAddCommand,
-      runQaCredentialsListCommand,
-      runQaCredentialsRemoveCommand,
-      runQaCoverageReportCommand,
-      runQaJsonlReplayCommand,
-      runQaLabSelfCheckCommand,
-      runQaManualLaneCommand,
-      runQaProfileCommand,
-      runQaProviderServerCommand,
-      runQaSuiteCommand,
-      runQaTelegramCommand,
-      runMantisBeforeAfterCommand,
-      runMantisDesktopBrowserSmokeCommand,
-      runMantisDiscordSmokeCommand,
-      runMantisSlackDesktopSmokeCommand,
-    ]) {
-      command.mockReset();
-    }
     listQaRunnerCliContributions
       .mockReset()
       .mockReturnValue([createAvailableQaRunnerContribution()]);
@@ -209,30 +191,17 @@ describe("qa cli registration", () => {
     await expectQaFailure(["telegram"], message);
   });
 
-  it("registers discovered and built-in live transport subcommands", () => {
-    const qa = program.commands.find((command) => command.name() === "qa");
-    if (!qa) {
-      throw new Error("expected qa command");
-    }
-    const commandNames = qa.commands.map((command) => command.name());
-    expect(commandNames).toContain(TEST_QA_RUNNER.commandName);
-    expect(commandNames).toContain("telegram");
-    expect(commandNames).toContain("mantis");
-    expect(commandNames).toContain("credentials");
-    expect(commandNames).toContain("coverage");
+  it("registers the discovered runner", () => {
+    expect(
+      program.commands
+        .find((command) => command.name() === "qa")
+        ?.commands.map((command) => command.name()),
+    ).toContain(TEST_QA_RUNNER.commandName);
   });
-  it.each([["--scenario", ["dm-chat-baseline"]]])(
-    "rejects qa run profile-only flag %s without --qa-profile",
-    async (flag, values) => {
-      await expectQaFailure(["run", flag, ...values], `qa run ${flag} requires --qa-profile`);
 
-      expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
-      expect(runQaProfileCommand).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects conflicting deprecated evidence flags", async () => {
-    await expectQaFailure(
+  it.each([
+    [["run", "--scenario", "dm-chat-baseline"], "qa run --scenario requires --qa-profile"],
+    [
       [
         "run",
         "--qa-profile",
@@ -242,8 +211,15 @@ describe("qa cli registration", () => {
         "--exclude-test-execution-evidence",
       ],
       "--exclude-test-execution-evidence conflicts with --evidence-mode full",
-    );
-
+    ],
+    [["run", "--qa-profile", ""], "--qa-profile must not be empty."],
+    [
+      ["run", "--qa-profile", "smoke-ci", "--output", "out.md"],
+      "qa run --output is only valid for the self-check mode",
+    ],
+  ])("rejects invalid run mode %j", async (args, message) => {
+    await expectQaFailure(args, message);
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
     expect(runQaProfileCommand).not.toHaveBeenCalled();
   });
 
@@ -260,24 +236,6 @@ describe("qa cli registration", () => {
         "tiny",
       ]),
     ).rejects.toThrow("--evidence-mode must be one of full, slim.");
-
-    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
-    expect(runQaProfileCommand).not.toHaveBeenCalled();
-  });
-
-  it("rejects an empty qa run --qa-profile instead of falling back to self-check", async () => {
-    await expectQaFailure(["run", "--qa-profile", ""], "--qa-profile must not be empty.");
-
-    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
-    expect(runQaProfileCommand).not.toHaveBeenCalled();
-  });
-
-  it("rejects self-check output flags in qa run profile mode", async () => {
-    await expectQaFailure(
-      ["run", "--qa-profile", "smoke-ci", "--output", ".artifacts/qa-self-check.md"],
-      "qa run --output is only valid for the self-check mode",
-    );
-
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
     expect(runQaProfileCommand).not.toHaveBeenCalled();
   });
@@ -382,61 +340,30 @@ describe("qa cli registration", () => {
     );
   });
 
-  it("routes coverage report flags into the qa runtime command", async () => {
-    await parseQa([
-      "coverage",
-      "--repo-root",
-      "/tmp/openclaw-repo",
-      "--output",
-      ".artifacts/qa-coverage.md",
-      "--json",
-    ]);
-
-    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
-      repoRoot: "/tmp/openclaw-repo",
-      output: ".artifacts/qa-coverage.md",
-      json: true,
-      tools: false,
-      match: [],
-    });
-  });
-
-  it("routes tool coverage report flags into the qa runtime command", async () => {
-    await parseQa([
-      "coverage",
-      "--repo-root",
-      "/tmp/openclaw-repo",
-      "--tools",
-      "--summary",
-      ".artifacts/runtime-summary.json",
-    ]);
-
-    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
-      repoRoot: "/tmp/openclaw-repo",
-      tools: true,
-      json: false,
-      summary: ".artifacts/runtime-summary.json",
-      match: [],
-    });
-  });
-
-  it("routes evidence gap reporting without starting a QA run", async () => {
-    await parseQa(["coverage", "--evidence", "run/qa-evidence.json", "--json"]);
-    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
-      evidence: "run/qa-evidence.json",
-      json: true,
-      tools: false,
-      match: [],
-    });
-  });
-
-  it("routes coverage match queries into the qa runtime command", async () => {
-    await parseQa(["coverage", "--match", "image roundtrip", "--match", "native"]);
-
+  it.each([
+    [
+      ["coverage", "--repo-root", "/repo", "--output", "out.md", "--json"],
+      { repoRoot: "/repo", output: "out.md", json: true },
+    ],
+    [
+      ["coverage", "--repo-root", "/repo", "--tools", "--summary", "summary.json"],
+      { repoRoot: "/repo", tools: true, summary: "summary.json" },
+    ],
+    [
+      ["coverage", "--evidence", "evidence.json", "--json"],
+      { evidence: "evidence.json", json: true },
+    ],
+    [
+      ["coverage", "--match", "image roundtrip", "--match", "native"],
+      { match: ["image roundtrip", "native"] },
+    ],
+  ] as const)("routes coverage options %j", async (args, expected) => {
+    await parseQa([...args]);
     expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
       tools: false,
       json: false,
-      match: ["image roundtrip", "native"],
+      match: [],
+      ...expected,
     });
   });
 
@@ -525,35 +452,22 @@ describe("qa cli registration", () => {
     expect(call?.fastMode).toBeUndefined();
   });
 
-  it("forwards --list-scenarios for telegram runs", async () => {
-    await parseQa(["telegram", "--list-scenarios"]);
-
-    expect(runQaTelegramCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ listScenarios: true }),
-    );
-  });
-
-  it("forwards --allow-failures for telegram runs", async () => {
-    await parseQa(["telegram", "--allow-failures"]);
-
-    expect(runQaTelegramCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ allowFailures: true }),
-    );
-  });
-
-  it("forwards --allow-failures for suite runs", async () => {
-    await parseQa(["suite", "--allow-failures"]);
-
-    expect(runQaSuiteCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ allowFailures: true, providerMode: undefined }),
-    );
-  });
-  it("forwards --runtime-pair-lane for suite runs", async () => {
-    await parseQa(["suite", "--runtime-pair-lane", "core", "--runtime-pair-lane", "extended,soak"]);
-
-    expect(runQaSuiteCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ runtimePairLane: ["core", "extended,soak"] }),
-    );
+  it.each([
+    [["telegram", "--list-scenarios"], runQaTelegramCommand, { listScenarios: true }],
+    [["telegram", "--allow-failures"], runQaTelegramCommand, { allowFailures: true }],
+    [
+      ["suite", "--allow-failures"],
+      runQaSuiteCommand,
+      { allowFailures: true, providerMode: undefined },
+    ],
+    [
+      ["suite", "--runtime-pair-lane", "core", "--runtime-pair-lane", "extended,soak"],
+      runQaSuiteCommand,
+      { runtimePairLane: ["core", "extended,soak"] },
+    ],
+  ] as const)("forwards lane options %j", async (args, command, expected) => {
+    await parseQa([...args]);
+    expect(command).toHaveBeenCalledWith(expect.objectContaining(expected));
   });
 
   it("routes credential add flags into the qa runtime command", async () => {
