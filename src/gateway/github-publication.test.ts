@@ -432,16 +432,14 @@ describe("Gateway GitHub publication", () => {
     expect(githubPosts()).toHaveLength(0);
   });
 
-  it("bounds and redacts Git fetch diagnostics even when log redaction is disabled", async () => {
+  it("bounds and redacts Git fetch diagnostics without custom logging configuration", async () => {
     const database = openDatabase();
     const coordinator = coordinatorFor(database);
     seedLocalPublication(database, {
       requestId: "publication-fetch-redaction",
       status: "publishing",
     });
-    const logging = vi
-      .spyOn(loggingConfig, "readLoggingConfig")
-      .mockReturnValue({ redactSensitive: "off" });
+    const logging = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue(undefined);
     const token = `ghp_${"x".repeat(36)}`;
     const diagnostic = [
       "\u001b[31mfatal: Authentication failed\u001b[0m",

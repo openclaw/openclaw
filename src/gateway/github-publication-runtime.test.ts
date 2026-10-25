@@ -77,11 +77,11 @@ describe("GitHub publication idle recovery", () => {
       message: expect.stringContaining("fatal: Could not resolve host"),
     });
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toContain("fatal: Could not resolve host");
+    expect(warn.mock.calls[0]?.[0]).toContain("fatal: Could not resolve host");
     expect(
       JSON.stringify(await runtime.coordinator.readAsync("base-fetch-unconfirmed")),
     ).not.toContain("fixture-token");
-    expect(warn.mock.calls[0][0]).not.toContain("fixture-token");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("fixture-token");
     expect(calls.filter((argv) => argv.includes("fetch"))).toHaveLength(1);
 
     let attempts = 1;
