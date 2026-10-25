@@ -90,7 +90,7 @@ async function pollTerminal(action: ProcessAction, sessionId: string) {
   return terminal;
 }
 
-test.each([
+test.for([
   { topology: "plain", memoryLimitBytes: undefined },
   { topology: "memory-bounded", memoryLimitBytes: 512 * 1024 * 1024 },
 ])(
