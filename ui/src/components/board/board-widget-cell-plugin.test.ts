@@ -5,10 +5,12 @@ import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createSessionOwnerMenuHarness } from "../../test-helpers/session-owner-menu.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   callbacks,
   cleanupCells,
+  mountCell,
   mountElement as mount,
 } from "./board-widget-cell.test-support.ts";
 import "./board-widget-cell.solid.tsx";
@@ -41,6 +43,96 @@ afterEach(cleanupCells);
 const CHUNK_LOAD_WAIT = { timeout: 10_000 };
 
 describe("plugin board widget cells", () => {
+  it("shares rendering subscriptions across native and inactive frame cells with independent lifetimes", async () => {
+    function application() {
+      const { context, publish } = createSessionOwnerMenuHarness();
+      publish({
+        hello: {
+          ...context.gateway.snapshot.hello!,
+          controlUiWidgetKinds: [
+            { pluginId: "session", kind: "session:progress", label: "Session progress" },
+          ],
+        },
+      });
+      const gatewayListeners = new Set<Parameters<ApplicationGateway["subscribe"]>[0]>();
+      const subscribe = context.gateway.subscribe.bind(context.gateway);
+      const gatewaySubscriptions = vi
+        .spyOn(context.gateway, "subscribe")
+        .mockImplementation((listener) => {
+          gatewayListeners.add(listener);
+          const stop = subscribe(listener);
+          return () => {
+            gatewayListeners.delete(listener);
+            stop();
+          };
+        });
+      onTestFinished(() => gatewaySubscriptions.mockRestore());
+      const pluginListeners = new Set<() => void>();
+      const plugins = {
+        ...context.plugins,
+        isLoading: () => false,
+        subscribe: vi.fn((listener: () => void) => {
+          pluginListeners.add(listener);
+          return () => pluginListeners.delete(listener);
+        }),
+      };
+      return {
+        context: { ...context, plugins },
+        gatewayListeners,
+        pluginListeners,
+        acquisitions: () => [
+          gatewaySubscriptions.mock.calls.length,
+          plugins.subscribe.mock.calls.length,
+        ],
+      };
+    }
+    const first = application();
+    const second = application();
+    const cells = Array.from({ length: 12 }, (_, index) => {
+      const native = index % 2 === 0;
+      const widget: BoardWidget = {
+        name: `widget-${index}`,
+        tabId: "main",
+        contentKind: native ? "plugin" : "html",
+        ...(native ? { pluginKind: "session:progress" } : {}),
+        sizeW: 6,
+        sizeH: 4,
+        position: index,
+        grantState: "none",
+        revision: 1,
+      };
+      return mountCell(widget, {
+        context: index < 8 ? first.context : second.context,
+        active: false,
+        widgetFrameUrl: () => "/synthetic-frame",
+      });
+    });
+    await Promise.all(cells.map((cell) => cell.updateComplete));
+    await waitForSolid(() => {
+      expect(first.acquisitions()).toEqual([1, 1]);
+      expect(second.acquisitions()).toEqual([1, 1]);
+    });
+    expect(cells[1]!.querySelector("iframe")).not.toBeNull();
+    cells[0]!.remove();
+    await waitForSolid(() => expect(first.gatewayListeners.size).toBe(1));
+    for (const cell of cells.slice(1, 8)) {
+      cell.remove();
+    }
+    await waitForSolid(() => {
+      expect(first.gatewayListeners.size).toBe(0);
+      expect(first.pluginListeners.size).toBe(0);
+      expect(second.gatewayListeners.size).toBe(1);
+      expect(second.pluginListeners.size).toBe(1);
+    });
+    for (const cell of cells.slice(8)) {
+      cell.remove();
+    }
+    await waitForSolid(() => {
+      expect(second.gatewayListeners.size).toBe(0);
+      expect(second.pluginListeners.size).toBe(0);
+    });
+  });
+
   it("updates a healthy frame when only its URL resolver changes", async () => {
     const widget: BoardWidget = {
       name: "external-report",
@@ -92,7 +184,7 @@ describe("plugin board widget cells", () => {
       const provider = createApplicationContextProvider({
         basePath: "/console",
         navigate,
-        gateway: { snapshot: { phase: "connected" } },
+        gateway: { snapshot: { phase: "connected" }, subscribe: () => () => undefined },
         plugins: {
           errors: labsDisabled
             ? [
@@ -153,6 +245,7 @@ describe("plugin board widget cells", () => {
     const registrations = vi.fn(() => []);
     const provider = createApplicationContextProvider({
       gateway: {
+        subscribe: () => () => undefined,
         snapshot: {
           phase: "connected",
           client: { request },

@@ -30,6 +30,10 @@ export const sharedProfileDirectoryProjection = createSharedOwnerProjection(
   (directory: ReturnType<typeof profileDirectory>) => directory,
 );
 
+export const sharedPluginsProjection = createSharedOwnerProjection(
+  (plugins: ApplicationContext["plugins"]) => plugins,
+);
+
 // Only the revision is projected; consumers keep their own session lookup and navigation intent.
 export const sharedSessionsRevision = createSharedOwnerProjection(
   (_sessions: ApplicationContext["sessions"]) => undefined,
