@@ -144,6 +144,12 @@ export function makeCompletionsChunk(
   } as ChatCompletionChunk;
 }
 
+export function makeCompletionsToolDelta(id: string, name: string, args: string) {
+  return {
+    tool_calls: [{ index: 0, id, type: "function", function: { name, arguments: args } }],
+  };
+}
+
 export function createDeepSeekCompletionsModel(): CompletionsModel {
   return modelFixture("deepseek-v4-pro", {
     ...nativeDeepSeekModel,
