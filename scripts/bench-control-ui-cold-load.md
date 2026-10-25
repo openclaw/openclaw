@@ -1,5 +1,50 @@
 # Team-scale Control UI cold-load benchmark
 
+## Cold route CSS coverage and rendering cost
+
+`bench-control-ui-css.ts` serves already-built base and head bundles through the
+production Gateway HTTP handler with the deterministic team-scale RPC fixture.
+It serially interleaves base, identical-base control, and head (reversing the
+triplet on alternating pairs), using a fresh browser context and cold HTTP cache
+for every direct navigation. The default matrix is Chat, New Session, Sessions,
+and Settings Appearance × desktop/mobile × light/dark × 1×/4× CPU. Settings uses
+`/settings/appearance`: desktop `/settings` redirects to Chat. Readiness requires
+the matching successful route, no pending route, the requested theme, and the
+enabled composer plus transcript text, a session table row, or a theme tile, as
+appropriate, across two animation frames. Chat also waits for the visible final
+inline metric's nested sandbox content and fonts. Every route then settles the
+parent document's fonts and two animation frames before stopping metrics, so
+blank embedded fixtures and late font layout cannot look like performance wins.
+Reports retain shell-ready and complete-screen-ready wall times separately.
+The renderer's `threadTicks` clock
+reports script/task/style/layout CPU and style/layout counts; browser navigation
+time to readiness remains wall time. Reports include raw samples, median/p95 and
+range, host load, CSS resource counts/sizes, build identity, and first-pair
+screenshots. The readiness probe's frame/geometry checks and the short CDP
+collection tail are included consistently in every CPU sample.
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-css.ts \
+  --bundle-dir /absolute/base/control-ui --compare-bundle-dir /absolute/head/control-ui \
+  --pairs 10 --output /absolute/proof/css-local
+```
+
+Repeat with `--network-latency-ms 100` for HTTP at 100 ms latency/10 Mbps. Filter
+with `--routes chat,new,sessions,settings`, `--viewports desktop,mobile`,
+`--themes light,dark`, and `--cpu-rates 1,4`. Run a separate `--coverage --pairs 1`
+pass to retain raw stylesheet text and Chromium used ranges through asserted
+readiness; its instrumented timings are not performance evidence. Used ranges
+record rules observed during boot, including earlier transient states, rather
+than proving every selector in a rule matched the final screen. Zero coverage is
+not deletion authority: inactive routes, states, pseudo-classes, media queries,
+and shadow roots require source/consumer audits and their own behavior coverage.
+Screenshots disable animations after measurement; inspect them
+before sharing. Service workers are blocked, immutable server asset caches stay
+warm, and RPC/bootstrap/plugin data are synthetic. HTTP throttling does not add
+RPC latency, so these results describe CSS delivery and renderer cost, not live
+Gateway/provider performance. Use the A/A control and 20 pairs with CPU metrics
+when shared-host wall timings are noisy.
+
 ## Media load, remount, and disposal
 
 `bench-control-ui-media.ts` compares **already-built** base and head bundles with

@@ -1365,7 +1365,8 @@ openclaw-chat-sidebar-region,
   grid-template-areas: "main-header" "main" "divider" "side-header" "side";
 }
 
-.sidebar-region--desktop :is([data-region="side"], [data-region-header="side"]) {
+.sidebar-region--desktop [data-region="side"],
+.sidebar-region--desktop [data-region-header="side"] {
   position: absolute;
   z-index: 3;
   grid-area: auto;
