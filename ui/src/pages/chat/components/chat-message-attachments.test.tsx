@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createMemo, createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createMemo } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
 import { stubObjectUrls, ticketResponse } from "./chat-message-media.test-helpers.ts";
@@ -37,21 +37,18 @@ function makeAttachment(
 
 const card = (part: string) => container.querySelector(`.chat-assistant-attachment-card${part}`);
 const imageNode = () => container.querySelector("img.chat-message-image");
-const expandCard = () =>
-  container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+const action = (name: string) =>
+  container.querySelector<HTMLButtonElement>(`.chat-assistant-attachment-card__${name}`);
+const expandCard = () => action("expand")?.click();
+const imageButton = () => container.querySelector<HTMLButtonElement>(".chat-message-image-button");
+const svgElement = () => container.querySelector("openclaw-chat-svg-attachment");
 const text = (part: string) => card(part)?.textContent;
 const attr = (part: string, name: string) => card(part)?.getAttribute(name);
 
 type AttachmentTestProps = Omit<Parameters<typeof AssistantAttachments>[0], "attachments"> & {
   content: AssistantAttachmentItem[];
 };
-const mounts = new Map<
-  HTMLElement,
-  {
-    update: (props: AttachmentTestProps) => void;
-    unmount: () => void;
-  }
->();
+let mounted: ReturnType<typeof mountSolid<AttachmentTestProps>> | undefined;
 
 function AttachmentContent(props: AttachmentTestProps) {
   const media = createMemo(() => projectMessageMedia({}, props.content));
@@ -70,27 +67,20 @@ function AttachmentContent(props: AttachmentTestProps) {
 }
 
 function draw(
-  content: AssistantAttachmentItem[],
-  options: AttachmentTestProps["options"] = {},
-  onOpenSidebar?: AttachmentTestProps["onOpenSidebar"],
-  onAssistantAttachmentLoaded?: AttachmentTestProps["onAssistantAttachmentLoaded"],
-  inlinePlayback = true,
+  content: AssistantAttachmentItem | AssistantAttachmentItem[],
+  overrides: Partial<Omit<AttachmentTestProps, "content">> = {},
 ) {
-  const props = { content, options, onOpenSidebar, onAssistantAttachmentLoaded, inlinePlayback };
-  const mounted = mounts.get(container);
+  const props = {
+    content: Array.isArray(content) ? content : [content],
+    options: {},
+    inlinePlayback: true,
+    ...overrides,
+  };
   if (mounted) {
     mounted.update(props);
-    flush();
   } else {
-    const [current, update] = createSignal<AttachmentTestProps>(props, { ownedWrite: true });
-    const root = mountSolid(() => <AttachmentContent {...current()} />, { container });
-    mounts.set(container, { update, unmount: root.unmount });
+    mounted = mountSolid(AttachmentContent, props, container);
   }
-}
-
-function unmountAttachments(target: HTMLElement) {
-  mounts.get(target)?.unmount();
-  mounts.delete(target);
 }
 
 function drawReactive(
@@ -98,7 +88,8 @@ function drawReactive(
   options: AttachmentTestProps["options"] = {},
   onOpenSidebar?: AttachmentTestProps["onOpenSidebar"],
 ) {
-  const update = () => draw(content(), { ...options, mediaOwner: update }, onOpenSidebar);
+  const update = () =>
+    draw(content(), { options: { ...options, mediaOwner: update }, onOpenSidebar });
   subscribers.add(update);
   update();
 }
@@ -148,9 +139,8 @@ function stubAttachmentIntersection(): () => Promise<void> {
 }
 
 afterEach(() => {
-  for (const target of mounts.keys()) {
-    unmountAttachments(target);
-  }
+  mounted?.dispose();
+  mounted = undefined;
   for (const subscriber of subscribers) {
     releaseChatMediaResourceOwner(subscriber);
   }
@@ -163,13 +153,10 @@ afterEach(() => {
 describe("attachment sidebar source ownership", () => {
   it("preserves an ordinary comment-named file when its source cannot be previewed", async () => {
     const onOpenSidebar = vi.fn();
-    draw(
-      [makeAttachment("https://files.example/notes.txt", "selection-comment.txt", "text/plain")],
-      {},
+    draw(makeAttachment("https://files.example/notes.txt", "selection-comment.txt", "text/plain"), {
       onOpenSidebar,
-      undefined,
-      false,
-    );
+      inlinePlayback: false,
+    });
     await vi.waitFor(() => expect(text("__title")).toContain("selection-comment.txt"));
     expandCard();
     expect(onOpenSidebar).toHaveBeenCalledOnce();
@@ -187,11 +174,11 @@ describe("attachment sidebar source ownership", () => {
     "renders document-shaped %s attachments as expandable images",
     async (label, mimeType, source) => {
       const onOpenImage = vi.fn();
-      draw([makeAttachment(source, label, mimeType)], { onOpenImage });
+      draw(makeAttachment(source, label, mimeType), { options: { onOpenImage } });
 
       expect(card("")).toBeNull();
       await waitForSolid(() => expect(imageNode()?.getAttribute("src")).toBe(source));
-      container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+      imageButton()?.click();
       expect(onOpenImage).toHaveBeenCalledWith(
         expect.objectContaining({ src: source, title: label }),
       );
@@ -209,23 +196,14 @@ describe("attachment sidebar source ownership", () => {
       const availableResponse = (mediaTicket: string) => ticketResponse(mediaTicket, 31_000);
       const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(availableResponse("loaded"));
       vi.stubGlobal("fetch", fetchMock);
-      onTestFinished(() => {
-        unmountAttachments(container);
-      });
-      const attachment: AttachmentItem = {
-        type: "attachment",
-        attachment: {
-          kind,
-          label: "photo.png",
-          mimeType: "image/png",
-          url: `/tmp/openclaw/${crypto.randomUUID()}.png`,
-        },
-      };
+      const attachment = makeAttachment(
+        `/tmp/openclaw/${crypto.randomUUID()}.png`,
+        "photo.png",
+        "image/png",
+        { kind },
+      );
       const rerender = () =>
-        draw([attachment], {
-          authToken: "test-token",
-          mediaOwner: rerender,
-        });
+        draw(attachment, { options: { authToken: "test-token", mediaOwner: rerender } });
       subscribers.add(rerender);
       rerender();
       await vi.advanceTimersByTimeAsync(0);
@@ -250,9 +228,7 @@ describe("attachment sidebar source ownership", () => {
         displayed.dispatchEvent(new Event("load"));
         displayed.dispatchEvent(new Event("error"));
         expect(container.querySelector("img")).toBeNull();
-        const retry = container.querySelector<HTMLButtonElement>(
-          ".chat-assistant-attachment-card__retry",
-        );
+        const retry = action("retry");
         if (outcome === "missing") {
           expect(container.textContent).toContain("Attachment removed");
           fetchMock.mockResolvedValueOnce(availableResponse("recovered"));
@@ -271,27 +247,21 @@ describe("attachment sidebar source ownership", () => {
 
   it("routes an SVG filename with an opaque source through the bounded SVG renderer", () => {
     draw(
-      [
-        makeAttachment(
-          "https://files.example/download/opaque",
-          "vector.svg",
-          "application/octet-stream",
-        ),
-      ],
-      {},
+      makeAttachment(
+        "https://files.example/download/opaque",
+        "vector.svg",
+        "application/octet-stream",
+      ),
     );
 
-    expect(container.querySelector("openclaw-chat-svg-attachment")).not.toBeNull();
+    expect(svgElement()).not.toBeNull();
     expect(imageNode()).toBeNull();
   });
 
   it("does not let an SVG-shaped label override a document MIME type", () => {
-    draw(
-      [makeAttachment("https://files.example/document.pdf", "vector.svg", "application/pdf")],
-      {},
-    );
+    draw(makeAttachment("https://files.example/document.pdf", "vector.svg", "application/pdf"));
 
-    expect(container.querySelector("openclaw-chat-svg-attachment")).toBeNull();
+    expect(svgElement()).toBeNull();
     expect(card("")).not.toBeNull();
   });
 
@@ -313,7 +283,7 @@ describe("attachment sidebar source ownership", () => {
     vi.stubGlobal("fetch", fetchMock);
     const onOpenImage = vi.fn();
     const onAssistantAttachmentLoaded = vi.fn();
-    draw([svgAttachment(source)], { onOpenImage }, undefined, onAssistantAttachmentLoaded);
+    draw(svgAttachment(source), { options: { onOpenImage }, onAssistantAttachmentLoaded });
 
     expect(fetchMock).not.toHaveBeenCalled();
     await intersectAttachment();
@@ -328,7 +298,7 @@ describe("attachment sidebar source ownership", () => {
       }),
     );
     expect(objectBlob?.type).toBe("image/svg+xml");
-    const svg = container.querySelector("openclaw-chat-svg-attachment")!;
+    const svg = svgElement()!;
     svg.label = "Renamed vector";
     await svg.updateComplete;
     expect(imageNode()?.getAttribute("src")).toBe(objectUrl);
@@ -339,13 +309,13 @@ describe("attachment sidebar source ownership", () => {
     expect(container.querySelector("iframe")).toBeNull();
     imageNode()?.dispatchEvent(new Event("load"));
     expect(onAssistantAttachmentLoaded).toHaveBeenCalledOnce();
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+    imageButton()?.click();
     expect(onOpenImage).toHaveBeenCalledWith(
       expect.objectContaining({ src: objectUrl, title: "vector.svg" }),
     );
     const lightboxItem = onOpenImage.mock.calls[0]?.[0] as { release?: () => void } | undefined;
     expect(lightboxItem?.release).toBeTypeOf("function");
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+    imageButton()?.click();
     const secondLightboxItem = onOpenImage.mock.calls[1]?.[0] as
       | { release?: () => void }
       | undefined;
@@ -366,7 +336,7 @@ describe("attachment sidebar source ownership", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const onOpenSidebar = vi.fn();
-    draw([makeAttachment(source, "diagram", undefined, { kind: "image" })], {}, onOpenSidebar);
+    draw(makeAttachment(source, "diagram", undefined, { kind: "image" }), { onOpenSidebar });
 
     await vi.waitFor(() => expect(card("--compact")).not.toBeNull());
     expect(fetchMock).not.toHaveBeenCalled();
@@ -384,11 +354,11 @@ describe("attachment sidebar source ownership", () => {
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
     const fetchMock = vi.fn<typeof fetch>(async () => svgResponse());
     vi.stubGlobal("fetch", fetchMock);
-    draw([svgAttachment(`${window.location.origin}/reconnected.svg`, "reconnected.svg")], {});
+    draw(svgAttachment(`${window.location.origin}/reconnected.svg`, "reconnected.svg"));
 
     await intersectAttachment();
     await vi.waitFor(() => expect(imageNode()?.getAttribute("src")).toBe("blob:svg-first"));
-    const attachment = container.querySelector("openclaw-chat-svg-attachment")!;
+    const attachment = svgElement()!;
     attachment.remove();
     await Promise.resolve();
     container.append(attachment);
@@ -442,16 +412,16 @@ describe("attachment sidebar source ownership", () => {
         fetchMock.mockResolvedValue(svgResponse("<svg><broken"));
       }
       draw(
-        [
-          svgAttachment(
-            `${window.location.origin}/${name}`,
-            name,
-            failure === "size" ? { sizeBytes: 256 * 1024 + 1 } : {},
-          ),
-        ],
-        {},
-        failure === "decode" ? onOpenSidebar : undefined,
-        failure === "timeout" ? onAssistantAttachmentLoaded : undefined,
+        svgAttachment(
+          `${window.location.origin}/${name}`,
+          name,
+          failure === "size" ? { sizeBytes: 256 * 1024 + 1 } : {},
+        ),
+        {
+          onOpenSidebar: failure === "decode" ? onOpenSidebar : undefined,
+          onAssistantAttachmentLoaded:
+            failure === "timeout" ? onAssistantAttachmentLoaded : undefined,
+        },
       );
       await intersect?.();
       if (failure === "timeout") {
@@ -490,7 +460,7 @@ describe("attachment sidebar source ownership", () => {
     await flushAttachmentResolution();
     expect(card("--blocked")).not.toBeNull();
 
-    container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__retry")?.click();
+    action("retry")?.click();
     await flushAttachmentResolution();
 
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
@@ -501,10 +471,12 @@ describe("attachment sidebar source ownership", () => {
   it("keeps static attachment URLs as static sidebar sources", async () => {
     const source = "https://example.com/clip.mp4";
     let sidebarContent: AttachmentSidebarContent | undefined;
-    draw([managedAttachment(source)], {}, (content) => {
-      if (content.kind === "attachment") {
-        sidebarContent = content;
-      }
+    draw(managedAttachment(source), {
+      onOpenSidebar: (content) => {
+        if (content.kind === "attachment") {
+          sidebarContent = content;
+        }
+      },
     });
     expandCard();
 
@@ -513,9 +485,9 @@ describe("attachment sidebar source ownership", () => {
   });
 
   it("does not expose a Files action without a sidebar owner", () => {
-    draw([managedAttachment("https://example.com/asset.bin")]);
+    draw(managedAttachment("https://example.com/asset.bin"));
 
-    expect(container.querySelector(".chat-assistant-attachment-card__expand")).toBeNull();
+    expect(action("expand")).toBeNull();
     expect(card("")?.hasAttribute("data-openable")).toBe(false);
   });
 
@@ -542,7 +514,7 @@ describe("attachment sidebar source ownership", () => {
       const source = `https://example.com/${label}`;
       const playback = requestedPlayback ?? "native";
       const onOpenSidebar = vi.fn();
-      draw([makeAttachment(source, label, mimeType, { kind, playback })], {}, onOpenSidebar);
+      draw(makeAttachment(source, label, mimeType, { kind, playback }), { onOpenSidebar });
 
       const mediaPlayer = container.querySelector(player);
       expect(mediaPlayer).toMatchObject({ playback, sourceIdentity: source, src: source });
@@ -554,13 +526,13 @@ describe("attachment sidebar source ownership", () => {
     ["audio", "unsafe.mp3", "audio/mpeg", "javascript:alert(1)"],
     ["video", "unsafe.mp4", "video/mp4", "data:text/html;base64,PHNjcmlwdD4="],
   ] as const)("blocks unsafe %s player source %s", (kind, label, mimeType, url) => {
-    draw([makeAttachment(url, label, mimeType, { kind })], {});
+    draw(makeAttachment(url, label, mimeType, { kind }));
 
     expect(container.querySelector("openclaw-chat-audio-player")).toBeNull();
     expect(container.querySelector("openclaw-chat-video-player")).toBeNull();
     expect(container.querySelector("audio, video")).toBeNull();
     expect(card("--blocked")).not.toBeNull();
-    expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
+    expect(action("download")).toBeNull();
     expect(container.textContent).toContain(label);
   });
 
@@ -584,7 +556,6 @@ describe("attachment sidebar source ownership", () => {
         }),
         "normalized attachment failure",
       ),
-      {},
     );
 
     expect(text("__title")).toBe(label);
@@ -605,13 +576,10 @@ describe("attachment sidebar source ownership", () => {
   it("renders normalized base64 audio with inline playback and Files actions", () => {
     const onOpenSidebar = vi.fn();
     draw(
-      [
-        makeAttachment("data:audio/wav;base64,UklGRg==", "inline.wav", "audio/wav", {
-          kind: "audio",
-        }),
-      ],
-      {},
-      onOpenSidebar,
+      makeAttachment("data:audio/wav;base64,UklGRg==", "inline.wav", "audio/wav", {
+        kind: "audio",
+      }),
+      { onOpenSidebar },
     );
 
     const player = container.querySelector("openclaw-chat-audio-player");
@@ -658,10 +626,7 @@ describe("attachment sidebar source ownership", () => {
       },
     );
     const expand = await vi.waitFor(() =>
-      expectDefined(
-        container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand"),
-        "available attachment expand action",
-      ),
+      expectDefined(action("expand"), "available attachment expand action"),
     );
     expand.click();
 
@@ -669,19 +634,14 @@ describe("attachment sidebar source ownership", () => {
     subscribers.add(sidebarUpdate);
     const resolveSource = sidebarContent?.resolveSource;
     expect(resolveSource).toBeDefined();
-    expect(
+    const refreshSource = () =>
       resolveSource?.(sidebarUpdate, {
         authToken: "token-B",
         sessionKey: "agent:main:sidebar-audio",
-      }),
-    ).toEqual({ status: "pending" });
+      });
+    expect(refreshSource()).toEqual({ status: "pending" });
     await vi.waitFor(() =>
-      expect(
-        resolveSource?.(sidebarUpdate, {
-          authToken: "token-B",
-          sessionKey: "agent:main:sidebar-audio",
-        }),
-      ).toEqual(
+      expect(refreshSource()).toEqual(
         expect.objectContaining({
           authToken: "token-B",
           src: expect.stringContaining("mediaTicket=ticket-token-B"),
@@ -702,10 +662,7 @@ describe("attachment sidebar source ownership", () => {
         ),
       ),
     ).toEqual(["saved-audio-message", "saved-audio-message"]);
-    const refreshed = resolveSource?.(sidebarUpdate, {
-      authToken: "token-B",
-      sessionKey: "agent:main:sidebar-audio",
-    });
+    const refreshed = refreshSource();
     expect(refreshed?.status).toBe("ready");
     if (refreshed?.status === "ready") {
       const params = new URL(refreshed.src, window.location.origin).searchParams;

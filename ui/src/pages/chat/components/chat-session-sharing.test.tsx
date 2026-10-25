@@ -42,6 +42,20 @@ const owner = {
 function human(id: string, label: string) {
   return { type: "human" as const, id, label };
 }
+function permission(
+  identityId: string,
+  level: "read" | "send" = "read",
+  options: ("read" | "send")[] = ["read", "send"],
+) {
+  return { identityId, level, options };
+}
+function aliceRoster(overrides: Partial<SharingResult> = {}) {
+  return sharingState({
+    identities: [human("alice", "Alice")],
+    permissions: [permission("alice")],
+    ...overrides,
+  });
+}
 
 function sharingSession(overrides: Partial<NonNullable<ChatSessionSharingProps["session"]>>) {
   return {
@@ -78,6 +92,12 @@ const part = (root: HTMLElement, name: string) =>
   root.querySelector<HTMLElement>(`.chat-pane__${name}`);
 const item = (root: HTMLElement, value: string) =>
   root.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`);
+const query = <T extends Element = HTMLElement>(root: HTMLElement, selector: string) =>
+  root.querySelector<T>(selector);
+const memberRow = (root: HTMLElement, id: string) => query(root, `[data-value="member:${id}"]`);
+const alert = (root: HTMLElement) => query(root, '[role="alert"]');
+const trigger = (root: HTMLElement) =>
+  query<HTMLButtonElement>(root, ".chat-pane__sharing-trigger")!;
 
 function render(props: ChatSessionSharingProps, root: HTMLElement) {
   const view = updates.get(root);
@@ -90,9 +110,9 @@ function render(props: ChatSessionSharingProps, root: HTMLElement) {
 
 async function openMenu(root: HTMLElement) {
   const panel = part(root, "sharing-panel");
-  const trigger = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger");
-  if (panel && trigger && !trigger.disabled && !panel.matches(":popover-open")) {
-    trigger.click();
+  const toggle = trigger(root);
+  if (panel && toggle && !toggle.disabled && !panel.matches(":popover-open")) {
+    toggle.click();
     await waitForSolid(() => {
       expect(panel.matches(":popover-open")).toBe(true);
       expect(panel.querySelector('[data-value="access"]')).not.toBeNull();
@@ -102,32 +122,32 @@ async function openMenu(root: HTMLElement) {
 }
 
 async function openAccess(root: HTMLElement) {
-  const panel = root.querySelector<HTMLElement>(".chat-pane__sharing-panel")!;
+  const panel = part(root, "sharing-panel")!;
   if (!panel.querySelector('[data-value="access:back"]')) {
-    const trigger = panel.querySelector<HTMLButtonElement>('[data-value="access"]');
-    expect(trigger).not.toBeNull();
-    trigger!.click();
+    const access = item(panel, "access");
+    expect(access).not.toBeNull();
+    access!.click();
   }
   await waitForSolid(() => {
     expect(panel.matches(":popover-open")).toBe(true);
-    expect(panel.querySelector('[data-value="access:back"]')?.textContent).toBe("Back");
+    expect(item(panel, "access:back")?.textContent).toBe("Back");
     expect(panel.querySelectorAll('[data-value^="visibility:"]')).toHaveLength(4);
-    expect(panel.querySelector('[data-value="access"]')).toBeNull();
-    expect(panel.querySelector(".chat-pane__sharing-permissions")).toBeNull();
+    expect(item(panel, "access")).toBeNull();
+    expect(part(panel, "sharing-permissions")).toBeNull();
   });
 }
 
 async function backToOverview(root: HTMLElement) {
-  const panel = root.querySelector<HTMLElement>(".chat-pane__sharing-panel")!;
-  const back = panel.querySelector<HTMLButtonElement>('[data-value="access:back"]');
+  const panel = part(root, "sharing-panel")!;
+  const back = item(panel, "access:back");
   expect(back).not.toBeNull();
   back!.click();
   await waitForSolid(() => {
     expect(panel.matches(":popover-open")).toBe(true);
-    expect(panel.querySelector('[data-value="access"]')).not.toBeNull();
-    expect(panel.querySelector('[data-value="access:back"]')).toBeNull();
+    expect(item(panel, "access")).not.toBeNull();
+    expect(item(panel, "access:back")).toBeNull();
     expect(panel.querySelectorAll('[data-value^="visibility:"]')).toHaveLength(0);
-    expect(document.activeElement).toBe(panel.querySelector('[data-value="access"]'));
+    expect(document.activeElement).toBe(item(panel, "access"));
   });
 }
 
@@ -192,11 +212,11 @@ describe("chat session sharing menu", () => {
     expect(onOpen).toHaveBeenCalledOnce();
     expect(readAvatar).toHaveBeenCalled();
     expect(root.querySelectorAll(".chat-pane__sharing-person")).toHaveLength(101);
-    const member = root.querySelector<HTMLElement>('[data-value="member:person-100"]');
+    const member = memberRow(root, "person-100");
     const avatar = member?.querySelector("openclaw-session-owner-chip");
     expect(avatar).not.toBeNull();
     render({ ...sharing(102, true), memberRemoveDisabledReason: "Requires write" }, root);
-    expect(root.querySelector('[data-value="member:person-100"]')).toBe(member);
+    expect(memberRow(root, "person-100")).toBe(member);
     expect(member?.querySelector("openclaw-session-owner-chip")).toBe(avatar);
     expect(item(root, "permission:person-100")).toMatchObject({ title: "Requires write" });
     expect(member && part(member, "sharing-member-label")?.textContent).toBe("Person 100 (102)");
@@ -205,7 +225,7 @@ describe("chat session sharing menu", () => {
     flush();
     expect(panel.matches(":popover-open")).toBe(false);
     await openMenu(root);
-    expect(root.querySelector('[data-value="member:person-100"]')).toBe(member);
+    expect(memberRow(root, "person-100")).toBe(member);
     root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
     flush();
     const search = root.querySelector<HTMLInputElement>("input[data-search]")!;
@@ -220,11 +240,7 @@ describe("chat session sharing menu", () => {
 
   it("hides members in Shared and restores them when authoritative visibility changes", async () => {
     const props = renderSharing({
-      state: sharingState({
-        owner,
-        identities: [human("alice", "Alice")],
-        permissions: [{ identityId: "alice", level: "read", options: ["read", "send"] }],
-      }),
+      state: aliceRoster({ owner }),
       onPublicShareChange: vi.fn(),
     });
     const root = await mount(props);
@@ -259,13 +275,9 @@ describe("chat session sharing menu", () => {
         human("inherited", "Morgan"),
       ],
       permissions: [
-        { identityId: "owner", level: "send" as const, options: ["send"] as "send"[] },
-        {
-          identityId: "channel:chn_design",
-          level: "read" as const,
-          options: ["read", "send"] as ("read" | "send")[],
-        },
-        { identityId: "inherited", level: "send" as const, options: ["send"] as "send"[] },
+        permission("owner", "send", ["send"]),
+        permission("channel:chn_design"),
+        permission("inherited", "send", ["send"]),
       ],
     };
     const props = renderSharing({
@@ -276,12 +288,12 @@ describe("chat session sharing menu", () => {
     const root = await mount(props);
     expect(root.querySelectorAll('[data-value="member:owner"]')).toHaveLength(1);
     expect(item(root, "permission:inherited")).toBeNull();
-    const inherited = root.querySelector<HTMLElement>('[data-value="member:inherited"]')!;
+    const inherited = memberRow(root, "inherited")!;
     expect(part(inherited, "sharing-permission")?.textContent).toBe("Can send");
     const editable = item(root, "permission:channel:chn_design")!;
     expect(editable.textContent).toBe("Can read");
     expect(
-      root.querySelector('[data-value="member:channel:chn_design"] openclaw-session-owner-chip'),
+      memberRow(root, "channel:chn_design")?.querySelector("openclaw-session-owner-chip"),
     ).not.toBeNull();
     expect(onMemberChange).not.toHaveBeenCalled();
     editable.click();
@@ -295,10 +307,7 @@ describe("chat session sharing menu", () => {
         ...props,
         state: sharingState({
           ...result,
-          permissions: [
-            { identityId: "channel:chn_design", level: "send", options: ["read", "send"] },
-            result.permissions[2]!,
-          ],
+          permissions: [permission("channel:chn_design", "send"), result.permissions[2]!],
         }),
       },
       root,
@@ -377,17 +386,17 @@ describe("chat session sharing menu", () => {
       state: sharingState(),
       onPublicShareChange,
     });
-    const toggle = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-public-toggle")!;
+    const toggle = query<HTMLButtonElement>(root, ".chat-pane__sharing-public-toggle")!;
     expect(part(root, "sharing-permissions")).toBeNull();
     toggle.click();
     await waitForSolid(() => {
-      expect(root.querySelector('[role="alert"]')?.textContent).toContain("Sharing command failed");
+      expect(alert(root)?.textContent).toContain("Sharing command failed");
       expect(part(root, "sharing-permissions")).not.toBeNull();
       expect(part(root, "sharing-empty")).not.toBeNull();
     });
     toggle.click();
     await waitForSolid(() => {
-      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(alert(root)).toBeNull();
       expect(part(root, "sharing-permissions")).toBeNull();
       expect(toggle.disabled).toBe(true);
     });
@@ -407,13 +416,11 @@ describe("chat session sharing menu", () => {
     });
     const copy = item(root, "public:copy")!;
     copy.click();
-    await waitForSolid(() =>
-      expect(root.querySelector('[role="alert"]')?.textContent).toContain("Clipboard unavailable"),
-    );
+    await waitForSolid(() => expect(alert(root)?.textContent).toContain("Clipboard unavailable"));
     expect(item(root, "public:copy")).toBe(copy);
     copy.click();
     await waitForSolid(() => {
-      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(alert(root)).toBeNull();
       expect(copy.disabled).toBe(true);
     });
     retry.resolve({ status: "success" });
@@ -455,10 +462,7 @@ describe("chat session sharing menu", () => {
     expect(item(root, "permission:alice")).toBeNull();
     const ready = renderSharing({
       session: sharingSession({ visibility: "read-only" }),
-      state: sharingState({
-        identities: [human("alice", "Alice")],
-        permissions: [{ identityId: "alice", level: "read", options: ["read", "send"] }],
-      }),
+      state: aliceRoster(),
     });
     render(ready, root);
     initialRead.resolve();
@@ -477,9 +481,7 @@ describe("chat session sharing menu", () => {
     render({ ...ready, state: { ...ready.state!, error: "Membership refresh failed" } }, root);
     refresh.resolve();
     await waitForSolid(() =>
-      expect(root.querySelector('[role="alert"]')?.textContent).toContain(
-        "Membership refresh failed",
-      ),
+      expect(alert(root)?.textContent).toContain("Membership refresh failed"),
     );
     expect(item(root, "permission:alice")).toBe(person);
     expect(root.querySelector("input[type=search]")).toBe(search);
@@ -487,7 +489,7 @@ describe("chat session sharing menu", () => {
     render({ ...ready, state: { ...ready.state!, loading: true, read: retry.promise } }, root);
     render(ready, root);
     retry.resolve();
-    await waitForSolid(() => expect(root.querySelector('[role="alert"]')).toBeNull());
+    await waitForSolid(() => expect(alert(root)).toBeNull());
     expect(item(root, "permission:alice")).toBe(person);
     expect(search.value).toBe("Ali");
   });
@@ -498,10 +500,9 @@ describe("chat session sharing menu", () => {
     const navigate = vi.fn();
     const root = await mount({
       session: sharingSession({ visibility: "read-only" }),
-      state: sharingState({
+      state: aliceRoster({
         owner,
         identities: [human("owner", "Owner"), human("alice", "Alice")],
-        permissions: [{ identityId: "alice", level: "read", options: ["read", "send"] }],
         allowedVisibilities: ["shared", "read-only"],
       }),
       ownerViewing: false,
@@ -520,7 +521,7 @@ describe("chat session sharing menu", () => {
     const ownerRow = part(root, "sharing-person--creator")!;
     expect(ownerRow.textContent).toContain("Owner");
     expect(ownerRow.querySelector("openclaw-session-owner-chip")).not.toBeNull();
-    const ownerLink = ownerRow.querySelector<HTMLAnchorElement>("a.person-activity-link");
+    const ownerLink = query<HTMLAnchorElement>(ownerRow, "a.person-activity-link");
     expect(ownerLink?.getAttribute("href")).toBe("/activity/owner");
     const ownerAvatarLink = ownerRow.querySelector("a.person-activity-avatar-link");
     expect(ownerAvatarLink).toMatchObject({ tabIndex: -1 });
@@ -561,7 +562,8 @@ describe("chat session sharing menu", () => {
     const indicator = part(root, "draft-indicator");
     expect(indicator?.querySelector("svg")).not.toBeNull();
     expect(indicator?.textContent?.trim()).toBe("");
-    const ownerLink = root.querySelector<HTMLAnchorElement>(
+    const ownerLink = query<HTMLAnchorElement>(
+      root,
       "a.person-activity-avatar-link:has(openclaw-session-owner-chip)",
     );
     expect(ownerLink?.getAttribute("href")).toBe("/activity/owner");
@@ -579,10 +581,7 @@ describe("chat session sharing menu", () => {
       session: sharingSession({ visibility: "read-only" }),
       state: sharingState({
         members: [{ identityId: "alice", addedBy: "owner", addedAt: 1 }],
-        permissions: [
-          { identityId: "alice", level: "send", options: ["read", "send"] },
-          { identityId: "bob", level: "read", options: ["read", "send"] },
-        ],
+        permissions: [permission("alice", "send"), permission("bob")],
         identities: [
           human("alice", "Alice with a very long selected member display name"),
           human("bob", "Bob with a very long available member display name"),
@@ -604,8 +603,8 @@ describe("chat session sharing menu", () => {
       const member = item(root, `permission:${identityId}`)!;
       expect(member).toMatchObject({ disabled: true, title: "Requires write" });
       expect(
-        root
-          .querySelector(`[data-value="member:${identityId}"] .chat-pane__sharing-member-label`)
+        memberRow(root, identityId)
+          ?.querySelector(".chat-pane__sharing-member-label")
           ?.hasAttribute("title"),
       ).toBe(false);
     }
@@ -627,10 +626,8 @@ describe("chat session sharing menu", () => {
       onOpen,
     });
 
-    expect(root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled).toBe(
-      true,
-    );
-    root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.click();
+    expect(trigger(root).disabled).toBe(true);
+    trigger(root).click();
     expect(onOpen).not.toHaveBeenCalled();
   });
 
@@ -644,9 +641,7 @@ describe("chat session sharing menu", () => {
       onVisibilityChange,
     });
 
-    expect(root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled).toBe(
-      false,
-    );
+    expect(trigger(root).disabled).toBe(false);
     expect(part(root, "sharing-permissions")).toBeNull();
     expect(root.textContent).not.toContain("Permissions");
     await openAccess(root);
@@ -674,14 +669,12 @@ describe("chat session sharing menu", () => {
     expect(button?.disabled).toBe(true);
     failed.reject(new Error("Sharing command rejected"));
     await waitForSolid(() => {
-      expect(root.querySelector('[role="alert"]')?.textContent).toContain(
-        "Sharing command rejected",
-      );
+      expect(alert(root)?.textContent).toContain("Sharing command rejected");
       expect(button?.disabled).toBe(false);
     });
     button!.click();
     await waitForSolid(() => {
-      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(alert(root)).toBeNull();
       expect(item(root, "visibility:read-only")).toBe(button);
       expect(button?.disabled).toBe(true);
     });
