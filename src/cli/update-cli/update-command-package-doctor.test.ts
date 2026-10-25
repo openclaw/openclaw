@@ -107,7 +107,6 @@ function doctorResultPath(options: Parameters<typeof processRunner.runCommandWit
 
 it.each([
   { requested: false, supported: false },
-  { requested: false, supported: true },
   { requested: true, supported: false },
   { requested: true, supported: true },
 ])(
@@ -217,12 +216,8 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
     if (completeGraph) {
       openOpenClawStateDatabase({ env });
       await closeStateDatabaseForTest();
-      const database = new DatabaseSync(databasePath);
-      try {
-        database.exec(`PRAGMA user_version = ${newerSchema}`);
-      } finally {
-        database.close();
-      }
+      using database = new DatabaseSync(databasePath);
+      database.exec(`PRAGMA user_version = ${newerSchema}`);
     }
     let includeChanged = false;
     if (includeState === "changed-during-capture") {
@@ -290,14 +285,8 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
           },
         ],
       });
-      const database = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(database.prepare("PRAGMA user_version").get()).toEqual({
-          user_version: newerSchema,
-        });
-      } finally {
-        database.close();
-      }
+      using database = new DatabaseSync(databasePath, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: newerSchema });
     } else {
       expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({

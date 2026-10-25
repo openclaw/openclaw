@@ -629,13 +629,11 @@ it("does not publish partial history when the latest terminal row is unreadable"
   const latest = createUpdateRun({ trigger: "cli" });
   finishUpdateRun(latest.runId, { status: "succeeded" });
   closeStateForTest();
-  const database = new DatabaseSync(statePathFor());
-  try {
+  {
+    using database = new DatabaseSync(statePathFor());
     database
       .prepare("UPDATE update_runs SET origin_json = ? WHERE run_id = ?")
       .run("not-json", latest.runId);
-  } finally {
-    database.close();
   }
   expect(findActiveUpdateRun()).toEqual(active);
   expect(() => listUpdateRuns({ limit: 1 })).toThrow();

@@ -261,12 +261,8 @@ async function scenario(
   const rename = fs.rename.bind(fs);
   const unlink = fs.unlink.bind(fs);
   const mutateLease = (sql: string) => {
-    const db = new DatabaseSync(path.join(temporary, "managed-update-handoffs.sqlite"));
-    try {
-      db.exec(sql);
-    } finally {
-      db.close();
-    }
+    using db = new DatabaseSync(path.join(temporary, "managed-update-handoffs.sqlite"));
+    db.exec(sql);
   };
   let injected = setupInjected;
   let failNextLeaseRead = false;
@@ -507,11 +503,13 @@ async function scenario(
     );
   }
   const afterRepeat = getUpdateRun(run.runId, { env: run.env });
+  if (kind !== "verified-report-read" && kind !== "revoked") {
+    expect(afterRepeat).toEqual(beforeRepeat);
+  }
   const observations = {
     injected,
     repeatedCompletion,
     exitCode: failure instanceof UpdateCommandFailure ? failure.exitCode : failure ? 1 : 0,
-    failure: failure instanceof Error ? failure.message : failure,
     failureObject: failure,
     revokedState,
     afterRevocation: revokedState ? await retainedState() : undefined,
@@ -527,11 +525,9 @@ async function scenario(
     errorOutput,
     history,
     report,
-    beforeRepeat,
-    afterRepeat,
     lease: createManagedHandoffLeaseStore().read(swap.packageRoot).kind,
   };
-  return { ...observations, swap, run };
+  return observations;
 }
 
 describe("composed cleanup and terminal outcome", () => {
@@ -547,8 +543,7 @@ describe("composed cleanup and terminal outcome", () => {
   });
   it("publishes the Gateway's completed row after real executor release", async () => {
     const value = await scenario("healthy", false, false, true, false, true);
-    expect(value.exitCode).toBe(0);
-    expect(value.history?.status).toBe("succeeded");
+    expect(value).toMatchObject({ exitCode: 0, history: { status: "succeeded" } });
     expect(value.lease).toBe("absent");
     expect(value.retainedExists).toBe(false);
     expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
@@ -557,17 +552,14 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.errorOutput).not.toContain(
       "Finishing update: checking package backup retention and cleanup.",
     );
-    expect(value.afterRepeat).toEqual(value.beforeRepeat);
   });
   it("suppresses prepared success when the real executor lease cannot be released", async () => {
     const value = await scenario("release-failure", true, false, true, false, true);
     expect(value.injected).toBe(true);
-    expect(value.history?.status).toBe("succeeded");
+    expect(value).toMatchObject({ exitCode: 1, history: { status: "succeeded" } });
     expect(value.lease).toBe("current");
-    expect(value.exitCode).toBe(1);
     expect(value.observedResults).toEqual([]);
     expect(value.jsonOutput).toEqual([]);
-    expect(value.afterRepeat).toEqual(value.beforeRepeat);
   });
   it("reports revoked authority from captured facts without changing retained state", async () => {
     const value = await scenario("revoked", true, false, true, true);
@@ -590,7 +582,7 @@ describe("composed cleanup and terminal outcome", () => {
     const value = await scenario("link-retained", true, false, true, true);
     const reason = "package-backup-retention-failed";
     expect(value.injected).toBe(true);
-    expect(value.exitCode).toBe(1);
+    expect(value).toMatchObject({ exitCode: 1, history: { status: "failed" } });
     expect(value.jsonOutput).toHaveLength(1);
     const report = value.jsonOutput[0];
     expect(report).toMatchObject({
@@ -601,7 +593,6 @@ describe("composed cleanup and terminal outcome", () => {
       },
     });
     expect(value.sentinel).toMatchObject({ payload: { status: "error", stats: { reason } } });
-    expect(value.history?.status).toBe("failed");
     expect(value.package.version).toBe("2.0.0");
     expect(value.report.toLowerCase()).toContain("failed");
     expect.soft(value.history?.downtimeMs).toBe(0);
@@ -622,7 +613,6 @@ describe("composed cleanup and terminal outcome", () => {
     });
     expect(value.retainedExists).toBe(true);
     expect(value.lease).toBe("absent");
-    expect(value.afterRepeat).toEqual(value.beforeRepeat);
   });
 
   it.each(["retained", "cleanup-deadline"] as const)(
@@ -643,9 +633,8 @@ describe("composed cleanup and terminal outcome", () => {
       }
       expect(value.package.version).toBe("2.0.0");
       expect(value.launcher).toBe("candidate launcher\n");
-      expect(value.exitCode).toBe(0);
+      expect(value).toMatchObject({ exitCode: 0, history: { status: "succeeded" } });
       expect(value.retainedExists).toBe(true);
-      expect(value.history?.status).toBe("succeeded");
       expect(JSON.stringify(value.jsonOutput)).toContain(value.expectedRetained);
       expect(JSON.stringify(value.history)).toContain(value.expectedRetained);
       expect(value.report).toContain(value.expectedRetained);
@@ -653,7 +642,6 @@ describe("composed cleanup and terminal outcome", () => {
         expect(value.report).toContain("EPERM");
         expect(value.report).toContain("EBUSY");
       }
-      expect(value.afterRepeat).toEqual(value.beforeRepeat);
       if (kind !== "cleanup-deadline") {
         expect(value.repeatedCompletion).toMatchObject({
           exitCode: 1,
@@ -667,7 +655,7 @@ describe("composed cleanup and terminal outcome", () => {
     async (kind) => {
       const value = await scenario(kind, true);
       expect(value.injected).toBe(true);
-      expect(value.exitCode).toBe(1);
+      expect(value).toMatchObject({ exitCode: 1, history: { status: "failed" } });
       expect(value.jsonOutput).toHaveLength(1);
       expect(value.jsonOutput[0]).toMatchObject({
         status: "error",
@@ -675,17 +663,13 @@ describe("composed cleanup and terminal outcome", () => {
           expect.objectContaining({ advisory: expect.anything() }),
         ]),
       });
-      expect(value.history?.status).toBe("failed");
-      expect(value.afterRepeat).toEqual(value.beforeRepeat);
     },
   );
   it("publishes the hard completion result through the direct finalizer fallback", async () => {
     const value = await scenario("unverified-completion", true, false, false);
-    expect(value.exitCode).toBe(1);
+    expect(value).toMatchObject({ exitCode: 1, history: { status: "failed" } });
     expect(value.jsonOutput).toHaveLength(1);
     expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
-    expect(value.history?.status).toBe("failed");
-    expect(value.afterRepeat).toEqual(value.beforeRepeat);
   });
   it("preserves foreign terminal history and emits only the pending failure", async () => {
     const value = await scenario("foreign-revoked", true);
@@ -694,7 +678,6 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.jsonOutput).toHaveLength(1);
     expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
     expect(value.history).toMatchObject({ status: "failed", reason: "foreign-terminal-fact" });
-    expect(value.afterRepeat).toEqual(value.beforeRepeat);
   });
 });
 

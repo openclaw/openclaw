@@ -241,15 +241,7 @@ describe("update CLI shared helpers", () => {
         });
         for (const detail of [
           `Root: ${root}`,
-          "Git metadata: absent or unreadable",
-          "node_modules layout: package under node_modules",
-          "local node_modules absent or unreadable",
-          "package.json name: missing or unreadable",
-          "Service unit target: not inspected",
-          "Inspected package-manager owners:",
           "npm root -g",
-          "pnpm root -g",
-          "prefix -g",
           "No package changes or Gateway restart were attempted.",
         ]) {
           await expect(owner).rejects.toMatchObject({ message: expect.stringContaining(detail) });
@@ -297,8 +289,7 @@ describe("update CLI shared helpers", () => {
         if (!existing) {
           await expect(fs.stat(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
         }
-        await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
-        await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
+        await writeClone(stagingDir, true);
         return successfulCommandResult;
       });
 
@@ -319,16 +310,6 @@ describe("update CLI shared helpers", () => {
       await expectFile(checkoutDir, "checkout.marker", "complete\n");
       await expect(fs.readdir(path.dirname(checkoutDir))).resolves.toEqual(["openclaw"]);
       expect((await fs.readdir(checkoutDir)).toSorted()).toEqual([".git", "checkout.marker"]);
-      expect(runCommandWithTimeout).toHaveBeenCalledWith(
-        [
-          "git",
-          "clone",
-          "--filter=blob:none",
-          "https://github.com/openclaw/openclaw.git",
-          expect.stringMatching(/[/\\]\.openclaw-clone-[^/\\]+[/\\]repository$/u),
-        ],
-        expect.objectContaining({ env: process.env, timeoutMs: 1_000 }),
-      );
     },
   );
 

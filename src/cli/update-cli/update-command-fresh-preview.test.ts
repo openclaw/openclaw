@@ -561,12 +561,8 @@ it.each([
         expect.objectContaining({ target: { version: "2026.9.2", nodeEngine: ">=22" } }),
       );
       expect(admission).toHaveBeenCalledOnce();
-      const db = new DatabaseSync(fixture.databasePath, { readOnly: true });
-      try {
-        expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: schema });
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(fixture.databasePath, { readOnly: true });
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: schema });
     }
   },
 );
