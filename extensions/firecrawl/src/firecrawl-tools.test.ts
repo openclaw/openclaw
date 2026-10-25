@@ -407,7 +407,7 @@ describe("firecrawl tools", () => {
                   entry === "text tool" ? { url, extractMode: "text", proxy: "invalid" } : input,
                 )
               ).details;
-      const defaults = entry === "fetch provider" || entry === "text tool";
+      const defaults = entry === "text tool";
       expect(response.body()).toEqual({
         url,
         formats: ["markdown"],

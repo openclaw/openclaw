@@ -3,16 +3,20 @@ import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 
 type PacerOptions = ConstructorParameters<typeof RealtimeAudioPacer>[0];
 
+function createCompactSerializer(): PacerOptions["serializer"] {
+  return {
+    serializeMedia: (payload) => payload,
+    serializeClear: () => "clear",
+    serializeMark: (name) => `mark:${name}`,
+  };
+}
+
 function createPlaybackPacer(overrides: Partial<PacerOptions> = {}) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
   const sent: string[] = [];
   const onBackpressure = vi.fn();
   const pacer = new RealtimeAudioPacer({
-    serializer: {
-      serializeMedia: (payload) => payload,
-      serializeClear: () => "clear",
-      serializeMark: (name) => `mark:${name}`,
-    },
+    serializer: createCompactSerializer(),
     onBackpressure,
     send: (message) => {
       sent.push(message);
@@ -21,12 +25,6 @@ function createPlaybackPacer(overrides: Partial<PacerOptions> = {}) {
     ...overrides,
   });
   return { pacer, sent, onBackpressure };
-}
-
-function expectPlayback(pacer: RealtimeAudioPacer, ...items: [string, number][]) {
-  expect(pacer.getPlaybackState()).toEqual(
-    items.map(([itemId, audioEndMs]) => ({ itemId, audioEndMs })),
-  );
 }
 
 async function fillRetention(pacer: RealtimeAudioPacer) {
@@ -124,15 +122,15 @@ describe("RealtimeAudioPacer", () => {
 
     pacer.sendAudio(createSequencedAudio(20), { itemId: "item-a" });
     await vi.advanceTimersByTimeAsync(400);
-    expectPlayback(pacer, ["item-a", 0]);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
 
     pacer.clearAudio();
-    expectPlayback(pacer);
+    expect(pacer.getPlaybackState()).toEqual([]);
     expect(onPlaybackReset).toHaveBeenCalledTimes(1);
 
     pacer.sendAudio(createSequencedAudio(20), { itemId: "item-b" });
     pacer.close();
-    expectPlayback(pacer);
+    expect(pacer.getPlaybackState()).toEqual([]);
     expect(onPlaybackReset).toHaveBeenCalledTimes(2);
   });
 
@@ -143,14 +141,20 @@ describe("RealtimeAudioPacer", () => {
     pacer.sendAudio(createSequencedAudio(20), { itemId: "item-b" });
     pacer.sendAudio(createSequencedAudio(10), { itemId: "item-a" });
     await vi.advanceTimersByTimeAsync(300);
-    expectPlayback(pacer, ["item-a", 0], ["item-b", 0]);
+    expect(pacer.getPlaybackState()).toEqual([
+      { itemId: "item-a", audioEndMs: 0 },
+      { itemId: "item-b", audioEndMs: 0 },
+    ]);
     pacer.acknowledgeMark(sentMarkAt(sent, 160));
 
-    expectPlayback(pacer, ["item-a", 160], ["item-b", 0]);
+    expect(pacer.getPlaybackState()).toEqual([
+      { itemId: "item-a", audioEndMs: 160 },
+      { itemId: "item-b", audioEndMs: 0 },
+    ]);
 
     await vi.advanceTimersByTimeAsync(860);
     pacer.acknowledgeMark(sentMarkAt(sent, 1120));
-    expectPlayback(pacer, ["item-a", 720]);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 720 }]);
   });
 
   it("does not retire an unfinished item when the carrier catches up to a delayed pump", async () => {
@@ -166,7 +170,7 @@ describe("RealtimeAudioPacer", () => {
       pacer.acknowledgeMark(mark);
 
       expect(pacer.hasPendingAudio()).toBe(true);
-      expectPlayback(pacer, ["item-a", 160]);
+      expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 160 }]);
     } finally {
       pacer.close();
       stalledClock.mockRestore();
@@ -183,15 +187,17 @@ describe("RealtimeAudioPacer", () => {
     pacer.sendAudio(createSequencedAudio(30), { itemId: "item-a" });
     pacer.acknowledgeMark(oldMark);
 
-    expectPlayback(pacer, ["item-a", 0]);
+    expect(pacer.getPlaybackState()).toEqual([{ itemId: "item-a", audioEndMs: 0 }]);
   });
   it("does not evict fully sent segments without receipts after elapsed playout time", async () => {
     const { pacer, onBackpressure } = createPlaybackPacer();
     await fillRetention(pacer);
     expect(pacer.hasPendingAudio()).toBe(false);
-    expectPlayback(
-      pacer,
-      ...Array.from({ length: 128 }, (_, i): [string, number] => [`item-${i + 1}`, 0]),
+    expect(pacer.getPlaybackState()).toEqual(
+      Array.from({ length: 128 }, (_, index) => ({
+        itemId: `item-${index + 1}`,
+        audioEndMs: 0,
+      })),
     );
 
     pacer.sendAudio(createSequencedAudio(1), { itemId: "item-129" });

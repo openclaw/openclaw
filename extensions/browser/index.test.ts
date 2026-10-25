@@ -41,6 +41,7 @@ beforeEach(() => vi.clearAllMocks());
 function createApi() {
   const hooks = {
     registerCli: vi.fn(),
+    registerGatewayMethod: vi.fn<OpenClawPluginApi["registerGatewayMethod"]>(),
     registerTool: vi.fn<OpenClawPluginApi["registerTool"]>(),
   };
   const openKeyedStore = vi.fn(() => ({
@@ -98,6 +99,16 @@ it("initializes the durable tab registry without loading browser control or Gate
     commands: ["browser"],
     descriptors: [{ name: "browser", hasSubcommands: true, machineOutput: expect.any(Function) }],
   });
+});
+
+it("requires admin authority for the browser request Gateway method", () => {
+  const { api, registerGatewayMethod } = createApi();
+  registerBrowserPlugin(api);
+  const registration = registerGatewayMethod.mock.calls.find(
+    ([name]) => name === "browser.request",
+  );
+  expect(registration).toBeDefined();
+  expect(registration?.[2]).toEqual({ scope: "operator.admin" });
 });
 
 it("makes node commands unavailable when browser or proxy control is disabled", () => {

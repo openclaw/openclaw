@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { doctorDatabasePort as port } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { readBackupEngine } from "../../snapshot/database-backup.js";
+import { capturePostgresBackup, readBackupEngine } from "../../snapshot/database-backup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -134,6 +134,37 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     },
     120_000,
   );
+
+  it("recovers and backs up scoped PostgreSQL agents with SQLite state", async () => {
+    const unrelated = hash(workboard);
+    interruptPublication();
+    await expect(port({ family: "agent", to: "postgres" })).rejects.toThrow();
+    vi.restoreAllMocks();
+    expect(readBackupEngine(agent).engine).toBe("postgres");
+    expect(() => assertDatabasePortStartupAllowed(state.stateDir)).toThrow();
+    await port({ resume: databasePortManifestPath(state.stateDir) });
+    expect(() => assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
+    expect(config().database).toMatchObject({
+      engine: "sqlite",
+      families: { agent: { engine: "postgres" } },
+    });
+    expect(readBackupEngine(shared).engine).toBe("sqlite");
+    const backup = await capturePostgresBackup({
+      sourcePath: agent,
+      directory: state.path("agent-backup"),
+      profile: "exact",
+      config: config(),
+      assertCurrent() {},
+    });
+    expect(backup.source.owner).toBe("agent");
+    await port({ family: "agent", to: "sqlite" });
+    expect(config().database?.families).toBeUndefined();
+    expect(readBackupEngine(shared).engine).toBe("sqlite");
+    expect(hash(workboard)).toBe(unrelated);
+    using db = openNodeSqliteDatabase(agent, { readOnly: true });
+    const row = db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get();
+    expect(row).toEqual({ value_json: '"agent-data"' });
+  }, 120_000);
 
   describe("interrupted scoped publication", () => {
     beforeAll(async () => {

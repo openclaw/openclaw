@@ -7,6 +7,7 @@ import { clearFollowupQueue, getFollowupQueue } from "../auto-reply/reply/queue/
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createModelSelectionInputs,
   createRequest,
@@ -18,7 +19,7 @@ await vi.hoisted(() => import("./apply-session-model-selection.test-support.js")
 const { effects, placementMocks } = selectionMocks;
 
 const persistedSession = useSelectionStore("openclaw-model-picker-profile-");
-const { expectNoSelectionEffects } = useSelectionEffects();
+const { lifecycleEvents, expectNoSelectionEffects } = useSelectionEffects();
 
 import {
   applySessionModelSelectionInternal as applySessionModelSelection,
@@ -149,6 +150,48 @@ it.each([undefined, { allow: ["openai/*"] }])(
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   },
 );
+
+it("publishes a profile-only selection after the scoped session has persisted", async () => {
+  const { sessionEntry, sessionKey, storePath } = await persistedSession(
+    createSelectedEntry("openai", "gpt-5.6-luna", {
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "auto",
+    }),
+    "agent:main:dm:profile",
+  );
+  let publishedEntry: SessionEntry | undefined;
+  const unsubscribe = onSessionLifecycleEvent(() => {
+    publishedEntry = loadSessionEntryReadOnly({ sessionKey, storePath });
+  });
+  try {
+    const result = await select({
+      sessionEntry,
+      sessionKey,
+      storePath,
+      currentProvider: "openai",
+      currentModel: "gpt-5.6-luna",
+      modelCatalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna" }],
+      request: createRequest("openai", "gpt-5.6-luna", {
+        profileOverride: "openai:work",
+      }),
+    });
+
+    expect(result).toMatchObject({ status: "applied", changed: true });
+    expect(lifecycleEvents).toEqual([
+      { sessionKey, agentId: "main", reason: "patch", catalogChanged: true },
+    ]);
+    expect(publishedEntry).toMatchObject({
+      sessionId: "session-1",
+      modelOverride: "gpt-5.6-luna",
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+    });
+    expect(effects.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+  } finally {
+    unsubscribe();
+  }
+});
 
 it("applies authorized selection effects once to the resolved target session", async () => {
   const sessionKey = "agent:main:telegram:bound:thread:42";
