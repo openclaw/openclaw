@@ -125,7 +125,7 @@ kubectl rollout restart -n openclaw deploy/openclaw
 
 Keep `openclaw.json.last-good` and the `openclaw.json.bak*` backups when reseeding.
 A valid replacement does not need a `meta` block: `openclaw doctor --fix` keeps
-its settings, stamps metadata, and refreshes last-good with a visible repair note.
+it, and the Gateway promotes it to last-good after it starts successfully.
 Truncated or invalid configs still use backup recovery. If recovery replaces a
 file, the warning names the saved `openclaw.json.clobbered.*` original and explains
 how to copy it back after correcting the reported problem.

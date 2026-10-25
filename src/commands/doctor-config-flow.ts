@@ -14,6 +14,7 @@ import {
 } from "../config/legacy.default-agent-owner.js";
 import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
 import { findLegacyConfigRuleIssues } from "../config/legacy.shared.js";
+import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withDoctorProgress } from "../flows/doctor-health-startup.js";
@@ -164,15 +165,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
   };
   const finalizeMigrationResult = prepareDoctorConfigMigrationResult(preflight, snapshot);
-  if (snapshot.exists && snapshot.valid && !snapshot.sourceConfig.meta) {
-    applyConfigMutation(
-      {
-        config: state.candidate,
-        changes: ["Kept valid config without meta and stamped config metadata."],
-      },
-      `Run "${doctorFixCommand}" to stamp config metadata.`,
-    );
-  }
   const plannedProviderRenames = runWithCurrentPluginMetadata(state.candidate, () =>
     planProviderRenames(
       snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
@@ -706,8 +698,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...finalized,
     cfg,
     heartbeatMigrationSource: modelBillingRouteConfig,
+    ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
+      ? {
+          confirmedConfigSource: {
+            path: snapshot.path,
+            hash: snapshot.hash ?? hashConfigRaw(snapshot.raw),
+          },
+        }
+      : {}),
     ...(referenceSource ? { referenceSource } : {}),
-    path: snapshot.path,
+    path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
     ...(configRepairWarnings.length ? { warnings: [...new Set(configRepairWarnings)] } : {}),
     ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),

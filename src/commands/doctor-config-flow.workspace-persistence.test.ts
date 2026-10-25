@@ -74,7 +74,7 @@ const withQueueDefaultHome = useDoctorConfigPreflightHome();
 afterEach(closeOpenClawStateDatabaseForTest);
 
 it(
-  "keeps a valid Kubernetes reseed without metadata and refreshes recovery after Doctor writes",
+  "keeps a valid Kubernetes reseed without metadata and still recovers a later invalid config",
   withHome(async (home) => {
     const configPath = await writeConfig(home, { gateway: { mode: "local", port: 19091 } });
     await writeInitial(configPath);
@@ -91,18 +91,12 @@ it(
 
     await using ctx = await prepareDoctorContext(configPath);
     expect(ctx.cfg.gateway?.port).toBe(19092);
-    expect(ctx.configResult.pendingChangePanels?.join("\n")).toContain(
-      "Kept valid config without meta",
-    );
-    await runInitialConfigWriteHealth(ctx);
-
-    const saved = await readJson(configPath);
-    expect(saved.gateway.port).toBe(19092);
-    expect(saved.meta.lastTouchedVersion).toEqual(expect.any(String));
-    expect(await readText(`${configPath}.last-good`)).toBe(await readText(configPath));
+    expect(await readText(configPath)).toBe(reseededRaw);
     expect(await fs.readdir(path.dirname(configPath))).not.toEqual(
       expect.arrayContaining([expect.stringContaining(".clobbered.")]),
     );
+    // Gateway startup promotes the accepted config; the meta-less reseed must qualify.
+    expect(await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot())).toBe(true);
 
     const invalidRaw = '{ "gateway": { "mode": 123 } }';
     await fs.writeFile(configPath, invalidRaw);
