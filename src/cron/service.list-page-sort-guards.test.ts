@@ -4,7 +4,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as snapshotRevisions from "./list-snapshot-revision.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { locked } from "./service/locked.js";
+import { remove } from "./service/ops-mutations.js";
 import { listPage, status } from "./service/ops-read.js";
+import { applyCronRuntimeRowsToState } from "./service/runtime-publication.js";
 import type { CronJob } from "./types.js";
 
 function listState(...jobs: Partial<CronJob>[]) {
@@ -99,6 +101,8 @@ it("shares immutable requested rows until a list revision changes", async () => 
   const visibilityPass = await listPage(state, options, () => false);
   expect(visibilityPass).toMatchObject({ jobs: [], total: 0 });
   const repeated = await listPage(state, options);
+  await expect(remove(state, "missing-job")).resolves.toEqual({ ok: true, removed: false });
+  expect((await listPage(state, options)).jobs[0]).toBe(page.jobs[0]);
   expect(repeated.jobs[0]).toBe(page.jobs[0]);
   expect(await status(state)).toBe(firstStatus);
   expect(repeated.snapshotRevision).toBe(page.snapshotRevision);
@@ -108,9 +112,10 @@ it("shares immutable requested rows until a list revision changes", async () => 
   expect(repeated.jobs).toHaveLength(1);
 
   await locked(state, async () => {
-    jobs[1]!.state.lastStatus = "ok";
-    jobs[1]!.state.nextRunAtMs = 100;
-    jobs[2]!.state.lastStatus = "ok";
+    applyCronRuntimeRowsToState(state, [
+      { ...jobs[1]!, state: { ...jobs[1]!.state, lastStatus: "ok", nextRunAtMs: 100 } },
+      { ...jobs[2]!, state: { ...jobs[2]!.state, lastStatus: "ok" } },
+    ]);
   });
   const changed = await listPage(state, options);
 
@@ -163,7 +168,7 @@ it("reuses interleaved list variants while refreshing visibility and mutated row
   expect(revision).toHaveBeenCalledTimes(4);
 
   await locked(state, async () => {
-    state.store!.jobs[1]!.name = "delta";
+    applyCronRuntimeRowsToState(state, [{ ...state.store!.jobs[1]!, name: "delta" }]);
   });
   const changedAgent = await listPage(state, { ...options, agentId: "main" });
   const changedAll = await listPage(state, options);
