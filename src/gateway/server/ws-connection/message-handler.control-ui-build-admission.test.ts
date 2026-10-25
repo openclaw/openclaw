@@ -18,7 +18,6 @@ import { rawDataToString } from "../../../infra/ws.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { gatewayTestTextTransport } from "../connection-transport.test-support.js";
-import { createGatewaySnapshotFixture } from "../health-state.test-support.js";
 import { createAdmissionHandler } from "./message-handler.admission.test-support.js";
 
 const {
@@ -72,7 +71,18 @@ vi.mock("../../server-methods.js", () => ({
   handleGatewayRequest: handleGatewayRequestMock,
 }));
 vi.mock("../health-state.js", () => ({
-  buildGatewaySnapshot: vi.fn(() => createGatewaySnapshotFixture()),
+  buildGatewaySnapshot: vi.fn(() => ({
+    presence: [],
+    health: {},
+    stateVersion: { presence: 1, health: 1 },
+    uptimeMs: 1,
+    sessionDefaults: {
+      defaultAgentId: "main",
+      mainKey: "main",
+      mainSessionKey: "main",
+      scope: "per-sender",
+    },
+  })),
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
 }));
