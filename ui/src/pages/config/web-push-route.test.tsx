@@ -1,15 +1,22 @@
 /* @vitest-environment jsdom */
 
+import { createRouter, definePage } from "@openclaw/uirouter";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
+import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { createWebPushCapability } from "../../app/web-push.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
-import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { completeConfigContext } from "./config-page.test-support.ts";
-import { mountConfigCommandRoutes } from "./updates.test-support.ts";
+import type { ConfigPageId, ConfigPageRouteData } from "./config-page.tsx";
+import { pages } from "./route.ts";
 
 const originalServiceWorker = Object.getOwnPropertyDescriptor(navigator, "serviceWorker");
 
@@ -73,15 +80,42 @@ it("leaves the notifications route before an admitted Web Push command settles",
     hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
   });
   const capability = createWebPushCapability(gateway);
+  const notifications = pages.find(
+    (page): page is Extract<(typeof pages)[number], { id: ConfigPageId }> =>
+      page.id === "notifications",
+  )!;
+  const production = await notifications.component();
+  const ConfigRoute = production.renderSolid;
+  const module = {
+    ...production,
+    renderSolid: (props: SolidRouteProps<ConfigPageRouteData>) => (
+      <Provider>
+        <ConfigRoute {...props} />
+      </Provider>
+    ),
+  };
+  const router = createRouter<
+    ConfigPageId | "usage",
+    ApplicationContext,
+    Pick<typeof module, "renderSolid">,
+    ConfigPageRouteData
+  >({
+    routes: [
+      { ...notifications, component: () => module },
+      definePage({
+        id: "usage",
+        path: "/usage",
+        component: () => ({ renderSolid: () => <p>Usage destination</p> }),
+      }),
+    ],
+  });
   const context = completeConfigContext({
     gateway,
     webPush: capability,
+    router,
   } as unknown as ApplicationContext);
-  const { router, view: outlet } = await mountConfigCommandRoutes(
-    context,
-    "notifications",
-    "usage",
-  );
+  const { wrapper: Provider } = createSolidApplicationContextProvider(context);
+  const outlet = mountRouterOutlet({ router, retryContext: context });
   const send = () =>
     Array.from(outlet.querySelectorAll("button")).find((button) =>
       button.textContent?.includes("Send test"),
@@ -90,7 +124,8 @@ it("leaves the notifications route before an admitted Web Push command settles",
     await router.navigate("notifications", context);
     await waitForSolid(() => expect(send()?.disabled).toBe(false));
     send()!.click();
-    await waitForSolid(() => expect(capability.snapshot.loading).toBe(true));
+    await waitForSolid(() => expect(request).toHaveBeenCalledWith("push.web.test", {}));
+    expect(capability.snapshot.loading).toBe(true);
 
     await router.navigate("usage", context);
     await waitForSolid(() => {
