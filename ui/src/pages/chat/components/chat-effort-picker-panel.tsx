@@ -60,7 +60,7 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
   const fadeUltra = () => {
     const fade = (element: HTMLElement | undefined, animation: Animation | undefined) => {
       if (!element || !animation || animation.playState === "finished") {
-        return;
+        return undefined;
       }
       // Freeze the current light and halo before fading; cancelling first would snap to zero.
       const { opacity, transform, boxShadow } = getComputedStyle(element);
