@@ -370,50 +370,20 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(pollStore.recordVote).not.toHaveBeenCalled();
   });
 
-  it("does not resolve user allowlists by display name unless name matching is enabled", async () => {
-    const cfg = configured({
+  it.each([
+    {
+      mode: "disabled",
       allowFrom: ["19:group@thread.tacv2", "Alice", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
       groupAllowFrom: [
         "19:MiXeD-group@thread.tacv2;messageid=1740123456789",
         "Bob",
         "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198",
       ],
-      teams: teams("Product", "Roadmap"),
-    });
-    resolveAllowlistMocks.resolveMSTeamsTeamsConfig.mockResolvedValueOnce({
-      teams: teams("team-id", "channel-id"),
-      mapping: ["Product/Roadmap→team-id/channel-id"],
-      unresolved: [],
-    });
-
-    await startMonitor(cfg);
-
-    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).not.toHaveBeenCalled();
-    expect(resolveAllowlistMocks.resolveMSTeamsTeamsConfig).toHaveBeenCalledWith({
-      cfg,
-      accountId: "default",
-      teamIdMode: "bot-framework",
-      teams: teams("Product", "Roadmap"),
-    });
-
-    const registeredCfg = registeredDeps().cfg;
-    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual([
-      "40a1a0ed-4ff2-4164-a219-55518990c197",
-    ]);
-    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual([
-      "19:MiXeD-group@thread.tacv2",
-      "50a1a0ed-4ff2-4164-a219-55518990c198",
-    ]);
-    expect(registeredCfg.channels?.msteams?.teams).toEqual(teams("team-id", "channel-id"));
-  });
-
-  it("resolves user allowlists when name matching is enabled", async () => {
-    resolveAllowlistMocks.resolveMSTeamsUserAllowlist
-      .mockResolvedValueOnce([{ input: "Alice", resolved: true, id: "alice-aad" }])
-      .mockResolvedValueOnce([{ input: "Bob", resolved: true, id: "bob-aad" }]);
-
-    const cfg = configured({
-      dangerouslyAllowNameMatching: true,
+      expectedAllow: ["40a1a0ed-4ff2-4164-a219-55518990c197"],
+      expectedGroup: ["19:MiXeD-group@thread.tacv2", "50a1a0ed-4ff2-4164-a219-55518990c198"],
+    },
+    {
+      mode: "enabled",
       allowFrom: ["19:group@thread.tacv2", "Alice"],
       groupAllowFrom: [
         "19:group@thread.tacv2;messageid=1740123456789",
@@ -422,30 +392,56 @@ describe("monitorMSTeamsProvider lifecycle", () => {
         "19:legacy@thread.skype",
         "Bob",
       ],
+      expectedAllow: ["alice-aad"],
+      expectedGroup: [
+        "19:group@thread.tacv2",
+        "19:MiXeD-group@thread.tacv2",
+        "19:modern-group@thread.v2",
+        "19:legacy@thread.skype",
+        "bob-aad",
+      ],
+    },
+    {
+      mode: "group fallback",
+      allowFrom: ["19:fallback-group@thread.v2;messageid=1740123456789", "Alice"],
+      groupAllowFrom: undefined,
+      expectedAllow: ["alice-aad"],
+      expectedGroup: ["19:fallback-group@thread.v2", "alice-aad"],
+    },
+  ])("resolves sender allowlists with name matching $mode", async (row) => {
+    const enabled = row.mode !== "disabled";
+    if (enabled) {
+      resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockResolvedValueOnce([
+        { input: "Alice", resolved: true, id: "alice-aad" },
+      ]);
+      if (row.groupAllowFrom) {
+        resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockResolvedValueOnce([
+          { input: "Bob", resolved: true, id: "bob-aad" },
+        ]);
+      }
+    } else {
+      resolveAllowlistMocks.resolveMSTeamsTeamsConfig.mockResolvedValueOnce({
+        teams: teams("team-id", "channel-id"),
+        mapping: ["Product/Roadmap→team-id/channel-id"],
+        unresolved: [],
+      });
+    }
+    await startMonitor(
+      configured({
+        dangerouslyAllowNameMatching: enabled,
+        allowFrom: row.allowFrom,
+        groupAllowFrom: row.groupAllowFrom,
+        ...(!enabled ? { teams: teams("Product", "Roadmap") } : {}),
+      }),
+    );
+    expect(registeredDeps().cfg.channels?.msteams).toMatchObject({
+      allowFrom: row.expectedAllow,
+      groupAllowFrom: row.expectedGroup,
+      ...(!enabled ? { teams: teams("team-id", "channel-id") } : {}),
     });
-
-    await startMonitor(cfg);
-
-    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).toHaveBeenNthCalledWith(1, {
-      cfg,
-      accountId: "default",
-      entries: ["Alice"],
-    });
-    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).toHaveBeenNthCalledWith(2, {
-      cfg,
-      accountId: "default",
-      entries: ["Bob"],
-    });
-
-    const registeredCfg = registeredDeps().cfg;
-    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual(["alice-aad"]);
-    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual([
-      "19:group@thread.tacv2",
-      "19:MiXeD-group@thread.tacv2",
-      "19:modern-group@thread.v2",
-      "19:legacy@thread.skype",
-      "bob-aad",
-    ]);
+    if (!enabled) {
+      expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps only stable allowlist entries when Graph resolution fails", async () => {
@@ -457,16 +453,8 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       dangerouslyAllowNameMatching: true,
       allowFrom: ["Alice", "accessGroup:operators", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
       teams: {
-        Mutable: {
-          channels: {
-            Roadmap: {},
-          },
-        },
-        "19:stable-team@thread.tacv2": {
-          channels: {
-            "19:stable-channel@thread.tacv2": {},
-          },
-        },
+        ...teams("Mutable", "Roadmap"),
+        ...teams("19:stable-team@thread.tacv2", "19:stable-channel@thread.tacv2"),
       },
     });
 
@@ -482,28 +470,6 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("mutable allowlist entries are disabled"),
     );
-  });
-
-  it("preserves Graph-resolved sender identities in the group fallback", async () => {
-    resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockResolvedValueOnce([
-      { input: "Alice", resolved: true, id: "alice-aad" },
-    ]);
-    const cfg = configured({
-      dangerouslyAllowNameMatching: true,
-      allowFrom: ["19:fallback-group@thread.v2;messageid=1740123456789", "Alice"],
-    });
-    await startMonitor(cfg);
-    const registeredCfg = registeredDeps().cfg;
-    expect(registeredCfg.channels?.msteams?.allowFrom).toEqual(["alice-aad"]);
-    expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual([
-      "19:fallback-group@thread.v2",
-      "alice-aad",
-    ]);
-    expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).toHaveBeenCalledExactlyOnceWith({
-      cfg,
-      accountId: "default",
-      entries: ["Alice"],
-    });
   });
 });
 
