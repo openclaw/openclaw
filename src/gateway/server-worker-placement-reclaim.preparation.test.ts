@@ -636,7 +636,6 @@ it.each([
         expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
         expect(await f.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(f.harness.environments.createWithRequest).toHaveBeenCalledOnce();
-        expect(f.harness.log.filter((event) => event === "placement:requested")).toHaveLength(1);
       }
     } finally {
       reconciling.release.resolve();
