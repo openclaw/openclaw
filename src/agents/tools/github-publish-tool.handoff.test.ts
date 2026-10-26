@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionGitHubPublicationResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
@@ -62,9 +63,26 @@ afterEach(() => {
   resetSystemEventsForTest();
 });
 
-it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
+it.for([
+  "prepared",
+  "published",
+  "publication-failed",
+  "failed",
+  "stop",
+  "undelivered",
+  "reset",
+] as const)(
   "hands PR preparation to its registered owner after cleanup: %s",
   async (outcome, { signal }) => {
+    const localPublication = outcome === "published" || outcome === "publication-failed";
+    const failedPublication = {
+      status: "failed",
+      requestId: "local-publication",
+      code: "github_rejected",
+      message: "Branch pushed; pull request creation failed.",
+      nextAction: "Inspect the existing branch before retrying publication.",
+      effect: { kind: "push", status: "observed", headCommit: "a".repeat(40) },
+    } satisfies SessionGitHubPublicationResult;
     await withOpenClawTestState(
       { scenario: "minimal", prepareProfileCatalog: true, env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
@@ -73,7 +91,9 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
         const runId = "pr-handoff-run";
         const scope = { agentId: "main", sessionKey };
         const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-        const scopes: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
+        const scopes: OperatorScope[] = localPublication
+          ? ["operator.read", "operator.write"]
+          : ["operator.sessions.read", "operator.sessions.write"];
         const config: OpenClawConfig = {
           agents: completionConfig(state.workspaceDir).agents,
           gateway: {
@@ -124,12 +144,27 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
         const resumed = createDeferredCore<string>();
         const order: string[] = [];
         const endpoint = vi.fn<GatewayRequestHandler>(async ({ params, respond }) => {
-          expect(params).toMatchObject({ sessionKey, action: "prepare_pr" });
+          expect(params).toMatchObject(
+            localPublication
+              ? { sessionKey, workspacePath: state.workspaceDir }
+              : { sessionKey, action: "prepare_pr" },
+          );
           expect(getGatewayToolCallerIdentity()?.workspacePrAdoptionSessionId).toBe(sessionId);
           expect(getSessionControllerEntryForOperation(operation).successorBarrier).toBeDefined();
           order.push("prepare");
           if (outcome === "failed") {
             respond(false, undefined, { code: "UNAVAILABLE", message: "Saved source preserved" });
+          } else if (outcome === "publication-failed") {
+            respond(true, failedPublication);
+          } else if (localPublication) {
+            respond(true, {
+              status: "published",
+              requestId: "local-publication",
+              url: "https://github.com/example/repo/pull/1",
+              repository: "example/repo",
+              branch: "openclaw/task",
+              headCommit: "a".repeat(40),
+            });
           } else {
             respond(true, {
               status: "prepared",
@@ -143,6 +178,10 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
           }
         });
         const publish = vi.fn<GatewayRequestHandler>(async (options) => {
+          if (localPublication) {
+            await endpoint(options);
+            return;
+          }
           const admitted = await prepareGitHubPublicationRequesterV2(options, scope);
           try {
             admitted.requester.assertCurrent();
@@ -183,15 +222,17 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             "resumed guest caller",
           );
           await withGatewayToolCallerIdentity(caller, async () => {
-            expect(
-              (await createGitHubPublishTool().execute("resumed-publish", {})).details,
-            ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
-            await expect(
-              callAgentToolGatewayRequest({
-                method: "tools.effective",
-                params: scope,
-              }),
-            ).rejects.toThrow("operator.read");
+            if (!localPublication) {
+              expect(
+                (await createGitHubPublishTool().execute("resumed-publish", {})).details,
+              ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
+              await expect(
+                callAgentToolGatewayRequest({
+                  method: "tools.effective",
+                  params: scope,
+                }),
+              ).rejects.toThrow("operator.read");
+            }
             await expect(
               callAgentToolGatewayRequest({ method: "plugins.reload", params: {} }),
             ).rejects.toThrow("operator.admin");
@@ -236,7 +277,7 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             }
             order.push("resume");
             resumed.resolve(text);
-            if (outcome === "prepared") {
+            if (outcome === "prepared" || localPublication) {
               receipt = enqueueReal(text, options);
               return receipt;
             }
@@ -270,13 +311,15 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
                 sessionId,
                 runId,
                 // An ordinary local Docker conversation, as the visibility rule admits.
-                sandbox: createSandboxTestContext({
-                  overrides: {
-                    sessionKey,
-                    workspaceSource: undefined,
-                    backend: { id: "docker" } as never,
-                  },
-                }),
+                sandbox: localPublication
+                  ? undefined
+                  : createSandboxTestContext({
+                      overrides: {
+                        sessionKey,
+                        workspaceSource: undefined,
+                        backend: { id: "docker" } as never,
+                      },
+                    }),
                 onYield() {
                   order.push("yield");
                   runAbort.abort(SESSIONS_YIELD_ABORT_REASON);
@@ -303,10 +346,12 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             surface.tools.find((candidate) => candidate.name === "github_publish"),
             "direct github_publish",
           );
-          const result = await tool.execute("prepare", {
-            action: "prepare_pr",
-            pullRequestUrl: "https://github.com/example/repo/pull/1",
-          });
+          const result = await tool.execute(
+            "prepare",
+            localPublication
+              ? { workspacePath: state.workspaceDir, title: "Publish the task" }
+              : { action: "prepare_pr", pullRequestUrl: "https://github.com/example/repo/pull/1" },
+          );
           expect(result.details).toMatchObject({
             status: "started",
             async: true,
@@ -324,12 +369,18 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             expect(enqueue).not.toHaveBeenCalled();
           } else {
             expect(await resumed.promise).toContain(
-              outcome === "failed" ? "Saved source preserved" : '"status":"prepared"',
+              outcome === "publication-failed"
+                ? JSON.stringify(failedPublication)
+                : outcome === "failed"
+                  ? "Saved source preserved"
+                  : localPublication
+                    ? '"status":"published"'
+                    : '"status":"prepared"',
             );
             expect(order).toEqual(["yield", "cleanup", "prepare", "resume"]);
             expect(enqueue).toHaveBeenCalledOnce();
             expect(resumedCaller).toEqual({ identity: undefined });
-            if (outcome === "prepared") {
+            if (outcome === "prepared" || localPublication) {
               const settled = await withinTest(
                 expectDefined(receipt, "actual event receipt").settled,
                 signal,

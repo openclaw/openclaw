@@ -225,6 +225,23 @@ it("shares recipient encodings only for matching authority and delivered baselin
       const envelopeTuples = new Set<unknown>();
       let envelopeMaxFields = 0;
       let fieldNameInsertions = 0;
+      let stagedFieldIndexTuples = 0;
+      const MapConstructor = globalThis.Map;
+      globalThis.Map = new Proxy(MapConstructor, {
+        construct(target, args) {
+          const entries: unknown = args[0];
+          if (
+            Array.isArray(entries) &&
+            entries.some(
+              (entry: unknown) =>
+                Array.isArray(entry) && entry[0] === "sharingRole" && typeof entry[1] === "number",
+            )
+          ) {
+            stagedFieldIndexTuples += entries.length;
+          }
+          return Reflect.construct(target, args);
+        },
+      });
       // oxlint-disable-next-line typescript/unbound-method -- The observer calls add with its original Set receiver.
       const add = Set.prototype.add;
       const adding = vi.spyOn(Set.prototype, "add").mockImplementation(function (
@@ -282,6 +299,7 @@ it("shares recipient encodings only for matching authority and delivered baselin
       try {
         publish(peers.map((peer) => peer.client.connId));
       } finally {
+        globalThis.Map = MapConstructor;
         encoding.mockRestore();
         enumerating.mockRestore();
         adding.mockRestore();
@@ -347,6 +365,8 @@ it("shares recipient encodings only for matching authority and delivered baselin
       expect(envelopeTuples.size).toBe(envelopeMaxFields);
       // Field names are indexed once per audience, not inserted into a Set per history.
       expect(fieldNameInsertions).toBe(0);
+      // Index construction must not stage a tuple for every field before inserting it.
+      expect(stagedFieldIndexTuples).toBe(0);
       // Eight current delta recipients were primed at this revision; sixteen were not.
       expect(sharingKeyEncodings).toBe(16);
       // Four authority/baseline groups share row planning across both delta capabilities.

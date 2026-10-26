@@ -7,17 +7,6 @@ import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { NewSessionPlaceControls } from "./target-controls-view.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
-export const nativeRuntime = (
-  id = "openclaw",
-  mode: "worker-turn" | "remote-exec" = "worker-turn",
-) => ({
-  id,
-  source: "model" as const,
-  cloudPlacementSupported: true,
-  cloudPlacementExecutionMode: mode,
-  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-});
-
 export const hostedRuntime = {
   id: "agentsapi",
   source: "model" as const,

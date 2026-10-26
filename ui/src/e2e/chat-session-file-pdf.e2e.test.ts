@@ -3,6 +3,7 @@ import { createServer, request } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { captureUiProofEnabled, chatMessage } from "./chat-flow.test-support.ts";
@@ -147,7 +148,7 @@ suite.define(() => {
             panel.getByRole("button", { name: "Download file", exact: true }).click(),
           ]);
           expect(download.suggestedFilename()).toBe(file.name);
-          expect(fs.readFileSync((await download.path())!).equals(file.bytes)).toBe(true);
+          expect((await readControlUiE2eDownload(download)).equals(file.bytes)).toBe(true);
           expect((await gateway.getRequests("sessions.files.download")).at(-1)?.params).toEqual({
             sessionKey,
             agentId: "main",
