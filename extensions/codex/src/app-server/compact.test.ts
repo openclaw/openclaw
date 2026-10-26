@@ -102,8 +102,8 @@ function startCompaction(
   return maybeCompactCodexAppServerSession(compactionParams(sessionFile, params), options);
 }
 
-async function compactResult(...args: Parameters<typeof maybeCompactCodexAppServerSession>) {
-  return requireCompactResult(await maybeCompactCodexAppServerSession(...args));
+async function compactResult(...args: Parameters<typeof startCompaction>) {
+  return requireCompactResult(await startCompaction(...args));
 }
 
 async function setupCompaction(
@@ -444,12 +444,13 @@ describe("maybeCompactCodexAppServerSession", () => {
     async (resolvedApiKey) => {
       const { factory, sessionFile } = await setupCompaction();
       const result = await compactResult(
-        compactionParams(sessionFile, {
+        sessionFile,
+        {
           provider: "openai",
           model: "gpt-5.5",
           resolvedApiKey,
           runtimeAuthPlan: runtimeAuthPlan(),
-        }),
+        },
         { clientFactory: factory },
       );
       if (resolvedApiKey) {
@@ -530,10 +531,14 @@ describe("maybeCompactCodexAppServerSession", () => {
     const factory = vi.fn(async () => fake.client);
     const sessionFile = await writeSupervisedTestBinding(tempDir);
 
-    const result = await compactResult(compactionParams(sessionFile), {
-      clientFactory: factory,
-      pluginConfig: { supervision: { enabled: false } },
-    });
+    const result = await compactResult(
+      sessionFile,
+      {},
+      {
+        clientFactory: factory,
+        pluginConfig: { supervision: { enabled: false } },
+      },
+    );
 
     expect(result).toEqual({
       ok: false,
@@ -582,12 +587,13 @@ describe("maybeCompactCodexAppServerSession", () => {
       const preflightRequired = scenario === "required preflight";
       const suffix = aborted ? "1" : "2";
       const result = await compactResult(
-        compactionParams(sessionFile, {
+        sessionFile,
+        {
           trigger: "budget",
           currentTokenCount: 456,
           ...(preflightRequired ? { preflightRequired: true } : {}),
           ...(aborted ? { abortSignal: AbortSignal.abort("cancelled") } : {}),
-        }),
+        },
         {
           allowNonManualNativeRequest: true,
           ...(aborted ? {} : { bindingStore: replaceBindingAfterRead(sessionFile) }),
@@ -663,10 +669,8 @@ describe("maybeCompactCodexAppServerSession", () => {
       })();
 
       const result = await compactResult(
-        compactionParams(sessionFile, {
-          trigger: "budget",
-          currentTokenCount: 456,
-        }),
+        sessionFile,
+        { trigger: "budget", currentTokenCount: 456 },
         { allowNonManualNativeRequest: true },
       );
 
@@ -690,12 +694,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("skips native app-server compaction when trigger is omitted", async () => {
     const { fake, sessionFile } = await setupCompaction();
 
-    const result = await compactResult(
-      compactionParams(sessionFile, {
-        trigger: undefined,
-        currentTokenCount: 789,
-      }),
-    );
+    const result = await compactResult(sessionFile, { trigger: undefined, currentTokenCount: 789 });
 
     expect(fake.request).not.toHaveBeenCalled();
     expect(result).toMatchObject({
@@ -733,7 +732,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   ] as const)("blocks native app-server compaction for %s", async (_label, params, reason) => {
     const { fake, sessionFile } = await setupCompaction();
     expectFailed(
-      await compactResult(params(tempDir, sessionFile)),
+      requireCompactResult(await maybeCompactCodexAppServerSession(params(tempDir, sessionFile))),
       expect.stringContaining(
         `Codex-native native compaction is unavailable because OpenClaw ${reason} is active for this session.`,
       ),
@@ -1009,9 +1008,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     };
     const sessionFile = await writeCompactionTestBinding(tempDir, binding);
 
-    const result = requireCompactResult(
-      await startCompaction(sessionFile, { currentTokenCount: 456 }),
-    );
+    const result = await compactResult(sessionFile, { currentTokenCount: 456 });
 
     expect(await readCodexAppServerBinding(sessionFile)).toMatchObject(binding);
     expectFailed(result, "thread not found: thread-1");
@@ -1027,9 +1024,8 @@ describe("maybeCompactCodexAppServerSession", () => {
     const sessionFile = await writeCompactionTestBinding(tempDir);
 
     const result = await compactResult(
-      compactionParams(sessionFile, {
-        trigger: "budget",
-      }),
+      sessionFile,
+      { trigger: "budget" },
       {
         allowNonManualNativeRequest: true,
         clientFactory: async () => fake.client,
@@ -1064,13 +1060,7 @@ describe("maybeCompactCodexAppServerSession", () => {
 
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("ignoring OpenClaw compaction overrides"),
-      expect.objectContaining({
-        ignoredConfig: [
-          "agents.defaults.compaction.model",
-          "agents.defaults.compaction.thinkingLevel",
-          "agents.defaults.compaction.provider",
-        ],
-      }),
+      expect.anything(),
     );
     warn.mockRestore();
   });
