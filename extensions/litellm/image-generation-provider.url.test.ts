@@ -39,9 +39,9 @@ const generate = (cfg = config, overrides: Partial<ImageGenerationRequest> = {})
     cfg,
     ...overrides,
   });
-const imageResponse = (bytes: Uint8Array) =>
-  new Response(new Uint8Array(bytes), { headers: { "Content-Type": "image/png" } });
 const headersAt = (index: number) => new Headers(fetchMock.mock.calls[index]?.[1]?.headers);
+const credentialsAt = (index: number) =>
+  ["Authorization", "Cookie"].map((name) => headersAt(index).get(name));
 
 beforeEach(() => {
   images = [{ url: imageUrl, revised_prompt: "Synthetic square" }];
@@ -58,7 +58,7 @@ beforeEach(() => {
     }
     return redirect
       ? new Response(null, { status: 302, headers: { Location: redirect } })
-      : imageResponse(downloadBytes);
+      : new Response(new Uint8Array(downloadBytes), { headers: { "Content-Type": "image/png" } });
   });
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -88,13 +88,12 @@ it.each([
     },
   ]);
   expect(fetchMock).toHaveBeenCalledTimes(2);
-  expect(headersAt(0).get("Authorization")).toBe("Bearer fixture-provider-key");
-  expect(headersAt(0).get("Cookie")).toBe(
+  expect(credentialsAt(0)).toEqual([
+    "Bearer fixture-provider-key",
     cfg.models?.providers?.litellm?.request?.headers?.Cookie ?? null,
-  );
+  ]);
   expect(fetchMock.mock.calls[1]?.[0]).toBe(url);
-  expect(headersAt(1).has("Authorization")).toBe(false);
-  expect(headersAt(1).has("Cookie")).toBe(false);
+  expect(credentialsAt(1)).toEqual([null, null]);
 });
 
 it.each([
