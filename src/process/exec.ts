@@ -7,7 +7,7 @@ import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { hasChildProcessExited, releaseChildProcessOutputAfterExit } from "./child-process.js";
 import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
-import { createSanitizedCommandError } from "./exec-result.js";
+import { CommandProcessCleanupError, createSanitizedCommandError } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import {
   COMMAND_PROCESS_TREE_KILL_GRACE_MS,
@@ -349,6 +349,11 @@ export async function runCommandBuffered(
       : result.termination === "no-output-timeout"
         ? "timeout"
         : result.termination;
+    // Preserve the native runner's cleanup classification: callers gate recovery
+    // on hasCommandProcessCleanupError, so an uncertain cleanup must surface as
+    // the canonical error alongside the captured signal and output.
+    const cleanupError =
+      result.cleanup === "uncertain" ? new CommandProcessCleanupError() : undefined;
     return {
       stdout: capturedOutput("stdout"),
       stderr: capturedOutput("stderr"),
@@ -358,6 +363,7 @@ export async function runCommandBuffered(
       termination,
       ...(outputLimitStream ? { outputLimitStream } : {}),
       ...(result.outputErrorStream ? { errorStream: result.outputErrorStream } : {}),
+      ...(cleanupError ? { error: cleanupError } : {}),
     };
   } catch (error) {
     const commandError = error instanceof Error ? error : new Error("Command execution failed");
