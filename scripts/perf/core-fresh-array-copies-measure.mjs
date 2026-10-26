@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 
 const [baseRoot, candidateRoot] = process.argv.slice(2);
 assert(baseRoot && candidateRoot, "provide BASE_ROOT and CAND_ROOT");
-assert(globalThis.gc && process.threadCpuUsage, "use Node with --expose-gc and threadCpuUsage");
+assert(globalThis.gc, "use Node with --expose-gc");
 const samples = 5;
 const samplingInterval = 1024;
 const generated = mkdtempSync(path.join(tmpdir(), "core-fresh-array-copies-"));
