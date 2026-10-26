@@ -9,7 +9,7 @@ import { runChannelTurn } from "./run-channel-turn.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-const migratedMessageTurnFiles = [
+const migratedMessageTurnFiles = new Set([
   "extensions/discord/src/monitor/message-handler.context.ts",
   "extensions/discord/src/monitor/message-handler.preflight.ts",
   "extensions/feishu/src/bot.ts",
@@ -26,16 +26,10 @@ const migratedMessageTurnFiles = [
   "extensions/telegram/src/bot-message-dispatch.ts",
   "extensions/whatsapp/src/auto-reply/monitor/on-message.ts",
   "extensions/zalouser/src/monitor.ts",
-];
+]);
 
-const lowLevelHistoryHelpers = [
-  "buildInboundHistoryFromMap",
-  "buildHistoryContextFromMap",
-  "buildPendingHistoryContextFromMap",
-  "clearHistoryEntriesIfEnabled",
-  "recordPendingHistoryEntryIfEnabled",
-  "recordPendingHistoryEntryWithMedia",
-];
+const lowLevelHistoryHelpers =
+  /\b(?:buildInboundHistoryFromMap|buildHistoryContextFromMap|buildPendingHistoryContextFromMap|clearHistoryEntriesIfEnabled|recordPendingHistoryEntryIfEnabled|recordPendingHistoryEntryWithMedia)\b/;
 
 const legacyReplyHistoryCompatibilityFiles = new Set([
   "extensions/mattermost/runtime-api.ts",
@@ -44,23 +38,16 @@ const legacyReplyHistoryCompatibilityFiles = new Set([
 
 const skippedExtensionScanDirs = /^(?:\.cache|\.turbo|build|coverage|dist|node_modules|tmp)$/;
 
-function readRepoFile(relativePath: string): string {
-  return fs.readFileSync(path.join(repoRoot, ...relativePath.split("/")), "utf8");
-}
-
-function isScannableTsFile(relativePath: string): boolean {
-  return (
-    !relativePath.split("/").some((part) => skippedExtensionScanDirs.test(part)) &&
-    relativePath.endsWith(".ts") &&
-    !relativePath.endsWith(".d.ts")
-  );
-}
-
 function listTsFiles(relativeDir: string): string[] {
   return expectDefined(
     listGitTrackedFiles({ repoRoot, pathspecs: relativeDir }),
     "migration guardrails require a Git checkout",
-  ).filter(isScannableTsFile);
+  ).filter(
+    (file) =>
+      !file.split("/").some((part) => skippedExtensionScanDirs.test(part)) &&
+      file.endsWith(".ts") &&
+      !file.endsWith(".d.ts"),
+  );
 }
 
 const importOrExportPattern =
@@ -90,32 +77,19 @@ describe("message turn migration guardrails", () => {
     });
   });
 
-  it("keeps migrated message paths off low-level reply-history helpers", () => {
-    for (const file of migratedMessageTurnFiles) {
-      const source = readRepoFile(file);
-      for (const helper of lowLevelHistoryHelpers) {
-        expect(source, `${file}: forbidden ${helper}`).not.toMatch(new RegExp(`\\b${helper}\\b`));
-      }
-    }
-  });
-
-  it("keeps plugin runtime files off deprecated reply-history map helpers", () => {
-    for (const file of listTsFiles("extensions")) {
+  it("keeps migrated paths and plugin runtime imports off low-level reply-history helpers", () => {
+    for (const file of new Set([...listTsFiles("extensions"), ...migratedMessageTurnFiles])) {
       if (
-        file.includes(".test.") ||
-        file.endsWith(".test.ts") ||
-        legacyReplyHistoryCompatibilityFiles.has(file)
+        !migratedMessageTurnFiles.has(file) &&
+        (file.includes(".test.") || legacyReplyHistoryCompatibilityFiles.has(file))
       ) {
         continue;
       }
-      const source = readRepoFile(file);
-      const bindings = Array.from(
-        source.matchAll(importOrExportPattern),
-        ([, names]) => names,
-      ).join(" ");
-      for (const helper of lowLevelHistoryHelpers) {
-        expect(bindings, `${file}: forbidden ${helper}`).not.toMatch(new RegExp(`\\b${helper}\\b`));
-      }
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      const bindings = migratedMessageTurnFiles.has(file)
+        ? source
+        : Array.from(source.matchAll(importOrExportPattern), ([, names]) => names).join(" ");
+      expect(bindings, file).not.toMatch(lowLevelHistoryHelpers);
     }
   });
 });
