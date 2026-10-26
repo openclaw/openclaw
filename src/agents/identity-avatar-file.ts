@@ -40,8 +40,13 @@ type OpenedLocalAgentAvatarFile = {
 type LocalAgentAvatarPath = {
   filePath: string;
   workspaceRoot: string;
-  stat: fs.BigIntStats;
 };
+
+function resolveLocalAgentAvatarSource(workspaceRoot: string, raw: string): string {
+  return raw.startsWith("~") || path.isAbsolute(raw)
+    ? resolveUserPath(raw)
+    : path.resolve(workspaceRoot, raw);
+}
 
 /** Resolve one local avatar source while retaining its canonical workspace root. */
 export function resolveLocalAgentAvatarPath(params: {
@@ -51,10 +56,7 @@ export function resolveLocalAgentAvatarPath(params: {
   | { ok: true; value: LocalAgentAvatarPath }
   | { ok: false; reason: LocalAgentAvatarFailureReason } {
   const workspaceRoot = resolveRealpathOrAbsolute(params.workspaceDir);
-  const resolved =
-    params.raw.startsWith("~") || path.isAbsolute(params.raw)
-      ? resolveUserPath(params.raw)
-      : path.resolve(workspaceRoot, params.raw);
+  const resolved = resolveLocalAgentAvatarSource(workspaceRoot, params.raw);
   const filePath = resolveRealpathOrAbsolute(resolved);
   if (!isPathInside(workspaceRoot, filePath)) {
     return { ok: false, reason: "outside_workspace" };
@@ -63,14 +65,14 @@ export function resolveLocalAgentAvatarPath(params: {
     return { ok: false, reason: "unsupported_extension" };
   }
   try {
-    const stat = fs.statSync(filePath, { bigint: true });
+    const stat = fs.statSync(filePath);
     if (!stat.isFile()) {
       return { ok: false, reason: "missing" };
     }
     if (stat.size > AVATAR_MAX_BYTES) {
       return { ok: false, reason: "too_large" };
     }
-    return { ok: true, value: { filePath, workspaceRoot, stat } };
+    return { ok: true, value: { filePath, workspaceRoot } };
   } catch {
     return { ok: false, reason: "missing" };
   }
@@ -116,25 +118,69 @@ export type PreparedLocalAgentAvatarFile = Omit<OpenedLocalAgentAvatarFile, "fd"
   body?: Buffer;
 };
 
+// Native realpath and ordinary admission disagree on symlink parent traversal.
+// Leave those aliases to admission; inspect ordinary aliases without blocking the Gateway.
+async function resolveLocalAgentAvatarFreshnessPath(value: string): Promise<string | undefined> {
+  let remaining = path.resolve(value);
+  // An already-canonical spelling has no aliases whose resolution could disagree.
+  if ((await fs.promises.realpath(remaining)) === remaining) {
+    return remaining;
+  }
+  for (let hops = 0; hops < 40; hops += 1) {
+    let current = path.parse(remaining).root;
+    const segments = remaining.slice(current.length).split(path.sep).filter(Boolean);
+    let redirected = false;
+    for (const [index, segment] of segments.entries()) {
+      const next = path.join(current, segment);
+      const stat = await fs.promises.lstat(next);
+      if (stat.isSymbolicLink()) {
+        await fs.promises.stat(next);
+        const target = await fs.promises.readlink(next);
+        if (target.split(/[\\/]/).includes("..")) {
+          return undefined;
+        }
+        remaining = path.resolve(current, target, ...segments.slice(index + 1));
+        redirected = true;
+        break;
+      }
+      current = next;
+    }
+    if (!redirected) {
+      return current;
+    }
+  }
+  return undefined;
+}
+
 /** Re-resolve aliases as well as identity: a cached canonical path can outlive its source. */
-export function isLocalAgentAvatarFileCurrent(
+export async function isLocalAgentAvatarFileCurrent(
   input: LocalAgentAvatarRead,
   file: PreparedLocalAgentAvatarFile,
-): boolean {
-  const resolved = resolveLocalAgentAvatarPath({
-    raw: input.source,
-    workspaceDir: input.workspaceDir,
-  });
-  if (!resolved.ok || resolved.value.filePath !== file.path) {
+): Promise<boolean> {
+  let stat: fs.BigIntStats;
+  try {
+    const workspaceRoot = await resolveLocalAgentAvatarFreshnessPath(input.workspaceDir);
+    if (!workspaceRoot) {
+      return false;
+    }
+    const filePath = await resolveLocalAgentAvatarFreshnessPath(
+      resolveLocalAgentAvatarSource(workspaceRoot, input.source),
+    );
+    if (filePath !== file.path || !isPathInside(workspaceRoot, filePath)) {
+      return false;
+    }
+    stat = await fs.promises.stat(filePath, { bigint: true });
+  } catch {
     return false;
   }
-  const { stat } = resolved.value;
   // Match fs-safe's fractional-millisecond view of its pinned bigint observation.
   const milliseconds = (ns: bigint) => {
     const remainder = ((ns % 1_000_000_000n) + 1_000_000_000n) % 1_000_000_000n;
     return Number((ns - remainder) / 1_000_000_000n) * 1_000 + Number(remainder) / 1_000_000;
   };
   return (
+    stat.isFile() &&
+    stat.size <= AVATAR_MAX_BYTES &&
     stat.nlink === 1n &&
     stat.dev.toString() === file.stat.dev &&
     stat.ino.toString() === file.stat.ino &&
