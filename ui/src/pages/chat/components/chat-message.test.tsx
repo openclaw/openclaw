@@ -406,96 +406,34 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it.each([
-    [
-      "qualified local profile",
-      {
-        senderId: "profile-buns",
-        senderIdentity: { type: "profile", id: "profile-buns" },
-      },
-      { userId: "profile-buns", userName: "Buns" },
-      "Buns",
-      undefined,
-      "DIV",
-    ],
-    [
-      "authenticated human with CLI provenance",
-      {
-        senderId: "profile-1",
-        senderName: "Recorded Name",
-        senderIdentity: { type: "profile", id: "profile-1" },
-        transport: { clients: [{ id: "cli", mode: "cli", displayName: "Task helper" }] },
-      },
-      { userId: "profile-1", userName: "Current Name" },
-      "Current Name",
-      "via CLI (Task helper)",
-      undefined,
-    ],
-    [
-      "source-only Web and external clients",
-      {
-        transport: {
-          clients: [
-            { id: "openclaw-control-ui", mode: "webchat" },
-            { id: "cli", mode: "cli", displayName: "Release helper" },
-            { id: "gateway-client", mode: "backend", displayName: "Build helper" },
-          ],
-        },
-      },
-      {
-        avatarPlacement: "gutter",
-        userName: "Unrelated Viewer",
-        userAvatar: "https://example.test/viewer.png",
-      },
-      undefined,
-      "via CLI (Release helper), RPC (Build helper)",
-      null,
-    ],
-  ] as const)(
-    "keeps sender attribution distinct for %s",
-    (_label, metadata, options, sender, source, avatar) => {
-      const message = createUserMessage("Follow up on the current task.", {
-        timestamp: 1000,
-        __openclaw: metadata,
-      });
-      const group = prepareMessageGroup(createMessageEntry("source-message", message));
-      render(renderTestMessageGroup(group, options));
-      if (sender === undefined) {
-        expectAbsent(".chat-sender-name");
-        expect(harness.view.textContent).not.toContain("Unrelated Viewer");
-      } else {
-        expect(elementText(".chat-group.user .chat-sender-name")).toBe(sender);
-      }
-      if (avatar === null) {
-        expectAbsent(".chat-avatar, .chat-author-avatar");
-      } else if (avatar !== undefined) {
-        expect(element(".chat-avatar.user")?.tagName).toBe(avatar);
-      }
-      expect(elementText(".chat-message-source")).toBe(source);
-    },
-  );
-
-  it("sender provenance links only profiles and does not identify colliding legacy senders as you", () => {
+  it("keeps profile ownership, navigation and transport attribution separate", () => {
     const navigate = vi.fn();
-    const renderSender = (senderId: string, profile = true) => {
-      const message = createUserMessage("hello", { timestamp: 1000 });
+    const cli = { id: "cli", mode: "cli", displayName: "Task helper" };
+    const renderSender = (
+      senderId: string | null,
+      profile = true,
+      clients: Array<{ id: string; mode: string; displayName?: string }> = [],
+    ) => {
+      const message = createUserMessage("hello", {
+        timestamp: 1000,
+        __openclaw: {
+          ...(senderId
+            ? {
+                senderId,
+                senderName: "Alice Example",
+                ...(profile ? { senderIdentity: { type: "profile", id: senderId } } : {}),
+              }
+            : {}),
+          transport: { clients },
+        },
+      });
       render(
-        renderTestMessageGroup(
-          createMessageGroup(message, "user", {
-            key: `sender-link-${senderId}`,
-            senderLabel: "Alice Example",
-            sender: {
-              id: senderId,
-              name: "Alice Example",
-              ...(profile ? { identity: { type: "profile" as const, id: senderId } } : {}),
-            },
-          }),
-          {
-            userId: "me",
-            userName: "Local User",
-            personActivity: { basePath: "", navigate },
-          },
-        ),
+        renderTestMessageGroup(prepareMessageGroup(createMessageEntry("sender", message)), {
+          userId: "me",
+          userName: "Local User",
+          userAvatar: "https://example.test/viewer.png",
+          personActivity: { basePath: "", navigate },
+        }),
       );
       return harness.view;
     };
@@ -506,14 +444,26 @@ describe("grouped chat rendering", () => {
     expect(link?.getAttribute("href")).toBe("/activity/profile-alice");
     link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(navigate).toHaveBeenCalledWith("profile-alice", "Alice Example");
+    expect(elementText(".chat-message-source")).toBeUndefined();
 
-    const own = renderSender("me");
+    const own = renderSender("me", true, [cli]);
     expect(own.querySelector("a.chat-sender-name")).toBeNull();
     expect(own.querySelector(".chat-sender-name")?.textContent).toBe("Local User");
+    expect(element(".chat-avatar.user")?.tagName).toBe("DIV");
+    expect(elementText(".chat-message-source")).toBe("via CLI (Task helper)");
     const legacy = renderSender("me", false);
     expect(legacy.querySelector("a.chat-sender-name")).toBeNull();
     expect(legacy.querySelector(".chat-sender-name")?.textContent).toBe("Alice Example");
     expect(renderSender("profile-alice", false).querySelector("a.chat-sender-name")).toBeNull();
+
+    renderSender(null, false, [
+      { id: "openclaw-control-ui", mode: "webchat" },
+      cli,
+      { id: "gateway-client", mode: "backend", displayName: "Build helper" },
+    ]);
+    expectAbsent(".chat-sender-name", ".chat-avatar", ".chat-author-avatar");
+    expect(harness.view.textContent).not.toContain("Local User");
+    expect(elementText(".chat-message-source")).toBe("via CLI (Task helper), RPC (Build helper)");
   });
 
   it("renders multiline system notices as sanitized markdown", () => {

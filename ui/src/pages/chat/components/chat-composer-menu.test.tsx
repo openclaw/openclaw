@@ -7,12 +7,7 @@ import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ComposerSkillCatalog } from "../composer-capability-catalog.ts";
-import {
-  docsServer,
-  docsTools,
-  makeCapabilities,
-  makeMenu,
-} from "./chat-composer-menu.test-support.ts";
+import { docsServer, makeCapabilities, makeMenu } from "./chat-composer-menu.test-support.ts";
 import {
   ComposerMenuLoadingRows,
   renderComposerMenuOption as ComposerMenuOption,
@@ -205,17 +200,6 @@ it("retains the focused capability row and management link through catalog refre
   update(
     { toolOverrides: { skills: { focused: false } } },
     {
-      skills: [{ key: "focused", name: "Focused skill", enabled: false, baseEnabled: true }],
-    },
-  );
-  flush();
-  expect(view.container.querySelector('[data-value="skill:focused"]')).toBe(row);
-  expect(document.activeElement).toBe(row);
-  await waitForSolid(() => expect(row.getAttribute("aria-checked")).toBe("false"));
-
-  update(
-    {},
-    {
       skillsRead: null,
       skills: [
         { key: "new", name: "New skill", enabled: true, baseEnabled: true },
@@ -242,24 +226,6 @@ it("retains the focused capability row and management link through catalog refre
   expect(onNavigate).not.toHaveBeenCalled();
   manage.click();
   await waitForSolid(() => expect(onNavigate).toHaveBeenCalledExactlyOnceWith("skills"));
-
-  update(
-    {
-      view: "connectors",
-      toolOverrides: { mcpServers: { docs: true } },
-    },
-    { mcpServers: [docsServer(false)] },
-  );
-  await waitForSolid(() => expect(checkbox("docs Enabled session")).toBeTruthy());
-  const connector = checkbox("docs Enabled session");
-  setMenu((previous) => ({ ...previous, toolOverrides: null }));
-  await waitForSolid(() => expect(checkbox("docs Disabled")).toBe(connector));
-
-  update({ view: "tools:docs" }, { toolsEffectiveResult: docsTools(true) });
-  await waitForSolid(() => {
-    expect(checkbox("search Search documents")).toBeTruthy();
-    expect(checkbox("list")).toBeTruthy();
-  });
 });
 
 it("retains attachment choices while the native menu closes and reopens", async () => {

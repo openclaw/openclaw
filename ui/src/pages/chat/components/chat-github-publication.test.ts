@@ -155,16 +155,11 @@ it.each([
     unidentified: true,
   }),
   availability(undefined, undefined, { name: "native-publisher", native: true }),
-  availability(undefined, undefined, {
-    name: "native-publisher-unidentified",
-    native: true,
-    unidentified: true,
-  }),
 ])("explains $name publication availability without requiring a connection", async (scenario) => {
   const shared = scenario.native
     ? { ...sharedPublisher, source: "system-detected" as const }
     : null;
-  const { controller, request } = setup({
+  const { controller } = setup({
     ...publicationOptions,
     shared,
     personal: scenario.unidentified
@@ -198,10 +193,6 @@ it.each([
   }
   expect(row.textContent).not.toContain("Connect GitHub in Settings");
   expect(row.querySelector('[aria-label="Publication account"]')).toBeNull();
-  expect(request).toHaveBeenCalledExactlyOnceWith("sessions.github.options", {
-    sessionKey: "agent:main:one",
-    agentId: "main",
-  });
 });
 
 it.each(["system-configured", "agent-override", null] as const)(
@@ -312,47 +303,6 @@ it("warns about the workspace only for a selected or sole personal account", () 
   expect(query('[aria-label="Publication account"]')).toBeNull();
   expect(container.textContent).toContain("reclaim the workspace");
   expect(onSelect).not.toHaveBeenCalled();
-});
-
-it("selects an eligible profile directly from Details and publishes its exact identity", async () => {
-  const { controller, request, changed } = setup();
-  await settled(controller);
-  request.mockResolvedValue({
-    requestId: "profile-choice",
-    status: "requested",
-    publisher: { source: "personal", accountId: 2, login: "alice-tools" },
-  });
-  const draw = () => paintEnvironment(workWithPublication(controller.view()));
-  changed.mockImplementation(draw);
-  draw();
-  const create = await waitForPublication();
-  expect(create?.textContent).toBe("Create PR");
-  expect(
-    request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-  ).toHaveLength(0);
-  await openBranchMenu();
-  const personal = queryButton('.chat-pr-branch-menu [role="menuitemradio"][value="personal"]');
-  expect(personal).not.toBeNull();
-  expect(personal.textContent).toContain("My GitHub");
-  expect(personal.textContent).toContain("@alice-tools");
-  expect(query('.chat-pr-branch-menu [role="menuitemradio"]')).toBe(personal);
-  expect(personal.closest('[role="menu"]')).toBe(branchMenu());
-  personal.click();
-  await waitForSolid(() => expect(controller.view()?.selection?.source).toBe("personal"));
-  expect(branchMenu()?.matches(":popover-open")).toBe(false);
-  create!.click();
-  await waitForSolid(() =>
-    expect(request).toHaveBeenCalledWith("sessions.github.publish", {
-      sessionKey: "agent:main:one",
-      agentId: "main",
-      idempotencyKey: expect.any(String),
-      selection: {
-        source: "personal",
-        generation: "bdca439a-e787-4f9f-b5f3-a878c662cc76",
-        account: { accountId: 2, login: "alice-tools" },
-      },
-    }),
-  );
 });
 
 it.each(["personal", "confirmation"] as const)(

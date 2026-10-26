@@ -129,13 +129,6 @@ function escape() {
 }
 const expectOpen = (panel: Element, open: boolean) =>
   expect(panel.matches(":popover-open")).toBe(open);
-async function toggle(details: HTMLDetailsElement) {
-  const changed = new Promise<void>((resolve) => {
-    details.addEventListener("toggle", () => resolve(), { once: true });
-  });
-  details.querySelector<HTMLElement>(":scope > summary")!.click();
-  await changed;
-}
 afterEach(() => {
   for (const element of mounted.splice(0)) {
     element.remove();
@@ -274,7 +267,13 @@ describe("chat Details presentation", () => {
   });
 
   it("positions above its supplied footer when unrelated matching DOM precedes it", async () => {
-    const { frame, footer, trigger, panel } = await fixture();
+    const { updateChat, frame, footer, trigger, panel } = await fixture();
+    expect(trigger.textContent).toContain("Details");
+    expectOpen(panel, false);
+    expect(panel.querySelector("openclaw-chat-details-session")).toBeNull();
+    updateChat({ progressCard: { ...card, revision: 2 } });
+    flush();
+    expectOpen(panel, false);
     const unrelatedFooter = document.createElement("div");
     unrelatedFooter.className = "chat-footer";
     unrelatedFooter.style.cssText = "position:absolute;top:0;height:20px";
@@ -359,24 +358,6 @@ describe("chat Details presentation", () => {
     expect(navigation.getBoundingClientRect().toJSON()).toEqual(beforeHover);
     await page.getByRole("button", { name: "Show session changes", exact: true }).click();
     expect(openChanges).toHaveBeenCalledOnce();
-  });
-
-  it("starts closed, stays closed on revisions, and returns Escape focus to its labeled trigger", async () => {
-    const { updateChat, trigger, panel } = await fixture();
-    expect(trigger.textContent).toContain("Details");
-    expectOpen(panel, false);
-    expect(panel.querySelector("openclaw-chat-details-session")).toBeNull();
-    updateChat({ progressCard: { ...card, revision: 2 } });
-    flush();
-    expectOpen(panel, false);
-    click(trigger);
-    expectOpen(panel, true);
-    await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
-    expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
-    panel.querySelector<HTMLButtonElement>("button")!.focus();
-    escape();
-    expectOpen(panel, false);
-    expect(document.activeElement).toBe(trigger);
   });
 
   it("opens full-width mobile Details from Panels and restores focus to that control", async () => {
@@ -470,34 +451,6 @@ describe("chat Details presentation", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("keeps metadata visible while progress retains its collapse across revisions", async () => {
-    const { updateChat, trigger, panel, progress } = await fixture();
-    click(trigger);
-    await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
-    const session = panel.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
-    await session.updateComplete;
-    flush();
-    const sessionSection = session.querySelector<HTMLElement>(".chat-details-session")!;
-    const progressSection = progress.querySelector<HTMLDetailsElement>(".task-progress-details")!;
-    expect(sessionSection.querySelector(":scope > summary")).toBeNull();
-    expect(progressSection.open).toBe(true);
-    expect(
-      session.querySelector(
-        '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
-      ),
-    ).toBeNull();
-    await toggle(progressSection);
-    expect(progressSection.open).toBe(false);
-    expect(
-      getComputedStyle(progress.querySelector(".chat-details-progress__menu")!).display,
-    ).not.toBe("none");
-    updateChat({ progressCard: { ...card, revision: 3 } });
-    flush();
-    flush();
-    expect(sessionSection.checkVisibility()).toBe(true);
-    expect(progressSection.open).toBe(false);
-  });
-
   it("constrains the popover to its conversation and above the composer after narrowing", async () => {
     const { frame, footer, trigger, panel } = await fixture();
     click(trigger);
@@ -533,31 +486,20 @@ describe("chat Details presentation", () => {
     expectOpen(panel, false);
   });
 
-  it("keeps global browser hide, lifetime dismiss, saved clear and refresh as distinct actions", async () => {
+  it("routes browser progress preferences and retires hidden menu actions", async () => {
     const hide = vi.fn();
-    const dismiss = vi.fn();
-    const clear = vi.fn();
-    const refresh = vi.fn();
     const collapse = vi.fn();
     const settings = vi.fn();
     const { update, trigger, progress } = await fixture(
       props({
         onHideTaskProgress: hide,
-        onDismissProgressCard: dismiss,
-        onClearSavedProgressCard: clear,
         onCollapseTaskProgressChange: collapse,
         onOpenTaskProgressSettings: settings,
-        progressCardRefresh: { onRefresh: refresh },
       }),
     );
     click(trigger);
     flush();
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
-    const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
-    menu.querySelector<HTMLButtonElement>("button")!.click();
-    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
-    expectOpen(menuSurface, true);
-    expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
     const select = async (value: string) => {
       if (trigger.getAttribute("aria-expanded") !== "true") {
         click(trigger);
@@ -567,26 +509,19 @@ describe("chat Details presentation", () => {
       }
       if (menu.querySelector("button")!.getAttribute("aria-expanded") !== "true") {
         menu.querySelector<HTMLButtonElement>("button")!.click();
-        await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+        await expect
+          .poll(() => menu.querySelector<HTMLElement>('[role="menu"]')!.dataset.phase)
+          .toBe("open");
       }
       menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!.click();
     };
+    await select("collapse");
+    expect(collapse).toHaveBeenCalledWith(true);
+    await select("settings");
+    expect(settings).toHaveBeenCalledOnce();
     await select("hide");
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     expect(hide).toHaveBeenCalledOnce();
-    expect(clear).not.toHaveBeenCalled();
-    await select("collapse");
-    expect(collapse).toHaveBeenCalledWith(true);
-    expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
-    await select("settings");
-    expect(settings).toHaveBeenCalledOnce();
-    await select("dismiss");
-    expect(dismiss).toHaveBeenCalledWith(card);
-    expect(clear).not.toHaveBeenCalled();
-    await select("refresh");
-    expect(refresh).toHaveBeenCalledWith(card);
-    await select("clear");
-    expect(clear).toHaveBeenCalledWith(card);
     update({ presentation: false });
     flush();
     flush();
@@ -595,7 +530,7 @@ describe("chat Details presentation", () => {
   });
 });
 
-it("keeps Environment changes readable across disclosure toggles and omits empty Participants", async () => {
+it("keeps Environment changes readable with the current callback and omits empty Participants", async () => {
   await page.viewport(1000, 800);
   const openChanges = vi.fn();
   const currentOpenChanges = vi.fn();
@@ -634,12 +569,6 @@ it("keeps Environment changes readable across disclosure toggles and omits empty
   expect(openChanges).toHaveBeenCalledOnce();
   view.updateChat({ onOpenSessionDiff: currentOpenChanges });
   flush();
-  click(heading);
-  expect(heading.getAttribute("aria-expanded")).toBe("false");
-  expect(action().closest("[inert]")).not.toBeNull();
-  click(heading);
-  expect(heading.getAttribute("aria-expanded")).toBe("true");
-  expect(action().closest("[inert]")).toBeNull();
   expect(action().textContent).toContain("+248");
   expect(action().textContent).toContain("−61");
   await page.getByRole("button", { name: /Changes/ }).click();

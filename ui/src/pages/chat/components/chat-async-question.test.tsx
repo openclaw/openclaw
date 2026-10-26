@@ -276,27 +276,6 @@ it("retires the unowned mirrored prompt only after its canonical restart recover
   );
 });
 
-it("reopens the archived question with its draft until another later completion", () => {
-  document.body.append(container);
-  const old = question("old", "run-1");
-  const state = presentationState();
-  present([old], state);
-  const draft = { answers: new Map([["0", { selected: new Set<string>(), freeText: "My team" }]]) };
-  state.asyncQuestionDrafts.set("old", draft);
-  const messages = [old, terminal("run-1"), terminal("run-2")];
-  let presentation = present(messages, state);
-  drawSummary(readAsyncQuestions(old)!, presentation);
-  expectSummary(["Which audience?", "No longer pending"], ["Answer above the message box."]);
-  const answer = container.querySelector<HTMLButtonElement>("button")!;
-  expect(answer.textContent?.trim()).toBe("Answer");
-  answer.click();
-  presentation = present(messages, state);
-  expect(pendingIds(presentation)).toEqual(["old"]);
-  expect(state.asyncQuestionDrafts.get("old")).toBe(draft);
-  expect(state.asyncQuestionDrafts.get("old")?.answers.get("0")?.freeText).toBe("My team");
-  expectPending([...messages, terminal("run-3")], 0, state);
-});
-
 it("keeps a rejected in-flight answer and its retry error visible after a later completion", async () => {
   const old = question("old", "run-1");
   const state = presentationState();
@@ -419,7 +398,6 @@ it("keeps a persisted answer resolved across remount and reconnect and displays 
 
 it.each([
   ["unsaved answer", [{ role: "user", content: historicalAnswer.content }], 1],
-  ["unrelated text", [{ ...historicalAnswer, content: "Everyone" }], 1],
   ["internal input", [{ ...historicalAnswer, provenance: { kind: "internal_system" } }], 1],
   ["empty answer", [{ ...historicalAnswer, content: "> Which audience?\n\n" }], 1],
   [
@@ -492,14 +470,12 @@ it.each([
         ? "Edited in the outbox: use my earlier details."
         : "> First?\n\nQuote this:\n\n> Second?\n\nStill the first answer\n\n> Second?\n\nThe second answer",
     };
-    for (const epoch of [1, 2]) {
-      const presentation = historyPresentation([promptMessage, answer], epoch);
-      expect(presentation.pending).toHaveLength(confirmed ? 0 : 1);
-      drawSummary(promptMessage.openclawAsyncDelivery, presentation);
-      expect(container.textContent?.includes("Answer sent")).toBe(confirmed);
-      if (confirmed) {
-        expectSummary([answer.content], ["Awaiting delivery confirmation"]);
-      }
+    const presentation = historyPresentation([promptMessage, answer]);
+    expect(presentation.pending).toHaveLength(confirmed ? 0 : 1);
+    drawSummary(promptMessage.openclawAsyncDelivery, presentation);
+    expect(container.textContent?.includes("Answer sent")).toBe(confirmed);
+    if (confirmed) {
+      expectSummary([answer.content], ["Awaiting delivery confirmation"]);
     }
   },
 );

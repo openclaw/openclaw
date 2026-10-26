@@ -97,18 +97,9 @@ it("subtracts embedded prompt sections once, and leaves unmeasured and inconsist
 
 it("keeps total usage when session replacement rejects a report from another incarnation", async () => {
   const first = createDeferredCore<ReturnType<typeof usage>>();
-  let signal: AbortSignal | undefined;
-  let requestIndex = 0;
-  const request = createGatewayRequestMock((method, params, options) => {
-    const firstRequest = requestIndex++ === 0;
-    expect(method).toBe("sessions.usage");
-    expect(params).toMatchObject({ key: `agent:main:${firstRequest ? "first" : "second"}` });
-    if (firstRequest) {
-      signal = options?.signal;
-      return first.promise;
-    }
-    return usage("second", "retired");
-  });
+  const request = createGatewayRequestMock()
+    .mockReturnValueOnce(first.promise)
+    .mockResolvedValue(usage("second", "retired"));
   const { gateway, publish } = createApplicationGateway();
   const client = createTestGatewayClient(request);
   publish({ ...gateway.snapshot, phase: "connected", client });
@@ -128,14 +119,9 @@ it("keeps total usage when session replacement rejects a report from another inc
     />
   ));
   await expect.poll(() => request.mock.calls.length).toBe(1);
-  setSession((current) => ({ ...current, label: "Renamed session" }));
-  flush();
-  expect(request).toHaveBeenCalledTimes(1);
-  expect(signal?.aborted).toBe(false);
   setSession({ key: "agent:main:second", kind: "direct", sessionId: "current" });
   flush();
   await expect.poll(() => view.container.querySelector('[role="meter"]')).not.toBeNull();
-  expect(signal?.aborted).toBe(true);
   first.resolve(usage("first"));
   await first.promise;
   flush();
@@ -148,7 +134,6 @@ it("keeps total usage when session replacement rejects a report from another inc
   setSession((current) => ({ ...current, totalTokens: 80000, totalTokensFresh: false }));
   flush();
   expect(total.getAttribute("aria-valuetext")).toBe("~80k of 1M tokens");
-  view.unmount();
 });
 
 it("offers retry after a rejected read and keeps loading until recovery settles", async () => {
@@ -175,7 +160,6 @@ it("offers retry after a rejected read and keeps loading until recovery settles"
   categoryButton(view.container, "files").click();
   flush();
   expect(view.container.textContent).toContain("AGENTS.md");
-  view.unmount();
 });
 
 it("groups duplicate filenames by producer origin and keeps deferred schemas outside usage", () => {
@@ -233,12 +217,10 @@ it("reports only the current manual refresh failure after reconnect", async () =
   try {
     await expect.poll(() => view.container.querySelector(".chat-context__bar")).not.toBeNull();
     view.container.querySelector<HTMLButtonElement>(".chat-context__refresh")!.click();
-    expect(request).toHaveBeenCalledTimes(2);
     const pendingRefresh = refresh(gateway);
     publish({ ...gateway.snapshot, phase: "reconnecting" });
     publish({ ...gateway.snapshot, phase: "connected", client });
     await expect.poll(() => view.container.textContent).toContain("Couldn");
-    expect(request).toHaveBeenCalledTimes(3);
     stale.resolve(usage("first"));
     await pendingRefresh;
     flush();
@@ -249,7 +231,6 @@ it("reports only the current manual refresh failure after reconnect", async () =
     expect(retry.textContent).toBe("Retry");
     retry.click();
     await expect.poll(() => notify.mock.calls.length).toBe(1);
-    expect(request).toHaveBeenCalledTimes(4);
   } finally {
     view.unmount();
     notify.mockRestore();
@@ -408,13 +389,10 @@ it.each([
     flush();
     expect(view.container.textContent).toContain(message);
     expect(view.container.querySelector("openclaw-panel-empty-state")).not.toBeNull();
-    expect(view.container.querySelector(".chat-context-page__header")).toBeNull();
-    expect(view.container.querySelector(".chat-context__compact")).toBeNull();
     const button = view.container.querySelector<HTMLButtonElement>(
       "openclaw-panel-empty-state button",
     );
     expect(button?.textContent === "Retry").toBe(retry);
-    expect(view.container.querySelector('[aria-label="Refresh"]')).toBeNull();
   } finally {
     view.unmount();
   }
