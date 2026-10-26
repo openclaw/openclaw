@@ -4,20 +4,23 @@ import {
   type BootRecord,
 } from "../../app/boot-record.ts";
 import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-data.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   sidebarSnapshotInvalidationMatches,
   snapshotStoreGeneration,
   subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
 
+type PreparedSnapshotRead = ReturnType<
+  typeof import("./session-snapshot-store.ts").readPrewarmedChatSnapshot
+>;
+
 type PrewarmedSnapshot = {
   cacheKey: string;
   cancelled: boolean;
   promise: Promise<unknown>;
   prepared?: {
-    promise: Promise<ChatSessionSnapshot | null>;
-    snapshot?: ChatSessionSnapshot | null;
+    promise: PreparedSnapshotRead;
+    snapshot?: Awaited<PreparedSnapshotRead>;
   };
 };
 
@@ -37,10 +40,7 @@ export function peekPrewarmedChatSnapshot(): PrewarmedSnapshot | undefined {
   return pending;
 }
 
-export function readSharedPrewarm(
-  entry: PrewarmedSnapshot,
-  read: () => Promise<ChatSessionSnapshot | null>,
-) {
+export function readSharedPrewarm(entry: PrewarmedSnapshot, read: () => PreparedSnapshotRead) {
   const prepared: NonNullable<PrewarmedSnapshot["prepared"]> = (entry.prepared ??= {
     promise: read().then((snapshot) => {
       prepared.snapshot = snapshot;
