@@ -24,7 +24,7 @@ function baseline(tools: readonly JsonValue[]) {
       .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
   );
 }
-const candidate = codexLegacyDynamicToolsFingerprint;
+const algorithms = { baseline, candidate: codexLegacyDynamicToolsFingerprint };
 const fixtureRoot = new URL(
   "../../../../test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/",
   import.meta.url,
@@ -45,7 +45,7 @@ let goldenCases = 0;
 for (const { tools } of catalogs) {
   for (const catalog of [tools, tools.toReversed(), flattenCodexDynamicToolFunctions(tools)]) {
     const legacy = baseline(catalog);
-    assert.equal(candidate(catalog), legacy);
+    assert.equal(algorithms.candidate(catalog), legacy);
     assert.equal(
       codexDynamicToolsFingerprint(catalog),
       `sha256:${createHash("sha256").update(legacy).digest("hex")}`,
@@ -58,7 +58,7 @@ for (const catalog of [
   [null, true, false, 0, -0, 1.5, "é", "e", "E", [1, null, "x"]],
   [JSON.parse('{"__proto__":{"x":1},"2":"two","10":"ten","a":"\\n\\\""}')],
 ]) {
-  assert.equal(candidate(catalog), baseline(catalog));
+  assert.equal(algorithms.candidate(catalog), baseline(catalog));
   goldenCases++;
 }
 
@@ -94,12 +94,9 @@ try {
       ...sourceTools[(index * 7) % sourceTools.length]!,
       name: `tool_${(index * 137) % size}`,
     }));
-    assert.equal(candidate(tools), baseline(tools));
+    assert.equal(algorithms.candidate(tools), baseline(tools));
     const cold = [];
-    for (const [name, fingerprint] of [
-      ["baseline", baseline],
-      ["candidate", candidate],
-    ] as const) {
+    for (const [name, fingerprint] of Object.entries(algorithms)) {
       const start = performance.now();
       fingerprint(tools);
       cold.push({ name, ms: performance.now() - start, ...countWork(() => fingerprint(tools)) });
@@ -109,10 +106,7 @@ try {
     }
     const measurements = [];
     for (let sample = 0; sample < samples; sample++) {
-      for (const [name, fingerprint] of [
-        ["baseline", baseline],
-        ["candidate", candidate],
-      ] as const) {
+      for (const [name, fingerprint] of Object.entries(algorithms)) {
         globalThis.gc?.();
         await inspector.post("HeapProfiler.startSampling", {
           samplingInterval: 4096,
