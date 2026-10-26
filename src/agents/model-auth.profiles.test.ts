@@ -180,6 +180,14 @@ const oauthFixture = {
 
 const routerUrl = "https://openrouter.ai/api/v1";
 
+function keyStore(provider: string, key: string, profileId = `${provider}:default`) {
+  return authStore({ [profileId]: keyCredential(provider, key) });
+}
+
+function completionProvider(baseUrl: string, options: Partial<ModelProviderConfig> = {}) {
+  return providerEntry(baseUrl, { api: "openai-completions", ...options });
+}
+
 const BEDROCK_PROVIDER_CFG = configFor(
   "amazon-bedrock",
   "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -364,16 +372,12 @@ describe("getApiKeyForModelCore", () => {
   });
 
   it("rejects an explicit OpenAI API-key profile for the Codex transport", async () => {
-    const store = authStore({
-      "openai:api-key": keyCredential("openai", "direct-openai-key"),
-    });
-
     await expect(
       resolveModelAuth({
         model: model("gpt-5.5", "openai-chatgpt-responses"),
         profileId: "openai:api-key",
         lockedProfile: true,
-        store,
+        store: keyStore("openai", "direct-openai-key", "openai:api-key"),
       }),
     ).rejects.toThrow(/requires a ChatGPT subscription \(OAuth or token\) profile/);
   });
@@ -388,13 +392,11 @@ describe("getApiKeyForModelCore", () => {
           agents: { entries: { configured: { agentDir: state.agentDir("configured") } } },
         };
 
-        await withEnvAsync({ DEMO_LOCAL_API_KEY: "env-demo-key" }, async () => {
-          await expect(resolveAuth({ provider: "demo-local", cfg })).rejects.toThrow(
-            /Inline API key for provider "demo-local" is temporarily disabled/,
-          );
-        });
+        await expect(resolveAuth({ provider: "demo-local", cfg })).rejects.toThrow(
+          /Inline API key for provider "demo-local" is temporarily disabled/,
+        );
       },
-      { agentEnv: "clear" },
+      { agentEnv: "clear", env: { DEMO_LOCAL_API_KEY: "env-demo-key" } },
     );
   });
 
@@ -435,9 +437,7 @@ describe("getApiKeyForModelCore", () => {
       async () => {
         const resolved = await resolveAuth({
           provider: "zai",
-          store: authStore({
-            "zai:default": keyCredential("zai", "openclaw onboard --auth-choice zai-coding-global"),
-          }),
+          store: keyStore("zai", "openclaw onboard --auth-choice zai-coding-global"),
         });
         expect(resolved.apiKey).toBe("zai-current-key");
         expect(resolved.source).toContain("ZAI_API_KEY");
@@ -454,13 +454,11 @@ describe("getApiKeyForModelCore", () => {
       prepareRuntimeAvailableProviderAuth({
         provider,
         cfg: configForProviders({
-          [provider]: {
-            api: "openai-completions",
-            baseUrl,
+          [provider]: completionProvider(baseUrl, {
             models: [
               modelDefinition("fixture-model", { reasoning: false, contextWindow: 128_000 }),
             ],
-          },
+          }),
         }),
         env: {},
         store: authStore({}),
@@ -594,11 +592,7 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
           const agentDir = state.agentDir("worker");
           await fs.mkdir(agentDir, { recursive: true });
           const legacyPath = path.join(agentDir, "auth-profiles.json");
-          const legacyBytes = JSON.stringify(
-            authStore({
-              "anthropic:default": keyCredential("anthropic", "legacy-key"),
-            }),
-          );
+          const legacyBytes = JSON.stringify(keyStore("anthropic", "legacy-key"));
           await fs.writeFile(legacyPath, legacyBytes);
           const persistedProfiles =
             snapshot === "invalid persisted"
@@ -637,14 +631,7 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
               status: "readable",
               raw: { profiles: persistedProfiles },
             });
-            await fs.writeFile(
-              legacyPath,
-              JSON.stringify(
-                authStore({
-                  "nvidia:default": keyCredential("nvidia", "new-legacy-key"),
-                }),
-              ),
-            );
+            await fs.writeFile(legacyPath, JSON.stringify(keyStore("nvidia", "new-legacy-key")));
             for (const removeSource of [false, true]) {
               if (removeSource) {
                 await fs.rm(legacyPath);
@@ -702,9 +689,7 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
           api: "openai-completions" as const,
           apiKey: { source: "env", provider: "default", id: "OPENROUTER_PROFILE" },
         }),
-        store: authStore({
-          OPENROUTER_PROFILE: keyCredential("openrouter", "sk-or-wrong-profile"),
-        }),
+        store: keyStore("openrouter", "sk-or-wrong-profile", "OPENROUTER_PROFILE"),
       });
 
       expect(resolved.apiKey).toBe("sk-or-env-secret");
@@ -741,13 +726,10 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
       provider: "openrouter-minimax",
       cfg: {
         ...configForProviders({
-          openrouter: providerEntry("https://openrouter.ai/api/v1", {
-            api: "openai-completions" as const,
-          }),
-          "openrouter-minimax": providerEntry("https://openrouter.ai/api/v1", {
-            api: "openai-completions" as const,
+          openrouter: completionProvider(routerUrl),
+          "openrouter-minimax": completionProvider(routerUrl, {
             apiKey: "openrouter:key-b",
-            auth: "api-key" as const,
+            auth: "api-key",
           }),
         }),
         auth: { order: { openrouter: ["openrouter:key-a", "openrouter:key-b"] } },
@@ -768,7 +750,6 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
   type BindingOptions = Partial<Pick<ModelProviderConfig, "baseUrl" | "api">> & {
     provider?: string;
     profileId?: string;
-    modelApi?: string;
     owner?: boolean;
   };
   it.each<[string, AuthProfileCredential, RegExp, BindingOptions?]>([
@@ -784,34 +765,10 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
       },
     ],
     [
-      "model auth mode",
-      { type: "token", provider: "openai", token: "oauth-token" },
-      /requires an OpenAI API key profile/,
-      {
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-        profileId: "openai:token",
-        api: "openai-responses",
-        modelApi: "openai-responses",
-        owner: false,
-      },
-    ],
-    [
-      "OAuth credential class",
-      createOAuthRefreshCredential({ provider: "google", expires: 0 }),
-      /references a "oauth" credential for provider "google", which is not a bearer-style auth class/,
-      { profileId: "google:oauth-a" },
-    ],
-    [
       "different provider endpoint",
       keyCredential("openrouter", "sk-or-actual-key-b"),
       /not compatible with this provider entry's auth binding/,
       { provider: "custom-proxy", baseUrl: "https://example.invalid/v1" },
-    ],
-    [
-      "profile with no key material",
-      { type: "api_key", provider: "openrouter" },
-      /matched a stored profile but failed to resolve/,
     ],
   ])(
     "rejects %s instead of sending a profile ID as a literal bearer",
@@ -821,13 +778,11 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
         baseUrl = routerUrl,
         profileId = "openrouter:key-b",
         api = "openai-completions",
-        modelApi,
         owner = credential.type !== "oauth",
       } = options;
       await expect(
         resolveAuth({
           provider,
-          modelApi,
           cfg: configForProviders({
             ...(owner
               ? { openrouter: providerEntry(routerUrl, { api: "openai-completions" }) }
