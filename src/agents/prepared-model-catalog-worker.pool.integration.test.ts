@@ -2,16 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as checkpoint } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type MockInstance,
-} from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
@@ -92,8 +83,12 @@ function currentRuntime(fixture: Fleet, index = 0) {
   })!;
 }
 
-function refreshFleet(fixture: Fleet, agentIds?: Set<string>) {
-  return refreshPreparedModelRuntimeSnapshots(fixture.config, {
+function refreshFleet(
+  fixture: Fleet,
+  agentIds?: Set<string>,
+  config: OpenClawConfig = fixture.config,
+) {
+  return refreshPreparedModelRuntimeSnapshots(config, {
     catalogMode: "static",
     allowGatewaySubagentBinding: true,
     agentIds,
@@ -111,6 +106,20 @@ function loadFleetAuth(fixture: Fleet, providerIds: string[] = []) {
 
 function loadAuth(snapshot: Fleet["snapshots"][number], providerIds = [PROVIDER_ID]) {
   return loadPreparedModelRuntimeAuth(snapshot, { providerIds });
+}
+
+function expectAuth(snapshot: Fleet["snapshots"][number]) {
+  return expect(loadAuth(snapshot)).resolves.toMatchObject({ authStore: { version: 1 } });
+}
+
+function holdFleet(fixture: Fleet, index = 0) {
+  const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[index]!.agentDir);
+  fs.writeFileSync(`${fixture.marker}.hold`, "");
+  return {
+    ...pendingCatalogWork(`${fixture.marker}.hold`),
+    entered,
+    release: () => fs.rmSync(`${fixture.marker}.hold`),
+  };
 }
 
 function observeFailures() {
@@ -175,7 +184,7 @@ describe("Gateway catalog worker pool", () => {
     const refresh = async () => {
       await refreshFleet(fixture, new Set([agentId]));
       const current = currentRuntime(fixture);
-      await expect(loadAuth(current)).resolves.toMatchObject({ authStore: { version: 1 } });
+      await expectAuth(current);
       await loadCompletedFullCatalog(current);
       const catalog = await loadGatewayModelCatalogSnapshot({
         agentId,
@@ -307,9 +316,7 @@ describe("Gateway catalog worker pool", () => {
         expect(retained.refreshFailed).toBe(index === 0 ? true : undefined);
       }
       expect(catalogFailures).toHaveLength(1);
-      await expect(loadAuth(replacements[1]!)).resolves.toMatchObject({
-        authStore: { version: 1 },
-      });
+      await expectAuth(replacements[1]!);
       expect(replacements[0]!.readFullModelCatalog!()!.refreshFailed).toBe(true);
       for (const replacement of replacements.slice(1)) {
         expect(replacement.readFullModelCatalog!()!.refreshFailed).toBeUndefined();
@@ -335,7 +342,7 @@ describe("Gateway catalog worker pool", () => {
       signal.addEventListener("abort", resume, { once: true });
       const { failures, unregister } = observeFailures();
       let renewal: ReturnType<typeof loadCompletedFullCatalog> | undefined;
-      let termination: MockInstance<Worker["terminate"]> | undefined;
+      let restoreTermination: (() => void) | undefined;
       try {
         const original = fixture.snapshots[0]!;
         const accepted = (await loadFleetCatalogs(fixture))[0]!;
@@ -382,12 +389,13 @@ describe("Gateway catalog worker pool", () => {
         expectWorkerCustody(fixture, worker);
         expect(original.readFullModelCatalog!()).toBe(accepted);
         const terminate = worker.terminate.bind(worker);
-        termination = vi.spyOn(worker, "terminate").mockImplementation(async () => {
+        const termination = vi.spyOn(worker, "terminate").mockImplementation(async () => {
           const result = await terminate();
           exited.resolve();
           await release.promise;
           return result;
         });
+        restoreTermination = () => termination.mockRestore();
         await terminate();
         await exited.promise;
         expect(worker.threadId).toBe(-1);
@@ -403,12 +411,7 @@ describe("Gateway catalog worker pool", () => {
                       api: "openai-completions",
                     }),
                   };
-            await refreshPreparedModelRuntimeSnapshots(config, {
-              catalogMode: "static",
-              allowGatewaySubagentBinding: true,
-              agentIds: new Set([agentId]),
-              pluginMetadataSnapshot: original.metadataSnapshot,
-            });
+            await refreshFleet(fixture, new Set([agentId]), config);
           } else {
             const key =
               next === "A" ? `synthetic-catalog-${agentId}` : "synthetic-catalog-account-b";
@@ -473,7 +476,7 @@ describe("Gateway catalog worker pool", () => {
         signal.removeEventListener("abort", resume);
         fs.rmSync(`${fixture.marker}.hold`, { force: true });
         await Promise.allSettled([renewal]);
-        termination?.mockRestore();
+        restoreTermination?.();
         unregister();
       }
     },
@@ -533,14 +536,12 @@ describe("Gateway catalog worker pool", () => {
       const fixture = await createFleetFixture(undefined, true);
       await loadFleetCatalogs(fixture);
       const { failures, unregister } = observeFailures();
-      const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);
       const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
       const warnings = workerFailureWarnings().length;
-      const work = pendingCatalogWork(`${fixture.marker}.hold`);
-      fs.writeFileSync(`${fixture.marker}.hold`, "");
+      const work = holdFleet(fixture);
       const renewal = work.track(fixture.snapshots[0]!.loadFullModelCatalog!({ refresh: true }));
       try {
-        await entered(renewal, signal);
+        await work.entered(renewal, signal);
         const queued = work.track(fixture.snapshots[1]!.loadFullModelCatalog!({ refresh: true }));
         const closing = work.track(
           reason === "shutdown"
@@ -549,7 +550,7 @@ describe("Gateway catalog worker pool", () => {
                 getPluginMetadataSnapshotCache(fixture.snapshots[0]!.metadataSnapshot),
               ),
         );
-        fs.rmSync(`${fixture.marker}.hold`);
+        work.release();
         await closing;
         await expect(renewal).rejects.toThrow();
         await expect(queued).rejects.toThrow();
@@ -574,18 +575,15 @@ describe("Gateway catalog worker pool", () => {
     await loadFleetAuth(fixture);
     await loadFleetCatalogs(fixture);
     expectPool({ workers: 1, workersCreated: 1, activeTasks: 0, pendingTasks: 0 });
-    const marker = fixture.marker;
-    await using work = pendingCatalogWork(`${marker}.hold`);
-    const entered = observeCatalogEntry(marker, fixture.snapshots[0]!.agentDir);
-    fs.writeFileSync(`${marker}.hold`, "");
+    await using work = holdFleet(fixture);
     const first = work.track(loadCompletedFullCatalog(fixture.snapshots[0]!, { refresh: true }));
-    await entered(first, signal);
+    await work.entered(first, signal);
     expectPool({ activeTasks: 1, pendingTasks: 1 });
     const retired = work.track(loadAuth(fixture.snapshots[1]!));
     const sibling = work.track(loadAuth(fixture.snapshots[2]!));
     await expect.poll(() => getPreparedModelCatalogWorkerPoolSnapshot().pendingTasks).toBe(3);
     await refreshFleet(fixture, new Set([fixture.agentIds[1]!]));
-    fs.rmSync(`${marker}.hold`);
+    work.release();
     await expect(retired).rejects.toThrow("superseded");
     await expect(sibling).resolves.toMatchObject({ authStore: { version: 1 } });
     await first;
@@ -760,12 +758,10 @@ describe("Gateway catalog worker pool", () => {
     // Startup discovery must finish before the pool is expected to drain.
     await loadFleetCatalogs(fixture);
     await loadFleetAuth(fixture);
-    const work = pendingCatalogWork(`${fixture.marker}.hold`);
-    const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);
-    fs.writeFileSync(`${fixture.marker}.hold`, "");
+    const work = holdFleet(fixture);
     const first = work.track(loadCompletedFullCatalog(fixture.snapshots[0]!, { refresh: true }));
     try {
-      await entered(first, signal);
+      await work.entered(first, signal);
       // The already-created pool owns native timers. Advance only the queued caller's outer
       // deadline while the sibling's worker and its admitted execution budget remain live.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -784,14 +780,10 @@ describe("Gateway catalog worker pool", () => {
       await expect(duplicate).rejects.toBe(await expired.catch((error: unknown) => error));
       vi.useRealTimers();
       expect(fixture.snapshots.every((snapshot) => snapshot.isCurrent())).toBe(true);
-      fs.rmSync(`${fixture.marker}.hold`);
+      work.release();
       await first;
-      await expect(loadAuth(fixture.snapshots[1]!)).resolves.toMatchObject({
-        authStore: { version: 1 },
-      });
-      await expect(loadAuth(fixture.snapshots[2]!)).resolves.toMatchObject({
-        authStore: { version: 1 },
-      });
+      await expectAuth(fixture.snapshots[1]!);
+      await expectAuth(fixture.snapshots[2]!);
       expectPool({ maxWorkers: 1, workers: 1, workersCreated: 1, activeTasks: 0, pendingTasks: 0 });
     } finally {
       vi.useRealTimers();
