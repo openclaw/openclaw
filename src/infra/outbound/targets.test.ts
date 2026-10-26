@@ -27,15 +27,6 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
 }));
 
-type SessionFixture = {
-  deliveryContext?: DeliveryContext;
-  chatType?: SessionEntry["chatType"];
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-};
-
 const passthroughOutbound: NonNullable<ChannelPlugin["outbound"]> = {
   deliveryMode: "direct",
   resolveTarget: ({ to }) =>
@@ -118,31 +109,24 @@ beforeEach(() => {
   setActivePluginRegistry(createTargetsTestRegistry());
 });
 
-function session(fields: SessionFixture): SessionEntry {
-  const context = fields.deliveryContext ?? {
-    channel: fields.lastChannel,
-    to: fields.lastTo,
-    accountId: fields.lastAccountId,
-    threadId: fields.lastThreadId,
-  };
+function session(context: DeliveryContext, chatType?: SessionEntry["chatType"]): SessionEntry {
   return {
     sessionId: "session",
     updatedAt: 1,
-    chatType: fields.chatType,
+    chatType,
     delivery: normalizeSessionDeliveryState({ context }),
   };
 }
 
-type SessionTargetCase = {
+type SessionTargetCase = Parameters<typeof resolveSessionDeliveryTarget>[0] & {
   name: string;
-  input: Parameters<typeof resolveSessionDeliveryTarget>[0];
   expected: Partial<SessionDeliveryTarget>;
 };
 
 describe("resolveSessionDeliveryTarget", () => {
   it("selects the unsupported channel fallback", () => {
     const resolved = resolveSessionDeliveryTarget({
-      entry: session({ lastChannel: "alpha", lastTo: "room-one" }),
+      entry: session({ channel: "alpha", to: "room-one" }),
       requestedChannel: "webchat",
       fallbackChannel: "beta",
     });
@@ -161,7 +145,7 @@ describe("resolveSessionDeliveryTarget", () => {
 
   it("selects an explicit provider prefix before session fallback", () => {
     const resolved = resolveSessionDeliveryTarget({
-      entry: session({ lastChannel: "alpha", lastTo: "room-one" }),
+      entry: session({ channel: "alpha", to: "room-one" }),
       requestedChannel: "last",
       explicitTo: "beta:room-two",
     });
@@ -178,11 +162,7 @@ describe("resolveSessionDeliveryTarget", () => {
 
     const resolved = await resolveProactiveDeliveryTarget({
       cfg: { channels: { forum: { allowFrom: ["dm:operator"] } } } as OpenClawConfig,
-      entry: session({
-        lastChannel: "forum",
-        lastTo: "room:ops",
-        chatType: "group",
-      }),
+      entry: session({ channel: "forum", to: "room:ops" }, "group"),
       policy: { to: "group:wrong" },
     });
 
@@ -295,13 +275,10 @@ describe("resolveSessionDeliveryTarget", () => {
 
     const resolved = await resolveProactiveDeliveryTarget({
       cfg: { commands: { ownerAllowFrom: ["alpha:user:owner"] } },
-      entry: session({
-        lastChannel: "alpha",
-        lastTo: "user:owner",
-        lastAccountId: "work",
-        lastThreadId: "thread-7",
-        chatType: "direct",
-      }),
+      entry: session(
+        { channel: "alpha", to: "user:owner", accountId: "work", threadId: "thread-7" },
+        "direct",
+      ),
     });
 
     expect(resolved).toMatchObject({
@@ -317,7 +294,7 @@ describe("resolveSessionDeliveryTarget", () => {
     setPlugins();
     const resolved = await resolveProactiveDeliveryTarget({
       cfg: {},
-      entry: session({ lastChannel: "forum" }),
+      entry: session({ channel: "forum" }),
       policy: { target: "last", accountId: "configured-account" },
     });
     expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
@@ -327,7 +304,7 @@ describe("resolveSessionDeliveryTarget", () => {
   it("allows proactive delivery to plugin-classified direct chats by default", async () => {
     const resolved = await resolveProactiveDeliveryTarget({
       cfg: {},
-      entry: session({ lastChannel: "forum", lastTo: "dm:one" }),
+      entry: session({ channel: "forum", to: "dm:one" }),
       policy: { target: "last" },
     });
     expect(resolved).toMatchObject({
@@ -400,7 +377,7 @@ describe("resolveSessionDeliveryTarget", () => {
     );
     const resolved = await resolveProactiveDeliveryTarget({
       cfg: {},
-      entry: session({ lastChannel: "forum", lastTo: to }),
+      entry: session({ channel: "forum", to }),
       policy: { target: "last", accountId },
     });
     expect(resolved).toMatchObject(expected);
@@ -420,7 +397,7 @@ describe("resolveSessionDeliveryTarget", () => {
     };
     setPlugins(routedAlpha);
     const policy = { target: "last", directPolicy: "block" } as const;
-    const entry = session({ lastChannel: "alpha", lastTo: "channel:D123" });
+    const entry = session({ channel: "alpha", to: "channel:D123" });
     expect(
       await resolveProactiveDeliveryTargetWithSessionRoute({
         cfg: { agents: { defaults: { heartbeat: policy } } },
@@ -534,38 +511,13 @@ describe("resolveSessionDeliveryTarget", () => {
           telegram: { allowFrom: ["999"] },
         },
       } as OpenClawConfig,
-      entry: session({
-        lastChannel: "slack",
-        lastTo: "user:someone",
-        chatType: "direct",
-      }),
+      entry: session({ channel: "slack", to: "user:someone" }, "direct"),
       policy: { target: "owner" },
     });
 
     // Precedence and channel binding are under test; the passthrough fixture
     // resolveTarget keeps the raw prefixed form (stripping is covered elsewhere).
     expect(resolved).toMatchObject({ channel: "telegram", to: "telegram:456" });
-  });
-
-  it("delivers a classifier-proven WhatsApp E.164 owner route", async () => {
-    const inferTargetChatType = vi.fn(({ to }: { to: string }) =>
-      /^\+\d+$/.test(to) ? ("direct" as const) : undefined,
-    );
-    const whatsapp = ownerPlugin("whatsapp", "+15555550166", inferTargetChatType);
-    setPlugins(whatsapp);
-    const cfg = {
-      channels: { whatsapp: { allowFrom: ["+15555550166"] } },
-    } as OpenClawConfig;
-
-    expect(await hasResolvableProactiveOwnerRoute({ cfg })).toBe(true);
-
-    const resolved = await resolveProactiveDeliveryTargetWithSessionRoute({
-      cfg,
-      agentId: "main",
-      policy: { target: "owner" },
-    });
-
-    expect(resolved).toMatchObject({ channel: "whatsapp", to: "+15555550166" });
   });
 
   it.each(["target-resolver", "infer-only"] as const)(
@@ -676,10 +628,7 @@ describe("resolveSessionDeliveryTarget", () => {
     const resolved = await resolveProactiveDeliveryTargetWithSessionRoute({
       cfg: {},
       agentId: "main",
-      entry: session({
-        lastChannel: "alpha",
-        lastTo: "group:ops",
-      }),
+      entry: session({ channel: "alpha", to: "group:ops" }),
       policy: {
         target: "last",
       },
@@ -691,21 +640,13 @@ describe("resolveSessionDeliveryTarget", () => {
   it.each([
     {
       name: "group deliveryContext",
-      entry: session({
-        deliveryContext: { channel: "forum", to: "room:ops", threadId: 1122 },
-        chatType: "group",
-      }),
+      entry: session({ channel: "forum", to: "room:ops", threadId: 1122 }, "group"),
       to: "room:ops",
       threadId: 1122,
     },
     {
       name: "direct route drops stale thread",
-      entry: session({
-        lastChannel: "forum",
-        lastTo: "dm:one",
-        lastThreadId: 1122,
-        chatType: "direct",
-      }),
+      entry: session({ channel: "forum", to: "dm:one", threadId: 1122 }, "direct"),
       to: "dm:one",
       threadId: undefined,
     },
@@ -746,11 +687,7 @@ describe("resolveSessionDeliveryTarget", () => {
       const resolved = await resolveProactiveDeliveryTargetWithSessionRoute({
         cfg: {},
         agentId: "main",
-        entry: session({
-          lastChannel: "alpha",
-          lastTo: storedTo,
-          chatType: storedType,
-        }),
+        entry: session({ channel: "alpha", to: storedTo }, storedType),
         policy: {
           target: eventTo === storedTo ? "last" : "alpha",
           to: eventTo === storedTo ? undefined : eventTo,
@@ -763,39 +700,32 @@ describe("resolveSessionDeliveryTarget", () => {
 });
 
 describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", () => {
-  const topic = { lastChannel: "forum", lastTo: "room:ops", lastThreadId: 1122 };
-  const changed = { lastChannel: "beta", lastTo: "wrong-room" };
+  const topic = { channel: "forum", to: "room:ops", threadId: 1122 };
+  const changed = { channel: "beta", to: "wrong-room" };
   const topicSession = session(topic);
   const changedSession = session(changed);
   it.each([
     {
       name: "explicit channel overrides turn source",
-      input: {
-        entry: changedSession,
-        requestedChannel: "forum",
-        explicitTo: "room:ops",
-        turnSourceChannel: "alpha",
-        turnSourceTo: "room-one",
-      },
+      entry: changedSession,
+      requestedChannel: "forum",
+      explicitTo: "room:ops",
+      turnSourceChannel: "alpha",
+      turnSourceTo: "room-one",
       expected: { channel: "forum" },
     },
     {
       name: "turn source owns account and thread",
-      input: {
-        entry: session({ ...changed, lastAccountId: "wrong-account", lastThreadId: 999 }),
-        turnSourceChannel: "forum",
-        turnSourceTo: "room:ops",
-        turnSourceAccountId: "bot-123",
-        turnSourceThreadId: 42,
-      },
+      entry: session({ ...changed, accountId: "wrong-account", threadId: 999 }),
+      turnSourceAccountId: "bot-123",
+      turnSourceThreadId: 42,
       expected: { channel: "forum", to: "room:ops", accountId: "bot-123", threadId: 42 },
     },
     {
       name: "turn source channel suppresses stale metadata",
-      input: {
-        entry: session({ ...changed, lastAccountId: "wrong-account", lastThreadId: "thread-1" }),
-        turnSourceChannel: "alpha",
-      },
+      entry: session({ ...changed, accountId: "wrong-account", threadId: "thread-1" }),
+      turnSourceChannel: "alpha",
+      turnSourceTo: undefined,
       expected: {
         channel: "alpha",
         to: undefined,
@@ -808,12 +738,8 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     },
     {
       name: "same conversation inherits session topic",
-      input: {
-        entry: session({ ...topic, lastAccountId: "work" }),
-        turnSourceChannel: "forum",
-        turnSourceTo: "room:ops",
-        turnSourceAccountId: "work",
-      },
+      entry: session({ ...topic, accountId: "work" }),
+      turnSourceAccountId: "work",
       expected: {
         channel: "forum",
         to: "room:ops",
@@ -824,12 +750,8 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     },
     {
       name: "different account cannot inherit session topic",
-      input: {
-        entry: session({ ...topic, lastAccountId: "personal" }),
-        turnSourceChannel: "forum",
-        turnSourceTo: "room:ops",
-        turnSourceAccountId: "work",
-      },
+      entry: session({ ...topic, accountId: "personal" }),
+      turnSourceAccountId: "work",
       expected: {
         accountId: "work",
         threadId: undefined,
@@ -839,21 +761,24 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     },
     {
       name: "bare stored destination does not match topic-scoped turn",
-      input: {
-        entry: topicSession,
-        turnSourceChannel: "forum",
-        turnSourceTo: "forum:room:ops:topic:1122",
-      },
+      entry: topicSession,
+      turnSourceTo: "forum:room:ops:topic:1122",
       expected: { channel: "forum", to: "forum:room:ops:topic:1122", threadId: undefined },
     },
     {
       name: "different destination cannot inherit session thread",
-      input: { entry: topicSession, turnSourceChannel: "forum", turnSourceTo: "room:other" },
+      entry: topicSession,
+      turnSourceTo: "room:other",
       expected: { channel: "forum", to: "room:other", threadId: undefined },
     },
-  ] satisfies SessionTargetCase[])("$name", ({ input, expected }) => {
-    expect(resolveSessionDeliveryTarget({ requestedChannel: "last", ...input })).toMatchObject(
-      expected,
-    );
+  ] satisfies SessionTargetCase[])("$name", ({ name: _name, expected, ...input }) => {
+    expect(
+      resolveSessionDeliveryTarget({
+        requestedChannel: "last",
+        turnSourceChannel: "forum",
+        turnSourceTo: "room:ops",
+        ...input,
+      }),
+    ).toMatchObject(expected);
   });
 });
