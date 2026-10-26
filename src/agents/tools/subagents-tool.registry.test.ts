@@ -1,5 +1,6 @@
 import { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
@@ -58,24 +59,12 @@ it("keeps persisted subagent wait selection off the calling thread", async () =>
     });
     persistRegistryFixture(new Map([[run.runId, run]]));
     clearSubagentRunsReadCacheForTest();
-    let registryReads = 0;
-    for (const method of ["get", "all", "iterate"] as const) {
-      const execute = StatementSync.prototype[method];
-      vi.spyOn(StatementSync.prototype, method).mockImplementation(function (
-        this: StatementSync,
-        ...args: unknown[]
-      ) {
-        if (/\bfrom\s+"?subagent_runs\b/i.test(this.sourceSQL)) {
-          registryReads++;
-        }
-        return Reflect.apply(execute, this, args);
-      });
-    }
+    const sql = observeSqliteReadSql(StatementSync.prototype);
     expect(await waitForRuns([run.runId])).toMatchObject({
       reason: "timeout",
       ...selectedRun(run.runId),
     });
-    expect(registryReads).toBe(0);
+    expect(sql.queries.filter((query) => /\bfrom\s+"?subagent_runs\b/i.test(query))).toEqual([]);
   }, true);
 });
 
