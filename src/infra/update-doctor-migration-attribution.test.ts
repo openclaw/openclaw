@@ -123,7 +123,7 @@ it.each(["different content", "same content"])(
       writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
       using database = new DatabaseSync(pathname);
       expect(() => migrate(database, pathname)).toThrow(
-        "SQLite migration source changed after update capture.",
+        "SQLite migration source changed after update capture:",
       );
     });
     expect(receipt).toMatchObject({ unchanged: false });
@@ -191,7 +191,7 @@ it.each(["lease", "outside"] as const)(
         expect((await prepareOpenClawStateDatabaseSchema({ env }, "doctor")).warnings).toEqual([]);
       } else {
         await expect(prepareOpenClawStateDatabaseSchema({ env }, "doctor")).rejects.toThrow(
-          "SQLite migration source changed after update capture.",
+          "SQLite migration source changed after update capture:",
         );
       }
       await closeOpenClawStateDatabaseAsync();

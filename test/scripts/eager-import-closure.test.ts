@@ -458,6 +458,15 @@ it.each([
     deferredOwners: ["src/cli/daemon-cli.ts", "src/cli/daemon-cli/register.ts"],
   },
   {
+    name: "shared-state read worker startup",
+    entrypoints: ["src/state/openclaw-state-read.worker.ts"],
+    dynamic: false,
+    deferredOwners: [
+      "src/infra/state-migrations.cron-run-logs.ts",
+      "src/cron/run-history-detail.ts",
+    ],
+  },
+  {
     name: "Git operation workers",
     entrypoints: ["src/infra/git-operation.worker.ts"],
     dynamic: true,

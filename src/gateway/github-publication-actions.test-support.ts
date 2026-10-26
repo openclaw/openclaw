@@ -15,6 +15,7 @@ import {
   createGitHubPublicationRequesterFixture,
   createRequesterPublicationFixture,
 } from "./github-publication-requester.test-support.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -195,6 +196,12 @@ export function createPublicationActionInvoker(
   ) => {
     const principal =
       actor === "guest" ? f.guestSource : actor === "writer" ? writerSource : f.maintainerSource;
+    const client = invocation.client ?? principal.client;
+    const context = {
+      ...principal.context,
+      githubPublicationService: f.coordinator,
+    } as GatewayRequestContext;
+    const operator = await captureGatewayOperatorRunAuthority({ client, context });
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,
       params: Record<string, unknown>,
@@ -202,11 +209,8 @@ export function createPublicationActionInvoker(
       const respond = vi.fn();
       await handleGatewayRequest({
         req: { type: "req", id: randomUUID(), method, params },
-        client: invocation.client ?? principal.client,
-        context: {
-          ...principal.context,
-          githubPublicationService: f.coordinator,
-        } as GatewayRequestContext,
+        client,
+        context,
         isWebchatConnect: () => false,
         respond,
       });
@@ -217,17 +221,26 @@ export function createPublicationActionInvoker(
       }
       return result as T;
     };
-    return await withPublicationToolTransport(callGateway, () =>
-      withGatewayToolCallerIdentity({ agentId: "main", sessionKey: source }, async () =>
-        invocation.raw
-          ? {
-              content: [],
-              details: await callGateway("sessions.github.action", { sessionKey: source, ...args }),
-            }
-          : createGitHubPublishTool({
-              sandbox: invocation.sandbox,
-            }).execute("publication-action", args),
-      ),
-    );
+    try {
+      return await withPublicationToolTransport(callGateway, () =>
+        withGatewayToolCallerIdentity(
+          { agentId: "main", sessionKey: source, operatorAuthority: operator?.authority },
+          async () =>
+            invocation.raw
+              ? {
+                  content: [],
+                  details: await callGateway("sessions.github.action", {
+                    sessionKey: source,
+                    ...args,
+                  }),
+                }
+              : createGitHubPublishTool({
+                  sandbox: invocation.sandbox,
+                }).execute("publication-action", args),
+        ),
+      );
+    } finally {
+      operator?.release();
+    }
   };
 }

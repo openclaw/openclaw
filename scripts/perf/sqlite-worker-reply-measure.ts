@@ -4,6 +4,7 @@
  * Run unchanged on base and candidate; compare the JSON CPU/op and sampled bytes/op.
  * Synthetic replies and jobs are prepared outside every measured loop. Five untraced
  * timing passes are separate from allocation sampling, which includes collected objects.
+ * Enable the Gateway task monitor so synchronous decode attribution is included.
  * Pass --reply-file <synthetic-reply.bin> to replay a V8-serialized reply captured
  * by sqlite-reply-census-preload.mjs instead of the default synthetic shapes.
  */
@@ -13,17 +14,19 @@ import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import { deserialize, serialize } from "node:v8";
+import { createMainThreadStallMonitor } from "../../src/infra/main-thread-stall.js";
 import { receiveSqliteWorkerReply } from "../../src/infra/sqlite-worker-broker-reply.js";
 import type { Job } from "../../src/infra/sqlite-worker-broker.types.js";
 import type { SqliteWorkerReply } from "../../src/infra/sqlite-worker-contract.js";
 import { SqliteWorkerSlotCustody } from "../../src/infra/sqlite-worker-request-custody.js";
 
-const iterations = 5_000;
+const iterations = 10_000;
 const { values } = parseArgs({ options: { "reply-file": { type: "string" } } });
 const samplingInterval = 512;
 const gc = global.gc;
 assert(gc, "Run with --expose-gc");
 const initialLoad = loadavg();
+const monitor = createMainThreadStallMonitor();
 const result = Promise.resolve(undefined);
 const observation = { started() {}, completed() {} };
 const custody = new SqliteWorkerSlotCustody();
@@ -146,6 +149,7 @@ try {
   }
 } finally {
   inspector.disconnect();
+  monitor.stop();
 }
 assert.equal(completed, fixtures.length * (500 + iterations * 6));
 console.log(

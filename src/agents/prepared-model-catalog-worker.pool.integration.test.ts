@@ -682,74 +682,71 @@ describe("Gateway catalog worker pool", () => {
     "rotates the pinned environment after a full Gateway publication (shutdown: %s)",
     async (shutdown, { signal }) => {
       const observed = observeWorkers();
-      const warnings = vi.spyOn(process, "emitWarning");
-      try {
-        const fixture = await createFleetFixture(observed.subscribe);
-        await loadFleetAuth(fixture);
-        expect(observed.spawned).toHaveLength(1);
-        const nextMarker = path.join(fixture.root, "next-environment-marker.txt");
-        vi.stubEnv("OPENCLAW_WORKER_CATALOG_MARKER", nextMarker);
-        const publish = () => refreshFleet(fixture);
-        const replacement = () => currentRuntime(fixture);
-        if (shutdown) {
-          const retiring = createDeferredCore();
-          const resumeTermination = createDeferredCore();
-          const resumeShutdown = createDeferredCore();
-          const resume = () => {
-            resumeTermination.resolve();
-            resumeShutdown.resolve();
-          };
-          signal.addEventListener("abort", resume, { once: true });
-          const worker = observed.spawned[0]!;
-          const terminate = worker.terminate.bind(worker);
-          const termination = vi.spyOn(worker, "terminate").mockImplementation(async () => {
-            const code = await terminate();
-            retiring.resolve();
-            await resumeTermination.promise;
-            return code;
-          });
-          const release = registerPreparedModelRuntimeClose(() => resumeShutdown.promise);
-          let closing: Promise<void> | undefined;
-          const request = publish().then(() => loadAuth(replacement(), []));
-          try {
-            await awaitGateBeforeSettlement(
-              retiring.promise,
-              request,
-              "replacement completed before retiring its previous worker",
-            );
-            closing = closePreparedModelRuntimeSnapshots();
-            resumeTermination.resolve();
-            await expect(request).rejects.toThrow("process lifetime closed");
-          } finally {
-            signal.removeEventListener("abort", resume);
-            resume();
-            await Promise.allSettled([request, closing]);
-            release();
-            termination.mockRestore();
-          }
-          await closing;
-          await retirePluginCache(
-            getPluginMetadataSnapshotCache(fixture.snapshots[0]!.metadataSnapshot),
+      using warnings = vi.spyOn(process, "emitWarning");
+
+      const fixture = await createFleetFixture(observed.subscribe);
+      await loadFleetAuth(fixture);
+      expect(observed.spawned).toHaveLength(1);
+      const nextMarker = path.join(fixture.root, "next-environment-marker.txt");
+      vi.stubEnv("OPENCLAW_WORKER_CATALOG_MARKER", nextMarker);
+      const publish = () => refreshFleet(fixture);
+      const replacement = () => currentRuntime(fixture);
+      if (shutdown) {
+        const retiring = createDeferredCore();
+        const resumeTermination = createDeferredCore();
+        const resumeShutdown = createDeferredCore();
+        const resume = () => {
+          resumeTermination.resolve();
+          resumeShutdown.resolve();
+        };
+        signal.addEventListener("abort", resume, { once: true });
+        const worker = observed.spawned[0]!;
+        const terminate = worker.terminate.bind(worker);
+        const termination = vi.spyOn(worker, "terminate").mockImplementation(async () => {
+          const code = await terminate();
+          retiring.resolve();
+          await resumeTermination.promise;
+          return code;
+        });
+        const release = registerPreparedModelRuntimeClose(() => resumeShutdown.promise);
+        let closing: Promise<void> | undefined;
+        const request = publish().then(() => loadAuth(replacement(), []));
+        try {
+          await awaitGateBeforeSettlement(
+            retiring.promise,
+            request,
+            "replacement completed before retiring its previous worker",
           );
-          await checkpoint();
-          expect(observed.spawned).toHaveLength(1);
-          expectPool({ workers: 0, activeTasks: 0, pendingTasks: 0 });
-        } else {
-          await publish();
-          await expect(loadAuth(fixture.snapshots[0]!)).rejects.toThrow("superseded");
-          await loadCompletedFullCatalog(replacement(), { refresh: true });
-          expect(fs.readFileSync(nextMarker, "utf8")).toContain("done");
-          expect(observed.spawned).toHaveLength(2);
+          closing = closePreparedModelRuntimeSnapshots();
+          resumeTermination.resolve();
+          await expect(request).rejects.toThrow("process lifetime closed");
+        } finally {
+          signal.removeEventListener("abort", resume);
+          resume();
+          await Promise.allSettled([request, closing]);
+          release();
+          termination.mockRestore();
         }
-        expect(observed.peakWorkers).toBe(1);
-        expect(
-          warnings.mock.calls.filter(([warning]) =>
-            String(warning).includes("Gateway catalog worker failed to retire"),
-          ),
-        ).toEqual([]);
-      } finally {
-        warnings.mockRestore();
+        await closing;
+        await retirePluginCache(
+          getPluginMetadataSnapshotCache(fixture.snapshots[0]!.metadataSnapshot),
+        );
+        await checkpoint();
+        expect(observed.spawned).toHaveLength(1);
+        expectPool({ workers: 0, activeTasks: 0, pendingTasks: 0 });
+      } else {
+        await publish();
+        await expect(loadAuth(fixture.snapshots[0]!)).rejects.toThrow("superseded");
+        await loadCompletedFullCatalog(replacement(), { refresh: true });
+        expect(fs.readFileSync(nextMarker, "utf8")).toContain("done");
+        expect(observed.spawned).toHaveLength(2);
       }
+      expect(observed.peakWorkers).toBe(1);
+      expect(
+        warnings.mock.calls.filter(([warning]) =>
+          String(warning).includes("Gateway catalog worker failed to retire"),
+        ),
+      ).toEqual([]);
     },
   );
   it("keeps a queued deadline local and accepts the same agent's next request", async ({

@@ -142,7 +142,7 @@ it("attaches the abort listener only when body consumption starts", async () => 
 
 // Bun does not implement V8 promise hooks; the lifecycle tests above still run there.
 it.skipIf(Boolean(process.versions.bun))(
-  "forwards 1,000 chunks without an extra async promise per pull",
+  "forwards 1,000 chunks without per-chunk continuations or an extra async promise",
   async () => {
     const chunk = new Uint8Array([1, 2, 3]);
     let sent = 0;
@@ -157,6 +157,27 @@ it.skipIf(Boolean(process.versions.bun))(
         }
       },
     });
+    const upstream = body.getReader();
+    const read = upstream.read.bind(upstream);
+    const continuations = new Set<unknown>();
+    vi.spyOn(body, "getReader").mockReturnValue(upstream);
+    upstream.read = () => {
+      const pending = read();
+      const then = pending.then.bind(pending);
+      // Observe allocation work at the actual upstream read boundary, forwarding
+      // the original promise and handlers without replacing stream behavior.
+      // oxlint-disable-next-line unicorn/no-thenable -- This is already a Promise; spies add settlement promises.
+      pending.then = (fulfilled, rejected) => {
+        if (fulfilled) {
+          continuations.add(fulfilled);
+        }
+        if (rejected) {
+          continuations.add(rejected);
+        }
+        return then(fulfilled, rejected);
+      };
+      return pending;
+    };
     const reader = wrapGuardedBodyStream({
       body,
       refreshTimeout: () => refreshed++,
@@ -190,5 +211,6 @@ it.skipIf(Boolean(process.versions.bun))(
     // Six promises per chunk include source/consumer reads and stream backpressure.
     // Leave room for fixed setup/EOF work, but reject another promise per chunk.
     expect(promises).toBeLessThan(6_100);
+    expect(continuations.size).toBeLessThanOrEqual(2);
   },
 );

@@ -99,8 +99,27 @@ it.each([
   vi.stubEnv("OPENCLAW_PROFILE", "work");
   await expect(updateCleanupCommand({ json: true, yes: true })).rejects.toEqual(new ExitError(1));
   expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
-    { status: "blocked", error: message },
+    { ok: false, status: "blocked", error: { type: "cli_error", message } },
     2,
   );
   expect(retireSessionSqliteRecovery).not.toHaveBeenCalled();
+});
+
+it("keeps the inspected recovery report when retirement throws", async () => {
+  const report = cleanupReport();
+  vi.mocked(inspectSessionSqliteRecovery).mockReturnValue(report);
+  vi.mocked(retireSessionSqliteRecovery).mockRejectedValueOnce(new Error("retirement unavailable"));
+
+  await expect(updateCleanupCommand({ json: true, yes: true })).rejects.toEqual(new ExitError(1));
+
+  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(
+    {
+      ...report,
+      ok: false,
+      status: "blocked",
+      error: { type: "cli_error", message: "Error: retirement unavailable" },
+    },
+    2,
+  );
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
 });

@@ -1116,6 +1116,15 @@ read the recorded observation through the existing status RPC; they do not run
 a checkpoint or open a diagnostic database. Before the first observation, or
 when an older Gateway supplies no observations, this warning is absent.
 
+On Linux, periodic WAL maintenance checks the open sidecar identities with
+asynchronous filesystem reads before dispatching maintenance. Slow metadata
+writeback delays that check without blocking the Gateway event loop. Stopping
+maintenance joins the check. A confirmed live sidecar mismatch still terminates
+the process without SQLite cleanup, including when shutdown is waiting on the
+check. Native close and replacement refuse while inspection is pending; idle eviction
+retains its handle and lease until a later retry. Otherwise, a stopped owner
+dispatches no further maintenance.
+
 If the warning persists, capture `openclaw status --deep` output and restart the
 Gateway with `openclaw gateway restart`. Report the captured output
 if the warning returns. Do not delete the WAL: it can contain committed data

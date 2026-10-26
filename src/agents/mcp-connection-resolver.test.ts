@@ -3,6 +3,7 @@ import http from "node:http";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { McpServer } from "@modelcontextprotocol/server";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
@@ -148,16 +149,9 @@ async function startAuthenticatedMcpProofServer() {
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("MCP proof server did not acquire a loopback port");
-  }
+  const origin = await httpFixtures.listenLoopback(server);
   for (const endpoint of endpoints) {
-    endpoint.url = `http://127.0.0.1:${address.port}${endpoint.path}`;
+    endpoint.url = `${origin}${endpoint.path}`;
   }
 
   return {
@@ -165,10 +159,7 @@ async function startAuthenticatedMcpProofServer() {
     activeDrive,
     close: async () => {
       await Promise.all(endpoints.map((endpoint) => endpoint.server.close()));
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await httpFixtures.closeHttpServer(server);
     },
   };
 }

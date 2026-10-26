@@ -145,9 +145,11 @@ Reading the output does not drain pending agent output or acknowledge completion
 notifications. **Stop** requests termination of the exact observed process instance.
 
 The list is bounded, prioritizes running processes, and follows the existing
-in-memory retention limits. It refreshes while visible; disconnected or
-unavailable workers show an error rather than an empty list. It does not provide
-an interactive terminal or enumerate unrelated operating-system processes.
+in-memory retention limits. It refreshes while visible. A connected node returns
+an empty list after confirming that the worker has fully retired and no launch
+is still active for that environment. Disconnected workers and uncertain cleanup show
+an error. It does not provide an interactive terminal or enumerate unrelated
+operating-system processes.
 
 ## Child process bridging
 

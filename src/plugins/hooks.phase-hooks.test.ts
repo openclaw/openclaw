@@ -503,6 +503,7 @@ describe("before_prompt_build dispatch", () => {
   it.each([
     Object.freeze({ buffer: new SharedArrayBuffer(4) }),
     new Error("shared", { cause: new Uint8Array(new SharedArrayBuffer(4)) }),
+    { __openclaw: { upstreamUserText: "storage only", shared: new SharedArrayBuffer(4) } },
     {
       get buffer() {
         return new SharedArrayBuffer(4);
@@ -562,22 +563,44 @@ describe("before_prompt_build dispatch", () => {
     const date = new Date("2026-01-01T00:00:00Z");
     const leaf = { text: "caller" };
     const map = new Map([["leaf", leaf]]);
-    const event = { prompt: "test", messages: [{ date, leaf, map }, { leaf }] };
+    const metadata = {
+      upstreamUserText: "storage only",
+      leaf,
+      map,
+      [Symbol("omitted")]: Symbol("not cloned"),
+    };
+    const event = {
+      prompt: "test",
+      messages: [{ date, leaf, map, __openclaw: metadata }, { leaf }],
+    };
     const ownKeys = vi.spyOn(Reflect, "ownKeys");
-    onTestFinished(() => ownKeys.mockRestore());
-    const runner = promptRunner([
-      {
-        handler: (input) => {
-          const [first, second] = input.messages as typeof event.messages;
-          expect(first!.date).toEqual(date);
-          expect(first!.date).not.toBe(date);
-          expect(first!.leaf).toBe(second!.leaf);
-          expect(first!.map!.get("leaf")).toBe(first!.leaf);
-          first!.leaf.text = "local";
-          expect(second!.leaf.text).toBe("local");
+    const descriptors = vi.spyOn(Object, "getOwnPropertyDescriptor");
+    onTestFinished(() => {
+      ownKeys.mockRestore();
+      descriptors.mockRestore();
+    });
+    const runner = promptRunner(
+      [
+        {
+          handler: (input) => {
+            const [first, second] = input.messages as typeof event.messages;
+            // Native cloning already materialized these fields as data properties.
+            expect(descriptors.mock.calls.some(([value]) => value === first!.leaf)).toBe(false);
+            expect(first!.date).toEqual(date);
+            expect(first!.date).not.toBe(date);
+            expect(first!.leaf).toBe(second!.leaf);
+            expect(first!.map!.get("leaf")).toBe(first!.leaf);
+            expect(first!["__openclaw"]!.leaf).toBe(first!.leaf);
+            expect(first!["__openclaw"]!.map).toBe(first!.map);
+            expect(first!["__openclaw"]).not.toHaveProperty("upstreamUserText");
+            expect(Object.getOwnPropertySymbols(first!["__openclaw"]!)).toEqual([]);
+            first!.leaf.text = "local";
+            expect(second!.leaf.text).toBe("local");
+          },
         },
-      },
-    ]);
+      ],
+      { catchErrors: false },
+    );
     await runner.runBeforePromptBuild(event, {});
     expect(leaf.text).toBe("caller");
     expect(map.get("leaf")).toBe(leaf);
@@ -611,8 +634,10 @@ describe("before_prompt_build dispatch", () => {
       const messages = [message, entry.message];
       const owned = new Set<object>(messages.flatMap((item) => [item.content, item.content[0]!]));
       const ownKeys = vi.spyOn(Reflect, "ownKeys");
+      const clone = vi.spyOn(globalThis, "structuredClone");
       onTestFinished(() => {
         ownKeys.mockRestore();
+        clone.mockRestore();
       });
       const runner = hookRunner(
         [
@@ -628,6 +653,7 @@ describe("before_prompt_build dispatch", () => {
                 }).toThrow(TypeError);
                 expect(projected).not.toHaveProperty("details");
                 expect(projected["__openclaw"]).toEqual({ retained: "visible" });
+                projected["__openclaw"].retained = "local metadata";
                 projected.toolName = "local tool name";
               }
               return { prependContext: "returned context" };
@@ -638,12 +664,14 @@ describe("before_prompt_build dispatch", () => {
       );
       for (let turn = 0; turn < 2; turn++) {
         ownKeys.mockClear();
-        const event = { prompt: "test", messages, queuedInjections: [] };
+        clone.mockClear();
+        const event = { prompt: "test", messages };
         const result =
           hookName === "before_prompt_build"
             ? await runner.runBeforePromptBuild(event, {})
-            : await runner.runAgentTurnPrepare(event, {});
+            : await runner.runAgentTurnPrepare({ ...event, queuedInjections: [] }, {});
         expect(result?.prependContext).toBe("returned context");
+        expect(clone).toHaveBeenCalledTimes(hookName === "before_prompt_build" ? 0 : 1);
         // Warm dispatch must not rescan the frozen payload graph (#182349).
         if (turn > 0) {
           expect(ownKeys.mock.calls.filter(([value]) => owned.has(value))).toHaveLength(0);

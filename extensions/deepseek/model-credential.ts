@@ -19,22 +19,19 @@ function isDeepSeekApiUrl(value: string | undefined): boolean {
   return url.origin === DEEPSEEK_API_ORIGIN;
 }
 
-/** Chat credentials are DeepSeek keys only while every configured DeepSeek route uses its API. */
-export function chatUsesDeepSeekApi(config: OpenClawConfig | undefined): boolean {
+/** Raw model-provider key (SecretRefs intact) when DeepSeek search may reuse it. */
+export function resolveDeepSeekModelKeyFallback(config?: OpenClawConfig) {
+  const value = config?.models?.providers?.deepseek?.apiKey;
+  if (value === undefined) {
+    return undefined;
+  }
   // Chat may send the provider key over any variant entry's or model's route, so check them all.
-  return Object.entries(config?.models?.providers ?? {})
+  const usesDeepSeekApi = Object.entries(config?.models?.providers ?? {})
     .filter(([id]) => normalizeProviderId(id) === "deepseek")
     .every(
       ([, entry]) =>
         isDeepSeekApiUrl(entry.baseUrl) &&
         (entry.models ?? []).every((model) => isDeepSeekApiUrl(model.baseUrl)),
     );
-}
-
-/** Raw model-provider key (SecretRefs intact) when DeepSeek search may reuse it. */
-export function resolveDeepSeekModelKeyFallback(config?: OpenClawConfig) {
-  const value = config?.models?.providers?.deepseek?.apiKey;
-  return value === undefined || !chatUsesDeepSeekApi(config)
-    ? undefined
-    : { path: "models.providers.deepseek.apiKey", value };
+  return usesDeepSeekApi ? { path: "models.providers.deepseek.apiKey", value } : undefined;
 }

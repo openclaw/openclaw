@@ -71,15 +71,27 @@ export async function resolveNodeBootstrapRuntimeChunks(
       continue;
     }
     const source = (await read(file)).toString("utf8");
+    // Dist inspection skips nested dependencies; absence of a callback there is not a fact.
+    let hasNodeLoader = /(?:^|\/)node_modules\//u.test(file);
+    const staticImports: string[] = [];
     const fileImports = collectPackageDistImports({
       files: [file],
       includeTypeScript,
       readText: () => source,
+      onNodeLoaderReference: () => {
+        hasNodeLoader = true;
+      },
+      onStaticImport: (specifier) => {
+        staticImports.push(specifier);
+      },
     });
     sourceFacts.set(file, { imports: fileImports });
     const dependencies = new Set(fileImports.map(({ importedPath }) => importedPath));
     const resolveImport = createRequire(path.join(packageRoot, file)).resolve;
-    for (const specifier of collectPackageRootImports(preparePackageDistJavaScript(file, source))) {
+    const rootImports = hasNodeLoader
+      ? collectPackageRootImports(preparePackageDistJavaScript(file, source))
+      : staticImports;
+    for (const specifier of rootImports) {
       if (!specifier.startsWith(".")) {
         continue;
       }

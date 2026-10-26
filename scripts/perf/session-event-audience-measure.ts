@@ -7,13 +7,14 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-event-audience-measure.ts \
  *   --base-owner src/gateway/.base-presentation.ts --pairs 5 --events 3000
  * --owner selects the candidate; --allocations runs a separate sampled-allocation
- * pass. Pairs alternate AB/BA, sharing prewarmed fixtures and import setup outside
+ * pass; --profiles saves each sampling profile under --state-root for attribution.
+ * Pairs alternate AB/BA, sharing prewarmed fixtures and import setup outside
  * measurement. Acceptance: equal per-recipient row digest and presentation
  * counts, lower CPU/allocation; report absolute costs and host load for every arm.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
@@ -31,6 +32,7 @@ const { values } = parseArgs({
     events: { type: "string", default: "3000" },
     clients: { type: "string", default: "65" },
     allocations: { type: "boolean", default: false },
+    profiles: { type: "boolean", default: false },
     "state-root": { type: "string", default: ".local/session-event-audience-measure" },
   },
 });
@@ -218,6 +220,12 @@ try {
             const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
               node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
             sampledBytes = sum(profile.head);
+            if (values.profiles) {
+              writeFileSync(
+                path.join(stateRoot, `${variant.name}-${pair}.heapprofile`),
+                JSON.stringify(profile),
+              );
+            }
           }
           results.push({
             pair,

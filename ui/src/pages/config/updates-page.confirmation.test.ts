@@ -11,6 +11,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import { UpdatesPage } from "./updates-page.tsx";
+import { createUpdatesViewProps } from "./updates.test-support.ts";
 
 it.each(["loading", "open"] as const)(
   "retires a Gateway update confirmation when its target changes while %s",
@@ -41,24 +42,15 @@ it.each(["loading", "open"] as const)(
     const context = {
       gateway: harness.gateway,
       overlays,
-      config: {
-        current: { serverVersion: "1.0.0" },
-        subscribe: () => () => undefined,
-      },
+      config: { current: { serverVersion: "1.0.0" }, subscribe: () => () => undefined },
       nativeDeviceSettings: null,
     } as unknown as ApplicationContext;
     const mounted = mountSolid(() =>
       createComponent(UpdatesPage, {
+        ...createUpdatesViewProps({ configObject: {} }),
         context,
-        configObject: {},
-        configBusy: false,
-        updateBusy: false,
-        statusRead: null,
+        nowMs: undefined,
         onCheckStatus: () => overlays.refreshUpdateStatus(),
-        captureCommandPresentation: () => ({
-          retired: new Promise<void>(() => {}),
-          isCurrent: () => true,
-        }),
       }),
     );
     const updateButton = () => {

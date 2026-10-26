@@ -20,7 +20,7 @@ import { digest } from "./vault.js";
 export class StorageJournal extends StorageBase {
   resume(access: VaultAccess, requestId: string): Receipt {
     access.assertCurrent();
-    const published = this.transaction((db) => {
+    const published = this.transaction("knowledge.resume", (db) => {
       const row = this.row(db, scopeKey(access.scope), requestId);
       if (!row) {
         throw new Error("Mutation unavailable in this scope.");

@@ -556,10 +556,8 @@ describe("control UI session PR subscriptions", () => {
   it("rejects replace-sets from inactive connections before loading", async () => {
     const active = start({ isConnectionActive: () => false });
 
-    const onAdmitted = vi.fn();
-    await active.replace("conn-closed", ["orphan"], undefined, onAdmitted);
+    await active.replace("conn-closed", ["orphan"]);
 
-    expect(onAdmitted).toHaveBeenCalledTimes(1);
     expect(load).not.toHaveBeenCalled();
     expect(broadcastToConnIds).not.toHaveBeenCalled();
   });

@@ -343,6 +343,11 @@ registered task, not the session key format. Root sessions, collectors, stopped
 tasks, and superseded generations cannot claim a child message wait. Separate
 admitted follow-ups in the same child session remain independent tasks. A quiet
 native child can pause without acquiring an announced completion or pause notice.
+A turn that owns pending child or runtime completions is not waiting for a
+message: those completions resume the session. There, `waitFor: "message"` is
+not applied. The yield is an ordinary child wait, the requester gets no pause
+notice, and the `yielded` result carries a `note` saying so. Omit `waitFor`
+when yielding for your own children.
 Without a real pending child/runtime completion or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses

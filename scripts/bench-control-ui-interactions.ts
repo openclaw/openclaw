@@ -844,29 +844,32 @@ try {
               owners: [],
             });
             const boardResponse = createProjectionBoardResponses();
+            const defaultRequestHandlers: Record<string, (params: unknown) => unknown> = {
+              ...(scenario.projectionFamily
+                ? {
+                    "board.get": (params: unknown) => {
+                      if (!isRecord(params)) {
+                        throw new Error("Expected board.get parameters");
+                      }
+                      return boardResponse(params);
+                    },
+                  }
+                : {}),
+              "sessions.list": (params: unknown) => {
+                if (!isRecord(params)) {
+                  throw new Error("Expected sessions.list query parameters");
+                }
+                return sessions.list(params).result;
+              },
+            };
             // Keep the same readiness contract with a timeout scaled for intentional throttling.
             const gateway = await installMockGateway(
               page,
               { ...fixture, awaitInitialRoster: false },
               {
                 requestHandlers: {
-                  ...(scenario.projectionFamily
-                    ? {
-                        "board.get": (params: unknown) => {
-                          if (!isRecord(params)) {
-                            throw new Error("Expected board.get parameters");
-                          }
-                          return boardResponse(params);
-                        },
-                      }
-                    : {}),
-                  "sessions.list": (params) => {
-                    if (!isRecord(params)) {
-                      throw new Error("Expected sessions.list query parameters");
-                    }
-                    return sessions.list(params).result;
-                  },
-                  ...scenario.createRequestHandlers?.(),
+                  ...defaultRequestHandlers,
+                  ...scenario.createRequestHandlers?.(defaultRequestHandlers),
                 },
               },
             );

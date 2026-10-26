@@ -222,6 +222,31 @@ it("shares recipient encodings only for matching authority and delivered baselin
       const previousSends = peers.map((peer) => peer.send.mock.calls.length);
       const fieldEnumerations = new Map<object, number>();
       let envelopeEnumerations = 0;
+      const envelopeTuples = new Set<unknown>();
+      let envelopeMaxFields = 0;
+      let fieldNameInsertions = 0;
+      // oxlint-disable-next-line typescript/unbound-method -- The observer calls add with its original Set receiver.
+      const add = Set.prototype.add;
+      const adding = vi.spyOn(Set.prototype, "add").mockImplementation(function (
+        this: Set<unknown>,
+        value: unknown,
+      ) {
+        if (value === "sharingRole") {
+          fieldNameInsertions++;
+        }
+        return add.call(this, value);
+      });
+      const fromEntries = Object.fromEntries;
+      const copying = vi.spyOn(Object, "fromEntries").mockImplementation((entries) => {
+        const result = fromEntries(entries);
+        if (result.sessionKey === key && isRecord(result.session) && Array.isArray(entries)) {
+          envelopeMaxFields = Math.max(envelopeMaxFields, entries.length);
+          for (const entry of entries) {
+            envelopeTuples.add(entry);
+          }
+        }
+        return result;
+      });
       const entries = Object.entries;
       const enumerating = vi.spyOn(Object, "entries").mockImplementation((value) => {
         if (isRecord(value) && value.sessionKey === key && isRecord(value.session)) {
@@ -259,6 +284,8 @@ it("shares recipient encodings only for matching authority and delivered baselin
       } finally {
         encoding.mockRestore();
         enumerating.mockRestore();
+        adding.mockRestore();
+        copying.mockRestore();
       }
       const decodedPayloads: unknown[] = [];
       for (const [index, peer] of peers.entries()) {
@@ -312,10 +339,14 @@ it("shares recipient encodings only for matching authority and delivered baselin
           });
         }
       }
-      // The full row's field ordering is shared even when delivery baselines differ.
-      expect([...fieldEnumerations.values()]).toEqual([1, 1]);
+      // Field order needs only names, never a temporary tuple for every row value.
+      expect([...fieldEnumerations.values()]).toEqual([]);
       // Referenced fields must not allocate entry tuples just to discard them.
       expect(envelopeEnumerations).toBe(0);
+      // Interleaved histories and audiences share only synchronous copy scratch space.
+      expect(envelopeTuples.size).toBe(envelopeMaxFields);
+      // Field names are indexed once per audience, not inserted into a Set per history.
+      expect(fieldNameInsertions).toBe(0);
       // Eight current delta recipients were primed at this revision; sixteen were not.
       expect(sharingKeyEncodings).toBe(16);
       // Four authority/baseline groups share row planning across both delta capabilities.

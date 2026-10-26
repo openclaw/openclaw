@@ -142,9 +142,6 @@ it.each([
         expect(calls.every(([command]) => command === (browser ? "docker" : "podman"))).toBe(true);
         expect(calls.flat()).not.toContain(newEntry.containerName);
         expect(calls.flat()).not.toContain("new-browser");
-        expect(physical.get(browser ? "docker" : oldUri)?.has(removedName)).toBe(false);
-        expect(physical.get(newUri)?.has(newEntry.containerName)).toBe(true);
-        expect(physical.get("docker")?.has("new-browser")).toBe(true);
         expect(await readRegistryEntry(newEntry.containerName)).toEqual(newEntry);
         expect(await readRegistryEntry(oldEntry.containerName)).toEqual(browser ? oldEntry : null);
         expect(

@@ -1,14 +1,19 @@
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { AVATAR_MAX_BYTES, isAvatarImageMimeType } from "../../../src/shared/avatar-limits.js";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import {
   fetchGatewayContextResource,
   readAvatarGatewayContext,
   registerAvatarGatewayReset,
 } from "./identity-avatar-context.ts";
 import { resolveTrustedAvatarUrl } from "./identity-avatar.ts";
+import { listen } from "./reactive/listener.ts";
 
 const IDENTITY_AVATAR_CACHE_MAX_ENTRIES = 128;
 const IDENTITY_AVATAR_FETCH_TIMEOUT_MS = 30_000;
 const IDENTITY_AVATAR_FAILURE_TTL_MS = 60_000;
+const KNOWN_AVATAR_STORAGE_PREFIX = "openclaw.identityAvatars.v1:";
+const KNOWN_AVATAR_STORAGE_MAX_BYTES = 64 * 1024;
 
 type CachedIdentityAvatar = {
   blobUrl: string | null;
@@ -20,9 +25,73 @@ type CachedIdentityAvatar = {
 
 const identityAvatarCache = new Map<string, CachedIdentityAvatar>();
 let identityAvatarGeneration = 0;
+let knownAvatarUrls: Set<string> | undefined;
+
+function knownAvatarStorageKey(): string | null {
+  const { origin, resourceBasePath, storageScope } = readAvatarGatewayContext();
+  return origin && storageScope
+    ? KNOWN_AVATAR_STORAGE_PREFIX + JSON.stringify([origin, resourceBasePath, storageScope])
+    : null;
+}
+
+function readKnownAvatarUrls(): Set<string> {
+  if (knownAvatarUrls) {
+    return knownAvatarUrls;
+  }
+  knownAvatarUrls = new Set();
+  const key = knownAvatarStorageKey();
+  if (key) {
+    try {
+      const storage = getSafeLocalStorage();
+      const raw = storage?.getItem(key);
+      const urls: unknown =
+        raw && raw.length <= KNOWN_AVATAR_STORAGE_MAX_BYTES ? JSON.parse(raw) : null;
+      if (isStringArray(urls) && urls.length <= IDENTITY_AVATAR_CACHE_MAX_ENTRIES) {
+        knownAvatarUrls = new Set(urls);
+      } else if (raw) {
+        storage?.removeItem(key);
+      }
+    } catch {
+      // URL hints are disposable; storage must never prevent an authenticated read.
+    }
+  }
+  return knownAvatarUrls;
+}
+
+function persistKnownAvatarUrls(): void {
+  const key = knownAvatarStorageKey();
+  if (!key || !knownAvatarUrls) {
+    return;
+  }
+  try {
+    const json = JSON.stringify([...knownAvatarUrls]);
+    const storage = getSafeLocalStorage();
+    if (json.length <= KNOWN_AVATAR_STORAGE_MAX_BYTES) {
+      storage?.setItem(key, json);
+    } else {
+      storage?.removeItem(key);
+    }
+  } catch {
+    // Successful in-document reads remain usable without persistent hints.
+  }
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  // Persist URL facts once when leaving, never image bytes or per-row boot writes.
+  listen(window, "pagehide", persistKnownAvatarUrls);
+}
 
 function clearIdentityAvatarCache(): void {
   identityAvatarGeneration += 1;
+  knownAvatarUrls = undefined;
+  const key = knownAvatarStorageKey();
+  if (key) {
+    try {
+      getSafeLocalStorage()?.removeItem(key);
+    } catch {
+      // Retire in-memory facts even when optional storage is unavailable.
+    }
+  }
   for (const entry of identityAvatarCache.values()) {
     if (entry.blobUrl) {
       URL.revokeObjectURL(entry.blobUrl);
@@ -52,7 +121,10 @@ function trimIdentityAvatarCache(): void {
   }
 }
 
-function loadIdentityAvatar(url: string): string | Promise<string | null> | null {
+function loadIdentityAvatar(
+  url: string,
+  directImage: boolean,
+): string | Promise<string | null> | null {
   const cached = identityAvatarCache.get(url);
   // Map order is the LRU order; concurrent roster, profile, and chat views
   // share the authenticated request and its result, including a cached miss.
@@ -60,6 +132,11 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> | null
   if (cached && (cached.retryAt === undefined || Date.now() < cached.retryAt)) {
     identityAvatarCache.set(url, cached);
     return cached.blobUrl ?? (cached.retryAt === undefined ? cached.promise : null);
+  }
+  // A prior successful read may reuse the browser cache, but never bypass a
+  // current request or cached miss. No image bytes are restored during reload.
+  if (directImage && readAvatarGatewayContext().storageScope && readKnownAvatarUrls().has(url)) {
+    return url;
   }
 
   const entry: CachedIdentityAvatar = {
@@ -94,6 +171,14 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> | null
         return null;
       }
       entry.blobUrl = blobUrl;
+      if (directImage) {
+        const urls = readKnownAvatarUrls();
+        urls.add(url);
+        const oldest = urls.values().next().value;
+        if (urls.size > IDENTITY_AVATAR_CACHE_MAX_ENTRIES && oldest !== undefined) {
+          urls.delete(oldest);
+        }
+      }
       trimIdentityAvatarCache();
       return blobUrl;
     } catch {
@@ -123,9 +208,37 @@ export function resolveAvatarImageUrl(
   if (!trusted) {
     return unmanagedUrl;
   }
-  // Connected same-origin routes need the loader too: it resolves a missing
-  // avatar before Lit can reconcile an <img> error back over its initials.
-  return origin || authTokens.length ? loadIdentityAvatar(trusted) : trusted;
+  if (!origin && !authTokens.length) {
+    return trusted;
+  }
+  return loadIdentityAvatar(
+    trusted,
+    !authTokens.length && origin !== null && origin === globalThis.location?.origin,
+  );
+}
+
+/** A previously good direct image can disappear; share that miss with later views. */
+export function recordAvatarImageError(value: string | Promise<string | null> | null): void {
+  if (!value) {
+    return;
+  }
+  const url =
+    typeof value === "string" && knownAvatarUrls?.has(value)
+      ? value
+      : [...identityAvatarCache].find(
+          ([, entry]) => entry.promise === value || entry.blobUrl === value,
+        )?.[0];
+  if (!url || !knownAvatarUrls?.delete(url) || identityAvatarCache.has(url)) {
+    return;
+  }
+  identityAvatarCache.set(url, {
+    blobUrl: null,
+    references: 0,
+    settled: true,
+    retryAt: Date.now() + IDENTITY_AVATAR_FAILURE_TTL_MS,
+    promise: Promise.resolve(null),
+  });
+  trimIdentityAvatarCache();
 }
 
 /** Acquire before awaiting: each pending or displayed consumer owns its own release. */
@@ -209,6 +322,7 @@ export function createIdentityAvatars() {
         ) {
           return;
         }
+        recordAvatarImageError(route.result);
         route.url = null;
         notify();
       };

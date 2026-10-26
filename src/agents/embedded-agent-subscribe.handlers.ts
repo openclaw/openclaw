@@ -52,13 +52,18 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       return;
     }
 
-    const task = Promise.resolve(result)
-      .then(() => {}, onError)
-      .finally(() => {
+    const settle = async () => {
+      try {
+        await result;
+      } catch (err) {
+        onError(err);
+      } finally {
         if (ctx.state.pendingEventChain === task) {
           ctx.state.pendingEventChain = null;
         }
-      });
+      }
+    };
+    const task = settle();
     ctx.state.pendingEventChain = task;
     return task;
   };

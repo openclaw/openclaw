@@ -22,6 +22,12 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+Chat portraits keep a fixed frame while images load. Previously verified
+same-origin portrait URLs reuse the browser image cache within the admitted
+operator's connection scope when using ambient authentication. Unknown URLs and
+missing images share the avatar loader's requests and retry handling. Initials
+remain beneath the image and are visible if it fails.
+
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer
 visibility, or remote session-link titles. Side Chat is hidden, and session links
@@ -154,9 +160,11 @@ The chat header’s **Details** panel groups session information into collapsibl
 
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to a session reuses its details on the same connection, including updates received through complete session snapshots. Incomplete updates, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
-Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
+
+If session metadata takes more than two seconds to load, the Changes panel keeps waiting and polls again while that shared read finishes in the background. An empty pending response does not mean there are no changes. The completed diff still requires current session and workspace access.
 
 When a checkout is too large or its Git layout cannot be validated cheaply, summaries reuse the last result for up to ten seconds before probing again. Missing or unavailable checkouts retry after one second. Full patches still require fresh revision validation.
 

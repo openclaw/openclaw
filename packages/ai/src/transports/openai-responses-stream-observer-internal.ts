@@ -7,7 +7,6 @@ import {
 } from "./openai-responses-contracts.js";
 import type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-internal.js";
 import { log } from "./openai-transport-shared.js";
-import { iterateModelStream } from "./transport-stream-shared.js";
 
 const STRING_DELTA_EVENTS = new Set([
   "response.function_call_arguments.delta",
@@ -18,41 +17,36 @@ const STRING_DELTA_EVENTS = new Set([
   "response.text.delta",
 ]);
 
-export async function* adaptResponsesStream(
-  stream: AsyncIterable<unknown>,
-  signal?: AbortSignal,
-): AsyncGenerator<OpenAIResponsesStreamEvent> {
-  for await (const rawEvent of iterateModelStream(stream, signal)) {
-    // Guarded HTTP turns a unary JSON body into one SSE data event. Reuse the
-    // terminal consumer for Responses snapshots instead of projecting a second answer.
-    const event =
-      isRecord(rawEvent) &&
-      rawEvent.type === undefined &&
-      rawEvent.object === "response" &&
-      typeof rawEvent.status === "string" &&
-      isResponsesTerminalEventType("response." + rawEvent.status)
-        ? { type: "response." + rawEvent.status, response: rawEvent }
-        : rawEvent;
-    if (!isRecord(event) || typeof event.type !== "string") {
-      throw new Error("Responses stream delivered a malformed event without a string type");
-    }
-    if (STRING_DELTA_EVENTS.has(event.type) && typeof event.delta !== "string") {
-      throw new Error(`Responses stream delivered malformed ${event.type} delta`);
-    }
-    if (
-      (event.type === "response.output_item.added" || event.type === "response.output_item.done") &&
-      !isRecord(event.item)
-    ) {
-      throw new Error(`Responses stream delivered malformed ${event.type} item`);
-    }
-    if (
-      (event.type === "response.created" || isResponsesTerminalEventType(event.type)) &&
-      !isRecord(event.response)
-    ) {
-      throw new Error(`Responses stream delivered malformed ${event.type} response`);
-    }
-    yield event as OpenAIResponsesStreamEvent;
+export function adaptResponsesStreamEvent(rawEvent: unknown): OpenAIResponsesStreamEvent {
+  // Guarded HTTP turns a unary JSON body into one SSE data event. Reuse the
+  // terminal consumer for Responses snapshots instead of projecting a second answer.
+  const event =
+    isRecord(rawEvent) &&
+    rawEvent.type === undefined &&
+    rawEvent.object === "response" &&
+    typeof rawEvent.status === "string" &&
+    isResponsesTerminalEventType("response." + rawEvent.status)
+      ? { type: "response." + rawEvent.status, response: rawEvent }
+      : rawEvent;
+  if (!isRecord(event) || typeof event.type !== "string") {
+    throw new Error("Responses stream delivered a malformed event without a string type");
   }
+  if (STRING_DELTA_EVENTS.has(event.type) && typeof event.delta !== "string") {
+    throw new Error(`Responses stream delivered malformed ${event.type} delta`);
+  }
+  if (
+    (event.type === "response.output_item.added" || event.type === "response.output_item.done") &&
+    !isRecord(event.item)
+  ) {
+    throw new Error(`Responses stream delivered malformed ${event.type} item`);
+  }
+  if (
+    (event.type === "response.created" || isResponsesTerminalEventType(event.type)) &&
+    !isRecord(event.response)
+  ) {
+    throw new Error(`Responses stream delivered malformed ${event.type} response`);
+  }
+  return event as OpenAIResponsesStreamEvent;
 }
 
 export async function* observeResponsesStream<TEvent>(

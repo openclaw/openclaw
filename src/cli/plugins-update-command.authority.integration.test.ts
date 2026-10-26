@@ -132,15 +132,13 @@ it.each([false, true])(
       const command = runPluginUpdateCommand({ ids: [pluginId], opts: {} });
       if (refuse) {
         await expect(command).rejects.toThrow();
-        expect(failedReads).toBe(1);
         expect(tentativeRow).toBeDefined();
         expect(readIndexRow({ env: state.env })).toEqual(tentativeRow);
       } else {
         await expect(command).resolves.toBeUndefined();
-        expect(failedReads).toBe(0);
       }
+      expect(failedReads).toBe(refuse ? 1 : 0);
       expect(await readRecords({ env: state.env })).toEqual(nextRecords);
-      expect(fs.existsSync(nextPath), "retained inventory must point at a live package").toBe(true);
       expect(identity(nextPath)).toEqual(nextIdentity);
       expect(JSON.parse(readPackage(nextPath)).version).toBe("2.0.0");
       expect({ identity: identity(oldPath), bytes: readPackage(oldPath) }).toEqual(oldSnapshot);

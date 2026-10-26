@@ -220,10 +220,8 @@ async function untrackedFileAdditions(root: string, filePath: string): Promise<n
       return 0;
     }
     let lines = 0;
-    for (const byte of body) {
-      if (byte === 10) {
-        lines += 1;
-      }
+    for (let index = body.indexOf(10); index !== -1; index = body.indexOf(10, index + 1)) {
+      lines += 1;
     }
     // A trailing fragment without a newline is still a line git would add.
     return body[body.length - 1] === 10 ? lines : lines + 1;
@@ -241,12 +239,18 @@ async function untrackedStats(root: string): Promise<{ additions: number; files:
     "-z",
   ]);
   // NUL-delimited filenames retain leading whitespace, unlike scalar Git output.
-  const paths = listing?.code === 0 ? listing.stdout.split("\0").filter(Boolean) : [];
+  const output = listing?.code === 0 ? listing.stdout : "";
   let additions = 0;
-  for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
-    additions += await untrackedFileAdditions(root, filePath);
+  let files = 0;
+  for (let start = 0; start < output.length;) {
+    const separator = output.indexOf("\0", start);
+    const end = separator < 0 ? output.length : separator;
+    if (end > start && ++files <= MAX_UNTRACKED_STAT_FILES) {
+      additions += await untrackedFileAdditions(root, output.slice(start, end));
+    }
+    start = end + 1;
   }
-  return { additions, files: paths.length };
+  return { additions, files };
 }
 
 /**

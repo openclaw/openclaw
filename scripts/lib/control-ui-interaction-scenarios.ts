@@ -22,10 +22,12 @@ import {
   browserResourceMethodResponses,
   createBrowserResourceScenarios,
 } from "./control-ui-browser-resource-scenarios.ts";
+import { dataActivityLiveScenarios } from "./control-ui-data-activity-live-scenarios.ts";
 import { dataActivityScenarios } from "./control-ui-data-activity-scenarios.ts";
 import { dataBoardScenarios } from "./control-ui-data-board-scenarios.ts";
 import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
 import { dataLogScenarios } from "./control-ui-data-log-scenarios.ts";
+import { dataUsageDetailScenarios } from "./control-ui-data-usage-detail-scenarios.ts";
 import { dataUsageScenarios } from "./control-ui-data-usage-scenarios.ts";
 import { heavyContentScenarios } from "./control-ui-heavy-content-scenarios.ts";
 import {
@@ -120,7 +122,9 @@ export type InteractionScenario = {
   fixture?: InteractionFixtureOptions;
   /** Large-data campaigns replace only their domain's synthetic Gateway responses. */
   fixtureOverrides?: (sandbox?: InteractionSandbox) => InteractionFixtureOverrides;
-  createRequestHandlers?: () => Record<string, (params: unknown) => unknown>;
+  createRequestHandlers?: (
+    defaults: Readonly<Record<string, (params: unknown) => unknown>>,
+  ) => Record<string, (params: unknown) => unknown>;
   dataPage?: string;
   /** Resource campaigns opt into the longer inventory and idle scenarios. */
   resourceOnly?: boolean;
@@ -1554,10 +1558,12 @@ async function prepareProviderUsage(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...dataActivityLiveScenarios,
   ...dataActivityScenarios,
   ...dataBoardScenarios,
   ...dataCatalogScenarios,
   ...dataLogScenarios,
+  ...dataUsageDetailScenarios,
   ...dataUsageScenarios,
   ...(
     ["tooltips", "link-providers", "link-metadata", "ci-pairs", "clawhub-cards"] as const

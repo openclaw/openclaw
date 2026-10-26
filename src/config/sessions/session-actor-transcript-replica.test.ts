@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, describe, expect, it } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
@@ -111,6 +111,43 @@ function append(
 }
 
 describe("actor transcript context replica", () => {
+  it("reuses inspected descriptors when detaching seed and read snapshots", () => {
+    const { hot, prepared } = fixture();
+    delete prepared.residentRows;
+    const inspected = new WeakSet<PropertyDescriptor>();
+    const getDescriptor = Object.getOwnPropertyDescriptor;
+    const defineProperty = Object.defineProperty;
+    let redundantDescriptors = 0;
+    let copiedProperties = 0;
+    const inspect = vi
+      .spyOn(Object, "getOwnPropertyDescriptor")
+      .mockImplementation((value, key) => {
+        const descriptor = getDescriptor(value, key);
+        if (descriptor) {
+          inspected.add(descriptor);
+        }
+        return descriptor;
+      });
+    const define = vi
+      .spyOn(Object, "defineProperty")
+      .mockImplementation((value, key, descriptor) => {
+        copiedProperties++;
+        if (!inspected.has(descriptor)) {
+          redundantDescriptors++;
+        }
+        return defineProperty(value, key, descriptor);
+      });
+    try {
+      const retained = seed(undefined, hot, prepared, limits);
+      readContext(retained, hot, limits);
+    } finally {
+      define.mockRestore();
+      inspect.mockRestore();
+    }
+    expect(copiedProperties).toBeGreaterThan(0);
+    expect(redundantDescriptors).toBe(0);
+  });
+
   it("advances a complete linear path using the receipt's stored byte sizes", () => {
     const { hot, prepared } = fixture();
     const retained = seed(undefined, hot, prepared, limits);

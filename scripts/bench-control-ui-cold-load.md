@@ -483,6 +483,12 @@ Every reload replays the warm visit's persisted sidebar and trimmed v8 transcrip
 serves synthetic HTTP fixtures natively so production JS/CSS can use the browser's
 cache during warm reloads. Without that option, Playwright's synthetic HTTP routes
 disable caching: "warm" then describes persisted application state only.
+Warm-up captures each build's native local/session storage writes after the
+application exits, including page-exit-only cache hints. Measured repeats replay
+those frozen inputs without carrying writes from a prior measured run.
+Empty reset documents use temporary interception; build switches unload to
+`about:blank`. No reset route remains active during a measured navigation, since
+Playwright routing disables the browser HTTP cache.
 `http.waterfall[].transferBytes` records the actual transfer.
 
 `--warm-reload` adds self-contained cache/paint diagnostics. An optional

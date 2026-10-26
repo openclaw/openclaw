@@ -105,6 +105,48 @@ it.each([
   },
 );
 
+it.each(["registry child", "runtime claim"] as const)(
+  "yields for a subagent's own %s without publishing a message-wait pause notice",
+  async (source) => {
+    // The subagent is itself a running announced child of agent:main:main.
+    const runner = await seedNativeChild({
+      runId: "run-runner",
+      childSessionKey: "agent:main:subagent:runner",
+    });
+    if (source === "registry child") {
+      // ...and this turn of the subagent spawned a leaf whose completion resumes it.
+      await seedRequiredChild(runner.childSessionKey, {
+        runId: "run-leaf",
+        childSessionKey: "agent:main:subagent:leaf",
+        requesterTurnRunId: runner.runId,
+      });
+    }
+    const onYield = vi.fn();
+    const tool = createYieldToolForTurn({
+      requesterSessionKey: runner.childSessionKey,
+      requesterTurnRunId: runner.runId,
+      ...(source === "runtime claim" ? { claimYieldCompletion: () => true } : {}),
+      onYield,
+    });
+
+    await expectYield(
+      tool,
+      {
+        status: "yielded",
+        acknowledgment: "Handoff: leaf pending",
+        note: expect.stringContaining('waitFor: "message" was not applied'),
+      },
+      { waitFor: "message", acknowledgment: "Handoff: leaf pending" },
+    );
+    // An ordinary child wait: no message wait is recorded for the runtime, and the
+    // runner's requester is not told it is paused awaiting a sessions_send.
+    expect(onYield).toHaveBeenCalledWith("Turn yielded.", "Handoff: leaf pending", undefined);
+    const after = getSubagentRunByRunId(runner.runId);
+    expect(after?.requesterSettleWake?.pauseNotice).toBeUndefined();
+    expect(after?.execution.status).toBe("running");
+  },
+);
+
 function createYieldToolForTurn({
   onYield = vi.fn(),
   ...claim

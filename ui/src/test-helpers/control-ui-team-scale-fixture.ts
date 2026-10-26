@@ -23,6 +23,7 @@ import {
 } from "./control-ui-team-scale-inventory.ts";
 import {
   createTeamScalePeople,
+  TEAM_SCALE_AVATAR_ASSET,
   TEAM_SCALE_SELF_INSTANCE_ID,
 } from "./control-ui-team-scale-people.ts";
 import {
@@ -57,6 +58,7 @@ type FixtureOptions = {
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
   sidebarAvatars?: boolean;
+  transcriptAvatars?: boolean;
   sidebarPersistentChildren?: boolean;
   sessionEventChurn?: boolean;
   sessionEventDurationMs?: number;
@@ -64,6 +66,7 @@ type FixtureOptions = {
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
   largeSnapshot?: boolean;
+  rowFacts?: boolean;
   offRosterSession?: boolean;
   transcriptMessages?: number;
   dashboardMcpApp?: { font: Buffer };
@@ -103,6 +106,16 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     },
   );
   const assets = new Map<string, FixtureAsset>(avatarAssets);
+  const transcriptSender = people[4]!;
+  if (options.transcriptAvatars) {
+    transcriptSender.avatarUrl = `/api/users/${transcriptSender.id}/avatar?v=${now}`;
+    profiles[4]!.hasAvatar = true;
+    profiles[4]!.avatarMime = "image/png";
+    assets.set(`/api/users/${transcriptSender.id}/avatar`, {
+      ...TEAM_SCALE_AVATAR_ASSET,
+      headers: { "Cache-Control": "private, max-age=31536000, immutable" },
+    });
+  }
   const { sessions, pinnedRows, pinnedKeys, selectedSessionKey, sidebarPersistentChildren } =
     createTeamScaleSessionInventory({
       now,
@@ -125,6 +138,15 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       hasActiveRun: true,
       status: "running",
       activeRunIds: [TEAM_SCALE_LIVE_RUN_ID],
+    });
+  }
+  if (options.rowFacts && !options.liveRun) {
+    Object.assign(pinnedRows[0]!, {
+      status: "failed",
+      lastRunId: "synthetic-row-facts-run",
+      lastRunError: "Synthetic verification failed; retry the check.",
+      runtimeMs: 180_000,
+      contextTokens: 200_000,
     });
   }
   for (const [index, person] of people.entries()) {
@@ -166,12 +188,16 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     now,
     selectedSessionKey,
   );
-  const { messageIds, historyMessages } = createTeamScaleHistoryFixture({
+  const { messageIds, historyMessages, configuredHistory } = createTeamScaleHistoryFixture({
     messageCount: counts.transcriptMessages,
     inlineWidgets: counts.inlineWidgets,
     now,
     largeSnapshot: options.largeSnapshot,
+    rowFacts: options.rowFacts,
     attachments: duplicateReads?.attachments,
+    sender: options.transcriptAvatars ? transcriptSender : undefined,
+    historyStateReceipt: options.historyStateReceipt,
+    sessionInfo: pinnedRows[0]!,
   });
   const historySnapshot = () => ({
     sessionId: pinnedRows[0]!.sessionId,
@@ -184,23 +210,6 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     startedAt: now,
     events: [],
   });
-  const configuredHistory =
-    options.largeSnapshot || options.historyStateReceipt
-      ? {
-          ...historySnapshot(),
-          hasMore: false,
-          totalMessages: counts.transcriptMessages,
-          metadata: { commands: [], models: [] },
-          ...(options.historyStateReceipt
-            ? {
-                stateRevision: {
-                  sessionInfo: "fixture-session-v1",
-                  commands: "fixture-commands-v1",
-                },
-              }
-            : {}),
-        }
-      : undefined;
   const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
     id,
     label: id === "codex" ? "Codex" : "Claude Code",
@@ -355,10 +364,17 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     awaitInitialRoster: false,
     authMethod: "trusted-proxy",
     authMode: "trusted-proxy",
+    ...(options.transcriptAvatars
+      ? { deviceToken: null, hasMultipleSessionSharingIdentities: true }
+      : {}),
     assistantAgentId: "main",
     assistantName: "Harbor",
     agentModel: "gpt-5-mini",
+    models: [
+      { id: "gpt-5-mini", name: "Fixture reasoning model", provider: "openai", reasoning: true },
+    ],
     sessionKey: selectedSessionKey,
+    ...(options.rowFacts ? { sessionInfo: pinnedRows[0]! } : {}),
     sessions,
     presenceUsers: people,
     historyMessages,

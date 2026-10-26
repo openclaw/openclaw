@@ -5,6 +5,14 @@ import type { ChatComposerSnapshot } from "./session-message-cache.ts";
 export function ChatPaneModelControl(props: {
   model: Parameters<typeof ChatModelControls>[0] & { snapshot?: ChatComposerSnapshot };
 }) {
+  const savedSession = () =>
+    props.model.snapshot
+      ? {
+          ...props.model.snapshot,
+          model: props.model.snapshot.id,
+          modelProvider: props.model.snapshot.provider,
+        }
+      : undefined;
   return (
     <div
       class="chat-composer-model-control"
@@ -20,6 +28,8 @@ export function ChatPaneModelControl(props: {
             ? { hasSnapshot: true, status: "offline" }
             : props.model.modelCatalogState
         }
+        thinkingSession={savedSession() ?? props.model.thinkingSession}
+        fastModeDisplay={props.model.snapshot?.speed}
         selectedSession={
           props.model.snapshot
             ? {

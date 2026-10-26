@@ -98,11 +98,6 @@ it.each([
       person("Riley", {
         ts: 2,
         lastInputSeconds: 150,
-        onlineSince: 2,
-        lastActivityAt: 2,
-        platform: "linux",
-        deviceFamily: "Desktop",
-        timeZone: "Europe/Vienna",
       }),
       person("self", { ts: 2, lastInputSeconds: 10 }),
     ],

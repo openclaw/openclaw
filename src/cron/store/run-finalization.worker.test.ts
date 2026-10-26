@@ -8,6 +8,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { claimCronRecoveryReceipt } from "../service/run-recovery.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { mutateCronJobsInWorker } from "./guarded-mutation.worker.js";
@@ -66,6 +67,7 @@ it("commits execution, delivery, and history once despite an owner edit and a du
             configRevision: "old",
           },
           status,
+          errorReason: undefined,
           completionStatus: status === "ok" ? "succeeded" : "failed",
           deliveryState: {
             status: "delivered",
@@ -107,6 +109,46 @@ it("commits execution, delivery, and history once despite an owner edit and a du
   });
 });
 
+it.each([undefined, "timeout"] as const)(
+  "persists the prepared failure reason %s without provider inference",
+  async (errorReason) => {
+    await withOpenClawTestState({ label: "cron-prepared-reason" }, async (fixture) => {
+      const startedAt = Date.now();
+      const storeKey = fixture.statePath("cron", "jobs.json");
+      const job = createDueIsolatedJob({
+        id: "prepared",
+        nowMs: startedAt,
+        nextRunAtMs: startedAt,
+      });
+      job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
+      await saveCronStore(storeKey, { version: 1, jobs: [job] });
+      const receipt = claimCronRecoveryReceipt(storeKey, job, startedAt, "main");
+      withWorkerState({ environment: { OPENCLAW_STATE_DIR: fixture.stateDir } }, () =>
+        finalize(openOpenClawStateDatabase(), cronStoreKey(storeKey), startedAt + 10, {
+          job,
+          runReceipt: receipt,
+          status: "error",
+          error: "internal_error from provider",
+          provider: "anthropic",
+          errorReason,
+          completionStatus: "failed",
+          deliveryState: {
+            status: "not-requested",
+            failureNotification: { status: "not-requested" },
+          },
+        }),
+      );
+      expect((await loadCronStore(storeKey)).jobs[0]?.state.lastErrorReason).toBe(errorReason);
+      const history = readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(storeKey),
+        jobId: job.id,
+      });
+      expect(history.entries).toHaveLength(1);
+      expect(history.entries[0]?.errorReason).toBe(errorReason);
+    });
+  },
+);
+
 it.each(["cancel", "disable"] as const)(
   "retains an unstarted due slot across receipt pruning without replay after %s",
   async (terminalAction) => {
@@ -139,6 +181,7 @@ it.each(["cancel", "disable"] as const)(
             job: run.job,
             runReceipt: run.runReceipt,
             status: "skipped",
+            errorReason: undefined,
             completionStatus: "failed",
             deliveryState: {
               status: "not-requested",

@@ -6,7 +6,6 @@ import {
   fetchDeepSeekUsage,
   resolveProviderUsageApiKeyAuth,
 } from "openclaw/plugin-sdk/provider-usage";
-import { chatUsesDeepSeekApi } from "./model-credential.js";
 import { applyDeepSeekConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildDeepSeekProvider } from "./provider-catalog.js";
@@ -51,11 +50,7 @@ export default defineSingleProviderPluginEntry({
     wrapStreamFn: (ctx) => createDeepSeekV4ThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
     resolveThinkingProfile: ({ modelId }) => resolveDeepSeekV4ThinkingProfile(modelId),
     isModernModelRef: ({ modelId }) => Boolean(resolveDeepSeekV4ThinkingProfile(modelId)),
-    // Balance is DeepSeek account data; chat credentials for another base URL belong to it.
-    resolveUsageAuth: async (ctx) =>
-      chatUsesDeepSeekApi(ctx.config)
-        ? await resolveProviderUsageApiKeyAuth(ctx, [ctx.env.DEEPSEEK_API_KEY])
-        : { handled: true },
+    resolveUsageAuth: (ctx) => resolveProviderUsageApiKeyAuth(ctx, [ctx.env.DEEPSEEK_API_KEY]),
     fetchUsageSnapshot: async (ctx) =>
       await fetchDeepSeekUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
   },

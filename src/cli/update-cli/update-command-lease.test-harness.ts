@@ -267,7 +267,8 @@ export function expectDoctorDiagnostics(): void {
 
 export function expectSuccess(lane: Lane, doctorExpected = true): void {
   expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-  expect(reportedResult(lane)).toMatchObject(
+  const result = reportedResult(lane);
+  expect(result, JSON.stringify(result, null, 2)).toMatchObject(
     lane === "resume"
       ? { status: "ok" }
       : { status: "ok", postUpdate: { plugins: { status: "ok" } } },

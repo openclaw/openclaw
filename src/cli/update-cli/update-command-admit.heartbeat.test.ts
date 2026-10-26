@@ -6,7 +6,6 @@ import * as terminalNote from "../../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { retireHeartbeatWithDoctor } from "../../commands/doctor-heartbeat-retirement.js";
 import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
-import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   type UpdateAdmissionContext,
@@ -18,6 +17,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { withStateMigrationBackupForTest } from "../../state/openclaw-state-schema.test-support.js";
 import * as schemaPreflight from "./schema-preflight.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
+import { snapshotUpdateFixtureFiles } from "./update-command-filesystem-snapshot.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const initialExitCode = process.exitCode;
@@ -133,18 +133,7 @@ function fixture(scenario: Scenario, withDatabase = true) {
       database.close();
     }
   }
-  const snapshot = () =>
-    listDirectoryTreeStrictSync(home)
-      .map((walkEntry) => walkEntry.dirent)
-      .filter((entry) => entry.isFile())
-      .map((entry) => {
-        const filename = path.join(entry.parentPath, entry.name);
-        return [
-          path.relative(home, filename),
-          fs.readFileSync(filename).toString("hex"),
-          fs.statSync(filename).mode,
-        ];
-      });
+  const snapshot = () => snapshotUpdateFixtureFiles(home);
   return { config, configPath, contextPath, sourcePath, snapshot };
 }
 

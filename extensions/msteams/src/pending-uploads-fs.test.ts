@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
@@ -17,26 +14,23 @@ import {
 } from "./pending-uploads-fs.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { useMSTeamsStateTempDirs } from "./test-support/state.js";
 
-let stateDir: string;
+const tempDirs = useMSTeamsStateTempDirs();
 let env: NodeJS.ProcessEnv;
 
-beforeEach(async () => {
+beforeEach(() => {
   resetPluginStateStoreForTests();
   setMSTeamsRuntime(msteamsRuntimeStub);
-  stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-pending-"));
+  const stateDir = tempDirs.make("openclaw-msteams-pending-");
   env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 });
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
-  try {
-    await fs.promises.rm(stateDir, { recursive: true, force: true });
-  } finally {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-  }
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 function storeUpload(
@@ -125,30 +119,28 @@ describe("msteams pending uploads (fs-backed)", () => {
   });
 });
 
-describe("prepareFileConsentActivityFs end-to-end", () => {
-  it("writes the pending upload to the fs store with the same id as the card", async () => {
-    const result = await prepareFileConsentActivityFs({
-      media: {
-        buffer: Buffer.from("cli file"),
-        filename: "cli.bin",
-        contentType: "application/octet-stream",
-      },
-      conversationId: "19:victim@thread.v2",
-      description: "Sent via CLI",
-    });
-
-    expect(result.uploadId).toMatch(/[0-9a-f-]/);
-    const attachments = result.activity.attachments as Array<Record<string, unknown>>;
-    expect(attachments).toHaveLength(1);
-    const content = attachments[0]?.content as { acceptContext: { uploadId: string } };
-    expect(content.acceptContext.uploadId).toBe(result.uploadId);
-
-    const loaded = await getPendingUploadFs(result.uploadId);
-    expect(loaded).toMatchObject({
+it("prepareFileConsentActivityFs persists the same upload id as the card", async () => {
+  const result = await prepareFileConsentActivityFs({
+    media: {
+      buffer: Buffer.from("cli file"),
       filename: "cli.bin",
       contentType: "application/octet-stream",
-      conversationId: "19:victim@thread.v2",
-    });
-    expect(loaded?.buffer.toString("utf8")).toBe("cli file");
+    },
+    conversationId: "19:victim@thread.v2",
+    description: "Sent via CLI",
   });
+
+  expect(result.uploadId).toMatch(/[0-9a-f-]/);
+  const attachments = result.activity.attachments as Array<Record<string, unknown>>;
+  expect(attachments).toHaveLength(1);
+  const content = attachments[0]?.content as { acceptContext: { uploadId: string } };
+  expect(content.acceptContext.uploadId).toBe(result.uploadId);
+
+  const loaded = await getPendingUploadFs(result.uploadId);
+  expect(loaded).toMatchObject({
+    filename: "cli.bin",
+    contentType: "application/octet-stream",
+    conversationId: "19:victim@thread.v2",
+  });
+  expect(loaded?.buffer.toString("utf8")).toBe("cli file");
 });

@@ -1,6 +1,7 @@
 import type { Model } from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { makeStallingStream } from "../providers/provider-stream.test-support.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-internal.js";
 import {
   assignTransportErrorDetails,
@@ -107,11 +108,9 @@ it("does not wait for unread response cancellation after the observer fails", as
   const hookError = new Error("acceptance failed");
   const { promise: cancelStarted, resolve: markCancelStarted } = Promise.withResolvers<void>();
   const response = new Response(
-    new ReadableStream<Uint8Array>({
-      cancel() {
-        markCancelStarted();
-        return new Promise<void>(() => {});
-      },
+    makeStallingStream([], () => {
+      markCancelStarted();
+      return new Promise<void>(() => {});
     }),
   );
   const options = withProviderAcceptanceObserver({}, () => {

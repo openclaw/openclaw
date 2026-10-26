@@ -239,13 +239,18 @@ describe("postWorkshopChangeNotice", () => {
             presentation: { blocks: [{ type: "buttons", buttons: [button] }] },
           },
         ],
-        mirror: expect.objectContaining({ sessionKey, deliveryMirror: marker(true) }),
+        session: expect.objectContaining({ key: sessionKey }),
+        deliveryIntentId: expect.stringMatching(/^skill-workshop-notice:/),
       }),
       undefined,
       undefined,
       generation(sessionKey),
     );
-    expect(mocks.append).not.toHaveBeenCalled();
+    // The session records its own notice once, with the marker the Control UI renders.
+    expect(mocks.append).toHaveBeenCalledOnce();
+    expect(mocks.append).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey, deliveryMirror: marker(true) }),
+    );
     expect(mocks.enqueue).toHaveBeenCalledTimes(1);
     expect(mocks.enqueue).toHaveBeenCalledWith(
       expect.stringContaining("skill_workshop action=restore name=budget version=v1;"),

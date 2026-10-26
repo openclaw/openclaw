@@ -192,11 +192,8 @@ extensions/discord/src/internal/api.guild.ts	2
 extensions/discord/src/internal/api.messages.ts	5
 extensions/discord/src/internal/api.reactions.ts	1
 extensions/discord/src/internal/api.users.ts	3
-extensions/discord/src/internal/command-comparison.ts	1
-extensions/discord/src/internal/command-deploy.ts	1
 extensions/discord/src/internal/commands.ts	1
 extensions/discord/src/internal/components.modal.ts	1
-extensions/discord/src/internal/entity-cache.ts	3
 extensions/discord/src/internal/gateway-dispatch.ts	5
 extensions/discord/src/internal/gateway-payload.ts	1
 extensions/discord/src/internal/gateway.ts	2
@@ -391,7 +388,6 @@ extensions/matrix/src/matrix/direct-management.ts	1
 extensions/matrix/src/matrix/errors.ts	1
 extensions/matrix/src/matrix/format.ts	3
 extensions/matrix/src/matrix/monitor/ack-config.ts	2
-extensions/matrix/src/matrix/monitor/context-summary.ts	2
 extensions/matrix/src/matrix/monitor/events.ts	3
 extensions/matrix/src/matrix/monitor/handler-context.ts	1
 extensions/matrix/src/matrix/monitor/handler-helpers.ts	2
@@ -893,7 +889,7 @@ packages/acp-core/src/runtime/errors.ts	5
 packages/agent-core/src/agent-loop.ts	1
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
-packages/agent-core/src/harness/session/tool-result-pairing.ts	3
+packages/agent-core/src/harness/session/tool-result-pairing.ts	2
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
 packages/agent-core/src/turn-interruption.ts	1
@@ -1040,11 +1036,11 @@ src/agents/agent-tools.read.ts	4
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/ai-transport-runtime-host.ts	9
 src/agents/apply-patch-file-ops.ts	2
-src/agents/apply-patch.ts	2
+src/agents/apply-patch.ts	1
 src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	1
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
-src/agents/auth-profiles/oauth.ts	2
+src/agents/auth-profiles/oauth.ts	1
 src/agents/auth-profiles/persisted.ts	1
 src/agents/auth-profiles/policy.ts	1
 src/agents/auth-profiles/profiles.ts	1
@@ -1237,7 +1233,7 @@ src/agents/session-transcript-repair.ts	2
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/auth-storage.ts	1
 src/agents/sessions/extensions/loader.ts	2
-src/agents/sessions/extensions/runner.ts	14
+src/agents/sessions/extensions/runner.ts	13
 src/agents/sessions/keybindings.ts	2
 src/agents/sessions/model-registry.ts	3
 src/agents/sessions/resolve-config-value.ts	1
