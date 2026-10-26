@@ -198,8 +198,11 @@ Key policy rules:
   work. Stale plugin references stay inert while this is active; re-enable
   plugins before running doctor cleanup if you want stale ids removed.
 - `plugins.deny` wins over allow and per-plugin enablement.
-- `plugins.allow` is an exclusive allowlist. Plugin-owned tools outside the
-  allowlist stay unavailable even when `tools.allow` includes `"*"`.
+- A non-empty `plugins.allow` restricts which plugins can load, with activation
+  exceptions for selected slot owners and explicitly enabled bundled chat
+  channels. Plugin-owned tools outside the allowlist stay unavailable even
+  when `tools.allow` includes `"*"`; plugin activation and tool availability
+  are separate policy decisions.
 - `plugins.entries.<id>.enabled: false` disables one plugin while keeping its
   config.
 - `plugins.load.paths` adds explicit local plugin files or directories.
@@ -211,9 +214,13 @@ Key policy rules:
   unless config explicitly overrides it.
 - `plugins.slots.<slot>` (`memory` or `contextEngine`) picks one plugin for an
   exclusive category. Slot selection counts as explicit activation and
-  force-enables the selected plugin for that slot, even if it would otherwise
-  be opt-in. `plugins.deny` and `plugins.entries.<id>.enabled: false` still
-  block it.
+  enables the selected plugin for that slot even when `plugins.allow` omits
+  it or the plugin would otherwise be opt-in. This includes the implicit
+  `memory-core` selection when `plugins.slots.memory` is unset. To turn off
+  memory plugins, set `plugins.slots.memory: "none"`; to block `memory-core`
+  specifically, use `plugins.deny: ["memory-core"]` or
+  `plugins.entries.memory-core.enabled: false`. Global disable, deny, explicit
+  per-plugin disable, and workspace-origin trust checks still apply.
 - Bundled opt-in plugins can auto-activate when config names one of their
   owned surfaces, such as a provider/model ref, channel config, CLI backend,
   or agent harness runtime.
