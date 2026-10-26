@@ -33,6 +33,7 @@ import {
 } from "./isolated-agent/job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import * as h from "./isolated-agent/run.test-harness.js";
+import { resolveCarriedCronModelSelection } from "./isolated-agent/session-carried-model.js";
 import { normalizeCronRunErrorText } from "./service/execution-errors.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
@@ -296,6 +297,13 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       if (trigger === "cron") {
         expect(result.status).toBe("error");
         expect(result.error).toContain("Automation has no recorded inference account");
+        // The refusal names the runtime and account, and the exact command that records it.
+        expect(result.error).toContain(
+          "Runtime claude-cli would run openai/gpt-4o with stored account claude-cli:personal",
+        );
+        expect(result.error).toContain(
+          "openclaw automations edit <jobId> --model openai/gpt-4o@claude-cli:personal",
+        );
         expect(h.runCliAgentMock).not.toHaveBeenCalled();
       } else {
         expect(result.status, result.error).toBe("ok");
@@ -312,12 +320,14 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     { trigger: "event", cli: true },
     { trigger: "cron", cli: false },
   ] as const)(
-    "explains a bound account refusal for $trigger with cli=$cli (#144047)",
+    "explains a legacy bound account refusal for $trigger with cli=$cli (#144047)",
     async ({ trigger, cli }) => {
       await saveProfiles({ "openai:work": apiKey(), "claude-cli:personal": oauth("claude-cli") });
       const cfg = config();
-      const binding = await capture(cfg, "openai/gpt-4.1@openai:work");
-      expect(binding).toMatchObject({ profileId: "openai:work", source: "user" });
+      const captured = await capture(cfg, "openai/gpt-4.1@openai:work");
+      expect(captured).toMatchObject({ profileId: "openai:work", source: "user" });
+      // Captured before bindings recorded their runtime, so the run derives one as before.
+      const { runtime: _runtime, ...binding } = captured!;
       const storePath = state.statePath("cron", "jobs.json");
       await saveCronJobsStore(storePath, {
         version: 1,
@@ -343,6 +353,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       expect(result.status).toBe("error");
       expect(result.error).toContain("incompatible with its recorded inference account and route");
       expect(result.error).toContain(cli ? "CLI login" : "different provider");
+      expect(result.error).toContain("account openai:work (no recorded runtime)");
       expect(result.error).toContain(
         "openclaw automations edit <jobId> --model <provider/model>@<profileId>",
       );
@@ -353,6 +364,29 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       expect(h.runCliAgentMock).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps a bound job on its recorded runtime when config moves its model to a CLI", async () => {
+    await saveProfiles({ "openai:work": apiKey(), "claude-cli:personal": oauth("claude-cli") });
+    const cfg = config();
+    const binding = await capture(cfg, "openai/gpt-4.1@openai:work");
+    expect(binding?.runtime).toBeTruthy();
+    setupClaudeCliBackend();
+    h.resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4o" });
+    cfg.agents!.defaults!.model = "openai/gpt-4o";
+    cfg.agents!.defaults!.models = { "openai/gpt-4o": { agentRuntime: { id: "claude-cli" } } };
+    h.runEmbeddedAgentMock.mockImplementation(async (request: AgentRequest) => {
+      expect(request.authProfileBinding?.profileId).toBe("openai:work");
+      expect(request.agentHarnessRuntimeOverride).toBe(binding?.runtime);
+      request.userTurnTranscriptRecorder?.markBlocked();
+      return { payloads: [{ text: "recorded runtime" }], meta: { agentMeta: {} } };
+    });
+
+    const result = await runWithConfig(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(h.runCliAgentMock).not.toHaveBeenCalled();
+  });
 
   // Claude CLI forwards a stored Anthropic account the same way interactive chat does.
   const claudeCliConfig = async (): Promise<OpenClawConfig> => {
@@ -561,4 +595,158 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     // The native login stays the CLI's own and leaves the job unbound.
     await expect(update(`${claudeRef}@anthropic:claude-cli`)).resolves.toBeUndefined();
   });
+  // The Oct 20 shape: a `current` job created from a conversation that runs Claude through
+  // claude-cli, on an Anthropic model the config alone would run embedded, with a stored
+  // Anthropic key. The run copies the conversation's runtime, so capture must resolve it too.
+  const claudeCliCreator = (): SessionEntry => ({
+    sessionId: "creator-session",
+    updatedAt: 1,
+    modelOverride: claudeModel,
+    providerOverride: "anthropic",
+    modelOverrideSource: "user",
+    agentRuntimeOverride: "claude-cli",
+  });
+  const embeddedAnthropicConfig = async (credential: AuthProfileCredential) => {
+    await saveProfiles({ [claudeProfile]: credential });
+    setupClaudeCliBackend();
+    const cfg = config(claudeRef);
+    cfg.auth = {
+      profiles: {
+        [claudeProfile]: {
+          provider: "anthropic",
+          mode: credential.type === "api_key" ? "api_key" : "token",
+        },
+      },
+      order: { anthropic: [claudeProfile] },
+    };
+    h.resolveConfiguredModelRefMock.mockReturnValue({ provider: "anthropic", model: claudeModel });
+    h.resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "anthropic", model: claudeModel },
+    });
+    return cfg;
+  };
+  const captureFromCreator = (cfg: OpenClawConfig, creatorEntry: SessionEntry) =>
+    captureCronInferenceBinding({
+      cfg,
+      agentId: "main",
+      sessionEntry: creatorEntry,
+      executionSessionEntry: resolveCarriedCronModelSelection(creatorEntry),
+    });
+  const runCopyingCreator = (cfg: OpenClawConfig, job: CronStoredJob) => {
+    // The run's cron session carries the creator's model and runtime, as session.ts copies them.
+    h.resolveCronSessionMock.mockResolvedValue(
+      h.makeCronSession({
+        sessionEntry: h.makeCronSessionEntry(resolveCarriedCronModelSelection(claudeCliCreator())),
+      }),
+    );
+    return runWithConfig(cfg, job);
+  };
+
+  it("captures the CLI login a claude-cli creator's job runs on and runs it there", async () => {
+    const cfg = await embeddedAnthropicConfig({
+      type: "api_key",
+      provider: "anthropic",
+      key: "synthetic-anthropic-key",
+    });
+    const binding = await captureFromCreator(cfg, claudeCliCreator());
+    // The CLI login owns auth; the stored key is not recorded for a runtime that won't use it.
+    expect(binding).toBeUndefined();
+    h.resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
+    h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
+
+    const result = await runCopyingCreator(cfg, makeAuthJob({ sessionTarget: "current" }));
+
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runCliAgentMock).toHaveBeenCalledOnce();
+    expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+      provider: "claude-cli",
+      nativeAuthOnly: true,
+    });
+    expect(h.runCliAgentMock.mock.lastCall?.[0].authProfileId).toBeUndefined();
+    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("records the forwarded account with its claude-cli runtime and runs on that runtime", async () => {
+    const cfg = await embeddedAnthropicConfig(claudeToken());
+    const binding = await captureFromCreator(cfg, claudeCliCreator());
+    expect(binding).toMatchObject({
+      provider: "anthropic",
+      profileId: claudeProfile,
+      runtime: "claude-cli",
+    });
+    h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
+
+    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+      provider: "claude-cli",
+      authProfileId: claudeProfile,
+    });
+    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("runs a bound job on its captured runtime, not the runtime its cron session copied", async () => {
+    const cfg = await embeddedAnthropicConfig(claudeToken());
+    const binding = await capture(cfg);
+    expect(binding?.runtime).toBeTruthy();
+    expect(binding?.runtime).not.toBe("claude-cli");
+    h.runEmbeddedAgentMock.mockImplementation(async (request: AgentRequest) => {
+      expect(request.authProfileBinding?.profileId).toBe(claudeProfile);
+      request.userTurnTranscriptRecorder?.markBlocked();
+      return { payloads: [{ text: "captured runtime" }], meta: { agentMeta: {} } };
+    });
+
+    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(h.runCliAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a bound job whose captured runtime the config no longer allows", async () => {
+    const cfg = await embeddedAnthropicConfig(claudeToken());
+    const binding = await captureFromCreator(cfg, claudeCliCreator());
+    expect(binding?.runtime).toBe("claude-cli");
+    // claude-cli stops being a CLI backend for this config after capture.
+    h.isCliProviderMock.mockImplementation(() => false);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+
+    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain(`account ${claudeProfile} on runtime claude-cli`);
+    expect(result.error).toContain("captured for runtime claude-cli");
+    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(h.runCliAgentMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["embedded", "cli"] as const)(
+    "fails a %s job whose stored account was removed with one message naming account and runtime",
+    async (route) => {
+      const cfg =
+        route === "cli" ? await claudeCliConfig() : await embeddedAnthropicConfig(claudeToken());
+      const binding = await capture(cfg);
+      if (!binding?.runtime) {
+        throw new Error("Expected a binding with its captured runtime");
+      }
+      await removeAuthProfilesAcrossOwnerStores({
+        profileIds: [claudeProfile],
+        agentDir: state.agentDir(),
+      });
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const result = await runWithConfig(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+      expect(result.status).toBe("error");
+      expect(result.error).toContain(
+        `Automation inference account ${claudeProfile} on runtime ${binding.runtime} was removed or signed out`,
+      );
+      expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(h.runCliAgentMock).not.toHaveBeenCalled();
+    },
+  );
 });

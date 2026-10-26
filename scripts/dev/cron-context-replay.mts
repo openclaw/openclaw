@@ -15,7 +15,11 @@ import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { tryResolveAmbientOwnerAgentId } from "../../src/agents/agent-scope-config.js";
+import { isCliProvider } from "../../src/agents/model-selection-cli.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../src/agents/session-runtime-compat.js";
+import { resolveEffectiveAgentRuntime } from "../../src/agents/thinking-runtime.js";
 import { isRuntimeToolAllowed } from "../../src/agents/tool-policy-match.js";
+import type { SessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
@@ -29,6 +33,7 @@ import {
 import {
   compareScheduledDecisions,
   type ScheduledDivergence,
+  type ScheduledInferenceRuntimeFacts,
 } from "../../src/cron/execution-context-projection.js";
 import {
   replayScheduledContextFixture,
@@ -39,6 +44,8 @@ import {
   resolveScheduledRequester,
   type ScheduledAdmissionFacts,
 } from "../../src/cron/execution-context.js";
+import { resolveCronCandidateExecution } from "../../src/cron/isolated-agent/candidate-execution.js";
+import { resolveCarriedCronModelSelection } from "../../src/cron/isolated-agent/session-carried-model.js";
 import { resolveCronSessionTargetSessionKey } from "../../src/cron/session-target.js";
 import { resolveCronRunToolsAllow } from "../../src/cron/tools-allow.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
@@ -108,6 +115,77 @@ function runSessionKeyFor(job: CronStoredJob, agentId: string) {
 }
 
 type ParentRow = NonNullable<ScheduledAdmissionFacts["parentRow"]>;
+
+// The model id a bound job runs for its account's provider: its pinned model, the model its
+// cron session copies, or the configured default, in the order run model selection uses.
+function boundModelId(
+  provider: string,
+  job: CronStoredJob,
+  entry: Partial<SessionEntry> | undefined,
+  cfg: OpenClawConfig,
+): string {
+  const refs = [
+    job.payload.kind === "agentTurn" ? job.payload.model : undefined,
+    entry?.modelOverride
+      ? `${entry.providerOverride ?? provider}/${entry.modelOverride}`
+      : undefined,
+    (() => {
+      const model = cfg.agents?.defaults?.model;
+      return typeof model === "string" ? model : model?.primary;
+    })(),
+  ];
+  for (const ref of refs) {
+    const [refProvider, ...rest] = (ref ?? "").split("@")[0]!.split("/");
+    if (refProvider === provider && rest.length > 0) {
+      return rest.join("/");
+    }
+  }
+  return "";
+}
+
+/**
+ * Runtimes a bound job's run resolves: the legacy pick from the entry its cron session copies
+ * (a `current` job's creating conversation, a `session:` job's row), and config policy alone.
+ */
+export function replayInferenceRuntimes(
+  job: CronStoredJob,
+  agentId: string,
+  cfg: OpenClawConfig,
+  readRow: (sessionKey: string) => SessionEntry | undefined,
+): ScheduledInferenceRuntimeFacts | undefined {
+  const binding = job.inferenceBinding;
+  if (!binding || job.payload.kind !== "agentTurn") {
+    return undefined;
+  }
+  const target = resolveCronSessionTargetSessionKey(job.sessionTarget);
+  const currentRow =
+    job.sessionTarget === "current" && job.sessionKey ? readRow(job.sessionKey) : undefined;
+  const entry = target
+    ? readRow(target)
+    : currentRow
+      ? resolveCarriedCronModelSelection(currentRow)
+      : undefined;
+  const provider = binding.provider;
+  const model = boundModelId(provider, job, entry, cfg);
+  const deps = { isCliProvider, resolveEffectiveAgentRuntime };
+  const resolve = (sessionEntry: Partial<SessionEntry> | undefined) =>
+    resolveCronCandidateExecution(
+      {
+        cfg,
+        agentId,
+        provider,
+        model,
+        sessionRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
+          provider,
+          entry: sessionEntry,
+          cfg,
+        }),
+        sessionEntry,
+      },
+      deps,
+    ).runtime;
+  return { legacy: resolve(entry), configOnly: resolve(undefined) };
+}
 
 // Keeps the discriminators the builder reads from a stored operator source. A
 // source that does not decode stays undecodable, so the fixture keeps failing.
@@ -447,7 +525,14 @@ async function main() {
         owner,
       );
       const result = buildScheduledExecutionContext(job, facts);
-      const divergence = compareScheduledDecisions(job, facts, result);
+      const inferenceRuntimes = replayInferenceRuntimes(job, agentId, cfg, (sessionKey) => {
+        const row = agentDbs
+          .get(agentId)
+          ?.prepare("select entry_json from session_nodes where session_key = ?")
+          .get(sessionKey) as { entry_json: string } | undefined;
+        return row ? (JSON.parse(row.entry_json) as SessionEntry) : undefined;
+      });
+      const divergence = compareScheduledDecisions(job, facts, result, inferenceRuntimes);
       rows.push({
         job: job.name || job.id,
         agentId,
@@ -466,12 +551,14 @@ async function main() {
           name: "",
           parentRow: fixtureParentRow,
           owner,
+          inferenceRuntimes,
         });
         if (![...fixtures.keys()].includes(shapeKey)) {
           fixtures.set(shapeKey, {
             job: fixtureJob,
             ...(fixtureParentRow ? { parentRow: fixtureParentRow } : {}),
             ...(owner !== undefined ? { owner } : {}),
+            ...(inferenceRuntimes ? { inferenceRuntimes } : {}),
           });
         }
       }

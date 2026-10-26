@@ -12,13 +12,16 @@ import {
 } from "../agents/cli-execution-auth.js";
 import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
-import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
+import { isCliProvider } from "../agents/model-selection-cli.js";
 import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
-import type { CronInferenceBinding } from "./inference-binding.js";
+import { type CronInferenceBinding, describeCronInferenceBinding } from "./inference-binding.js";
+import { resolveCronCandidateExecution } from "./isolated-agent/candidate-execution.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
@@ -31,7 +34,14 @@ export async function captureCronInferenceBinding(params: {
   model?: string;
   isGmailHook?: boolean;
   sessionEntry?: SessionEntry;
-  executionSessionEntry?: Pick<SessionEntry, "modelOverride" | "providerOverride">;
+  /**
+   * The model and runtime fields the cron session will hold: the target row of a
+   * `session:` job, or what a `current` job carries from its creating conversation.
+   */
+  executionSessionEntry?: Pick<
+    SessionEntry,
+    "modelOverride" | "providerOverride" | "modelOverrideSource" | "agentRuntimeOverride"
+  >;
   authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
   retainAuthorization?: (authority: AuthProfileAuthorization) => void;
 }): Promise<CronInferenceBinding | undefined> {
@@ -56,13 +66,25 @@ export async function captureCronInferenceBinding(params: {
   if (!model.ok) {
     throw new Error(model.error);
   }
-  const cliExecutionProvider = resolveCliRuntimeExecutionProvider({
-    cfg,
-    agentId,
-    provider: model.provider,
-    modelId: model.model,
-    authProfileId: model.configuredProfileId,
-  });
+  // Resolve the runtime the way the run will: the override its cron session carries, then
+  // config policy. The binding records it, and runs execute on it.
+  const execution = resolveCronCandidateExecution(
+    {
+      cfg,
+      agentId,
+      provider: model.provider,
+      model: model.model,
+      sessionRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
+        provider: model.provider,
+        entry: params.executionSessionEntry,
+        cfg,
+      }),
+      sessionEntry: params.executionSessionEntry,
+      authProfileId: model.configuredProfileId,
+    },
+    { isCliProvider, resolveEffectiveAgentRuntime },
+  );
+  const cliExecutionProvider = execution.cliExecution ? execution.executionProvider : undefined;
   // Backends that never forward a stored profile own their login; nothing here can bind it.
   if (
     cliExecutionProvider &&
@@ -210,6 +232,7 @@ export async function captureCronInferenceBinding(params: {
       profileId: selection.profileId,
       authorizationId: authority.authorizationId,
       authRequirement,
+      runtime: execution.runtime,
       source:
         model.configuredProfileId ||
         creatorSession?.authProfileOverrideSource === "user" ||
@@ -241,7 +264,7 @@ export async function acquireCronInferenceAuthorization(params: {
     });
     if (authority.authorizationId !== params.binding.authorizationId) {
       throw new Error(
-        "Automation inference account was replaced. Explicitly select an authorized account again.",
+        `Automation inference ${describeCronInferenceBinding(params.binding)} was replaced. Explicitly select an authorized account again.`,
       );
     }
     authority.assertCurrent();
@@ -255,7 +278,7 @@ export async function acquireCronInferenceAuthorization(params: {
       error.code === "MCP_AUTHORIZATION_RETIRED"
     ) {
       throw new Error(
-        `Automation inference account ${params.binding.profileId} was removed or signed out. Explicitly select an authorized account again.`,
+        `Automation inference ${describeCronInferenceBinding(params.binding)} was removed or signed out. Explicitly select an authorized account again.`,
         { cause: error },
       );
     }

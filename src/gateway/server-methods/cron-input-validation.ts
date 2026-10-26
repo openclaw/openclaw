@@ -25,6 +25,7 @@ import {
   requiresExternalCronDelivery,
   resolveDeliveryTarget,
 } from "../../cron/isolated-agent/delivery-target.js";
+import { resolveCarriedCronModelSelection } from "../../cron/isolated-agent/session-carried-model.js";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { resolveFailureAlert } from "../../cron/service/failure-alerts.js";
@@ -339,6 +340,14 @@ export async function captureCronCreatorSession(
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && executionSessionKey
       ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionSessionKey, agentId })
       : undefined;
+  // A `current` run copies its model and runtime from the creating conversation each time.
+  const currentSourceKey = job.sessionTarget === "current" ? job.sessionKey?.trim() : undefined;
+  const currentSource =
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && currentSourceKey
+      ? currentSourceKey === sessionKey
+        ? loaded
+        : await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: currentSourceKey, agentId })
+      : undefined;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
@@ -353,7 +362,11 @@ export async function captureCronCreatorSession(
                   parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
                 )) === "gmail",
             sessionEntry: callerScope ? creatorSession : undefined,
-            executionSessionEntry: executionSession?.entry,
+            executionSessionEntry:
+              executionSession?.entry ??
+              (currentSource?.entry
+                ? resolveCarriedCronModelSelection(currentSource.entry)
+                : undefined),
           },
           caller,
         )

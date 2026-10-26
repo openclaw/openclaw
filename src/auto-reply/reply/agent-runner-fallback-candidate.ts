@@ -269,7 +269,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           sessionEntry: params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry(),
           agentRuntime: runOptions.agentHarnessRuntimeOverride,
         });
-        params.scheduledInference?.assertCandidate(provider, runtime.useCliExecution);
+        params.scheduledInference?.assertCandidate(
+          provider,
+          runtime.useCliExecution,
+          candidateAgentRuntime,
+        );
         assertCronRuntimeAuthorityCandidate({
           authority: candidateRun.scheduledAutomation?.job.runtimeAuthority,
           candidateRuntime: candidateAgentRuntime,
