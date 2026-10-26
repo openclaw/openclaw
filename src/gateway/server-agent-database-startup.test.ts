@@ -439,6 +439,14 @@ it.for([
     let suppliedBroker: Awaited<ReturnType<typeof spawnBroker.startGatewaySpawnBroker>>;
     let unadoptedPortClaim: TestPortClaim | undefined;
     let chatClient: Awaited<ReturnType<typeof connectWebchatClient>> | undefined;
+    const closeServer = async () => {
+      await server!.close();
+      await suppliedBroker?.close();
+      if (brokerExpected) {
+        expect(inspectionAliveAtBrokerClose).toBe(false);
+        expect(() => process.kill(brokerPid!, 0)).toThrow();
+      }
+    };
     try {
       if (outcome === "startup-failure") {
         const startupFailure = new Error("startup stopped before Gateway adoption");
@@ -612,12 +620,7 @@ it.for([
         expect(fs.existsSync(preparationEnteredPath)).toBe(true);
         expect(preparationCancelled).toBe(false);
         expect(fs.existsSync(pause!.preparationReleasePath)).toBe(false);
-        await server.close();
-        await suppliedBroker?.close();
-        if (brokerExpected) {
-          expect(inspectionAliveAtBrokerClose).toBe(false);
-          expect(() => process.kill(brokerPid!, 0)).toThrow();
-        }
+        await closeServer();
         expect(preparationCancelled).toBe(true);
         expect(fs.readFileSync(pause!.preparationReleasePath, "utf8")).toBe("owner cancelled");
         expect(inspectionAlive(preparationEnteredPath)).toBe(false);
@@ -749,12 +752,7 @@ it.for([
           expect(hostJournalReads).toBe(0);
         }
       } else if (outcome === "shutdown") {
-        await server.close();
-        await suppliedBroker?.close();
-        if (brokerExpected) {
-          expect(inspectionAliveAtBrokerClose).toBe(false);
-          expect(() => process.kill(brokerPid!, 0)).toThrow();
-        }
+        await closeServer();
         expect(fs.existsSync(releasePath)).toBe(false);
         const pid = Number(fs.readFileSync(enteredPath, "utf8"));
         expect(() => process.kill(pid, 0)).toThrow();

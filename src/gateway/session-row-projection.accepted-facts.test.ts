@@ -81,8 +81,23 @@ function activitySummary(
   };
 }
 
-function transcriptMessage(role: "user" | "assistant", content: string) {
-  return { messages: [{ message: { role, content } }] };
+function writeTranscript(
+  scope: Parameters<typeof persistSessionTranscriptTurn>[0],
+  role: "user" | "assistant",
+  content: string,
+  options: Omit<Parameters<typeof persistSessionTranscriptTurn>[1], "messages"> = {},
+) {
+  return persistSessionTranscriptTurn(scope, {
+    messages: [{ message: { role, content } }],
+    ...options,
+  });
+}
+
+function putBoard(key: string, html: string) {
+  const board = new SqliteBoardStore({
+    resolveSession: ({ sessionKey }) => ({ agentId: "main", sessionKey }),
+  });
+  return board.putWidget({ sessionKey: key, name: "status", content: { kind: "html", html } });
 }
 
 function sharedFactReads(reads: {
@@ -112,10 +127,7 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
     };
     replaceSessionEntrySync(scope, entry);
     // Cold transcript initialization may acquire row facts before warmed receipt reuse begins.
-    await persistSessionTranscriptTurn(scope, {
-      ...transcriptMessage("user", "Initial transcript"),
-      touchSessionEntry: false,
-    });
+    await writeTranscript(scope, "user", "Initial transcript", { touchSessionEntry: false });
     const acp: SessionAcpMeta = {
       backend: "receipt-backend",
       agent: "main",
@@ -129,18 +141,8 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
       lifecycleRevision: entry.lifecycleRevision,
       meta: acp,
     });
-    const board = new SqliteBoardStore({
-      resolveSession: ({ sessionKey }) => ({ agentId: "main", sessionKey }),
-    });
-    await board.putWidget({
-      sessionKey: scope.sessionKey,
-      name: "status",
-      content: { kind: "html", html: "<p>Current</p>" },
-    });
-    const projection = await create({
-      cfg,
-      modelCatalog: [],
-    });
+    await putBoard(scope.sessionKey, "<p>Current</p>");
+    const projection = await create({ cfg, modelCatalog: [] });
     const query = { agentId: scope.agentId, key: scope.sessionKey };
     await projection.ensureMaterialized();
     const rowReads: string[] = [];
@@ -149,10 +151,7 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
       return owner.readRowFacts(input);
     });
     const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    await persistSessionTranscriptTurn(scope, {
-      ...transcriptMessage("user", "First input"),
-      touchSessionEntry: false,
-    });
+    await writeTranscript(scope, "user", "First input", { touchSessionEntry: false });
     await projection.ensureMaterialized();
     const watermark = readSessionTranscriptWatermark(scope);
     replaceSessionEntrySync(scope, {
@@ -173,10 +172,7 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
     await projection.ensureMaterialized();
     expect(projection.snapshot(query).row?.activitySummary?.state).toBe("current");
     expect(rowReads).toEqual([]);
-    await persistSessionTranscriptTurn(scope, {
-      ...transcriptMessage("assistant", "Second message"),
-      touchSessionEntry: false,
-    });
+    await writeTranscript(scope, "assistant", "Second message", { touchSessionEntry: false });
     await projection.ensureMaterialized();
     expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
     expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
@@ -184,9 +180,7 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
       acpMeta: acp,
       activitySummaryWatermark: readSessionTranscriptWatermark(scope),
     });
-    await persistSessionTranscriptTurn(scope, {
-      ...transcriptMessage("assistant", "Combined entry and transcript"),
-    });
+    await writeTranscript(scope, "assistant", "Combined entry and transcript");
     await projection.ensureMaterialized();
     expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
     expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
@@ -311,12 +305,11 @@ it.each([
         replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "replacement" });
         expected = null;
       } else if (change === "transcript publication") {
-        await persistSessionTranscriptTurn(
+        await writeTranscript(
           { ...scope, sessionId: entry.sessionId, storePath: suffix.storeTarget.storePath },
-          {
-            ...transcriptMessage("assistant", "New transcript content"),
-            touchSessionEntry: false,
-          },
+          "assistant",
+          "New transcript content",
+          { touchSessionEntry: false },
         );
       } else if (change === "lifecycle adapter") {
         await persistGatewaySessionLifecycleEvent({
@@ -513,9 +506,8 @@ it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
           sessionId: entries[1]!.sessionId,
         };
         if (transcriptOnly) {
-          await persistSessionTranscriptTurn(suffixScope, {
+          await writeTranscript(suffixScope, "user", "Summarized transcript", {
             config: cfg,
-            ...transcriptMessage("user", "Summarized transcript"),
             touchSessionEntry: false,
             updateMode: "none",
           });
@@ -647,9 +639,8 @@ it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
             const publications: unknown[] = [];
             const unsubscribe = sessionChanges.subscribe((change) => publications.push(change));
             try {
-              await persistSessionTranscriptTurn(suffixScope, {
+              await writeTranscript(suffixScope, "user", "New archived transcript", {
                 config: cfg,
-                ...transcriptMessage("user", "New archived transcript"),
                 touchSessionEntry: false,
               });
             } finally {
@@ -766,23 +757,12 @@ it("lets keyed reads supersede accepted archive facts after a same-generation pu
 it("replaces accepted entry, board, and watermark facts through a worker receipt", async () => {
   await withAcceptedSuffix(async ({ projection, suffix, scope, query, entry, reads, resume }) => {
     expect(suffix.pendingDatabaseFacts?.hasBoard).toBe(false);
-    const board = new SqliteBoardStore({
-      resolveSession: ({ sessionKey }) => ({ agentId: "main", sessionKey }),
+    await putBoard(query.key, "<p>current</p>");
+    await writeTranscript({ ...scope, sessionId: entry.sessionId }, "user", "Current transcript", {
+      config: projection.state.cfg,
+      touchSessionEntry: false,
+      updateMode: "none",
     });
-    await board.putWidget({
-      sessionKey: query.key,
-      name: "status",
-      content: { kind: "html", html: "<p>current</p>" },
-    });
-    await persistSessionTranscriptTurn(
-      { ...scope, sessionId: entry.sessionId },
-      {
-        config: projection.state.cfg,
-        ...transcriptMessage("user", "Current transcript"),
-        touchSessionEntry: false,
-        updateMode: "none",
-      },
-    );
     const watermark = readSessionTranscriptWatermark({ ...scope, sessionId: entry.sessionId });
     const committedEntry: InternalSessionEntry = {
       ...entry,
