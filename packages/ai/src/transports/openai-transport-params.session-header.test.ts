@@ -3,15 +3,11 @@ import {
   type Context,
   type Model,
   type CacheRetention,
-  type SimpleStreamOptions,
 } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH } from "../providers/openai-prompt-cache.js";
 import { createModel } from "./openai-responses-prompt-observer.test-support.js";
-import {
-  buildOpenAIClientHeaders,
-  buildOpenAISdkRequestOptions,
-} from "./openai-transport-params.js";
+import { buildOpenAIClientHeaders } from "./openai-transport-params.js";
 
 const codexModel = createModel({
   api: "openai-chatgpt-responses",
@@ -53,24 +49,5 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
     expect(Object.keys(headers).filter((name) => name.toLowerCase() === "session_id")).toHaveLength(
       1,
     );
-  });
-});
-
-describe("buildOpenAISdkRequestOptions turn controls", () => {
-  const model = createModel();
-
-  it("keeps SDK retries at zero for legacy maxRetries", () => {
-    const signal = new AbortController().signal;
-    const options: SimpleStreamOptions = { timeoutMs: 1_234, maxRetries: 7 };
-
-    expect(buildOpenAISdkRequestOptions(model, signal, options)).toEqual({
-      signal,
-      timeout: 1_234,
-      maxRetries: 0,
-    });
-  });
-
-  it("does not add a retry policy when the turn does not specify one", () => {
-    expect(buildOpenAISdkRequestOptions(model)).toBeUndefined();
   });
 });

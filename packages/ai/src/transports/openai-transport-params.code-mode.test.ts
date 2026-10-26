@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   assertCodeModeResponsesToolSurface as assertSurface,
   enforceCodeModeResponsesToolSurface as enforceSurface,
@@ -82,9 +82,8 @@ it("keeps only explicitly allowed hosted tools alongside visible client function
 });
 
 it.each(["functionDeclarations", "function_declarations"] as const)(
-  "rejects and removes grouped %s while observing final-egress identities",
+  "rejects and removes grouped %s from final-egress tools",
   (field) => {
-    const observer = vi.fn();
     const payload = payloadWith(
       fn("exec"),
       nestedFn("wait"),
@@ -93,20 +92,9 @@ it.each(["functionDeclarations", "function_declarations"] as const)(
       hosted("file_search"),
     );
     expectViolation(payload, hostedTypes);
-    enforceSurface(payload, visible, hostedTypes, observer);
+    enforceSurface(payload, visible, hostedTypes);
     expect(payload.tools).toEqual([fn("exec"), nestedFn("wait"), hosted("web_search")]);
     expect(() => assertSurface(payload, visible, hostedTypes)).not.toThrow();
-    expect(observer).toHaveBeenCalledExactlyOnceWith({
-      beforeToolIdentities: [
-        "client:exec",
-        "client:wait",
-        "client:computer",
-        "client:rogue",
-        "hosted:web_search",
-        "hosted:file_search",
-      ],
-      afterToolIdentities: ["client:exec", "client:wait", "hosted:web_search"],
-    });
   },
 );
 

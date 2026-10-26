@@ -12,29 +12,14 @@ import {
 
 describe.each(["managed", "direct"] as const)("%s", (mode) => {
   it.each([
-    {
-      field: "reasoning",
-      required: true,
-      expected: "reasoning_content",
-    },
-    {
-      field: "reasoning_text",
-      required: true,
-      expected: "reasoning_content",
-    },
+    { field: "reasoning", required: true, expected: "reasoning_content" },
+    { field: "reasoning_text", required: true, expected: "reasoning_content" },
     { field: "reasoning", expected: "reasoning" },
     { field: "reasoning_text", expected: "reasoning_text" },
-    {
-      field: "reasoning_content",
-      expected: "reasoning_content",
-    },
+    { field: "reasoning_content", expected: "reasoning_content" },
     { field: "reasoning", provider: "openai" },
     { field: "reasoning", switchModel: true },
-    {
-      field: "reasoning",
-      provider: "opencode-go",
-      expected: "reasoning_content",
-    },
+    { field: "reasoning", provider: "opencode-go", expected: "reasoning_content" },
   ])("replays reasoning with %j", async ({ field, required, expected, provider, switchModel }) => {
     const requests: Array<{ messages: Array<Record<string, unknown>> }> = [];
     await withServer(
@@ -64,13 +49,7 @@ describe.each(["managed", "direct"] as const)("%s", (mode) => {
         });
         const context: Context = {
           messages: [{ role: "user", content: "What is the weather?", timestamp: 1 }],
-          tools: [
-            {
-              name: "weather",
-              description: "Get weather",
-              parameters: { type: "object", properties: {} },
-            },
-          ],
+          tools: [{ name: "weather", description: "", parameters: { type: "object" } }],
         };
         const stream =
           mode === "direct" ? streamOpenAICompletions : createOpenAICompletionsTransportStreamFn();
@@ -94,18 +73,17 @@ describe.each(["managed", "direct"] as const)("%s", (mode) => {
         expect(requests).toHaveLength(2);
         const assistant = requests[1]?.messages.find((message) => message.role === "assistant");
         expect(assistant).toBeDefined();
-        for (const key of [
+        const replayFields = new Set([
           "reasoning",
           "reasoning_text",
           "reasoning_content",
           "reasoning_details",
-        ]) {
-          if (key === expected) {
-            expect(assistant).toHaveProperty(key, "Check the forecast.");
-          } else {
-            expect(assistant).not.toHaveProperty(key);
-          }
-        }
+        ]);
+        expect(
+          Object.fromEntries(
+            Object.entries(assistant ?? {}).filter(([key]) => replayFields.has(key)),
+          ),
+        ).toStrictEqual(expected ? { [expected]: "Check the forecast." } : {});
       },
     );
   });
