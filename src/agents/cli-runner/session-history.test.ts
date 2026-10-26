@@ -109,6 +109,31 @@ function systemNote(content: string, extra = {}) {
   };
 }
 
+const conversation = (...contents: string[]) =>
+  contents.map((content) => ({ role: "user" as const, content }));
+const historyReaders = [
+  loadCliSessionHistoryMessages,
+  loadCliSessionContextEngineMessages,
+  loadCliSessionReseedMessages,
+];
+async function expectReaders(
+  params: Parameters<typeof loadCliSessionPromptContext>[0],
+  messages: unknown[],
+  readers = historyReaders,
+) {
+  for (const load of readers) {
+    await expect(load(params)).resolves.toMatchObject(messages);
+  }
+}
+
+function historyPrompt(
+  messages: Parameters<typeof buildCliSessionHistoryPrompt>[0]["messages"],
+  maxHistoryChars?: number,
+  prompt = "next ask",
+) {
+  return buildCliSessionHistoryPrompt({ messages, maxHistoryChars, prompt });
+}
+
 describe("canonical CLI history", () => {
   it("reseeds persisted group senders as structured context without changing roles or stored text", async () => {
     const stateDir = tempDirs.make("openclaw-cli-senders-");
@@ -178,15 +203,9 @@ describe("canonical CLI history", () => {
         allowRawTranscriptReseed: true,
         rawTranscriptReseedReason: "missing-transcript" as const,
       };
-      const expected = [{ content: "EXPLICITLY_RETAINED_FACT" }, { content: "next" }];
+      const expected = conversation("EXPLICITLY_RETAINED_FACT", "next");
       expect(manager.buildSessionContext().messages).toMatchObject(expected);
-      for (const load of [
-        loadCliSessionContextEngineMessages,
-        loadCliSessionReseedMessages,
-        loadCliSessionHistoryMessages,
-      ]) {
-        await expect(load(params)).resolves.toMatchObject(expected);
-      }
+      await expectReaders(params, expected);
     },
   );
 
@@ -213,9 +232,7 @@ describe("canonical CLI history", () => {
         expect(context.durableContext).toContain("CURRENT_NOTE");
         expect(context.durableContext?.includes("RETAINED_NOTE")).toBe(boundary === "compaction");
         expect(context.durableContext).not.toMatch(/OUTSIDE_WINDOW|EXCLUDED_NOTE|TRANSIENT_NOTE/);
-        expect(
-          buildCliSessionHistoryPrompt({ messages: context.reseedMessages, prompt: "next" }) ?? "",
-        ).not.toContain("CURRENT_NOTE");
+        expect(historyPrompt(context.reseedMessages) ?? "").not.toContain("CURRENT_NOTE");
         expect(await loadCliSessionPromptContext(owner)).toEqual(context);
       }
       expect(manager.getEntries()).toEqual(before);
@@ -290,29 +307,14 @@ describe("canonical CLI history", () => {
       expect(manager.getEntries()).toEqual(before);
       manager.appendResetBoundary("reset", tail);
       manager.appendMessage({ role: "user", content: "OWNED_AFTER_RESET", timestamp: 14 });
-      for (const load of [
-        loadCliSessionHistoryMessages,
-        loadCliSessionContextEngineMessages,
-        loadCliSessionReseedMessages,
-      ]) {
-        await expect(load(owned)).resolves.toMatchObject([
-          { content: "OWNED_TAIL" },
-          { content: "OWNED_AFTER_RESET" },
-        ]);
-      }
+      await expectReaders(owned, conversation("OWNED_TAIL", "OWNED_AFTER_RESET"));
       const branchManager = SessionManager.fromEntries([manager.getHeader(), ...before]);
       branchManager.branch(first);
       branchManager.appendMessage({ role: "user", content: "OWNED_BRANCH", timestamp: 15 });
-      for (const load of [
-        loadCliSessionHistoryMessages,
-        loadCliSessionContextEngineMessages,
-        loadCliSessionReseedMessages,
-      ]) {
-        await expect(load({ ...params, sessionManager: branchManager })).resolves.toMatchObject([
-          { content: "OWNED_PREFIX" },
-          { content: "OWNED_BRANCH" },
-        ]);
-      }
+      await expectReaders(
+        { ...params, sessionManager: branchManager },
+        conversation("OWNED_PREFIX", "OWNED_BRANCH"),
+      );
     },
   );
 
@@ -349,22 +351,17 @@ describe("canonical CLI history", () => {
     expect(resolveSessionTranscriptDatabasePath(first.target)).not.toBe(
       resolveSessionTranscriptDatabasePath(second.target),
     );
-    await expect(loadCliSessionHistoryMessages(first.params)).resolves.toMatchObject([
-      { content: "first history" },
+    await expectReaders(first.params, conversation("first history"), [
+      loadCliSessionHistoryMessages,
     ]);
-    await expect(loadCliSessionHistoryMessages(second.params)).resolves.toMatchObject([
-      { content: "second history" },
+    await expectReaders(second.params, conversation("second history"), [
+      loadCliSessionHistoryMessages,
     ]);
-    await expect(
-      loadCliSessionHistoryMessages({
-        sessionTarget: { ...first.target, sessionId: "missing", sessionKey: "agent:main:missing" },
-      }),
-    ).resolves.toEqual([]);
-    await expect(
-      hasCliSessionTranscript({
-        sessionTarget: { ...first.target, sessionId: "missing", sessionKey: "agent:main:missing" },
-      }),
-    ).resolves.toBe(false);
+    const missing = {
+      sessionTarget: { ...first.target, sessionId: "missing", sessionKey: "agent:main:missing" },
+    };
+    await expect(loadCliSessionHistoryMessages(missing)).resolves.toEqual([]);
+    await expect(hasCliSessionTranscript(missing)).resolves.toBe(false);
   });
 
   it("distinguishes a session row from a persisted transcript and allows ephemeral runs", async () => {
@@ -416,12 +413,11 @@ describe("canonical CLI history", () => {
     const { params, manager } = await createSession(["active root", "abandoned"]);
     manager.branch("msg-0");
     manager.appendMessage({ role: "user", content: "active tail", timestamp: 3 });
-    for (const load of [loadCliSessionHistoryMessages, loadCliSessionContextEngineMessages]) {
-      await expect(load(params)).resolves.toMatchObject([
-        { content: "active root" },
-        { content: "active tail" },
-      ]);
-    }
+    await expectReaders(
+      params,
+      conversation("active root", "active tail"),
+      historyReaders.slice(0, 2),
+    );
   });
 
   it.each([
@@ -555,18 +551,13 @@ describe("canonical CLI history", () => {
         { role: "user", content: "retained" },
         { role: "user", content: "tail" },
       ]);
-      const prompt = buildCliSessionHistoryPrompt({ messages: reseed, prompt: "next" });
+      const prompt = historyPrompt(reseed);
       for (const text of ["summary", "retained", "tail"]) {
         expect(prompt).toContain(text);
       }
       await manager.appendResetBoundaryAsync("reset", tail);
       await manager.appendMessageAsync(makeUserMessage("after reset", 4));
-      for (const load of [loadCliSessionHistoryMessages, loadCliSessionContextEngineMessages]) {
-        await expect(load(params)).resolves.toMatchObject([
-          { role: "user", content: "tail" },
-          { role: "user", content: "after reset" },
-        ]);
-      }
+      await expectReaders(params, conversation("tail", "after reset"), historyReaders.slice(0, 2));
       await expect(loadCliSessionReseedMessages(params)).resolves.toEqual([]);
     },
   );
@@ -652,6 +643,19 @@ describe("resumed Claude session gaps", () => {
       const { target, params } = await createSession();
       const load = (overrides: Partial<Parameters<typeof loadCliSessionPromptContext>[0]> = {}) =>
         loadCliSessionPromptContext({ ...params, ...overrides });
+      const gap = async (overrides: Parameters<typeof load>[0] = {}) =>
+        (await load(overrides)).sessionGapContext;
+      const appendReply = (eventId: string, now: number, provider: string, text: string) =>
+        appendTranscriptMessage(target, {
+          eventId,
+          now,
+          message: buildAssistantMessage({
+            model: { api: "cli", provider, id: "test-model" },
+            content: [{ type: "text", text }],
+            stopReason: "stop",
+            usage: buildUsageWithNoCost({}),
+          }),
+        });
       const admission = prepareSystemAgentRunAdmission({}, `gap-${memory}`, "main", "history-test");
       const admittedRunContext = await admission.admit("embedded");
       try {
@@ -663,31 +667,20 @@ describe("resumed Claude session gaps", () => {
           provider: "claude-cli",
           tools: [{ name: "sessions_history" }],
         };
-        expect(
-          (
-            await load({
-              ...resumedClaudeSession,
-              nativeSessionId: undefined,
-              rawTranscriptReseedReason: "auth-unknown",
-            })
-          ).sessionGapContext,
-        ).toBeUndefined();
+        await expect(
+          gap({
+            ...resumedClaudeSession,
+            nativeSessionId: undefined,
+            rawTranscriptReseedReason: "auth-unknown",
+          }),
+        ).resolves.toBeUndefined();
         for (const [index, provider] of ["claude-cli", "mock"].entries()) {
           await appendTranscriptMessage(target, {
             eventId: `user-${index}`,
             now: index * 2000 + 1000,
             message: makeUserMessage(`PRIVATE-TOKEN-${index}`, index * 2000 + 1000),
           });
-          await appendTranscriptMessage(target, {
-            eventId: `assistant-${index}`,
-            now: index * 2000 + 2000,
-            message: buildAssistantMessage({
-              model: { api: "cli", provider, id: "test-model" },
-              content: [{ type: "text", text: "acknowledged" }],
-              stopReason: "stop",
-              usage: buildUsageWithNoCost({}),
-            }),
-          });
+          await appendReply(`assistant-${index}`, index * 2000 + 2000, provider, "acknowledged");
         }
         const options = {
           ...params,
@@ -699,7 +692,7 @@ describe("resumed Claude session gaps", () => {
         expect(context.resumeContext).toContain("PRIVATE-TOKEN-1");
         expect(context.resumeContext).not.toContain("PRIVATE-TOKEN-0");
         expect((await load({ ...options, tools: [] })).resumeContext).toBe(context.resumeContext);
-        expect((await load()).sessionGapContext).toBeUndefined();
+        await expect(gap()).resolves.toBeUndefined();
         const unknown = await load({
           ...options,
           rawTranscriptReseedReason: "auth-unknown",
@@ -717,15 +710,12 @@ describe("resumed Claude session gaps", () => {
             rawTranscriptReseedReason: reason,
           };
           const replacement = await load(fresh);
-          expect(replacement.reseedMessages).toEqual([]);
-          expect(replacement.durableContext).toBeUndefined();
+          expect(replacement).toMatchObject({ reseedMessages: [], durableContext: undefined });
           expect(replacement.sessionGapContext).toBe(
             '[OpenClaw: 4 earlier messages in this chat from 1970-01-01T00:00:01.000Z to 1970-01-01T00:00:04.000Z, using "claude-cli/test-model", "mock/test-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:history","limit":100}) to read them; page older messages with offset if needed.]',
           );
           expect(replacement.sessionGapContext).not.toContain("PRIVATE-TOKEN");
-          expect((await load({ ...fresh, tools: [] })).sessionGapContext).not.toContain(
-            "sessions_history",
-          );
+          await expect(gap({ ...fresh, tools: [] })).resolves.not.toContain("sessions_history");
         }
         for (const reason of ["auth-profile", "auth-epoch"] as const) {
           expect(await load({ ...options, rawTranscriptReseedReason: reason })).toMatchObject({
@@ -736,37 +726,22 @@ describe("resumed Claude session gaps", () => {
           });
         }
         // A fresh replacement after the switch may reseed, but never gets a resume-gap note.
-        expect(
-          (
-            await load({
-              ...options,
-              nativeSessionId: undefined,
-              rawTranscriptReseedReason: "missing-transcript",
-              allowRawTranscriptReseed: true,
-            })
-          ).sessionGapContext,
-        ).toBeUndefined();
-        expect(
-          (await load({ ...options, admittedRunContext: undefined })).sessionGapContext,
-        ).toBeUndefined();
-        await appendTranscriptMessage(target, {
-          eventId: "returned-claude",
-          now: 5000,
-          message: buildAssistantMessage({
-            model: { api: "cli", provider: "claude-cli", id: "test-model" },
-            content: [{ type: "text", text: "returned" }],
-            stopReason: "stop",
-            usage: buildUsageWithNoCost({}),
+        await expect(
+          gap({
+            ...options,
+            nativeSessionId: undefined,
+            rawTranscriptReseedReason: "missing-transcript",
+            allowRawTranscriptReseed: true,
           }),
-        });
-        expect(
-          (
-            await load({
-              ...resumedClaudeSession,
-              rawTranscriptReseedReason: "auth-unknown",
-            })
-          ).sessionGapContext,
-        ).toBeUndefined();
+        ).resolves.toBeUndefined();
+        await expect(gap({ ...options, admittedRunContext: undefined })).resolves.toBeUndefined();
+        await appendReply("returned-claude", 5000, "claude-cli", "returned");
+        await expect(
+          gap({
+            ...resumedClaudeSession,
+            rawTranscriptReseedReason: "auth-unknown",
+          }),
+        ).resolves.toBeUndefined();
       } finally {
         admission.close();
       }
@@ -776,13 +751,14 @@ describe("resumed Claude session gaps", () => {
 
 describe("buildCliSessionHistoryPrompt", () => {
   it("renders dated and undated transcript history around the next user message", () => {
-    const prompt = buildCliSessionHistoryPrompt({
-      messages: [
+    const prompt = historyPrompt(
+      [
         { role: "user", content: "dated ask", timestamp: "2026-06-17T16:00:00.000Z" },
         { role: "assistant", content: [{ type: "text", text: "undated answer" }] },
       ],
-      prompt: "new ask",
-    });
+      undefined,
+      "new ask",
+    );
 
     expect(prompt).toContain("[2026-06-17T16:00:00.000Z] User: dated ask");
     expect(prompt).toContain("Assistant: undated answer");
@@ -791,12 +767,7 @@ describe("buildCliSessionHistoryPrompt", () => {
   });
 
   it("skips reseed text when the transcript has no renderable conversation", () => {
-    expect(
-      buildCliSessionHistoryPrompt({
-        messages: [{ role: "user", content: "" }],
-        prompt: "new ask",
-      }),
-    ).toBeUndefined();
+    expect(historyPrompt(conversation(""))).toBeUndefined();
   });
 
   it("caps rendered reseed history before adding the next user message", () => {
@@ -819,11 +790,7 @@ describe("buildCliSessionHistoryPrompt", () => {
   });
 
   it("keeps a whole code point when the retained history tail starts inside an emoji", () => {
-    const prompt = buildCliSessionHistoryPrompt({
-      messages: [{ role: "user", content: "prefix😀tail" }],
-      prompt: "next",
-      maxHistoryChars: withReseedGuidanceBudget(5),
-    });
+    const prompt = historyPrompt(conversation("prefix😀tail"), withReseedGuidanceBudget(5));
 
     expect(prompt).toContain(
       `<conversation_history>\n${RESEED_CURRENCY_GUIDANCE}\ntail\n</conversation_history>`,
@@ -867,18 +834,14 @@ describe("buildCliSessionHistoryPrompt", () => {
   });
 
   it("preserves the compaction summary when the post-summary transcript exceeds the cap", () => {
-    const prompt = buildCliSessionHistoryPrompt({
-      messages: [
-        { role: "compactionSummary", summary: "COMPACTION_SUMMARY_MARKER pinned context" },
-        { role: "user", content: "z".repeat(8000) },
-        { role: "assistant", content: "w".repeat(8000) },
-        { role: "user", content: "POST_SUMMARY_FINAL_USER" },
-        { role: "assistant", content: "POST_SUMMARY_FINAL_ASSISTANT" },
-      ],
-      prompt: "next ask",
-    });
+    const prompt = historyPrompt([
+      { role: "compactionSummary", summary: "COMPACTION_SUMMARY_MARKER pinned context" },
+      { role: "user", content: "z".repeat(8000) },
+      { role: "assistant", content: "w".repeat(8000) },
+      { role: "user", content: "POST_SUMMARY_FINAL_USER" },
+      { role: "assistant", content: "POST_SUMMARY_FINAL_ASSISTANT" },
+    ]);
 
-    expect(prompt).toBeDefined();
     expect(prompt).toContain("Compaction summary: COMPACTION_SUMMARY_MARKER pinned context");
     expect(prompt).toContain("POST_SUMMARY_FINAL_USER");
     expect(prompt).toContain("POST_SUMMARY_FINAL_ASSISTANT");
@@ -942,11 +905,10 @@ describe("buildCliSessionHistoryPrompt", () => {
   });
 
   it("keeps a whole code point at an oversize compaction-summary boundary", () => {
-    const prompt = buildCliSessionHistoryPrompt({
-      messages: [{ role: "compactionSummary", summary: `aa😀${"z".repeat(100)}` }],
-      prompt: "next",
-      maxHistoryChars: withReseedGuidanceBudget(80),
-    });
+    const prompt = historyPrompt(
+      [{ role: "compactionSummary", summary: `aa😀${"z".repeat(100)}` }],
+      withReseedGuidanceBudget(80),
+    );
 
     expect(prompt).toContain(
       `<conversation_history>\n${RESEED_CURRENCY_GUIDANCE}\n[OpenClaw reseed history truncated; older turns dropped]\nCompaction summary: aa\n</conversation_history>`,
@@ -956,22 +918,16 @@ describe("buildCliSessionHistoryPrompt", () => {
   it("honors the cap when the summary block plus marker crosses it", () => {
     const historyBudget = 200;
     const maxHistoryChars = withReseedGuidanceBudget(historyBudget);
-    const remainingBudget = 10;
-    const summaryPrefix = "Compaction summary: ";
-    const summaryText = "S".repeat(
-      historyBudget - remainingBudget - "\n\n".length - summaryPrefix.length,
-    );
-    const prompt = buildCliSessionHistoryPrompt({
-      messages: [
+    const summaryText = "S".repeat(historyBudget - 10 - "\n\nCompaction summary: ".length);
+    const prompt = historyPrompt(
+      [
         { role: "compactionSummary", summary: summaryText },
         { role: "user", content: "POST_SUMMARY_TAIL_USER" },
         { role: "assistant", content: "POST_SUMMARY_TAIL_ASSISTANT" },
       ],
-      prompt: "next ask",
       maxHistoryChars,
-    });
+    );
 
-    expect(prompt).toBeDefined();
     expect(prompt).toMatch(/<conversation_history>\n[\s\S]*?\n<\/conversation_history>/);
     expect(extractReseedHistory(prompt).length).toBeLessThanOrEqual(maxHistoryChars);
     expect(prompt).toContain("[OpenClaw reseed history truncated; older turns dropped]");
