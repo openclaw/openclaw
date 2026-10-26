@@ -416,6 +416,32 @@ function createConfig(overrides: Partial<ReplyRunParams["cfg"]> = {}): ReplyRunP
   return { session: {}, channels: {}, agents: { defaults: {} }, ...overrides };
 }
 
+function createOwnerIngress(kind: string, channel: string, body: string, runId: string) {
+  const params = ownerParams();
+  params.command.senderId = "owner-1";
+  params.command.senderIsOwner = kind !== "non-owner" && kind !== "discord-promoted-before-drain";
+  return {
+    ...params,
+    ...turn(body, {
+      ...createProviderSurface(channel),
+      ChatType: "group",
+      SenderId:
+        kind === "owner-alias" || kind === "discord-owner-alias" ? "transport-alias" : "owner-1",
+      InboundEventKind: kind === "room-event" ? "room_event" : undefined,
+      InputProvenance:
+        kind === "internal" || kind === "inter-session"
+          ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
+          : undefined,
+    }),
+    conversation: undefined,
+    sessionEntry:
+      kind === "spawned"
+        ? { sessionId: "spawned-session", updatedAt: 1, spawnedBy: "agent:parent:main" }
+        : undefined,
+    opts: { runId, suppressNextUserMessagePersistence: kind === "replay" },
+  };
+}
+
 async function useActualSystemEventDrain() {
   const actual = await vi.importActual<typeof import("./session-system-events.js")>(
     "./session-system-events.js",
@@ -468,11 +494,16 @@ describe("runPreparedReply media-only handling", () => {
       "retains the actual channel owner ingress through queued execution: %s",
       async (kind) => {
         resetFollowupTurnTestState();
-        const params = ownerParams();
-        const key = expectDefined(params.sessionKey, "queued execution session key");
         const promoted = kind === "discord-promoted-before-drain";
         const refreshOwner = promoted || kind === "owner-source-replaced";
         const channel = kind === "discord-owner-alias" || promoted ? "discord" : "telegram";
+        const params = createOwnerIngress(
+          kind,
+          channel,
+          "list all automations",
+          "original-ingress",
+        );
+        const key = expectDefined(params.sessionKey, "queued execution session key");
         const cfg = {
           commands: { ownerAllowFrom: [`${channel}:${promoted ? "other" : "owner-1"}`] },
         };
@@ -504,9 +535,15 @@ describe("runPreparedReply media-only handling", () => {
           const count =
             kind === "owner-overflow"
               ? 3
-              : kind === "owner-batch" || kind === "mixed-source-authority"
+              : ["owner-batch", "mixed-source-authority"].includes(kind)
                 ? 2
                 : 1;
+          const settings = {
+            mode,
+            debounceMs: 0,
+            cap: kind === "owner-overflow" ? 1 : 20,
+            dropPolicy: "summarize" as const,
+          };
           for (let index = 0; index < count; index++) {
             const source = {
               ...followupRun,
@@ -516,25 +553,11 @@ describe("runPreparedReply media-only handling", () => {
               turnAdoptionLifecycle: undefined,
               sourceTurnId: `source-${index}`,
               messageId: `source-${index}`,
-              ...(kind === "mixed-source-authority" && index === 1
-                ? { createChannelCronAuthority: undefined }
-                : {}),
             };
-            expect(
-              enqueueFollowupRun(
-                key,
-                source,
-                {
-                  mode,
-                  debounceMs: 0,
-                  cap: kind === "owner-overflow" ? 1 : 20,
-                  dropPolicy: "summarize",
-                },
-                "none",
-                undefined,
-                false,
-              ),
-            ).toBe(true);
+            if (kind === "mixed-source-authority" && index === 1) {
+              source.createChannelCronAuthority = undefined;
+            }
+            expect(enqueueFollowupRun(key, source, settings, "none", undefined, false)).toBe(true);
             queuedSources.push(source);
           }
           return undefined;
@@ -601,41 +624,11 @@ describe("runPreparedReply media-only handling", () => {
             releaseAgentRunDelegatedAuthority(authority);
           }
         });
-        params.command.senderId = "owner-1";
-        params.command.senderIsOwner = kind !== "non-owner" && !promoted;
-        const input = turn("list all automations", {
-          ...createProviderSurface(channel),
-          ChatType: "group",
-          SenderId: kind === "discord-owner-alias" ? "transport-alias" : "owner-1",
-          InboundEventKind: kind === "room-event" ? "room_event" : undefined,
-          ...(kind === "internal"
-            ? { InputProvenance: { kind: "inter_session" as const, sourceTool: "sessions_send" } }
-            : {}),
-        });
         if (kind !== "configured-owner" && kind !== "configured-owner-revoked") {
-          bindCommandOwnerAuthority(input.sessionCtx, { isCurrent: () => current });
+          bindCommandOwnerAuthority(params.sessionCtx, { isCurrent: () => current });
         }
         try {
-          await runPrepared({
-            ...params,
-            ...input,
-            conversation: undefined,
-            cfg,
-            ...(kind === "spawned"
-              ? {
-                  sessionEntry: {
-                    sessionId: "spawned-session",
-                    updatedAt: 1,
-                    spawnedBy: "agent:parent:main",
-                  },
-                }
-              : {}),
-            opts: {
-              runId: "original-ingress",
-
-              suppressNextUserMessagePersistence: kind === "replay",
-            },
-          });
+          await runPrepared({ ...params, cfg });
           if (capturedOpts?.cronCreatorAuthorityCapability) {
             expect(capturedOpts.cronCreatorAuthorityCapability.active).toBe(false);
           }
@@ -801,32 +794,9 @@ describe("runPreparedReply media-only handling", () => {
         return undefined;
       });
       try {
-        const params = ownerParams();
-        params.command.senderId = "owner-1";
-        params.command.senderIsOwner = kind !== "non-owner";
         await runPrepared({
-          ...params,
-          conversation: undefined,
+          ...createOwnerIngress(kind, "discord", "list automations", runId),
           cfg,
-          ...turn("list automations", {
-            ...createProviderSurface("discord"),
-            ChatType: "group",
-            SenderId: kind === "owner-alias" ? "transport-alias" : "owner-1",
-            InputProvenance:
-              kind === "inter-session"
-                ? { kind: "inter_session", sourceTool: "sessions_send" }
-                : undefined,
-            InboundEventKind: kind === "room-event" ? "room_event" : undefined,
-          }),
-          sessionEntry:
-            kind === "spawned"
-              ? { sessionId: "spawned-session", updatedAt: 1, spawnedBy: "agent:parent:main" }
-              : undefined,
-          opts: {
-            runId,
-
-            suppressNextUserMessagePersistence: kind === "replay",
-          },
         });
         expect(calls).toEqual(kind === "revoked" ? [] : admitted ? ["cron.list"] : ["restricted"]);
       } finally {
