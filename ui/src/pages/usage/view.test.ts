@@ -347,8 +347,7 @@ describe("renderUsage", () => {
     document.body.appendChild(container);
     onTestFinished(() => container.remove());
     const { dropdown } = openProviderFilter(container);
-    const providerOptions = () =>
-      dropdown.querySelectorAll<HTMLElement>(".usage-filter-option");
+    const providerOptions = () => dropdown.querySelectorAll<HTMLElement>(".usage-filter-option");
     const values = () => [...providerOptions()].map((option) => option.getAttribute("aria-label"));
     const chartModeButton = (label: string) =>
       [...container.querySelectorAll<HTMLButtonElement>(".usage-view-options button")].find(

@@ -167,12 +167,13 @@ function HeatmapSvg(props: UsageHeatmapProps) {
       </For>
       <For each={cells}>
         {(day) => {
-          const tooltip = createMemo(() =>
-            `${formatFullDate(day.date)} · ${t("usage.heatmap.cellTokens", {
-              tokens: day.partial
-                ? t("usage.common.atLeast", { value: numberFormat.format(day.tokens) })
-                : numberFormat.format(day.tokens),
-            })}`,
+          const tooltip = createMemo(
+            () =>
+              `${formatFullDate(day.date)} · ${t("usage.heatmap.cellTokens", {
+                tokens: day.partial
+                  ? t("usage.common.atLeast", { value: numberFormat.format(day.tokens) })
+                  : numberFormat.format(day.tokens),
+              })}`,
           );
           return (
             <rect

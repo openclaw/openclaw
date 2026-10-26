@@ -9,7 +9,8 @@ import { UsageHeatmap } from "./view-heatmap.tsx";
 import { mountView } from "./view-render.test-support.ts";
 
 function mountHeatmap(daily: CostDailyEntry[], start: string, end: string) {
-  return mountView(() => UsageHeatmap({ daily, rangeStartDate: start, rangeEndDate: end })).container;
+  return mountView(() => UsageHeatmap({ daily, rangeStartDate: start, rangeEndDate: end }))
+    .container;
 }
 
 describe("UsageHeatmap", () => {
