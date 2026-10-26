@@ -8,6 +8,7 @@ import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { writeTextAtomic } from "../infra/json-files.js";
 import { statIfExists as statPathIfExists } from "../infra/path-existence.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
@@ -130,6 +131,7 @@ type RootMemoryMigrationResult = {
   legacyPath: string;
   mergedLegacy: boolean;
   archivedLegacyPath?: string;
+  canonicalBackupPath?: string;
   skipReason?: string;
 };
 
@@ -239,18 +241,34 @@ async function migrateLegacyRootMemoryFile(
       archivedLegacyPath,
     };
   }
+  let canonicalBackupPath: string | undefined;
   if (canonicalText !== legacyText) {
     const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
       legacyText,
       archivedLegacyPath: shortenHomePath(archivedLegacyPath),
     })}`;
-    await fs.promises.writeFile(detection.canonicalPath, merged, "utf-8");
+    // The pre-merge canonical bytes exist nowhere else (only the legacy file was
+    // archived), so copy them beside that archive before touching the live file,
+    // and publish through an atomic replace: a crash or ENOSPC mid-write must
+    // never tear the only durable memory file.
+    canonicalBackupPath = path.join(
+      path.dirname(archivedLegacyPath),
+      `${CANONICAL_ROOT_MEMORY_FILENAME}.pre-merge`,
+    );
+    await fs.promises.copyFile(detection.canonicalPath, canonicalBackupPath);
+    const { mode } = await fs.promises.stat(detection.canonicalPath);
+    await writeTextAtomic(detection.canonicalPath, merged, {
+      durable: true,
+      mode: mode & 0o777,
+      tempPrefix: CANONICAL_ROOT_MEMORY_FILENAME,
+    });
   }
   return {
     ...unchanged,
     changed: true,
     mergedLegacy: canonicalText !== legacyText,
     archivedLegacyPath,
+    ...(canonicalBackupPath ? { canonicalBackupPath } : {}),
   };
 }
 
@@ -329,6 +347,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       `${prefix}Workspace memory root merged:`,
       `- current: ${migration.canonicalPath}`,
       migration.archivedLegacyPath ? `- backup: ${migration.archivedLegacyPath}` : null,
+      migration.canonicalBackupPath ? `- pre-merge backup: ${migration.canonicalBackupPath}` : null,
       migration.mergedLegacy ? `- merged legacy content from: ${migration.legacyPath}` : null,
       `- removed legacy file: ${migration.legacyPath}`,
     ].filter(Boolean);

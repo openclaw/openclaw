@@ -52,6 +52,7 @@ describe("root memory repair", () => {
   let prompter: DoctorPrompter;
   let canonicalPath: string;
   let legacyPath: string;
+  let mergeWriteFails = false;
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-root-memory-"));
@@ -89,6 +90,7 @@ describe("root memory repair", () => {
   }
 
   afterEach(async () => {
+    mergeWriteFails = false;
     vi.restoreAllMocks();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
@@ -191,11 +193,53 @@ describe("root memory repair", () => {
     expect(canonical).toContain("# Legacy 旧版 �");
     await expectPathMissing(legacyPath);
     const archive = await expectArchivedLegacyMemory();
+    const canonicalBackup = path.join(path.dirname(archive), "MEMORY.md.pre-merge");
     expect(note).toHaveBeenCalledExactlyOnceWith(
-      `Workspace memory root merged:\n- current: ${canonicalPath}\n- backup: ${archive}\n- merged legacy content from: ${legacyPath}\n- removed legacy file: ${legacyPath}`,
+      `Workspace memory root merged:\n- current: ${canonicalPath}\n- backup: ${archive}\n- pre-merge backup: ${canonicalBackup}\n- merged legacy content from: ${legacyPath}\n- removed legacy file: ${legacyPath}`,
       "Doctor changes",
     );
     await expect(fs.readFile(archive, "utf8")).resolves.toBe("# Legacy 旧版 �\n");
+    await expect(fs.readFile(canonicalBackup, "utf8")).resolves.toBe("# Canonical 合法 😀 �\n");
+  });
+
+  it("preserves canonical memory when the merge write fails", async () => {
+    if (!(await seedMemory())) {
+      return;
+    }
+    const realWriteFile = fs.writeFile.bind(fs);
+    const realRename = fs.rename.bind(fs);
+    const failure = Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      const [filePath] = args as Parameters<typeof fs.writeFile>;
+      if (mergeWriteFails && filePath === canonicalPath) {
+        // Mirror a mid-write ENOSPC: truncation already happened.
+        await realWriteFile(canonicalPath, "", "utf-8");
+        throw failure;
+      }
+      return realWriteFile(...(args as Parameters<typeof fs.writeFile>));
+    });
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      const [source, target] = args as Parameters<typeof fs.rename>;
+      if (mergeWriteFails && target === canonicalPath) {
+        throw failure;
+      }
+      return realRename(source, target);
+    });
+
+    mergeWriteFails = true;
+    await repair();
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0]);
+    expect(message).toContain("Workspace memory repair could not be completed");
+    // The failed merge write must not tear the only durable memory file.
+    await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("# Canonical\n");
+    const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory");
+    const archives = await fs.readdir(repairDir);
+    await expect(
+      fs.readFile(path.join(repairDir, archives[0]!, "MEMORY.md.pre-merge"), "utf8"),
+    ).resolves.toBe("# Canonical\n");
+    await expectPathMissing(legacyPath);
   });
 
   it("follows a symlinked AGENTS.md while keeping its target bounded", async () => {
