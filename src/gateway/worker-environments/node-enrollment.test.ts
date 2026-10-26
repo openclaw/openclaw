@@ -53,12 +53,16 @@ function downloadRequest(descriptor: { token: string; sha256: string }) {
   return { token: descriptor.token, artifactKey: descriptor.sha256 };
 }
 
-function createConfig(pluginPublicUrl?: string): OpenClawConfig {
+function createConfig(
+  pluginPublicUrl?: string,
+  gateway: OpenClawConfig["gateway"] = {},
+): OpenClawConfig {
   return {
     gateway: {
       bind: "loopback",
       publicOrigin: PUBLIC_ORIGIN,
       auth: { mode: "token", token: "gateway-token" },
+      ...gateway,
     },
     ...(pluginPublicUrl
       ? {
@@ -121,6 +125,23 @@ describe("worker node enrollment", () => {
       to: "provisioning",
       ...(nodeDeviceId ? { patch: { nodeDeviceId } } : {}),
     });
+  };
+  const holdFirstArtifact = () => {
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    let first = true;
+    return {
+      entered: entered.promise,
+      resume: resume.resolve,
+      prepareArtifact: async () => {
+        if (first) {
+          first = false;
+          entered.resolve();
+          await resume.promise;
+        }
+        return artifact();
+      },
+    };
   };
 
   const createArtifactProvider = async () => {
@@ -187,29 +208,17 @@ describe("worker node enrollment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each([
-    {
-      host: "localhost",
-      config: createConfig("http://localhost:19821"),
-      source: "plugins.entries.device-pair.config.publicUrl",
-    },
-  ])(
-    "rejects unreachable cloud Gateway host $host from $source before preparing artifacts",
-    async ({ host, config, source }) => {
-      const prepareArtifact = vi.fn(async () => artifact());
-      const manager = createManager({
-        getConfig: () => config,
-        prepareArtifact,
-      });
-
-      await expect(manager.prepare(await createRequested())).rejects.toThrow(
-        new Error(
-          `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${new URL(`http://${host}`).hostname}:19821, from ${source}). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
-        ),
-      );
-      expect(prepareArtifact).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects an unreachable cloud Gateway before preparing artifacts", async () => {
+    const prepareArtifact = vi.fn(async () => artifact());
+    const manager = createManager({
+      getConfig: () => createConfig("http://localhost:19821"),
+      prepareArtifact,
+    });
+    await expect(manager.prepare(await createRequested())).rejects.toThrow(
+      "Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://localhost:19821, from plugins.entries.device-pair.config.publicUrl)",
+    );
+    expect(prepareArtifact).not.toHaveBeenCalled();
+  });
 
   it("prepares requested-state artifacts without enrollment or transfer grants", async () => {
     const record = await createRequested();
@@ -483,22 +492,12 @@ describe("worker node enrollment", () => {
     "rejects late artifact preparation after %s",
     async (reason) => {
       const record = await createProvisioning();
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      let preparations = 0;
-      const manager = createManager({
-        prepareArtifact: async () => {
-          if (++preparations === 1) {
-            entered.resolve();
-            await resume.promise;
-          }
-          return artifact();
-        },
-      });
+      const held = holdFirstArtifact();
+      const manager = createManager({ prepareArtifact: held.prepareArtifact });
       const operation = new AbortController();
       const pending = manager.prepareRuntime(record, bundle(), operation.signal);
       const rejected = expect(pending).rejects.toThrow();
-      await entered.promise;
+      await held.entered;
       const enrollment = reason === "enrollment" ? await manager.begin(record) : undefined;
       if (reason === "operation-abort") {
         operation.abort();
@@ -506,7 +505,7 @@ describe("worker node enrollment", () => {
       if (reason === "destroy") {
         await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
       }
-      resume.resolve();
+      held.resume();
       await rejected;
       if (enrollment) {
         expect(enrollment.signal?.aborted).toBe(false);
@@ -516,57 +515,40 @@ describe("worker node enrollment", () => {
   );
 
   it.each(
-    [
-      {
-        name: "prefers shared publicOrigin over Tailscale for cloud enrollment",
-        modes: ["connect"],
-        config: {
-          ...createConfig(),
-          gateway: {
-            ...createConfig().gateway,
-            tls: { enabled: true },
-            tailscale: { mode: "serve" },
-          },
-        } satisfies OpenClawConfig,
-        expectedUrl: "wss://gateway.example.test",
-        expectedFingerprint: undefined,
-      },
-      {
-        name: "preserves the cloud pairing publicUrl path ahead of gateway.publicOrigin",
-        modes: ["connect"],
-        config: createConfig(`${PLUGIN_PUBLIC_URL}/extra`),
-        expectedUrl: `${PLUGIN_PUBLIC_URL}/extra`,
-        expectedFingerprint: undefined,
-      },
-      {
-        name: "pins direct Gateway TLS",
-        modes: ["connect", "resume"],
-        config: {
-          gateway: {
-            bind: "custom",
-            customBindHost: "192.168.50.20",
-            port: 19443,
-            tls: { enabled: true },
-            auth: { mode: "token", token: "gateway-token" },
-          },
-        } satisfies OpenClawConfig,
-        expectedUrl: "wss://192.168.50.20:19443",
-        expectedFingerprint: LOCAL_TLS_FINGERPRINT,
-      },
-      {
-        name: "pins the configured remote Gateway TLS",
-        modes: ["connect", "resume"],
-        config: {
-          gateway: {
-            remote: { url: "wss://remote.example.test", tlsFingerprint: REMOTE_TLS_FINGERPRINT },
-            auth: { mode: "token", token: "gateway-token" },
-          },
-        } satisfies OpenClawConfig,
-        expectedUrl: "wss://remote.example.test",
-        expectedFingerprint: REMOTE_TLS_FINGERPRINT,
-      },
-    ].flatMap(({ modes, ...testCase }) => modes.map((mode) => ({ mode, ...testCase }))),
-  )("$name ($mode)", async ({ config, expectedUrl, expectedFingerprint, mode }) => {
+    ["public origin", "pairing path", "direct TLS", "remote TLS"].flatMap((endpoint) =>
+      (endpoint.endsWith("TLS") ? ["connect", "resume"] : ["connect"]).map((mode) => ({
+        endpoint,
+        mode,
+      })),
+    ),
+  )("resolves $endpoint ($mode)", async ({ endpoint, mode }) => {
+    let config: OpenClawConfig;
+    let expectedUrl: string;
+    let expectedFingerprint: string | undefined;
+    if (endpoint === "public origin") {
+      config = createConfig(undefined, { tls: { enabled: true }, tailscale: { mode: "serve" } });
+      expectedUrl = "wss://gateway.example.test";
+    } else if (endpoint === "pairing path") {
+      config = createConfig(`${PLUGIN_PUBLIC_URL}/extra`);
+      expectedUrl = `${PLUGIN_PUBLIC_URL}/extra`;
+    } else {
+      const direct = endpoint === "direct TLS";
+      expectedUrl = direct ? "wss://192.168.50.20:19443" : "wss://remote.example.test";
+      expectedFingerprint = direct ? LOCAL_TLS_FINGERPRINT : REMOTE_TLS_FINGERPRINT;
+      config = {
+        gateway: {
+          auth: { mode: "token", token: "gateway-token" },
+          ...(direct
+            ? {
+                bind: "custom" as const,
+                customBindHost: "192.168.50.20",
+                port: 19443,
+                tls: { enabled: true },
+              }
+            : { remote: { url: expectedUrl, tlsFingerprint: expectedFingerprint } }),
+        },
+      };
+    }
     const discover = vi
       .spyOn(processExec, "runCommandWithTimeout")
       .mockRejectedValue(new Error("Unexpected endpoint discovery"));
@@ -738,27 +720,16 @@ describe("worker node enrollment", () => {
 
   it("does not let an older pending enrollment replace a newer enrollment", async () => {
     const record = await createProvisioning();
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    let preparations = 0;
-    const manager = createManager({
-      prepareArtifact: async () => {
-        preparations += 1;
-        if (preparations === 1) {
-          entered.resolve();
-          await resume.promise;
-        }
-        return artifact();
-      },
-    });
+    const held = holdFirstArtifact();
+    const manager = createManager({ prepareArtifact: held.prepareArtifact });
     const pending = manager.begin(record);
     const rejected = expect(pending).rejects.toThrow();
-    await entered.promise;
+    await held.entered;
     const current = await manager.begin(record);
     const authorization = transfer.authorize(downloadRequest(current.nodeBootstrap))!;
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
 
-    resume.resolve();
+    held.resume();
     await rejected;
 
     expect(current.signal?.aborted).toBe(false);
@@ -772,32 +743,25 @@ describe("worker node enrollment", () => {
     "does not grant download authority after teardown during %s preparation",
     async (stage) => {
       const record = await createProvisioning();
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      const prepareArtifact = async () => {
-        if (stage === "artifact") {
-          entered.resolve();
-          await resume.promise;
-        }
-        return artifact();
-      };
+      const held = holdFirstArtifact();
       if (stage === "pairing") {
         vi.mocked(ensureDevicePairSetupBootstrapToken).mockImplementationOnce(
           async ({ setupId }) => {
-            entered.resolve();
-            await resume.promise;
+            await held.prepareArtifact();
             return { status: "pending", token: "bootstrap-token", expiresAtMs: 10_000, setupId };
           },
         );
       }
-      const manager = createManager({ prepareArtifact });
+      const manager = createManager(
+        stage === "artifact" ? { prepareArtifact: held.prepareArtifact } : {},
+      );
       const beginning = manager.begin(record);
       const rejected = expect(beginning).rejects.toThrow(
         /cannot begin node enrollment|no longer provisioning|authority is unavailable/u,
       );
-      await entered.promise;
+      await held.entered;
       await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
-      resume.resolve();
+      held.resume();
       await rejected;
     },
   );

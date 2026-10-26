@@ -13,10 +13,11 @@ import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createPlacementFailureActions } from "./placement-dispatch-failure.js";
 import { createWorkerPlacementDispatchStartup } from "./placement-dispatch-startup.js";
 import {
-  BUNDLE_HASH,
-  MANIFEST_REF,
   REQUEST,
   seedActivePlacement,
+  seedProvisioningPlacement,
+  seedSyncingPlacement,
+  seedStartingPlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { makeClaimInput, WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
@@ -212,87 +213,45 @@ describe("worker placement restart recovery", () => {
     },
   );
 
-  it.each([
+  it.each<{
+    name: string;
+    executionMode?: "remote-exec" | "worker-turn";
+    snapshotMode?: "remote-exec" | "worker-turn";
+    nodeBacked?: boolean;
+    supported?: boolean;
+    sweep?: boolean;
+    error?: string;
+  }>([
+    { name: "unsupported provider", supported: false, error: "does not support remote-exec" },
     {
-      failure: "provider no longer supports the persisted execution mode",
-      executionMode: "remote-exec",
-      snapshotMode: "remote-exec",
-      nodeBacked: true,
-      providerSupportsMode: false,
-      expectedError: "does not support remote-exec",
-      sweep: false,
-    },
-    {
-      failure: "persisted provisioning mode does not match placement authority",
-      executionMode: "remote-exec",
+      name: "mismatched mode",
       snapshotMode: "worker-turn",
-      nodeBacked: true,
-      providerSupportsMode: true,
-      expectedError: "execution mode does not match",
-      sweep: false,
+      error: "execution mode does not match",
     },
     {
-      failure: "worker-turn placement has an SSH lease",
+      name: "SSH worker-turn",
       executionMode: "worker-turn",
-      snapshotMode: "worker-turn",
       nodeBacked: false,
-      providerSupportsMode: true,
-      expectedError: "requires a node lease",
-      sweep: false,
+      error: "requires a node lease",
     },
     {
-      failure: "runtime sweep observes a changed provider execution mode",
-      executionMode: "remote-exec",
-      snapshotMode: "remote-exec",
-      nodeBacked: true,
-      providerSupportsMode: false,
-      expectedError: "does not support remote-exec",
+      name: "runtime provider change",
+      supported: false,
       sweep: true,
+      error: "does not support remote-exec",
     },
-  ] as const)("fences active restart recovery when $failure", async (scenario) => {
-    const placements = createPlacementStore();
-    const harness = await createHarness(support.testState.stateDb, placements);
-    await harness.environments.attachSession({
-      environmentId: harness.ready.environmentId,
-      ownerEpoch: harness.ready.ownerEpoch,
-      sessionId: REQUEST.sessionId,
-    });
-    const environment = {
-      ...harness.attached,
-      providerId: "durable-provider",
-      profileSnapshot: {
-        ...harness.attached.profileSnapshot,
-        executionMode: scenario.snapshotMode,
-      },
-      ...(scenario.nodeBacked ? { nodeDeviceId: "durable-node", sshEndpoint: null } : {}),
-    };
-    vi.mocked(harness.environments.get).mockReturnValue(environment);
-    vi.mocked(harness.environments.supportsProviderExecutionMode).mockReturnValue(
-      scenario.providerSupportsMode,
-    );
-    await harness.placements.seedActive(environment.ownerEpoch, scenario.executionMode);
-
-    if (scenario.sweep) {
-      await harness.service.reconcileActive(environment.environmentId);
-    } else {
-      await harness.service.reconcile();
-    }
-
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      recoveryError: expect.stringContaining(scenario.expectedError),
-    });
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
-    expect(harness.environments.destroy).toHaveBeenCalledWith(environment.environmentId);
-    expect(harness.log).not.toContain("placement:adopted");
-  });
-
-  it.each([
-    { transport: "node", nodeBacked: true },
-    { transport: "SSH", nodeBacked: false },
-  ] as const)(
-    "adopts an exact remote-exec $transport lease from its durable provider after profile changes",
-    async ({ nodeBacked }) => {
+    { name: "adopts node lease" },
+    { name: "adopts SSH lease", nodeBacked: false },
+  ])(
+    "recovers active durable-provider placement: $name",
+    async ({
+      executionMode = "remote-exec",
+      snapshotMode = executionMode,
+      nodeBacked = true,
+      supported = true,
+      sweep = false,
+      error,
+    }) => {
       const placements = createPlacementStore();
       const harness = await createHarness(support.testState.stateDb, placements);
       await harness.environments.attachSession({
@@ -303,30 +262,37 @@ describe("worker placement restart recovery", () => {
       const environment = {
         ...harness.attached,
         providerId: "durable-provider",
-        profileSnapshot: {
-          ...harness.attached.profileSnapshot,
-          executionMode: "remote-exec" as const,
-        },
+        profileSnapshot: { ...harness.attached.profileSnapshot, executionMode: snapshotMode },
         ...(nodeBacked ? { nodeDeviceId: "durable-node", sshEndpoint: null } : {}),
       };
       vi.mocked(harness.environments.get).mockReturnValue(environment);
-      const supportsProviderExecutionMode = vi.mocked(
-        harness.environments.supportsProviderExecutionMode,
-      );
-      await harness.placements.seedActive(environment.ownerEpoch, "remote-exec");
-
-      await harness.service.reconcile();
-
-      expect(harness.placements.current()).toMatchObject({
-        state: "active",
-        executionMode: "remote-exec",
-      });
-      expect(supportsProviderExecutionMode).toHaveBeenCalledWith("durable-provider", "remote-exec");
-      expect(harness.environments.destroy).not.toHaveBeenCalled();
-      if (nodeBacked) {
-        expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+      const supports = vi.mocked(harness.environments.supportsProviderExecutionMode);
+      if (error) {
+        supports.mockReturnValue(supported);
+      }
+      await harness.placements.seedActive(environment.ownerEpoch, executionMode);
+      if (sweep) {
+        await harness.service.reconcileActive(environment.environmentId);
       } else {
-        expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
+        await harness.service.reconcile();
+      }
+      if (error) {
+        expect(harness.placements.current()).toMatchObject({
+          state: "failed",
+          recoveryError: expect.stringContaining(error),
+        });
+        expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+        expect(harness.environments.destroy).toHaveBeenCalledWith(environment.environmentId);
+        expect(harness.log).not.toContain("placement:adopted");
+      } else {
+        expect(harness.placements.current()).toMatchObject({ state: "active", executionMode });
+        expect(supports).toHaveBeenCalledWith("durable-provider", "remote-exec");
+        expect(harness.environments.destroy).not.toHaveBeenCalled();
+        if (nodeBacked) {
+          expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+        } else {
+          expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
+        }
       }
     },
   );
@@ -628,35 +594,11 @@ describe("worker placement restart recovery", () => {
           expectedGeneration: original.generation,
           recoveryError: "superseded placement",
         });
-        const requested = await placements.startDispatch(REQUEST);
-        replacement = await placements.transition({
-          sessionId: original.sessionId,
-          from: "requested",
-          to: "provisioning",
-          expectedGeneration: requested.generation,
-          patch: { environmentId: replacementEnvironmentId },
-        });
-        if (state === "syncing" || state === "starting") {
-          replacement = await placements.transition({
-            sessionId: original.sessionId,
-            from: "provisioning",
-            to: "syncing",
-            expectedGeneration: replacement.generation,
-            patch: { workerBundleHash: BUNDLE_HASH },
-          });
-        }
-        if (state === "starting") {
-          replacement = await placements.transition({
-            sessionId: original.sessionId,
-            from: "syncing",
-            to: "starting",
-            expectedGeneration: replacement.generation,
-            patch: {
-              workspaceBaseManifestRef: MANIFEST_REF,
-              remoteWorkspaceDir: "/worker/newer-workspace",
-            },
-          });
-        }
+        replacement = await {
+          provisioning: seedProvisioningPlacement,
+          syncing: seedSyncingPlacement,
+          starting: seedStartingPlacement,
+        }[state](placements, replacementEnvironmentId);
       };
       const startup = createWorkerPlacementDispatchStartup({
         placements: observedPlacements,

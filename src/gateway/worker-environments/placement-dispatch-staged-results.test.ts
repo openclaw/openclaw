@@ -283,18 +283,13 @@ describe("worker placement result recovery", () => {
       let recovery = harness;
       if (refState === "removed-before-restart") {
         expect(
-          await runCommandWithTimeout(
-            [
-              "git",
-              "-C",
-              workspacePath,
-              "update-ref",
-              "-d",
-              cleanupWorkerWorkspaceResultRef(pending.stagedResultRef),
-            ],
-            { timeoutMs: 10_000 },
+          await gitCode(
+            workspacePath,
+            "update-ref",
+            "-d",
+            cleanupWorkerWorkspaceResultRef(pending.stagedResultRef),
           ),
-        ).toMatchObject({ code: 0 });
+        ).toBe(0);
         const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
         await restartedStore.clearLocalTurnClaimsAfterRestartAsync();
         recovery = await createHarness(database, restartedStore, {
@@ -628,18 +623,13 @@ describe("worker placement result recovery", () => {
       if (placementState === "accepted-reclaim") {
         expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
         expect(
-          await runCommandWithTimeout(
-            [
-              "git",
-              "-C",
-              workspacePath,
-              "show-ref",
-              "--verify",
-              cleanupWorkerWorkspaceResultRef(staged.stagedResultRef),
-            ],
-            { timeoutMs: 10_000 },
+          await gitCode(
+            workspacePath,
+            "show-ref",
+            "--verify",
+            cleanupWorkerWorkspaceResultRef(staged.stagedResultRef),
           ),
-        ).not.toMatchObject({ code: 0 });
+        ).not.toBe(0);
       }
     },
   );
