@@ -199,7 +199,9 @@ export async function resolveEmbeddedModelSelection(params: {
       entry,
       defaultProvider,
       defaultModel,
+      // A selectable cataloged or configured route is a deliberate pick, not a lost wrapper.
       isKnownRoute: (ref) =>
+        visibilityPolicy.allows(ref) &&
         Boolean(findModelInCatalog(visibilityPolicy.catalog, ref.provider, ref.model)),
     });
     entryUpdated ||= repaired.updated;
