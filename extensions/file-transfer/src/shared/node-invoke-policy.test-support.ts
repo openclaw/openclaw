@@ -2,15 +2,13 @@ import crypto from "node:crypto";
 import { gzipSync } from "node:zlib";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 
 type InvokeNode = OpenClawPluginNodeInvokePolicyContext["invokeNode"];
 type Fields = Record<string, unknown>;
+type ArchiveOptions = { producerRoot?: boolean };
 
-export function tarEntries(
-  entries: Record<string, string>,
-  options?: { producerRoot?: boolean },
-): string {
+export function tarEntries(entries: Record<string, string>, options?: ArchiveOptions): string {
   const blocks: Buffer[] = [];
   if (options?.producerRoot) {
     blocks.push(createTarFileHeader("./", 0, "5"));
@@ -70,7 +68,7 @@ export function createCtx({
   pluginConfig?: Fields;
   approvals?: OpenClawPluginNodeInvokePolicyContext["approvals"];
 }) {
-  const invokeNode = vi.fn<InvokeNode>(async ({ params }: Parameters<InvokeNode>[0] = {}) => ({
+  const invokeNode = vi.fn<InvokeNode>(async ({ params } = {}) => ({
     ok: true,
     payload: {
       ok: true,
@@ -108,10 +106,10 @@ export const WRITE_BINDING = {
 } as const;
 
 export function mockDirFetchArchive(
-  invokeNode: ReturnType<typeof createCtx>["invokeNode"],
+  invokeNode: Mock<InvokeNode>,
   root: string,
   entries: Record<string, string>,
-  options?: { producerRoot?: boolean },
+  options?: ArchiveOptions,
 ) {
   const tarBase64 = tarEntries(entries, options);
   for (const payload of [
@@ -135,11 +133,8 @@ export function expectResultFields(result: unknown, fields: Fields) {
   expectRecordFields(requireRecord(result, "policy result"), fields);
 }
 
-export function requireInvokeParams(
-  invokeNode: ReturnType<typeof vi.fn<InvokeNode>>,
-  callIndex: number,
-) {
-  const call = (invokeNode.mock.calls as unknown[][])[callIndex]?.[0];
+export function requireInvokeParams(invokeNode: Mock<InvokeNode>, callIndex: number) {
+  const call = invokeNode.mock.calls[callIndex]?.[0];
   const request = requireRecord(call, `invoke call ${callIndex + 1}`);
   return requireRecord(request.params, `invoke call ${callIndex + 1} params`);
 }
