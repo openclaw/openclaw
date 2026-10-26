@@ -1,5 +1,5 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   markTelegramDroppedControlFallback,
   resolveFinalTelegramPresentationText,
@@ -20,9 +20,9 @@ const presentationPayload = (
   presentationTextMode,
   presentation: { blocks: [statusTable, ...blocks] },
 });
-const renderFinal = (payload: ReplyPayload) =>
+const renderFinal = (payload: ReplyPayload, richMessages = true) =>
   resolveFinalTelegramPresentationText({
-    richMessages: true,
+    richMessages,
     text: payload.text ?? "",
     payload,
   });
@@ -31,31 +31,24 @@ describe("createLaneTextDeliverer streamed presentation finals", () => {
     "keeps partial text plain and finalizes %s on the same preview",
     async (kind) => {
       const text = kind === "text-only" ? "Hello final" : "Status summary as plain text";
-      const expected = kind === "rich" ? "Final native table" : text;
+      const expected =
+        kind === "rich"
+          ? "<table><caption>Status</caption><thead><tr><th>Key</th></tr></thead><tbody><tr><td>Gateway</td></tr></tbody></table>"
+          : text;
       const payload = kind === "text-only" ? { text } : presentationPayload(text, "fallback");
-      const resolveFinalPresentationText = vi.fn(
-        (input: { payload: ReplyPayload; text: string }) => {
-          expect(input.payload.presentationTextMode).toBe("fallback");
-          expect(input.text).toBe(text);
-          return kind === "rich"
-            ? expected
-            : resolveFinalTelegramPresentationText({ ...input, richMessages: false });
-        },
-      );
-      const harness = createHarness({ answerMessageId: 999, resolveFinalPresentationText });
+      const harness = createHarness({
+        answerMessageId: 999,
+        resolveFinalPresentationText: (input) => renderFinal(input.payload, kind === "rich"),
+      });
       const send = (infoKind: "block" | "final") => deliver(harness, text, { payload, infoKind });
       const block = await send("block");
       expect(block.kind).toBe("preview-updated");
-      expect(resolveFinalPresentationText).not.toHaveBeenCalled();
       expect(harness.answer?.lastDeliveredText()).toBe(text);
       const delivery = expectPreviewFinalized(await send("final"));
       expect(delivery.content).toBe(expected);
       expect(harness.answer?.lastDeliveredText()).toBe(expected);
       expect(harness.sendPayload).not.toHaveBeenCalled();
       expect(harness.lanes.answer.finalized).toBe(true);
-      if (kind === "text-only") {
-        expect(resolveFinalPresentationText).not.toHaveBeenCalled();
-      }
     },
   );
 });

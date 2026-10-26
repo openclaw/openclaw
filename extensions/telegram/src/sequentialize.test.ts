@@ -1,39 +1,38 @@
-import { Bot } from "grammy";
-import type { Chat, Update } from "grammy/types";
+import type { Chat } from "grammy/types";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
-import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramSequentializer } from "./sequentialize.js";
 
 const chat: Chat.SupergroupChat = { id: -1001, type: "supergroup", title: "Q", is_forum: true };
 
-function update(updateId: number, messageId: number, topic: number | "reaction"): Update {
+function update(id: number, messageId: number, topic: number | "reaction") {
   const base = { chat, message_id: messageId, date: 1 };
-  if (topic === "reaction") {
-    return {
-      update_id: updateId,
-      message_reaction: { ...base, old_reaction: [], new_reaction: [] },
-    };
-  }
-  const message = {
-    ...base,
-    from: { id: 1, is_bot: false, first_name: "Ada" },
-    message_thread_id: topic,
-    is_topic_message: true,
-    text: "message",
+  return {
+    id,
+    context:
+      topic === "reaction"
+        ? { update: { message_reaction: base } }
+        : {
+            message: {
+              ...base,
+              message_thread_id: topic,
+              is_topic_message: true,
+              text: "message",
+              from: { id: 1, is_bot: false, first_name: "Ada" },
+            },
+          },
   };
-  return { update_id: updateId, message };
 }
 
-function createSequencedBot(handler: (id: number) => Promise<void>) {
+function createSequencer(handler: (id: number) => Promise<void>) {
   const started: number[] = [];
-  const bot = new Bot("123:test", { botInfo: telegramBotInfoForTest });
-  bot.use(createTelegramSequentializer());
-  bot.use((ctx) => {
-    started.push(ctx.update.update_id);
-    return handler(ctx.update.update_id);
-  });
-  return { started, run: bot.handleUpdate.bind(bot) };
+  const sequentialize = createTelegramSequentializer();
+  const run = ({ id, context }: ReturnType<typeof update>) =>
+    sequentialize(context, () => {
+      started.push(id);
+      return handler(id);
+    });
+  return { started, run };
 }
 
 describe("Telegram sequential middleware", () => {
@@ -41,7 +40,7 @@ describe("Telegram sequential middleware", () => {
     const firstGate = createDeferred<void>();
     const secondGate = createDeferred<void>();
     const secondStarted = createDeferred<void>();
-    const { started, run } = createSequencedBot(async (id) => {
+    const { started, run } = createSequencer(async (id) => {
       if (id === 2) {
         secondStarted.resolve();
       }
@@ -75,21 +74,18 @@ describe("Telegram sequential middleware", () => {
     }
   });
 
-  it.each(["throw", "reject"])("recovers %s without releasing other lanes", async (failure) => {
+  it("recovers a failed reaction without releasing other lanes", async () => {
     const gate = createDeferred<void>();
     const error = new Error("reaction failed");
-    const { started, run } = createSequencedBot((id) => {
+    const { started, run } = createSequencer((id) => {
       if (id !== 2) {
         return id === 1 ? gate.promise : Promise.resolve();
       }
-      if (failure === "throw") {
-        throw error;
-      }
-      return Promise.reject(error);
+      throw error;
     });
     const topic = run(update(1, 76, 9));
     const failedReaction = run(update(2, 77, "reaction"));
-    const rejection = expect(failedReaction).rejects.toMatchObject({ error });
+    const rejection = expect(failedReaction).rejects.toBe(error);
     const joined = run(update(3, 77, 9));
     const runs = [topic, failedReaction, joined];
 

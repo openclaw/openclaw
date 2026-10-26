@@ -10,10 +10,12 @@ const rejecting = (error: unknown) => async () => {
 const safeFailure = 'network request failed transport={"code":"ECONNRESET","syscall":"read"}';
 const privateText = "https://example.test/bot-private-token request body";
 const transportError = () =>
-  Object.assign(new Error(privateText), {
-    code: "ECONNRESET",
-    syscall: "read",
-    address: "private-host",
+  new TypeError("fetch failed", {
+    cause: Object.assign(new Error(privateText), {
+      code: "ECONNRESET",
+      syscall: "read",
+      address: "private-host",
+    }),
   });
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
@@ -41,17 +43,15 @@ describe("Telegram API error logging", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each(["nested", "unsafe-fields", "no-fields"])("redacts %s request data", async (kind) => {
+  it.each(["unsafe-fields", "no-fields"])("redacts %s request data", async (kind) => {
     const cause =
-      kind === "nested"
-        ? new TypeError("fetch failed", { cause: transportError() })
-        : kind === "unsafe-fields"
-          ? {
-              code: privateText,
-              syscall: privateText,
-              cause: { code: "UND_ERR_SOCKET", syscall: "connect" },
-            }
-          : new Error(privateText);
+      kind === "unsafe-fields"
+        ? {
+            code: privateText,
+            syscall: privateText,
+            cause: { code: "UND_ERR_SOCKET", syscall: "connect" },
+          }
+        : new Error(privateText);
     const error = new HttpError(privateText, cause);
     const logger = kind === "unsafe-fields" ? vi.fn() : logs.apiError;
     await expect(
@@ -62,11 +62,7 @@ describe("Telegram API error logging", () => {
       }),
     ).rejects.toBe(error);
     const suffix =
-      kind === "nested"
-        ? ' transport={"code":"ECONNRESET","syscall":"read"}'
-        : kind === "unsafe-fields"
-          ? ' transport={"code":"UND_ERR_SOCKET","syscall":"connect"}'
-          : "";
+      kind === "unsafe-fields" ? ' transport={"code":"UND_ERR_SOCKET","syscall":"connect"}' : "";
     expect(logger).toHaveBeenCalledExactlyOnceWith(
       `telegram sendMessage failed: network request failed${suffix}`,
     );

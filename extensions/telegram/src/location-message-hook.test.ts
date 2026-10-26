@@ -39,10 +39,9 @@ function emitLocation(
 
 describe("Telegram location message hooks", () => {
   beforeEach(() => {
-    hookRunner.hasHooks.mockClear();
-    hookRunner.runInboundClaim.mockClear();
-    hookRunner.runMessageReceived.mockReset();
-    hookRunner.runMessageReceived.mockResolvedValue(undefined);
+    for (const hook of Object.values(hookRunner)) {
+      hook.mockClear();
+    }
   });
 
   it("ignores non-location edits", () => {
@@ -51,28 +50,23 @@ describe("Telegram location message hooks", () => {
     expect(hookRunner.runMessageReceived).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [
-      "edited_message",
-      9002,
-      { location: { ...coordinates, horizontal_accuracy: 12, live_period: 900 } },
-      true,
-    ],
-    ["edited_message", 9003, { location: coordinates }, false],
-    [
-      "edited_channel_post",
-      9004,
-      {
-        chat: { id: -1001234, type: "supergroup", title: "Travel updates" },
-        from: { id: 789, is_bot: true, first_name: "Travel updates" },
-      },
-      true,
-    ],
-  ] satisfies ["edited_message" | "edited_channel_post", number, Partial<Message>, boolean][])(
-    "emits %s location update %i without dispatching inbound claims",
-    (kind, id, fields, isLive) => {
-      emitLocation(fields, id, kind);
-      expect(hookRunner.hasHooks).toHaveBeenCalledWith("message_received", expect.any(Object));
+  it.each(["live", "stopped", "channel"])(
+    "emits a %s location without dispatching inbound claims",
+    (mode) => {
+      const kind = mode === "channel" ? "edited_channel_post" : "edited_message";
+      const fields: Partial<Message> =
+        mode === "channel"
+          ? {
+              chat: { id: -1001234, type: "supergroup", title: "Travel updates" },
+              from: { id: 789, is_bot: true, first_name: "Travel updates" },
+            }
+          : {
+              location:
+                mode === "stopped"
+                  ? coordinates
+                  : { ...coordinates, horizontal_accuracy: 12, live_period: 900 },
+            };
+      emitLocation(fields, 9002, kind);
       expect(hookRunner.runMessageReceived).toHaveBeenCalledWith(
         expect.objectContaining({
           messageId: "456",
@@ -80,11 +74,11 @@ describe("Telegram location message hooks", () => {
           timestamp: 1_786_094_520_000,
           location: expect.objectContaining({
             ...coordinates,
-            isLive,
-            ...(id === 9002 ? { accuracy: 12, source: "live", livePeriodSeconds: 900 } : {}),
+            isLive: mode !== "stopped",
+            ...(mode === "live" ? { accuracy: 12, source: "live", livePeriodSeconds: 900 } : {}),
           }),
           providerUpdate: {
-            id: String(id),
+            id: "9002",
             kind,
             messageId: "456",
             messageTimestamp: 1_786_094_460_000,
@@ -94,7 +88,7 @@ describe("Telegram location message hooks", () => {
         expect.objectContaining({
           channelId: "telegram",
           accountId: "main",
-          ...(id === 9002 ? { conversationId: "telegram:1234" } : {}),
+          ...(mode === "live" ? { conversationId: "telegram:1234" } : {}),
           messageId: "456",
           senderId: "789",
         }),

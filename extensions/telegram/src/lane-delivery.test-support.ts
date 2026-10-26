@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { expect, vi } from "vitest";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
@@ -24,16 +25,20 @@ function lane(stream: DraftLaneState["stream"]): DraftLaneState {
   };
 }
 
-export function createHarness(params?: {
+export function createHarness({
+  answerStream,
+  answerMessageId,
+  ...options
+}: {
   answerMessageId?: number;
   answerStream?: DraftLaneState["stream"] | null;
   resolveFinalPayloadCandidate?: DelivererOptions["resolveFinalPayloadCandidate"];
   resolveFinalPresentationText?: DelivererOptions["resolveFinalPresentationText"];
-}) {
+} = {}) {
   const answer =
-    params?.answerStream === null
+    answerStream === null
       ? undefined
-      : (params?.answerStream ?? createTestDraftStream({ messageId: params?.answerMessageId }));
+      : (answerStream ?? createTestDraftStream({ messageId: answerMessageId }));
   const reasoning = createTestDraftStream();
   const lanes: Record<LaneName, DraftLaneState> = {
     answer: lane(answer),
@@ -52,18 +57,11 @@ export function createHarness(params?: {
     lanes,
     createPromptContextSequence: () =>
       createTelegramPromptContextProjectionSequence({ record: mocks.recordPromptContextPreview }),
-    resolveFinalPayloadCandidate: params?.resolveFinalPayloadCandidate,
-    resolveFinalPresentationText: params?.resolveFinalPresentationText,
+    ...options,
     log: () => {},
   });
 
-  return {
-    deliverLaneText,
-    lanes,
-    answer,
-    reasoning,
-    ...mocks,
-  };
+  return { deliverLaneText, lanes, answer, reasoning, ...mocks };
 }
 
 type Harness = ReturnType<typeof createHarness>;
@@ -91,10 +89,7 @@ export async function deliverProjectedFinalAnswer(harness: Harness, text: string
 export function expectPreviewFinalized(
   result: LaneDeliveryResult,
 ): Extract<LaneDeliveryResult, { kind: "preview-finalized" }>["delivery"] {
-  expect(result.kind).toBe("preview-finalized");
-  if (result.kind !== "preview-finalized") {
-    throw new Error(`expected preview-finalized, got ${result.kind}`);
-  }
+  assert(result.kind === "preview-finalized", `expected preview-finalized, got ${result.kind}`);
   return result.delivery;
 }
 

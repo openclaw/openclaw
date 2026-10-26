@@ -93,20 +93,14 @@ describe("telegram message cache conversation context", () => {
 
   it("does not select messages before the persisted session start when the reset command is absent", async () => {
     const cache = createTelegramMessageCache();
-    const beforeSession = Date.parse("2026-05-10T12:40:00.000Z");
-    const sessionStartedAt = Date.parse("2026-05-10T17:30:43.127Z");
-    const afterSession = Date.parse("2026-05-11T23:36:00.000Z");
-    const chat = { id: -1001234567890, type: "supergroup", title: "Ops", is_forum: true } as const;
-    const topicMessage = (id: number, text: string, timestampMs: number) =>
-      message(id, { chat, message_thread_id: 22534, text, date: Math.floor(timestampMs / 1000) });
-    const stale = topicMessage(84670, "previous session message", beforeSession);
-    await record(cache, topicMessage(84649, "tools.toolSearch: true", beforeSession - 5 * 60_000));
-    await record(cache, stale);
-    await record(cache, topicMessage(87184, "how does this determine stability?", afterSession));
-    const current = message(87227, {
-      ...topicMessage(87227, "what config change?", afterSession + 2 * 60 * 60_000),
-      reply_to_message: stale,
-    });
+    const chat = { id: -7, type: "supergroup", title: "Ops", is_forum: true } as const;
+    const topicMessage = (id: number, date: number) =>
+      message(id, { chat, message_thread_id: 9, date });
+    const stale = topicMessage(2, 1_000);
+    for (const msg of [topicMessage(1, 700), stale, topicMessage(3, 3_000)]) {
+      await record(cache, msg);
+    }
+    const current = { ...topicMessage(4, 10_200), reply_to_message: stale };
     await record(cache, current);
     const replyChainNodes = await buildTelegramReplyChain({
       cache,
@@ -114,12 +108,12 @@ describe("telegram message cache conversation context", () => {
       chatId: chat.id,
       msg: current,
     });
-    const context = await conversation(cache, "87227", {
+    const context = await conversation(cache, "4", {
       chatId: chat.id,
-      threadId: 22534,
+      threadId: 9,
       replyChainNodes,
-      minTimestampMs: sessionStartedAt,
+      minTimestampMs: 2_000_127,
     });
-    expect(context.map((entry) => entry.node.messageId)).toEqual(["87184"]);
+    expect(context.map((entry) => entry.node.messageId)).toEqual(["3"]);
   });
 });

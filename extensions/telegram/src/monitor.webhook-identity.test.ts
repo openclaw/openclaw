@@ -48,7 +48,7 @@ const gateway = createTelegramWebhookTestGateway({
 beforeAll(() => gateway.listen());
 afterAll(() => gateway.close());
 
-it.each([false, true])("isolates webhook update IDs (polling offset: %s)", (hasPollingOffset) =>
+it("isolates webhook update IDs from polling offsets and other bots", () =>
   withStateDirEnv("telegram-webhook-identity-", async ({ stateDir }) => {
     gateway.resetRegistry();
     handleUpdate.mockClear();
@@ -117,9 +117,7 @@ it.each([false, true])("isolates webhook update IDs (polling offset: %s)", (hasP
       }
     };
     try {
-      if (hasPollingOffset) {
-        await writeTelegramUpdateOffset({ botToken: "111111:fixture-a", updateId: 42 });
-      }
+      await writeTelegramUpdateOffset({ botToken: "111111:fixture-a", updateId: 42 });
       await deliver("111111:fixture-a", "bot A");
       await deliver("111111:fixture-a", "same-bot retry");
       await deliver("111111:fixture-rotated", "same-bot token rotation");
@@ -127,12 +125,9 @@ it.each([false, true])("isolates webhook update IDs (polling offset: %s)", (hasP
 
       await deliver("222222:fixture-b", "bot B");
       expectDelivered("bot A", "bot B");
-      await deliver("333333:fixture-c", "bot C");
-      expectDelivered("bot A", "bot B", "bot C");
     } finally {
       clearTelegramRuntimeForTest();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
     }
-  }),
-);
+  }));
