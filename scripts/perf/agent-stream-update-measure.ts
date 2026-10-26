@@ -9,6 +9,8 @@
  * --event-type text_delta|thinking_delta|toolcall_delta selects snapshot updates.
  * --transforms 1 (or 3) installs real adjacent stream-event decorators. Compare
  * against --transforms 0 to separate wrapper cost from the fixture generator.
+ * --plugin-bound includes a registered plugin's iterator membrane; --owner can
+ * select a frozen stream-wrapper.ts module for paired decorator measurements.
  * --mode promises counts Node promise initialization separately from timing.
  * --mode verify replays a fixed multi-turn recording with all update kinds, async
  * fragments and a blocking tool; compare its outputSha256 across revisions.
@@ -30,6 +32,8 @@ import { writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { runAgentLoop } from "../../packages/agent-core/src/agent-loop.js";
 import {
@@ -41,8 +45,10 @@ import {
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
 import { Agent } from "../../packages/agent-core/src/agent.js";
 import type { AssistantMessageEvent } from "../../packages/llm-core/src/types.js";
-import { wrapStreamObjectEvents } from "../../src/agents/embedded-agent-runner/run/stream-wrapper.js";
 import type { MutableAssistantMessageEventStream } from "../../src/agents/stream-compat.js";
+import { PluginInstance } from "../../src/plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
+import { createPluginRecord } from "../../src/plugins/status.test-helpers.js";
 
 const { values } = parseArgs({
   options: {
@@ -55,10 +61,19 @@ const { values } = parseArgs({
     snapshots: { type: "string", default: "true" },
     "async-fragments": { type: "string", default: "false" },
     transforms: { type: "string", default: "0" },
+    "plugin-bound": { type: "boolean", default: false },
+    owner: { type: "string" },
     layer: { type: "string" },
     dispatch: { type: "string", default: "loop" },
   },
 });
+const {
+  wrapStreamObjectEvents,
+}: typeof import("../../src/agents/embedded-agent-runner/run/stream-wrapper.js") = await import(
+  values.owner
+    ? pathToFileURL(resolve(values.owner)).href
+    : "../../src/agents/embedded-agent-runner/run/stream-wrapper.js"
+);
 const events = Number(values.events);
 const turns = Number(values.turns);
 const warmup = Number(values.warmup);
@@ -129,7 +144,15 @@ const fragmentTail = {
 };
 let deliveries = 0;
 let observations = 0;
-function decorate(stream: MutableAssistantMessageEventStream) {
+const record = createPluginRecord({ id: "synthetic-stream", origin: "bundled" });
+const plugin = values["plugin-bound"]
+  ? new PluginInstance(record.id, {
+      record,
+      registry: { ...createEmptyPluginRegistry(), plugins: [record] },
+    })
+  : undefined;
+function decorate(source: MutableAssistantMessageEventStream) {
+  const stream = plugin?.wrap(source) ?? source;
   for (let index = 0; index < transforms; index++) {
     wrapStreamObjectEvents(stream, (event) => {
       if (event.type === eventType) {
@@ -374,6 +397,7 @@ console.log(
     turns,
     warmup,
     transforms,
+    pluginBound: Boolean(plugin),
     observations,
     promisesPerUpdate: values.mode === "promises" ? promises / deliveries : undefined,
     deliveries,
@@ -385,3 +409,4 @@ console.log(
   }),
 );
 session?.dispose();
+await plugin?.dispose();
