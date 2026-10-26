@@ -23,6 +23,7 @@ import {
   openOpenClawAgentDatabase,
   getOpenClawAgentDatabaseIfOpen,
 } from "../../state/openclaw-agent-db.js";
+import * as nativeExecution from "../../state/openclaw-agent-execution.js";
 import * as writeAdmission from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -61,6 +62,7 @@ import {
   createSessionColdStorageFixture,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
+import { spyAgentExecutions } from "./session-native-binding.execution.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir as waitForReconciliation } from "./session-transcript-reconcile.js";
 
@@ -945,36 +947,13 @@ describe("SQLite transcript archive sessions", () => {
 type ArchiveSessionReply = TranscriptArchiveWorkerMessage | TranscriptArchivePublishWorkerMessage;
 
 function observeArchiveMetadata(afterExecute: (type: string, result: unknown) => Promise<void>) {
-  const withWorker = sessionWorker.withSessionEntryWorker;
-  return vi.spyOn(sessionWorker, "withSessionEntryWorker").mockImplementation((...args) => {
-    const withExecution = args[3];
-    args[3] = (execution, owner, context) =>
-      withExecution(
-        {
-          ...execution,
-          get fileIdentity() {
-            return execution.fileIdentity;
-          },
-          runExisting(readSource, read, readOptions) {
-            return execution.runExisting(
-              readSource,
-              (worker) =>
-                read({
-                  execute: async (command, requestOptions) => {
-                    const result = await worker.execute(command, requestOptions);
-                    await afterExecute(command.type, result);
-                    return result;
-                  },
-                }),
-              readOptions,
-            );
-          },
-        },
-        owner,
-        context,
-      );
-    return withWorker(...args);
-  });
+  spyAgentExecutions(nativeExecution, (worker) => ({
+    execute: async (command, options) => {
+      const result = await worker.execute(command, options);
+      await afterExecute(command.type, result);
+      return result;
+    },
+  }));
 }
 
 function observeArchiveSessionWorkers(
