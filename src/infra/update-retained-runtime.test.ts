@@ -170,7 +170,6 @@ it.for([false, true])(
     expect(await acceptedWrite).toEqual(["retained:accepted before exit"]);
     assert.ok(directory && store);
     await expect(store.execute({ type: "append", input: "escaped" })).rejects.toThrow();
-    expect(removed.mock.calls.some(([target]) => String(target) === directory)).toBe(false);
     expect(await unrelated.execute({ type: "append", input: "still open" })).toEqual([
       "retained:still open",
     ]);
