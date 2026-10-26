@@ -731,14 +731,10 @@ async function readBuild(directory: string) {
     build,
     indexSha256: createHash("sha256").update(html).digest("hex"),
     nextPreloads: Object.fromEntries(
-      [
-        "agents-next",
-        "cron-next",
-        "activity-next",
-        "model-picker",
-        "new-session-model-picker",
-        "roster-next",
-      ].map((key) => [key, navigationPreloads[key] ?? []]),
+      ["agents-next", "cron-next", "activity-next", "model-picker", "roster-next"].map((key) => [
+        key,
+        navigationPreloads[key] ?? [],
+      ]),
     ),
   };
 }
@@ -1891,12 +1887,9 @@ try {
                 ? route === "roster"
                   ? "roster-next"
                   : undefined
-                : route === "new-session" &&
-                    variant.nextPreloads["new-session-model-picker"]?.length
-                  ? "new-session-model-picker"
-                  : route === "chat" || route === "new-session"
-                    ? "model-picker"
-                    : `${route}-next`;
+                : route === "chat" || route === "new-session"
+                  ? "model-picker"
+                  : `${route}-next`;
               const warmFiles =
                 warmKey && (routeInteractions.length || preloadIdle)
                   ? (variant.nextPreloads[warmKey] ?? [])
@@ -1917,10 +1910,19 @@ try {
                   reportAnonymousScripts: false,
                 });
               }
-              if (
-                creationWarmup &&
-                (warmKey === "model-picker" || warmKey === "new-session-model-picker")
-              ) {
+              if (creationWarmup && warmKey === "model-picker") {
+                // Native hover listeners precede the descriptor fetch; include this wait in warmup.
+                await page.waitForFunction((baseUrl) => {
+                  const descriptor = document
+                    .getElementById("openclaw-navigation-preloads")
+                    ?.getAttribute("content");
+                  if (!descriptor) {
+                    return false;
+                  }
+                  return performance
+                    .getEntriesByName(new URL(descriptor, baseUrl).href)
+                    .some((entry) => (entry as PerformanceResourceTiming).responseEnd > 0);
+                }, server.baseUrl);
                 await page
                   .locator('.chat-controls__model-trigger[aria-disabled="false"]')
                   .first()
