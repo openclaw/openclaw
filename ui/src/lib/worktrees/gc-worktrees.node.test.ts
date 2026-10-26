@@ -53,20 +53,12 @@ function setup(...responses: (WorktreesGcResult | Promise<WorktreesGcResult>)[])
     }),
   );
   const context = { gateway: source.gateway } as ApplicationContext;
-  let retireBeforeEnqueue = false;
+  const notify = vi.fn();
   const reconnect = () => {
     source.publish({ ...source.gateway.snapshot, phase: "reconnecting" });
     source.publish({ ...source.gateway.snapshot, phase: "connected" });
   };
-  const model = new WorktreesModel(
-    () => context,
-    () => {
-      if (retireBeforeEnqueue && model.operation === "gc") {
-        retireBeforeEnqueue = false;
-        reconnect();
-      }
-    },
-  );
+  const model = new WorktreesModel(() => context, notify);
   const binding = new GatewayPageBinding(() => undefined, {
     getGateway: () => source.gateway,
     invalidateRequests: () => model.invalidateRequests(),
@@ -74,16 +66,7 @@ function setup(...responses: (WorktreesGcResult | Promise<WorktreesGcResult>)[])
   model.gateway = Object.assign(binding, { readEpoch: () => binding.epoch });
   binding.connect();
   onTestFinished(() => binding.dispose());
-  return {
-    request,
-    list,
-    model,
-    run: () => model.gc(),
-    reconnect,
-    retireBeforeEnqueue: () => {
-      retireBeforeEnqueue = true;
-    },
-  };
+  return { request, list, model, reconnect, notify };
 }
 
 afterEach(() => {
@@ -95,9 +78,9 @@ afterEach(() => {
 
 it("enqueues once, polls the same job serially, and settles only when cleanup completes", async () => {
   const slowPoll = createDeferred<WorktreesGcResult>();
-  const { request, list, model, run } = setup(queued, slowPoll.promise, completed);
+  const { request, list, model } = setup(queued, slowPoll.promise, completed);
   const settled = vi.fn();
-  const pending = run().then(settled);
+  const pending = model.gc().then(settled);
   expect(model).toMatchObject({ operation: "gc", loading: true });
   await vi.advanceTimersByTimeAsync(999);
   expect([request.mock.calls, settled.mock.calls]).toEqual([[["worktrees.gc", {}]], []]);
@@ -122,8 +105,8 @@ it.each([
   ["offline", [queued, partial]],
   ["cleanup failed", [{ ...queued, jobId: undefined }]],
 ] as const)("reports %s without starting another job", async (message, responses) => {
-  const { request, model, run } = setup(...responses);
-  const pending = run();
+  const { request, model } = setup(...responses);
+  const pending = model.gc();
   await vi.advanceTimersByTimeAsync(1_000);
   await pending;
   expect(model).toMatchObject({ error: message, operation: null, loading: false });
@@ -134,13 +117,13 @@ it.each(["before enqueue", "during enqueue", "between polls", "during poll"] as 
   "ignores the old Gateway epoch %s",
   async (phase) => {
     const response = createDeferred<WorktreesGcResult>();
-    const { request, list, model, run, reconnect, retireBeforeEnqueue } = setup(
+    const { request, list, model, reconnect, notify } = setup(
       ...(phase === "during enqueue" ? [response.promise] : [queued, response.promise]),
     );
     if (phase === "before enqueue") {
-      retireBeforeEnqueue();
+      notify.mockImplementationOnce(reconnect);
     }
-    const pending = run();
+    const pending = model.gc();
     await vi.advanceTimersByTimeAsync(phase === "during poll" ? 1_000 : 0);
     if (phase !== "before enqueue") {
       reconnect();
