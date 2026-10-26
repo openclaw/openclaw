@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { findTranscriptEvent } from "../../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../../config/sessions/session-transcript-turn-state.js";
@@ -15,6 +16,7 @@ import {
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { SessionDeliveryRequesterBinding } from "../../infra/session-delivery-queue.records.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { RequiredCompletionTerminalResult } from "../completion-result.js";
 import {
@@ -102,13 +104,27 @@ export async function retainBlockedMediaCompletion(params: {
   const fallbackText =
     "Generated media is ready, but completion delivery was not confirmed. The saved media is retained here.";
   const idempotencyKey = `media-completion-retained:${handle.runId}`;
-  if (
-    await findTranscriptEvent(target, {
-      kind: "idempotency",
-      key: idempotencyKey,
-      assistant: true,
-    })
-  ) {
+  const existing = await findTranscriptEvent(target, {
+    kind: "idempotency",
+    key: idempotencyKey,
+    assistant: true,
+  });
+  if (existing) {
+    assertCurrent();
+    const event = existing.event;
+    const message = isRecord(event) && isRecord(event.message) ? event.message : undefined;
+    const displayContent = readAssistantDisplayContent(message);
+    const hasImage = displayContent.some((block) => block.type === "image");
+    if (hasImage) {
+      const messageId = isRecord(event) && typeof event.id === "string" ? event.id.trim() : "";
+      if (
+        !messageId ||
+        !(await attachManagedOutgoingMediaToMessage({ messageId, blocks: displayContent }))
+      ) {
+        throw new Error("Could not reconcile retained generated image ownership");
+      }
+      assertCurrent();
+    }
     return;
   }
   assertCurrent();
@@ -130,6 +146,7 @@ export async function retainBlockedMediaCompletion(params: {
       ? [
           {
             url,
+            trustedLocal: false,
             ...(attachment.name ? { filename: attachment.name } : {}),
             ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
           },
@@ -143,6 +160,13 @@ export async function retainBlockedMediaCompletion(params: {
         sessionKey: target.sessionKey,
         agentId: target.agentId,
         items: imageItems,
+        continueOnPrepareError: true,
+        onPrepareError: (error) => {
+          log.warn("A generated image could not be prepared for retained completion", {
+            runId: handle.runId,
+            error,
+          });
+        },
         assertCurrent,
       });
     } catch (error) {
@@ -154,7 +178,7 @@ export async function retainBlockedMediaCompletion(params: {
     }
   }
 
-  let committed = false;
+  let transcriptCommitted = false;
   try {
     assertCurrent();
     const result = await appendAssistantMessageToSessionTranscript({
@@ -174,6 +198,7 @@ export async function retainBlockedMediaCompletion(params: {
     if (!result.ok) {
       throw new Error(`Could not retain generated media in the original session: ${result.reason}`);
     }
+    transcriptCommitted = true;
     if (
       displayMedia.some((block) => block.type === "image") &&
       !(await attachManagedOutgoingMediaToMessage({
@@ -184,9 +209,8 @@ export async function retainBlockedMediaCompletion(params: {
       throw new Error("Could not persist retained generated image ownership");
     }
     assertCurrent();
-    committed = true;
   } finally {
-    if (!committed && displayMedia.length > 0) {
+    if (!transcriptCommitted && displayMedia.length > 0) {
       await removeManagedOutgoingMediaBlocks({ blocks: displayMedia, messageId: null });
     }
   }
