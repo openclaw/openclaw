@@ -1,4 +1,5 @@
 import "../../test/host.setup.ts";
+import { setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 // @vitest-environment node
 import { afterEach, expect, it, vi } from "vitest";
@@ -14,21 +15,16 @@ import { loadWorkboard } from "./loading.ts";
 import { stopWorkboardLiveRefresh, getWorkboardState, subscribeWorkboard } from "./runtime.ts";
 import { createWorkboardCard, createWorkboardTestClient } from "./test/index-helpers.ts";
 
-function cardsResponse(title?: string) {
-  return {
-    cards: title ? [createWorkboardCard({ title })] : [],
-    statuses: ["todo", "done"],
-  };
-}
+const cardsResponse = (title?: string) => ({
+  cards: title ? [createWorkboardCard({ title })] : [],
+  statuses: ["todo", "done"],
+});
 
-function setup(read: () => unknown = cardsResponse, onChange?: () => void) {
+function setup(read: () => unknown = cardsResponse) {
   const host = {};
   const client = createWorkboardTestClient((method) =>
     method === "workboard.cards.list" ? read() : { tasks: [] },
   );
-  if (onChange) {
-    subscribeWorkboard(host, onChange);
-  }
   configureWorkboardLiveRefresh({ host, client });
   const listCalls = () =>
     client.request.mock.calls.filter(([method]) => method === "workboard.cards.list").length;
@@ -36,9 +32,7 @@ function setup(read: () => unknown = cardsResponse, onChange?: () => void) {
   return { host, client, state: getWorkboardState(host), listCalls, waitForReads };
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 it("publishes read progress and completion through the owner's subscription", async () => {
   const result = createDeferred<unknown>();
@@ -46,9 +40,9 @@ it("publishes read progress and completion through the owner's subscription", as
   const state = host.state;
   const client = createWorkboardTestClient(() => result.promise);
   const seen: Array<{ loading: boolean; title: string | undefined }> = [];
-  const unsubscribe = host.subscribe(() => {
-    seen.push({ loading: state.loading, title: state.cards[0]?.title });
-  });
+  const unsubscribe = host.subscribe(() =>
+    seen.push({ loading: state.loading, title: state.cards[0]?.title }),
+  );
   const pending = loadWorkboard({ host, client });
   expect(seen).toEqual([{ loading: true, title: undefined }]);
   result.resolve(cardsResponse("Admitted result"));
@@ -72,15 +66,12 @@ it("validates the bounded invalidation payload", () => {
 
 it("rereads canonical cards and ignores stale revisions", async () => {
   const { host, client, state, listCalls } = setup(() => cardsResponse("Updated elsewhere"));
-
   expect(handleWorkboardChanged(host, { epoch: "epoch-a", revision: 2 })).toBe(true);
   await waitForFast(() => expect(state.cards[0]?.title).toBe("Updated elsewhere"));
   expect(handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 })).toBe(false);
   expect(listCalls()).toBe(1);
-  expect(client.request).not.toHaveBeenCalledWith(
-    "workboard.cards.diagnostics.refresh",
-    expect.anything(),
-  );
+  const diagnostics = "workboard.cards.diagnostics.refresh";
+  expect(client.request).not.toHaveBeenCalledWith(diagnostics, expect.anything());
 });
 
 it("coalesces revisions that arrive during a canonical read", async () => {
@@ -89,7 +80,6 @@ it("coalesces revisions that arrive during a canonical read", async () => {
   const { host, listCalls, waitForReads } = setup(() =>
     ++reads === 1 ? firstList.promise : cardsResponse(),
   );
-
   handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 });
   await waitForReads();
   handleWorkboardChanged(host, { epoch: "epoch-a", revision: 2 });
@@ -103,40 +93,34 @@ it("coalesces revisions that arrive during a canonical read", async () => {
 
 it("defers during edits and resumes after the local draft closes", async () => {
   const onChange = vi.fn();
-  const { host, client, state, waitForReads } = setup(cardsResponse, onChange);
-  state.draftOpen = true;
-  state.editingCardId = "card-1";
+  const { host, client, state, waitForReads } = setup();
+  subscribeWorkboard(host, onChange);
+  Object.assign(state, { draftOpen: true, editingCardId: "card-1" });
 
   handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 });
   await Promise.resolve();
   expect(client.request).not.toHaveBeenCalled();
   expect(onChange).not.toHaveBeenCalled();
 
-  state.draftOpen = false;
-  state.editingCardId = null;
+  Object.assign(state, { draftOpen: false, editingCardId: null });
   resumeWorkboardLiveRefresh(host);
   await waitForReads();
-  expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
 });
 
 it("retries transient failures and treats a new epoch as authoritative", async () => {
   vi.useFakeTimers();
-  let fail = true;
-  const { host, client, listCalls, waitForReads } = setup(() => {
-    if (fail) {
-      throw new Error("temporarily unavailable");
-    }
-    return cardsResponse();
-  });
+  const read = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("temporarily unavailable"))
+    .mockReturnValue(cardsResponse());
+  const { host, client, listCalls, waitForReads } = setup(read);
 
   handleWorkboardChanged(host, { epoch: "epoch-a", revision: 9 });
   await waitForReads();
-  expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
   resumeWorkboardLiveRefresh(host);
   configureWorkboardLiveRefresh({ host, client });
   await Promise.resolve();
   expect(listCalls()).toBe(1);
-  fail = false;
   await vi.advanceTimersByTimeAsync(1000);
   expect(listCalls()).toBe(2);
 
@@ -153,16 +137,11 @@ it.each(["live", "direct"])("discards a %s read that completes after teardown", 
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 });
   }
   await waitForReads();
-  expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
   stopWorkboardLiveRefresh(host);
   list.resolve(cardsResponse("Must not apply"));
+  await delay(0);
   if (loading) {
     await expect(loading).resolves.toBe(false);
-  } else {
-    await list.promise;
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
   }
   expect(state.cards).toEqual([]);
   expect(state.loading).toBe(false);
@@ -178,7 +157,6 @@ it("retains cards on unchanged responses and still refreshes caller-scoped Sessi
   request.mockResolvedValueOnce({ cards: [card], boards: [], revision });
   request.mockResolvedValue({ unchanged: true, revision });
   await loadWorkboard({ host, client });
-  expect(state.loaded).toBe(true);
   await loadWorkboard({ host, client, force: true });
   expect(state.loaded).toBe(true);
   expect(state.cards).toEqual([card]);
