@@ -41,27 +41,6 @@ function generateVideo(
   });
 }
 
-function expectPostJsonRequest(
-  call: unknown,
-  expected: { url: string; body: Record<string, unknown>; elapsedMs: number },
-) {
-  assert(call && typeof call === "object" && "timeoutMs" in call && "headers" in call);
-  expect(call).toHaveProperty("url", expected.url);
-  expect(call).toHaveProperty("body", expected.body);
-  // Submission receives the remaining operation budget after preparation consumes clock ticks.
-  expect(call.timeoutMs).toBeGreaterThan(0);
-  expect(call.timeoutMs).toBeLessThanOrEqual(120_000);
-  expect(call.timeoutMs).toBeGreaterThanOrEqual(120_000 - expected.elapsedMs);
-  expect(call).toMatchObject({ fetchFn: globalThis.fetch, allowPrivateNetwork: false });
-  expect(Reflect.get(call, "dispatcherPolicy")).toBeUndefined();
-  assert(call.headers instanceof Headers);
-  expect(Array.from(call.headers.entries())).toEqual([
-    ["authorization", "Bearer provider-key"],
-    ["content-type", "application/json"],
-    ["x-dashscope-async", "enable"],
-  ]);
-}
-
 it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
   mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
   let nowMs = Date.now();
@@ -77,18 +56,32 @@ it("submits async Wan generation, polls task status, and downloads the resulting
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-    expectPostJsonRequest(postJsonRequestMock.mock.calls[0]?.[0], {
-      elapsedMs: Date.now() - startedAt,
+    const call = postJsonRequestMock.mock.calls[0]?.[0];
+    expect(call).toMatchObject({
       url: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
-      body: {
-        model: "wan2.6-r2v-flash",
-        input: {
-          prompt: "animate this shot",
-          reference_urls: ["https://example.com/ref.png"],
-        },
-        parameters: { duration: 6, audio: true },
-      },
+      fetchFn: globalThis.fetch,
+      allowPrivateNetwork: false,
     });
+    expect(call).toHaveProperty("body", {
+      model: "wan2.6-r2v-flash",
+      input: {
+        prompt: "animate this shot",
+        reference_urls: ["https://example.com/ref.png"],
+      },
+      parameters: { duration: 6, audio: true },
+    });
+    // Submission receives the remaining budget after preparation consumes clock ticks.
+    assert(call && typeof call === "object" && "timeoutMs" in call && "headers" in call);
+    expect(call.timeoutMs).toBeGreaterThan(0);
+    expect(call.timeoutMs).toBeLessThanOrEqual(120_000);
+    expect(call.timeoutMs).toBeGreaterThanOrEqual(120_000 - (Date.now() - startedAt));
+    expect(Reflect.get(call, "dispatcherPolicy")).toBeUndefined();
+    assert(call.headers instanceof Headers);
+    expect(Array.from(call.headers.entries())).toEqual([
+      ["authorization", "Bearer provider-key"],
+      ["content-type", "application/json"],
+      ["x-dashscope-async", "enable"],
+    ]);
     expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
     expectSuccessfulDashscopeVideoResult(result);
   } finally {
