@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn<typeof callGatewayFromCli>(async () => ({ ok: true })),
 }));
+// mock-isolation: Exercise request policy without opening a real Gateway transport.
 vi.mock("openclaw/plugin-sdk/gateway-runtime", () => gatewayMocks);
 const { callBrowserRequest, runBrowserCliRequest } = await import("./browser-cli-shared.js");
 const gateway = gatewayMocks.callGatewayFromCli;

@@ -31,6 +31,7 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
     }
   },
 }));
+// mock-isolation: Control catalog ownership without activating model runtimes.
 vi.mock("../../agents/model-runtime-choice.js", () => ({
   preparePublishedModelRuntimeChoice: async ({
     runtimeId,

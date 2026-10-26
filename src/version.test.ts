@@ -71,6 +71,7 @@ it.each([undefined, " ", "x".repeat(97)])("rejects unusable build id %s", async 
 
 it("captures the runtime commit from startup provenance once", async () => {
   let commit = "aaaaaaa";
+  // mock-isolation: Pin startup provenance without probing the checkout or build environment.
   vi.doMock("./infra/git-commit.js", () => ({ resolveLoadedCommitHash: () => commit }));
   vi.resetModules();
   try {
