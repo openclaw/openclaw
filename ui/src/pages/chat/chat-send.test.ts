@@ -110,6 +110,7 @@ import { handleAgentEvent } from "./tool-stream.ts";
 type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = ReturnType<typeof makeChatHost>;
 
+const startupOptions = { startup: true, awaitHistory: true, deferBranches: true };
 const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
 const storageError =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
@@ -285,12 +286,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function createJsonResponse(body: unknown, options: { ok?: boolean } = {}): Response {
-  const response = new Response(null, { status: options.ok === false ? 500 : 200 });
-  response.json = async () => await body;
-  return response;
-}
-
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
   return { ...sessionListFixture(sessions, 0), path: "" };
 }
@@ -347,11 +342,7 @@ describe("refreshChat", () => {
       },
     });
 
-    const refresh = refreshPageChat(asChatPageHost(host), {
-      awaitHistory: true,
-      deferBranches: true,
-      startup: true,
-    });
+    const refresh = refreshPageChat(asChatPageHost(host), startupOptions);
     const reobserved = refreshChatMetadata(asChatPageHost(host));
     startup.resolve({ messages: [message] });
     await expect(refresh).resolves.toBeUndefined();
@@ -397,11 +388,7 @@ describe("refreshChat", () => {
         "models.list": async () => ({ models: [ready] }),
       },
     });
-    const refresh = refreshPageChat(asChatPageHost(host), {
-      startup: true,
-      awaitHistory: true,
-      deferBranches: true,
-    });
+    const refresh = refreshPageChat(asChatPageHost(host), startupOptions);
     invalidateChatMetadataStore(expectDefined(host.client, "chat host client"));
     await waitForFast(() => expect(host.chatModelCatalog).toEqual([ready]));
     startup.resolve({
@@ -430,11 +417,7 @@ describe("refreshChat", () => {
     const closed = asChatPageHost(opening);
     kept.chatModelCatalog = [{ ...ready, available: false, unavailableReason: "missing-auth" }];
     const restoring = refreshChatModelCatalogOnDemand(kept);
-    const loading = refreshPageChat(closed, {
-      startup: true,
-      awaitHistory: true,
-      deferBranches: true,
-    });
+    const loading = refreshPageChat(closed, startupOptions);
     retireChatMetadataRequests(closed);
     closed.connected = false;
     metadata.resolve({ commands: [], models: [ready] });
@@ -569,98 +552,86 @@ describe("refreshChat", () => {
     host.sessions.dispose();
   });
 
-  it.each([
-    {
-      name: "drains a restored queue after history proves the selected session is idle",
-      history: () => idleChatHistory("agent:main:dashboard"),
-      overrides: { sessionKey: "agent:main:dashboard" },
-      message: "after reload",
-      expectedSend: { sessionKey: "agent:main:dashboard", message: "after reload" },
-    },
-    {
-      name: "drains a restored queue from history metadata when rows are scoped elsewhere",
-      history: () => idleChatHistory("agent:work:dashboard"),
-      overrides: {
-        sessionKey: "agent:work:dashboard",
-        sessionsResult: createSessionsResult([
-          row("agent:main:main", { hasActiveRun: false, status: "done" }),
-        ]),
-        sessionsResultAgentId: "main",
-      },
-      message: "after scoped reload",
-      expectedSend: { sessionKey: "agent:work:dashboard", message: "after scoped reload" },
-    },
-    {
-      name: "drains a restored queue when global history answers an agent main alias",
-      history: {
-        messages: [],
-        sessionInfo: row("global", {
-          kind: "global",
-          sessionId: "work-current",
-          hasActiveRun: false,
-          status: "done",
+  it.each(["selected session", "other-agent rows", "global alias"] as const)(
+    "drains a restored queue from history for %s",
+    async (scenario) => {
+      const scoped = scenario !== "selected session";
+      const global = scenario === "global alias";
+      const sessionKey = global
+        ? "agent:work:main"
+        : scoped
+          ? "agent:work:dashboard"
+          : "agent:main:dashboard";
+      const message = "after reload";
+      const primarySessions = createSessionsResult([
+        row("agent:main:main", { hasActiveRun: false, status: "done" }),
+      ]);
+      const expectedSend = {
+        sessionKey: global ? "global" : sessionKey,
+        message,
+        ...(global ? { agentId: "work" } : {}),
+      };
+      const sendRequested = createDeferred();
+      const host = makeChatHost({
+        sessionKey,
+        ...(scoped ? { sessionsResult: primarySessions, sessionsResultAgentId: "main" } : {}),
+        ...(global
+          ? { agentsList: { defaultId: "main", mainKey: "main", scope: "global" as const } }
+          : {}),
+        requestHandlers: {
+          "chat.history": global
+            ? {
+                messages: [],
+                sessionInfo: row("global", {
+                  kind: "global",
+                  sessionId: "work-current",
+                  hasActiveRun: false,
+                  status: "done",
+                  modelProvider: "openai",
+                  totalTokens: 90_000,
+                  contextTokens: 300_000,
+                }),
+              }
+            : () => idleChatHistory(sessionKey),
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "restored send payload");
+            sendRequested.resolve();
+            return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
+          },
+        },
+        chatQueue: [queuedMessage("queued-1", message, {})],
+      });
+      if (scoped) {
+        for (const session of primarySessions.sessions) {
+          host.sessions.reconcile(session, primarySessions.defaults, { resultAgentId: "main" });
+        }
+      }
+      const primaryResult = host.sessions.state.result;
+      admitHostQueueItems(host);
+
+      await refreshPageChat(asChatPageHost(host), { scheduleScroll: false });
+      await sendRequested.promise;
+      await resumeStoredChatOutboxes(host);
+      expectRpc(host.request, "chat.send", expect.objectContaining(expectedSend));
+      expect(host.chatQueue).toEqual([]);
+
+      if (expectedSend.sessionKey === "global") {
+        expect(host.sessions.state.result).toBe(primaryResult);
+        expect(host.sessions.state.agentId).toBe("main");
+        expect(host.sessionsResultAgentId).toBe("work");
+        expect(selectedChatSessionRow(asChatPageHost(host))).toMatchObject({
+          key: "global",
           modelProvider: "openai",
           totalTokens: 90_000,
           contextTokens: 300_000,
-        }),
-      },
-      overrides: {
-        sessionKey: "agent:work:main",
-        agentsList: { defaultId: "main", mainKey: "main", scope: "global" as const },
-        sessionsResult: createSessionsResult([
-          row("agent:main:main", { hasActiveRun: false, status: "done" }),
-        ]),
-        sessionsResultAgentId: "main",
-      },
-      message: "after global alias reload",
-      expectedSend: { sessionKey: "global", agentId: "work", message: "after global alias reload" },
-    },
-  ])("$name", async ({ history, overrides, message, expectedSend }) => {
-    const sendRequested = createDeferred();
-    const host = makeChatHost({
-      ...overrides,
-      requestHandlers: {
-        "chat.history": history,
-        "chat.send": (params: unknown) => {
-          const payload = requireRecord(params, "restored send payload");
-          sendRequested.resolve();
-          return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
-        },
-      },
-      chatQueue: [queuedMessage("queued-1", message, {})],
-    });
-    if (overrides.sessionsResultAgentId) {
-      for (const session of overrides.sessionsResult.sessions) {
-        host.sessions.reconcile(session, overrides.sessionsResult.defaults, {
-          resultAgentId: overrides.sessionsResultAgentId,
+          hasActiveRun: false,
+          status: "done",
         });
+      } else {
+        expect(host.sessionsResult).toBe(host.sessions.state.result);
       }
-    }
-    const primaryResult = host.sessions.state.result;
-    admitHostQueueItems(host);
-
-    await refreshPageChat(asChatPageHost(host), { scheduleScroll: false });
-    await sendRequested.promise;
-    await resumeStoredChatOutboxes(host);
-    expectRpc(host.request, "chat.send", expect.objectContaining(expectedSend));
-    expect(host.chatQueue).toEqual([]);
-
-    if (expectedSend.sessionKey === "global") {
-      expect(host.sessions.state.result).toBe(primaryResult);
-      expect(host.sessions.state.agentId).toBe("main");
-      expect(host.sessionsResultAgentId).toBe("work");
-      expect(selectedChatSessionRow(asChatPageHost(host))).toMatchObject({
-        key: "global",
-        modelProvider: "openai",
-        totalTokens: 90_000,
-        contextTokens: 300_000,
-        hasActiveRun: false,
-        status: "done",
-      });
-    } else {
-      expect(host.sessionsResult).toBe(host.sessions.state.result);
-    }
-  });
+    },
+  );
 
   it("keeps a timed-out startup settled through an outbox wake until explicit history retry", async () => {
     vi.useFakeTimers();
@@ -1542,7 +1513,7 @@ describe("handleSendChat", () => {
   it("keeps slash-command model changes in the canonical row", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn<typeof fetch>().mockResolvedValue(createJsonResponse({}, { ok: false })),
+      vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 500 })),
     );
 
     const host = makeChatHost({
@@ -1875,13 +1846,13 @@ describe("handleSendChat", () => {
       requestHandlers: {
         "chat.history": (params: unknown) => {
           const payload = requireRecord(params, "chat.history payload");
-          return Promise.resolve({
+          return {
             messages: [],
             sessionInfo: row(String(payload.sessionKey), {
               hasActiveRun: false,
               status: "done",
             }),
-          });
+          };
         },
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "chat.send payload");
@@ -1889,7 +1860,7 @@ describe("handleSendChat", () => {
           sentSessions.push(sessionKey);
           return sessionKey === visibleSessionKey
             ? visibleAck.promise
-            : Promise.resolve({ runId: payload.idempotencyKey, status: "started", messageSeq: 1 });
+            : { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
         },
       },
       sessionKey: visibleSessionKey,
@@ -2199,20 +2170,18 @@ describe("handleSendChat", () => {
     admitItem(host, selected, selected.sessionKey, selected.agentId);
     admitItem(host, defaultAgent, defaultAgent.sessionKey, defaultAgent.agentId);
 
-    expect(
-      handlePageGatewayEvent(asChatPageHost(host), {
-        event: "chat",
-        payload: {
-          state: "final",
-          runId,
-          sessionKey: "global",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "default agent reply" }],
-          },
+    handlePageGatewayEvent(asChatPageHost(host), {
+      event: "chat",
+      payload: {
+        state: "final",
+        runId,
+        sessionKey: "global",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "default agent reply" }],
         },
-      } as Parameters<typeof handlePageGatewayEvent>[1]),
-    ).toBeUndefined();
+      },
+    } as Parameters<typeof handlePageGatewayEvent>[1]);
 
     expect(host.chatMessages).toStrictEqual([]);
     expectItems(host.chatQueue, { id: selected.id });
@@ -2291,9 +2260,9 @@ describe("handleSendChat", () => {
       },
     } as Parameters<typeof handlePageGatewayEvent>[1];
 
-    expect(handlePageGatewayEvent(asChatPageHost(inactive), event)).toBeUndefined();
-    expect(handlePageGatewayEvent(asChatPageHost(visible), event)).toBeUndefined();
-    expect(handlePageGatewayEvent(asChatPageHost(inactive), event)).toBeUndefined();
+    handlePageGatewayEvent(asChatPageHost(inactive), event);
+    handlePageGatewayEvent(asChatPageHost(visible), event);
+    handlePageGatewayEvent(asChatPageHost(inactive), event);
 
     expect(
       visible.chatMessages.map((message) => requireRecord(message, "terminal transcript").role),
@@ -3154,33 +3123,16 @@ describe("handleSendChat", () => {
   );
 
   it.each([
-    {
-      state: "waiting-reconnect",
-      sessionKey: "agent:main:main",
-      message: "retry the oversized turn",
-      error: "gateway closed (1006): network lost",
-    },
-    {
-      state: "waiting-reconnect",
-      sessionKey: "main",
-      message: "retry the oversized turn",
-      error: "gateway closed (1006): network lost",
-    },
-    {
-      state: "waiting-reconnect",
-      sessionKey: "global",
-      message: "retry the oversized turn",
-      error: "gateway closed (1006): network lost",
-    },
-    {
-      state: "failed",
-      sessionKey: "agent:main",
-      message: "retry after definite failure",
-      error: "send rejected",
-    },
-  ])(
-    "retries a $state volatile send from $sessionKey with the appropriate run identity",
-    async ({ state, sessionKey, message, error }) => {
+    ["waiting-reconnect", "agent:main:main"],
+    ["waiting-reconnect", "main"],
+    ["waiting-reconnect", "global"],
+    ["failed", "agent:main"],
+  ] as const)(
+    "retries a %s volatile send from %s with the appropriate run identity",
+    async (state, sessionKey) => {
+      const message =
+        state === "failed" ? "retry after definite failure" : "retry the oversized turn";
+      const error = state === "failed" ? "send rejected" : "gateway closed (1006): network lost";
       installQuotaExceededStorage();
       const firstAttempt = createDeferred<unknown>();
       const runIds: unknown[] = [];
@@ -3353,10 +3305,9 @@ describe("handleSendChat", () => {
 
     const host = makeChatHost({
       requestHandlers: {
-        "chat.history": () =>
-          Promise.resolve({
-            sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-          }),
+        "chat.history": () => ({
+          sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+        }),
       },
       connected: true,
       chatQueue: [
