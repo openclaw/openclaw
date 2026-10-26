@@ -10,6 +10,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
@@ -349,7 +350,10 @@ function formatJsonOrText<T>(
   json: boolean | undefined,
   render: (result: T) => string,
 ): string {
-  return json ? JSON.stringify(result, null, 2) : render(result);
+  // Preserve report layout while sanitizing file-derived text at the CLI boundary.
+  return json
+    ? JSON.stringify(result, null, 2)
+    : render(result).split("\n").map(sanitizeTerminalText).join("\n");
 }
 
 function formatGatewayJsonOrText<T>(
@@ -835,10 +839,10 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     const run = async (value: string | undefined, opts: WikiJsonOptions) => {
       const { config } = requireCommandContext();
       assertOfficialObsidianCliSupported(config);
-      printWikiResult(
-        await runObsidianAction({ config, action, value }),
-        opts.json,
-        (result) => result.stdout.trim() || action.success,
+      const result = await runObsidianAction({ config, action, value });
+      // External command stdout is raw output, rather than a Wiki report.
+      writeOutput(
+        opts.json ? JSON.stringify(result, null, 2) : result.stdout.trim() || action.success,
       );
     };
     if (action.argument) {
