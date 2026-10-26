@@ -647,7 +647,8 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
 });
 
 it("admits tool appends once per transaction boundary without transferring replica state", async () => {
-  await withActor(async ({ actor, admissions }) => {
+  await withActor(async ({ actor, admissions, seedTransferEntry }) => {
+    seedTransferEntry(32 * 1024);
     const initial = await actor.read(authority);
     const append = messageAppend(actor, initial.entry!.sessionId, {
       role: "toolResult",
@@ -665,18 +666,10 @@ it("admits tool appends once per transaction boundary without transferring repli
     expect(result.kind).toBe("committed");
     expect(admissions.map(({ stage }) => stage)).toEqual(["transaction", "commit"]);
     for (const request of admissions) {
-      expect(request.facts).toMatchObject({
-        publication: {
-          snapshot: { target: actor.target, entry: { sessionId: initial.entry!.sessionId } },
-        },
-      });
       const facts = isRecord(request.facts) ? request.facts.publication : undefined;
       assert(isRecord(facts) && isRecord(facts.snapshot));
-      expect(
-        serialize(facts.snapshot).byteLength -
-          serialize(facts.snapshot.target).byteLength -
-          serialize(facts.snapshot.entry).byteLength,
-      ).toBeLessThan(32);
+      expect(facts.snapshot.target).toEqual(actor.target);
+      expect(serialize(facts.snapshot).byteLength).toBeLessThan(1024);
     }
     const committed = actor.snapshot(authority)!;
     expect(committed.transcript.version.rawSeq).toBeGreaterThan(

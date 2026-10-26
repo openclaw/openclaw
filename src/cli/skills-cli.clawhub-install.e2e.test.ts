@@ -3,9 +3,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, expect, it } from "vitest";
+import { readRequestText as readRequestBody } from "../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
-import { readRequestBody, spawnOpenClaw } from "./clawhub-install.test-support.js";
+import { spawnOpenClaw } from "./clawhub-install.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 function reply(res: ServerResponse, body: unknown, type = "application/json", status = 200) {

@@ -11,9 +11,8 @@ import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { createPluginRegistry } from "../plugins/registry.js";
+import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
@@ -289,11 +288,7 @@ describe("gateway/node-command-policy", () => {
   });
 
   it("preserves registered node command order, opt-in policy, and registry replacement", () => {
-    const builder = createPluginRegistry({
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-      runtime: {} as PluginRuntime,
-      activateGlobalSideEffects: false,
-    });
+    const builder = createTestPluginRegistry();
     const record = createPluginRecord({
       id: "remote",
       source: "/plugins/remote/index.ts",

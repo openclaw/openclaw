@@ -165,7 +165,7 @@ pgrep -fl 'facetime-audio-capture|caffeinate -d -i -w' || true
 
 echo
 echo "Place the configured owner-handle FaceTime call from the iPhone now."
-echo "Select OpenClaw-Mic as the FaceTime or Phone microphone if the app has not retained it."
+echo "Select OpenClaw-Mic as the FaceTime microphone if the app has not retained it."
 echo "This script will wait up to ${wait_seconds}s for a paired-device realtime session."
 deadline=$((SECONDS + wait_seconds))
 call_seen=false

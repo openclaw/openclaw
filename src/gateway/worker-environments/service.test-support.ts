@@ -47,6 +47,7 @@ import {
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
 import {
   createWorkerEnvironmentStore,
+  type WorkerEnvironmentRecord,
   type WorkerEnvironmentStore,
   type WorkerEnvironmentTransitionPatch,
 } from "./store.js";
@@ -230,45 +231,7 @@ export async function reopenWorkerEnvironmentStore() {
 
 export function createService(
   provider: WorkerProvider,
-  serviceOptions: Partial<
-    Pick<
-      WorkerEnvironmentServiceOptions,
-      | "applyTranscriptCommit"
-      | "bootstrapCallTimeoutMs"
-      | "executeInference"
-      | "inferenceStore"
-      | "closeNodeBootstrapArtifacts"
-      | "createGatewayTools"
-      | "executeComputer"
-      | "closeEnvironmentComputers"
-      | "providerCallTimeoutMs"
-      | "projectNamespace"
-      | "resolveSshIdentity"
-      | "ensureNodeWorkerBundle"
-      | "registerPreparedWorkspace"
-      | "prepareNodeBootstrap"
-      | "prepareNodeArtifacts"
-      | "prepareNodeRuntime"
-      | "closeNodeRuntime"
-      | "prepareNodeEnrollment"
-      | "closeNodeEnrollment"
-      | "retireNodeEnrollment"
-      | "stopNodeEnrollmentWaits"
-      | "tunnelManager"
-      | "generateWorkerCredential"
-      | "liveEvents"
-      | "maintainProviders"
-      | "scheduler"
-      | "logger"
-      | "now"
-      | "nodeTunnelManager"
-      | "nodeDesktopCarrier"
-      | "nodePortalCarrier"
-      | "placementStore"
-      | "workerCredentialTtlMs"
-      | "resolveGatewayContext"
-    >
-  > = {},
+  serviceOptions: Partial<WorkerEnvironmentServiceOptions> = {},
 ) {
   const { executeInference, ...options } = serviceOptions;
   vi.spyOn(inferenceManager, "executeWorkerInference").mockImplementation(
@@ -330,11 +293,23 @@ export async function seedBootstrapping(
     ...(install ? { install } : {}),
     settings: { region: "test" },
   });
+  return advance(provisioning, "bootstrapping", {
+    leaseId: `lease:${environmentId}`,
+    sshEndpoint: SSH_ENDPOINT,
+    sharedHost,
+  });
+}
+
+function advance(
+  record: Pick<WorkerEnvironmentRecord, "environmentId" | "state">,
+  to: Parameters<WorkerEnvironmentStore["transition"]>[0]["to"],
+  patch?: WorkerEnvironmentTransitionPatch,
+) {
   return testState.store.transition({
-    environmentId,
-    from: provisioning.state,
-    to: "bootstrapping",
-    patch: { leaseId: `lease:${environmentId}`, sshEndpoint: SSH_ENDPOINT, sharedHost },
+    environmentId: record.environmentId,
+    from: record.state,
+    to,
+    patch,
   });
 }
 
@@ -349,11 +324,7 @@ async function seedProvisioning(
     profileSnapshot,
     provisionOperationId: `provision:${environmentId}`,
   });
-  return testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
-  });
+  return advance(intent, "provisioning");
 }
 
 export async function seedReady(
@@ -362,12 +333,7 @@ export async function seedReady(
   sharedHost = false,
 ) {
   const bootstrapping = await seedBootstrapping(environmentId, install, sharedHost);
-  return testState.store.transition({
-    environmentId,
-    from: bootstrapping.state,
-    to: "ready",
-    patch: readyPatch(environmentId),
-  });
+  return advance(bootstrapping, "ready", readyPatch(environmentId));
 }
 
 export async function seedReadyDesktop(
@@ -377,22 +343,12 @@ export async function seedReadyDesktop(
   const provisioning = await seedProvisioning(environmentId, {
     settings: { region: "test", desktop: true },
   });
-  const bootstrapping = await testState.store.transition({
-    environmentId,
-    from: provisioning.state,
-    to: "bootstrapping",
-    patch: {
-      leaseId: `lease:${environmentId}`,
-      sshEndpoint: SSH_ENDPOINT,
-      desktop,
-    },
+  const bootstrapping = await advance(provisioning, "bootstrapping", {
+    leaseId: `lease:${environmentId}`,
+    sshEndpoint: SSH_ENDPOINT,
+    desktop,
   });
-  return testState.store.transition({
-    environmentId,
-    from: bootstrapping.state,
-    to: "ready",
-    patch: readyPatch(environmentId),
-  });
+  return advance(bootstrapping, "ready", readyPatch(environmentId));
 }
 
 export async function seedReadyNodeDesktop(
@@ -402,17 +358,12 @@ export async function seedReadyNodeDesktop(
   const provisioning = await seedProvisioning(environmentId, {
     settings: { region: "test", desktop: true },
   });
-  return testState.store.transition({
-    environmentId,
-    from: provisioning.state,
-    to: "ready",
-    patch: {
-      leaseId: `lease:${environmentId}`,
-      nodeDeviceId: `node:${environmentId}`,
-      sshEndpoint: null,
-      desktop,
-      ...readyPatch(environmentId),
-    },
+  return advance(provisioning, "ready", {
+    leaseId: `lease:${environmentId}`,
+    nodeDeviceId: `node:${environmentId}`,
+    sshEndpoint: null,
+    desktop,
+    ...readyPatch(environmentId),
   });
 }
 
@@ -460,12 +411,7 @@ export async function seedAttachedIdentity(
   sessionId: string,
 ): Promise<WorkerConnectionIdentity> {
   const ready = await seedReady(environmentId);
-  const attached = await testState.store.transition({
-    environmentId,
-    from: ready.state,
-    to: "attached",
-    patch: attachedPatch(environmentId, sessionId),
-  });
+  const attached = await advance(ready, "attached", attachedPatch(environmentId, sessionId));
   const credential = testState.store.getCredential(environmentId);
   if (!credential || !attached.bootstrapReceipt) {
     throw new Error("attached worker fixture is incomplete");

@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import type { CDPSession } from "playwright";
+import type { CDPSession, ElementHandle } from "playwright";
 import {
   TALK_READY_HISTORY_MESSAGE,
   waitForTalkReady,
@@ -44,6 +44,8 @@ const { values } = parseArgs({
     viewport: { type: "string", default: "both" },
     "cpu-throttle": { type: "string", default: "1,4" },
     states: { type: "string", default: "listening,speaking,transcribing,idle,hidden" },
+    "external-transcripts": { type: "boolean", default: false },
+    "expect-hidden-parked": { type: "boolean", default: false },
     aa: { type: "boolean", default: false },
     sample: { type: "boolean", default: false },
     trace: { type: "boolean", default: false },
@@ -58,6 +60,7 @@ const pairs = values.sample ? 1 : Number(values.pairs);
 const durationMs = values.sample ? 1000 : Number(values["duration-ms"]);
 const cpuRates = values["cpu-throttle"].split(",").map(Number);
 const states = values.states.split(",") as TalkBenchState[];
+const transcriptPeriodMs = 50;
 const compareCss = values["compare-css-file"]
   ? await readFile(values["compare-css-file"], "utf8")
   : undefined;
@@ -68,16 +71,25 @@ if (
   durationMs < 1000 ||
   cpuRates.some((rate) => !Number.isFinite(rate) || rate < 1) ||
   states.some(
-    (state) => !["listening", "speaking", "transcribing", "idle", "hidden"].includes(state),
+    (state) =>
+      !["listening", "speaking", "transcribing", "idle", "hidden", "hidden-transcribing"].includes(
+        state,
+      ),
   ) ||
   !["desktop", "mobile", "both"].includes(values.viewport)
 ) {
   throw new Error("Invalid benchmark selection");
 }
-if (values.frames && states.some((state) => state === "hidden" || state === "idle")) {
+if (
+  values.frames &&
+  states.some((state) => state === "hidden" || state === "hidden-transcribing" || state === "idle")
+) {
   throw new Error(
     "--frames adds animation wakeups: select active states only for a separate diagnostic pass",
   );
+}
+if (values["expect-hidden-parked"] && !states.includes("hidden-transcribing")) {
+  throw new Error("--expect-hidden-parked requires hidden-transcribing");
 }
 const artifactDir = createControlUiE2eArtifactDir("talk", values.output);
 const viewports = [
@@ -89,6 +101,7 @@ const slots: Array<{
   buildId: string;
   version: string;
   indexSha256: string;
+  assetHashes: Record<string, string>;
   directory?: string;
   close?: () => Promise<void>;
 }> = [];
@@ -271,6 +284,7 @@ try {
       url,
       ...build,
       indexSha256: createHash("sha256").update(html).digest("hex"),
+      assetHashes: {},
       close,
     });
   }
@@ -279,18 +293,32 @@ try {
   }
   const manifest = {
     revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-    slots: slots.map(({ url, buildId, version, indexSha256, directory }) => ({
+    sourceHashes: {
+      runner: createHash("sha256")
+        .update(await readFile(new URL(import.meta.url)))
+        .digest("hex"),
+      fixture: createHash("sha256")
+        .update(await readFile(new URL("./lib/control-ui-talk-fixture.ts", import.meta.url)))
+        .digest("hex"),
+    },
+    slots: slots.map(({ url, buildId, version, indexSha256, directory, assetHashes }) => ({
       url,
       buildId,
       version,
       indexSha256,
       directory,
+      assetHashes,
     })),
     pairs,
     durationMs,
     viewports,
     cpuRates,
     states,
+    externalTranscripts: values["external-transcripts"],
+    transcriptPeriodMs,
+    expectHiddenParked: values["expect-hidden-parked"],
+    assetHashContract:
+      "Hashes of server files (or Node-fetched assets) matched to observed browser resource URLs; not browser-response byte attestation.",
     mode: values.trace || values.counters || values.frames ? "diagnostic" : "thread-cpu-comparison",
     instrumentation: {
       trace: values.trace,
@@ -300,16 +328,16 @@ try {
     },
     compareCss,
     contract:
-      "Production renderer; native oscillator microphone and native audio-element playback; synthetic WebRTC/provider events. No real-provider, network, hardware microphone, end-to-end audio latency, or battery-life claim. Playback latency measures the local native play() promise, not network round-trip. Transcript latency is provider-event dispatch to DOM observation, not INP. Idle means a connected Talk session without audio/transcript work; hidden means a connected listening session in an actually hidden document. Speaking means input/playback with 0.8Hz amplitude modulation, silenced at the audio element. Frame probe adds its own RAF loop, so run separately. All timers/animations retain native clocks.",
+      "Production renderer; native oscillator microphone and native audio-element playback; synthetic WebRTC/provider events. No real-provider, network, hardware microphone, end-to-end audio latency, or battery-life claim. Playback latency measures the local native play() promise, not network round-trip. Transcript latency is provider-event dispatch to DOM observation, not INP. Idle means a connected Talk session without audio/transcript work; hidden means a connected listening session in an actually hidden document. Hidden-transcribing delivers provider chunks from Node at 20Hz and verifies complete catchup and retained row identity after reveal. External transcript CPU windows omit per-chunk DOM observation unless --counters is enabled; endpoint scans run after metrics. Speaking means input/playback with 0.8Hz amplitude modulation, silenced at the audio element. Frame probe adds its own RAF loop, so run separately. All timers/animations retain native clocks.",
     acceptance:
       "At least 10 interleaved pairs; aim for 40% active CPU reduction and near-zero idle/hidden renderer work. A clean >=5% CPU win may land; per-cell timing median regression <=5% with no p95 increase (or 20-pair confirmation). A/A identifies shared-host wall-time noise; never claim network/provider latency from this fixture.",
   };
   await writeFile(path.join(artifactDir, "manifest.json"), JSON.stringify(manifest, null, 2));
   const comparisons = [...(slots.length === 2 ? ["AB"] : ["A"]), ...(values.aa ? ["AA"] : [])];
-  for (const comparison of comparisons) {
-    for (const viewport of viewports) {
-      for (const cpuRate of cpuRates) {
-        for (let pair = 0; pair < pairs; pair++) {
+  for (const viewport of viewports) {
+    for (const cpuRate of cpuRates) {
+      for (let pair = 0; pair < pairs; pair++) {
+        for (const comparison of comparisons) {
           // Reverse alternate pairs to remove consistently first/second browser bias.
           const sides = comparison === "A" ? [0] : pair % 2 ? [1, 0] : [0, 1];
           for (const side of sides) {
@@ -412,12 +440,36 @@ try {
                 await page.addStyleTag({ content: compareCss });
               }
               await page.waitForLoadState("networkidle");
+              const assetBase = new URL("assets/", slot.url).href;
+              const loadedAssets = await page.evaluate(() =>
+                performance.getEntriesByType("resource").map((entry) => entry.name),
+              );
+              for (const asset of new Set(loadedAssets)) {
+                if (!asset.startsWith(assetBase) || !new URL(asset).pathname.endsWith(".js")) {
+                  continue;
+                }
+                const name = new URL(asset).pathname.slice(new URL(assetBase).pathname.length);
+                if (!(name in slot.assetHashes)) {
+                  const content = slot.directory
+                    ? await readFile(path.join(slot.directory, "assets", name))
+                    : new Uint8Array(await (await fetch(asset)).arrayBuffer());
+                  slot.assetHashes[name] = createHash("sha256").update(content).digest("hex");
+                }
+              }
+              await writeFile(
+                path.join(artifactDir, "manifest.json"),
+                JSON.stringify(manifest, null, 2),
+              );
               // Retire startup paint/audio-service setup before the first measured state.
               await new Promise((resolve) => {
                 setTimeout(resolve, 1000);
               });
               await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
               for (const state of states) {
+                const hidden = state === "hidden" || state === "hidden-transcribing";
+                const externalTranscripts =
+                  state === "hidden-transcribing" ||
+                  (state === "transcribing" && values["external-transcripts"]);
                 const prefix = path.join(artifactDir, `${browserPrefix}-${state}`);
                 const row: Sample = {
                   comparison,
@@ -432,12 +484,44 @@ try {
                 };
                 results.push(row);
                 let windowId: number | undefined;
+                let transcriptRow: ElementHandle<HTMLElement | SVGElement> | null = null;
                 try {
-                  await page.evaluate((phase) => window.openclawTalkBench.setState(phase), state);
+                  await page.evaluate(
+                    ({ phase, externalTranscripts: external }) =>
+                      window.openclawTalkBench.setState(phase, external),
+                    { phase: state, externalTranscripts },
+                  );
+                  if (externalTranscripts) {
+                    // Establish a row before hiding so reveal also proves identity retention.
+                    const seed = await page.evaluate(() =>
+                      window.openclawTalkBench.deliverTranscriptChunk(false),
+                    );
+                    await page.waitForFunction(
+                      (token) =>
+                        [...document.querySelectorAll(".agent-chat__voice-turn-text")].some(
+                          (element) => element.textContent?.includes(token),
+                        ),
+                      seed,
+                      { polling: 50 },
+                    );
+                    transcriptRow = await page
+                      .locator(".agent-chat__voice-turn")
+                      .last()
+                      .elementHandle();
+                    await page.mouse.move(1, 1);
+                    await page
+                      .getByRole("button", { name: "Stop voice input", exact: true })
+                      .evaluate((element) => {
+                        if (element === document.activeElement && element instanceof HTMLElement) {
+                          element.blur();
+                        }
+                      });
+                    await page.locator("openclaw-tooltip[open]").waitFor({ state: "detached" });
+                  }
                   await new Promise((resolve) => {
                     setTimeout(resolve, 350);
                   });
-                  if (state !== "transcribing") {
+                  if (state !== "transcribing" && state !== "hidden-transcribing") {
                     await page
                       .locator(".agent-chat__voice-turn-stream")
                       .waitFor({ state: "detached" });
@@ -450,17 +534,17 @@ try {
                           ?.getAttribute("data-level") === "0",
                     );
                   }
-                  if (state === "hidden") {
+                  if (hidden) {
                     ({ windowId } = await cdp.send("Browser.getWindowForTarget"));
                     await cdp.send("Browser.setWindowBounds", {
                       windowId,
                       bounds: { windowState: "minimized" },
                     });
-                    await page.waitForFunction(() => document.hidden);
+                    await page.waitForFunction(() => document.hidden, undefined, { polling: 50 });
                   } else {
-                    await page.waitForFunction(() => !document.hidden);
+                    await page.waitForFunction(() => !document.hidden, undefined, { polling: 50 });
                   }
-                  if (values["first-pair-screenshots"] && pair === 0 && state !== "hidden") {
+                  if (values["first-pair-screenshots"] && pair === 0 && !hidden) {
                     await page.screenshot({ path: `${prefix}.png` });
                   }
                   events.length = 0;
@@ -477,15 +561,40 @@ try {
                     await page.evaluate(() => performance.mark("openclaw-talk-sample"));
                   }
                   await page.evaluate(
-                    (frames) => window.openclawTalkBench.start(frames),
-                    values.frames,
+                    ({ frames, observeTranscripts, observeTooltips }) =>
+                      window.openclawTalkBench.start(frames, observeTranscripts, observeTooltips),
+                    {
+                      frames: values.frames,
+                      observeTranscripts: !externalTranscripts || values.counters,
+                      observeTooltips: externalTranscripts,
+                    },
                   );
                   const beforeProcesses = await processes(browserCdp);
                   const beforeWakeups = wakeups(beforeProcesses);
                   const before = await metrics(cdp);
                   const start = performance.now();
+                  let offeredChunks = 0;
+                  const offeredAt: number[] = [];
+                  if (externalTranscripts) {
+                    const plannedChunks = Math.floor(durationMs / transcriptPeriodMs);
+                    for (let index = 0; index < plannedChunks; index++) {
+                      await new Promise((resolve) => {
+                        setTimeout(
+                          resolve,
+                          Math.max(0, start + index * transcriptPeriodMs - performance.now()),
+                        );
+                      });
+                      offeredAt.push(performance.now() - start);
+                      await page.evaluate(
+                        (expectedHidden) =>
+                          window.openclawTalkBench.deliverTranscriptChunk(expectedHidden),
+                        hidden,
+                      );
+                      offeredChunks++;
+                    }
+                  }
                   await new Promise((resolve) => {
-                    setTimeout(resolve, durationMs);
+                    setTimeout(resolve, Math.max(0, start + durationMs - performance.now()));
                   });
                   const after = await metrics(cdp);
                   const wallMs = performance.now() - start;
@@ -495,8 +604,12 @@ try {
                     startUs: before.Timestamp! * 1000000,
                     endUs: after.Timestamp! * 1000000,
                   };
-                  const proof = await page.evaluate(() => {
+                  const proof = await page.evaluate((readExternalTranscript) => {
                     const snapshot = window.openclawTalkBench;
+                    if (readExternalTranscript) {
+                      // CPU timing ended above; this observation must not tax each hidden chunk.
+                      snapshot.readTranscriptDom();
+                    }
                     snapshot.stop();
                     const {
                       analyserReads,
@@ -506,6 +619,11 @@ try {
                       timeoutCallbacks,
                       animationCallbacks,
                       transcriptChunks,
+                      transcriptDomMutations,
+                      transcriptPendingChunks,
+                      tooltipOpenAtStart,
+                      tooltipOpenAtEnd,
+                      tooltipChanges,
                       transcriptLatenciesMs,
                       frameTimes,
                     } = snapshot;
@@ -517,11 +635,17 @@ try {
                       timeoutCallbacks,
                       animationCallbacks,
                       transcriptChunks,
+                      transcriptDomMutations,
+                      transcriptPendingChunks,
+                      tooltipOpenAtStart,
+                      tooltipOpenAtEnd,
+                      tooltipChanges,
+                      transcriptObservedChunks: transcriptChunks - transcriptPendingChunks,
                       transcriptLatenciesMs,
                       frameTimes,
                     };
                     return { ...counts, visibility: document.visibilityState };
-                  });
+                  }, externalTranscripts);
                   if (tracing) {
                     const { profile } = await cdp.send("Profiler.stop");
                     await writeFile(`${prefix}.cpu-profile.json`, JSON.stringify(profile));
@@ -602,7 +726,18 @@ try {
                     rendererCpuMs,
                     heapDeltaBytes: after.JSHeapUsedSize! - before.JSHeapUsedSize!,
                     proof,
-                    transcriptDomLatency: distribution(proof.transcriptLatenciesMs),
+                    transcriptDelivery: externalTranscripts
+                      ? {
+                          offeredChunks,
+                          periodMs: transcriptPeriodMs,
+                          offeredAt,
+                          actualRateHz: offeredChunks / (wallMs / 1000),
+                        }
+                      : undefined,
+                    transcriptDomLatency:
+                      !externalTranscripts || values.counters
+                        ? distribution(proof.transcriptLatenciesMs)
+                        : undefined,
                     frameGapsMs: distribution(frameGaps),
                     fps: frameGaps.length
                       ? 1000 / (frameGaps.reduce((a, b) => a + b, 0) / frameGaps.length)
@@ -626,6 +761,100 @@ try {
                   if (errors.length) {
                     throw new Error(`Page errors: ${errors.join("; ")}`);
                   }
+                  if (externalTranscripts) {
+                    if (
+                      proof.tooltipOpenAtStart ||
+                      proof.tooltipOpenAtEnd ||
+                      proof.tooltipChanges
+                    ) {
+                      throw new Error(
+                        "External transcript observation did not retain neutral tooltips",
+                      );
+                    }
+                    if (
+                      proof.transcriptChunks !== offeredChunks ||
+                      proof.visibility !== (hidden ? "hidden" : "visible")
+                    ) {
+                      throw new Error(
+                        "External transcript delivery or visibility invariant failed",
+                      );
+                    }
+                    if (
+                      hidden &&
+                      values["expect-hidden-parked"] &&
+                      (comparison === "AB" ? side === 1 : slots.length === 1) &&
+                      (proof.transcriptObservedChunks !== 0 || proof.transcriptDomMutations !== 0)
+                    ) {
+                      throw new Error("Candidate rendered transcript chunks while hidden");
+                    }
+                    if (windowId !== undefined) {
+                      const beforeReveal = await metrics(cdp);
+                      const revealStartedAt = performance.now();
+                      await cdp.send("Browser.setWindowBounds", {
+                        windowId,
+                        bounds: { windowState: "normal" },
+                      });
+                      windowId = undefined;
+                      await page.waitForFunction(() => !document.hidden, undefined, {
+                        polling: 50,
+                      });
+                      await page.waitForFunction(
+                        () => {
+                          window.openclawTalkBench.readTranscriptDom();
+                          return window.openclawTalkBench.transcriptPendingChunks === 0;
+                        },
+                        undefined,
+                        { polling: 50 },
+                      );
+                      const observedAfterMs = performance.now() - revealStartedAt;
+                      await page.evaluate(
+                        () =>
+                          new Promise<void>((resolve) => {
+                            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+                          }),
+                      );
+                      const afterReveal = await metrics(cdp);
+                      const revealDelta = (name: string) =>
+                        (afterReveal[name]! - beforeReveal[name]!) * 1000;
+                      const revealCpu = {
+                        taskMs: revealDelta("TaskDuration"),
+                        scriptMs: revealDelta("ScriptDuration"),
+                        layoutMs: revealDelta("LayoutDuration"),
+                        styleMs: revealDelta("RecalcStyleDuration"),
+                      };
+                      row.reveal = {
+                        observedAfterMs,
+                        frameAfterMs: performance.now() - revealStartedAt,
+                        ...revealCpu,
+                        observedChunks: await page.evaluate(
+                          () =>
+                            window.openclawTalkBench.transcriptChunks -
+                            window.openclawTalkBench.transcriptPendingChunks,
+                        ),
+                      };
+                      row.hiddenAndReveal = {
+                        taskMs: delta("TaskDuration") + revealCpu.taskMs,
+                        scriptMs: delta("ScriptDuration") + revealCpu.scriptMs,
+                        layoutMs: delta("LayoutDuration") + revealCpu.layoutMs,
+                        styleMs: delta("RecalcStyleDuration") + revealCpu.styleMs,
+                      };
+                      if (values["first-pair-screenshots"] && pair === 0) {
+                        await page.screenshot({ path: `${prefix}.revealed.png` });
+                      }
+                    } else if (proof.transcriptPendingChunks !== 0) {
+                      throw new Error("Visible transcript did not display every offered chunk");
+                    }
+                    const rowRetained = await transcriptRow?.evaluate(
+                      (element) =>
+                        element.isConnected &&
+                        element ===
+                          [...document.querySelectorAll(".agent-chat__voice-turn")].at(-1),
+                    );
+                    if (!rowRetained) {
+                      throw new Error("Transcript streaming or reveal replaced its existing row");
+                    }
+                    row.transcriptRowRetained = true;
+                  }
                   if (state === "transcribing" && !proof.transcriptLatenciesMs.length) {
                     throw new Error("No streamed transcript reached the production DOM");
                   }
@@ -638,6 +867,7 @@ try {
                   await saveTalkFailure(page, prefix, error);
                   throw error;
                 } finally {
+                  await transcriptRow?.dispose();
                   if (windowId !== undefined) {
                     await cdp.send("Browser.setWindowBounds", {
                       windowId,

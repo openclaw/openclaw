@@ -461,8 +461,8 @@ The sealed single-file update-recovery helper uses its existing in-process hashi
 fallback so its recorded recovery artifact remains self-contained. Normal
 installations use the declared hashing workers.
 
-Browser MCP and remote repository bootstrap scripts are generated from typed
-sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:gen`;
+Browser MCP, widget keyboard shortcuts, and remote repository bootstrap scripts are
+generated from typed sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:gen`;
 `pnpm runtime:scripts:check` verifies freshness before building. The runtime does
 not need to serialize function bodies or retain loose JavaScript for these scripts.
 

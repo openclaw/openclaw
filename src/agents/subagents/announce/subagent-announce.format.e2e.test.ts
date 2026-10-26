@@ -30,6 +30,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
+import { expectText } from "../../../test-utils/text-assertions.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
 import {
@@ -72,14 +73,6 @@ type AnnounceParams = Partial<
 >;
 function session(sessionId: string, fields: SessionEntryFixture = {}): SessionEntryFixture {
   return { sessionId, ...fields };
-}
-function expectText(text: string, included: string[], excluded: string[] = []) {
-  for (const part of included) {
-    expect(text).toContain(part);
-  }
-  for (const part of excluded) {
-    expect(text).not.toContain(part);
-  }
 }
 
 function prepareTerminal(rawText: string) {

@@ -64,7 +64,6 @@ describe("FaceTime helper supervisor", () => {
     expect(run).not.toHaveBeenCalled();
     expect(supervisor.status()).toEqual([
       expect.objectContaining({ target: "FaceTime", connected: true, attempts: 0 }),
-      expect.objectContaining({ target: "Phone", connected: true, attempts: 0 }),
     ]);
   });
 

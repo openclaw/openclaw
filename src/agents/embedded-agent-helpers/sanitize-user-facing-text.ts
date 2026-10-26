@@ -416,7 +416,7 @@ export function userFacingTextFilters(
           ],
         },
     { transform: stripInboundMetadata, activationTokens: INBOUND_METADATA_MARKERS },
-    minimaxToolCallTextFilter,
+    minimaxToolCallTextFilter(streaming),
     toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }),
     {
       transform: stripInternalPlaceholderLines,

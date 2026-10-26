@@ -74,6 +74,24 @@ it("reads a pinned local file with the shared MIME policy", async () => {
   expect(await url("avatar.jpeg")).toBe(`data:image/jpeg;base64,${body.toString("base64")}`);
 });
 
+it("encodes unchanged avatars once across list clients and refreshes changed files", async () => {
+  const { prepare, url, write, file } = createWorkspace("original");
+  const first = await prepare();
+  assert(first.ok && first.file.body);
+  const encode = vi.spyOn(first.file.body, "toString");
+  for (let poll = 0; poll < 3; poll += 1) {
+    expect(await Promise.all(Array.from({ length: 4 }, () => url("avatar.png")))).toEqual(
+      Array(4).fill("data:image/png;base64,b3JpZ2luYWw="),
+    );
+  }
+  expect(encode).toHaveBeenCalledTimes(1);
+
+  fs.renameSync(write("replacement.png", "changed"), file("avatar.png"));
+  expect(await url("avatar.png")).toBe("data:image/png;base64,Y2hhbmdlZA==");
+  fs.unlinkSync(file("avatar.png"));
+  expect(await url("avatar.png")).toBeUndefined();
+});
+
 it("passes through only bounded image data URLs for agent-list projections", async () => {
   const { url } = createWorkspace();
   const prefix = "data:image/svg+xml;base64,";

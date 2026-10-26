@@ -31,3 +31,10 @@ export function observeAsyncWorkScopeRuns() {
     [Symbol.dispose]: dispose,
   };
 }
+
+export function createDeferredWorkTracker(scope: AsyncWorkScope) {
+  return <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const operation = Promise.resolve().then(() => run(scope.signal));
+    return scope.track(() => operation);
+  };
+}

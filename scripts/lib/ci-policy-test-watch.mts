@@ -703,6 +703,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   ...[
+    "src/config/sessions/session-accessor.pending-input-retention.test.ts",
     "src/config/sessions/session-accessor.pending-inputs.test.ts",
     "src/config/sessions/session-accessor.question-answer-transcript.test.ts",
   ].map((testFile): PolicyTestWatch => ({

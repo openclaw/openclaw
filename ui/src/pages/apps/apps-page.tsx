@@ -38,11 +38,11 @@ export function AppsPage(props: { appSearch?: string }) {
   );
   const launch = createMemo((previous: AppLaunch | undefined): AppLaunch => {
     const state = gateway.read();
-    const agentId = selection.read().state.selectedId ?? undefined;
+    const target = catalog.target();
     const key = JSON.stringify([
       appSearch(),
-      state.snapshot.sessionKey,
-      agentId,
+      target.sessionKey,
+      target.agentId,
       state.connectionRevision,
     ]);
     const route = appRoute();
@@ -80,8 +80,7 @@ export function AppsPage(props: { appSearch?: string }) {
       detail:
         server && entrypoint
           ? {
-              sessionKey: state.snapshot.sessionKey,
-              agentId,
+              ...target,
               owner: state.snapshot.client,
               serverName: server.serverName,
               entrypoint,

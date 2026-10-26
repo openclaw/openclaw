@@ -530,6 +530,12 @@ Internal hot-state projections also retain the actor's replace-only target,
 version, participants, and members. Read replies and committed receipt capture
 own detachment before those facts leave the worker.
 
+Actor commands retain their immutable replica preimage for admission transport.
+The worker sends a reference only after matching its authoritative write token,
+and only while the entry object remains unchanged. Cold or mismatched revisions
+and replaced entries carry the complete entry. Main resolves references within
+that command; live policy and revocation checks still run at every admission.
+
 Replica lookups resolve configured path spellings through the existing admission
 registry: SQLite uses the admitted physical identity and birthtime; PostgreSQL
 uses the admitted namespace and store ID. Symlinked and canonical paths therefore

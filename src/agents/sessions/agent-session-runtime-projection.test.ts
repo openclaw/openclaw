@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
-import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
@@ -16,9 +15,8 @@ import {
 } from "../runtime/internal-hooks.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
-  createAssistant,
-  createAssistantResultStream,
   createTestSession,
+  mockToolTurn as mockExchange,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "./agent-session-loop-correctness.test-support.js";
@@ -50,16 +48,6 @@ const result = (value: string, details: Record<string, unknown>) => ({
   content: [text(value)],
   details,
 });
-
-function mockExchange(content: AssistantMessage["content"]) {
-  streamMocks.streamSimple
-    .mockImplementationOnce((model: Model) =>
-      createAssistantResultStream(createAssistant(model, content, "toolUse")),
-    )
-    .mockImplementation((model: Model) =>
-      createAssistantResultStream(createAssistant(model, "Done.")),
-    );
-}
 
 it.for([
   { owner: "adapter", abortBeforeLaunch: false },
