@@ -111,23 +111,6 @@ function writeJson(res: ServerResponse, payload: unknown, status = 200): void {
   res.end(JSON.stringify(payload));
 }
 
-function setStreamingSessionInternals(
-  session: FeishuStreamingSession,
-  values: {
-    state: StreamingSessionState;
-    lastUpdateTime?: number;
-  },
-): void {
-  const internals = session as unknown as {
-    state: StreamingSessionState;
-    lastUpdateTime: number;
-  };
-  internals.state = values.state;
-  if (values.lastUpdateTime !== undefined) {
-    internals.lastUpdateTime = values.lastUpdateTime;
-  }
-}
-
 function createActiveSession(
   deps: StreamingFetchDeps,
   options: {
@@ -145,17 +128,19 @@ function createActiveSession(
     options.log,
     deps,
   );
-  setStreamingSessionInternals(session, {
-    state: {
-      cardId: options.cardId,
-      messageId: options.messageId,
-      sequence: 1,
-      currentText: options.text ?? "",
-      sentText: options.text ?? "",
-      hasNote: options.hasNote ?? false,
-    },
-    lastUpdateTime: options.lastUpdateTime,
-  });
+  const internals = session as unknown as {
+    state: StreamingSessionState;
+    lastUpdateTime: number;
+  };
+  internals.state = {
+    cardId: options.cardId,
+    messageId: options.messageId,
+    sequence: 1,
+    currentText: options.text ?? "",
+    sentText: options.text ?? "",
+    hasNote: options.hasNote ?? false,
+  };
+  internals.lastUpdateTime = options.lastUpdateTime ?? 0;
   return session;
 }
 
@@ -204,6 +189,32 @@ describe("FeishuStreamingSession", () => {
       }
       return jsonResponse({ code: 0, msg: "ok" }, status);
     });
+  }
+
+  function mockActiveSession(
+    options: Omit<Parameters<typeof createActiveSession>[1], "log">,
+    failures: {
+      updateIndexes?: ReadonlySet<number>;
+      updateStatuses?: ReadonlyMap<number, number>;
+      replaceStatuses?: ReadonlyMap<number, number>;
+    } = {},
+  ) {
+    const updateBodies: string[] = [];
+    const replaceBodies: string[] = [];
+    const log = vi.fn();
+    const deps = mockFetches(
+      updateBodies,
+      failures.updateIndexes,
+      replaceBodies,
+      failures.updateStatuses,
+      failures.replaceStatuses,
+    );
+    return {
+      session: createActiveSession(deps, { ...options, log }),
+      updateBodies,
+      replaceBodies,
+      log,
+    };
   }
 
   function mockStreamingTokenStart(resolveAuthJson: (token: string) => Record<string, unknown>): {
@@ -426,35 +437,39 @@ describe("FeishuStreamingSession", () => {
     expect(session.isActive()).toBe(false);
   });
 
-  it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
-    let clientClosed: Promise<void> | undefined;
-    const deps = await createStreamingFetch(({ url, res }) => {
-      if (url.pathname.includes("/auth/")) {
-        clientClosed = writeOversizedJson(
-          res,
-          FEISHU_JSON_MAX_BYTES,
-          '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
-        );
-        return;
-      }
-      writeJson(res, { code: 0, msg: "ok", data: { card_id: "card_oversized_token" } });
-    });
-
-    const session = createStreamingSession(
-      {} as never,
-      {
-        appId: "app_oversized_token",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    );
-
-    await expect(session.start("chat_id", "open_id")).rejects.toThrow(
-      /feishu\.streaming-card\.token: JSON response exceeds \d+ bytes/,
-    );
-    await expect(clientClosed).resolves.toBeUndefined();
-  });
+  it.each(["token", "create"])(
+    "rejects oversized streaming %s JSON before buffering the full body",
+    async (operation) => {
+      let clientClosed: Promise<void> | undefined;
+      const deps = await createStreamingFetch(({ url, res }) => {
+        if (url.pathname.includes("/auth/") && operation === "create") {
+          writeJson(res, createStreamingTokenPayload());
+        } else if (url.pathname.includes("/auth/") || operation === "create") {
+          clientClosed = writeOversizedJson(
+            res,
+            FEISHU_JSON_MAX_BYTES,
+            '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
+          );
+        } else {
+          writeJson(res, { code: 0, msg: "ok", data: { card_id: "card_oversized_token" } });
+        }
+      });
+      const session = createStreamingSession(
+        (operation === "token"
+          ? {}
+          : { im: { message: { create: vi.fn() } } }) as unknown as ConstructorParameters<
+          typeof FeishuStreamingSession
+        >[0],
+        { appId: `app_oversized_${operation}`, appSecret: "secret" },
+        undefined,
+        deps,
+      );
+      await expect(session.start("chat_id", "open_id")).rejects.toThrow(
+        new RegExp(`feishu\\.streaming-card\\.${operation}: JSON response exceeds \\d+ bytes`),
+      );
+      await expect(clientClosed).resolves.toBeUndefined();
+    },
+  );
 
   it("aborts a stalled Feishu tenant-token request after the configured timeout", async () => {
     vi.useFakeTimers();
@@ -518,49 +533,10 @@ describe("FeishuStreamingSession", () => {
     );
   });
 
-  it("rejects oversized streaming card-create JSON before buffering the full body", async () => {
-    let clientClosed: Promise<void> | undefined;
-    const deps = await createStreamingFetch(({ url, res }) => {
-      if (url.pathname.includes("/auth/")) {
-        writeJson(res, createStreamingTokenPayload());
-        return;
-      }
-      clientClosed = writeOversizedJson(
-        res,
-        FEISHU_JSON_MAX_BYTES,
-        '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
-      );
-    });
-
-    const session = createStreamingSession(
-      {
-        im: {
-          message: {
-            create: vi.fn(),
-          },
-        },
-      } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0],
-      {
-        appId: "app_oversized_card_create",
-        appSecret: "secret",
-      },
-      undefined,
-      deps,
-    );
-
-    await expect(session.start("chat_id", "open_id")).rejects.toThrow(
-      /feishu\.streaming-card\.create: JSON response exceeds \d+ bytes/,
-    );
-    await expect(clientClosed).resolves.toBeUndefined();
-  });
-
   it("flushes only the latest authoritative snapshot after the throttle window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const updateBodies: string[] = [];
-    const deps = mockFetches(updateBodies);
-
-    const session = createActiveSession(deps, {
+    const { session, updateBodies } = mockActiveSession({
       cardId: "card_1",
       messageId: "om_1",
       text: "visible",
@@ -626,10 +602,7 @@ describe("FeishuStreamingSession", () => {
   it("pushes natural-boundary updates immediately inside the throttle window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_000);
-    const updateBodies: string[] = [];
-    const deps = mockFetches(updateBodies);
-
-    const session = createActiveSession(deps, {
+    const { session, updateBodies } = mockActiveSession({
       cardId: "card_2",
       messageId: "om_2",
       text: "hello",
@@ -649,12 +622,9 @@ describe("FeishuStreamingSession", () => {
   it("closes with a throttled divergent latest snapshot without merging it", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_750);
-    const updateBodies: string[] = [];
-    const replaceBodies: string[] = [];
-    const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies);
     const previous = "> Thinking one\n\n---\n\nanswer";
     const next = "> Thinking two\n\n---\n\nanswer more";
-    const session = createActiveSession(deps, {
+    const { session, updateBodies, replaceBodies } = mockActiveSession({
       cardId: "card_pending_reasoning_close",
       messageId: "om_pending_reasoning_close",
       text: previous,
@@ -681,14 +651,6 @@ describe("FeishuStreamingSession", () => {
     const previous = "> Thinking one\n\n---\n\nanswer";
     const next = "> Thinking two\n\n---\n\nanswer more";
     let sentTextWhenSettingsClosed: string | undefined;
-    const state: StreamingSessionState = {
-      cardId: "card_rejected_pending_reasoning_close",
-      messageId: "om_rejected_pending_reasoning_close",
-      sequence: 1,
-      currentText: previous,
-      sentText: previous,
-      hasNote: false,
-    };
     const deps = createMemoryFetch((url, body) => {
       if (url.pathname.includes("/auth/")) {
         return jsonResponse(createStreamingTokenPayload());
@@ -699,20 +661,18 @@ describe("FeishuStreamingSession", () => {
       }
       if (url.pathname.includes("/settings")) {
         settingsBodies.push(body);
-        sentTextWhenSettingsClosed = state.sentText;
+        sentTextWhenSettingsClosed = (session as unknown as { state: StreamingSessionState }).state
+          .sentText;
       }
       return jsonResponse({ code: 0, msg: "ok" });
     });
     const log = vi.fn();
-    const session = createStreamingSession(
-      {} as never,
-      { appId: "app_rejected_pending_reasoning_close", appSecret: "secret" },
-      log,
-      deps,
-    );
-    setStreamingSessionInternals(session, {
-      state,
+    const session = createActiveSession(deps, {
+      cardId: "card_rejected_pending_reasoning_close",
+      messageId: "om_rejected_pending_reasoning_close",
+      text: previous,
       lastUpdateTime: 2_900,
+      log,
     });
 
     await session.update(next);
@@ -785,72 +745,32 @@ describe("FeishuStreamingSession", () => {
     );
   });
 
-  it("retries cumulative content after a failed streaming update", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(3_000);
-    const updateBodies: string[] = [];
-    const deps = mockFetches(updateBodies, new Set([0]));
+  it.each(["network", "http"])(
+    "retries cumulative content after a %s update failure",
+    async (kind) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(3_000);
+      const { session, updateBodies } = mockActiveSession(
+        { cardId: `card_${kind}`, messageId: `om_${kind}`, text: "hello", lastUpdateTime: 2_000 },
+        kind === "network"
+          ? { updateIndexes: new Set([0]) }
+          : { updateStatuses: new Map([[0, 429]]) },
+      );
 
-    const session = createActiveSession(deps, {
-      cardId: "card_3",
-      messageId: "om_3",
-      text: "hello",
-      lastUpdateTime: 2_000,
-    });
+      await session.update("hello world");
+      await session.update("hello world!");
 
-    await session.update("hello world");
-    await session.update("hello world!");
-
-    expect(updateBodies).toHaveLength(2);
-    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: "hello world",
-      sequence: 2,
-      uuid: "s_card_3_2",
-    });
-    expect(JSON.parse(updateBodies[1] ?? "{}")).toEqual({
-      content: "hello world!",
-      sequence: 3,
-      uuid: "s_card_3_3",
-    });
-  });
-
-  it("retries cumulative content after a non-OK streaming update", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(3_500);
-    const updateBodies: string[] = [];
-    const deps = mockFetches(updateBodies, new Set<number>(), [], new Map([[0, 429]]));
-
-    const session = createActiveSession(deps, {
-      cardId: "card_5",
-      messageId: "om_5",
-      text: "hello",
-      lastUpdateTime: 2_000,
-    });
-
-    await session.update("hello world");
-    await session.update("hello world!");
-
-    expect(updateBodies).toHaveLength(2);
-    expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
-      content: "hello world",
-      sequence: 2,
-      uuid: "s_card_5_2",
-    });
-    expect(JSON.parse(updateBodies[1] ?? "{}")).toEqual({
-      content: "hello world!",
-      sequence: 3,
-      uuid: "s_card_5_3",
-    });
-  });
+      expect(updateBodies.map((body) => JSON.parse(body))).toEqual([
+        { content: "hello world", sequence: 2, uuid: `s_card_${kind}_2` },
+        { content: "hello world!", sequence: 3, uuid: `s_card_${kind}_3` },
+      ]);
+    },
+  );
 
   it("replaces content when final text removes transient streamed status", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_000);
-    const updateBodies: string[] = [];
-    const replaceBodies: string[] = [];
-    const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies);
-
-    const session = createActiveSession(deps, {
+    const { session, updateBodies, replaceBodies } = mockActiveSession({
       cardId: "card_4",
       messageId: "om_4",
       text: "Web Search\n\nfinal answer",
@@ -883,9 +803,7 @@ describe("FeishuStreamingSession", () => {
   it("drops a surrogate pair whole when truncating the closeout summary", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_200);
-    // 46 'a' + 😀 (U+1F600, UTF-16 indices 46-47) + 20 'b' = 68-char string.
-    // truncateSummary's default max is 50, so it slices at max-3 = 47, which
-    // lands between the high and low surrogate halves of the emoji.
+    // Summary's 47-code-unit cut lands inside this emoji's surrogate pair.
     const finalText = `${"a".repeat(46)}\u{1F600}${"b".repeat(20)}`;
     const settingsBodies: string[] = [];
     const deps = await createStreamingFetch(({ url, body, res }) => {
@@ -913,108 +831,56 @@ describe("FeishuStreamingSession", () => {
       config?: { summary?: { content?: string } };
     };
     const summary = settings.config?.summary?.content ?? "";
-    // The half-emoji must be dropped whole: 46 a's + "...", and the summary
-    // must NOT end with a lone high surrogate (which Feishu renders as �).
     expect(summary).toBe(`${"a".repeat(46)}...`);
     expect(summary).not.toContain("\uD83D");
     expect(summary.charCodeAt(summary.length - 4)).not.toBe(0xd83d);
   });
 
-  it("logs a final replacement failure when CardKit returns non-OK", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(4_500);
-    const updateBodies: string[] = [];
-    const replaceBodies: string[] = [];
-    const deps = mockFetches(
-      updateBodies,
-      new Set<number>(),
-      replaceBodies,
-      new Map<number, number>(),
-      new Map([[0, 500]]),
-    );
-    const log = vi.fn();
-
-    const session = createActiveSession(deps, {
-      cardId: "card_6",
-      messageId: "om_6",
-      text: "working\n\nfinal answer",
-      lastUpdateTime: 3_000,
-      log,
-    });
-
-    await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: { visibleReplySent: true, content: "working\n\nfinal answer" },
-    });
-
-    expect(updateBodies).toHaveLength(0);
-    expect(replaceBodies).toHaveLength(1);
-    expect(log).toHaveBeenCalledWith(
-      "Final replace failed: Error: Replace card content failed with HTTP 500",
-    );
-  });
-
-  it("reports the final text as not accepted when CardKit rejects the final update after a visible preview", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(4_600);
-    const updateBodies: string[] = [];
-    const replaceBodies: string[] = [];
-    // CardKit closes streaming mode ~10 minutes after it was enabled; every later
-    // content write is rejected while the earlier preview stays visible in the chat.
-    const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies, new Map([[0, 500]]));
-    const log = vi.fn();
-
-    const session = createActiveSession(deps, {
-      cardId: "card_8",
-      messageId: "om_8",
-      text: "working",
-      lastUpdateTime: 3_000,
-      log,
-    });
-
-    await expect(session.closeWithResult("working\n\nfinal answer")).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        visibleReplySent: true,
-        content: "working",
-        messageIds: ["om_8"],
-        finalTextAccepted: false,
-      },
-    });
-
-    expect(updateBodies).toHaveLength(1);
-    expect(replaceBodies).toHaveLength(0);
-    expect(log).toHaveBeenCalledWith(
-      "Final update failed: Error: Update card content failed with HTTP 500",
-    );
-  });
-
-  it("reports no visible content when final close update fails before any accepted text", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(4_800);
-    const updateBodies: string[] = [];
-    const replaceBodies: string[] = [];
-    const deps = mockFetches(updateBodies, new Set<number>(), replaceBodies, new Map([[0, 500]]));
-    const log = vi.fn();
-
-    const session = createActiveSession(deps, {
-      cardId: "card_7",
-      messageId: "om_7",
-      lastUpdateTime: 3_000,
-      log,
-    });
-
-    const error = await session.closeWithResult("final answer").catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(Error);
-    expect(error).toMatchObject({ message: "Update card content failed with HTTP 500" });
-    expect(error).not.toHaveProperty("deliveryResult");
-
-    expect(updateBodies).toHaveLength(1);
-    expect(replaceBodies).toHaveLength(0);
-    expect(log).toHaveBeenCalledWith(
-      "Final update failed: Error: Update card content failed with HTTP 500",
-    );
-  });
+  it.each([
+    { mode: "replace", text: "working\n\nfinal answer", finalText: "final answer" },
+    { mode: "update", text: "working", finalText: "working\n\nfinal answer" },
+    { mode: "empty", text: "", finalText: "final answer" },
+  ])(
+    "reports rejected final writes correctly for $mode content",
+    async ({ mode, text, finalText }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(mode === "replace" ? 4_500 : mode === "update" ? 4_600 : 4_800);
+      const replace = mode === "replace";
+      const { session, updateBodies, replaceBodies, log } = mockActiveSession(
+        {
+          cardId: `card_failed_${mode}`,
+          messageId: `om_failed_${mode}`,
+          text,
+          lastUpdateTime: 3_000,
+        },
+        replace
+          ? { replaceStatuses: new Map([[0, 500]]) }
+          : { updateStatuses: new Map([[0, 500]]) },
+      );
+      const error = await session.closeWithResult(finalText).catch((caught: unknown) => caught);
+      if (text) {
+        expect(error).toMatchObject({
+          code: "CHANNEL_PARTIAL_DELIVERY",
+          deliveryResult: {
+            visibleReplySent: true,
+            content: text,
+            ...(replace ? {} : { messageIds: [`om_failed_${mode}`], finalTextAccepted: false }),
+          },
+        });
+      } else {
+        expect(error).toBeInstanceOf(Error);
+        expect(error).toMatchObject({ message: "Update card content failed with HTTP 500" });
+        expect(error).not.toHaveProperty("deliveryResult");
+      }
+      expect(updateBodies).toHaveLength(replace ? 0 : 1);
+      expect(replaceBodies).toHaveLength(replace ? 1 : 0);
+      expect(log).toHaveBeenCalledWith(
+        replace
+          ? "Final replace failed: Error: Replace card content failed with HTTP 500"
+          : "Final update failed: Error: Update card content failed with HTTP 500",
+      );
+    },
+  );
 
   it("bounds streaming token cache lifetime when token expiry overflows", async () => {
     vi.useFakeTimers();
