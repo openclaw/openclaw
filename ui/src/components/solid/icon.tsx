@@ -33,7 +33,7 @@ export function sessionIcon(name: IconName, size = 12, stroke = 2): HTMLElement 
   element.className = "session-css-icon";
   element.setAttribute("aria-hidden", "true");
   if (size !== 12) element.style.cssText = `width:${size}px;height:${size}px`;
-  element.style.setProperty("--session-icon", sessionIconMask(name, stroke));
+  element.style.maskImage = sessionIconMask(name, stroke);
   return element;
 }
 

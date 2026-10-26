@@ -123,11 +123,11 @@ it("keeps named glyphs visible and updates their kind without replacing the lead
   const { dom, session, setCurrent } = mountRow({ icon: "kanban" });
   const glyph = dom.query(".session-glyph");
   const art = dom.query<HTMLElement>(".session-glyph__icon .session-css-icon");
-  expect(art?.style.getPropertyValue("--session-icon")).toBe(sessionIconMask("kanban"));
+  expect(art?.style.maskImage).toBe(sessionIconMask("kanban"));
   setCurrent({ ...session, icon: "bot" });
   flush();
   expect(dom.query(".session-glyph__icon .session-css-icon")).toBe(art);
-  expect(art?.style.getPropertyValue("--session-icon")).toBe(sessionIconMask("bot"));
+  expect(art?.style.maskImage).toBe(sessionIconMask("bot"));
   expect(dom.query(".session-glyph")).toBe(glyph);
 });
 
@@ -338,7 +338,7 @@ it.each(["owner", "icon"] as const)(
     const content = dom.query(".session-glyph__content")!;
     const artwork = content.firstElementChild;
     const graphic = content.querySelector<HTMLElement>(".session-css-icon");
-    const initialGraphic = graphic?.style.getPropertyValue("--session-icon");
+    const initialGraphic = graphic?.style.maskImage;
     const archive = dom.query("[data-sidebar-session-archive]")!;
     const archiveIcon = archive.querySelector("svg");
     const row = dom.query(".sidebar-recent-session")!;
@@ -375,7 +375,7 @@ it.each(["owner", "icon"] as const)(
       );
     } else {
       expect(content.querySelector(".session-css-icon")).toBe(graphic);
-      expect(graphic?.style.getPropertyValue("--session-icon")).not.toBe(initialGraphic);
+      expect(graphic?.style.maskImage).not.toBe(initialGraphic);
     }
   },
 );

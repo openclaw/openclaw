@@ -289,7 +289,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   height: 12px;
   flex: none;
   background: currentColor;
-  mask: var(--session-icon) center / contain no-repeat;
+  mask: center / contain no-repeat;
 }
 
 .session-glyph__icon,

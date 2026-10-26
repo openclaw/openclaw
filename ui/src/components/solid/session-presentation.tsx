@@ -441,7 +441,7 @@ function SessionIcon(props: { icon: string }) {
             <i
               class="session-css-icon"
               aria-hidden="true"
-              style={{ "--session-icon": sessionIconMask(name()) }}
+              style={{ "mask-image": sessionIconMask(name()) }}
             />
           )}
         </Match>
