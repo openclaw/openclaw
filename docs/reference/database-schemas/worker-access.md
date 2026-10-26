@@ -184,6 +184,8 @@ the canonical entry postimage, without a second copy.
 Session-entry patch preparation sends only logical entries and their keys. SQL row,
 window, and side-table facts stay with the worker; callback commits retain the same
 entry comparison, admission ordering, and persisted bytes.
+Entry comparison ignores top-level property order introduced by replica deltas,
+while preserving JSON field values and rejecting intervening owner or content changes.
 
 Session file reads retain workspace authority independently of evictable display
 rows. Committed writers carry their existing full postimages to predicates that

@@ -52,7 +52,11 @@ export function registerSharedClientIdleTests() {
     "releasing",
     "background",
   ] as const)("idle retirement waits for %s ownership to settle", async (kind) => {
-    const { client, send } = await startIdleClient();
+    vi.useFakeTimers();
+    const harness = createIdleLifecycleHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const { send } = harness;
+    const client = await getLeasedSharedCodexAppServerClient();
     const releaseGate = createDeferred<void>();
     const failure = vi.fn();
     let finish: () => Promise<unknown>;
@@ -101,13 +105,6 @@ export function registerSharedClientIdleTests() {
     expect(client.getCloseError()).toBeDefined();
     expect(failure).not.toHaveBeenCalled();
   });
-}
-
-async function startIdleClient() {
-  vi.useFakeTimers();
-  const harness = createIdleLifecycleHarness();
-  vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-  return { ...harness, client: await getLeasedSharedCodexAppServerClient() };
 }
 
 function createIdleLifecycleHarness() {

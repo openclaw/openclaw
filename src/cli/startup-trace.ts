@@ -9,6 +9,7 @@ import {
   supportsUpdateCanaryProgress,
   UPDATE_CANARY_PROGRESS_PREFIX,
 } from "../infra/update-candidate-canary-progress.js";
+import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 
 type GatewayStartupTraceSource = "entry" | "cli.main";
 type GatewayStartupTraceLineFormatter = (message: string) => string;
@@ -53,8 +54,13 @@ const MAX_BOOTSTRAP_STEPS = 128;
 let bootstrapSteps: Map<string, GatewayBootstrapStep> | undefined = new Map();
 
 export function formatGatewayStartupMemoryUsage(): string {
+  const workers = sampleTrackedWorkerMemory({ refresh: false });
+  const workerHeap =
+    workers.workerHeapTotalBytes === undefined
+      ? ""
+      : ` workerHeapMb=${(workers.workerHeapTotalBytes / 1024 / 1024).toFixed(1)} workerHeapSource=cached`;
   // MiB: RSS includes worker isolates; the heap belongs to the main isolate.
-  return `rssMb=${(process.memoryUsage.rss() / 1024 / 1024).toFixed(1)} heapUsedMb=${(getHeapStatistics().used_heap_size / 1024 / 1024).toFixed(1)}`;
+  return `rssMb=${(process.memoryUsage.rss() / 1024 / 1024).toFixed(1)} heapUsedMb=${(getHeapStatistics().used_heap_size / 1024 / 1024).toFixed(1)} workers=${workers.workerCount} workerHeapSamples=${workers.workerHeapSampledCount}/${workers.workerCount}${workerHeap}`;
 }
 
 /** Collect process facts once; Gateway startup consumes them before serving. */

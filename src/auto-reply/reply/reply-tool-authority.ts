@@ -31,11 +31,7 @@ import {
   type SessionCapabilityStore,
 } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
-import {
-  attachToolAllowlistIntersection,
-  readToolAllowlistIntersection,
-} from "../../agents/tool-policy.js";
-import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
+import { readToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { isMainGitContributorScope } from "../../config/sessions/session-entry-provenance.js";
@@ -71,6 +67,7 @@ import {
   captureMemoryReplyToolAuthoritySession,
   prepareMemoryReplyToolAuthorityCaller,
 } from "./reply-tool-authority-memory.js";
+import { captureReplyToolAuthorityInput } from "./reply-tool-authority-snapshot.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
 export { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
@@ -343,50 +340,7 @@ export function prepareReplyToolAuthority(
     >
   > {
   const capturedJoinObservation = joinObservation ? structuredClone(joinObservation) : undefined;
-  const handoff = run.run.trustedInternalHandoff;
-  const toolsAllow = run.toolsAllow ? [...run.toolsAllow] : undefined;
-  const intersection = run.toolsAllow
-    ? readToolAllowlistIntersection(run.toolsAllow)?.map((restriction) => restriction.slice())
-    : undefined;
-  if (toolsAllow && intersection) {
-    attachToolAllowlistIntersection(toolsAllow, intersection);
-  }
-  const snapshot: ReplyToolAuthorityInput = {
-    originatingChannel: run.originatingChannel,
-    operatorAuthority: run.operatorAuthority,
-    toolsAllow,
-    disableTools: run.disableTools === true,
-    forceRestartSafeTools: run.forceRestartSafeTools === true,
-    forceCodeModeTools: run.forceCodeModeTools === true,
-    run: {
-      ...run.run,
-      requesterOrigin: run.run.requesterOrigin
-        ? captureRequesterOrigin({ requesterOrigin: run.run.requesterOrigin })
-        : undefined,
-      config: run.run.config ? captureRuntimeConfig(run.run.config) : undefined,
-      conversationToolPolicy: structuredClone(run.run.conversationToolPolicy),
-      inputProvenance: structuredClone(run.run.inputProvenance),
-      scheduledToolPolicy: structuredClone(run.run.scheduledToolPolicy),
-      runtimePluginToolGrant: structuredClone(run.run.runtimePluginToolGrant),
-      // Copy policy facts while retaining the settle owner's live revocation check.
-      trustedInternalHandoff: handoff
-        ? {
-            ...handoff,
-            settleBatch: handoff.settleBatch && {
-              ...handoff.settleBatch,
-              sourceSessionKeys: [...handoff.settleBatch.sourceSessionKeys],
-            },
-          }
-        : undefined,
-      toolOverrides: structuredClone(run.run.toolOverrides),
-      execOverrides: structuredClone(run.run.execOverrides),
-      bashElevated: structuredClone(run.run.bashElevated),
-      toolBindings: structuredClone(run.run.toolBindings),
-      clientCaps: run.run.clientCaps ? [...run.run.clientCaps] : undefined,
-      gatewayUiCommandTarget: structuredClone(run.run.gatewayUiCommandTarget),
-      memberRoleIds: run.run.memberRoleIds ? [...run.run.memberRoleIds] : undefined,
-    },
-  };
+  const snapshot = captureReplyToolAuthorityInput(run);
   const requesterPrincipalKey = resolveRequesterPrincipalKey({
     ...snapshot.run,
     messageChannel: snapshot.originatingChannel,
@@ -438,7 +392,7 @@ export function prepareReplyToolAuthority(
       ? undefined
       : retainReplyToolAuthorityClassification(captured, entry, assertOpen);
     if (!predicate) {
-      return { assertCurrent() {}, release() {} };
+      return undefined;
     }
     const release = () => {
       predicate.release();
@@ -463,21 +417,19 @@ export function prepareReplyToolAuthority(
     const assertEntry = retainEntry(entry);
     let selectedInput = input;
     let selectedRoute = route;
-    const resolveFingerprint = () =>
-      resolvePreparedReplyToolAuthorityFingerprint(
+    const prepared = await prepareSessionCapabilityRead(() => {
+      assertOpen();
+      capturedReadPlan?.assertCurrent();
+      assertEntry?.assertCurrent();
+      return resolvePreparedReplyToolAuthorityFingerprint(
         selectedInput,
         selectedRoute,
         readMemoryEntry ? readMemoryEntry() : entry,
         narrow,
         memoryCapabilities,
       );
-    const prepared = await prepareSessionCapabilityRead(() => {
-      assertOpen();
-      capturedReadPlan?.assertCurrent();
-      assertEntry.assertCurrent();
-      return resolveFingerprint();
     }).catch((error: unknown) => {
-      assertEntry.release();
+      assertEntry?.release();
       throw error;
     });
     releases.add(prepared.release);

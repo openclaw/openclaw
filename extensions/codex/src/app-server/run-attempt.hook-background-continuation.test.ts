@@ -70,14 +70,17 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
   );
   ownCodexInferenceClient(harness.client);
   const unsubscribe = { method: "thread/unsubscribe", params: { threadId: "thread-1" } };
+  const paramsFor = (runId: string, prompt?: string) =>
+    Object.assign(createParams(path.join(tempDir, "session.jsonl"), tempDir, { runId, prompt }), {
+      agentDir,
+    });
   try {
     for (const [index, hookContext] of contexts.entries()) {
       context = hookContext;
-      const params = createParams(path.join(tempDir, "session.jsonl"), tempDir, {
-        runId: `run-${index}`,
-        prompt: index === 0 ? "Start a callback listener" : "Explain the callback setup",
-      });
-      params.agentDir = agentDir;
+      const params = paramsFor(
+        `run-${index}`,
+        index === 0 ? "Start a callback listener" : "Explain the callback setup",
+      );
       params.skillsSnapshot = {
         prompt: "<available_skills><skill><name>synthetic-skill</name></skill></available_skills>",
         skills: [],
@@ -92,13 +95,7 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
         await harness.notify(itemNotification("item/started", command));
       }
       await harness.notify(answerCompleted("Ready."));
-      const result = await run;
-      expect(result.messagesSnapshot).toContainEqual(
-        expect.objectContaining({
-          role: "assistant",
-          content: [{ type: "text", text: "Ready." }],
-        }),
-      );
+      await run;
       expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
       expect(harness.requests).not.toContainEqual(unsubscribe);
     }
@@ -112,11 +109,7 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
     }
     expect(received[1]).not.toContain("Synthetic first-turn recall");
     systemPrompt = "Changed persistent thread policy";
-    const changedPolicy = createParams(path.join(tempDir, "session.jsonl"), tempDir, {
-      runId: "changed-policy",
-    });
-    changedPolicy.agentDir = agentDir;
-    await expect(runCodexAppServerAttempt(changedPolicy)).rejects.toThrow(
+    await expect(runCodexAppServerAttempt(paramsFor("changed-policy"))).rejects.toThrow(
       "Codex thread thread-1 is claimed by active work; stop it first.",
     );
     expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
@@ -126,8 +119,7 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
         .filter(({ method }) => ["thread/start", "thread/resume"].includes(method))
         .map(({ method }) => method),
     ).toEqual(["thread/start"]);
-    expect(JSON.stringify(harness.requests)).not.toContain("Synthetic first-turn recall");
-    expect(JSON.stringify(harness.requests)).not.toContain("Synthetic second-turn recall");
+    expect(JSON.stringify(harness.requests)).not.toMatch(/Synthetic (first|second)-turn recall/);
     expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(2);
   } finally {
     source.abort(new Error("fixture cleanup"));

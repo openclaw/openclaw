@@ -26,6 +26,7 @@ import { dataActivityScenarios } from "./control-ui-data-activity-scenarios.ts";
 import { dataBoardScenarios } from "./control-ui-data-board-scenarios.ts";
 import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
 import { dataLogScenarios } from "./control-ui-data-log-scenarios.ts";
+import { dataUsageDetailScenarios } from "./control-ui-data-usage-detail-scenarios.ts";
 import { dataUsageScenarios } from "./control-ui-data-usage-scenarios.ts";
 import { heavyContentScenarios } from "./control-ui-heavy-content-scenarios.ts";
 import {
@@ -1558,6 +1559,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
   ...dataBoardScenarios,
   ...dataCatalogScenarios,
   ...dataLogScenarios,
+  ...dataUsageDetailScenarios,
   ...dataUsageScenarios,
   ...(
     ["tooltips", "link-providers", "link-metadata", "ci-pairs", "clawhub-cards"] as const

@@ -44,6 +44,8 @@ you only need an issued ClawRouter key.
     `plugins.allow`, add `clawrouter` to that list before enabling it. For a
     custom deployment, set `models.providers.clawrouter.baseUrl` to the
     ClawRouter origin; the default is `https://clawrouter.openclaw.ai`.
+    Live and retained model catalogs must come from that configured origin.
+    Static capability declarations remain scoped to their declared endpoints.
 
   </Step>
   <Step title="List granted models">

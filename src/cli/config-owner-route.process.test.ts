@@ -22,6 +22,7 @@ import { runStateOwnerCli as run, stateOwnerEnv } from "./cli-process-fixture.te
 // app runs against its own running Gateway (setup wizard, gateway setup, local AI tray).
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const token = "synthetic-config-route-token";
+const prefixEnv = { SYNTH_ROUTE_PREFIX: "synthetic-prefix" };
 const provider = {
   baseUrl: "http://127.0.0.1:18080/v1",
   api: "openai-completions",
@@ -42,6 +43,7 @@ describe("config mutations against a running Gateway", () => {
     ...GATEWAY_TEST_ENV_KEYS,
     "OPENCLAW_HOME",
     "OPENCLAW_PATH_BOOTSTRAPPED",
+    ...Object.keys(prefixEnv),
   ]);
   const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
   const readConfig = async () =>
@@ -58,7 +60,7 @@ describe("config mutations against a running Gateway", () => {
     // Canonical paths: the Gateway keys resident state by the identity path the CLI resolves.
     const root = await fs.realpath(roots.make("openclaw-config-owner-route-"));
     claim = await acquireTestPortBlock({ offsets: [0] });
-    env = stateOwnerEnv(root, { OPENCLAW_GATEWAY_TOKEN: token });
+    env = stateOwnerEnv(root, { OPENCLAW_GATEWAY_TOKEN: token, ...prefixEnv });
     await fs.mkdir(env.OPENCLAW_STATE_DIR!, { recursive: true });
     await writeFixtureJson(env.OPENCLAW_CONFIG_PATH!, {
       gateway: {
@@ -84,6 +86,7 @@ describe("config mutations against a running Gateway", () => {
       OPENCLAW_SKIP_GMAIL_WATCHER: "1",
       OPENCLAW_SKIP_PROVIDERS: "1",
       OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+      ...prefixEnv,
     });
     lock = await acquireGatewayLock({ port: claim.port, allowInTests: true, timeoutMs: 0 });
     expect(lock).not.toBeNull();
@@ -148,6 +151,30 @@ describe("config mutations against a running Gateway", () => {
     expectGatewayKeptRunning();
   });
 
+  it("persists a write under reload off without restarting, like the offline write", async () => {
+    const suspend = await run(env, ["config", "set", "gateway.reload.mode", "off"]);
+    expect(suspend.code, suspend.stderr).toBe(0);
+    const allow = ["canvas.present"];
+    const result = await run(env, [
+      "config",
+      "set",
+      "gateway.nodes.commands.allow",
+      JSON.stringify(allow),
+      "--strict-json",
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      "Updated gateway.nodes.commands.allow. Restart the gateway to apply.",
+    );
+    expect((await readConfig()).gateway.nodes.commands.allow).toEqual(allow);
+    expect((await gatewayConfig()).gateway.nodes.commands.allow).toEqual(allow);
+    expectGatewayKeptRunning();
+
+    const restore = await run(env, ["config", "set", "gateway.reload.mode", "hybrid"]);
+    expect(restore.code, restore.stderr).toBe(0);
+    expectGatewayKeptRunning();
+  });
+
   it("replaces a strict JSON array value", async () => {
     const allow = ["canvas.present", "camera.snap"];
     const result = await run(env, [
@@ -207,6 +234,48 @@ describe("config mutations against a running Gateway", () => {
     const removed = await readConfig();
     expect(removed.models?.providers?.llamacpp).toBeUndefined();
     expect(removed.agents?.defaults?.model?.primary).toBeUndefined();
+  });
+
+  // config.patch carries no explicit paths, so the Gateway's writer would keep an escaped
+  // literal and clear a supplied session-store owner; both refuse instead of diverging.
+  it("refuses changes the Gateway's writer would save differently", async () => {
+    const literal = await run(env, [
+      "config",
+      "set",
+      "messages.responsePrefix",
+      "$${SYNTH_ROUTE_PREFIX}",
+    ]);
+    expect(literal.code, literal.stderr).toBe(0);
+    const ownerBatch = path.join(env.HOME!, "session-owner.batch.json");
+    const writeBatch = (store: string) =>
+      fs.writeFile(
+        ownerBatch,
+        JSON.stringify([
+          { path: "session.store", value: store },
+          { path: "agents.defaults.sessionStore.agentId", value: "main" },
+        ]),
+      );
+    await writeBatch("~/sessions-a/sessions.json");
+    const assign = await run(env, ["config", "set", "--batch-file", ownerBatch]);
+    expect(assign.code, assign.stderr).toBe(0);
+    const before = await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8");
+    expect(JSON.parse(before)).toMatchObject({
+      messages: { responsePrefix: "$${SYNTH_ROUTE_PREFIX}" },
+      agents: { defaults: { sessionStore: { agentId: "main" } } },
+    });
+
+    await writeBatch("~/sessions-b/sessions.json");
+    for (const args of [
+      ["config", "set", "messages.responsePrefix", "${SYNTH_ROUTE_PREFIX}"],
+      ["config", "set", "--batch-file", ownerBatch],
+    ]) {
+      const result = await run(env, args);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("The running Gateway would save a different result");
+      expect(result.stderr).toContain("Nothing was sent and no settings were saved.");
+      expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(before);
+    }
+    expectGatewayKeptRunning();
   });
 
   it("keeps the missing-path error for an unset of an absent path", async () => {

@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { withPreparedToolConstruction } from "../../agents/tool-construction-preparation.js";
 import * as facts from "../../config/resolution-facts.js";
 import * as snapshots from "../../config/runtime-snapshot.js";
@@ -28,6 +29,55 @@ afterEach(() => {
   authorities.splice(0).forEach((authority) => authority.close());
   snapshots.clearRuntimeConfigSnapshot();
 });
+it("captures authority facts without copying unrelated attempt payloads", async () => {
+  let payloadReads = 0;
+  const input = {
+    run: {
+      ...run,
+      sessionId: "bounded-snapshot",
+      operatorProfileId: "synthetic-operator",
+      get prompt() {
+        payloadReads++;
+        return "unrelated model input";
+      },
+      get continuation() {
+        payloadReads++;
+        return { messages: [] };
+      },
+    },
+  };
+  const authority = prepareReplyToolAuthority(input);
+  authorities.push(authority);
+  const fingerprint = await authority.fingerprintAsync(route);
+  expect(authority.requesterPrincipalKey).toBe('["operator","synthetic-operator"]');
+  expect(authority.fingerprint(route)).toBe(fingerprint);
+  expect(payloadReads).toBe(0);
+});
+
+it("keeps captured policy isolated and checks revocation after preparation", async () => {
+  const revocation = new AbortController();
+  const input = {
+    operatorAuthority: createAdmittedRunOperatorAuthority({
+      profileId: "synthetic-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => revocation.signal.throwIfAborted(),
+    }),
+    run: {
+      ...run,
+      sessionId: "revoked-snapshot",
+      toolOverrides: { webSearch: false },
+    },
+  };
+  const authority = prepareReplyToolAuthority(input);
+  authorities.push(authority);
+  const fingerprint = await authority.fingerprintAsync(route);
+  input.run.toolOverrides.webSearch = true;
+  expect(authority.fingerprint(route)).toBe(fingerprint);
+  revocation.abort(new Error("synthetic authority revoked"));
+  expect(() => authority.fingerprint(route)).toThrow("synthetic authority revoked");
+  await expect(authority.fingerprintAsync(route)).rejects.toThrow("synthetic authority revoked");
+});
+
 it("pins active turns across policy publication and reset", async () => {
   const config: OpenClawConfig = { tools: { deny: ["exec"] } };
   snapshots.setRuntimeConfigSnapshot(config);

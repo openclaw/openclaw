@@ -181,7 +181,10 @@ latency improvement.
 The current internal budget is 500 ms, not a configuration option. One existing
 Decision batch asks two independent Boolean questions: whether the latest request
 has an unresolved contextual reference, and whether fulfilling it requires tools
-in the next response. Both probabilities must be below 0.35 to omit optional tools.
+in the next response. Both probabilities must be below 0.35 to omit optional tools. The context question
+checks for a referent needed to fulfill the current request, not merely for
+additional background. A conversational acknowledgment of completed work that
+requests nothing further does not itself require a missing referent.
 Missing, affirmative, or uncertain answers preserve tools. These are probabilities
 of yes, not degrees of tool use or separate confidence values.
 

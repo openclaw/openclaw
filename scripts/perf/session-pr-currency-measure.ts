@@ -2,6 +2,8 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-pr-currency-measure.ts
 //   --output .local/currency.json [--allocations] [--base-owner-suffix base]
 // --base-owner-suffix compares control-ui-session-pr-{read,source,subscriptions}.<suffix>.ts.
+// --subscribe measures real subscribe handlers plus settled passive watcher work.
+// Its baseline also needs server-methods/control-ui.<suffix>.ts.
 // --subscriptions measures passive watcher polls with a runtime publication per poll;
 // iterations must be divisible by 64 and count watcher validations, not polls.
 // Both arms share one prepared fixture; five pairs alternate AB/BA without rebuilding state.
@@ -22,6 +24,11 @@ import type { SessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { ControlUiSessionPrRead } from "../../src/gateway/control-ui-session-pr-read.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/client-types.js";
+import { createControlUiRequestOptions } from "../../src/gateway/server-methods/control-ui-request.test-support.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "../../src/gateway/server-methods/types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -31,6 +38,7 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "1000" },
     allocations: { type: "boolean", default: false },
     subscriptions: { type: "boolean", default: false },
+    subscribe: { type: "boolean", default: false },
     "base-owner-suffix": { type: "string" },
     pairs: { type: "string", default: "5" },
     output: { type: "string" },
@@ -41,6 +49,8 @@ const integer = (name: "iterations" | "warmup" | "pairs") =>
 const iterations = integer("iterations");
 const warmup = integer("warmup");
 const pairs = integer("pairs");
+const watchSubscriptions = values.subscriptions || values.subscribe;
+assert(!(values.subscriptions && values.subscribe), "Choose --subscribe or --subscriptions");
 assert(global.gc, "Run Node with --expose-gc");
 assert(!values["base-owner-suffix"] || /^[a-z0-9-]+$/.test(values["base-owner-suffix"]));
 const sources = [
@@ -58,14 +68,22 @@ const sources = [
     `../../src/gateway/control-ui-session-pr-subscriptions${suffix}.ts`,
     import.meta.url,
   );
+  const handlerUrl = new URL(
+    `../../src/gateway/server-methods/control-ui${suffix}.ts`,
+    import.meta.url,
+  );
   return {
     name,
     url,
+    handlerUrl,
+    handlerSha256: values.subscribe
+      ? createHash("sha256").update(readFileSync(handlerUrl)).digest("hex")
+      : undefined,
     sha256: createHash("sha256").update(readFileSync(url)).digest("hex"),
     sourceUrl,
     sourceSha256: createHash("sha256").update(readFileSync(sourceUrl)).digest("hex"),
     subscriptionsUrl,
-    subscriptionsSha256: values.subscriptions
+    subscriptionsSha256: watchSubscriptions
       ? createHash("sha256").update(readFileSync(subscriptionsUrl)).digest("hex")
       : undefined,
   };
@@ -79,7 +97,7 @@ for (const directory of ["home", "tmp"]) {
 }
 const sessionCount = 10_000;
 const readerCount = 64;
-if (values.subscriptions) {
+if (watchSubscriptions) {
   assert.equal(iterations % readerCount, 0, "--iterations must be divisible by 64");
 }
 const childrenPerRoot = 4;
@@ -140,8 +158,16 @@ const owners = await Promise.all(
     );
     const subscriptions:
       | typeof import("../../src/gateway/control-ui-session-pr-subscriptions.js")
-      | undefined = values.subscriptions ? await import(source.subscriptionsUrl.href) : undefined;
-    return { ...source, createControlUiSessionPrRead, withControlUiSessionPrSource, subscriptions };
+      | undefined = watchSubscriptions ? await import(source.subscriptionsUrl.href) : undefined;
+    const handlers: typeof import("../../src/gateway/server-methods/control-ui.js") | undefined =
+      values.subscribe ? await import(source.handlerUrl.href) : undefined;
+    return {
+      ...source,
+      createControlUiSessionPrRead,
+      withControlUiSessionPrSource,
+      subscriptions,
+      handler: handlers?.controlUiHandlers["controlUi.sessionPullRequests.subscribe"],
+    };
   }),
 );
 const profile = ensureProfileForEmail("currency-reader@example.test");
@@ -185,9 +211,10 @@ try {
   for (const owner of owners) {
     const access = new AbortController();
     const reads: ControlUiSessionPrRead[] = [];
+    const clients: GatewayClient[] = [];
     for (let index = 0; index < readerCount; index++) {
       const client: GatewayClient = {
-        connId: `currency-reader-${index}`,
+        connId: String(index),
         connect: {
           minProtocol: 1,
           maxProtocol: 1,
@@ -214,8 +241,9 @@ try {
         },
       };
       prepareGatewayRecipientProfile(client);
+      clients.push(client);
       const read = owner.createControlUiSessionPrRead({
-        taskReceiptsOnly: values.subscriptions,
+        taskReceiptsOnly: watchSubscriptions,
         client,
         sessionKey: keyFor(index),
         getRuntimeConfig: () => cfg,
@@ -245,31 +273,100 @@ try {
     if (owner.subscriptions) {
       const scheduler = new GatewayScheduler();
       schedulers.push(scheduler);
+      let publications = 0;
       const subscriptions = owner.subscriptions.createControlUiSessionPullRequestSubscriptions({
         scheduler,
         getSessionRowProjection: () => projection,
-        broadcastToConnIds: () => {},
+        broadcastToConnIds: () => {
+          publications++;
+        },
         isConnectionActive: () => true,
-        prepareRead: async (connId) => reads[Number(connId)],
+        prepareRead: async (connId) => {
+          const read = reads[Number(connId)];
+          assert(read, "Every request must have a real reader");
+          return read;
+        },
       });
       stopSubscriptions.push(subscriptions.stop);
-      for (let index = 0; index < readerCount; index++) {
-        await subscriptions.replace(
-          String(index),
-          [],
-          new Set(),
-          undefined,
-          new Set([keyFor(index)]),
-        );
+      const replacements: Promise<void>[] = [];
+      const requestSubscriptions = {
+        ...subscriptions,
+        replace: (...args: Parameters<typeof subscriptions.replace>) => {
+          const pending = subscriptions.replace(...args);
+          replacements.push(pending);
+          return pending;
+        },
+      };
+      const settleReplacements = async () => {
+        await Promise.all(replacements.splice(0));
+      };
+      const requestOptions = createControlUiRequestOptions(() => cfg);
+      const requests = owner.handler
+        ? clients.map((client, index) => {
+            const params = { sessionKeys: [], passiveSessionKeys: [keyFor(index)] };
+            // This owner benchmark supplies only the context consumed by the subscribe RPC.
+            const context = {
+              controlUiSessionPullRequests: requestSubscriptions,
+              logGateway: {
+                warn: (message: string) => {
+                  throw new Error(message);
+                },
+              },
+            } satisfies Pick<GatewayRequestContext, "controlUiSessionPullRequests"> & {
+              logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
+            };
+            const respond = (ok: boolean, payload: unknown) => {
+              assert(ok);
+              assert.deepEqual(payload, { subscribed: true });
+            };
+            return Object.assign(requestOptions(params, respond, { context }), {
+              client,
+              req: {
+                type: "req" as const,
+                id: String(index),
+                method: "controlUi.sessionPullRequests.subscribe",
+                params,
+              },
+            }) satisfies GatewayRequestHandlerOptions;
+          })
+        : [];
+      if (owner.handler) {
+        for (const request of requests) {
+          await owner.handler(request);
+        }
+        await settleReplacements();
+        assert.equal(publications, readerCount, "Each real subscription must publish its snapshot");
+      } else {
+        for (let index = 0; index < readerCount; index++) {
+          if (owner.name === "base") {
+            // Historical owner snapshots retain the removed admission callback position.
+            const replace = subscriptions.replace as (
+              connId: string,
+              keys: readonly string[],
+              refresh: ReadonlySet<string>,
+              admitted: undefined,
+              passive: ReadonlySet<string>,
+            ) => Promise<void>;
+            await replace(String(index), [], new Set(), undefined, new Set([keyFor(index)]));
+          } else {
+            await subscriptions.replace(String(index), [], new Set(), new Set([keyFor(index)]));
+          }
+        }
       }
       run = async (count) => {
         for (let index = 0; index < Math.ceil(count / readerCount); index++) {
-          sessionChanges.emit({
-            agentId: "main",
-            sessionKey: keyFor(index % readerCount),
-            scope: "runtime",
-          });
-          await subscriptions.pollNow();
+          if (owner.handler) {
+            await Promise.all(requests.map((request) => Promise.resolve(owner.handler!(request))));
+            // Include exactly the work scheduled by the request, without an extra poll.
+            await settleReplacements();
+          } else {
+            sessionChanges.emit({
+              agentId: "main",
+              sessionKey: keyFor(index % readerCount),
+              scope: "runtime",
+            });
+            await subscriptions.pollNow();
+          }
         }
       };
     }
@@ -350,7 +447,13 @@ try {
       source.sourceSha256,
       "Physical source owner changed during measurement",
     );
-    if (values.subscriptions) {
+    if (values.subscribe) {
+      assert.equal(
+        createHash("sha256").update(readFileSync(source.handlerUrl)).digest("hex"),
+        source.handlerSha256,
+      );
+    }
+    if (watchSubscriptions) {
       assert.equal(
         createHash("sha256").update(readFileSync(source.subscriptionsUrl)).digest("hex"),
         source.subscriptionsSha256,
@@ -358,17 +461,21 @@ try {
     }
   }
   const result = {
-    scope:
-      "real in-process PR reader, physical source and final currency assertions; no transport or whole-Gateway claim",
+    scope: values.subscribe
+      ? "real subscribe handler and settled owner work; no transport or whole-Gateway claim"
+      : "real in-process PR reader, physical source and final currency assertions; no transport or whole-Gateway claim",
     node: process.version,
-    owners: sources.map(({ name, url, sha256, sourceUrl, sourceSha256, subscriptionsSha256 }) => ({
-      name,
-      path: url.pathname,
-      sha256,
-      sourcePath: sourceUrl.pathname,
-      sourceSha256,
-      subscriptionsSha256,
-    })),
+    owners: sources.map(
+      ({ name, url, sha256, sourceUrl, sourceSha256, subscriptionsSha256, handlerSha256 }) => ({
+        name,
+        path: url.pathname,
+        sha256,
+        sourcePath: sourceUrl.pathname,
+        sourceSha256,
+        subscriptionsSha256,
+        handlerSha256,
+      }),
+    ),
     workload: {
       sessionCount,
       configuredAgents: agentIds.length,
@@ -378,6 +485,7 @@ try {
       warmup,
       pairs,
       subscriptions: values.subscriptions,
+      subscribe: values.subscribe,
     },
     allocationMode: values.allocations,
     samples,

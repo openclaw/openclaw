@@ -152,6 +152,8 @@ it.each([
     await Promise.all(image.getAnimations().map((animation) => animation.finished));
     const zoomBefore = zoom.textContent;
     const before = image.getBoundingClientRect();
+    expect(before.width).toBeGreaterThan(fitted.width);
+    expect(before.height).toBeGreaterThan(fitted.height);
     full.resolve({ src: source, title: "Synthetic screenshot", width, height });
     await expect.poll(() => image.src).toBe(source);
     await image.decode();
