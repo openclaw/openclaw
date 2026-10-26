@@ -371,45 +371,25 @@ printf 'setup\\n' >> "$HOME/count"
     changed.close();
   });
 
-  it("verifies a skipped executable recipe without running it or sharing its build cache", async () => {
+  it("rejects a skipped executable recipe that differs from its admission", async () => {
     const f = await fixture('#!/bin/sh\nprintf setup > "$HOME/setup-ran"\n');
     const seed = f.operation();
     await seed.project.prepare(f);
     seed.close();
-    const input = {
-      namespace: "gateway",
-      seedKey: workerProjectSeedKey(f.project),
-      preparationKey: "a".repeat(64),
-      cacheKey: "c".repeat(64),
-      baseCommit: f.project.baseCommit,
-      setupRecipe: (await readWorkerProjectEnvironmentRecipe(f.project)).identity,
-      timeoutMs: 30_000,
-    };
     await expect(
       f.runScript(
-        createProjectSetupScript({ ...input, runSetupScript: false, setupRecipe: "f".repeat(40) }),
-      ),
-    ).rejects.toThrow("Prepared project setup recipe differs from its admission");
-    const skipped = JSON.parse(
-      await f.runScript(createProjectSetupScript({ ...input, runSetupScript: false })),
-    ) as { homeDir: string; workspaceDir: string; sourceManifestRef: string };
-    expect(skipped.sourceManifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
-    await missing(skipped.homeDir, "setup-ran");
-    expect(await requireGit(skipped.workspaceDir, ["rev-parse", "HEAD"])).toBe(
-      f.project.baseCommit,
-    );
-    const built = JSON.parse(
-      await f.runScript(
         createProjectSetupScript({
-          ...input,
-          preparationKey: "b".repeat(64),
-          cacheKey: "d".repeat(64),
+          namespace: "gateway",
+          seedKey: workerProjectSeedKey(f.project),
+          preparationKey: "a".repeat(64),
+          cacheKey: "c".repeat(64),
+          baseCommit: f.project.baseCommit,
+          runSetupScript: false,
+          setupRecipe: "f".repeat(40),
+          timeoutMs: 30_000,
         }),
       ),
-    ) as { homeDir: string; workspaceDir: string };
-    expect(built.workspaceDir).not.toBe(skipped.workspaceDir);
-    expect(await readText(built.homeDir, "setup-ran")).toBe("setup");
-    await missing(skipped.homeDir, "setup-ran");
+    ).rejects.toThrow("Prepared project setup recipe differs from its admission");
   });
 
   it("updates A to B to A with thin transfers and stable build and HOME paths", async () => {

@@ -83,31 +83,20 @@ const cleanupRef = cleanupWorkerWorkspaceResultRef(workerWorkspaceResultRef("orp
 const readCleanupRef = (root: string) =>
   git(root, "for-each-ref", "--format=%(refname)", cleanupRef);
 
-function prepareTargetedAdmissionObserver(placements: ReturnType<typeof createStore>) {
-  // The harness copies store methods. Install the spy before construction, then
-  // arm it only when the test reaches its recovery observation boundary.
-  const read = placements.readProjection.bind(placements);
-  const reads = vi.spyOn(placements, "readProjection");
-  return (harness: Awaited<ReturnType<typeof createHarness>>) => {
-    const unitReached = createDeferredCore();
-    const reconcile = harness.service.reconcileActive;
-    vi.spyOn(harness.service, "reconcileActive").mockImplementation((environmentId, admit) =>
-      reconcile(environmentId, (sessionIds, run) => {
-        if (!admit) {
-          throw new Error("Recovery requires coordinator admission");
-        }
-        const operation = admit(sessionIds, run);
-        unitReached.resolve();
-        return operation;
-      }),
-    );
-    reads.mockClear();
-    reads.mockImplementation((...args) => {
+function observeTargetedAdmission(harness: Awaited<ReturnType<typeof createHarness>>) {
+  const unitReached = createDeferredCore();
+  const reconcile = harness.service.reconcileActive;
+  vi.spyOn(harness.service, "reconcileActive").mockImplementation((environmentId, admit) =>
+    reconcile(environmentId, (sessionIds, run) => {
+      if (!admit) {
+        throw new Error("Recovery requires coordinator admission");
+      }
+      const operation = admit(sessionIds, run);
       unitReached.resolve();
-      return read(...args);
-    });
-    return { unitReached: unitReached.promise, reads };
-  };
+      return operation;
+    }),
+  );
+  return unitReached.promise;
 }
 
 async function git(root: string, ...args: string[]) {
@@ -132,6 +121,13 @@ describe("placement recovery session admission with persisted placements", () =>
     await git(root, "update-ref", ref, await git(root, "write-tree"));
     return { root, ref, read: () => git(root, "for-each-ref", "--format=%(refname)", ref) };
   }
+  const publishWorktree = (root: string, id: string, ownerId = `agent:main:${id}`) =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        insertRegistryWorktreeInDatabase(db, { record: makeWorktreeRecord(root, id, { ownerId }) });
+      },
+      { database: support.testState.stateDb },
+    );
   let releaseOwnedWork: (() => Promise<void>) | undefined;
   afterEach(async () => {
     // Release blocked provider work before the service fixture drains on a failed test.
@@ -197,7 +193,6 @@ describe("placement recovery session admission with persisted placements", () =>
       if (mode !== "targeted") {
         await seedFailed(placements);
       }
-      const observe = prepareTargetedAdmissionObserver(placements);
       const readCandidates = placements.readRecoveryCandidates.bind(placements);
       const candidateReads = vi.spyOn(placements, "readRecoveryCandidates");
       const harness = await harnessFor(mode === "targeted" ? {} : { environmentGeneration: 3 });
@@ -222,9 +217,9 @@ describe("placement recovery session admission with persisted placements", () =>
       try {
         if (mode === "targeted") {
           await beginDispatch();
-          const observation = observe(harness);
+          const admitted = observeTargetedAdmission(harness);
           sweep = coordinated.reconcileActive(harness.ready.environmentId);
-          await observation.unitReached;
+          await admitted;
         } else {
           candidateReads.mockImplementation(async () => {
             const candidates = await readCandidates();
@@ -253,7 +248,6 @@ describe("placement recovery session admission with persisted placements", () =>
   it.each(["full", "targeted"] as const)(
     "%s recovery does not expire a live Move while destination admission still sees local placement",
     async (mode) => {
-      const observe = prepareTargetedAdmissionObserver(placements);
       const harness = await harnessFor({
         workspacePath: support.testState.root,
       });
@@ -275,10 +269,10 @@ describe("placement recovery session admission with persisted placements", () =>
         await destination.entered;
         const intent = await placements.getPlacementMoveAsync(REQUEST.sessionId);
         expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
-        const observation = observe(harness);
+        const admitted = observeTargetedAdmission(harness);
         sweep = coordinated.reconcileActive(mode === "targeted" ? active.environmentId : undefined);
         if (mode === "targeted") {
-          await observation.unitReached;
+          await admitted;
         } else {
           await sweep;
         }
@@ -345,7 +339,6 @@ describe("placement recovery session admission with persisted placements", () =>
   });
 
   it("preserves the final-save owner during targeted result recovery", async () => {
-    const observe = prepareTargetedAdmissionObserver(placements);
     const abandon = vi.spyOn(placements, "abandonWorkspaceResult");
     const reconciliation = barrier();
     const harness = await harnessFor({
@@ -358,11 +351,11 @@ describe("placement recovery session admission with persisted placements", () =>
     void stop.catch(reconciliation.reject);
     await reconciliation.entered;
     expect(await pendingResults()).toHaveLength(1);
-    const observation = observe(harness);
+    const admitted = observeTargetedAdmission(harness);
     abandon.mockClear();
     const sweep = coordinated.reconcileActive(active.environmentId!);
     try {
-      await observation.unitReached;
+      await admitted;
     } finally {
       reconciliation.release();
       await stop;
@@ -546,14 +539,7 @@ describe("placement recovery session admission with persisted placements", () =>
             scope: "session-entry",
           });
         } else {
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              insertRegistryWorktreeInDatabase(db, {
-                record: makeWorktreeRecord(root, id, { ownerId: `agent:main:${id}` }),
-              });
-            },
-            { database: support.testState.stateDb },
-          );
+          publishWorktree(root, id);
         }
       };
       try {
@@ -591,16 +577,7 @@ describe("placement recovery session admission with persisted placements", () =>
             stopFailure();
           }
         } else if (source === "worktree") {
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              insertRegistryWorktreeInDatabase(db, {
-                record: makeWorktreeRecord(root, "restored-worktree", {
-                  ownerId: target.sessionKey,
-                }),
-              });
-            },
-            { database: support.testState.stateDb },
-          );
+          publishWorktree(root, "restored-worktree", target.sessionKey);
         } else {
           publish(key);
         }
