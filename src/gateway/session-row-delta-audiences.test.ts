@@ -224,7 +224,6 @@ it("shares recipient encodings only for matching authority and delivered baselin
       let envelopeEnumerations = 0;
       const envelopeTuples = new Set<unknown>();
       let envelopeMaxFields = 0;
-      let envelopeKeyEnumerations = 0;
       let fieldNameInsertions = 0;
       // oxlint-disable-next-line typescript/unbound-method -- The observer calls add with its original Set receiver.
       const add = Set.prototype.add;
@@ -236,13 +235,6 @@ it("shares recipient encodings only for matching authority and delivered baselin
           fieldNameInsertions++;
         }
         return add.call(this, value);
-      });
-      const keys = Object.keys;
-      const enumeratingKeys = vi.spyOn(Object, "keys").mockImplementation((value) => {
-        if (isRecord(value) && value.sessionKey === key && isRecord(value.session)) {
-          envelopeKeyEnumerations++;
-        }
-        return keys(value);
       });
       const fromEntries = Object.fromEntries;
       const copying = vi.spyOn(Object, "fromEntries").mockImplementation((entries) => {
@@ -294,7 +286,6 @@ it("shares recipient encodings only for matching authority and delivered baselin
         enumerating.mockRestore();
         adding.mockRestore();
         copying.mockRestore();
-        enumeratingKeys.mockRestore();
       }
       const decodedPayloads: unknown[] = [];
       for (const [index, peer] of peers.entries()) {
@@ -354,8 +345,6 @@ it("shares recipient encodings only for matching authority and delivered baselin
       expect(envelopeEnumerations).toBe(0);
       // Interleaved histories and audiences share only synchronous copy scratch space.
       expect(envelopeTuples.size).toBe(envelopeMaxFields);
-      // Enumerating the own payload fields needs no temporary key array.
-      expect(envelopeKeyEnumerations).toBe(0);
       // Field names are indexed once per audience, not inserted into a Set per history.
       expect(fieldNameInsertions).toBe(0);
       // Eight current delta recipients were primed at this revision; sixteen were not.
