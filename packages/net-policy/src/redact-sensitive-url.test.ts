@@ -122,7 +122,7 @@ function expectRedacted(value: string, secrets = ["USER", "PASS"], marker = "***
 
 it.each([`https://outer.example/?${credentials}=v`, `https://outer.example/#/cb?${credentials}=v`])(
   "redacts credentials in query names: %s",
-  expectRedacted,
+  (value) => expectRedacted(value),
 );
 
 it.each(["%2F", "%3F", "%23"])("redacts reserved userinfo character %s", (reserved) => {
