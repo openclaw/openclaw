@@ -24,6 +24,7 @@ import {
 } from "../../admitted-run-context.js";
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
+import * as harnessHost from "../../harness/host-capability.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness, AgentHarnessAttemptParamsV2 } from "../../harness/types.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../../model-auth-markers.js";
@@ -40,7 +41,6 @@ import { requireGit } from "../../worktrees/git.js";
 import { insertRegistryWorktree } from "../../worktrees/registry.js";
 import { initializeManagedWorktreeTestRepository } from "../../worktrees/service.test-support.js";
 import type { ManagedWorktreeRecord } from "../../worktrees/types.js";
-import * as attemptBackend from "./backend.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import { dispatchCases } from "./run-attempt-dispatch.cases.test-support.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
@@ -667,13 +667,13 @@ it.each(dispatchCases)(
           await writeRetrySettings(path.join(workspaceDir, ".openclaw"), 7);
         }
       }
-      const runBackend = attemptBackend.runEmbeddedAttemptWithBackend;
-      const backendObserver = transcriptTargetInvalidation
+      const createHost = harnessHost.createAgentHarnessHostCapabilities;
+      const hostObserver = transcriptTargetInvalidation
         ? vi
-            .spyOn(attemptBackend, "runEmbeddedAttemptWithBackend")
+            .spyOn(harnessHost, "createAgentHarnessHostCapabilities")
             .mockImplementation((...args) => {
-              assertPreparedTarget = args[0].preparedSessionTarget?.assertCurrent;
-              return runBackend(...args);
+              assertPreparedTarget = args[0].attempt.preparedSessionTarget?.assertCurrent;
+              return createHost(...args);
             })
         : undefined;
       const pending = prepareAndDispatchEmbeddedRunAttempt(input);
@@ -885,7 +885,7 @@ it.each(dispatchCases)(
       } finally {
         baseline.resolve();
         await pending.catch(() => undefined);
-        backendObserver?.mockRestore();
+        hostObserver?.mockRestore();
         preparation?.mockRestore();
         remoteImageRead?.mockRestore();
         restorePlacement();
