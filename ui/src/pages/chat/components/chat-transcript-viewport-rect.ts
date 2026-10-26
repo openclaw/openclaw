@@ -76,7 +76,12 @@ export class TranscriptViewportRect {
       delivered = true;
       const railGeometry = this.owner.positionRail.read();
       if (railGeometry) {
-        this.owner.layout.restoreRows(instance, railGeometry.columnWidth);
+        this.owner.layout.restoreRows(
+          instance,
+          railGeometry.columnWidth,
+          rect.width,
+          railGeometry.gutter,
+        );
       }
       this.owner.commitComposerResize();
       const widthChanged =

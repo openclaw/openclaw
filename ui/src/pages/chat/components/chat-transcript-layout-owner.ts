@@ -40,16 +40,18 @@ export class TranscriptLayoutOwner {
   rowLayout?: ChatWidgetLayout;
   private rowPresentation = "";
   rowWidth = 0;
+  paneWidth = 0;
+  rowGutter = 0;
   private recordingRows = false;
 
   configureRows(props: ChatThreadProps, avatarPlacement: string, recoveryRevision: number): void {
     this.ready = !props.loading;
-    this.rowLayout = props.widgetLayout;
+    // Full-message expansions are transient; the snapshot cannot restore them.
+    this.rowLayout = recoveryRevision === 0 ? props.widgetLayout : undefined;
     const theme = props.applicationContext?.theme;
     const font = theme?.settings;
     const presentation = JSON.stringify([
       CONTROL_UI_BUILD_INFO.buildId,
-      recoveryRevision,
       avatarPlacement,
       props.chatBubbleMode,
       i18n.getLocale(),
@@ -73,8 +75,8 @@ export class TranscriptLayoutOwner {
 
   private rowLayoutKey(index: number, width = this.rowWidth): string | undefined {
     const row = this.rows[index];
-    return width > 0 && row?.revision
-      ? `row:v1:${width}:${this.rowPresentation}:${row.revision}:${JSON.stringify(row.key)}`
+    return width > 0 && this.paneWidth > 0 && row?.revision
+      ? `row:v1:${width}:${this.paneWidth}:${this.rowGutter}:${this.rowPresentation}:${row.revision}:${JSON.stringify(row.key)}`
       : undefined;
   }
 
@@ -83,8 +85,15 @@ export class TranscriptLayoutOwner {
     return key ? (this.rowLayout?.read(key) ?? 0) : 0;
   };
 
-  restoreRows(instance: Virtualizer<HTMLDivElement, HTMLElement>, width: number): void {
+  restoreRows(
+    instance: Virtualizer<HTMLDivElement, HTMLElement>,
+    width: number,
+    paneWidth: number,
+    gutter: number,
+  ): void {
     this.rowWidth = width;
+    this.paneWidth = paneWidth;
+    this.rowGutter = gutter;
     this.rows.forEach((row, index) => {
       const minimum = this.rowMinimum(index);
       if (minimum > (instance.itemSizeCache.get(row.key) ?? 0)) {

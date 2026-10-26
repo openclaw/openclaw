@@ -84,6 +84,8 @@ it("reserves only the matching width and appearance, including text scale, width
   const layout = new TranscriptLayoutOwner(() => {});
   layout.rows = [{ key: "notice", revision: "notice-v1" }];
   layout.rowWidth = 768;
+  layout.paneWidth = 1100;
+  layout.rowGutter = 166;
   const reserve = (version = 0) => {
     layout.configureRows(props, "gutter", version);
     return layout.rowMinimum(0);
@@ -110,6 +112,19 @@ it("reserves only the matching width and appearance, including text scale, width
   expect(reserve()).toBe(0);
   layout.rowWidth = 768;
   expect(reserve()).toBe(300);
+  layout.paneWidth = 1300;
+  expect(reserve()).toBe(0);
+  layout.paneWidth = 1100;
+  layout.rowGutter = 68;
+  expect(reserve()).toBe(0);
+  layout.rowGutter = 166;
+  layout.paneWidth = 0;
+  expect(reserve()).toBe(0);
+  layout.paneWidth = 1100;
+  expect(reserve()).toBe(300);
+  // A repeated expansion counter cannot admit a footprint from another recovered message.
+  cachedKey = undefined;
+  expect(reserve(2)).toBe(0);
 });
 
 it("batches measured footprints after reveal and idle without publishing boot measurements", () => {
@@ -145,6 +160,7 @@ it("batches measured footprints after reveal and idle without publishing boot me
     0,
   );
   layout.rowWidth = 768;
+  layout.paneWidth = 1100;
   layout.rows = [{ key: "row", revision: "one" }];
   layout.connect(container);
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
