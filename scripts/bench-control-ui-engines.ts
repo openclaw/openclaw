@@ -33,6 +33,9 @@ import { frames } from "./lib/control-ui-interaction-navigation.ts";
 import {
   createScenarioFixture,
   interactionScenarios,
+  installInteractionNavigationPreloadObserver,
+  settleInteractionNavigationPreloads,
+  type InteractionNavigationPreloads,
   type InteractionEvidence,
 } from "./lib/control-ui-interaction-scenarios.ts";
 
@@ -99,6 +102,7 @@ type Observation = {
   metrics?: EngineMetrics;
   requests?: Record<string, number>;
   evidence?: InteractionEvidence;
+  navigationPreloads?: InteractionNavigationPreloads;
   error?: string;
   errorEvents?: Array<{ message: string; phase: string }>;
   resizeErrorCount?: number;
@@ -227,6 +231,7 @@ try {
             let measurement: Awaited<ReturnType<typeof startEngineMeasurement>> | undefined;
             try {
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              await page.addInitScript(installInteractionNavigationPreloadObserver);
               await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
               if (values.trace) {
                 await page.addInitScript(() => {
@@ -308,6 +313,7 @@ try {
               }
               await scenario.prepare(page, gateway);
               if (scenario.navigation !== "measured") {
+                observation.navigationPreloads = await settleInteractionNavigationPreloads(page);
                 await page.waitForLoadState("networkidle");
                 await page.evaluate(() => document.fonts.ready.then(() => undefined));
                 await frames(page);
