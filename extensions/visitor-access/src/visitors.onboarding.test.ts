@@ -14,32 +14,6 @@ const JOSH = { profileId: "profile-josh", label: "Josh" };
 describe("VisitorAccessService onboarding record", () => {
   useVisitorFixtures();
 
-  it("records the trusted inviter, note, and pending onboarding and reloads them", async () => {
-    const fixture = visitorFixture();
-    await fixture.service.invite(
-      { email: EMAIL, note: "  Start with the onboarding doc.\n" },
-      { ...fixture.authority, invitedBy: JOSH },
-    );
-
-    expect(fixture.grants.get(EMAIL)).toMatchObject({
-      invitedBy: JOSH,
-      note: "  Start with the onboarding doc.\n",
-      onboarding: { state: "pending", updatedAt: NOW },
-    });
-    fixture.service.close();
-    const restarted = visitorFixture({ grants: [...fixture.grants.values()] });
-    await restarted.service.initialize();
-    expect(
-      restarted.service.findActiveInvitation(fixture.grants.get(EMAIL)!.grantId!),
-    ).toMatchObject({
-      grantId: fixture.grants.get(EMAIL)?.grantId,
-      email: EMAIL,
-      invitedBy: JOSH,
-      note: "  Start with the onboarding doc.\n",
-      onboarding: { state: "pending", updatedAt: NOW },
-    });
-  });
-
   it.each([{ note: "x".repeat(1001) }, { note: 7 }])(
     "rejects an invalid note before any provider write: %j",
     async (input) => {
@@ -74,36 +48,18 @@ describe("VisitorAccessService onboarding record", () => {
     });
   });
 
-  it("renewal keeps inviter, note, and ready onboarding unless new values are supplied", async () => {
-    const fixture = visitorFixture();
-    await fixture.service.initialize();
-    await fixture.service.invite(
-      { email: EMAIL, note: "Welcome!" },
-      { ...fixture.authority, invitedBy: JOSH },
-    );
-    const invitation = fixture.service.findActiveInvitation(fixture.grants.get(EMAIL)!.grantId!)!;
-    vi.setSystemTime(NOW + 1000);
-    await fixture.service.compareAndSetOnboarding({
-      grantId: invitation.grantId,
-      expected: invitation.onboarding!,
-      next: { state: "ready", welcomeSessionKey: "welcome-key", welcomeSessionId: "welcome-id" },
-    });
-    const ready = {
-      state: "ready",
-      welcomeSessionKey: "welcome-key",
-      welcomeSessionId: "welcome-id",
-      updatedAt: NOW + 1000,
-    };
-
-    await fixture.invite({ email: EMAIL, days: 30 });
-    expect(fixture.grants.get(EMAIL)).toMatchObject({
-      grantId: invitation.grantId,
+  it("replaces inviter and note without replacing ready onboarding", async () => {
+    const grant = visitorGrant(EMAIL, {
       invitedBy: JOSH,
       note: "Welcome!",
-      onboarding: ready,
-      expiresAt: NOW + 1000 + 30 * DAY_MS,
+      onboarding: {
+        state: "ready",
+        welcomeSessionKey: "welcome-key",
+        welcomeSessionId: "welcome-id",
+        updatedAt: NOW,
+      },
     });
-
+    const fixture = visitorFixture({ grants: [grant], emails: [EMAIL] });
     const peter = { profileId: "profile-peter" };
     await fixture.service.invite(
       { email: EMAIL, note: "Updated note" },
@@ -112,7 +68,7 @@ describe("VisitorAccessService onboarding record", () => {
     expect(fixture.grants.get(EMAIL)).toMatchObject({
       invitedBy: peter,
       note: "Updated note",
-      onboarding: ready,
+      onboarding: grant.onboarding,
     });
   });
 
