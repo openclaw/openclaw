@@ -107,7 +107,10 @@ try {
     { database },
   );
   const placements = createWorkerSessionPlacementStore({ database, now: () => 1000 });
-  const environments = new Map<string, WorkerEnvironmentRecord>();
+  const environments = new Map<
+    string,
+    NonNullable<ReturnType<PlacementRecoveryDeps["environments"]["get"]>>
+  >();
   for (let index = 0; index < active; index++) {
     const session = identity(index);
     const environmentId = `synthetic-environment-${index}`;
@@ -141,7 +144,12 @@ try {
       leaseId: `synthetic-lease-${index}`,
       sshEndpoint: null,
     };
-    environments.set(environmentId, environment);
+    environments.set(environmentId, {
+      ...environment,
+      desktopAvailable: false,
+      desktopApps: [],
+      tunnelStatus: "stopped",
+    });
     writePlacementEnvironmentFixture(database, environment);
     await advancePlacementFixtureToActive(
       placements,
