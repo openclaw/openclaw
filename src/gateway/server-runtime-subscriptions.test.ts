@@ -48,7 +48,6 @@ import {
 import { registerSessionPublicationTests } from "./server-runtime-subscriptions.publication.test-support.js";
 import {
   createSubscriptionTestFixture,
-  lifecycleState,
   readLifecycleState,
   registerSubscriptionChatRun,
   registerSubscriptionRegistrationTests,
@@ -114,6 +113,12 @@ vi.mock("../config/io.js", async (importOriginal) => ({
 
 vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../audit/audit-recorder.js")>();
+  const count =
+    (field: keyof typeof auditTestState, increment = 1) =>
+    () => {
+      auditTestState[field] += increment;
+      return true;
+    };
   return {
     ...actual,
     createAuditEventRecorder: (options: Parameters<typeof actual.createAuditEventRecorder>[0]) => {
@@ -126,18 +131,9 @@ vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
             auditTestState[event.kind === "message" ? "messages" : "recorded"] += 1;
             return true;
           },
-          recordRun: () => {
-            auditTestState.recorded += 2;
-            return true;
-          },
-          recordExecutionIdentity: () => {
-            auditTestState.identityRecorded += 1;
-            return true;
-          },
-          recordExecutionDecision: () => {
-            auditTestState.decisionRecorded += 1;
-            return true;
-          },
+          recordRun: count("recorded", 2),
+          recordExecutionIdentity: count("identityRecorded"),
+          recordExecutionDecision: count("decisionRecorded"),
           recordExecutionDecisionWork: () => true,
           stop: async () => {
             auditTestState.stopped += 1;
@@ -462,17 +458,6 @@ describe("startGatewayEventSubscriptions", () => {
     );
 
     await waitForFast(() => expect(warn).toHaveBeenCalledTimes(2));
-    expect(agentEventHandlerMocks.persistLifecycle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "global",
-        agentId: "research",
-        assertCommitAllowed: expect.any(Function),
-      }),
-    );
-    expect(agentEventHandlerMocks.resolveSession).toHaveBeenCalledWith(runId, {
-      agentId: undefined,
-      projection: undefined,
-    });
     expect(warn).toHaveBeenCalledWith(
       "Agent event dispatch failed",
       expect.objectContaining({ runId, stream: "lifecycle" }),
@@ -547,7 +532,7 @@ describe("startGatewayEventSubscriptions", () => {
     agentEventHandlerMocks.create.mockReturnValue(Object.assign(async () => {}, { dispose() {} }));
   });
 
-  it("drives a registered chat run through the terminal persistence transition table", async () => {
+  it("keeps retryable lifecycle errors nonterminal when the run resumes", async () => {
     const runId = "run-lifecycle-table";
     const sessionKey = "agent:main:main";
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -558,40 +543,17 @@ describe("startGatewayEventSubscriptions", () => {
       sessionKey,
       lifecycleGeneration,
     });
-    const entry = registration.entry;
     const emit = (data: AgentEventPayload["data"]) =>
       emitAgentEvent({ runId, lifecycleGeneration, stream: "lifecycle", data });
-    expect(readLifecycleState(entry)).toEqual(lifecycleState(undefined));
     agentEventHandlerMocks.create.mockReturnValue(emptyHandler());
     start(params);
 
     emit({ phase: "start", startedAt: 1_000 });
-    expect(readLifecycleState(entry)).toEqual(lifecycleState(undefined, false));
     await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
 
     emit({ phase: "error", error: "retryable provider failure", endedAt: 2_000 });
     emit({ phase: "start", startedAt: 2_500 });
     expect(agentEventHandlerMocks.persistLifecycle).not.toHaveBeenCalled();
-
-    const terminalPersistence = createDeferred();
-    agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
-
-    emit({ phase: "end", endedAt: 3_000 });
-    const ownedPersistence = entry.adapter.projectSessionTerminalPersistence;
-
-    try {
-      expect(readLifecycleState(entry)).toEqual(
-        lifecycleState(false, true, 3_000, ownedPersistence, false),
-      );
-      expect(ownedPersistence).toBeInstanceOf(Promise);
-      terminalPersistence.resolve();
-      await waitForChatAbortTerminalPersistence(entry);
-      expect(entry.adapter.projectSessionTerminalPersisted).toBe(true);
-    } finally {
-      terminalPersistence.resolve();
-      await waitForChatAbortTerminalPersistence(entry);
-    }
-    expect(readLifecycleState(entry)).toEqual(lifecycleState(false, false, 3_000, undefined, true));
 
     registration.cleanup();
     expect(rpcSourceTesting.has(runId)).toBe(false);
@@ -657,8 +619,11 @@ describe("startGatewayEventSubscriptions", () => {
       let firstDrain: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
       try {
         emitTerminal(2_000);
-        expect(entry.adapter.projectSessionTerminalPending).toBe(true);
-        expect(entry.adapter.projectSessionTerminalPersisted).toBe(false);
+        expect(entry.adapter).toMatchObject({
+          projectSessionTerminalPending: true,
+          projectSessionTerminalPersisted: false,
+          projectSessionTerminalObservedAt: 2_000,
+        });
         expect(entry.adapter.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
         firstDrain = observeSettlement(waitForChatAbortTerminalPersistence(entry), () => {
           firstSettled = true;

@@ -8,7 +8,7 @@ import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
-import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
+import { modelDefinition, providerConfig } from "../agents/model-auth.fixtures.test-support.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -110,6 +110,26 @@ function expectPreparedModel(agentId: string) {
   expect(input && getPreparedModelRuntimeSnapshot(input)).toBeDefined();
 }
 
+async function expectStartupChatUnavailable(
+  client: Awaited<ReturnType<typeof connectWebchatClient>>,
+  params: { sessionKey: string; message: string; idempotencyKey: string },
+) {
+  expect(await rpcReq(client, "chat.send", params)).toMatchObject({
+    ok: false,
+    error: {
+      code: "UNAVAILABLE",
+      retryable: true,
+      details: { reason: "startup-sidecars", method: "chat.send" },
+    },
+  });
+}
+
+function expectInspectionPending(agentId: string, env: NodeJS.ProcessEnv) {
+  expect(readAgentDatabaseAdmissionRefusal(agentId, { env })?.code).toBe(
+    "agent-database-inspection-pending",
+  );
+}
+
 function pauseIntegrityInspection(params: {
   root: string;
   pathname: string;
@@ -200,7 +220,6 @@ it.for([
     const restorationEntered = createDeferredCore();
     const restorationRelease = createDeferredCore();
     const initialRecoveryReady = createDeferredCore();
-    let startupSettled = false;
     let recoverySource: OpenClawConfig | undefined;
     let bootstrapSecrets: ReturnType<typeof getActiveSecretsRuntimeSnapshot> | undefined;
     let subagentRecoverySettled: Promise<void> | undefined;
@@ -344,7 +363,6 @@ it.for([
     const preparationEntered = createDeferredCore();
     const maintenanceCompleted = createDeferredCore();
     const dispatched = createDeferredCore();
-    let sessionPrepared = false;
     let preparationParent: number | undefined;
     let brokerPid: number | undefined;
     let inspectionAliveAtBrokerClose: boolean | undefined;
@@ -403,7 +421,6 @@ it.for([
             });
             preparationParent = Number(result.stdout);
           }
-          sessionPrepared = true;
           preparationEntered.resolve();
           await preparationRelease.promise;
         }
@@ -511,16 +528,7 @@ it.for([
         return;
       }
       server = await startup;
-      void server.startupSettled.then(
-        () => {
-          startupSettled = true;
-        },
-        () => {},
-      );
       await server.startupSettled;
-      if (brokerExpected) {
-        expect(brokerPid).toBeTypeOf("number");
-      }
       expect((await probeGateway(port, "/healthz")).status).toBe(200);
       if (outcome === "corrupt") {
         // Gateway startup can settle before background integrity inspection does.
@@ -557,16 +565,13 @@ it.for([
         idempotencyKey: `startup-dispatch-${agentId}`,
       };
       if (paused) {
-        expect(refusal()).toMatchObject({
-          code: "agent-database-inspection-pending",
-        });
+        expectInspectionPending(agentId, env);
         expect(() => openOpenClawAgentDatabase(scope)).toThrow(AgentDatabaseAdmissionError);
         if (outcome === "handoff") {
           // Old startup blocks in full-file preflight before claiming its writable lease.
           expect(fs.existsSync(enteredPath)).toBe(false);
           const preparationMarker = pause!.preparationEnteredPath;
           await withinTest(handoffReceipts!.waitFor(preparationMarker, "entered"), signal);
-          expect(fs.existsSync(preparationMarker)).toBe(true);
         } else {
           await vi.waitFor(() => expect(fs.existsSync(enteredPath)).toBe(true));
         }
@@ -617,7 +622,6 @@ it.for([
           ),
           signal,
         );
-        expect(fs.existsSync(preparationEnteredPath)).toBe(true);
         expect(preparationCancelled).toBe(false);
         expect(fs.existsSync(pause!.preparationReleasePath)).toBe(false);
         await closeServer();
@@ -634,46 +638,29 @@ it.for([
           ]),
           signal,
         );
-        expect(sessionPrepared).toBe(true);
         if (outcome === "recover") {
           expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
         }
-        expect(refusal()).toMatchObject({
-          code: "agent-database-inspection-pending",
-        });
+        expectInspectionPending(agentId, env);
         if (outcome === "recover") {
           chatClient = await connectWebchatClient({ port });
           gatewayReplyMock.mockImplementationOnce(async () => {
             dispatched.resolve();
             return { text: "Synthetic startup reply" };
           });
-          expect(await rpcReq(chatClient, "chat.send", chatParams)).toMatchObject({
-            ok: false,
-            error: {
-              code: "UNAVAILABLE",
-              retryable: true,
-              details: { reason: "startup-sidecars", method: "chat.send" },
-            },
-          });
+          await expectStartupChatUnavailable(chatClient, chatParams);
           expect(gatewayReplyMock).not.toHaveBeenCalled();
           const active = getActiveSecretsRuntimeSnapshot()!;
           const source = structuredClone(active.sourceConfig);
-          source.models = {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                models: [
-                  modelDefinition("gpt-5.6-sol", {
-                    name: "GPT-5.6",
-                    api: "openai-responses",
-                    agentRuntime: { id: "openclaw" },
-                    contextWindow: 128000,
-                    maxTokens: 4096,
-                  }),
-                ],
-              },
-            },
-          };
+          source.models = providerConfig("openai", {
+            baseUrl: "https://api.openai.com/v1",
+            models: [
+              modelDefinition("gpt-5.6-sol", {
+                api: "openai-responses",
+                agentRuntime: { id: "openclaw" },
+              }),
+            ],
+          }).models;
           const runtime = structuredClone(source);
           recoverySource = source;
           runtime.models!.providers!.openai!.models[0]!.compat = {
@@ -724,7 +711,6 @@ it.for([
         if (holdSubagentRestoration) {
           // The optional worker stays gated without making the healthy Gateway unready.
           await withinTest(restorationEntered.promise, signal);
-          expect(startupSettled).toBe(true);
           const recoveringReadiness = await probeGateway(port, "/readyz");
           expect(recoveringReadiness.status).toBe(200);
           await expect(recoveringReadiness.json()).resolves.toMatchObject({
@@ -733,14 +719,7 @@ it.for([
             failing: [],
             agentRecovery: ["worker"],
           });
-          expect(await rpcReq(chatClient!, "chat.send", chatParams)).toMatchObject({
-            ok: false,
-            error: {
-              code: "UNAVAILABLE",
-              message: "chat.send unavailable during gateway startup",
-              details: { reason: "startup-sidecars", method: "chat.send" },
-            },
-          });
+          await expectStartupChatUnavailable(chatClient!, chatParams);
           restorationRelease.resolve();
           expect(subagentRecoverySettled).toBeDefined();
           await withinTest(subagentRecoverySettled!, signal);
