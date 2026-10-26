@@ -185,10 +185,6 @@
   overscroll-behavior: contain;
 }
 
-.agent-chat__composer-shell[data-mobile-composer="true"] .chat-queue__text {
-  font-weight: 500;
-}
-
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__input-btn--attach {
   width: 32px;

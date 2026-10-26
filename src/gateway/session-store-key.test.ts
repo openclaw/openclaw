@@ -1,5 +1,13 @@
 import { expect, onTestFinished, test, vi } from "vitest";
-import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
+import { canonicalizeSessionKeyForAgent, resolveSessionStoreKey } from "./session-store-key.js";
+
+test("does not fold qualified store keys to check unqualified sentinels", () => {
+  const key = "agent:ops:subagent:placement-normalization-work-count";
+  const spy = vi.spyOn(String.prototype, "toLowerCase");
+  onTestFinished(() => spy.mockRestore());
+  expect(resolveSessionStoreKey({ cfg: {}, sessionKey: key, storeAgentId: "ops" })).toBe(key);
+  expect(spy.mock.contexts.filter((value) => value === key)).toHaveLength(2);
+});
 
 test("canonicalizes a session key once without folding opaque peer IDs", () => {
   const key = "AGENT:OPS:SUBAGENT:normalization-work-count";

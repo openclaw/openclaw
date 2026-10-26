@@ -197,7 +197,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
             current,
             referenced,
           );
-          if (!isDeepStrictEqual(row.parents, parents)) {
+          if (row.parents !== parents) {
             put({ ...row, parents });
           }
         }
