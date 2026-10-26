@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import http from "node:http";
 import net from "node:net";
 import { afterEach, expect } from "vitest";
@@ -15,9 +16,7 @@ export function streamParams(kind: "desktop" | "portal", overrides: object = {})
 
 export function portOf(server: net.Server) {
   const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected local test address");
-  }
+  assert(address && typeof address !== "string", "expected local test address");
   return address.port;
 }
 
@@ -82,9 +81,7 @@ export function useStreamFixture() {
           if (kind === "portal") {
             expect(binary).toBe(true);
           }
-          if (!Buffer.isBuffer(data)) {
-            throw new Error("expected stream frame buffer");
-          }
+          assert(Buffer.isBuffer(data), "expected stream frame buffer");
           peer.frames.push(data);
         });
         ws.once("close", () => {

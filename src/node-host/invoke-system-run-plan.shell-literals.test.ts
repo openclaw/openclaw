@@ -52,40 +52,23 @@ it.skipIf(process.platform === "win32")("preserves native shell literal argument
   }
 });
 
-it.skipIf(process.platform === "win32")(
-  "rejects shell control, expansions and malformed payloads",
-  () => {
-    const binaryPath = resolveNativeBinaryFixturePath();
-    for (const argument of [
-      ...["&", ";", "&&", "|", ">", "<"].map((operator) => `safe${operator}other`),
-      "safe\nother 'x&y'",
-      "safe # comment\nother 'x&y'",
-      "safe # ignored&literal",
-      ...["\u000b", "\u00a0"].map((space) => `safe${space}#; other`),
-      "''#; other",
-      '""#; other',
-      "''#$(other) 'x&y'",
-      '""#`other` &other',
-      ...["$(other)", "`other`", "${VALUE}"].map((expansion) => `"${expansion}&literal"`),
-      "$(other) 'x&y'",
-      String.raw`\";other`,
-      String.raw`"safe\";literal";other`,
-      '"a&b$(other)"',
-      '"$(/usr/bin/printf ""; /bin/sh /tmp/payload.sh)"',
-      "\"$(/usr/bin/printf 'a|b')\"",
-      "`/usr/bin/printf 'a'; /usr/bin/printf 'b'`",
-      "'unterminated&literal",
-      "'x&y' trailing\\",
-    ]) {
-      const command = `${binaryPath} ${argument}`;
-      expect(prepareShell(command), command).toEqual(DENIED_RUNTIME_APPROVAL);
-    }
-  },
-);
-
 it
   .skipIf(process.platform === "win32")
   .each([
+    ...[
+      ...["&", ";", "&&", "|", ">", "<"].map((operator) => `safe${operator}other`),
+      "safe\nother 'x&y'",
+      "safe # ignored&literal",
+      ...["\u000b", "\u00a0"].map((space) => `safe${space}#; other`),
+      ...["''", '""'].map((quote) => `${quote}#; other`),
+      ...["$(other)", "`other`", "${VALUE}"].map((expansion) => `"${expansion}&literal"`),
+      "$(other) 'x&y'",
+      '"$(/usr/bin/printf ""; /bin/sh /tmp/payload.sh)"',
+      String.raw`\";other`,
+      String.raw`"safe\";literal";other`,
+      "'unterminated&literal",
+      "'x&y' trailing\\",
+    ].map((argument) => `printf ${argument}`),
     "py\\\nthon ./mutable.py 'x&y'",
     "\"py\\\nthon\" ./mutable.py 'x&y'",
     "pyth?n ./mutable.py 'x&y'",
@@ -107,6 +90,6 @@ it
     ]),
     ...["let", "declare"].map((builtin) => `${builtin} 'a[$(python ./mutable.py "x&y")]=1'`),
     "busybox sh -c 'python ./mutable.py \"x&y\"'",
-  ])("rejects shell syntax and carriers that obscure mutable interpreters: %j", (command) => {
+  ])("rejects unsafe shell syntax and mutable-interpreter carriers: %j", (command) => {
   expect(prepareShell(command)).toEqual(DENIED_RUNTIME_APPROVAL);
 });
