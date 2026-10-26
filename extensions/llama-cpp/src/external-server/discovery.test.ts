@@ -1,15 +1,19 @@
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
+import llamaCppProviderDiscovery from "../../provider-discovery.js";
 import { discoverLlamaServer } from "./discovery.js";
+import { prepareLlamaServerSetup } from "./setup.js";
 
 function withDiscovery(
-  reply: (request: IncomingMessage) => unknown,
+  reply: (request: IncomingMessage, response: ServerResponse) => unknown,
   run: (baseUrl: string) => Promise<void>,
 ) {
   return withServer((request, response) => {
     response.setHeader("Content-Type", "application/json");
-    const body = reply(request);
+    const body = reply(request, response);
     response.end(typeof body === "string" ? body : JSON.stringify(body));
   }, run);
 }
@@ -17,18 +21,10 @@ function withDiscovery(
 const result = (id: string) => ({ kind: "success", models: [{ config: { id } }] });
 
 it.each([
-  {
-    body: "<!doctype html><html><body>Local model app</body></html>",
-    caps: { supports_reasoning_effort: true },
-    reasoning: true,
-  },
-  {
-    body: JSON.stringify({ app: "local-models" }),
-    caps: { supports_reasoning_effort: false },
-    reasoning: false,
-  },
-  { body: undefined, caps: {}, reasoning: false },
-])("discovers rows with $caps behind $body", async ({ body, caps, reasoning }) => {
+  ["<!doctype html><html></html>", true],
+  [JSON.stringify({ app: "local-models" }), false],
+  [undefined, undefined],
+])("discovers rows behind %s with reasoning=%s", async (body, capability) => {
   const requests: string[] = [];
   await withDiscovery(
     ({ url }) => {
@@ -43,8 +39,10 @@ it.each([
       }
       return url?.startsWith("/props")
         ? {
-            default_generation_settings: { n_ctx: 32_768 },
-            chat_template_caps: { ...caps, supports_tools: true, supports_tool_calls: true },
+            chat_template_caps: {
+              supports_reasoning_effort: capability,
+              supports_tool_calls: true,
+            },
           }
         : {};
     },
@@ -57,9 +55,8 @@ it.each([
             status: "sleeping",
             config: {
               id: "qwen/model:Q4_K_M",
-              reasoning,
-              contextWindow: 32_768,
-              compat: { supportsTools: true, supportsReasoningEffort: reasoning },
+              reasoning: capability === true,
+              compat: { supportsReasoningEffort: capability === true },
             },
           },
         ],
@@ -91,7 +88,7 @@ it.each([
   { name: "API key", access: { apiKey: "endpoint-key" } },
   { name: "authorization header", access: { headers: { Authorization: "Bearer endpoint-key" } } },
 ])("fetches fresh discovery for $name and subsequent anonymous requests", async ({ access }) => {
-  let modelId = "anonymous-model";
+  let modelId = "initial";
   const modelRequests: Array<string | undefined> = [];
   await withDiscovery(
     (request) => {
@@ -102,15 +99,112 @@ it.each([
       return {};
     },
     async (baseUrl) => {
-      await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject(
-        result("anonymous-model"),
-      );
-      modelId = "fresh-model";
+      await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject(result("initial"));
+      modelId = "fresh";
       await expect(discoverLlamaServer({ baseUrl, ...access })).resolves.toMatchObject(
-        result("fresh-model"),
+        result("fresh"),
       );
-      await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject(result("fresh-model"));
+      await expect(discoverLlamaServer({ baseUrl })).resolves.toMatchObject(result("fresh"));
       expect(modelRequests).toEqual([undefined, "Bearer endpoint-key", undefined]);
+    },
+  );
+});
+
+async function refresh(config: ProviderCatalogContext["config"]) {
+  const catalog = await llamaCppProviderDiscovery.catalog.run({
+    config,
+    env: {},
+    resolveProviderApiKey: () => ({ apiKey: undefined }),
+    resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+  });
+  if (!catalog || !("provider" in catalog)) {
+    throw new Error("Expected a successful llama-server catalog refresh");
+  }
+  return catalog.provider.models;
+}
+
+const facts = (contextWindow: number, supportsTools: boolean, contextTokens = contextWindow) => ({
+  contextWindow,
+  contextTokens,
+  compat: { supportsTools },
+});
+const absentFacts = /"(?:contextWindow|contextTokens|supportsTools)"/u;
+
+it("persists verified router facts and refreshes unknown fields without replacing explicit values", async () => {
+  let loadedModel = "model-a";
+  const propsRequests: string[] = [];
+  await withDiscovery(
+    (request, response) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      if (url.pathname === "/health") {
+        return {};
+      }
+      if (url.pathname === "/models") {
+        return {
+          data: ["model-a", "model-b"].map((id) => ({
+            id,
+            status: { value: id === loadedModel ? "loaded" : "unloaded" },
+          })),
+        };
+      }
+      if (url.pathname === "/props") {
+        propsRequests.push(url.search);
+        return {
+          default_generation_settings: { n_ctx: 32768 },
+          chat_template_caps: { supports_tool_calls: true },
+        };
+      }
+      response.statusCode = 404;
+      return {};
+    },
+    async (baseUrl) => {
+      const configured = {
+        baseUrl,
+        headers: { Authorization: "Bearer router-fixture" },
+        models: [],
+      };
+      const setup = await prepareLlamaServerSetup({
+        config: { models: { providers: { "llama-cpp": configured } } },
+        env: {},
+        modelRef: "llama-cpp/model-a",
+      });
+      const saved = setup ? applyProviderAuthConfigPatch({}, setup.configPatch, setup) : undefined;
+      const provider = saved?.models?.providers?.["llama-cpp"];
+      if (!saved || !provider) {
+        throw new Error("Expected a llama-server setup config patch");
+      }
+      expect(provider.models.find((model) => model.id === "model-a")).toMatchObject(
+        facts(32768, true),
+      );
+      const unloaded = provider.models.find((model) => model.id === "model-b");
+      expect(unloaded).toMatchObject({ id: "model-b" });
+      expect(JSON.stringify(unloaded)).not.toMatch(absentFacts);
+
+      const refreshModel = async () =>
+        (await refresh(saved)).find((model) => model.id === "model-b");
+      expect(await refreshModel()).toMatchObject(facts(128000, false));
+      loadedModel = "model-b";
+      expect(await refreshModel()).toMatchObject(facts(32768, true));
+
+      const savedModels = provider.models;
+      for (const route of [
+        { baseUrl: `${baseUrl}/other/v1` },
+        { api: "openai-responses" as const },
+      ]) {
+        provider.models = savedModels.map((model) =>
+          model.id === "model-b" ? Object.assign({}, model, route) : model,
+        );
+        const otherRoute = await refreshModel();
+        expect(otherRoute).toMatchObject(route);
+        expect(JSON.stringify(otherRoute)).not.toMatch(absentFacts);
+      }
+      provider.models = savedModels.map((model) =>
+        model.id === "model-b" ? Object.assign({}, model, facts(24000, false, 16000)) : model,
+      );
+      expect(await refreshModel()).toMatchObject(facts(24000, false, 16000));
+      expect(propsRequests).toEqual(
+        ["a", "a", "b", "b", "b", "b"].map((id) => `?model=model-${id}&autoload=false`),
+      );
     },
   );
 });
