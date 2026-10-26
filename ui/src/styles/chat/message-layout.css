@@ -321,10 +321,6 @@
   corner-shape: inherit;
 }
 
-.chat-image-frame--managed > .chat-image-surface {
-  min-height: 32px;
-}
-
 .chat-image-frame--image {
   display: block;
   flex: none;
@@ -377,6 +373,12 @@
   right: 0;
   width: 44px;
   height: 44px;
+}
+
+/* Narrow previews keep their ratio; the full-size menu target may extend beside them. */
+.chat-image-frame--small > .chat-image-actions {
+  right: auto;
+  inset-inline-start: 0;
 }
 
 .chat-image-actions .oc-menu {
