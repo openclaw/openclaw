@@ -30,11 +30,10 @@ describe("command-startup-policy", () => {
     }
   });
 
-  it.each(["gateway"])("defers only %s installs with a runtime expectation", (parent) => {
-    const command = `${parent} install`;
-    expect(resolvePolicy(command).skipConfigGuard).toBe(false);
+  it("defers gateway installs with a runtime expectation", () => {
+    expect(resolvePolicy("gateway install").skipConfigGuard).toBe(false);
     expect(
-      resolvePolicy(command, {
+      resolvePolicy("gateway install", {
         options: { expectedRuntimePin: "{}" },
         jsonOutputMode: true,
       }).skipConfigGuard,
@@ -54,22 +53,13 @@ describe("command-startup-policy", () => {
     for (const command of paths) {
       expect(resolvePolicy(command).skipConfigGuard, command).toBe(true);
     }
-    expect(
-      resolvePolicy("agent", {
-        argv: ["node", "openclaw", "agent"],
-      }).skipConfigGuard,
-    ).toBe(true);
-    expect(
-      resolvePolicy("agent", {
-        argv: ["node", "openclaw", "agent", "--local"],
-      }).skipConfigGuard,
-    ).toBe(false);
+    const guardFor = (command: string, ...flags: string[]) =>
+      resolvePolicy(command, { argv: ["node", "openclaw", ...command.split(" "), ...flags] })
+        .skipConfigGuard;
+    expect(guardFor("agent")).toBe(true);
+    expect(guardFor("agent", "--local")).toBe(false);
     for (const flag of ["--index", "--fix"]) {
-      expect(
-        resolvePolicy("memory status", {
-          argv: ["node", "openclaw", "memory", "status", flag],
-        }).skipConfigGuard,
-      ).toBe(false);
+      expect(guardFor("memory status", flag)).toBe(false);
     }
   });
   it("uses process env banner suppression when startup env is omitted", () => {

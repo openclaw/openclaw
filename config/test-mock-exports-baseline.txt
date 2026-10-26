@@ -2704,8 +2704,6 @@
 ["src/cli/channels-status-cold-imports.test.ts","./program/config-guard.js","a50cc5f6f20ee6e71568e29802b9a35fee68ef6c41c171933ab52176b993e7e3",1]
 ["src/cli/channels-status-cold-imports.test.ts","./progress.js","93698f0f637a274bc04841f237a817d4c0a71f7eea9ec7529d848d45d20a94c3",1]
 ["src/cli/clawhub-install-confirmation.test.ts","./prompt.js","f6cc7d0ed3f2c1f98d8860cc2907279e580773cf059801d1d946a42e06b08e86",1]
-["src/cli/command-bootstrap.test.ts","./plugin-registry-loader.js","6f8d9712ebaa9d2078811b0a44b5eed577fd1792b82d757487e4cadc1ad1630f",1]
-["src/cli/command-bootstrap.test.ts","./program/config-guard.js","684fd4cd329ed27f46be8131cc8fcb6aa36997b8fd1356b779d9e7aa25754b04",1]
 ["src/cli/command-config-resolution.test.ts","../config/plugin-auto-enable.js","54b1e6f1039daf96006a1808ffa82bffe931c3ed42c57832cec6b5059ccf28ac",1]
 ["src/cli/command-config-resolution.test.ts","./command-secret-gateway.js","a955943c63802b41900b126eeb12d6e19cc18587b1c26747ba9a524595a3fa25",1]
 ["src/cli/command-execution-startup.test.ts","./plugin-registry-loader.js","6f8d9712ebaa9d2078811b0a44b5eed577fd1792b82d757487e4cadc1ad1630f",1]
