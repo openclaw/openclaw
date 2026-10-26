@@ -77,6 +77,8 @@ export type ToolPluginToolDefinition<
     | {
         /** Optional schema for the JSON value returned in `AgentToolResult.details`. */
         outputSchema?: TSchema;
+        /** Declare tool results as network-derived so the turn-taint path can mark them. */
+        resultContentSource?: AnyAgentTool["resultContentSource"];
         /** Execute one concrete tool call and return either plain text or JSON-serializable data. */
         execute: (
           params: Static<TParamsSchema>,
@@ -93,6 +95,8 @@ export type ToolPluginToolDefinition<
         execute?: never;
         /** Factory tools declare output schemas on their returned `AnyAgentTool` objects. */
         outputSchema?: never;
+        /** Factory tools declare result content sources on their returned `AnyAgentTool` objects. */
+        resultContentSource?: never;
       }
   );
 
@@ -104,6 +108,7 @@ type DefinedToolPluginTool = {
   outputSchema?: TSchema;
   optional: boolean;
   workspaceAccess?: boolean | "execute";
+  resultContentSource?: AnyAgentTool["resultContentSource"];
   execute?: (params: unknown, config: unknown, context: ToolPluginExecutionContext) => unknown;
   factory?: (
     context: ToolPluginFactoryContext<unknown>,
@@ -170,6 +175,7 @@ function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> 
     outputSchema: definition.outputSchema,
     optional: definition.optional === true,
     workspaceAccess: definition.workspaceAccess,
+    resultContentSource: definition.resultContentSource,
     execute: definition.execute as DefinedToolPluginTool["execute"],
     factory: definition.factory as DefinedToolPluginTool["factory"],
   })) as ToolPluginToolFactory<TConfig>;
@@ -239,6 +245,7 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
             description: tool.description,
             parameters: tool.parameters,
             ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+            ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
             execute: async (toolCallId, params, signal, onUpdate) =>
               wrapToolPluginResult(
                 await execute(params, config, {
