@@ -25,10 +25,14 @@ function feishuApiError(code: number, message: string): Error {
   });
 }
 
-function mockUserNames(...names: string[]): ReturnType<typeof vi.fn> {
+function mockUserNames(...names: (string | Error)[]): ReturnType<typeof vi.fn> {
   const get = vi.fn();
   for (const name of names) {
-    get.mockResolvedValueOnce({ data: { user: { name } } });
+    if (name instanceof Error) {
+      get.mockRejectedValueOnce(name);
+    } else {
+      get.mockResolvedValueOnce({ data: { user: { name } } });
+    }
   }
   createFeishuClientMock.mockReturnValue({
     contact: { user: { get } },
@@ -38,14 +42,8 @@ function mockUserNames(...names: string[]): ReturnType<typeof vi.fn> {
 
 const resolve = (senderId: string, log = vi.fn(), selectedAccount = account) =>
   resolveFeishuSenderName({ account: selectedAccount, senderId, log });
-function mockUnauthorizedLookup() {
-  const get = vi
-    .fn()
-    .mockRejectedValueOnce(feishuApiError(41050, "no user authority error"))
-    .mockResolvedValueOnce({ data: { user: { name: "Ada" } } });
-  createFeishuClientMock.mockReturnValue({ contact: { user: { get } } });
-  return get;
-}
+const mockUnauthorizedLookup = () =>
+  mockUserNames(feishuApiError(41050, "no user authority error"), "Ada");
 
 describe("resolveFeishuSenderName", () => {
   afterEach(() => {
@@ -56,8 +54,8 @@ describe("resolveFeishuSenderName", () => {
   it("reuses a cached sender name within the TTL", async () => {
     const get = mockUserNames("Ada");
 
-    await expect(resolve("ou_sender_cache")).resolves.toEqual({ name: "Ada" });
-    await expect(resolve("ou_sender_cache")).resolves.toEqual({ name: "Ada" });
+    await expect(resolve("ou_cache")).resolves.toEqual({ name: "Ada" });
+    await expect(resolve("ou_cache")).resolves.toEqual({ name: "Ada" });
 
     expect(get).toHaveBeenCalledTimes(1);
   });
@@ -66,11 +64,10 @@ describe("resolveFeishuSenderName", () => {
     const get = mockUnauthorizedLookup();
     const log = vi.fn();
 
-    await expect(resolve("ou_sender_hidden", log)).resolves.toEqual({});
-    await expect(resolve("ou_sender_hidden", log)).resolves.toEqual({});
-    await expect(
-      resolve("ou_sender_hidden", log, { ...account, accountId: "secondary" }),
-    ).resolves.toEqual({ name: "Ada" });
+    await expect(resolve("ou_hidden", log)).resolves.toEqual({});
+    await expect(resolve("ou_hidden", log)).resolves.toEqual({});
+    const secondary = { ...account, accountId: "secondary" };
+    await expect(resolve("ou_hidden", log, secondary)).resolves.toEqual({ name: "Ada" });
 
     expect(get).toHaveBeenCalledTimes(2);
     expect(log).not.toHaveBeenCalled();
@@ -114,11 +111,9 @@ describe("resolveFeishuSenderName", () => {
     await resolve("ou_sender_cap_500");
 
     expect(get).toHaveBeenCalledTimes(502);
-    expect(
-      get.mock.calls.filter(([params]) => params.path.user_id === "ou_sender_cap_0"),
-    ).toHaveLength(2);
-    expect(
-      get.mock.calls.filter(([params]) => params.path.user_id === "ou_sender_cap_500"),
-    ).toHaveLength(1);
+    const callsFor = (id: string) =>
+      get.mock.calls.filter(([params]) => params.path.user_id === id);
+    expect(callsFor("ou_sender_cap_0")).toHaveLength(2);
+    expect(callsFor("ou_sender_cap_500")).toHaveLength(1);
   });
 });

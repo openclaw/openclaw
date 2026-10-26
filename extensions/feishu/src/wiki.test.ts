@@ -27,18 +27,15 @@ function buildWikiTool(data?: unknown, resource: "space" | "spaceNode" = "space"
   }
   createFeishuToolClientMock.mockReturnValue({ wiki: { [resource]: { list } } });
   const registerTool = vi.fn();
+  const feishu = {
+    enabled: true,
+    appId: "app_id",
+    appSecret: "app_secret", // pragma: allowlist secret
+    tools: { wiki: true },
+  };
   registerFeishuWikiTools(
     createTestPluginApi({
-      config: {
-        channels: {
-          feishu: {
-            enabled: true,
-            appId: "app_id",
-            appSecret: "app_secret", // pragma: allowlist secret
-            tools: { wiki: true },
-          },
-        },
-      },
+      config: { channels: { feishu } },
       registerTool,
     }),
   );
@@ -61,14 +58,8 @@ describe("registerFeishuWikiTools pagination", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("nodes: forwards pagination and returns continuation metadata", async () => {
-    const { tool, list } = buildWikiTool(
-      {
-        items: [{ node_token: "node-1", obj_type: "docx", node_type: "origin" }],
-        has_more: true,
-        page_token: "page-2",
-      },
-      "spaceNode",
-    );
+    const page = { items: [{ node_token: "node-1" }], has_more: true, page_token: "page-2" };
+    const { tool, list } = buildWikiTool(page, "spaceNode");
 
     const result = await tool.execute("call-1", {
       action: "nodes",
@@ -99,9 +90,7 @@ describe("registerFeishuWikiTools pagination", () => {
     expect(tool.resultContentSource).toBe("network");
     const result = await tool.execute("call-1", { action: "spaces" });
 
-    expect(list).toHaveBeenCalledWith({
-      params: { page_size: 50, page_token: undefined },
-    });
+    expect(list).toHaveBeenCalledWith({ params: { page_size: 50, page_token: undefined } });
     expect(result.details).toMatchObject({
       spaces: [{ space_id: "space-1", name: hostile }],
       has_more: false,
@@ -126,10 +115,7 @@ describe("registerFeishuWikiTools pagination", () => {
   it("rejects out-of-range page sizes before calling Feishu", async () => {
     const { tool, list } = buildWikiTool();
 
-    const result = await tool.execute("call-1", {
-      action: "spaces",
-      page_size: 51,
-    });
+    const result = await tool.execute("call-1", { action: "spaces", page_size: 51 });
 
     expect(list).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({

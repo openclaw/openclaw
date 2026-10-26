@@ -28,23 +28,20 @@ it("ignores empty broadcast lists", () => {
 });
 
 it("keeps forwarded sticker keys and styled posts in chronological order", async () => {
+  const forwarded = (msg_type: string, create_time: string, content: string) => ({
+    upper_message_id: "om_forward",
+    msg_type,
+    create_time,
+    body: { content },
+  });
   const items = [
     { msg_type: "merge_forward" },
-    {
-      upper_message_id: "om_forward",
-      msg_type: "post",
-      create_time: "2000",
-      body: {
-        content:
-          '{"post":{"zh_cn":{"title":"Forwarded","content":[[{"tag":"text","text":"Status","style":["bold"]},{"tag":"text","text":" "},{"tag":"a","text":"Docs","href":"https://example.com","style":["italic"]}]]}}}',
-      },
-    },
-    {
-      upper_message_id: "om_forward",
-      msg_type: "sticker",
-      create_time: "1000",
-      body: { content: JSON.stringify({ file_key: "file_forwarded_sticker" }) },
-    },
+    forwarded(
+      "post",
+      "2000",
+      '{"post":{"zh_cn":{"title":"Forwarded","content":[[{"tag":"text","text":"Status","style":["bold"]},{"tag":"text","text":" "},{"tag":"a","text":"Docs","href":"https://example.com","style":["italic"]}]]}}}',
+    ),
+    forwarded("sticker", "1000", JSON.stringify({ file_key: "file_forwarded_sticker" })),
   ];
   const before = structuredClone(items);
   expect(await parseMergeForwardContent(items)).toBe(

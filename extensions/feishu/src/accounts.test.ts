@@ -64,7 +64,6 @@ describe("Feishu account resolution", () => {
         },
       },
     });
-
     expect(resolveFeishuAccount({ cfg, accountId: "sales.eu" })).toMatchObject({
       appId: "app-sales",
       config: { tools: { perm: false } },
@@ -124,17 +123,14 @@ describe("Feishu account resolution", () => {
 
   it.each(["encryptKey", "verificationToken"] as const)("checks webhook %s authority", (field) => {
     withEnv({ [FEISHU_SELECTED_SECRET_ENV]: "event-secret" }, () => {
-      const secrets = {
-        defaults: { env: "selected" },
-        providers: { selected: { source: "exec" as const, command: "/unused" } },
-      };
       const cfg = createFeishuTestConfig(
+        { ...credentials, connectionMode: "webhook", [field]: envRef("selected") },
         {
-          ...credentials,
-          connectionMode: "webhook",
-          [field]: envRef("selected"),
+          secrets: {
+            defaults: { env: "selected" },
+            providers: { selected: { source: "exec", command: "/unused" } },
+          },
         },
-        { secrets },
       );
       expect(() => resolveFeishuRuntimeAccount({ cfg }, { requireEventSecrets: true })).toThrow(
         FeishuSecretRefUnavailableError,
@@ -161,7 +157,6 @@ describe("Feishu account resolution", () => {
     withEnv(env, () => {
       const cfg = createFeishuSecretRefPolicyConfig(testCase);
       const account = resolveFeishuAccount({ cfg, accountId: "selected" });
-
       expect(account).toMatchObject({
         accountId: "selected",
         configured: testCase.configured,

@@ -36,17 +36,9 @@ describe("probeFeishu", () => {
   });
 
   it.each([
-    {
-      name: "probe",
-      run: probeFeishu,
-      expected: { ok: false, appId: "cli_123", error: "check timed out after 1000ms" },
-    },
-    {
-      name: "AI-agent registration",
-      run: registerFeishuAiAgent,
-      expected: { ok: false, reason: "timeout" },
-    },
-  ])("bounds $name request timeouts", async ({ run, expected }) => {
+    ["probe", probeFeishu, { ok: false, appId: "cli_123", error: "check timed out after 1000ms" }],
+    ["AI-agent registration", registerFeishuAiAgent, { ok: false, reason: "timeout" }],
+  ] as const)("bounds %s request timeouts", async (_name, run, expected) => {
     createFeishuClientMock.mockReturnValue({ request: vi.fn(() => new Promise(() => {})) });
     const promise = run(DEFAULT_CREDS, run === probeFeishu ? { timeoutMs: 1_000 } : {});
     await vi.advanceTimersByTimeAsync(FEISHU_PROBE_REQUEST_TIMEOUT_MS);
@@ -54,17 +46,9 @@ describe("probeFeishu", () => {
   });
 
   it.each([
-    {
-      name: "probe",
-      run: probeFeishu,
-      expected: { ok: false, appId: "cli_123", error: "check aborted" },
-    },
-    {
-      name: "AI-agent registration",
-      run: registerFeishuAiAgent,
-      expected: { ok: false, reason: "aborted" },
-    },
-  ])("does not start $name after abort", async ({ run, expected }) => {
+    ["probe", probeFeishu, { ok: false, appId: "cli_123", error: "check aborted" }],
+    ["AI-agent registration", registerFeishuAiAgent, { ok: false, reason: "aborted" }],
+  ] as const)("does not start %s after abort", async (_name, run, expected) => {
     createFeishuClientMock.mockClear();
     await expect(run(DEFAULT_CREDS, { abortSignal: AbortSignal.abort() })).resolves.toEqual(
       expected,
@@ -104,18 +88,16 @@ describe("probeFeishu", () => {
   });
 
   it("does not reuse cached identity when an account is reassigned to another app", async () => {
-    const requestFn = vi
-      .fn()
+    const requestFn = setupClient({});
+    requestFn
       .mockResolvedValueOnce({ code: 0, bot: { app_name: "OldBot", open_id: "ou_old" } })
       .mockResolvedValueOnce({ code: 0, bot: { app_name: "NewBot", open_id: "ou_new" } });
-    createFeishuClientMock.mockReturnValue({ request: requestFn });
-
-    await expect(
-      probeFeishu({ accountId: "acct-switch", appId: "cli_old", appSecret: "secret_old" }), // pragma: allowlist secret
-    ).resolves.toMatchObject({ ok: true, appId: "cli_old", botOpenId: "ou_old" });
-    await expect(
-      probeFeishu({ accountId: "acct-switch", appId: "cli_new", appSecret: "secret_new" }), // pragma: allowlist secret
-    ).resolves.toMatchObject({ ok: true, appId: "cli_new", botOpenId: "ou_new" });
+    for (const version of ["old", "new"]) {
+      const appId = `cli_${version}`;
+      await expect(
+        probeFeishu({ accountId: "acct-switch", appId, appSecret: `secret_${version}` }), // pragma: allowlist secret
+      ).resolves.toMatchObject({ ok: true, appId, botOpenId: `ou_${version}` });
+    }
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 

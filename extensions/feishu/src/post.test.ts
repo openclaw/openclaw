@@ -5,6 +5,8 @@ import { parsePostContent } from "./post.js";
 function post(content: unknown[][], title = "", extra: Record<string, unknown> = {}) {
   return JSON.stringify({ title, content, ...extra });
 }
+const parseRow = (content: unknown[], title = "", extra: Record<string, unknown> = {}) =>
+  parsePostContent(post([content], title, extra));
 function file(file_key: string, file_name: string, is_folder = false) {
   return { file_key, file_name, is_folder };
 }
@@ -32,8 +34,8 @@ function parsed(textContent: string, attachments: unknown[] = [], mentionedOpenI
 
 describe("parsePostContent", () => {
   it("renders title and styled text as markdown", () => {
-    const content = post(
-      [
+    expect(
+      parseRow(
         spaced([
           text("Bold", ["bold"]),
           text("Italic", ["italic"]),
@@ -41,20 +43,15 @@ describe("parsePostContent", () => {
           text("Strike", ["lineThrough"]),
           { tag: "code", text: "Code" },
         ]),
-      ],
-      "Daily *Plan*",
-    );
-
-    expect(parsePostContent(content)).toStrictEqual(
+        "Daily *Plan*",
+      ),
+    ).toStrictEqual(
       parsed("Daily \\*Plan\\*\n\n**Bold** *Italic* <u>Underline</u> ~~Strike~~ `Code`"),
     );
   });
 
   it("keeps boundary whitespace outside emphasis delimiters", () => {
-    const result = parsePostContent(
-      post([[text("Before"), text(" styled ", ["bold"]), text("after")]]),
-    );
-
+    const result = parseRow([text("Before"), text(" styled ", ["bold"]), text("after")]);
     expect(parseFeishuMarkdown(result.textContent)).toMatchObject({
       children: [
         {
@@ -70,21 +67,21 @@ describe("parsePostContent", () => {
   });
 
   it("renders styled links and mentions", () => {
-    const content = post([
-      spaced([
-        {
-          tag: "a",
-          text: "Docs [v2]",
-          href: "https://example.com/guide(a)",
-          style: ["lineThrough", "bold", "italic"],
-        },
-        { tag: "at", user_name: "alice_bob", style: ["underline"] },
-        { tag: "at", open_id: "ou_123" },
-        { tag: "a", href: "https://example.com/no-text" },
-      ]),
-    ]);
-
-    expect(parsePostContent(content)).toMatchObject({
+    expect(
+      parseRow(
+        spaced([
+          {
+            tag: "a",
+            text: "Docs [v2]",
+            href: "https://example.com/guide(a)",
+            style: ["lineThrough", "bold", "italic"],
+          },
+          { tag: "at", user_name: "alice_bob", style: ["underline"] },
+          { tag: "at", open_id: "ou_123" },
+          { tag: "a", href: "https://example.com/no-text" },
+        ]),
+      ),
+    ).toMatchObject({
       textContent:
         "~~***[Docs \\[v2\\]](https://example.com/guide(a))***~~ <u>@alice\\_bob</u> @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
       mentionedOpenIds: ["ou_123"],
@@ -107,8 +104,8 @@ describe("parsePostContent", () => {
   });
 
   it("preserves interleaved rich-post attachment occurrences in their original order", () => {
-    const content = post(
-      [
+    expect(
+      parseRow(
         [
           media("file_first", "first.mov"),
           image("img_shared"),
@@ -116,11 +113,9 @@ describe("parsePostContent", () => {
           image("img_shared"),
           media("invalid/key"),
         ],
-      ],
-      "Attachments",
-    );
-
-    expect(parsePostContent(content).attachments).toEqual([
+        "Attachments",
+      ).attachments,
+    ).toEqual([
       { kind: "file", key: "file_first", fileName: "first.mov" },
       { kind: "image", key: "img_shared" },
       { kind: "file", key: "file_last", fileName: "last.mov" },
@@ -129,24 +124,23 @@ describe("parsePostContent", () => {
   });
 
   it("collects top-level files[] from captioned and multi-file posts", () => {
-    const captioned = post([[text("这是账本")]], "", {
-      content_v2: [[text("这是账本")]],
-      files: [file("file_v3_caption", "amount.csv")],
-    });
-
-    expect(parsePostContent(captioned)).toEqual(
-      parsed("这是账本", [topLevelFile("file_v3_caption", "amount.csv")]),
-    );
-    const multiFile = post([[]], "", {
-      content_v2: [[]],
-      files: [
-        file("file_v3_zip_aug", "aug.zip"),
-        file("file_v3_zip_sep", "sep.zip"),
-        file("file_v3_folder", "ignored-folder", true),
-        file("invalid/key", "bad.csv"),
-      ],
-    });
-    expect(parsePostContent(multiFile).attachments).toEqual([
+    expect(
+      parseRow([text("这是账本")], "", {
+        content_v2: [[text("这是账本")]],
+        files: [file("file_v3_caption", "amount.csv")],
+      }),
+    ).toEqual(parsed("这是账本", [topLevelFile("file_v3_caption", "amount.csv")]));
+    expect(
+      parseRow([], "", {
+        content_v2: [[]],
+        files: [
+          file("file_v3_zip_aug", "aug.zip"),
+          file("file_v3_zip_sep", "sep.zip"),
+          file("file_v3_folder", "ignored-folder", true),
+          file("invalid/key", "bad.csv"),
+        ],
+      }).attachments,
+    ).toEqual([
       topLevelFile("file_v3_zip_aug", "aug.zip"),
       topLevelFile("file_v3_zip_sep", "sep.zip"),
     ]);
@@ -156,9 +150,9 @@ describe("parsePostContent", () => {
     expect(parsePostContent(localized).attachments).toEqual([
       topLevelFile("file_v3_locale", "locale.csv"),
     ]);
-    expect(
-      parsePostContent(post([[]], "", { files: [{ file_key: "file_pdf" }] })).attachments,
-    ).toEqual([{ kind: "file", key: "file_pdf", origin: "top-level" }]);
+    expect(parseRow([], "", { files: [{ file_key: "file_pdf" }] }).attachments).toEqual([
+      { kind: "file", key: "file_pdf", origin: "top-level" },
+    ]);
   });
 
   it.each([true, false])("supports locale wrapper (nested post: %s)", (nested) => {
@@ -170,9 +164,7 @@ describe("parsePostContent", () => {
 
 it("preserves code-block content containing Markdown fences through rich-post parsing", () => {
   const code = "Before\n```markdown\n# literal heading\n```\nAfter";
-  const result = parsePostContent(
-    JSON.stringify({ content: [[{ tag: "code_block", language: "markdown", text: code }]] }),
-  );
+  const result = parseRow([{ tag: "code_block", language: "markdown", text: code }]);
   expect(parseFeishuMarkdown(result.textContent)).toMatchObject({
     children: [{ type: "code", lang: "markdown", value: code }],
   });

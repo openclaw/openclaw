@@ -57,24 +57,18 @@ describe("Feishu read policy", () => {
     expectDenied({ account, chatId: "oc_other", ctx: currentContext });
   });
 
-  it("does not treat public delivery routing as trusted current-chat identity", () => {
-    expectDenied({
+  it.each([
+    {
+      name: "public delivery routing is not trusted current-chat identity",
       account: createAccount(),
       chatId: "oc_unconfigured",
       chatType: "group",
       ctx: {
         agentAccountId: "default",
         messageChannel: "feishu",
-        deliveryContext: {
-          channel: "feishu",
-          to: "oc_unconfigured",
-          accountId: "default",
-        },
+        deliveryContext: { channel: "feishu", to: "oc_unconfigured", accountId: "default" },
       },
-    });
-  });
-
-  it.each([
+    },
     {
       name: "wildcard defaults are not admission",
       account: createAccount({ dmPolicy: "open", groups: { "*": { requireMention: false } } }),
