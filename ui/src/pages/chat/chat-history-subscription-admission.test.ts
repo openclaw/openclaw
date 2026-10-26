@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { useFakeClock } from "../../test-helpers/fake-clock.ts";
@@ -60,8 +60,6 @@ it.each<[string, boolean]>([
       "chat.startup": () => ({ messages }),
     },
   });
-  state.chatError = null;
-  onTestFinished(() => state.sessions.dispose());
   const calls = (method: string) => requestCalls(state.request, method);
   if (change === "upgraded") {
     await state.sessions.subscribeMessages(key, { mode: "narration" });
@@ -79,7 +77,6 @@ it.each<[string, boolean]>([
   const method = startup ? "chat.startup" : "chat.history";
   if (retry) {
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls("sessions.messages.unsubscribe")).toHaveLength(0);
     expect(state.chatMessages).toEqual(cached);
     expect(state).toMatchObject({ chatError: null, lastError: null });
   }

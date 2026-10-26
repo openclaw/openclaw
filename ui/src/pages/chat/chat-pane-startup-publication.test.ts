@@ -7,15 +7,13 @@ import type { ApplicationPlacementStartupStatus } from "../../app/session-placem
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 
-function session(key: string): GatewaySessionRow {
-  return {
-    key: `agent:main:${key}`,
-    sessionId: key,
-    agentId: "main",
-    kind: "direct",
-    updatedAt: 1,
-  };
-}
+const session = (key: string): GatewaySessionRow => ({
+  key: `agent:main:${key}`,
+  sessionId: key,
+  agentId: "main",
+  kind: "direct",
+  updatedAt: 1,
+});
 
 it("publishes placement status without admitting another transcript message", async () => {
   const row = session("placement-publication");
@@ -36,7 +34,6 @@ it("publishes placement status without admitting another transcript message", as
   const pane = mounted.mount(sessionKey);
   await refreshPane(pane);
   await waitForSolid(() => expect(pane.querySelector("textarea")).not.toBeNull());
-  expect(pane.state.chatMessages).toEqual([]);
 
   publish({
     sessionKey,

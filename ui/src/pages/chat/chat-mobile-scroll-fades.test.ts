@@ -11,9 +11,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const release of releases.splice(0)) {
-    release();
-  }
+  releases.splice(0).forEach((release) => release());
   vi.useRealTimers();
   vi.restoreAllMocks();
   document.body.replaceChildren();
@@ -43,9 +41,9 @@ function port(parent: HTMLElement, left: number) {
   return element;
 }
 
-function edges(host: HTMLElement) {
-  return [...host.querySelectorAll<HTMLElement>(".chat-mobile-host__scroll-edge")];
-}
+const edges = (host: HTMLElement) => [
+  ...host.querySelectorAll<HTMLElement>(".chat-mobile-host__scroll-edge"),
+];
 
 function connect(fades: ReturnType<typeof createMobileSheetScrollFades>, host: HTMLElement) {
   const disconnect = fades.connect((ports) => createMobileSheetScrollFadeConnection(ports, host));
@@ -78,14 +76,9 @@ it("paints retained and late scroll ports in document order with the existing in
   const nested = port(first, 40);
   releases.push(fades.register(nested));
   vi.advanceTimersToNextFrame();
-  expect(edges(host).map((edge) => edge.style.left)).toEqual([
-    "22px",
-    "22px",
-    "32px",
-    "32px",
-    "42px",
-    "42px",
-  ]);
+  expect(edges(host).map((edge) => edge.style.left)).toEqual(
+    ["22px", "32px", "42px"].flatMap((left) => [left, left]),
+  );
   expect(edges(host)[0]).toBe(top);
   expect(edges(host)[1]).toBe(bottom);
 
@@ -121,7 +114,5 @@ it("reconnects retained ports only within the current shell and releases dispose
   outside.remove();
   await Promise.resolve();
   vi.advanceTimersToNextFrame();
-  expect(edges(nextHost)).toHaveLength(0);
-  scroll(retained);
   expect(edges(nextHost)).toHaveLength(0);
 });

@@ -7,16 +7,13 @@ import type { AgentEventPayload } from "./tool-stream-contract.ts";
 const toolCall = (id: string | undefined = "read-1") => ({
   role: "assistant",
   runId: "run-1",
-  content: [
-    { type: "toolCall", ...(id ? { id } : {}), name: "read", arguments: { path: "src/app.ts" } },
-  ],
+  content: [{ type: "toolCall", ...(id ? { id } : {}), name: "read" }],
 });
 
 const toolResult = () => ({
   role: "toolResult",
   runId: "run-1",
   toolCallId: "read-1",
-  toolName: "read",
   content: [{ type: "text", text: "export const ready = true;" }],
 });
 
