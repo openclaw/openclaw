@@ -4525,6 +4525,9 @@ process.on("exit", () => {
       writeFileSync(path.join(origin, "restored", "old.txt"), restored);
       git(origin, ["add", "-A"]);
       git(origin, ["commit", "-qm", "old content"]);
+      const restoredCommit = git(origin, ["rev-parse", "HEAD"]);
+      const restoredBlob = git(origin, ["rev-parse", `${restoredCommit}:restored/old.txt`]);
+      git(origin, ["tag", "retained-root"]);
       rmSync(path.join(origin, "restored"), { recursive: true });
       git(origin, ["add", "-A"]);
       git(origin, ["commit", "-qm", "remove old content"]);
@@ -4849,7 +4852,10 @@ require('node:module').syncBuiltinESMExports();`,
         const sent = runSender();
         const first = receive("reused", sent);
         expect(first.result.status, failureDetail(first.result)).toBe(0);
-        expect(git(first.receiver, ["rev-parse", "--is-shallow-repository"])).toBe("true");
+        expect(git(first.receiver, ["rev-parse", "--is-shallow-repository"])).toBe("false");
+        const danglingPayload = path.join(root, "dangling-private-payload");
+        writeFileSync(danglingPayload, "prior private payload\n");
+        const dangling = git(first.receiver, ["hash-object", "-w", danglingPayload]);
         const capturedMode = git(first.receiver, ["ls-tree", "HEAD", "--", "mode.sh"]);
         expect(capturedMode).toMatch(/^100755 blob /u);
         const retained = ["unchanged.bin", "alias", "directory-alias"].map((file) => ({
@@ -4885,7 +4891,136 @@ require('node:module').syncBuiltinESMExports();`,
         }
         expect(lstatSync(path.join(reused.receiver, "mode.sh")).mode & 0o100).toBe(0o100);
         expectFileText(deletionReferent, "canary.txt", "private referent\n");
+        expect(git(reused.receiver, ["cat-file", "-t", restoredCommit])).toBe("commit");
+        expect(git(reused.receiver, ["cat-file", "-t", `${restoredCommit}^{tree}`])).toBe("tree");
+        expect(git(reused.receiver, ["for-each-ref", "--format=%(refname)", "refs/tags"])).toBe("");
+        expect(git(reused.receiver, ["config", "--get", "remote.origin.promisor"])).toBe("true");
+        expect(git(reused.receiver, ["config", "--get", "remote.origin.partialclonefilter"])).toBe(
+          "blob:none",
+        );
+        expect(
+          readdirSync(path.join(reused.receiver, ".git/objects/pack")).some((file) =>
+            file.endsWith(".promisor"),
+          ),
+        ).toBe(true);
+        const restoredBlobLookup = runCommand("git", ["cat-file", "-e", restoredBlob], {
+          cwd: reused.receiver,
+          env: { ...env, GIT_NO_LAZY_FETCH: "1" },
+          timeout: 10_000,
+        });
+        expect(restoredBlobLookup.error, failureDetail(restoredBlobLookup)).toBeUndefined();
+        expect(restoredBlobLookup.status, failureDetail(restoredBlobLookup)).toBe(1);
+        const danglingLookup = runCommand("git", ["cat-file", "-e", dangling], {
+          cwd: reused.receiver,
+          timeout: 10_000,
+        });
+        expect(danglingLookup.error, failureDetail(danglingLookup)).toBeUndefined();
+        expect(danglingLookup.status, failureDetail(danglingLookup)).toBe(1);
         git(reused.receiver, ["fsck", "--connectivity-only", "--no-dangling"]);
+
+        // An existing shallow receiver has no complete history to retain. Preserve
+        // the depth-bounded path while still verifying and publishing its exact base.
+        const legacy = receive("legacy-shallow", sent, {
+          prepareReceiver: (receiver) => {
+            rmSync(receiver, { recursive: true });
+            git(root, ["clone", "-q", "--depth=2", `file://${origin}`, receiver]);
+            git(receiver, ["tag", "retained-base", "HEAD^"]);
+          },
+        });
+        expect(legacy.result.status, failureDetail(legacy.result)).toBe(0);
+        expect(git(legacy.receiver, ["rev-parse", "--is-shallow-repository"])).toBe("true");
+        expect(git(legacy.receiver, ["rev-parse", "origin/main"])).toBe(base);
+        expect(git(legacy.receiver, ["rev-parse", "HEAD^"])).toBe(base);
+        expect(git(legacy.receiver, ["for-each-ref", "--format=%(refname)", "refs/tags"])).toBe("");
+        expect(existsSync(path.join(legacy.receiver, ".git/objects/info/alternates"))).toBe(false);
+        for (const condition of ["missing ref", "missing base", "borrowed objects"] as const) {
+          const fallback = receive(`prepared-${condition.replace(" ", "-")}`, sent, {
+            prepareReceiver: (receiver) => {
+              if (condition === "missing ref") {
+                git(receiver, ["update-ref", "-d", "refs/remotes/origin/main"]);
+                return;
+              }
+              rmSync(receiver, { recursive: true });
+              if (condition === "borrowed objects") {
+                git(root, ["clone", "-q", "--shared", origin, receiver]);
+                return;
+              }
+              mkdirSync(receiver);
+              git(receiver, ["init", "-q", "-b", "main"]);
+              git(receiver, ["commit", "--allow-empty", "-qm", "unrelated prepared source"]);
+              git(receiver, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+            },
+          });
+          expect(fallback.result.status, failureDetail(fallback.result)).toBe(0);
+          expect(git(fallback.receiver, ["rev-parse", "origin/main"])).toBe(base);
+          expect(git(fallback.receiver, ["rev-parse", "--is-shallow-repository"])).toBe("true");
+          expect(existsSync(path.join(fallback.receiver, ".git/objects/info/alternates"))).toBe(
+            false,
+          );
+        }
+
+        // Native hydration keeps blob-filtered ancestry. A base switch and the
+        // following reuse must preserve that ancestry without hydrating missing blobs.
+        const partialHistory = receive("native-partial-history", sent, {
+          prepareReceiver: (receiver) => {
+            rmSync(receiver, { recursive: true });
+            git(root, [
+              "clone",
+              "-q",
+              "--filter=blob:none",
+              "--no-checkout",
+              `file://${origin}`,
+              receiver,
+            ]);
+            git(receiver, [
+              "-c",
+              "user.name=Transport Fixture",
+              "-c",
+              "user.email=transport@example.invalid",
+              "commit",
+              "--allow-empty",
+              "-qm",
+              "newer partial source",
+            ]);
+            git(receiver, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+          },
+        });
+        expect(partialHistory.result.status, failureDetail(partialHistory.result)).toBe(0);
+        expect(git(partialHistory.receiver, ["rev-parse", "origin/main"])).toBe(base);
+        expect(git(partialHistory.receiver, ["rev-parse", "--is-shallow-repository"])).toBe(
+          "false",
+        );
+        expect(git(partialHistory.receiver, ["config", "--get", "remote.origin.promisor"])).toBe(
+          "true",
+        );
+        expect(
+          git(partialHistory.receiver, ["config", "--get", "remote.origin.partialclonefilter"]),
+        ).toBe("blob:none");
+        expect(
+          readdirSync(path.join(partialHistory.receiver, ".git/objects/pack")).some((file) =>
+            file.endsWith(".promisor"),
+          ),
+        ).toBe(true);
+        const missingBlob = runCommand("git", ["cat-file", "-e", restoredBlob], {
+          cwd: partialHistory.receiver,
+          env: { ...env, GIT_NO_LAZY_FETCH: "1" },
+          timeout: 10_000,
+        });
+        expect(missingBlob.error, failureDetail(missingBlob)).toBeUndefined();
+        expect(missingBlob.status, failureDetail(missingBlob)).toBe(1);
+        const partialReused = receive("native-partial-history", sent, {
+          source: path.join(root, "unavailable-origin"),
+        });
+        expect(partialReused.result.status, failureDetail(partialReused.result)).toBe(0);
+        expect(git(partialReused.receiver, ["rev-parse", "origin/main"])).toBe(base);
+        expect(git(partialReused.receiver, ["config", "--get", "remote.origin.promisor"])).toBe(
+          "true",
+        );
+        expect(
+          readdirSync(path.join(partialReused.receiver, ".git/objects/pack")).some((file) =>
+            file.endsWith(".promisor"),
+          ),
+        ).toBe(true);
         return;
       }
       if (installsDependencies) {
@@ -5513,6 +5648,7 @@ require('node:module').syncBuiltinESMExports();`,
           "newer-private.ignored",
         ]);
         git(receiver, ["commit", "-qm", "newer workflow source"]);
+        git(receiver, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
         // A stale execution index cannot erase ownership recorded by its commit.
         git(receiver, ["update-index", "--force-remove", ...newerFiles]);
         writeFileSync(path.join(receiver, "newer-private.ignored"), "changed private bytes\n");
@@ -5547,10 +5683,21 @@ require('node:module').syncBuiltinESMExports();`,
         expectFileText(imported.receiver, "newer-private.ignored", "changed private bytes\n");
       }
       expect(git(imported.receiver, ["rev-parse", "HEAD^"])).toBe(base);
-      expect(git(imported.receiver, ["rev-list", "--count", "HEAD"])).toBe("3");
+      expect(git(imported.receiver, ["cat-file", "-t", restoredCommit])).toBe("commit");
+      expect(git(imported.receiver, ["cat-file", "-t", `${restoredCommit}^{tree}`])).toBe("tree");
+      expect(git(imported.receiver, ["for-each-ref", "--format=%(refname)", "refs/tags"])).toBe("");
       if (alias) {
         expect(git(imported.receiver, ["rev-parse", alias])).toBe(base);
       }
+      expect(git(imported.receiver, ["for-each-ref", "--format=%(refname)"])).toBe(
+        [
+          "refs/heads/openclaw-source",
+          "refs/remotes/origin/main",
+          ...(alias ? [`refs/remotes/${alias}`] : []),
+        ]
+          .toSorted()
+          .join("\n"),
+      );
       expectFileBytes(imported.receiver, hiddenPath, hiddenBytes);
       expectFileBytes(imported.receiver, "unchanged.bin", unchanged);
       expectFileText(imported.receiver, "renamed.txt", "base\n");
@@ -5718,6 +5865,11 @@ cp.spawnSync = (command, args, options) => {
           const rejected = receive(`fetch-failure-${index}`, candidate, {
             extraEnv: { NODE_OPTIONS: `--require=${preload}`, TRANSPORT_FIXTURE_ARGV: argvPath },
             prepareReceiver: (receiver) => {
+              if (phase === "base-fetch") {
+                rmSync(receiver, { recursive: true });
+                git(root, ["clone", "-q", "--depth=2", `file://${origin}`, receiver]);
+                writeFileSync(path.join(receiver, "owner.txt"), "native stale bytes\n");
+              }
               priorIndex = readFileSync(path.join(receiver, ".git", "index"));
             },
           });
