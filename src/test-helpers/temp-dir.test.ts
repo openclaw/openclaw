@@ -11,43 +11,33 @@ import { withTempDirSync, withTestDir } from "./temp-dir.js";
 
 const parentRoots = useAutoCleanupTempDirTracker(afterEach);
 
-describe("withTestDir", () => {
-  it("keeps the cached async prefix root while another case is active", async () => {
-    const parentDir = parentRoots.make("openclaw-temp-dir-helper-test-");
-    const options = { prefix: "openclaw-shared-root-", parentDir };
-    const firstCanFinish = Promise.withResolvers<void>();
-    const first = withTestDir(options, async (dir) => {
-      await fs.writeFile(path.join(dir, "first.txt"), "ok");
-      await firstCanFinish.promise;
+it("keeps the cached async prefix root while another case is active", async () => {
+  const parentDir = parentRoots.make("openclaw-temp-dir-helper-test-");
+  const options = { prefix: "openclaw-shared-root-", parentDir };
+  const firstCanFinish = Promise.withResolvers<void>();
+  const first = withTestDir(options, async () => firstCanFinish.promise);
+  const firstSettled = first.catch(() => {});
+  try {
+    await withTestDir(options, async () => {
+      await expect(fs.readdir(parentDir)).resolves.toHaveLength(1);
     });
+  } finally {
+    // Release and join the owned case even when the sibling assertion fails.
+    firstCanFinish.resolve();
+    await firstSettled;
+  }
+  await first;
+  await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
+});
 
-    const firstSettled = first.catch(() => {});
-    try {
-      await withTestDir(options, async (dir) => {
-        await fs.writeFile(path.join(dir, "second.txt"), "ok");
-        await expect(fs.readdir(parentDir)).resolves.toHaveLength(1);
-      });
+it("removes the cached sync prefix root when the case finishes", async () => {
+  const parentDir = parentRoots.make("openclaw-temp-dir-helper-test-");
 
-      firstCanFinish.resolve();
-      await first;
-
-      await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
-    } finally {
-      // Release and join the owned case even when the sibling assertion fails.
-      firstCanFinish.resolve();
-      await firstSettled;
-    }
+  withTempDirSync({ prefix: "openclaw-leak-check-sync-", parentDir }, (dir) => {
+    fsSync.writeFileSync(path.join(dir, "marker.txt"), "ok");
   });
 
-  it("removes the cached sync prefix root when the case finishes", async () => {
-    const parentDir = parentRoots.make("openclaw-temp-dir-helper-test-");
-
-    withTempDirSync({ prefix: "openclaw-leak-check-sync-", parentDir }, (dir) => {
-      fsSync.writeFileSync(path.join(dir, "marker.txt"), "ok");
-    });
-
-    await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
-  });
+  await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
 });
 
 describe.skipIf(process.platform === "win32")("private temporary case directories", () => {

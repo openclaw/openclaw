@@ -46,19 +46,6 @@ async function acquireAsyncPrefixRoot(options: RootOptions): Promise<PrefixRootS
   }
 }
 
-function acquireSyncPrefixRoot(options: RootOptions): PrefixRootState {
-  const key = getRootKey(options);
-  const state = syncPrefixRoots.get(key) ?? {
-    path: fsSync.realpathSync(
-      fsSync.mkdtempSync(path.join(options.parentDir ?? os.tmpdir(), options.prefix)),
-    ),
-    activeCount: 0,
-  };
-  syncPrefixRoots.set(key, state);
-  state.activeCount += 1;
-  return state;
-}
-
 function releasePrefixRoot(roots: Map<string, PrefixRootState>, options: RootOptions) {
   const key = getRootKey(options);
   const state = roots.get(key);
@@ -116,7 +103,15 @@ export function createSuiteTempRootTracker(options: RootOptions) {
 }
 
 export function withTempDirSync<T>(options: DirOptions, run: (dir: string) => T): T {
-  const root = acquireSyncPrefixRoot(options);
+  const key = getRootKey(options);
+  const root = syncPrefixRoots.get(key) ?? {
+    path: fsSync.realpathSync(
+      fsSync.mkdtempSync(path.join(options.parentDir ?? os.tmpdir(), options.prefix)),
+    ),
+    activeCount: 0,
+  };
+  syncPrefixRoots.set(key, root);
+  root.activeCount += 1;
   const base = path.join(root.path, `dir-${nextSyncDirIndex++}`);
   try {
     const dir = options.subdir ? path.join(base, options.subdir) : base;
