@@ -84,14 +84,12 @@ describe("Browser Relay Authentication v2", () => {
     await expect(auth.acceptOk(ok(forgedProof))).rejects.toThrow("accept proof is invalid");
   });
   it("canonicalizes only the allowed profile query", () => {
-    expect(
-      extensionRelayAuthResource("wss://gateway.example/base/browser/extension?profile=work"),
-    ).toBe("/base/browser/extension?profile=work");
+    const resource = "/base/browser/extension?profile=work";
+    expect(extensionRelayAuthResource(`wss://gateway.example${resource}`)).toBe(resource);
     const url = "ws://127.0.0.1/extension";
-    expect(() => extensionRelayAuthResource(`${url}?profile=a&profile=b`)).toThrow(
-      "unsupported query",
-    );
-    expect(() => extensionRelayAuthResource(`${url}?token=nope`)).toThrow("unsupported query");
+    for (const query of ["profile=a&profile=b", "token=nope"]) {
+      expect(() => extensionRelayAuthResource(`${url}?${query}`)).toThrow("unsupported query");
+    }
   });
   it("rejects duplicate security fields before JSON parsing", () => {
     expect(parseRelayAuthJson('{"type":"auth.ok","v":2,"v":1}')).toBeNull();
