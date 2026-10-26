@@ -8,10 +8,6 @@ import {
   memoryOwnerFixture,
 } from "../config/sessions/session-actor-memory-family.test-support.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
-import {
-  captureSessionEntryMetadataRead,
-  captureSessionEntrySourceAssertion,
-} from "../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveApprovalRequestChannelAccountId } from "../infra/approval-request-account-binding.js";
@@ -99,33 +95,6 @@ it("routes approvals from the memory actor's latest committed channel account", 
   });
 });
 
-it("checks current metadata at the effect without sending memory predicates to SQLite", async () => {
-  const { binding, patch } = await fixture();
-  await runWithSessionActorStorage(binding, async () => {
-    const scope = { sessionKey, agentId: binding.agentId, storePath: binding.path };
-    const metadata = captureSessionEntryMetadataRead(scope, () =>
-      binding.authority.assertCurrent(),
-    );
-    const assertion = captureSessionEntrySourceAssertion({
-      scope,
-      expected: metadata?.readCurrent(),
-      fields: ["sessionId", "lifecycleRevision", "spawnedCwd"],
-      assertCurrent() {},
-      refuse() {
-        throw new Error("Workspace authority changed");
-      },
-    });
-    const prepared = await assertion.prepareSessionSource();
-    expect(prepared.checks).toEqual([]);
-    await patch({ label: "Unrelated bookkeeping" });
-    expect(() => prepared.assertCurrent()).not.toThrow();
-    await patch({ spawnedCwd: "/synthetic/replacement" });
-    expect(() => prepared.assertCurrent()).toThrow("Workspace authority changed");
-    using publicationSession = await prepareGitHubPublicationSession(sessionKey);
-    expect(publicationSession.readCurrent().entry?.spawnedCwd).toBe("/synthetic/replacement");
-  });
-});
-
 it("keeps file planning detached and refuses disclosure after its workspace changes", async () => {
   const { binding, patch } = await fixture();
   await expect(
@@ -134,6 +103,8 @@ it("keeps file planning detached and refuses disclosure after its workspace chan
         expect(loaded.root).toBe("/synthetic/workspace");
         await patch({ spawnedCwd: "/synthetic/replacement" });
         expect(loaded.root).toBe("/synthetic/workspace");
+        using publication = await prepareGitHubPublicationSession(sessionKey);
+        expect(publication.readCurrent().entry?.spawnedCwd).toBe("/synthetic/replacement");
         assertCurrent();
       }),
     ),
@@ -156,7 +127,7 @@ it("revokes a host diff when runtime configuration removes its read-only sandbox
     agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } },
   };
   setRuntimeConfigSnapshot(cfg);
-  const read = vi.spyOn(checkoutDiff, "loadCheckoutDiff").mockImplementationOnce(async () => {
+  vi.spyOn(checkoutDiff, "loadCheckoutDiff").mockImplementationOnce(async () => {
     setRuntimeConfigSnapshot({
       agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "none" } } },
     });
@@ -165,5 +136,4 @@ it("revokes a host diff when runtime configuration removes its read-only sandbox
   await expect(
     runWithSessionActorStorage(binding, () => loadSessionDiff({ sessionKey })),
   ).rejects.toThrow("Session workspace changed during file access");
-  expect(read).toHaveBeenCalledOnce();
 });

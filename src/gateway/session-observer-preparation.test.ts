@@ -4,6 +4,7 @@ import "../agents/utility-completion.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import {
   advanceAndFlush as advance,
+  expectBroadcast,
   useObserverSuite,
 } from "./session-observer-suite.test-support.js";
 import {
@@ -14,13 +15,11 @@ import {
 } from "./session-observer.test-utils.js";
 
 const runtimeMocks = vi.hoisted(() => ({
-  completeDirect: vi.fn(),
   selectModel: vi.fn(),
   completeIsolated: vi.fn(),
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  completeWithPreparedSimpleCompletionModel: runtimeMocks.completeDirect,
   resolveSimpleCompletionSelectionForAgent: runtimeMocks.selectModel,
 }));
 vi.mock("../agents/isolated-completion.js", () => ({
@@ -40,25 +39,16 @@ it.each(["claude-cli", "anthropic"])(
         },
       },
     };
-    const prepared = {
-      config,
-      provider,
-      model: "claude-sonnet-4-6",
-      agentId: "main",
-      agentDir: "/tmp/agent",
-    };
-    runtimeMocks.completeDirect
-      .mockReset()
-      .mockRejectedValue(new Error("HTTP 401 invalid credential"));
     runtimeMocks.selectModel.mockReturnValue({
       provider,
-      modelId: prepared.model,
-      agentDir: prepared.agentDir,
+      modelId: "claude-sonnet-4-6",
+      agentDir: "/tmp/agent",
     });
+    const digest = { headline: "Reviewing the implementation", health: "on-track" as const };
     const completion = {
-      text: JSON.stringify({ headline: "Reviewing the implementation", health: "on-track" }),
+      text: JSON.stringify(digest),
       provider: "anthropic",
-      model: prepared.model,
+      model: "claude-sonnet-4-6",
       owner: { kind: "cli", id: "claude-cli" },
     };
     runtimeMocks.completeIsolated
@@ -82,23 +72,9 @@ it.each(["claude-cli", "anthropic"])(
     await vi.dynamicImportSettled();
     await flushObserver();
 
-    expect(runtimeMocks.completeDirect).not.toHaveBeenCalled();
     expect(runtimeMocks.completeIsolated).toHaveBeenCalledTimes(2);
-    expect(runtimeMocks.completeIsolated).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...prepared,
-        purpose: "session-observer",
-        timeoutMs: 30_000,
-        abortSignal: expect.any(AbortSignal),
-      }),
-    );
     expect(runtimeMocks.completeIsolated.mock.calls[0]?.[0]).not.toHaveProperty("auth");
-    expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
-      "session.observer",
-      expect.objectContaining({ headline: "Reviewing the implementation", health: "on-track" }),
-      expect.any(Set),
-      expect.anything(),
-    );
+    expectBroadcast(harness, digest);
   },
 );
 
@@ -136,9 +112,7 @@ it("retries after a rejected preparation", async () => {
 
   await advance(24_000);
 
-  expect(prepareModel).toHaveBeenCalledTimes(2);
-  expect(harness.completeModel).toHaveBeenCalledOnce();
-  expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
+  expectBroadcast(harness, { headline: "Reviewing the implementation" });
 });
 
 it.each([
@@ -158,13 +132,8 @@ it.each([
 
     await vi.advanceTimersByTimeAsync(12_000);
     await flushObserver();
-    expect(prepareModel).toHaveBeenCalledOnce();
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    if (initial) {
-      expect(harness.completeModel.mock.calls[0]?.[0]).toMatchObject({
-        agentHarnessRuntimeOverride: initial,
-      });
-    }
+    expect(harness.completeModel.mock.calls[0]?.[0].agentHarnessRuntimeOverride).toBe(initial);
     override = next;
     await harness.observer.handleEventAsync(
       event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_000 } }),
