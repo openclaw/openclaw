@@ -12,6 +12,7 @@ registerUsageEnglish();
 
 const CHARS_PER_TOKEN = 4;
 const DAY_MS = 86_400_000;
+const costFormatters: Partial<Record<2 | 4 | 6, Intl.NumberFormat>> = {};
 // These labels use the host realm's default locale, independently of the UI language.
 let dayLabelFormatter: Intl.DateTimeFormat | undefined;
 let fullDateFormatter: Intl.DateTimeFormat | undefined;
@@ -34,12 +35,16 @@ function formatUsageTokens(n: number, report?: UsageTotals["usageReport"]): stri
 
 // Usage charts choose fixed precision from the surrounding scale; the shared
 // adaptive cost formatter would change labels as values cross its thresholds.
-function formatUsageCost(n: number, decimals = 2, report?: UsageTotals["usageReport"]): string {
-  const amount = n.toLocaleString("en-US", {
+function formatUsageCost(
+  n: number,
+  decimals: 2 | 4 | 6 = 2,
+  report?: UsageTotals["usageReport"],
+): string {
+  const formatter = (costFormatters[decimals] ??= new Intl.NumberFormat("en-US", {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-  });
-  return atLeast(`$${amount}`, report);
+  }));
+  return atLeast(`$${formatter.format(n)}`, report);
 }
 
 export function formatAnalysisCost(value: number, report?: UsageTotals["usageReport"]): string {
