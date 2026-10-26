@@ -131,11 +131,6 @@ export function randomAsciiString(rng: () => number, maxLen: number): string {
   return chars.join("");
 }
 
-/** Return a value about half the time using a deterministic RNG. */
-export function maybe<T>(rng: () => number, value: T): T | undefined {
-  return rng() < 0.5 ? value : undefined;
-}
-
 /** Randomize string casing using a deterministic RNG. */
 export function randomlyCased(value: string, rng: () => number): string {
   return value
