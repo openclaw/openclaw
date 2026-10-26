@@ -10,6 +10,29 @@ Matrix is a downloadable channel plugin (`@openclaw/matrix`) built on the offici
 
 Node remains the recommended runtime. Matrix also accepts the [opt-in Bun runtime](/install/bun); E2EE requires the Matrix SDK's native crypto bindings to be available for your platform.
 
+Matrix account and token-hash stores follow the effective `database.families.state.engine`
+(or `database.engine` when inherited). PostgreSQL gives each root its own local
+anchor and remote namespace, including its serialized crypto state. Stop the
+Gateway and use [database port](/reference/database-engines#port-existing-stores)
+to move existing roots; changing config alone does not migrate them. Keep the
+Matrix plugin installed so backup, restore, updates, and Doctor can discover its
+retained roots, including disabled accounts.
+
+`openclaw matrix verify status`, `verify bootstrap`, and `verify device` route
+through the local Gateway when it is running. Update an older Gateway if it does
+not support this routing; failed requests are never replayed locally.
+
+Other `openclaw matrix` commands require the local Gateway to be stopped,
+including device diagnostics: preparing the account can update its crypto state.
+Stop the Gateway through its service owner, run the command, then restart it.
+Commands refuse before loading account state when a Gateway owns the state
+directory. Offline ownership lasts through crypto persistence and client shutdown.
+
+After an interrupted encrypted session, `openclaw matrix doctor inspect` reports
+accounts that need explicit snapshot recovery. Clean sessions retain their crypto
+guard files; do not delete them. See [encrypted-state recovery](/channels/matrix/encryption)
+before accepting a snapshot rollback.
+
 <CardGroup cols={3}>
   <Card title="Setup" icon="download" href="/channels/matrix/setup">
     Install the plugin and connect a homeserver account.
@@ -120,6 +143,8 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 ### Access and policy
 
+`openclaw config validate` warns about missing `dm.allowFrom` entries, including account overrides and inherited defaults. For `dm.policy: "open"`, add `"*"` to the indicated nested allowlist or run `openclaw doctor --fix`; for `"allowlist"`, add the intended Matrix user IDs.
+
 - `groupPolicy`: `"open"`, `"allowlist"`, or `"disabled"`. Default: `"allowlist"`.
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `mentionPatterns`: scoped regex patterns for room mentions. Object with `{ mode: "allow"|"deny", allowIn: [roomId, ...], denyIn: [roomId, ...] }`. Controls whether configured `agents.entries.*.groupChat.mentionPatterns` apply per-room.
@@ -132,7 +157,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `allowlistOnly`: when `true`, forces all active DM policies (except `"disabled"`) and `"open"` group policies to `"allowlist"`. Does not change `"disabled"` policies.
 - `dangerouslyAllowNameMatching`: when `true`, allows Matrix display-name directory lookup for user allowlist entries and joined-room name lookup for room allowlist keys. Prefer full `@user:server` IDs and room IDs or aliases.
 - `autoJoin`: `"always"`, `"allowlist"`, or `"off"`. Default: `"off"`. Applies to every Matrix invite, including DM-style invites.
-- `autoJoinAllowlist`: rooms/aliases allowed when `autoJoin` is `"allowlist"`. Alias entries resolve against the homeserver, not against state claimed by the invited room.
+- `autoJoinAllowlist`: rooms/aliases allowed when `autoJoin` is `"allowlist"`. Only room IDs, aliases, or `*` can match; the runtime warns about and ignores other entries (for example a user ID, which belongs in `dm.allowFrom`). Alias entries resolve against the homeserver, not against state claimed by the invited room.
 - `contextVisibility`: supplemental context visibility (`"all"` default, `"allowlist"`, `"allowlist_quote"`).
 
 ### Reply behavior
@@ -160,6 +185,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 
 - `actions`: per-action tool gating (`messages`, `reactions`, `pins`, `profile`, `memberInfo`, `channelInfo`, `verification`).
 - `groups`: per-room policy map. Session identity uses the stable room ID after resolution. (`rooms` is a legacy alias.)
+  Room tool and mention policies use room IDs resolved from configured keys; inbound display names never select another room's policy.
   - `groups.<room>.account`: restrict one inherited room entry to a specific account.
   - `groups.<room>.enabled`: per-room toggle. When `false`, the room is ignored as if it were not in the map.
   - `groups.<room>.requireMention`: per-room override of the channel-level mention requirement.

@@ -52,10 +52,14 @@ require re-pairing because the approved command family is unchanged. Restart
 the node host does not watch this config.
 
 Server-advertised tool-list changes apply live and replace the published node
-catalog. If an MCP transport closes or a stateful Streamable HTTP session
+catalog. If an MCP transport closes or an SSE or stateful Streamable HTTP session
 expires, the node withdraws that server's stale tools and reconnects with
 bounded backoff. The failed call that detects an expired session is not replayed;
 a later call can use the replacement connection after its tools are republished.
+
+If a node warns that an MCP server's cleanup could not be confirmed, check that
+server process on the node. Other servers continue shutting down or reconnecting;
+the warning does not confirm that the affected server has stopped.
 
 Gateway operators can ignore all agent-visible tools published by paired nodes,
 including node-hosted MCP tools, with

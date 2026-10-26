@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { withTimeout } from "./app-server/timeout.js";
-import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
+import {
+  CodexCatalogLoadingError,
+  withCodexCatalogLoadingTimeout,
+} from "./session-catalog-availability.js";
 import { CatalogParamsError, MAX_TITLE_SEARCH_CATALOG_PAGES } from "./session-catalog-parsing.js";
 
 export type CodexCatalogSourceAttempt =
@@ -72,12 +74,7 @@ export class CodexCatalogListRequest {
     const result =
       remaining === undefined
         ? await pending
-        : await withTimeout(
-            pending,
-            remaining,
-            "Codex session catalog is still loading",
-            () => new CodexCatalogLoadingError(),
-          );
+        : await withCodexCatalogLoadingTimeout(pending, remaining);
     this.assertActive();
     return result;
   }
@@ -89,12 +86,7 @@ export class CodexCatalogListRequest {
     }
     this.pages++;
     try {
-      const result = await withTimeout(
-        read(remaining),
-        remaining,
-        "Codex session catalog is still loading",
-        () => new CodexCatalogLoadingError(),
-      );
+      const result = await withCodexCatalogLoadingTimeout(read(remaining), remaining);
       this.assertActive();
       return result;
     } catch (error) {

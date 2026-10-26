@@ -14,7 +14,8 @@ describe("scripts/lib/bundled-plugin-source-utils.mts", () => {
     const payload = expectNoNodeFsScans<{
       channels: number;
       sources: number;
-    }>(`
+    }>(
+      `
       const utils = await import("./scripts/lib/bundled-plugin-source-utils.mts");
       const sources = utils.collectBundledPluginSources({
         repoRoot: process.cwd(),
@@ -26,7 +27,9 @@ describe("scripts/lib/bundled-plugin-source-utils.mts", () => {
         ).length,
         sources: sources.length,
       };
-    `);
+    `,
+      { allowedExistsSyncPaths: [path.join(process.cwd(), ".git")] },
+    );
     expect(payload.sources).toBeGreaterThan(0);
     expect(payload.channels).toBeGreaterThan(0);
   });
@@ -45,5 +48,19 @@ describe("scripts/lib/bundled-plugin-source-utils.mts", () => {
     await fs.rm(pluginDir, { recursive: true });
 
     expect(collectBundledPluginSources({ repoRoot, requirePackageJson: true })).toEqual([]);
+  });
+
+  it("discovers unpacked plugins beneath an ancestor checkout", async () => {
+    const parent = tempDirs.make("openclaw-bundled-plugin-parent-");
+    expect(spawnSync("git", ["init", "-q"], { cwd: parent }).status).toBe(0);
+    const repoRoot = path.join(parent, "staged");
+    const pluginDir = path.join(repoRoot, "extensions", "demo");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(path.join(pluginDir, "openclaw.plugin.json"), '{"id":"demo"}');
+    await fs.writeFile(path.join(pluginDir, "package.json"), '{"name":"demo"}');
+
+    expect(collectBundledPluginSources({ repoRoot, requirePackageJson: true })).toMatchObject([
+      { dirName: "demo", pluginDir, manifest: { id: "demo" }, packageJson: { name: "demo" } },
+    ]);
   });
 });

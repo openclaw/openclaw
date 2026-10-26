@@ -1,4 +1,3 @@
-// Irc tests cover monitor plugin behavior.
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -10,44 +9,26 @@ import {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createIrcIngressMonitor } from "./irc-ingress.js";
 import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js";
 import { monitorIrcProvider } from "./monitor.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
-type DisconnectingIrcServer = {
-  port: number;
-  lines: string[];
-  connectionCount: number;
-  disconnectFirst(): void;
-  close(): Promise<void>;
-};
-
-type InboundIrcServer = {
-  port: number;
-  lines: string[];
-  sendInbound(target: string, colonlessBody?: boolean, senderNick?: string): void;
-  close(): Promise<void>;
-};
-
-type ReconnectingReplyIrcServer = {
-  port: number;
-  linesByConnection: string[][];
-  replacementQuitReceived: Promise<void>;
-  connectionCount: number;
-  sendInbound(): void;
-  disconnectFirst(): void;
-  close(): Promise<void>;
-};
-
 type IrcIngressQueue = NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
 type IrcIngressPayload = Parameters<IrcIngressQueue["enqueue"]>[1];
 type IrcMonitorMessageHandler = NonNullable<Parameters<typeof monitorIrcProvider>[0]["onMessage"]>;
 
+type IrcResources = {
+  server: <T extends { close(): Promise<void> }>(pending: Promise<T>) => Promise<T>;
+  monitor: typeof monitorIrcProvider;
+};
+
 async function withIngressQueue<T>(
-  fn: (queue: IrcIngressQueue, stateDir: string) => Promise<T>,
+  fn: (queue: IrcIngressQueue, stateDir: string, resources: IrcResources) => Promise<T>,
   accountId = "default",
 ): Promise<T> {
   const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-irc-monitor-"));
@@ -58,10 +39,23 @@ async function withIngressQueue<T>(
     stateDir,
   });
   const complete = queue.complete.bind(queue);
+  const cleanup: Array<() => Promise<void>> = [];
+  const track = async <R>(pending: Promise<R>, dispose: (value: R) => Promise<void>) => {
+    const value = await pending;
+    cleanup.push(() => dispose(value));
+    return value;
+  };
   try {
-    return await fn(queue, stateDir);
+    return await fn(queue, stateDir, {
+      server: (pending) => track(pending, (server) => server.close()),
+      monitor: (options) => track(monitorIrcProvider(options), (monitor) => monitor.stop()),
+    });
   } finally {
+    for (const dispose of cleanup.toReversed()) {
+      await dispose();
+    }
     queue.complete = complete;
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   }
@@ -94,99 +88,103 @@ function observeReconnect() {
   return { statusSink, reconnected: reconnected.promise };
 }
 
-async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
-  const lines: string[] = [];
-  let connectionCount = 0;
-  let firstSocket: net.Socket;
-  const server = await startIrcTestServer((socket) => {
-    const connectionNumber = ++connectionCount;
-    if (connectionNumber === 1) {
-      firstSocket = socket;
-    }
-    onIrcTestLine(socket, (line) => {
-      lines.push(line);
-      if (line.startsWith("USER ")) {
-        if (connectionNumber === 2) {
-          socket.destroy();
-        } else {
-          socket.write(":server 001 bot :welcome\r\n");
-        }
-      }
-    });
-  });
-  return {
-    ...server,
-    lines,
-    disconnectFirst: () => firstSocket.destroy(),
-    get connectionCount() {
-      return connectionCount;
-    },
-  };
-}
-
-async function startInboundIrcServer(welcomeNick = "bot"): Promise<InboundIrcServer> {
-  let clientSocket: net.Socket;
-  const lines: string[] = [];
-  const server = await startIrcTestServer((socket) => {
-    clientSocket = socket;
-    onIrcTestLine(socket, (line) => {
-      lines.push(line);
-      if (line.startsWith("USER ")) {
-        socket.write(`:server 001 ${welcomeNick} :welcome\r\n`);
-      }
-    });
-  });
-  return {
-    ...server,
-    lines,
-    sendInbound: (target, colonlessBody = false, senderNick = "alice") => {
-      const bodySeparator = colonlessBody ? " " : " :";
-      clientSocket.write(
-        `:${senderNick}!ident@example.org PRIVMSG ${target}${bodySeparator}hello\r\n`,
-      );
-    },
-  };
-}
-
-async function startReconnectingReplyIrcServer(): Promise<ReconnectingReplyIrcServer> {
-  // Retain closed sockets in order so reconnect assertions keep their original connection index.
+async function startMonitorServer(
+  options: {
+    welcomeNick?: string;
+    failSecond?: boolean;
+    loginError?: string;
+    renameOnReconnect?: boolean;
+  } = {},
+) {
   const sockets: net.Socket[] = [];
+  const lines: string[] = [];
   const linesByConnection: string[][] = [];
+  const joined = createDeferred<void>(),
+    rejoined = createDeferred<void>();
   const replacementQuitReceived = createDeferred<void>();
   const server = await startIrcTestServer((socket) => {
-    const connectionIndex = sockets.length;
+    const index = sockets.length;
     sockets.push(socket);
-    linesByConnection[connectionIndex] = [];
+    linesByConnection.push([]);
     onIrcTestLine(socket, (line) => {
-      linesByConnection[connectionIndex]?.push(line);
-      if (connectionIndex === 1 && line.startsWith("QUIT :")) {
+      lines.push(line);
+      linesByConnection[index]!.push(line);
+      if (line === "JOIN #openclaw") {
+        (index === 0 ? joined : rejoined).resolve();
+      }
+      if (index === 1 && line.startsWith("QUIT :")) {
         replacementQuitReceived.resolve();
       }
-      if (line.startsWith("USER ")) {
-        const nick = connectionIndex === 0 ? "receipt-bot" : "reconnected-bot";
+      if (!line.startsWith("USER ")) {
+        return;
+      }
+      if (options.failSecond && index === 1) {
+        if (options.loginError) {
+          socket.write(`:server ${options.loginError} bot :login rejected\r\n`);
+        } else {
+          socket.destroy();
+        }
+      } else {
+        const nick =
+          options.renameOnReconnect && index > 0
+            ? "reconnected-bot"
+            : (options.welcomeNick ?? "bot");
         socket.write(`:server 001 ${nick} :welcome\r\n`);
       }
     });
   });
   return {
     ...server,
+    lines,
     linesByConnection,
+    joined: joined.promise,
+    rejoined: rejoined.promise,
     replacementQuitReceived: replacementQuitReceived.promise,
-    sendInbound: () => sockets[0]!.write(":alice!ident@example.org PRIVMSG receipt-bot :hello\r\n"),
     get connectionCount() {
       return sockets.length;
     },
-    disconnectFirst: () => sockets[0]?.destroy(),
+    disconnectFirst: () => sockets[0]!.destroy(),
+    sendInbound: (
+      target = options.welcomeNick ?? "bot",
+      colonlessBody = false,
+      senderNick = "alice",
+    ) => {
+      sockets[0]!.write(
+        `:${senderNick}!ident@example.org PRIVMSG ${target}${colonlessBody ? " " : " :"}hello\r\n`,
+      );
+    },
+    sendNotice: (target: string, text: string) =>
+      sockets[0]!.write(`:server NOTICE ${target} :${text}\r\n`),
   };
 }
 
-function installMonitorRuntime() {
+function monitorConfig(
+  port: number,
+  nick = "bot",
+  extra: Partial<NonNullable<NonNullable<CoreConfig["channels"]>["irc"]>> = {},
+): CoreConfig {
+  return {
+    channels: {
+      irc: {
+        host: "127.0.0.1",
+        port,
+        tls: false,
+        nick,
+        username: "bot",
+        realname: "OpenClaw",
+        ...extra,
+      },
+    },
+  };
+}
+
+function installMonitorRuntime(debug = vi.fn(), verbose = false) {
   const activityRecord = vi.fn();
   setIrcRuntime({
     logging: {
-      shouldLogVerbose: vi.fn(() => false),
+      shouldLogVerbose: vi.fn(() => verbose),
       getChildLogger: vi.fn(() => ({
-        debug: vi.fn(),
+        debug,
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
@@ -204,41 +202,34 @@ function installMonitorRuntime() {
 function installPairingMonitorRuntime(
   upsertPairingRequest: () => Promise<{ code: string; created: boolean }>,
 ) {
-  setIrcRuntime({
-    logging: {
-      shouldLogVerbose: vi.fn(() => false),
-      getChildLogger: vi.fn(() => ({
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-      })),
-    },
-    channel: {
-      activity: { record: vi.fn() },
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(upsertPairingRequest),
+  setIrcRuntime(
+    createPluginRuntimeMock({
+      channel: {
+        activity: { record: vi.fn() },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(upsertPairingRequest),
+        },
+        commands: { shouldHandleTextCommands: vi.fn(() => false) },
+        text: { hasControlCommand: vi.fn(() => false) },
+        mentions: {
+          buildMentionRegexes: vi.fn(() => []),
+          matchesMentionPatterns: vi.fn(() => false),
+        },
       },
-      commands: { shouldHandleTextCommands: vi.fn(() => false) },
-      text: { hasControlCommand: vi.fn(() => false) },
-      mentions: {
-        buildMentionRegexes: vi.fn(() => []),
-        matchesMentionPatterns: vi.fn(() => false),
-      },
-    },
-  } as never);
+    }),
+  );
 }
 
 describe("IRC automatic reply outcomes", () => {
-  it("reports sanitized-empty replies without recording outbound delivery", async () => {
-    await withIngressQueue(async (ingressQueue) => {
+  it("reports sanitized-empty replies without recording outbound delivery", async ({ signal }) => {
+    await withIngressQueue(async (ingressQueue, _stateDir, resources) => {
       const completed = observeIngressCompletion(ingressQueue);
       const core = createPluginRuntimeMock();
       vi.mocked(core.channel.reply.dispatchReplyWithBufferedBlockDispatcher).mockImplementation(
         async ({ dispatcherOptions }) => {
           try {
-            await dispatcherOptions.deliver({ text: String.raw`\n` }, { kind: "final" });
+            await dispatcherOptions.deliver({ text: "\u0001" }, { kind: "final" });
           } catch (error) {
             await dispatcherOptions.onError?.(error, { kind: "final" });
           }
@@ -248,41 +239,25 @@ describe("IRC automatic reply outcomes", () => {
       setIrcRuntime(core);
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const statusSink = vi.fn();
-      const server = await startInboundIrcServer();
-      let monitor: Awaited<ReturnType<typeof monitorIrcProvider>> | undefined;
-      try {
-        monitor = await monitorIrcProvider({
-          config: {
-            channels: {
-              irc: {
-                host: "127.0.0.1",
-                port: server.port,
-                tls: false,
-                nick: "bot",
-                dmPolicy: "open",
-                allowFrom: ["*"],
-              },
-            },
-          },
-          ingressQueue,
-          runtime,
-          statusSink,
-        });
-        server.sendInbound("bot");
-        await withTimeout(completed, 3_000, "sanitized-empty IRC reply completion");
+      const server = await resources.server(startMonitorServer());
 
-        expect(runtime.error).toHaveBeenCalledWith(
-          expect.stringContaining("Message must be non-empty for IRC sends"),
-        );
-        expect(server.lines.some((line) => line.startsWith("PRIVMSG "))).toBe(false);
-        expect(statusSink.mock.calls.some(([patch]) => patch.lastOutboundAt)).toBe(false);
-        expect(core.channel.activity.record).not.toHaveBeenCalledWith(
-          expect.objectContaining({ direction: "outbound" }),
-        );
-      } finally {
-        await monitor?.stop();
-        await server.close();
-      }
+      await resources.monitor({
+        config: monitorConfig(server.port, "bot", { dmPolicy: "open", allowFrom: ["*"] }),
+        ingressQueue,
+        runtime,
+        statusSink,
+      });
+      server.sendInbound("bot");
+      await withinTest(completed, signal);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Message must be non-empty for IRC sends"),
+      );
+      expect(server.lines.some((line) => line.startsWith("PRIVMSG "))).toBe(false);
+      expect(statusSink.mock.calls.some(([patch]) => patch.lastOutboundAt)).toBe(false);
+      expect(core.channel.activity.record).not.toHaveBeenCalledWith(
+        expect.objectContaining({ direction: "outbound" }),
+      );
     });
   });
 });
@@ -308,8 +283,8 @@ describe("IRC configured-unavailable credential connection boundaries", () => {
     } as unknown as CoreConfig;
 
     try {
-      await withIngressQueue(async (ingressQueue) => {
-        await expect(monitorIrcProvider({ config, ingressQueue })).rejects.toThrow(
+      await withIngressQueue(async (ingressQueue, _stateDir, resources) => {
+        await expect(resources.monitor({ config, ingressQueue })).rejects.toThrow(
           /configured but unavailable/i,
         );
       });
@@ -321,9 +296,11 @@ describe("IRC configured-unavailable credential connection boundaries", () => {
 });
 
 describe("irc monitor reconnect", () => {
-  it("settles only the stopped account's admission and recovers its durable message on a fresh socket", async () => {
+  it("settles only the stopped account's admission and recovers its durable message on a fresh socket", async ({
+    signal,
+  }) => {
     installMonitorRuntime();
-    await withIngressQueue(async (alphaQueue, stateDir) => {
+    await withIngressQueue(async (alphaQueue, stateDir, resources) => {
       const betaQueue = createChannelIngressQueueForTests<IrcIngressPayload>({
         channelId: "irc",
         accountId: "beta",
@@ -331,19 +308,21 @@ describe("irc monitor reconnect", () => {
       });
       const sockets = new Map<string, net.Socket>();
       let connections = 0;
-      const server = await startIrcTestServer((socket) => {
-        connections += 1;
-        let nick = "";
-        onIrcTestLine(socket, (line) => {
-          if (line.startsWith("NICK ")) {
-            nick = line.slice(5);
-            sockets.set(nick, socket);
-          }
-          if (line.startsWith("USER ")) {
-            socket.write(`:server 001 ${nick} :welcome\r\n`);
-          }
-        });
-      });
+      const server = await resources.server(
+        startIrcTestServer((socket) => {
+          connections += 1;
+          let nick = "";
+          onIrcTestLine(socket, (line) => {
+            if (line.startsWith("NICK ")) {
+              nick = line.slice(5);
+              sockets.set(nick, socket);
+            }
+            if (line.startsWith("USER ")) {
+              socket.write(`:server 001 ${nick} :welcome\r\n`);
+            }
+          });
+        }),
+      );
       const config: CoreConfig = {
         channels: {
           irc: {
@@ -366,14 +345,12 @@ describe("irc monitor reconnect", () => {
         await releaseAdmission.promise;
         return result;
       };
-      const monitors: Array<{ stop: () => Promise<void> }> = [];
       const start = async (
         accountId: string,
         ingressQueue: IrcIngressQueue,
         onMessage: IrcMonitorMessageHandler,
       ) => {
-        const monitor = await monitorIrcProvider({ accountId, config, ingressQueue, onMessage });
-        monitors.push(monitor);
+        const monitor = await resources.monitor({ accountId, config, ingressQueue, onMessage });
         return monitor;
       };
       try {
@@ -382,14 +359,14 @@ describe("irc monitor reconnect", () => {
         const betaSocket = sockets.get("qa-beta");
         expect(betaSocket).toBeDefined();
         sockets.get("qa-alpha")?.write(":alice!ident@example.org PRIVMSG #alpha :recover me\r\n");
-        await withTimeout(stored.promise, 3_000, "alpha durable admission");
+        await withinTest(stored.promise, signal);
         let stopSettled = false;
         const stopping = alpha.stop().then(() => {
           stopSettled = true;
         });
         const betaCompleted = observeIngressCompletion(betaQueue);
         betaSocket?.write(":bob!ident@example.org PRIVMSG #beta :sibling stays live\r\n");
-        await withTimeout(betaCompleted, 3_000, "beta delivery during alpha stop");
+        await withinTest(betaCompleted, signal);
         expect(stopSettled).toBe(false);
         expect(betaDispatch).toHaveBeenCalledOnce();
         expect(alphaDispatch).not.toHaveBeenCalled();
@@ -401,7 +378,7 @@ describe("irc monitor reconnect", () => {
         expect(pending).toHaveLength(1);
         const recovered = observeIngressCompletion(alphaQueue);
         await start("alpha", alphaQueue, freshDispatch);
-        expect(await withTimeout(recovered, 3_000, "alpha replay completion")).toBe(pending[0]?.id);
+        expect(await withinTest(recovered, signal)).toBe(pending[0]?.id);
         expect(freshDispatch).toHaveBeenCalledOnce();
         expect(freshDispatch.mock.calls[0]?.[0]).toMatchObject({
           text: "recover me",
@@ -414,67 +391,97 @@ describe("irc monitor reconnect", () => {
       } finally {
         releaseAdmission.resolve();
         alphaQueue.enqueue = enqueue;
-        await Promise.all(monitors.map((monitor) => monitor.stop()));
-        await server.close();
       }
     }, "alpha");
   });
 
-  it("reconnects when an established IRC socket closes", async () => {
-    await withIngressQueue(async (ingressQueue) => {
-      installMonitorRuntime();
-      const { statusSink, reconnected } = observeReconnect();
-      const server = await startDisconnectingIrcServer();
-      const config = {
-        channels: {
-          irc: {
-            host: "127.0.0.1",
-            port: server.port,
-            tls: false,
-            nick: "bot",
-            username: "bot",
-            realname: "OpenClaw",
-            channels: ["#openclaw"],
-          },
-        },
-      } as CoreConfig;
-      let monitor: { stop: () => Promise<void> } | undefined;
+  it.for([
+    {
+      failure: "a closed socket",
+      silent: false,
+      loginError: undefined,
+      error: "closed before ready",
+    },
+    { failure: "a rejected login", silent: false, loginError: "464", error: "login failed (464)" },
+    {
+      failure: "a silent socket",
+      silent: true,
+      loginError: undefined,
+      error: "closed before ready",
+    },
+  ])(
+    "reports disconnected status and recovers after $failure",
+    async ({ loginError, error, silent }, { signal }) => {
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+      });
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      await withIngressQueue(async (ingressQueue, _stateDir, resources) => {
+        installMonitorRuntime();
+        const disconnected = createDeferred<void>();
+        const failedReconnect = createDeferred<void>();
+        const reconnected = createDeferred<void>();
+        let readyCount = 0;
+        let recoveringCount = 0;
+        const status: Parameters<
+          NonNullable<Parameters<typeof monitorIrcProvider>[0]["statusSink"]>
+        >[0] = {};
+        const statusSink: NonNullable<Parameters<typeof monitorIrcProvider>[0]["statusSink"]> = (
+          patch,
+        ) => {
+          Object.assign(status, patch);
+          if (patch.lifecycle === "ready" && ++readyCount === 2) {
+            reconnected.resolve();
+          }
+          if (patch.lifecycle === "recovering") {
+            recoveringCount += 1;
+            (recoveringCount === 1 ? disconnected : failedReconnect).resolve();
+          }
+        };
+        const server = await resources.server(startMonitorServer({ failSecond: true, loginError }));
+        const config = monitorConfig(server.port, "bot", { channels: ["#openclaw"] });
 
-      try {
-        monitor = await monitorIrcProvider({ config, ingressQueue, statusSink });
-        server.disconnectFirst();
-        await withTimeout(reconnected, 3000, "IRC recovery after a failed reconnect attempt");
-        expect(
-          server.lines.filter((line) => line === "USER bot 0 * :OpenClaw").length,
-        ).toBeGreaterThanOrEqual(3);
-        expect(server.connectionCount).toBeGreaterThanOrEqual(3);
-        expect(
-          statusSink.mock.calls.flatMap(([patch]) =>
-            patch.lifecycle ? [patch.lifecycle as string] : [],
-          ),
-        ).toEqual(["ready", "recovering", "recovering", "ready"]);
-        for (const [readyPatch] of statusSink.mock.calls.filter(
-          ([statusPatch]) => statusPatch.lifecycle === "ready",
-        )) {
-          expect(readyPatch).toMatchObject({
-            running: true,
-            connected: true,
-            lastConnectedAt: expect.any(Number),
-            lastError: null,
-            terminalDisconnect: undefined,
-          });
+        const monitor = await resources.monitor({ config, ingressQueue, statusSink });
+        await withinTest(server.joined, signal);
+        if (silent) {
+          await vi.advanceTimersByTimeAsync(240_000);
+        } else {
+          server.disconnectFirst();
         }
-      } finally {
-        if (monitor) {
-          await monitor.stop();
-        }
-        await server.close();
-      }
-    });
-  });
+        await withinTest(disconnected.promise, signal);
+        expect(status).toMatchObject({
+          running: true,
+          connected: false,
+          lifecycle: "recovering",
+          lastDisconnect: { at: expect.any(Number) },
+        });
+        const disconnectedAt = status.lastDisconnect;
+        await vi.advanceTimersByTimeAsync(1_200);
+        await withinTest(failedReconnect.promise, signal);
+        expect(status).toMatchObject({
+          running: true,
+          connected: false,
+          lifecycle: "recovering",
+          lastError: expect.stringContaining(error),
+          lastDisconnect: disconnectedAt,
+        });
+        await vi.advanceTimersByTimeAsync(2_400);
+        await withinTest(reconnected.promise, signal);
+        await withinTest(server.rejoined, signal);
+        expect(status).toMatchObject({ running: true, connected: true, lastError: null });
+        expect(server.connectionCount).toBe(3);
+        expect(server.lines.filter((line) => line === "JOIN #openclaw")).toHaveLength(2);
+        await monitor.stop();
+        await vi.advanceTimersByTimeAsync(240_000);
+        expect(server.connectionCount).toBe(3);
+      });
+    },
+  );
 
   it("does not send a delayed private reply through the reconnected client", async () => {
-    await withIngressQueue(async (ingressQueue) => {
+    await withIngressQueue(async (ingressQueue, _stateDir, resources) => {
       const pairingStarted = createDeferred<void>();
       const pairingResult = createDeferred<{ code: string; created: boolean }>();
       const completed = observeIngressCompletion(ingressQueue);
@@ -483,24 +490,13 @@ describe("irc monitor reconnect", () => {
         pairingStarted.resolve();
         return await pairingResult.promise;
       });
-      const server = await startReconnectingReplyIrcServer();
+      const server = await resources.server(
+        startMonitorServer({ welcomeNick: "receipt-bot", renameOnReconnect: true }),
+      );
       const enqueueSpy = vi.spyOn(ingressQueue, "enqueue");
-      let monitor: { stop: () => Promise<void> } | undefined;
       try {
-        monitor = await monitorIrcProvider({
-          config: {
-            channels: {
-              irc: {
-                host: "127.0.0.1",
-                port: server.port,
-                tls: false,
-                nick: "receipt-bot",
-                username: "bot",
-                realname: "OpenClaw",
-                dmPolicy: "pairing",
-              },
-            },
-          } as CoreConfig,
+        const monitor = await resources.monitor({
+          config: monitorConfig(server.port, "receipt-bot", { dmPolicy: "pairing" }),
           ingressQueue,
           statusSink,
         });
@@ -528,11 +524,8 @@ describe("irc monitor reconnect", () => {
         ).toBe(false);
       } finally {
         pairingResult.resolve({ code: "CODE", created: true });
-        if (monitor) {
-          await monitor.stop();
-        }
+
         enqueueSpy.mockRestore();
-        await server.close();
       }
     });
   });
@@ -540,16 +533,6 @@ describe("irc monitor reconnect", () => {
 
 describe("irc monitor inbound target", () => {
   it.each([
-    {
-      label: "channel",
-      serverTarget: "#openclaw",
-      expected: { isGroup: true, target: "#openclaw", rawTarget: "#openclaw" },
-    },
-    {
-      label: "DM",
-      serverTarget: "openclaw-bot",
-      expected: { isGroup: false, target: "alice", rawTarget: "openclaw-bot" },
-    },
     {
       label: "channel with a colonless body",
       serverTarget: "#openclaw",
@@ -559,54 +542,63 @@ describe("irc monitor inbound target", () => {
   ])(
     "maps $label targets through the monitor boundary",
     async ({ serverTarget, colonlessBody, expected }) => {
-      await withIngressQueue(async (ingressQueue) => {
-        installMonitorRuntime();
-        const server = await startInboundIrcServer();
+      await withIngressQueue(async (ingressQueue, _stateDir, resources) => {
+        const debug = vi.fn();
+        installMonitorRuntime(debug, true);
+        const server = await resources.server(startMonitorServer());
+        const noticeText = "private-notice-sentinel";
         const messages: IrcInboundMessage[] = [];
         const completed = observeIngressCompletion(ingressQueue);
-        let monitor: { stop: () => Promise<void> } | undefined;
-        try {
-          monitor = await monitorIrcProvider({
-            config: {
-              channels: {
-                irc: {
-                  host: "127.0.0.1",
-                  port: server.port,
-                  tls: false,
-                  nick: "bot",
-                  username: "bot",
-                  realname: "OpenClaw",
-                },
-              },
-            } as CoreConfig,
-            ingressQueue,
-            onMessage: (message) => {
-              messages.push(message);
-            },
-          });
-          server.sendInbound(serverTarget, colonlessBody);
-          const completedId = await withTimeout(completed, 3000, "inbound IRC message completion");
-          expect(messages).toHaveLength(1);
-          expect(messages[0]).toMatchObject({
-            messageId: completedId,
-            ...expected,
-            senderNick: "alice",
-            text: "hello",
-          });
-        } finally {
-          if (monitor) {
-            await monitor.stop();
-          }
-          await server.close();
-        }
+
+        await resources.monitor({
+          config: monitorConfig(server.port),
+          ingressQueue,
+          onMessage: (message) => {
+            messages.push(message);
+          },
+        });
+        server.sendNotice(serverTarget, noticeText);
+        server.sendInbound(serverTarget, colonlessBody);
+        const completedId = await withTimeout(completed, 3000, "inbound IRC message completion");
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({
+          messageId: completedId,
+          ...expected,
+          senderNick: "alice",
+          text: "hello",
+        });
+        expect(debug).toHaveBeenCalledWith(expect.stringContaining(`notice ${serverTarget}`));
+        const diagnostics = JSON.stringify(debug.mock.calls);
+        expect(diagnostics).not.toContain("hello");
+        expect(diagnostics).not.toContain(noticeText);
       });
     },
   );
 
-  it("uses the receipt-time nickname when replaying a self echo", async () => {
-    await withIngressQueue(async (ingressQueue) => {
+  it.each([
+    [
+      "uses the receipt-time nickname when replaying a self echo",
+      {
+        eventId: "local:previous-connection:000000000001",
+        rawLine: ":receipt-bot!ident@example.org PRIVMSG #openclaw :echo",
+        laneKey: "channel:#openclaw",
+        nick: "reconnected-bot",
+        completionLabel: "replayed self echo completion",
+      },
+    ],
+    [
+      "does not replay a DM after the accepting connection changed",
+      {
+        eventId: "local:previous-connection:000000000002",
+        rawLine: ":alice!ident@example.org PRIVMSG receipt-bot :private",
+        laneKey: "direct:alice",
+        nick: "receipt-bot",
+        completionLabel: "replayed DM completion",
+      },
+    ],
+  ] as const)("%s", async (_title, { eventId, rawLine, laneKey, nick, completionLabel }) => {
+    await withIngressQueue(async (ingressQueue, _stateDir, resources) => {
       installMonitorRuntime();
-      const eventId = "local:previous-connection:000000000001";
       const receivedAt = Date.now();
       await ingressQueue.enqueue(
         eventId,
@@ -616,117 +608,36 @@ describe("irc monitor inbound target", () => {
           receivedAt,
           connectionEpoch: "previous-connection",
           connectedNick: "receipt-bot",
-          rawLine: ":receipt-bot!ident@example.org PRIVMSG #openclaw :echo",
+          rawLine,
         },
-        { receivedAt, laneKey: "channel:#openclaw" },
+        { receivedAt, laneKey },
       );
-      const server = await startInboundIrcServer("reconnected-bot");
+      const server = await resources.server(startMonitorServer({ welcomeNick: nick }));
       const onMessage = vi.fn();
       const completed = observeIngressCompletion(ingressQueue);
-      let monitor: { stop: () => Promise<void> } | undefined;
-      try {
-        monitor = await monitorIrcProvider({
-          config: {
-            channels: {
-              irc: {
-                host: "127.0.0.1",
-                port: server.port,
-                tls: false,
-                nick: "reconnected-bot",
-                username: "bot",
-                realname: "OpenClaw",
-              },
-            },
-          } as CoreConfig,
-          ingressQueue,
-          onMessage,
-        });
-        expect(await withTimeout(completed, 3000, "replayed self echo completion")).toBe(eventId);
-        expect(await ingressQueue.listPending({ limit: "all" })).toEqual([]);
-        expect(await ingressQueue.listClaims()).toEqual([]);
-        expect(onMessage).not.toHaveBeenCalled();
-      } finally {
-        if (monitor) {
-          await monitor.stop();
-        }
-        await server.close();
-      }
-    });
-  });
 
-  it("does not replay a DM after the accepting connection changed", async () => {
-    await withIngressQueue(async (ingressQueue) => {
-      installMonitorRuntime();
-      const eventId = "local:previous-connection:000000000002";
-      const receivedAt = Date.now();
-      await ingressQueue.enqueue(
-        eventId,
-        {
-          version: 1,
-          eventId,
-          receivedAt,
-          connectionEpoch: "previous-connection",
-          connectedNick: "receipt-bot",
-          rawLine: ":alice!ident@example.org PRIVMSG receipt-bot :private",
-        },
-        { receivedAt, laneKey: "direct:alice" },
-      );
-      const server = await startInboundIrcServer("receipt-bot");
-      const onMessage = vi.fn();
-      const completed = observeIngressCompletion(ingressQueue);
-      let monitor: { stop: () => Promise<void> } | undefined;
-      try {
-        monitor = await monitorIrcProvider({
-          config: {
-            channels: {
-              irc: {
-                host: "127.0.0.1",
-                port: server.port,
-                tls: false,
-                nick: "receipt-bot",
-                username: "bot",
-                realname: "OpenClaw",
-              },
-            },
-          } as CoreConfig,
-          ingressQueue,
-          onMessage,
-        });
-        expect(await withTimeout(completed, 3000, "replayed DM completion")).toBe(eventId);
-        expect(await ingressQueue.listPending({ limit: "all" })).toEqual([]);
-        expect(await ingressQueue.listClaims()).toEqual([]);
-        expect(onMessage).not.toHaveBeenCalled();
-      } finally {
-        if (monitor) {
-          await monitor.stop();
-        }
-        await server.close();
-      }
+      await resources.monitor({
+        config: monitorConfig(server.port, nick),
+        ingressQueue,
+        onMessage,
+      });
+      expect(await withTimeout(completed, 3000, completionLabel)).toBe(eventId);
+      expect(await ingressQueue.listPending({ limit: "all" })).toEqual([]);
+      expect(await ingressQueue.listClaims()).toEqual([]);
+      expect(onMessage).not.toHaveBeenCalled();
     });
   });
 
   it("does not record receipt-time self echoes as inbound activity", async () => {
-    await withIngressQueue(async (ingressQueue) => {
+    await withIngressQueue(async (ingressQueue, _stateDir, resources) => {
       const activityRecord = installMonitorRuntime();
-      const server = await startInboundIrcServer();
+      const server = await resources.server(startMonitorServer());
       const enqueueSpy = vi.spyOn(ingressQueue, "enqueue");
       const onMessage = vi.fn();
       const completed = observeIngressCompletion(ingressQueue);
-      let monitor: { stop: () => Promise<void> } | undefined;
       try {
-        monitor = await monitorIrcProvider({
-          config: {
-            channels: {
-              irc: {
-                host: "127.0.0.1",
-                port: server.port,
-                tls: false,
-                nick: "bot",
-                username: "bot",
-                realname: "OpenClaw",
-              },
-            },
-          } as CoreConfig,
+        const monitor = await resources.monitor({
+          config: monitorConfig(server.port),
           ingressQueue,
           onMessage,
         });
@@ -741,11 +652,7 @@ describe("irc monitor inbound target", () => {
         expect(onMessage).not.toHaveBeenCalled();
         expect(activityRecord).not.toHaveBeenCalled();
       } finally {
-        if (monitor) {
-          await monitor.stop();
-        }
         enqueueSpy.mockRestore();
-        await server.close();
       }
     });
   });

@@ -1,140 +1,76 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
-import { createTestSessionCapability } from "./session-capability.test-support.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "./session-capability.test-support.ts";
 
-function createGatewayHarness(client: GatewayBrowserClient) {
-  let snapshot: {
-    client: GatewayBrowserClient | null;
-    phase: "connected" | "reconnecting";
-    sessionKey: string;
-    assistantAgentId: string | null;
-    hello: GatewayHelloOk | null;
-  } = {
-    client,
-    phase: "connected",
-    sessionKey: "agent:main:main",
-    assistantAgentId: "main",
-    hello: null,
-  };
-  const listeners = new Set<(next: typeof snapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
-  return {
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe(listener: (next: typeof snapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-        eventListeners.add(listener);
-        return () => eventListeners.delete(listener);
-      },
-    },
-    publish: (connected: boolean) => {
-      snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-  };
+const key = "agent:main:main";
+const editor = {
+  editorText: "edit me",
+  editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+};
+function harness(routes: Record<string, () => unknown>) {
+  const request = vi.fn(async (method: string) => {
+    const handler = routes[method];
+    if (!handler) {
+      throw new Error(`Unexpected request: ${method}`);
+    }
+    return handler();
+  });
+  const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+  return { ...gateway, request, sessions: createTestSessionCapability(gateway.gateway) };
 }
 
-describe("session capability message cuts", () => {
-  it("returns a committed rewind result after the connection is replaced", async () => {
-    const committed = createDeferred<{
-      editorText?: string;
-      editorAttachments?: Array<{ mimeType: string; data: string }>;
-    }>();
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.rewind") {
-        return committed.promise;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const harness = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(harness.gateway);
+it("returns a committed rewind result after the connection is replaced", async () => {
+  const committed = createDeferred<typeof editor>();
+  const { sessions, publish, request } = harness({ "sessions.rewind": () => committed.promise });
 
-    const pending = sessions.rewind("agent:main:main", "user-entry");
-    harness.publish(false);
-    committed.resolve({
-      editorText: "edit me",
-      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
-    });
+  const pending = sessions.rewind(key, "user-entry");
+  publish(false);
+  committed.resolve(structuredClone(editor));
 
-    await expect(pending).resolves.toEqual({
-      editorText: "edit me",
-      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
-    });
-    expect(request).toHaveBeenCalledWith("sessions.rewind", {
-      sessionKey: "agent:main:main",
-      entryId: "user-entry",
-    });
-    sessions.dispose();
+  await expect(pending).resolves.toEqual(editor);
+  expect(request).toHaveBeenCalledWith("sessions.rewind", {
+    sessionKey: key,
+    entryId: "user-entry",
+  });
+});
+
+it("returns a committed fork result when the replacement refresh fails", async () => {
+  const fork = { sessionKey: "agent:main:dashboard:forked", ...editor };
+  const { sessions, request } = harness({
+    "sessions.fork": () => structuredClone(fork),
+    "sessions.list": () => {
+      throw new Error("refresh failed");
+    },
   });
 
-  it("returns a committed fork result when the replacement refresh fails", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.fork") {
-        return {
-          sessionKey: "agent:main:dashboard:forked",
-          editorText: "edit me",
-          editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
-        };
-      }
-      if (method === "sessions.list") {
-        throw new Error("refresh failed");
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
+  await expect(sessions.forkAtMessage(key, "user-entry")).resolves.toEqual(fork);
+  expect(request).toHaveBeenCalledWith("sessions.fork", {
+    sessionKey: key,
+    entryId: "user-entry",
+  });
+});
 
-    await expect(sessions.forkAtMessage("agent:main:main", "user-entry")).resolves.toEqual({
-      sessionKey: "agent:main:dashboard:forked",
-      editorText: "edit me",
-      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
-    });
-    expect(request).toHaveBeenCalledWith("sessions.fork", {
-      sessionKey: "agent:main:main",
-      entryId: "user-entry",
-    });
-    sessions.dispose();
+it("lists branches and sends the selected leaf to the switch RPC", async () => {
+  const branch = {
+    leafEntryId: "branch-b",
+    headline: "Try the earlier path",
+    messageCount: 3,
+    active: false,
+  };
+  const { sessions, request } = harness({
+    "sessions.branches.list": () => ({ branches: [branch] }),
+    "sessions.branches.switch": () => ({}),
+    "sessions.list": () => ({ sessions: [], count: 0 }),
   });
 
-  it("lists branches and sends the selected leaf to the switch RPC", async () => {
-    const branch = {
-      leafEntryId: "branch-b",
-      headline: "Try the earlier path",
-      messageCount: 3,
-      active: false,
-    };
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.branches.list") {
-        return { branches: [branch] };
-      }
-      if (method === "sessions.branches.switch") {
-        return {};
-      }
-      if (method === "sessions.list") {
-        return { sessions: [], count: 0 };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-
-    await expect(sessions.listBranches("agent:main:main")).resolves.toEqual([branch]);
-    await expect(sessions.switchBranch("agent:main:main", "branch-b")).resolves.toEqual({});
-    expect(request).toHaveBeenCalledWith("sessions.branches.switch", {
-      sessionKey: "agent:main:main",
-      leafEntryId: "branch-b",
-    });
-    sessions.dispose();
+  await expect(sessions.listBranches(key)).resolves.toEqual([branch]);
+  await expect(sessions.switchBranch(key, "branch-b")).resolves.toEqual({});
+  expect(request).toHaveBeenCalledWith("sessions.branches.switch", {
+    sessionKey: key,
+    leafEntryId: "branch-b",
   });
 });

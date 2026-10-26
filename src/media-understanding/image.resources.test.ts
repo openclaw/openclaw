@@ -7,8 +7,12 @@ import * as minimaxVlm from "../agents/minimax-vlm.js";
 import * as modelAuth from "../agents/model-auth.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
+import { closeEphemeralPreparedModelRuntimeResources } from "../agents/prepared-model-runtime.resources.js";
+import * as providerStream from "../agents/provider-stream.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerContextEngineInRegistry } from "../context-engine/registry.js";
+import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
+import * as llmStream from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
@@ -18,6 +22,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -26,6 +31,10 @@ import {
   getPluginRuntimeGenerationRegistry,
   withPluginRuntimeGenerationScope,
 } from "../plugins/runtime/generation-scope.js";
+import {
+  createColdPluginFixture,
+  isColdPluginRuntimeLoaded,
+} from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -226,26 +235,14 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       timeoutMs: 1000,
     },
     environment: <T>(run: () => Promise<T>) =>
-      withEnvAsync(
-        {
-          OPENCLAW_HOME: dir,
-          OPENCLAW_STATE_DIR: path.join(dir, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-        },
-        run,
-      ),
+      withEnvAsync(nativeFixtureEnv(dir, path.join(dir, "state")), run),
     cleanup() {
       state.finish.resolve();
       state.resumeSetup.resolve();
       state.finishCleanup.resolve();
       state.finishWork.resolve();
       state.finishSetupTail.resolve();
-      for (const connection of connections) {
-        if (connection.database.isOpen) {
-          connection.database.close();
-        }
-      }
-      Reflect.deleteProperty(globalThis, stateKey);
+      cleanupNativeFixture(stateKey, connections);
     },
   };
 }
@@ -271,6 +268,105 @@ afterEach(async () => {
   resetPluginLoaderTestStateForTest();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
+
+it("describes images without evaluating configured memory or context plugins", async () => {
+  const fixture = nativeImageFixture();
+  const agentOwners = ["memory", "context"].map((kind) => {
+    const rootDir = path.join(fixture.dir, kind);
+    fs.mkdirSync(rootDir);
+    return createColdPluginFixture({
+      rootDir,
+      pluginId: `expensive-${kind}`,
+      manifest: kind === "memory" ? { kind: "memory" } : {},
+      runtimeMessage: "Image descriptions must not evaluate agent-owned plugins",
+    });
+  });
+  const cfg: OpenClawConfig = {
+    ...fixture.config,
+    plugins: {
+      allow: [fixture.id, ...agentOwners.map((plugin) => plugin.pluginId)],
+      load: {
+        paths: [
+          ...(fixture.config.plugins?.load?.paths ?? []),
+          ...agentOwners.map((plugin) => plugin.rootDir),
+        ],
+      },
+      slots: { memory: "expensive-memory", contextEngine: "expensive-context" },
+      entries: Object.fromEntries(
+        agentOwners.map((plugin) => [plugin.pluginId, { enabled: true }]),
+      ),
+    },
+  };
+  try {
+    await fixture.environment(async () => {
+      useNoBundledPlugins();
+      fixture.state.finish.resolve();
+      expect(
+        await describeImageWithModelCore({ ...fixture.request, cfg, timeoutMs: 30_000 }),
+      ).toMatchObject({
+        text: "native image 42",
+      });
+      for (const owner of agentOwners) {
+        expect(isColdPluginRuntimeLoaded(owner)).toBe(false);
+      }
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+it("does not dispatch an image completion retired during transport initialization", async () => {
+  const fixture = nativeImageFixture();
+  try {
+    await fixture.environment(async () => {
+      useNoBundledPlugins();
+      const lease = await acquireFixtureRuntime(fixture, "image-model");
+      vi.useFakeTimers();
+      const dispatch = vi.fn(() => {
+        throw new Error("Unexpected retired image provider dispatch");
+      });
+      const register = vi
+        .spyOn(providerStream, "registerProviderStreamForModel")
+        .mockImplementationOnce(({ model }) => {
+          const runtime = getModelLlmRuntime(model);
+          expect(runtime).toBeDefined();
+          runtime?.registry.registerApiProvider({
+            api: model.api,
+            stream: dispatch,
+            streamSimple: dispatch,
+          });
+          return undefined;
+        });
+      const complete = llmStream.complete;
+      let retirement: Promise<void> | undefined;
+      const facade = vi.spyOn(llmStream, "complete").mockImplementationOnce((...args) => {
+        const completion = complete(...args);
+        retirement = closeEphemeralPreparedModelRuntimeResources();
+        expect(args[2]?.signal?.aborted).toBe(false);
+        return completion;
+      });
+      try {
+        await expect(
+          describeImageWithModelCore({
+            ...fixture.request,
+            preparedModelRuntime: lease.snapshot,
+          }),
+        ).rejects.toThrow("Prepared plugin registry resources have been released");
+        expect(facade).toHaveBeenCalledOnce();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        facade.mockRestore();
+        register.mockRestore();
+        await lease[Symbol.asyncDispose]();
+        await retirement;
+      }
+      expect(fixture.state.connections[0]?.disposals).toBe(1);
+      expect(fixture.state.connections[0]?.database.isOpen).toBe(false);
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
 
 it.each(["timeout", "cancellation", "late-rejection"] as const)(
   "retains the supplied generation and adopted donor after %s reports",

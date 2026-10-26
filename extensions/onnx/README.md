@@ -6,11 +6,12 @@ persistent CPU inference process.
 
 ## Setup
 
-Released OpenClaw `2026.9.5` lacks the decision-provider API. Packaged installs
-require a host and plugin API of at least `2026.9.6`.
+This adapter requires the prepared Decision V2 API. Released OpenClaw
+`2026.10.4` exposes V1 only. Packaged use requires a supporting paired host/plugin
+release; the older installation floor alone does not establish V2 compatibility.
 
-For development, use an OpenClaw checkout containing both the decision-provider
-API and this plugin. Run `pnpm install --frozen-lockfile` and `pnpm build`, enable
+For development, use a matching checkout containing both the prepared V2
+runtime and this plugin. Run `pnpm install --frozen-lockfile` and `pnpm build`, enable
 `plugins.entries.onnx`, and run these commands from the checkout:
 
 ```sh
@@ -22,7 +23,7 @@ pnpm openclaw onnx probe gliclass-edge-v3.0
 Select `onnx/gliclass-edge-v3.0` as `agents.defaults.decisionModel` or as an
 agent's override. Inference stays local; model downloads use pinned revisions,
 sizes, and SHA256 hashes. Large models may need preloading to meet the host's
-ten-second decision deadline.
+30-second decision deadline.
 
 On a compatible packaged host, install the local candidate with
 `openclaw plugins install npm-pack:/path/to/openclaw-onnx.tgz`. A development

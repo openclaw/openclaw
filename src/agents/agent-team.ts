@@ -11,7 +11,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import { readAgentDeletionJournalForCreation } from "../state/agent-deletion-journal.read.js";
 import { resolveUserPath } from "../utils.js";
 import { createAgent, validateAgentIdInput, type CreateAgentSuccess } from "./agent-create.js";
 import { loadAgentTeamPreset, loadAgentRole, validateAgentTeamMemberIds } from "./agent-roles.js";
@@ -98,8 +98,9 @@ export async function createAgentTeam(
         message: `Agents already exist: ${collisions.join(", ")}. Choose another coordinator or --prefix.`,
       };
     }
-    const pending = ids.filter((id) => {
-      const deletion = readAgentDeletionJournal(id);
+    const deletions = await Promise.all(ids.map((id) => readAgentDeletionJournalForCreation(id)));
+    const pending = ids.filter((_id, index) => {
+      const deletion = deletions[index];
       return deletion && !deletion.cleanupCompleted;
     });
     if (pending.length) {

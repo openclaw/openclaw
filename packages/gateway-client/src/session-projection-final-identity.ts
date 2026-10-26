@@ -5,6 +5,7 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
   hasDisplayableSessionMessage,
   readSessionMessageDisplayContent,
+  projectSessionTerminalReplyMessage,
 } from "./session-projection-message-content.js";
 import {
   readSessionMessageIdentity,
@@ -12,12 +13,7 @@ import {
   type SessionMessageIdentity,
 } from "./session-projection-message-identity.js";
 
-/**
- * The class of rows the #148297 relaxation newly admits as finals: persisted
- * with the run's terminal tool stop reason while carrying no tool-call
- * content. Both adoption directions and every position rule scope to this
- * predicate, so pre-existing match semantics stay untouched.
- */
+/** A run's selected text reply can inherit its terminal tool stop reason. */
 export function isToolUsePersistedFinalRow(message: unknown): boolean {
   const record = readRecord(message);
   return record?.["stopReason"] === "toolUse" && !isSessionProjectionToolContinuation(message);
@@ -104,12 +100,13 @@ function hasCompatiblePersistedFinalIdentity(currentMessage: unknown, incomingMe
 }
 
 export function readFinalContentIdentity(message: unknown): string | null {
-  const display = readSessionMessageDisplayContent(message);
+  const terminalMessage = projectSessionTerminalReplyMessage(message);
+  const display = readSessionMessageDisplayContent(terminalMessage);
   if (!display.text && !display.hasNonText) {
     return null;
   }
   const identity = readSessionMessageIdentity(message);
-  const record = readRecord(message);
+  const record = readRecord(terminalMessage);
   const metadata = readRecord(record?.["__openclaw"]);
   try {
     return `content:${stableStringify([
@@ -225,7 +222,10 @@ export function findUniqueSnapshotTerminalMatch(
     }
     snapshotIndexes = indexes;
   };
-  const hasCompletedRunSnapshotContext = (entry: TerminalProjectionEntry): boolean => {
+  const hasTerminalSnapshotPosition = (
+    entry: TerminalProjectionEntry,
+    requireUser: boolean,
+  ): boolean => {
     const runId = current.identity?.runId;
     if (!runId || entry.identity?.runId !== runId) {
       return false;
@@ -234,22 +234,9 @@ export function findUniqueSnapshotTerminalMatch(
     const entryIndex = snapshotIndexes?.get(entry);
     return (
       entryIndex !== undefined &&
-      firstUserIndex >= 0 &&
-      firstUserIndex < entryIndex &&
-      lastAssistantIndex <= entryIndex
+      lastAssistantIndex <= entryIndex &&
+      (requireUser ? firstUserIndex >= 0 && firstUserIndex < entryIndex : lastAssistantIndex >= 0)
     );
-  };
-  // A toolUse-persisted row can only be the run's selected final when no later
-  // same-run assistant row exists in the snapshot: a following assistant or
-  // tool row proves the run continued past it, so the live terminal must stay.
-  const isLastSameRunAssistantRow = (entry: TerminalProjectionEntry): boolean => {
-    const runId = current.identity?.runId;
-    if (!runId || entry.identity?.runId !== runId) {
-      return false;
-    }
-    ensureRunIndexes();
-    const entryIndex = snapshotIndexes?.get(entry);
-    return entryIndex !== undefined && lastAssistantIndex >= 0 && entryIndex >= lastAssistantIndex;
   };
   const durableTerminalMatches = matches.filter((entry) => {
     const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
@@ -257,16 +244,10 @@ export function findUniqueSnapshotTerminalMatch(
       (metadata?.runTerminal === true ||
         (entry.identity?.runId === current.identity?.runId &&
           (hasTerminalStopReason(entry.message) ||
-            // A row persisted with the run's terminal tool stop reason and no
-            // tool-call content is the run's selected final; it must reconcile
-            // with its unkeyed live projection (#148297). Unmarked rows stay
-            // separate — partial history must not adopt the terminal — and the
-            // row must be the run's last assistant row in the snapshot, since
-            // a later same-run row proves the run continued past it.
-            (readRecord(entry.message)?.["stopReason"] === "toolUse" &&
-              !isSessionProjectionToolContinuation(entry.message) &&
-              isLastSameRunAssistantRow(entry)))) ||
-        hasCompletedRunSnapshotContext(entry)) &&
+            // A later same-run assistant row disproves an inherited tool-stop final.
+            (isToolUsePersistedFinalRow(entry.message) &&
+              hasTerminalSnapshotPosition(entry, false)))) ||
+        hasTerminalSnapshotPosition(entry, true)) &&
       readFinalContentIdentity(entry.message) === terminalContent
     );
   });

@@ -1,5 +1,13 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-const obs = vi.hoisted(() => ({ events: [] as string[], note: vi.fn() }));
+import { it, expect, vi, afterEach } from "vitest";
+const obs = vi.hoisted(() => ({
+  events: [] as string[],
+  note: vi.fn(),
+  codexBwrap: vi.fn(),
+  record<T>(event: string, result: T) {
+    this.events.push(event);
+    return result;
+  },
+}));
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: () => ["fixture"],
   tryResolveSoleAgentId: () => "fixture",
@@ -10,15 +18,9 @@ vi.mock("../agents/agent-scope.js", () => ({
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: obs.note }));
 vi.mock("../commands/backup-health.js", () => ({ noteBackupDoctorHint: () => {} }));
 vi.mock("../state/config-machine-state-write.js", () => ({ writeConfigMachineState: () => {} }));
+// mock-isolation: use a synthetic cloned project without querying operator project state.
 vi.mock("../projects/project-registry.js", () => ({
-  listProjectRegistry: async () => [
-    {
-      id: "synthetic-clone",
-      displayName: "Synthetic clone",
-      repoRoot: "/synthetic/clone",
-      source: "cloned",
-    },
-  ],
+  listProjectRegistry: async () => [{ repoRoot: "/synthetic/clone", source: "cloned" }],
 }));
 vi.mock("../agents/worktrees/git.js", () => ({ gitEnvironment: (env: unknown) => env }));
 vi.mock("../infra/git-exec.js", () => ({
@@ -32,31 +34,26 @@ vi.mock("../infra/git-exec.js", () => ({
     };
   },
 }));
+// mock-isolation: record advisory selection without opening operator databases.
 vi.mock("../commands/doctor-db-bloat.js", () => ({
-  noteSqliteDatabaseBloat: () => {
-    obs.events.push("db-size-advice");
-  },
+  noteSqliteDatabaseBloat: () => obs.record("db-size-advice", undefined),
 }));
+vi.mock("../commands/doctor-sandbox.js", () => ({
+  noteCodexBwrapNamespaceWarnings: obs.codexBwrap,
+}));
+// mock-isolation: record advisory selection without reading real workspace bootstrap files.
 vi.mock("../commands/doctor-bootstrap-size.js", () => ({
-  noteBootstrapFileSize: () => {
-    obs.events.push("bootstrap-size-advice");
-  },
+  noteBootstrapFileSize: () => obs.record("bootstrap-size-advice", undefined),
 }));
+// mock-isolation: record credential-advice selection without accessing real credentials.
 vi.mock("../gateway/github-public-api.js", () => ({
-  hasConfiguredGitHubApiCredential: () => {
-    obs.events.push("github-credential-advice");
-    return false;
-  },
+  hasConfiguredGitHubApiCredential: () => obs.record("github-credential-advice", false),
 }));
-vi.mock("../commands/doctor-state-integrity.js", () => ({
-  collectWorkspaceBackupTip: () => undefined,
-}));
+// mock-isolation: record advisory selection without reading or modifying real workspaces.
 vi.mock("../commands/doctor-workspace.js", () => ({
+  collectWorkspaceBackupTip: () => undefined,
   MEMORY_SYSTEM_PROMPT: "synthetic",
-  shouldSuggestMemorySystem: async () => {
-    obs.events.push("workspace-suggestions");
-    return false;
-  },
+  shouldSuggestMemorySystem: async () => obs.record("workspace-suggestions", false),
 }));
 vi.mock("./doctor-workspace-suggestion-scopes.js", () => ({
   resolveDoctorWorkspaceSuggestionScopes: () => [
@@ -68,71 +65,71 @@ import {
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
-function context(env: NodeJS.ProcessEnv) {
-  const ctx = createDoctorHealthFlowContext({
-    env,
-    options: { repair: true, yes: true, nonInteractive: true, workspaceSuggestions: true },
-  });
-  ctx.prompter.shouldRepair = true;
-  return ctx;
-}
 afterEach(() => vi.unstubAllEnvs());
-describe("update Doctor diagnostic scope", () => {
-  it.each(["standalone", "package-swap", "post-core"])(
-    "keeps standalone advisory work outside update: %s",
-    async (mode) => {
-      const env: NodeJS.ProcessEnv =
-        mode === "standalone" ? {} : { OPENCLAW_UPDATE_IN_PROGRESS: "1" };
-      if (mode === "post-core") {
-        env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE = "1";
-      }
-      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", env.OPENCLAW_UPDATE_IN_PROGRESS);
-      vi.stubEnv(
-        "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE",
-        env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE,
+it.each(["standalone", "post-core"])(
+  "keeps standalone advisory work outside update: %s",
+  async (mode) => {
+    const standalone = mode === "standalone";
+    const env: NodeJS.ProcessEnv = standalone
+      ? {}
+      : {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+        };
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", env.OPENCLAW_UPDATE_IN_PROGRESS);
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE);
+    const ids = new Set([
+      "doctor:project-clone-shape",
+      "doctor:db-bloat",
+      "doctor:codex-bwrap",
+      "doctor:workspace-suggestions",
+      "doctor:github-projects",
+      "doctor:bootstrap-size",
+    ]);
+    const selected = resolveDoctorHealthContributions().filter((c) => ids.has(c.id));
+    expect(selected).toHaveLength(ids.size);
+    obs.events = [];
+    obs.note.mockClear();
+    obs.codexBwrap.mockClear();
+    const ctx = createDoctorHealthFlowContext({
+      env,
+      options: { repair: true, yes: true, nonInteractive: true, workspaceSuggestions: true },
+    });
+    ctx.prompter.shouldRepair = true;
+    const snapshot = vi.fn();
+    ctx.runWithPluginMetadataSnapshot = (_scope, run) => {
+      snapshot();
+      return run();
+    };
+    await runDoctorHealthContributionList(ctx, selected);
+    expect(obs.events).toEqual(
+      standalone
+        ? [
+            "project-git",
+            "project-git",
+            "project-git",
+            "db-size-advice",
+            "github-credential-advice",
+            "bootstrap-size-advice",
+            "workspace-suggestions",
+          ]
+        : [],
+    );
+    expect(snapshot).toHaveBeenCalledTimes(standalone ? ids.size : 0);
+    if (standalone) {
+      expect(obs.codexBwrap).toHaveBeenCalledExactlyOnceWith(ctx.cfg, {
+        env,
+        cwd: "/synthetic/workspace",
+      });
+      expect(obs.note).not.toHaveBeenCalledWith(expect.anything(), "Update Doctor scope");
+    } else {
+      expect(obs.codexBwrap).not.toHaveBeenCalled();
+      expect(obs.note).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(
+          /Omitted during update:.*Project clones.*SQLite database size.*Codex bwrap sandbox.*Workspace suggestions.*\nRun `openclaw doctor`/,
+        ),
+        "Update Doctor scope",
       );
-      const ids = new Set([
-        "doctor:project-clone-shape",
-        "doctor:db-bloat",
-        "doctor:workspace-suggestions",
-        "doctor:github-projects",
-        "doctor:bootstrap-size",
-      ]);
-      const selected = resolveDoctorHealthContributions().filter((c) => ids.has(c.id));
-      expect(selected).toHaveLength(ids.size);
-      obs.events = [];
-      obs.note.mockClear();
-      const ctx = context(env);
-      const snapshot = vi.fn();
-      ctx.runWithPluginMetadataSnapshot = (_scope, run) => {
-        snapshot();
-        return run();
-      };
-      await runDoctorHealthContributionList(ctx, selected);
-      expect(obs.events).toEqual(
-        mode === "standalone"
-          ? [
-              "project-git",
-              "project-git",
-              "project-git",
-              "db-size-advice",
-              "github-credential-advice",
-              "bootstrap-size-advice",
-              "workspace-suggestions",
-            ]
-          : [],
-      );
-      expect(snapshot).toHaveBeenCalledTimes(mode === "standalone" ? ids.size : 0);
-      if (mode === "standalone") {
-        expect(obs.note).not.toHaveBeenCalledWith(expect.anything(), "Update Doctor scope");
-      } else {
-        expect(obs.note).toHaveBeenCalledExactlyOnceWith(
-          expect.stringMatching(
-            /Omitted during update:.*Project clones.*SQLite database size.*Workspace suggestions.*\nRun `openclaw doctor`/,
-          ),
-          "Update Doctor scope",
-        );
-      }
-    },
-  );
-});
+    }
+  },
+);

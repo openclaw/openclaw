@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { createWorktreesHandlers } from "./worktrees.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
+import { worktreesHandlers } from "./worktrees.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -30,33 +33,23 @@ function worktreeRecord(repoRoot: string): ManagedWorktreeRecord {
 
 async function dispatchCreate(params: { repoRoot: string; scopes: string[]; workspace: string }) {
   const create = vi.fn(async () => worktreeRecord(params.repoRoot));
-  const handler = createWorktreesHandlers({ create } as never)["worktrees.create"];
+  using _ = vi.spyOn(managedWorktrees, "create").mockImplementation(create);
+  const handler = worktreesHandlers["worktrees.create"];
   if (!handler) {
     throw new Error("worktrees.create handler is not registered");
   }
   const respond = vi.fn();
   await handleGatewayRequest({
-    req: {
-      type: "req",
-      id: "req-worktree-create",
-      method: "worktrees.create",
-      params: { repoRoot: params.repoRoot },
-    },
+    req: gatewayRequest("req-worktree-create", "worktrees.create", { repoRoot: params.repoRoot }),
     respond,
     client: {
       connId: "conn-worktree-create",
-      connect: {
-        role: "operator",
-        scopes: params.scopes,
-        client: { id: "test", version: "1", platform: "test", mode: "test" },
-        minProtocol: 1,
-        maxProtocol: 1,
-      },
+      connect: gatewayConnect(params.scopes, { id: "test", version: "1", mode: "test" }),
     } as Parameters<typeof handleGatewayRequest>[0]["client"],
     isWebchatConnect: () => false,
     context: {
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main", default: true, workspace: params.workspace }] },
+        agents: { entries: { main: { workspace: params.workspace } } },
       }),
       logGateway: { warn: vi.fn() },
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
@@ -102,7 +95,15 @@ describe("worktrees.create authorization", () => {
     expect(write.respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
+      expect.objectContaining({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      }),
     );
 
     const admin = await dispatchCreate({

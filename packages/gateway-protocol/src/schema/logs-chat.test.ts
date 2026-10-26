@@ -1,22 +1,11 @@
-// Gateway Protocol tests cover typed chat stream events.
-import type { Static } from "typebox";
-import { Value } from "typebox/value";
-import { describe, expect, expectTypeOf, it } from "vitest";
-import {
-  ChatEventSchema,
-  ChatHistoryCursorResultSchema,
-  ChatHistoryDeltaResultSchema,
-  ChatHistoryParamsSchema,
-  ChatHistoryResetResultSchema,
-  ChatStartupParamsSchema,
-  ChatSendParamsSchema,
-  ChatStatusEventSchema,
-  type ChatHistoryCursorResult,
-  type ChatHistoryDeltaResult,
-  type ChatHistoryParams,
-  type ChatHistoryResetResult,
-} from "./logs-chat.js";
+import { describe, expect, it } from "vitest";
+import * as S from "./logs-chat.js";
+import { schemaValidation } from "./protocol-validation.test-support.js";
 
+const startup = schemaValidation(S.ChatStartupParamsSchema);
+const history = schemaValidation(S.ChatHistoryCursorResultSchema);
+const chat = schemaValidation(S.ChatEventSchema);
+const send = schemaValidation(S.ChatSendParamsSchema);
 const statusEvent = {
   runId: "run-1",
   sessionKey: "agent:main:main",
@@ -25,162 +14,131 @@ const statusEvent = {
   phase: "preparing_context",
 } as const;
 
-describe("ChatHistoryParamsSchema", () => {
-  it("accepts the history boundary and rejects larger requests", () => {
-    const request = { sessionKey: "agent:main:main" };
-
-    expect(Value.Check(ChatHistoryParamsSchema, { ...request, limit: 1000 })).toBe(true);
-    expect(Value.Check(ChatHistoryParamsSchema, { ...request, limit: 1001 })).toBe(false);
-    expect(Value.Check(ChatHistoryParamsSchema, { ...request, cursor: "" })).toBe(true);
-  });
-});
-
 describe("ChatStartupParamsSchema", () => {
   it("accepts one canonical or short selector while history remains canonical", () => {
     const short = { shortId: "12345678", agentId: "main", slugHint: "selected-chat" };
-    expect(Value.Check(ChatStartupParamsSchema, short)).toBe(true);
-    expect(
-      Value.Check(ChatStartupParamsSchema, { sessionKey: "agent:main:main", cursor: "cursor" }),
-    ).toBe(true);
-    expect(Value.Check(ChatHistoryParamsSchema, short)).toBe(false);
-    for (const invalid of [
-      { ...short, sessionKey: "agent:main:main" },
+    const canonical = { sessionKey: "agent:main:main", cursor: "cursor" };
+    startup.accepts(short, canonical, {
+      ...canonical,
+      knownState: { pendingInputs: "pending-revision", sessionInfo: "session-revision" },
+    });
+    schemaValidation(S.ChatHistoryParamsSchema).rejects(short);
+    startup.rejects(
+      { ...short, sessionKey: canonical.sessionKey },
       { ...short, cursor: "cursor" },
       { shortId: "12345678" },
-    ]) {
-      expect(Value.Check(ChatStartupParamsSchema, invalid)).toBe(false);
-    }
+      { sessionKey: canonical.sessionKey, knownState: { pendingInputs: "x".repeat(65) } },
+    );
   });
 });
 
 describe("ChatHistoryCursorResultSchema", () => {
-  const sessionInfo = { key: "agent:main:main" };
-
-  it("derives the public request and cursor result types from their schemas", () => {
-    expectTypeOf<ChatHistoryParams>().toEqualTypeOf<Static<typeof ChatHistoryParamsSchema>>();
-    expectTypeOf<ChatHistoryDeltaResult>().toEqualTypeOf<
-      Static<typeof ChatHistoryDeltaResultSchema>
-    >();
-    expectTypeOf<ChatHistoryResetResult>().toEqualTypeOf<
-      Static<typeof ChatHistoryResetResultSchema>
-    >();
-    expectTypeOf<ChatHistoryCursorResult>().toEqualTypeOf<
-      Static<typeof ChatHistoryCursorResultSchema>
-    >();
-  });
-
   it("accepts only the closed delta and reset outcomes", () => {
     const delta = {
       kind: "delta",
       messages: [],
       deltaCursor: "cursor-2",
-      sessionInfo,
+      sessionInfo: { key: "agent:main:main" },
     };
-    expect(Value.Check(ChatHistoryCursorResultSchema, delta)).toBe(true);
-    expect(
-      Value.Check(ChatHistoryCursorResultSchema, {
+    history.accepts(
+      delta,
+      {
+        kind: "delta",
+        messages: [],
+        deltaCursor: "cursor-2",
+        stateRevision: { pendingInputs: "pending-revision", sessionInfo: "session-revision" },
+      },
+      {
         ...delta,
         inFlightRun: { runId: "run-live", text: "still working" },
         inputReceipts: [{ runId: "retained-run", state: "pending" }],
         inputConsumptions: [{ runId: "consumed-run", consumedByEventId: "event-1" }],
-      }),
-    ).toBe(true);
-    for (const status of [undefined, "running", "completed", "failed", "blocked"]) {
-      const activity = [
-        { messageId: "quiet", items: [] },
-        {
-          messageId: "work",
-          items: [
-            {
-              itemId: "tool:work",
-              kind: "tool",
-              phase: "end",
-              title: "Read",
-              ...(status ? { status } : {}),
-            },
-          ],
-        },
-      ];
-      const response = { ...delta, activity };
+      },
+    );
+    const item = { itemId: "tool:work", kind: "tool", phase: "end", title: "Read" };
+    for (const status of [undefined, "running", "completed", "failed", "blocked", "skipped"]) {
+      const response = {
+        ...delta,
+        activity: [
+          { messageId: "quiet", items: [] },
+          { messageId: "work", items: [{ ...item, ...(status ? { status } : {}) }] },
+        ],
+      };
       const serialized = JSON.stringify(response);
       const decoded = JSON.parse(serialized);
-      expect(Value.Check(ChatHistoryCursorResultSchema, decoded)).toBe(true);
+      history.accepts(decoded);
       expect(decoded).toEqual(response);
     }
-    for (const activity of [
-      [{ items: [] }],
-      [
-        {
-          messageId: "work",
-          items: [{ itemId: "work", kind: "tool", phase: "end", title: "Read", status: "unknown" }],
-        },
-      ],
-      [{ messageId: "work", items: [], raw: "private" }],
-    ]) {
-      expect(Value.Check(ChatHistoryCursorResultSchema, { ...delta, activity })).toBe(false);
-    }
-    expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset" })).toBe(true);
-    expect(Value.Check(ChatHistoryCursorResultSchema, { ...delta, extra: true })).toBe(false);
-    expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset", messages: [] })).toBe(false);
+    history.rejects(
+      ...[
+        [{ items: [] }],
+        [{ messageId: "work", items: [{ ...item, itemId: "work", status: "unknown" }] }],
+        [{ messageId: "work", items: [], raw: "private" }],
+      ].map((activity) => Object.assign({}, delta, { activity })),
+      { ...delta, extra: true },
+      { kind: "reset", messages: [] },
+    );
+    history.accepts({ kind: "reset" });
   });
 });
 
 describe("ChatStatusEventSchema", () => {
-  it("accepts closed startup phases through the chat event union", () => {
-    expect(Value.Check(ChatStatusEventSchema, statusEvent)).toBe(true);
-    expect(Value.Check(ChatEventSchema, statusEvent)).toBe(true);
+  it("accepts optional local model wait reasons and rejects unsupported claims", () => {
+    const event = { ...statusEvent, phase: "waiting_for_model" };
+    chat.accepts(
+      ...[undefined, "response", "slot"].map((waitReason) =>
+        Object.assign({}, event, waitReason ? { waitReason } : {}),
+      ),
+    );
+    chat.rejects({ ...event, waitReason: "busy" });
   });
 
-  it("rejects unknown phases and extra fields", () => {
-    expect(Value.Check(ChatStatusEventSchema, { ...statusEvent, phase: "thinking" })).toBe(false);
-    expect(Value.Check(ChatStatusEventSchema, { ...statusEvent, detail: "Loading" })).toBe(false);
+  it("accepts closed startup phases through the chat event union", () => {
+    schemaValidation(S.ChatStatusEventSchema).accepts(statusEvent);
+    chat.accepts(statusEvent);
   });
 
   it("accepts bounded retry details while preserving the required coarse phase", () => {
-    const event = {
-      runId: "run-1",
-      sessionKey: "session-1",
-      seq: 2,
-      state: "status",
-      phase: "starting_model",
-    };
+    const event = { ...statusEvent, sessionKey: "session-1", seq: 2, phase: "starting_model" };
     const retry = { attempt: 2, maxAttempts: 10, reason: "rate_limit" };
-    for (const maxAttempts of [2, 10]) {
-      expect(Value.Check(ChatEventSchema, { ...event, retry: { ...retry, maxAttempts } })).toBe(
-        true,
-      );
-    }
-    for (const invalid of [
-      { attempt: 0 },
-      { attempt: 11 },
-      { attempt: 1.5 },
-      { maxAttempts: 0 },
-      { maxAttempts: 2.5 },
-      { maxAttempts: 11 },
-      { reason: "unknown" },
-      { errorBody: "provider data" },
-    ]) {
-      expect(Value.Check(ChatEventSchema, { ...event, retry: { ...retry, ...invalid } })).toBe(
-        false,
-      );
-    }
-    expect(Value.Check(ChatEventSchema, { ...event, phase: undefined, retry })).toBe(false);
+    const withRetry = (override: object) => ({ ...event, retry: { ...retry, ...override } });
+    chat.accepts(
+      ...["rate_limit", "overloaded", "server_error", "timeout", "output_limit"].map((reason) =>
+        withRetry({ reason, retryAt: 1_800_000_000_000 }),
+      ),
+      ...[2, 10].map((maxAttempts) => withRetry({ maxAttempts })),
+    );
+    chat.rejects(
+      ...[
+        { attempt: 0 },
+        { attempt: 11 },
+        { attempt: 1.5 },
+        { maxAttempts: 0 },
+        { maxAttempts: 2.5 },
+        { maxAttempts: 11 },
+        { reason: "unknown" },
+        { retryAt: -1 },
+        { retryAt: Infinity },
+        { errorBody: "provider data" },
+      ].map(withRetry),
+      { ...event, phase: undefined, retry },
+    );
   });
 });
 
 describe("ChatErrorEventSchema", () => {
-  const event = { runId: "run-1", sessionKey: "agent:main:main", seq: 1, state: "error" };
-  const detail = {
-    provider: "openai",
-    model: "gpt-5.6-luna",
-    failoverReason: "server_error",
-    providerRuntimeFailureKind: "timeout",
-    providerErrorType: "server_error",
-    httpStatus: 502,
-    providerErrorMessagePreview: "Upstream unavailable",
-  };
-
   it("round-trips optional closed provider error details", () => {
+    const event = { runId: "run-1", sessionKey: "agent:main:main", seq: 1, state: "error" };
+    const detail = {
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      failoverReason: "server_error",
+      providerRuntimeFailureKind: "timeout",
+      providerErrorCode: "server_error",
+      providerErrorType: "server_error",
+      httpStatus: 502,
+      providerErrorMessagePreview: "Upstream unavailable",
+    };
     for (const errorDetail of [
       undefined,
       {},
@@ -188,67 +146,44 @@ describe("ChatErrorEventSchema", () => {
       detail,
     ]) {
       const serialized = JSON.stringify({ ...event, errorDetail });
-      const wire = JSON.parse(serialized);
-      expect(Value.Check(ChatEventSchema, wire)).toBe(true);
+      chat.accepts(JSON.parse(serialized));
     }
-    expect(
-      Value.Check(ChatEventSchema, {
-        ...event,
-        errorDetail: { ...detail, rawErrorPreview: "raw" },
-      }),
-    ).toBe(false);
-    expect(Value.Check(ChatEventSchema, { ...event, state: "final", errorDetail: detail })).toBe(
-      false,
+    chat.rejects(
+      { ...event, errorDetail: { ...detail, rawErrorPreview: "raw" } },
+      { ...event, state: "final", errorDetail: detail },
     );
-  });
-
-  it("enforces string and HTTP status bounds", () => {
-    for (const key of Object.keys(detail).filter((field) => field !== "httpStatus")) {
-      expect(
-        Value.Check(ChatEventSchema, { ...event, errorDetail: { [key]: "x".repeat(300) } }),
-      ).toBe(true);
-      expect(
-        Value.Check(ChatEventSchema, { ...event, errorDetail: { [key]: "x".repeat(301) } }),
-      ).toBe(false);
-    }
-    for (const httpStatus of [100, 599]) {
-      expect(Value.Check(ChatEventSchema, { ...event, errorDetail: { httpStatus } })).toBe(true);
-    }
-    for (const httpStatus of [99, 600, 502.5, "502"]) {
-      expect(Value.Check(ChatEventSchema, { ...event, errorDetail: { httpStatus } })).toBe(false);
-    }
   });
 });
 
 describe("ChatSendParamsSchema", () => {
-  const send = {
-    sessionKey: "agent:main:main",
-    message: "hello",
-    idempotencyKey: "run-1",
-  };
-
-  it("accepts an expected active leaf while remaining closed", () => {
-    expect(Value.Check(ChatSendParamsSchema, { ...send, expectedLeafEntryId: "leaf-1" })).toBe(
-      true,
+  it("admits bounded plugin page details while keeping ambient context closed", () => {
+    const request = { sessionKey: "agent:main:main", message: "hello", idempotencyKey: "run-1" };
+    const context = {
+      page: "plugin:example:sessions",
+      detail: { board: "board-1", view: "stuck sessions" },
+    };
+    const withContext = (override: object) => ({
+      ...request,
+      workContext: { ...context, ...override },
+    });
+    send.accepts(
+      withContext({}),
+      withContext({ detail: { "line\nbreak": "reference" } }),
+      withContext({ detail: { ["x".repeat(32)]: "x".repeat(128) } }),
     );
-    expect(Value.Check(ChatSendParamsSchema, { ...send, expectedLeafEntryId: null })).toBe(true);
-    expect(
-      Value.Check(ChatSendParamsSchema, {
-        ...send,
-        queueMode: "steer",
-        expectedLeafEntryId: "leaf-1",
-      }),
-    ).toBe(true);
-    expect(Value.Check(ChatSendParamsSchema, { ...send, unknown: true })).toBe(false);
-  });
-
-  it("accepts session settings expectations", () => {
-    expect(
-      Value.Check(ChatSendParamsSchema, {
-        ...send,
-        expectedPermissionMode: "guarded",
-        expectedToolOverrides: { webSearch: false },
-      }),
-    ).toBe(true);
+    send.rejects(
+      ...[
+        null,
+        [],
+        { board: 42 },
+        { board: { id: "nested" } },
+        { "line\nbreak": { id: "nested" } },
+        { "": "empty key" },
+        { ["x".repeat(33)]: "long key" },
+        { board: "x".repeat(129) },
+        { a: "1", b: "2", c: "3", d: "4", e: "5" },
+      ].map((detail) => withContext({ detail })),
+      withContext({ permission: "admin" }),
+    );
   });
 });

@@ -22,13 +22,7 @@ type CodexAppServerRuntimeOptionsParams = NonNullable<
 export type CodexBindingAppServerConnection = {
   appServer: CodexAppServerRuntimeOptions;
   usesSupervisionConnection: boolean;
-  requestAuthProfileId: string | undefined;
   clientAuthProfileId: string | null | undefined;
-};
-
-type CodexSupervisionModelSelection = {
-  model: string;
-  modelProvider: string;
 };
 
 /** Connection selection excludes independently updated thread bookkeeping. */
@@ -75,7 +69,7 @@ export function assertCodexSessionRuntimeOwnership(
 /** Requires the native model pair after a supervised pending branch has materialized. */
 export function requireCodexSupervisionModelSelection(
   binding: Pick<CodexAppServerThreadBinding, "connectionScope" | "model" | "modelProvider">,
-): CodexSupervisionModelSelection {
+) {
   const model = binding.model?.trim();
   const modelProvider = binding.modelProvider?.trim();
   if (binding.connectionScope !== "supervision" || !model || !modelProvider) {
@@ -93,6 +87,7 @@ export type CodexBindingAppServerConnectionParams = CodexAppServerRuntimeOptions
   >;
   authProfileId?: string;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 };
 
 /** Registration publishes the resolver; connection policy loads only for an actual request. */

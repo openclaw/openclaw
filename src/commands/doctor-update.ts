@@ -1,10 +1,10 @@
-/** Optional pre-doctor update prompt for source checkouts and package installs. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../infra/update-run-timeouts.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -35,17 +35,17 @@ async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git
     : "not-git";
 }
 
-/** Offers to update OpenClaw before doctor when running interactively from an updatable install. */
 export async function maybeOfferUpdateBeforeDoctor(params: {
   options: DoctorOptions;
   root: string | null;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   outro: (message: string) => void;
-}): Promise<{
-  updated: boolean;
-  handled?: boolean;
-  reason?: "gateway-readiness-unverified" | "still-starting";
-}> {
+}): Promise<boolean> {
+  const installOwner = await readInstallOwner(params.root);
+  if (installOwner) {
+    note(formatInstallOwnerMessage(installOwner), "Update");
+    return false;
+  }
   const updateInProgress = isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
   const canOfferUpdate =
     !updateInProgress &&
@@ -54,7 +54,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     params.options.repair !== true &&
     process.stdin.isTTY;
   if (!canOfferUpdate || !params.root) {
-    return { updated: false };
+    return false;
   }
 
   const git = await detectOpenClawGitCheckout(params.root);
@@ -64,42 +64,36 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
         "Update through the external supervisor's stop/update/finalize/restart workflow. Continuing Doctor without updating OpenClaw.",
         "Update",
       );
-      return { updated: false };
+      return false;
     }
     const shouldUpdate = await params.confirm({
       message: "Update OpenClaw from git before running doctor?",
       initialValue: true,
     });
     if (!shouldUpdate) {
-      return { updated: false };
+      return false;
     }
     const { updateCommand } = await import("../cli/update-cli/update-command.js");
     let handled = false;
-    let readinessReason: "gateway-readiness-unverified" | "still-starting" | undefined;
+    let readinessUnverified = false;
     await updateCommand({
       sourceUpdate: { root: params.root },
       timeout: String(UPDATE_RUNNER_TIMEOUT_MS / 1000),
       onResult: (result) => {
-        readinessReason =
+        readinessUnverified =
           result.status === "skipped" &&
-          (result.reason === "gateway-readiness-unverified" || result.reason === "still-starting")
-            ? result.reason
-            : undefined;
-        handled = result.status === "ok" || readinessReason !== undefined;
+          (result.reason === "gateway-readiness-unverified" || result.reason === "still-starting");
+        handled = result.status === "ok" || readinessUnverified;
       },
     });
     if (handled) {
       params.outro(
-        readinessReason
+        readinessUnverified
           ? "OpenClaw installed; Gateway readiness remains unverified. Keep recovery backups and check `openclaw gateway status --deep`."
           : "Update completed (doctor already ran as part of the update).",
       );
     }
-    return {
-      updated: true,
-      handled,
-      ...(readinessReason ? { reason: readinessReason } : {}),
-    };
+    return handled;
   }
 
   if (git === "not-git") {
@@ -112,5 +106,5 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     );
   }
 
-  return { updated: false };
+  return false;
 }

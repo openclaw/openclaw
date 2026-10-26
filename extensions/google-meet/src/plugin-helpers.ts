@@ -1,6 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/channel-actions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildGoogleMeetCalendarDayWindow,
@@ -8,47 +8,29 @@ import {
   type GoogleMeetCalendarLookupResult,
 } from "./calendar.js";
 import type { GoogleMeetConfig } from "./config.js";
-import {
-  fetchGoogleMeetArtifacts,
-  fetchGoogleMeetAttendance,
-  fetchGoogleMeetSpace,
-} from "./meet.js";
-import { loadGoogleMeetCliModule, resolveMeetingInput } from "./plugin-registration.js";
-import type { GoogleMeetRuntime } from "./runtime.js";
-
-const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./create.js"));
-
-export async function createMeetFromParams(params: {
-  config: GoogleMeetConfig;
-  runtime: OpenClawPluginApi["runtime"];
-  raw: Record<string, unknown>;
-}) {
-  const create = await loadGoogleMeetCreateModule();
-  return create.createMeetFromParams(params);
-}
-
-export async function createAndJoinMeetFromParams(params: {
-  config: GoogleMeetConfig;
-  runtime: OpenClawPluginApi["runtime"];
-  raw: Record<string, unknown>;
-  ensureRuntime: () => Promise<GoogleMeetRuntime>;
-}) {
-  const create = await loadGoogleMeetCreateModule();
-  return create.createAndJoinMeetFromParams(params);
-}
+import { fetchGoogleMeetSpace } from "./meet-api.js";
+import { fetchGoogleMeetArtifacts, fetchGoogleMeetAttendance } from "./meet.js";
+import { resolveManagedGoogleMeetAccessToken, type GoogleMeetOAuthRuntime } from "./oauth-owner.js";
+import { resolveMeetingInput } from "./plugin-registration.js";
+const loadGoogleMeetExportModule = createLazyRuntimeModule(() => import("./cli-export.js"));
 
 export async function resolveGoogleMeetTokenFromParams(
   config: GoogleMeetConfig,
   raw: Record<string, unknown>,
+  runtime?: GoogleMeetOAuthRuntime,
 ) {
   const { resolveGoogleMeetAccessToken } = await import("./oauth.js");
-  return resolveGoogleMeetAccessToken({
+  const oauth = {
     clientId: normalizeOptionalString(raw.clientId) ?? config.oauth.clientId,
     clientSecret: normalizeOptionalString(raw.clientSecret) ?? config.oauth.clientSecret,
     refreshToken: normalizeOptionalString(raw.refreshToken) ?? config.oauth.refreshToken,
     accessToken: normalizeOptionalString(raw.accessToken) ?? config.oauth.accessToken,
     expiresAt: typeof raw.expiresAt === "number" ? raw.expiresAt : config.oauth.expiresAt,
-  });
+  };
+  const configured = isDeepStrictEqual(oauth, config.oauth);
+  return runtime && configured
+    ? resolveManagedGoogleMeetAccessToken(config.oauth, runtime)
+    : resolveGoogleMeetAccessToken(oauth);
 }
 
 function wantsCalendarLookup(raw: Record<string, unknown>): boolean {
@@ -76,8 +58,9 @@ export async function resolveMeetingFromParams(params: {
 export async function resolveSpaceFromParams(
   config: GoogleMeetConfig,
   raw: Record<string, unknown>,
+  runtime?: GoogleMeetOAuthRuntime,
 ) {
-  const token = await resolveGoogleMeetTokenFromParams(config, raw);
+  const token = await resolveGoogleMeetTokenFromParams(config, raw, runtime);
   const { meeting, calendarEvent } = await resolveMeetingFromParams({
     config,
     raw,
@@ -93,10 +76,11 @@ export async function resolveSpaceFromParams(
 export async function resolveArtifactQueryFromParams(
   config: GoogleMeetConfig,
   raw: Record<string, unknown>,
+  runtime?: GoogleMeetOAuthRuntime,
 ) {
   const meeting = normalizeOptionalString(raw.meeting) ?? config.defaults.meeting;
   const conferenceRecord = normalizeOptionalString(raw.conferenceRecord);
-  const token = await resolveGoogleMeetTokenFromParams(config, raw);
+  const token = await resolveGoogleMeetTokenFromParams(config, raw, runtime);
   const resolvedMeeting: { meeting?: string; calendarEvent?: GoogleMeetCalendarLookupResult } =
     conferenceRecord
       ? { meeting }
@@ -125,42 +109,23 @@ type ResolvedGoogleMeetArtifactQuery = Awaited<ReturnType<typeof resolveArtifact
 
 export function fetchResolvedGoogleMeetArtifacts(query: ResolvedGoogleMeetArtifactQuery) {
   return fetchGoogleMeetArtifacts({
+    ...query,
     accessToken: query.token.accessToken,
-    meeting: query.meeting,
-    conferenceRecord: query.conferenceRecord,
-    pageSize: query.pageSize,
-    includeTranscriptEntries: query.includeTranscriptEntries,
-    includeDocumentBodies: query.includeDocumentBodies,
-    allConferenceRecords: query.allConferenceRecords,
   });
 }
 
 export function fetchResolvedGoogleMeetAttendance(query: ResolvedGoogleMeetArtifactQuery) {
   return fetchGoogleMeetAttendance({
+    ...query,
     accessToken: query.token.accessToken,
-    meeting: query.meeting,
-    conferenceRecord: query.conferenceRecord,
-    pageSize: query.pageSize,
-    allConferenceRecords: query.allConferenceRecords,
-    mergeDuplicateParticipants: query.mergeDuplicateParticipants,
-    lateAfterMinutes: query.lateAfterMinutes,
-    earlyBeforeMinutes: query.earlyBeforeMinutes,
   });
 }
 
-export async function exportGoogleMeetBundleFromParams(
-  config: GoogleMeetConfig,
-  raw: Record<string, unknown>,
+export function buildGoogleMeetExportRequest(
+  resolved: ResolvedGoogleMeetArtifactQuery,
+  calendarId?: string,
 ) {
-  const resolved = await resolveArtifactQueryFromParams(config, raw);
-  const [artifacts, attendance] = await Promise.all([
-    fetchResolvedGoogleMeetArtifacts(resolved),
-    fetchResolvedGoogleMeetAttendance(resolved),
-  ]);
-  const { buildGoogleMeetExportManifest, googleMeetExportFileNames, writeMeetExportBundle } =
-    await loadGoogleMeetCliModule();
-  const calendarId = normalizeOptionalString(raw.calendarId);
-  const request = {
+  return {
     ...(resolved.meeting ? { meeting: resolved.meeting } : {}),
     ...(resolved.conferenceRecord ? { conferenceRecord: resolved.conferenceRecord } : {}),
     ...(resolved.calendarEvent?.event.id
@@ -182,42 +147,34 @@ export async function exportGoogleMeetBundleFromParams(
       ? { earlyBeforeMinutes: resolved.earlyBeforeMinutes }
       : {}),
   };
-  const tokenSource = resolved.token.refreshed ? "refresh-token" : "cached-access-token";
-  if (raw.dryRun === true) {
-    return {
-      dryRun: true,
-      manifest: buildGoogleMeetExportManifest({
-        artifacts,
-        attendance,
-        files: googleMeetExportFileNames(),
-        request,
-        tokenSource,
-        ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-      }),
-      ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-      tokenSource,
-    };
-  }
-  const outputDir = normalizeOptionalString(raw.outputDir) ?? normalizeOptionalString(raw.output);
-  const bundle = await writeMeetExportBundle({
-    ...(outputDir ? { outputDir } : {}),
+}
+
+export async function exportGoogleMeetBundleFromParams(
+  config: GoogleMeetConfig,
+  raw: Record<string, unknown>,
+  runtime?: GoogleMeetOAuthRuntime,
+) {
+  const resolved = await resolveArtifactQueryFromParams(config, raw, runtime);
+  const [artifacts, attendance] = await Promise.all([
+    fetchResolvedGoogleMeetArtifacts(resolved),
+    fetchResolvedGoogleMeetAttendance(resolved),
+  ]);
+  const { exportGoogleMeetBundle } = await loadGoogleMeetExportModule();
+  return exportGoogleMeetBundle({
     artifacts,
     attendance,
+    request: buildGoogleMeetExportRequest(resolved, normalizeOptionalString(raw.calendarId)),
+    tokenSource: resolved.token.refreshed ? "refresh-token" : "cached-access-token",
+    calendarEvent: resolved.calendarEvent,
+    outputDir: normalizeOptionalString(raw.outputDir) ?? normalizeOptionalString(raw.output),
     zip: raw.zip === true,
-    request,
-    tokenSource,
-    ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
+    dryRun: raw.dryRun === true,
   });
-  return {
-    ...bundle,
-    ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-    tokenSource,
-  };
 }
 
 export { buildGoogleMeetCalendarDayWindow, listGoogleMeetCalendarEvents } from "./calendar.js";
 export {
-  buildGoogleMeetPreflightReport,
   endGoogleMeetActiveConference,
   fetchLatestGoogleMeetConferenceRecord,
-} from "./meet.js";
+} from "./meet-api.js";
+export { buildGoogleMeetPreflightReport } from "./meet.js";

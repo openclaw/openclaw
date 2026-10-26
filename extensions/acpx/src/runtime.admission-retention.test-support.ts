@@ -1,63 +1,46 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
-import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { createFileSessionStore } from "acpx/runtime";
+import { promptJson, withProcessRuntime } from "./runtime-process.test-support.js";
 import { acpxOperationScope } from "./runtime-session-store.js";
-import { AcpxRuntime } from "./runtime.js";
+import type { AcpxRuntime } from "./runtime.js";
 
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
 const scenario = process.argv[2];
 assert.ok(scenario === "initial" || scenario === "after-reset");
-const peer = fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url));
 
-function unownedControl() {
-  return new WeakRef({ unowned: true });
+const references: Array<{ label: string; value: WeakRef<object> }> = [];
+const track = (label: string, value: object) =>
+  references.push({ label, value: new WeakRef(value) });
+const ids: number[] = [];
+let failLaunch = true;
+let lookupResult: "missing" | "error" | undefined;
+
+// Return the frame retaining the last rejected lookup promise before checking GC.
+async function exerciseUnusedLookups(runtime: AcpxRuntime) {
+  for (let index = 0; index < 8; index++) {
+    lookupResult = index % 2 === 0 ? "missing" : "error";
+    const lookup = runtime.findSession({
+      sessionKey: `lookup-only-${index}`,
+      agentId: "main",
+      agent: "fixture",
+    });
+    if (lookupResult === "error") {
+      await assert.rejects(lookup, /synthetic lookup failure/);
+    } else {
+      assert.equal(await lookup, undefined);
+    }
+  }
+  lookupResult = undefined;
 }
 
-await withOpenClawTestState({ label: `acpx-admission-${scenario}` }, async (state) => {
-  const directory = path.join(state.root, "peer");
-  await fs.mkdir(directory);
-  const references: Array<{ label: string; value: WeakRef<object> }> = [];
-  const ids: number[] = [];
-  let failLaunch = true;
-  const runtime = new AcpxRuntime({
-    cwd: state.root,
-    sessionStore: createFileSessionStore({ stateDir: state.root }),
-    agentRegistry: createAgentRegistry({
-      overrides: { fixture: [process.execPath, peer, directory] },
-    }),
-    openclawToolsMcpBridgeEnabled: true,
-    mcpServers: [{ name: "openclaw-tools", command: process.execPath, args: [], env: [] }],
-    permissionMode: "deny-all",
-    timeoutMs: 5000,
-    processLifecycle: {
-      onBeforeSpawn: async () => {
-        const generation = acpxOperationScope.getStore()?.generation;
-        assert.ok(generation, "Admission must retain its current owner through the SDK");
-        assert.equal(generation.afterReset, scenario === "after-reset");
-        ids.push(generation.id);
-        if (failLaunch) {
-          references.push({ label: `generation:${generation.id}`, value: new WeakRef(generation) });
-          if (scenario === "after-reset") {
-            assert.ok(generation.delegate);
-            references.push({
-              label: `delegate:${generation.id}`,
-              value: new WeakRef(generation.delegate),
-            });
-          }
-          throw new Error("synthetic admission launch failure");
-        }
-      },
-    },
-  });
-  const target = (index: number) => ({ sessionKey: `failed-admission-${index}`, agentId: "main" });
-  const ensure = (index: number) =>
-    runtime.ensureSession({ ...target(index), agent: "fixture", mode: "persistent" });
-  try {
+await withProcessRuntime(
+  `acpx-admission-${scenario}`,
+  async ({ runtime }) => {
+    const target = (id: number) => ({ sessionKey: `failed-admission-${id}`, agentId: "main" });
+    const ensure = (index: number) =>
+      runtime.ensureSession({ ...target(index), agent: "fixture", mode: "persistent" });
     for (let index = 0; index < 8; index++) {
       if (scenario === "after-reset") {
         await runtime.prepareFreshSession(target(index));
@@ -65,9 +48,11 @@ await withOpenClawTestState({ label: `acpx-admission-${scenario}` }, async (stat
       await assert.rejects(ensure(index), /synthetic admission launch failure/);
     }
     const failedIds = [...ids];
-    const control = unownedControl();
-    // Cross task boundaries so completed admission frames no longer keep WeakRefs alive.
-    // Fixed full collections allow GC convergence; the broken registry retains every owner.
+    if (scenario === "initial") {
+      await exerciseUnusedLookups(runtime);
+    }
+    const control = new WeakRef({ unowned: true });
+    // Cross task boundaries and allow GC convergence; the broken registry retains every owner.
     for (let pass = 0; pass < 32; pass++) {
       await setImmediate();
       gc();
@@ -79,27 +64,17 @@ await withOpenClawTestState({ label: `acpx-admission-${scenario}` }, async (stat
     console.log(
       JSON.stringify({ scenario, observed: references.length, retained, controlCollected: true }),
     );
-    assert.deepEqual(retained, [], "Failed first admissions retained unreachable lifecycle owners");
+    assert.deepEqual(retained, [], "Unused admissions or lookups retained lifecycle owners");
 
     failLaunch = false;
     const handle = await ensure(0);
     const retryId = ids.at(-1);
-    assert.ok(retryId !== undefined);
-    assert.ok(!failedIds.includes(retryId), "Sequential retry needs a fresh admission owner");
-    const turn = runtime.startTurn({
-      handle,
-      text: "show context",
-      mode: "prompt",
-      requestId: "retry",
-    });
-    let text = "";
-    for await (const event of turn.events) {
-      if (event.type === "text_delta") {
-        text += event.text;
-      }
-    }
-    assert.equal((await turn.result).status, "completed");
-    assert.deepEqual(JSON.parse(text).mcpServers, [
+    assert.ok(
+      retryId !== undefined && !failedIds.includes(retryId),
+      "Sequential retry needs a fresh admission owner",
+    );
+    const context = await promptJson(runtime, handle, "show context", "retry");
+    assert.deepEqual(context.mcpServers, [
       {
         name: "openclaw-tools",
         command: process.execPath,
@@ -107,8 +82,46 @@ await withOpenClawTestState({ label: `acpx-admission-${scenario}` }, async (stat
         env: [{ name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", value: target(0).sessionKey }],
       },
     ]);
-    await runtime.close({ handle, reason: "test-complete", discardPersistentState: true });
-  } finally {
-    await runtime.shutdown();
-  }
-});
+    await runtime.close({ handle, reason: "test-complete" });
+    const found = await runtime.findSession({ ...target(0), agent: "fixture" });
+    assert.ok(found, "Ordinary close preserves discoverable session history");
+    assert.equal((await runtime.getStatus({ handle: found })).details?.closed, true);
+  },
+  async (state) => {
+    const store = createFileSessionStore({ stateDir: state.root });
+    return {
+      sessionStore: {
+        load: async (key) => {
+          if (lookupResult) {
+            const generation = acpxOperationScope.getStore()?.generation;
+            assert.ok(generation, "Lookup must retain its owner until the read settles");
+            track(`lookup:${generation.id}`, generation);
+            if (lookupResult === "error") {
+              throw new Error("synthetic lookup failure");
+            }
+          }
+          return store.load(key);
+        },
+        save: (record) => store.save(record),
+      },
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [{ name: "openclaw-tools", command: process.execPath, args: [], env: [] }],
+      processLifecycle: {
+        onBeforeSpawn: async () => {
+          const generation = acpxOperationScope.getStore()?.generation;
+          assert.ok(generation, "Admission must retain its current owner through the SDK");
+          assert.equal(generation.afterReset, scenario === "after-reset");
+          ids.push(generation.id);
+          if (failLaunch) {
+            track(`generation:${generation.id}`, generation);
+            if (scenario === "after-reset") {
+              assert.ok(generation.delegate);
+              track(`delegate:${generation.id}`, generation.delegate);
+            }
+            throw new Error("synthetic admission launch failure");
+          }
+        },
+      },
+    };
+  },
+);

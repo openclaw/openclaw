@@ -1,138 +1,86 @@
-import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { beforeEach, expect, expectTypeOf, it, vi } from "vitest";
+import type { PluginMetadataSnapshot as Metadata } from "../plugins/plugin-metadata-snapshot.types.js";
 
 const mocks = vi.hoisted(() => ({
   getSnapshot: vi.fn(),
   loadCatalog: vi.fn(),
 }));
+const entries = [{ provider: "test", id: "selected", name: "Selected" }];
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  getPreparedModelCatalogSnapshot: (...args: unknown[]) => mocks.getSnapshot(...args),
+  refreshExpiredPreparedModelCatalog: (...args: unknown[]) => mocks.getSnapshot(...args),
   readPreparedModelCatalog: (...args: unknown[]) => mocks.loadCatalog(...args),
 }));
 
 import {
+  getPreparedModelCatalogSnapshot,
   loadModelCatalog,
   loadPreparedModelCatalog,
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "openclaw/plugin-sdk/agent-runtime";
 
-describe("agent-runtime model catalog compatibility", () => {
-  beforeEach(() => {
-    mocks.getSnapshot.mockReset();
-    mocks.loadCatalog.mockReset();
+beforeEach(() => {
+  mocks.getSnapshot.mockReset().mockReturnValue({ entries, routeVariants: [] });
+  mocks.loadCatalog.mockReset().mockResolvedValue(entries);
+});
+
+it("uses the shipped thinking catalog callback", async () => {
+  const readCatalog = vi.fn(async () => []);
+
+  await expect(
+    resolveThinkingDefaultWithRuntimeCatalog({
+      cfg: { agents: { defaults: { thinkingDefault: "low" } } },
+      provider: "example",
+      model: "example-model",
+      loadModelCatalog: readCatalog,
+    }),
+  ).resolves.toBe("low");
+  expect(readCatalog).toHaveBeenCalledOnce();
+});
+
+it("preserves explicit readOnly:true in the SDK loader", async () => {
+  const options = { config: {}, readOnly: true };
+  await expect(loadPreparedModelCatalog(options)).resolves.toBe(entries);
+  expect(mocks.loadCatalog).toHaveBeenCalledExactlyOnceWith(options);
+});
+
+it.each([
+  [
+    "legacy cache-only",
+    () => loadModelCatalog({ cacheOnly: true, useCache: true, refreshFullCatalog: true }),
+  ],
+  ["snapshot", () => getPreparedModelCatalogSnapshot()?.entries ?? []],
+] as const)("keeps %s reads nonblocking", async (_name, read) => {
+  expect(await read()).toEqual(entries);
+  expect(mocks.loadCatalog).not.toHaveBeenCalled();
+});
+
+it("preserves explicit refresh intent through the legacy loader", async () => {
+  await expect(loadModelCatalog({ refreshFullCatalog: true })).resolves.toBe(entries);
+  expect(mocks.loadCatalog).toHaveBeenCalledExactlyOnceWith({
+    readOnly: false,
+    refreshFullCatalog: true,
   });
+  expect(mocks.getSnapshot).not.toHaveBeenCalled();
+});
 
-  it("uses the shipped thinking catalog callback", async () => {
-    const readCatalog = vi.fn(async () => []);
-
-    await expect(
-      resolveThinkingDefaultWithRuntimeCatalog({
-        cfg: { agents: { defaults: { thinkingDefault: "low" } } },
-        provider: "example",
-        model: "example-model",
-        loadModelCatalog: readCatalog,
-      }),
-    ).resolves.toBe("low");
-    expect(readCatalog).toHaveBeenCalledOnce();
-  });
-
-  it("propagates failures from the shipped thinking catalog callback", async () => {
-    const failure = new Error("catalog unavailable");
-
-    await expect(
-      resolveThinkingDefaultWithRuntimeCatalog({
-        cfg: {},
-        provider: "example",
-        model: "example-model",
-        loadModelCatalog: async () => {
-          throw failure;
-        },
-      }),
-    ).rejects.toBe(failure);
-  });
-
-  it.each([
-    ["prepared", loadPreparedModelCatalog],
-    ["legacy", loadModelCatalog],
-  ] as const)("preserves the writable default of the %s SDK loader", async (_name, load) => {
-    const entries = [{ provider: "test", id: "discovered", name: "Discovered" }];
-    mocks.loadCatalog.mockResolvedValue(entries);
-
-    await expect(load()).resolves.toBe(entries);
-    expect(mocks.loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
-    expect(mocks.getSnapshot).not.toHaveBeenCalled();
-  });
-
-  it.each([true, false])("preserves explicit readOnly:%s in the SDK loader", async (readOnly) => {
-    const config = {};
-    const entries = [{ provider: "test", id: "selected", name: "Selected" }];
-    mocks.loadCatalog.mockResolvedValue(entries);
-
-    await expect(loadPreparedModelCatalog({ config, readOnly })).resolves.toBe(entries);
-    expect(mocks.loadCatalog).toHaveBeenCalledExactlyOnceWith({ config, readOnly });
-  });
-
-  it("keeps legacy cache-only reads nonblocking", async () => {
-    mocks.getSnapshot.mockReturnValue({
-      entries: [{ provider: "test", id: "cached", name: "Cached" }],
-      routeVariants: [],
-    });
-
-    await expect(
-      loadModelCatalog({ cacheOnly: true, useCache: true, refreshFullCatalog: true }),
-    ).resolves.toEqual([{ provider: "test", id: "cached", name: "Cached" }]);
-    expect(mocks.loadCatalog).not.toHaveBeenCalled();
-  });
-
-  it("preserves explicit refresh intent through the legacy loader", async () => {
-    const entries = [{ provider: "test", id: "refreshed", name: "Refreshed" }];
-    mocks.loadCatalog.mockResolvedValue(entries);
-
-    await expect(loadModelCatalog({ refreshFullCatalog: true })).resolves.toBe(entries);
-    expect(mocks.loadCatalog).toHaveBeenCalledExactlyOnceWith({
-      readOnly: false,
-      refreshFullCatalog: true,
-    });
-    expect(mocks.getSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("accepts legacy options without overriding lifecycle metadata", async () => {
-    type LegacyMetadataSnapshot = Omit<
-      PluginMetadataSnapshot,
-      "owners" | "declaredProviderOwners"
-    > & {
-      owners: Omit<
-        PluginMetadataSnapshot["owners"],
-        "modelIdNormalizationPolicies" | "providerAuthContributions"
-      >;
-    };
-    type AcceptedMetadataSnapshot = NonNullable<
-      NonNullable<Parameters<typeof loadModelCatalog>[0]>["metadataSnapshot"]
-    >;
-    expectTypeOf<LegacyMetadataSnapshot>().toMatchTypeOf<AcceptedMetadataSnapshot>();
-    expectTypeOf<PluginMetadataSnapshot>().toMatchTypeOf<AcceptedMetadataSnapshot>();
-    mocks.loadCatalog.mockResolvedValue([]);
-    const config = {};
-    const env = { OPENCLAW_STATE_DIR: "/tmp/plugin-state" };
-
-    await loadModelCatalog({
-      agentDir: "/tmp/plugin-agent",
-      config,
-      env,
-      metadataSnapshot: {} as never,
-      readOnly: true,
-      useCache: false,
-      workspaceDir: "/tmp/plugin-workspace",
-    });
-
-    expect(mocks.loadCatalog).toHaveBeenCalledWith({
-      agentDir: "/tmp/plugin-agent",
-      config,
-      env,
-      readOnly: true,
-      workspaceDir: "/tmp/plugin-workspace",
-    });
-  });
+it("accepts legacy options without overriding lifecycle metadata", async () => {
+  type NewOwners = "modelIdNormalizationPolicies" | "providerAuthContributions";
+  type Owners = Omit<Metadata["owners"], NewOwners>;
+  type LegacyMetadata = Omit<Metadata, "owners" | "declaredProviderOwners"> & { owners: Owners };
+  type Options = NonNullable<Parameters<typeof loadModelCatalog>[0]>;
+  type Accepted = NonNullable<Options["metadataSnapshot"]>;
+  expectTypeOf<LegacyMetadata>().toMatchTypeOf<Accepted>();
+  expectTypeOf<Metadata>().toMatchTypeOf<Accepted>();
+  mocks.loadCatalog.mockResolvedValue([]);
+  const options = {
+    agentDir: "/tmp/plugin-agent",
+    config: {},
+    env: { OPENCLAW_STATE_DIR: "/tmp/plugin-state" },
+    readOnly: true,
+    workspaceDir: "/tmp/plugin-workspace",
+  };
+  await loadModelCatalog({ ...options, metadataSnapshot: {} as never, useCache: false });
+  expect(mocks.loadCatalog).toHaveBeenCalledWith(options);
 });

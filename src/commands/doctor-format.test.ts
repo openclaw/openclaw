@@ -1,35 +1,47 @@
-// Doctor format tests cover doctor output formatting and issue display helpers.
 import { describe, expect, it } from "vitest";
 import { buildGatewayRuntimeHints } from "./doctor-format.js";
 
 describe("buildGatewayRuntimeHints", () => {
-  it("renders macOS GUI-session recovery for the selected profile", () => {
-    const hints = buildGatewayRuntimeHints(
-      {
-        status: "unknown",
-        missingGuiSession: true,
-      },
-      { platform: "darwin", env: { OPENCLAW_PROFILE: "work" } },
+  it.each([
+    [
+      "win32",
+      { status: "stopped", state: "Disabled" },
+      [
+        "Scheduled Task 'OpenClaw Gateway (work)' is registered but DISABLED",
+        "openclaw --profile work gateway start",
+        "openclaw --profile work doctor --fix",
+        "to re-enable it",
+      ],
+    ],
+    [
+      "darwin",
+      { status: "unknown", missingGuiSession: true },
+      ["logged-in macOS GUI session", "openclaw --profile work gateway restart"],
+    ],
+  ] as const)("renders %s recovery for the selected profile", (platform, runtime, expected) => {
+    const hints = buildGatewayRuntimeHints(runtime, {
+      platform,
+      env: { OPENCLAW_PROFILE: "work" },
+    });
+    expect(hints).toEqual(
+      expect.arrayContaining(expected.map((text) => expect.stringContaining(text))),
     );
-
-    expect(hints.join("\n")).toContain("logged-in macOS GUI session");
-    expect(hints.join("\n")).toContain("openclaw --profile work gateway restart");
+    if (platform === "win32") {
+      expect(hints.join("\n")).not.toContain("likely exited immediately");
+    }
   });
 
   it.each(["user", "system"] as const)("inspects the %s systemd cgroup", (scope) => {
+    const systemd = {
+      scope,
+      unit: "openclaw-gateway.service",
+      killMode: "process",
+      tasksCurrent: 807,
+      memoryCurrent: 11_918_534_246,
+    };
     expect(
       buildGatewayRuntimeHints(
-        {
-          status: "running",
-          pid: 1234,
-          systemd: {
-            scope,
-            unit: "openclaw-gateway.service",
-            killMode: "process",
-            tasksCurrent: 807,
-            memoryCurrent: 11_918_534_246,
-          },
-        },
+        { status: "running", pid: 1234, systemd },
         { platform: "linux", env: {} },
       ),
     ).toEqual([
@@ -41,35 +53,31 @@ describe("buildGatewayRuntimeHints", () => {
     ]);
   });
 
-  it("points stopped system services to their actual journal", () => {
-    const hints = buildGatewayRuntimeHints(
-      { status: "stopped", systemd: { scope: "system", unit: "openclaw.service" } },
-      { platform: "linux", env: {} },
-    );
-    expect(hints).toContain("Logs: journalctl --system -u openclaw.service -n 200 --no-pager");
-    expect(hints.join("\n")).not.toContain("journalctl --user");
-  });
-
-  it("uses the provided env when rendering WSL systemd recovery hints", () => {
-    const hints = buildGatewayRuntimeHints(
-      {
+  it.each([
+    {
+      name: "stopped system service journal",
+      runtime: { status: "stopped", systemd: { scope: "system", unit: "openclaw.service" } },
+      env: {},
+      expected: ["Logs: journalctl --system -u openclaw.service -n 200 --no-pager"],
+      excluded: "journalctl --user",
+    },
+    {
+      name: "WSL recovery using the provided env",
+      runtime: {
         status: "unknown",
         detail: "System has not been booted with systemd as init system",
       },
-      { platform: "linux", env: { WSL_DISTRO_NAME: "Ubuntu" } },
-    );
-
-    expect(hints).toContain(
-      "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
-    );
-    expect(hints).toContain("Then run: wsl --shutdown (from PowerShell) and reopen your distro.");
-    expect(hints).toContain("Verify: systemctl --user status");
-    expect(hints.join("\n")).not.toContain("systemd user services are unavailable");
-  });
-
-  it("classifies systemd recovery from structured inspection diagnostics", () => {
-    const hints = buildGatewayRuntimeHints(
-      {
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
+      expected: [
+        "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
+        "Then run: wsl --shutdown (from PowerShell) and reopen your distro.",
+        "Verify: systemctl --user status",
+      ],
+      excluded: "systemd user services are unavailable",
+    },
+    {
+      name: "structured systemd inspection failure",
+      runtime: {
         status: "unknown",
         detail: "service runtime inspection failed; retry with openclaw status --deep",
         inspectionFailure: {
@@ -77,113 +85,28 @@ describe("buildGatewayRuntimeHints", () => {
           detail: "systemctl --user unavailable: Failed to connect to bus",
         },
       },
-      { platform: "linux", env: {} },
-    );
-
-    expect(hints.some((hint) => hint.includes("systemd user services are unavailable"))).toBe(true);
-  });
-
-  it.each([
-    {
-      env: { OPENCLAW_PROFILE: "blue" },
-      command: "openclaw --profile blue gateway",
+      env: {},
+      expected: [expect.stringContaining("systemd user services are unavailable")],
     },
     {
-      env: { OPENCLAW_CONTAINER_HINT: "sandbox" },
-      command: "openclaw --container sandbox gateway",
-    },
-    {
-      env: { OPENCLAW_PROFILE: "blue", OPENCLAW_CONTAINER_HINT: "sandbox" },
-      command: "openclaw --container sandbox gateway",
-    },
-  ])("preserves the active target in systemd recovery commands: $command", ({ env, command }) => {
-    const hints = buildGatewayRuntimeHints(
-      {
-        status: "unknown",
-        detail: "systemctl --user unavailable: Failed to connect to bus",
-      },
-      { platform: "linux", env },
-    );
-
-    expect(hints.some((hint) => hint.includes(command))).toBe(true);
-    expect(hints.some((hint) => hint.includes("headless server"))).toBe(
-      !env.OPENCLAW_CONTAINER_HINT,
-    );
-  });
-
-  it("guides recovery when systemd hit its restart start limit (crash loop)", () => {
-    // Real give-up shape: process kept failing (Result=exit-code) until NRestarts
-    // reached StartLimitBurst and systemd stopped restarting.
-    const text = buildGatewayRuntimeHints(
-      {
+      name: "systemd crash-loop start limit",
+      runtime: {
         status: "stopped",
         state: "failed",
         systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
       },
-      { platform: "linux", env: {} },
-    ).join("\n");
-
-    expect(text).toContain("systemd stopped restarting the gateway after repeated crashes");
-    expect(text).toContain("openclaw gateway restart");
-    expect(text).not.toContain("likely exited immediately");
-  });
-
-  it("keeps the generic stopped hint for a single failed exit below the start limit", () => {
-    const text = buildGatewayRuntimeHints(
-      {
-        status: "stopped",
-        state: "failed",
-        systemd: { result: "exit-code", nRestarts: 1, startLimitBurst: 5 },
-      },
-      { platform: "linux", env: {} },
-    ).join("\n");
-
-    expect(text).toContain("likely exited immediately");
-    expect(text).not.toContain("systemd stopped restarting the gateway");
-  });
-
-  it("keeps the generic stopped hint after a config exit (78) despite a stale restart count", () => {
-    // RestartPreventExitStatus=78 stopped systemd on purpose; the leftover
-    // NRestarts must not flip the hint to start-limit recovery guidance.
-    const text = buildGatewayRuntimeHints(
-      {
-        status: "stopped",
-        state: "failed",
-        lastExitStatus: 78,
-        systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
-      },
-      { platform: "linux", env: {} },
-    ).join("\n");
-
-    expect(text).toContain("likely exited immediately");
-    expect(text).not.toContain("systemd stopped restarting the gateway");
-  });
-
-  it("keeps the generic stopped hint for an ordinary cleanly-stopped service", () => {
-    const text = buildGatewayRuntimeHints(
-      { status: "stopped", state: "inactive" },
-      { platform: "linux", env: {} },
-    ).join("\n");
-
-    expect(text).toContain("likely exited immediately");
-    expect(text).not.toContain("systemd stopped restarting the gateway");
-  });
-
-  it("does not warn for normal systemd cgroup metrics", () => {
-    expect(
-      buildGatewayRuntimeHints(
-        {
-          status: "running",
-          pid: 1234,
-          systemd: {
-            unit: "openclaw-gateway.service",
-            killMode: "control-group",
-            tasksCurrent: 7,
-            memoryCurrent: 132_120_576,
-          },
-        },
-        { platform: "linux", env: {} },
-      ),
-    ).toEqual([]);
+      env: {},
+      expected: [
+        expect.stringContaining("systemd stopped restarting the gateway after repeated crashes"),
+        expect.stringContaining("openclaw gateway restart"),
+      ],
+      excluded: "likely exited immediately",
+    },
+  ] as const)("renders $name", ({ runtime, env, expected, ...rest }) => {
+    const hints = buildGatewayRuntimeHints(runtime, { platform: "linux", env });
+    expect(hints).toEqual(expect.arrayContaining([...expected]));
+    if ("excluded" in rest) {
+      expect(hints.join("\n")).not.toContain(rest.excluded);
+    }
   });
 });

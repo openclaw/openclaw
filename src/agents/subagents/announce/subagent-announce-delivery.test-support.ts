@@ -1,44 +1,105 @@
 export * from "./subagent-announce-delivery.js";
 
-type QueueMessageOptions =
-  import("../../embedded-agent-runner/runs.js").EmbeddedAgentQueueMessageOptions;
-type QueueMessageOutcome =
-  import("../../embedded-agent-runner/runs.js").EmbeddedAgentQueueMessageOutcome;
-type RuntimeDeliveryDeps =
-  import("./subagent-announce-delivery.runtime.js").SubagentAnnounceDeliveryDeps;
-type DeliveryDeps = Omit<
-  RuntimeDeliveryDeps,
-  "getRequesterSessionActivity" | "queueEmbeddedAgentMessageWithOutcome"
-> & {
-  getRequesterSessionActivity: (
-    requesterSessionKey: string,
-    requesterAgentId?: string,
-  ) => {
-    sessionId?: string;
-    isActive: boolean;
+import { expect, it, vi } from "vitest";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import { mockCallArg } from "../../subagent-test-fixtures.test-helpers.js";
+import { hasAnnounceSendEvidence } from "./subagent-announce-delivery-retry.js";
+import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
+
+export const testing = {
+  setDepsForTest: setSubagentAnnounceDeliveryDepsForTest,
+  hasAnnounceSendEvidence,
+};
+
+type RunDescendantWake = typeof import("./subagent-announce-descendant-wake.js").runDescendantWake;
+type AnnounceRuntime = typeof import("./subagent-announce.runtime.js");
+
+export function registerDescendantWakeCurrencyTests({
+  createRoleRestrictedInProcessGatewayMock,
+  createGatewayMock,
+  runDescendantWake,
+}: {
+  runDescendantWake: RunDescendantWake;
+  createRoleRestrictedInProcessGatewayMock: (response: Record<string, unknown>) => {
+    cfg: ReturnType<AnnounceRuntime["getRuntimeConfig"]>;
+    dispatchGatewayMethodInProcess: AnnounceRuntime["dispatchGatewayMethodInProcess"];
   };
-  queueEmbeddedAgentMessageWithOutcome: (
-    sessionId: string,
-    text: string,
-    options?: QueueMessageOptions,
-  ) => QueueMessageOutcome | Promise<QueueMessageOutcome>;
-};
+  createGatewayMock: (
+    response?: Record<string, unknown>,
+  ) => AnnounceRuntime["callSubagentLifecycleGateway"];
+}) {
+  it.each(["current", "changed", "unavailable"] as const)(
+    "settles descendant wakes under restrictive gateway roles with %s currency",
+    async (currency) => {
+      const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
+        runId: "descendant-wake-run",
+      });
+      const resolveGatewayContext: GatewayContextResolver = () => undefined;
+      const signal = new AbortController().signal;
+      const replaceSubagentRunAfterSteer = vi.fn(async () => true);
+      let accepted = false;
+      const dispatch = vi.mocked(dispatchGatewayMethodInProcess);
+      const dispatchWithRoleCheck = dispatch.getMockImplementation()!;
+      dispatch.mockImplementation(async (...args) => {
+        const response = await dispatchWithRoleCheck(...args);
+        accepted = true;
+        return response;
+      });
+      const callGateway = createGatewayMock({
+        aborted: true,
+        runIds: ["descendant-wake-run"],
+      });
+      testing.setDepsForTest({
+        callGateway,
+        dispatchGatewayMethodInProcess,
+        getRuntimeConfig: () => cfg,
+        loadSessionEntryByKey: async () => ({ sessionId: "nested-session", updatedAt: 1 }),
+      });
 
-type Testing = {
-  setDepsForTest(overrides?: Partial<DeliveryDeps>): void;
-  hasAnnounceSendEvidence(error: unknown): boolean;
-  isWriterClaimReboundAnnounceError(error: unknown): boolean;
-};
+      const woke = await runDescendantWake({
+        runId: "nested-parent-run",
+        childSessionKey: "agent:main:subagent:nested-parent",
+        taskLabel: "collect descendant findings",
+        findings: "The descendant completed successfully.",
+        announceId: "descendant-completion",
+        prepareCurrent: async () => {
+          if (accepted && currency === "unavailable") {
+            throw new Error("currency reader closed");
+          }
+          return !accepted || currency === "current";
+        },
+        isChildSessionEffectsAllowed: () => true,
+        resolveGatewayContext,
+        signal,
+        replaceSubagentRunAfterSteer,
+      });
 
-function getTesting(): Testing {
-  return (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.subagentAnnounceDeliveryTestApi")
-  ] as Testing;
+      expect(woke).toBe(currency === "current");
+      expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
+        cancelOnDeadline: true,
+        resolveGatewayContext,
+        signal,
+      });
+      if (currency === "current") {
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
+          expect.objectContaining({
+            previousRunId: "nested-parent-run",
+            nextRunId: "descendant-wake-run",
+          }),
+        );
+      } else {
+        expect(replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+        expect(callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "chat.abort",
+            params: {
+              sessionKey: "agent:main:subagent:nested-parent",
+              runId: "descendant-wake-run",
+            },
+          }),
+        );
+      }
+    },
+  );
 }
-
-export const testing: Testing = {
-  setDepsForTest: (overrides) => getTesting().setDepsForTest(overrides),
-  hasAnnounceSendEvidence: (error) => getTesting().hasAnnounceSendEvidence(error),
-  isWriterClaimReboundAnnounceError: (error) =>
-    getTesting().isWriterClaimReboundAnnounceError(error),
-};

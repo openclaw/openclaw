@@ -6,13 +6,13 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { isGatewaySuspendControlAvailable } from "../infra/gateway-suspend-coordinator.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
   isGatewayWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   NODE_DESKTOP_ATTACH_PATH,
   NODE_PORTAL_ATTACH_PATH,
@@ -25,8 +25,11 @@ import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import { classifyWorkerGatewayPath } from "./gateway-http-route-contracts.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import {
+  assertRemoteControlUiIngressCurrent,
+  getRemoteControlUiIngressContext,
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
+  readPreparedGatewayIngressAttribution,
   PROXY_ATTRIBUTION_GUIDANCE,
   PROXY_ATTRIBUTION_REQUIRED_REASON,
   type GatewayIngressTransport,
@@ -34,13 +37,18 @@ import {
 } from "./ingress-attribution.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
+  getHttpAuthUtilsModule,
+  getPluginNodeCapabilityAuthModule,
+  getPluginRouteRuntimeScopesModule,
+} from "./server-http-modules.js";
+import {
   getCachedPluginGatewayAuthBypassPaths,
   shouldEnforceDefaultPluginGatewayAuth,
-  type PluginGatewayDispatchContext,
   type ResolvePluginNodeCapabilityRoute,
 } from "./server-http-plugin-auth.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { rejectGatewayUpgradeServiceUnavailable } from "./server/http-work-admission.js";
+import type { PluginHttpUpgradeHandler } from "./server/plugins-http.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
@@ -50,22 +58,6 @@ import {
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
-
-type PluginHttpUpgradeHandler = (
-  req: IncomingMessage,
-  socket: import("node:stream").Duplex,
-  head: Buffer,
-  pathContext?: PluginRoutePathContext,
-  dispatchContext?: PluginGatewayDispatchContext,
-) => Promise<boolean>;
-
-const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
-  () => import("./server/plugin-node-capability-auth.js"),
-);
-const getHttpAuthUtilsModule = createLazyRuntimeModule(() => import("./http-auth-utils.js"));
-const getPluginRouteRuntimeScopesModule = createLazyRuntimeModule(
-  () => import("./server/plugin-route-runtime-scopes.js"),
-);
 
 function rejectUpgradeAuth(socket: Pick<Duplex, "end" | "destroy">, auth: GatewayAuthResult) {
   if (auth.rateLimited) {
@@ -77,18 +69,11 @@ function rejectUpgradeAuth(socket: Pick<Duplex, "end" | "destroy">, auth: Gatewa
         type: "rate_limited",
       },
     });
-    socket.end(
-      [
-        "HTTP/1.1 429 Too Many Requests",
-        ...(retryAfterSeconds ? [`Retry-After: ${retryAfterSeconds}`] : []),
-        "Content-Type: application/json; charset=utf-8",
-        `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
-        "Connection: close",
-        "",
-        body,
-      ].join("\r\n"),
-      () => socket.destroy(),
-    );
+    rejectWebSocketUpgrade(socket, {
+      status: 429,
+      body: { contentType: "application/json; charset=utf-8", text: body },
+      headers: retryAfterSeconds ? { "Retry-After": String(retryAfterSeconds) } : undefined,
+    });
     return;
   }
   if (auth.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
@@ -98,17 +83,10 @@ function rejectUpgradeAuth(socket: Pick<Duplex, "end" | "destroy">, auth: Gatewa
         type: PROXY_ATTRIBUTION_REQUIRED_REASON,
       },
     });
-    socket.end(
-      [
-        "HTTP/1.1 403 Forbidden",
-        "Content-Type: application/json; charset=utf-8",
-        `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
-        "Connection: close",
-        "",
-        body,
-      ].join("\r\n"),
-      () => socket.destroy(),
-    );
+    rejectWebSocketUpgrade(socket, {
+      status: 403,
+      body: { contentType: "application/json; charset=utf-8", text: body },
+    });
     return;
   }
   rejectWebSocketUpgrade(socket, { status: 401 });
@@ -134,10 +112,7 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   if (
     isGatewayWorkAdmissionClosed() &&
     !allowsRestartStartupPreauth &&
-    (ingressName === "Worker" ||
-      isGatewayRestartDraining() ||
-      (getGatewaySuspendAdmissionPhase() !== "draining" &&
-        getGatewaySuspendAdmissionPhase() !== "prepared"))
+    (ingressName === "Worker" || !isGatewaySuspendControlAvailable())
   ) {
     rejectGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
     return;
@@ -161,6 +136,11 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   };
   socket.once("close", releaseUpgradeBudget);
   try {
+    // Skip compression on direct-local ingress. Loopback proxies may still serve
+    // remote clients, so use the ingress owner's prepared attribution.
+    if (readPreparedGatewayIngressAttribution(req)?.kind === "direct-local") {
+      delete req.headers["sec-websocket-extensions"];
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
       const ingressSocket = ws as GatewayIngressWebSocket;
       ingressSocket["__openclawPreauthBudgetKey"] = preauthBudgetKey;
@@ -178,7 +158,7 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   }
 }
 
-/** Attaches WebSocket and plugin-upgrade routing to an already-created HTTP server. */
+/** Physical and virtual transports share upgrade admission and route ownership. */
 export function attachGatewayUpgradeHandler(opts: {
   httpServer: HttpServer;
   wss: WebSocketServer;
@@ -200,12 +180,13 @@ export function attachGatewayUpgradeHandler(opts: {
   desktopSessionRegistry?: DesktopSessionRegistry;
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  waitForRequestRuntime?: () => Promise<void>;
   isStartupPending?: () => boolean;
   ingressTransport?: GatewayIngressTransport;
   reportUnattributableProxy?: GatewayUnattributableProxyReporter;
+  controlUiBasePath?: string;
 }) {
   const {
-    httpServer,
     wss,
     handlePluginUpgrade,
     shouldEnforcePluginGatewayAuth,
@@ -219,12 +200,30 @@ export function attachGatewayUpgradeHandler(opts: {
     log,
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
-  httpServer.on("upgrade", (req, socket, head) => {
+  const handle = async (req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> => {
     // Node releases socket errors before routing can await a plugin or authenticate.
     socket.once("error", () => socket.destroy());
-    markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
+    const remoteIngress = getRemoteControlUiIngressContext(req);
+    if (!remoteIngress) {
+      markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
+    }
     const handleUpgrade = async () => {
+      await opts.waitForRequestRuntime?.();
       const configSnapshot = getRuntimeConfig();
+      assertRemoteControlUiIngressCurrent(remoteIngress);
+      if (remoteIngress) {
+        const path = URL.parse(req.url ?? "/", remoteIngress.publicOrigin)?.pathname;
+        const basePath = opts.controlUiBasePath ?? "";
+        const mainPath = basePath || "/";
+        if (
+          req.headers.origin !== remoteIngress.publicOrigin ||
+          !path ||
+          ![mainPath, "/desktop/observe", "/desktop/audio", "/browser/screencast"].includes(path)
+        ) {
+          rejectWebSocketUpgrade(socket, { status: 403 });
+          return;
+        }
+      }
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const ingressAttribution = prepareGatewayIngressAttribution({
@@ -236,6 +235,10 @@ export function attachGatewayUpgradeHandler(opts: {
         ingressAttribution.kind === "unattributable-proxy"
           ? ingressAttribution.remoteAddress
           : ingressAttribution.clientIp;
+      const preauthBudgetKey =
+        ingressAttribution.kind === "remote-forwarded"
+          ? ingressAttribution.rateLimit.subject.key
+          : requestClientIp;
       const originalRequestPath = URL.parse(req.url ?? "/", "http://localhost")?.pathname;
       const originalWorkerGatewayRoute = originalRequestPath
         ? classifyWorkerGatewayPath(originalRequestPath)
@@ -336,7 +339,7 @@ export function attachGatewayUpgradeHandler(opts: {
           return;
         }
       }
-      if (handlePluginUpgrade) {
+      if (handlePluginUpgrade && (!remoteIngress || requestPath === "/browser/screencast")) {
         let pluginGatewayAuthSatisfied = false;
         let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
         let pluginGatewayRequestOperatorScopes: string[] | undefined;
@@ -355,6 +358,8 @@ export function attachGatewayUpgradeHandler(opts: {
             allowRealIpFallback,
             rateLimiter,
             cfg: configSnapshot,
+            getRuntimeConfig,
+            getResolvedAuth,
           });
           if (!authCheck.ok) {
             rejectUpgradeAuth(socket, authCheck.authResult);
@@ -369,6 +374,11 @@ export function attachGatewayUpgradeHandler(opts: {
             authCheck.requestAuth,
           );
         }
+        if (pluginGatewayRequestAuth?.hasCurrentClientAuthority?.() === false) {
+          rejectUpgradeAuth(socket, { ok: false, reason: "unauthorized" });
+          return;
+        }
+        assertRemoteControlUiIngressCurrent(remoteIngress);
         if (
           await handlePluginUpgrade(req, socket, head, pathContext, {
             gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
@@ -384,7 +394,7 @@ export function attachGatewayUpgradeHandler(opts: {
         rejectUpgradeAuth(socket, { ok: false, reason: ingressAttribution.reason });
         return;
       }
-      if (requestPath === "/desktop/observe") {
+      if (requestPath === "/desktop/observe" || requestPath === "/desktop/audio") {
         if (!opts.desktopSessionRegistry) {
           rejectGatewayUpgradeServiceUnavailable(socket, "desktop observe unavailable");
           return;
@@ -396,7 +406,14 @@ export function attachGatewayUpgradeHandler(opts: {
           rejectGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
           return;
         }
+        if (requestPath === "/desktop/audio") {
+          const { handleDesktopAudioUpgrade } = await import("./desktop/audio-bridge.js");
+          assertRemoteControlUiIngressCurrent(remoteIngress);
+          handleDesktopAudioUpgrade(req, socket, head);
+          return;
+        }
         const { handleDesktopObserveUpgrade } = await import("./desktop/observe-bridge.js");
+        assertRemoteControlUiIngressCurrent(remoteIngress);
         handleDesktopObserveUpgrade(req, socket, head, {
           registry: opts.desktopSessionRegistry,
         });
@@ -418,6 +435,11 @@ export function attachGatewayUpgradeHandler(opts: {
       }
       // Plugin-owned upgrade routes have already had the opportunity to claim the socket.
       // Core Gateway control connections remain reachable throughout a held suspension.
+      assertRemoteControlUiIngressCurrent(remoteIngress);
+      if (remoteIngress && requestPath !== (opts.controlUiBasePath || "/")) {
+        rejectWebSocketUpgrade(socket, { status: 404 });
+        return;
+      }
       try {
         handleBudgetedGatewayWebSocketUpgrade({
           req,
@@ -425,7 +447,7 @@ export function attachGatewayUpgradeHandler(opts: {
           head,
           wss,
           preauthConnectionBudget,
-          preauthBudgetKey: requestClientIp,
+          preauthBudgetKey,
           ingressName: "Gateway",
           isStartupPending: opts.isStartupPending,
         });
@@ -433,7 +455,7 @@ export function attachGatewayUpgradeHandler(opts: {
         throw new Error("gateway websocket upgrade failed");
       }
     };
-    void runHttpConnectionRequest(
+    await runHttpConnectionRequest(
       req,
       () => runWithDiagnosticTraceContext(createDiagnosticTraceContext(), handleUpgrade),
       "upgrade",
@@ -443,5 +465,9 @@ export function attachGatewayUpgradeHandler(opts: {
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);
       rejectWebSocketUpgrade(socket, { status: 503 });
     });
+  };
+  opts.httpServer.on("upgrade", (req, socket, head) => {
+    void handle(req, socket, head);
   });
+  return handle;
 }

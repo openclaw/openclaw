@@ -1,5 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
-// SQLite ownership helpers for Gateway skill-upload staging.
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -10,6 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -48,17 +47,7 @@ export type SkillUploadMetadataRow = InferResult<
   ReturnType<typeof selectSkillUploadMetadata>
 >[number];
 
-export function resolveSkillUploadDatabaseOptions(options: {
-  env?: NodeJS.ProcessEnv;
-  path?: string;
-}): OpenClawStateDatabaseOptions {
-  return {
-    ...(options.env ? { env: options.env } : {}),
-    ...(options.path ? { path: options.path } : {}),
-  };
-}
-
-export function openSkillUploadDatabase(options: OpenClawStateDatabaseOptions) {
+function openSkillUploadDatabase(options: OpenClawStateDatabaseOptions) {
   const database = openOpenClawStateDatabase(options);
   return {
     database,
@@ -66,19 +55,8 @@ export function openSkillUploadDatabase(options: OpenClawStateDatabaseOptions) {
   };
 }
 
-function readSkillUploadMetadata(
-  uploadId: string,
-  options: OpenClawStateDatabaseOptions,
-): SkillUploadMetadataRow | undefined {
-  const { database, kysely } = openSkillUploadDatabase(options);
-  return executeSqliteQueryTakeFirstSync(
-    database.db,
-    selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
-  );
-}
-
 export function deleteSkillUploadState(
-  db: DatabaseSync,
+  db: EngineConnection,
   kysely: Kysely<SkillUploadDatabase>,
   uploadId: string,
 ): void {
@@ -95,7 +73,6 @@ export function deleteSkillUploadState(
 export function deleteOwnedSkillUpload(
   uploadId: string,
   owner: string,
-  nowMs: number,
   options: OpenClawStateDatabaseOptions,
 ): "deleted" | "missing" | "not-owner" {
   return runOpenClawStateWriteTransaction(({ db }) => {
@@ -115,7 +92,12 @@ export function deleteOwnedSkillUpload(
         .where("scope", "=", SKILL_UPLOAD_LEASE_SCOPE)
         .where("lease_key", "=", uploadId),
     );
-    if (!lease || lease.owner !== owner || lease.expires_at === null || lease.expires_at <= nowMs) {
+    if (
+      !lease ||
+      lease.owner !== owner ||
+      lease.expires_at === null ||
+      lease.expires_at <= Date.now()
+    ) {
       return "not-owner";
     }
     deleteSkillUploadState(db, kysely, uploadId);
@@ -124,7 +106,7 @@ export function deleteOwnedSkillUpload(
 }
 
 export function hasLiveSkillUploadInstallLease(
-  db: DatabaseSync,
+  db: EngineConnection,
   kysely: Kysely<SkillUploadDatabase>,
   uploadId: string,
   nowMs: number,
@@ -142,19 +124,8 @@ export function hasLiveSkillUploadInstallLease(
   );
 }
 
-function deleteExpiredSkillUploadUnlessLeased(params: {
-  uploadId: string;
-  nowMs: number;
-  options: OpenClawStateDatabaseOptions;
-}): "active" | "deleted" | "leased" | "missing" {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => deleteExpiredSkillUploadUnlessLeasedInDatabase(db, params),
-    params.options,
-  );
-}
-
 export function deleteExpiredSkillUploadUnlessLeasedInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: { uploadId: string; nowMs: number },
 ): "active" | "deleted" | "leased" | "missing" {
   const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
@@ -181,11 +152,11 @@ export function deleteExpiredSkillUploadUnlessLeasedInDatabase(
 export function renewSkillUploadInstallLease(params: {
   uploadId: string;
   owner: string;
-  heartbeatAt: number;
-  expiresAt: number;
+  installLeaseMs: number;
   options: OpenClawStateDatabaseOptions;
 }): boolean {
   return runOpenClawStateWriteTransaction(({ db }) => {
+    const heartbeatAt = Date.now();
     const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
     return (
       executeSqliteQuerySync(
@@ -193,14 +164,14 @@ export function renewSkillUploadInstallLease(params: {
         kysely
           .updateTable("state_leases")
           .set({
-            heartbeat_at: params.heartbeatAt,
-            expires_at: params.expiresAt,
-            updated_at: params.heartbeatAt,
+            heartbeat_at: heartbeatAt,
+            expires_at: heartbeatAt + params.installLeaseMs,
+            updated_at: heartbeatAt,
           })
           .where("scope", "=", SKILL_UPLOAD_LEASE_SCOPE)
           .where("lease_key", "=", params.uploadId)
           .where("owner", "=", params.owner)
-          .where("expires_at", ">", params.heartbeatAt),
+          .where("expires_at", ">", heartbeatAt),
       ).numAffectedRows === 1n
     );
   }, params.options);
@@ -225,7 +196,19 @@ export function requireUploadMetadata(
   uploadId: string,
   options: OpenClawStateDatabaseOptions,
 ): SkillUploadMetadataRow {
-  const row = readSkillUploadMetadata(uploadId, options);
+  const { database, kysely } = openSkillUploadDatabase(options);
+  return requireUploadMetadataInDatabase(database.db, kysely, uploadId);
+}
+
+export function requireUploadMetadataInDatabase(
+  db: EngineConnection,
+  kysely: Kysely<SkillUploadDatabase>,
+  uploadId: string,
+): SkillUploadMetadataRow {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
+  );
   if (!row) {
     throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
   }
@@ -242,7 +225,14 @@ export function assertNotExpired(
     throw new SkillUploadRequestError("upload has expired");
   }
   if (!isFutureDateTimestampMs(row.expires_at, { nowMs: validNow })) {
-    deleteExpiredSkillUploadUnlessLeased({ uploadId: row.upload_id, nowMs: validNow, options });
+    runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        deleteExpiredSkillUploadUnlessLeasedInDatabase(db, {
+          uploadId: row.upload_id,
+          nowMs: Date.now(),
+        }),
+      options,
+    );
     throw new SkillUploadRequestError("upload has expired");
   }
 }

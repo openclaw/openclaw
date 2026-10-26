@@ -33,11 +33,17 @@ Settings for individual built-in tools. Whether a run may call them at all is de
 
 Values shown are defaults except `applyPatch.allowModels` (empty/unset by default, meaning any compatible model may use `apply_patch`). `approvalRunningNoticeMs` emits a running notice when approval-backed exec runs long; `0` disables it.
 
-`tools.exec.grantExpiryDays` (unset by default) sets the default lifetime, in days (1–3650), for standing grants minted by Always allow on automation approvals. Unset keeps grants valid until revoked or the owning automation changes. Terms freeze at mint, so changing the value affects only future grants; see [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations).
+`tools.exec.grantExpiryDays` (unset by default) sets the default lifetime, in days (1–3650), for standing grants minted by Always allow on automation approvals. Unset keeps grants valid until revoked or the owning automation's substantive definition changes; pausing and re-enabling the same definition does not revoke them. Terms freeze at mint, so changing the value affects only future grants; see [Standing grants for automations](/tools/exec-approvals#standing-grants-for-automations).
 
 ## `tools.loopDetection`
 
-Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
+Rolling tool-loop detection is **disabled by default**. Set `enabled: true` to activate it. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
+
+Independently, three consecutive identical tool errors always end the turn with
+a recorded failure and recovery guidance, even when `enabled` is `false`.
+Changed arguments or results and successful calls reset that error streak.
+See [Tool-loop detection](/tools/loop-detection) for the separate post-compaction
+guard and rolling detection behavior.
 
 ```json5
 {

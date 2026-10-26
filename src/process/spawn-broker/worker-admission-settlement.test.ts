@@ -4,6 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { killProcessTree } from "../kill-tree.js";
 import type { startBrokerExeca } from "./execa-worker.js";
 import type { BrokerRequest, BrokerResponse } from "./protocol.js";
+import type { BrokerBootstrap } from "./resource-protocol.js";
 import type { createWorkerSender } from "./worker-sender.js";
 
 type Sender = ReturnType<typeof createWorkerSender>;
@@ -31,24 +32,25 @@ vi.mock("./worker-sender.js", () => ({
   }),
 }));
 
+function unexpectedEffect(): never {
+  throw new Error("This worker admission fixture cannot launch, signal, inspect, or exit");
+}
+
 beforeEach(() => {
   vi.resetModules();
   vi.resetAllMocks();
   boundary.reserve.mockRejectedValue(new Error("synthetic reservation refused before startup"));
   boundary.send.mockResolvedValue(undefined);
-  boundary.spawn.mockImplementation(() => {
-    throw new Error("This worker admission fixture cannot spawn a process");
-  });
+  boundary.spawn.mockImplementation(unexpectedEffect);
   boundary.execa.mockRejectedValue(new Error("This worker admission fixture cannot start execa"));
-  boundary.killTree.mockImplementation(() => {
-    throw new Error("This worker admission fixture cannot signal a process");
-  });
+  boundary.killTree.mockImplementation(unexpectedEffect);
 });
 
 it.each(["spawn", "spawn-execa"] as const)(
   "reports authoritative no-start before the %s capacity refusal",
   async (type) => {
-    let receive: ((message: BrokerRequest) => void) | undefined;
+    let receive: ((message: BrokerBootstrap | BrokerRequest) => void) | undefined;
+    const connected = Object.getOwnPropertyDescriptor(process, "connected");
     const originalOn = process.on.bind(process);
     const originalOnce = process.once.bind(process);
     vi.spyOn(process, "on").mockImplementation((event, listener) => {
@@ -56,28 +58,24 @@ it.each(["spawn", "spawn-execa"] as const)(
         receive = listener;
         return process;
       }
-      if (event === "SIGTERM" || event === "SIGINT") {
-        return process;
-      }
-      return originalOn(event, listener);
+      return event === "SIGTERM" || event === "SIGINT" ? process : originalOn(event, listener);
     });
     vi.spyOn(process, "once").mockImplementation((event, listener) => {
-      if (event === "disconnect") {
-        return process;
-      }
-      return originalOnce(event, listener);
+      return event === "disconnect" ? process : originalOnce(event, listener);
     });
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-      throw new Error("This worker admission fixture cannot signal or inspect a process");
-    });
-    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("This worker admission fixture cannot exit the test process");
-    });
+    const kill = vi.spyOn(process, "kill").mockImplementation(unexpectedEffect);
+    const exit = vi.spyOn(process, "exit").mockImplementation(unexpectedEffect);
+    Object.defineProperty(process, "connected", { configurable: true, value: true });
     try {
       await import("./worker.js");
       if (!receive) {
         throw new Error("The worker did not register its message entrypoint");
       }
+      // Keep loader scheduling real; bootstrap and admission own the clock checked below.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      receive({ type: "bootstrap" });
+      await setImmediate();
+      expect(boundary.send).toHaveBeenCalledWith({ type: "ready", pid: process.pid }, undefined);
       // Reservations reject on the next microtask. Synchronous delivery fills
       // the real admission count without invoking either native launch path.
       for (let id = 1; id <= 257; id += 1) {
@@ -100,17 +98,14 @@ it.each(["spawn", "spawn-execa"] as const)(
       await setImmediate();
       const responses = boundary.send.mock.calls.map(([message]) => message);
       const refusal = responses.filter((message) => "id" in message && message.id === 257);
-      expect(refusal.map((message) => message.type)).toEqual(["execa-result", "error"]);
-      expect(refusal[0]).toMatchObject({
-        result: {
-          failed: true,
-          code: "ERR_SPAWN_BROKER_UNAVAILABLE",
-          error: { code: "ERR_SPAWN_BROKER_UNAVAILABLE" },
+      const error = { code: "ERR_SPAWN_BROKER_UNAVAILABLE" };
+      expect(refusal).toMatchObject([
+        {
+          type: "execa-result",
+          result: { failed: true, ...error, error },
         },
-      });
-      expect(refusal[1]).toMatchObject({
-        error: { code: "ERR_SPAWN_BROKER_UNAVAILABLE" },
-      });
+        { type: "error", error },
+      ]);
       expect(
         responses.some((message) => message.type === "owned" || message.type === "spawned"),
       ).toBe(false);
@@ -122,18 +117,23 @@ it.each(["spawn", "spawn-execa"] as const)(
       expect(kill).not.toHaveBeenCalled();
       expect(exit).not.toHaveBeenCalled();
       expect(boundary.close).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       // All launched continuations retain only these reservation/report promises;
       // the final event-loop turn joins their catch/finally tails before restoring process hooks.
-      await Promise.allSettled([
-        ...boundary.reserve.mock.results.flatMap((result) =>
-          result.type === "return" ? [result.value] : [],
+      await Promise.allSettled(
+        [boundary.reserve, boundary.send].flatMap((mock) =>
+          mock.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
         ),
-        ...boundary.send.mock.results.flatMap((result) =>
-          result.type === "return" ? [result.value] : [],
-        ),
-      ]);
+      );
       await setImmediate();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      if (connected) {
+        Object.defineProperty(process, "connected", connected);
+      } else {
+        Reflect.deleteProperty(process, "connected");
+      }
       vi.restoreAllMocks();
     }
   },

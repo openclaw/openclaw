@@ -1,180 +1,138 @@
-/**
- * Unit tests for the shared POST JSON endpoint helper used by gateway HTTP surfaces.
- */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 
-vi.mock("./http-utils.js", () => {
-  return {
-    authorizeGatewayHttpRequestOrReply: vi.fn(),
-    resolveTrustedHttpOperatorScopes: vi.fn(),
-  };
+vi.mock("./http-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-utils.js")>()),
+  authorizeGatewayHttpRequestOrReply: vi.fn(),
+  resolveSharedSecretHttpOperatorScopes: vi.fn(),
+}));
+
+vi.mock("./http-common.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-common.js")>()),
+  readJsonBodyOrError: vi.fn(),
+  sendMethodNotAllowed: vi.fn(),
+  sendMissingScopeForbidden: vi.fn(),
+}));
+
+vi.mock("./method-scopes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./method-scopes.js")>()),
+  authorizeOperatorScopesForMethod: vi.fn(),
+}));
+
+const {
+  readJsonBodyOrError: readBody,
+  sendMethodNotAllowed,
+  sendMissingScopeForbidden,
+} = await import("./http-common.js");
+const {
+  authorizeGatewayHttpRequestOrReply: authorize,
+  resolveSharedSecretHttpOperatorScopes: scopes,
+} = await import("./http-utils.js");
+const { authorizeOperatorScopesForMethod: authorizeScopes } = await import("./method-scopes.js");
+
+type RequestAuth = NonNullable<Awaited<ReturnType<typeof authorize>>>;
+
+const authorizedRequest = (overrides: Partial<RequestAuth> = {}): RequestAuth => ({
+  trustDeclaredOperatorScopes: true,
+  hasCurrentClientAuthority: () => true,
+  assertCurrent: () => {},
+  revalidate: async () => {},
+  ...overrides,
 });
 
-vi.mock("./http-common.js", () => {
-  return {
-    readJsonBodyOrError: vi.fn(),
-    sendJson: vi.fn(),
-    sendMethodNotAllowed: vi.fn(),
-    sendMissingScopeForbidden: vi.fn(),
-  };
-});
-
-vi.mock("./method-scopes.js", () => {
-  return {
-    authorizeOperatorScopesForMethod: vi.fn(),
-  };
-});
-
-const { readJsonBodyOrError, sendMethodNotAllowed, sendMissingScopeForbidden } =
-  await import("./http-common.js");
-const { authorizeGatewayHttpRequestOrReply, resolveTrustedHttpOperatorScopes } =
-  await import("./http-utils.js");
-const { authorizeOperatorScopesForMethod } = await import("./method-scopes.js");
-
-type EndpointOptions = Parameters<typeof handleGatewayPostJsonEndpoint>[2];
-type RequestOptions = {
-  url?: string;
-  method?: string;
-  host?: string;
-};
-
-function request(options: RequestOptions = {}): IncomingMessage {
-  return {
-    url: options.url ?? "/v1/ok",
-    method: options.method ?? "POST",
-    headers: { host: options.host ?? "localhost" },
-  } as unknown as IncomingMessage;
-}
-
-function response(): ServerResponse {
-  return {} as unknown as ServerResponse;
-}
-
-function endpointOptions(overrides: Partial<EndpointOptions> = {}): EndpointOptions {
-  return {
-    pathname: "/v1/ok",
-    auth: {} as unknown as ResolvedGatewayAuth,
-    maxBodyBytes: 123,
-    ...overrides,
-  };
-}
-
-function handleEndpoint(
-  options: {
-    request?: RequestOptions;
-    response?: ServerResponse;
-    endpoint?: Partial<EndpointOptions>;
-  } = {},
-) {
-  return handleGatewayPostJsonEndpoint(
-    request(options.request),
-    options.response ?? response(),
-    endpointOptions(options.endpoint),
+const handleEndpoint = (
+  request: Partial<Pick<IncomingMessage, "url" | "method" | "headers">> = {},
+  response = {} as ServerResponse,
+) =>
+  handleGatewayPostJsonEndpoint(
+    {
+      url: "/v1/ok",
+      method: "POST",
+      headers: { host: "localhost" },
+      ...request,
+    } as IncomingMessage,
+    response,
+    {
+      pathname: "/v1/ok",
+      auth: {} as ResolvedGatewayAuth,
+      requiredOperatorMethod: "chat.send",
+      maxBodyBytes: 123,
+    },
   );
-}
 
-describe("handleGatewayPostJsonEndpoint", () => {
-  it("returns false when path does not match", async () => {
-    const result = await handleEndpoint({ request: { url: "/nope" } });
-    expect(result).toBe(false);
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(authorizeScopes).mockReturnValue({ allowed: true });
+  vi.mocked(scopes).mockReturnValue(["operator.write"]);
+});
 
-  it("returns undefined and replies when method is not POST", async () => {
-    const mockedSendMethodNotAllowed = vi.mocked(sendMethodNotAllowed);
-    mockedSendMethodNotAllowed.mockClear();
-    const result = await handleEndpoint({ request: { method: "GET" } });
-    expect(result).toBeUndefined();
-    expect(mockedSendMethodNotAllowed).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns undefined when auth fails", async () => {
-    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue(null);
-    const result = await handleEndpoint();
-    expect(result).toBeUndefined();
-  });
-
-  it("returns body when auth succeeds and JSON parsing succeeds", async () => {
-    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
-      trustDeclaredOperatorScopes: true,
-    });
-    vi.mocked(readJsonBodyOrError).mockResolvedValue({ hello: "world" });
-    const result = await handleEndpoint();
-    expect(result).toEqual({
-      body: { hello: "world" },
-      requestAuth: { trustDeclaredOperatorScopes: true },
-    });
-  });
-
-  it("matches paths without trusting malformed Host headers", async () => {
-    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
-      trustDeclaredOperatorScopes: true,
-    });
-    vi.mocked(readJsonBodyOrError).mockResolvedValue({ ok: true });
-
-    const result = await handleEndpoint({ request: { host: "[" } });
-
-    expect(result).toEqual({
-      body: { ok: true },
-      requestAuth: { trustDeclaredOperatorScopes: true },
-    });
-  });
-
-  it("returns undefined and replies when required operator scope is missing", async () => {
-    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
-      trustDeclaredOperatorScopes: false,
-    });
-    vi.mocked(resolveTrustedHttpOperatorScopes).mockReturnValue(["operator.approvals"]);
-    vi.mocked(authorizeOperatorScopesForMethod).mockReturnValue({
-      allowed: false,
-      missingScope: "operator.write",
-    });
-    const mockedSendMissingScopeForbidden = vi.mocked(sendMissingScopeForbidden);
-    mockedSendMissingScopeForbidden.mockClear();
-    vi.mocked(readJsonBodyOrError).mockClear();
-    const res = response();
-
-    const result = await handleEndpoint({
-      response: res,
-      endpoint: {
-        requiredOperatorMethod: "chat.send",
+it("does not admit a parsed body after its authority was revoked while reading", async () => {
+  const body = createDeferred<unknown>();
+  const reading = createDeferred();
+  const res = Object.assign({} as ServerResponse, { writableEnded: false });
+  let current = true;
+  vi.mocked(authorize).mockResolvedValueOnce(
+    authorizedRequest({
+      hasCurrentClientAuthority: () => current,
+      revalidate: async () => {
+        if (!current) {
+          Object.assign(res, { writableEnded: true });
+          throw new Error("Unauthorized");
+        }
       },
-    });
-
-    expect(result).toBeUndefined();
-    expect(vi.mocked(authorizeOperatorScopesForMethod)).toHaveBeenCalledWith("chat.send", [
-      "operator.approvals",
-    ]);
-    expect(mockedSendMissingScopeForbidden).toHaveBeenCalledWith(res, "operator.write");
-    expect(vi.mocked(readJsonBodyOrError)).not.toHaveBeenCalled();
+    }),
+  );
+  vi.mocked(readBody).mockImplementationOnce(() => {
+    reading.resolve();
+    return body.promise;
   });
+  const pending = handleEndpoint({}, res);
+  await reading.promise;
+  current = false;
+  body.resolve({ message: "must not execute" });
+  await expect(pending).resolves.toBeUndefined();
+});
 
-  it("uses a custom operator scope resolver when provided", async () => {
-    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
-      authMethod: "token",
-      trustDeclaredOperatorScopes: false,
-    });
-    vi.mocked(authorizeOperatorScopesForMethod).mockReturnValue({ allowed: true });
-    vi.mocked(readJsonBodyOrError).mockResolvedValue({ ok: true });
-    const resolveOperatorScopes = vi.fn(() => ["operator.admin", "operator.write"]);
+it("returns false when path does not match", async () => {
+  expect(await handleEndpoint({ url: "/nope" })).toBe(false);
+});
 
-    const result = await handleEndpoint({
-      endpoint: {
-        requiredOperatorMethod: "chat.send",
-        resolveOperatorScopes,
-      },
-    });
+it("returns undefined and replies when method is not POST", async () => {
+  expect(await handleEndpoint({ method: "GET" })).toBeUndefined();
+  expect(sendMethodNotAllowed).toHaveBeenCalledTimes(1);
+});
 
-    const [, requestAuth] = (resolveOperatorScopes.mock.calls.at(0) as unknown as
-      | [IncomingMessage, { authMethod?: string; trustDeclaredOperatorScopes: boolean }]
-      | undefined) ?? [undefined, undefined];
-    expect(requestAuth?.authMethod).toBe("token");
-    expect(requestAuth?.trustDeclaredOperatorScopes).toBe(false);
-    expect(result).toEqual({
-      body: { ok: true },
-      requestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
-    });
+it("returns undefined when auth fails", async () => {
+  vi.mocked(authorize).mockResolvedValue(null);
+  expect(await handleEndpoint()).toBeUndefined();
+});
+
+it("matches paths without trusting malformed Host headers", async () => {
+  const requestAuth = authorizedRequest();
+  vi.mocked(authorize).mockResolvedValue(requestAuth);
+  vi.mocked(readBody).mockResolvedValue({ ok: true });
+
+  expect(await handleEndpoint({ headers: { host: "[" } })).toEqual({
+    body: { ok: true },
+    requestAuth,
+    operatorScopes: ["operator.write"],
   });
+});
+
+it("returns undefined and replies when required operator scope is missing", async () => {
+  vi.mocked(authorize).mockResolvedValue(authorizedRequest({ trustDeclaredOperatorScopes: false }));
+  vi.mocked(scopes).mockReturnValue(["operator.approvals"]);
+  vi.mocked(authorizeScopes).mockReturnValue({
+    allowed: false,
+    missingScope: "operator.write",
+  });
+  const res = {} as ServerResponse;
+
+  expect(await handleEndpoint({}, res)).toBeUndefined();
+  expect(authorizeScopes).toHaveBeenCalledWith("chat.send", ["operator.approvals"]);
+  expect(sendMissingScopeForbidden).toHaveBeenCalledWith(res, "operator.write");
+  expect(readBody).not.toHaveBeenCalled();
 });

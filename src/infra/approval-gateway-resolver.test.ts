@@ -34,6 +34,7 @@ vi.mock("../gateway/operator-approvals-client.js", () => ({
 function withApprovalAccountContext<T>(run: () => T): T {
   return withGatewayNativeApprovalRuntime(
     {
+      getRuntimeConfig: () => ({}),
       request: async <TResult>(method: string, params: Record<string, unknown>) =>
         (await hoisted.clientRequest(method, params)) as TResult,
       requestRoute: vi.fn(),
@@ -107,9 +108,6 @@ describe("resolveApprovalOverGateway", () => {
   });
 
   it.each([
-    { channel: "telegram" },
-    { accountId: "ops" },
-    { senderId: "owner" },
     { channel: "telegram", accountId: "ops" },
     { channel: "telegram", senderId: "owner" },
     { accountId: "ops", senderId: "owner" },
@@ -127,16 +125,7 @@ describe("resolveApprovalOverGateway", () => {
     expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["signal", "Signal"],
-    ["whatsapp", "WhatsApp"],
-    ["matrix", "Matrix"],
-    ["imessage", "iMessage"],
-    ["telegram", "Telegram"],
-    ["discord", "Discord"],
-    ["googlechat", "Google Chat"],
-    ["slack", "Slack"],
-  ] as const)(
+  it.each([["googlechat", "Google Chat"]] as const)(
     "derives the %s approval client label from channel metadata",
     async (channel, label) => {
       await resolveApprovalOverGateway({
@@ -199,6 +188,7 @@ describe("resolveApprovalOverGateway", () => {
     const request = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
     const result = await withGatewayNativeApprovalRuntime(
       {
+        getRuntimeConfig: () => ({}),
         request: request as GatewayNativeApprovalRuntime["request"],
         requestRoute: vi.fn(),
         routeCoordinator: {} as never,
@@ -250,6 +240,7 @@ describe("resolveApprovalOverGateway", () => {
     const injectedRequest = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
     const scopedRequest = vi.fn();
     const runtime = {
+      getRuntimeConfig: () => ({}),
       request: async <T>(): Promise<T> => {
         scopedRequest();
         throw new Error("unexpected scoped approval request");

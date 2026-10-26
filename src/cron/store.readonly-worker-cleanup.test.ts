@@ -1,90 +1,42 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as snapshots from "../infra/sqlite-readonly-location-cleanup.js";
-import * as coordinator from "../infra/state-database-coordinator.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
-import {
-  acquireOpenClawStateDatabaseFileExclusion,
-  registerOpenClawStateDatabaseAsyncResource,
-} from "../state/openclaw-state-db-cache.js";
-import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { loadCronJobsStoreWithConfigJobsReadOnly } from "./store.js";
+import { installCronSnapshotFaults } from "./store.readonly-worker-faults.test-support.js";
+import { withCronStore } from "./store.worker.test-support.js";
 
 it.each(["worker", "snapshot"] as const)(
-  "retries failed %s cleanup through the canonical owner",
+  "retains %s cleanup custody without losing a completed read",
   async (failureStage) => {
-    await withOpenClawTestState(
-      { label: "cron-readonly-cleanup", env: { XDG_CACHE_HOME: undefined } },
+    await withCronStore(
+      "cron-readonly-cleanup",
       async (state) => {
-        const databasePath = resolveOpenClawStateSqlitePath(state.env);
-        await fs.mkdir(path.dirname(databasePath), { recursive: true });
-        const db = new DatabaseSync(databasePath);
-        db.exec("CREATE TABLE marker(value TEXT)");
-        db.close();
-        const exclusion = await acquireOpenClawStateDatabaseFileExclusion(databasePath);
+        await state.createDatabase();
         const failure = new Error("controlled worker retirement failure");
         const terminate = vi.spyOn(Worker.prototype, "terminate");
-        const remove = vi.spyOn(fsSync.promises, "rm");
+        const fault =
+          failureStage === "snapshot" ? await installCronSnapshotFaults(state) : undefined;
         if (failureStage === "worker") {
           terminate.mockRejectedValueOnce(failure);
-        } else {
-          remove.mockRejectedValueOnce(
-            Object.assign(new Error("controlled snapshot removal failure"), { code: "EACCES" }),
-          );
         }
-        const pools = new Set<WorkerTaskPool<unknown, unknown>>();
-        // oxlint-disable-next-line typescript/unbound-method -- call restores the intercepted pool receiver below.
-        const close = WorkerTaskPool.prototype.close;
-        const closeSpy = vi
-          .spyOn(WorkerTaskPool.prototype, "close")
-          .mockImplementation(function (this: WorkerTaskPool<unknown, unknown>, error) {
-            pools.add(this);
-            return close.call(this, error);
-          });
+        const closeSpy = vi.spyOn(WorkerTaskPool.prototype, "close");
         // Test cleanup must also reclaim the intentionally leaked pre-fix resources.
-        const readers: Array<() => void> = [];
-        const directories: string[] = [];
-        const retain = snapshots.retainSnapshotTempDirectory;
-        const retainSpy = vi
-          .spyOn(snapshots, "retainSnapshotTempDirectory")
-          .mockImplementation((directory) => {
-            const release = retain(directory);
-            readers.push(release);
-            directories.push(directory);
-            return release;
-          });
-        const pins: Array<ReturnType<typeof coordinator.acquireStateDatabaseHandleLease>> = [];
-        const acquire = coordinator.acquireStateDatabaseHandleLease;
-        const pinSpy = vi
-          .spyOn(coordinator, "acquireStateDatabaseHandleLease")
-          .mockImplementation((params) => {
-            const pin = acquire(params);
-            pins.push(pin);
-            return pin;
-          });
+        const retainSpy = vi.spyOn(snapshots, "retainSnapshotTempDirectory");
         try {
-          const reading = exclusion.runWithSourceReads(() =>
-            withArtifactPreservingStateReads(() =>
-              loadCronJobsStoreWithConfigJobsReadOnly(
-                state.statePath("cron", "jobs.json"),
-                state.env,
-              ),
-            ),
-          );
+          const reading = state.read(true);
           if (failureStage === "worker") {
             await expect(reading).rejects.toBe(failure);
           } else {
-            await expect(reading).rejects.toThrow("Cron read-only state snapshot cleanup failed.");
+            expect((await reading).store.jobs).toEqual([]);
           }
-          exclusion.release();
+          if (fault) {
+            expect(fault.count("staging-rm")).toBeGreaterThan(0);
+          }
+          const directories = retainSpy.mock.calls.map(([directory]) => directory);
           expect(directories.length).toBeGreaterThan(0);
           if (failureStage === "worker") {
             await snapshots.cleanupSnapshotOperations();
@@ -95,41 +47,47 @@ it.each(["worker", "snapshot"] as const)(
           }
           expect(terminate).toHaveBeenCalledTimes(1);
 
-          await closeOpenClawStateDatabaseByPathAsync(databasePath);
+          fault?.allowRemoval();
+          await state.close();
+          await snapshots.cleanupSnapshotOperations();
           for (const retained of directories) {
             await expect(fs.stat(retained)).rejects.toMatchObject({ code: "ENOENT" });
           }
           expect(terminate).toHaveBeenCalledTimes(failureStage === "worker" ? 2 : 1);
-          const next = await acquireOpenClawStateDatabaseFileExclusion(databasePath);
-          next.release();
+          expect((await state.read()).store.jobs).toEqual([]);
         } finally {
           terminate.mockRestore();
-          remove.mockRestore();
+          fault?.allowRemoval();
+          const pools = new Set(closeSpy.mock.contexts);
           closeSpy.mockRestore();
-          await Promise.all([...pools].map((pool) => pool.close()));
-          for (const release of readers) {
-            release();
+          try {
+            for (const pool of pools) {
+              assert(pool instanceof WorkerTaskPool);
+              await pool.close();
+            }
+          } finally {
+            for (const result of retainSpy.mock.results) {
+              if (result.type === "return") {
+                result.value();
+              }
+            }
+            try {
+              await snapshots.cleanupSnapshotOperations();
+            } finally {
+              retainSpy.mockRestore();
+              fault?.restore();
+            }
           }
-          for (const pin of pins) {
-            pin.release();
-          }
-          exclusion.release();
-          await snapshots.cleanupSnapshotOperations();
-          retainSpy.mockRestore();
-          pinSpy.mockRestore();
         }
       },
+      { XDG_CACHE_HOME: undefined },
     );
   },
 );
 
 it("refuses new reader admission while canonical close is draining an earlier reader", async () => {
-  await withOpenClawTestState({ label: "cron-readonly-drain" }, async (state) => {
-    const databasePath = resolveOpenClawStateSqlitePath(state.env);
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const db = new DatabaseSync(databasePath);
-    db.exec("CREATE TABLE marker(value TEXT)");
-    db.close();
+  await withCronStore("cron-readonly-drain", async (state) => {
+    await state.createDatabase();
     const entered = createDeferred();
     const finish = createDeferred();
     const draining = createDeferred();
@@ -147,18 +105,16 @@ it("refuses new reader admission while canonical close is draining an earlier re
         await finish.promise;
         return await terminate.call(this);
       });
-    const read = () =>
-      loadCronJobsStoreWithConfigJobsReadOnly(state.statePath("cron", "jobs.json"), state.env);
-    const first = read().then(
+    const first = state.read().then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
     let closing: Promise<boolean> | undefined;
     try {
       await entered.promise;
-      closing = closeOpenClawStateDatabaseByPathAsync(databasePath);
+      closing = state.close();
       await draining.promise;
-      await expect(read()).rejects.toMatchObject({
+      await expect(state.read()).rejects.toMatchObject({
         code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
       });
     } finally {
@@ -168,6 +124,7 @@ it("refuses new reader admission while canonical close is draining an earlier re
       unregister();
     }
     expect(await first).toMatchObject({ error: expect.any(Error) });
-    expect((await read()).store.jobs).toEqual([]);
+    expect((await state.read()).store.jobs).toEqual([]);
   });
 });
+import assert from "node:assert/strict";

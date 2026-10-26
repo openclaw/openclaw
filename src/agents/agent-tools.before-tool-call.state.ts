@@ -1,13 +1,11 @@
-/**
- * Shared before_tool_call state for adjusted tool params.
- * The adapter and wrapper both consult this map so later execution can use the
- * normalized payload selected by hook processing.
- */
-export const adjustedParamsByToolCallId = new Map<string, unknown>();
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+
+/** Detached execution facts; internal readers borrow the same snapshot. */
+const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
-const startedToolCallIds = new Set<string>();
-const trackedToolCallIds = new Set<string>();
+// A tracked call starts pending (false), then crosses the implementation boundary (true).
+const trackedToolCallIds = new Map<string, boolean>();
 const batchAdmittedToolCallIds = new Set<string>();
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
@@ -15,6 +13,25 @@ export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: str
     return `${params.runId}:${params.toolCallId}`;
   }
   return params.toolCallId;
+}
+
+/** Detach before mutable execution; mutable hook/middleware inputs get their own copies. */
+export function recordAdjustedParamsForToolCall(
+  toolCallId: string | undefined,
+  params: unknown,
+  runId?: string,
+): void {
+  if (!toolCallId) {
+    return;
+  }
+  let snapshot: unknown;
+  try {
+    snapshot = structuredClone(params);
+  } catch {
+    return;
+  }
+  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), snapshot);
+  pruneMapToMaxSize(adjustedParamsByToolCallId, 1024);
 }
 
 /** Consume and remove hook-adjusted params for a completed tool call. */
@@ -25,19 +42,14 @@ export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: str
   return params;
 }
 
-/** Snapshot hook-adjusted params without consuming later outcome bookkeeping. */
+/** Borrow execution facts without consuming later outcome bookkeeping. */
 export function peekAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const params = adjustedParamsByToolCallId.get(key);
-  return params === undefined ? undefined : structuredClone(params);
+  return adjustedParamsByToolCallId.get(buildAdjustedParamsKey({ runId, toolCallId }));
 }
 
 /** Consume whether policy prevented the target tool from starting. */
 export function consumePreExecutionBlockedToolCall(toolCallId: string, runId?: string): boolean {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const blocked = preExecutionBlockedToolCallIds.has(key);
-  preExecutionBlockedToolCallIds.delete(key);
-  return blocked;
+  return preExecutionBlockedToolCallIds.delete(buildAdjustedParamsKey({ runId, toolCallId }));
 }
 
 /** Snapshot whether policy prevented execution without stealing cleanup from the tool owner. */
@@ -47,20 +59,19 @@ export function peekPreExecutionBlockedToolCall(toolCallId: string, runId?: stri
 
 /** Record active wrapper ownership so a racing timeout can inspect the boundary. */
 export function recordToolExecutionTracked(toolCallId: string, runId?: string): void {
-  trackedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  if (!trackedToolCallIds.has(key)) {
+    trackedToolCallIds.set(key, false);
+  }
 }
 
 export function recordToolExecutionStarted(toolCallId: string, runId?: string): void {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  trackedToolCallIds.add(key);
-  startedToolCallIds.add(key);
+  trackedToolCallIds.set(buildAdjustedParamsKey({ runId, toolCallId }), true);
 }
 
 /** Release execution-boundary evidence when the wrapped invocation settles. */
 export function clearTrackedToolExecution(toolCallId: string, runId?: string): void {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  trackedToolCallIds.delete(key);
-  startedToolCallIds.delete(key);
+  trackedToolCallIds.delete(buildAdjustedParamsKey({ runId, toolCallId }));
 }
 
 /**
@@ -72,10 +83,9 @@ export function consumeTrackedToolExecutionStarted(
   runId?: string,
 ): boolean | undefined {
   const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const tracked = trackedToolCallIds.has(key);
-  const started = startedToolCallIds.has(key);
-  clearTrackedToolExecution(toolCallId, runId);
-  return tracked ? started : undefined;
+  const started = trackedToolCallIds.get(key);
+  trackedToolCallIds.delete(key);
+  return started;
 }
 
 export function recordStructuredReplaySafeToolCall(toolCallId: string, runId?: string): void {
@@ -83,10 +93,7 @@ export function recordStructuredReplaySafeToolCall(toolCallId: string, runId?: s
 }
 
 export function consumeStructuredReplaySafeToolCall(toolCallId: string, runId?: string): boolean {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const replaySafe = structuredReplaySafeToolCallIds.has(key);
-  structuredReplaySafeToolCallIds.delete(key);
-  return replaySafe;
+  return structuredReplaySafeToolCallIds.delete(buildAdjustedParamsKey({ runId, toolCallId }));
 }
 
 /** Mark a call whose loop policy was already admitted with its whole assistant batch. */
@@ -96,10 +103,7 @@ export function recordBatchAdmittedToolCall(toolCallId: string, runId?: string):
 
 /** Consume whole-batch loop admission while leaving the remaining tool policies intact. */
 export function consumeBatchAdmittedToolCall(toolCallId: string, runId?: string): boolean {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const admitted = batchAdmittedToolCallIds.has(key);
-  batchAdmittedToolCallIds.delete(key);
-  return admitted;
+  return batchAdmittedToolCallIds.delete(buildAdjustedParamsKey({ runId, toolCallId }));
 }
 
 /** Release exact batch-admission markers for prepared calls suppressed by steering. */
@@ -122,12 +126,10 @@ export function clearBatchAdmittedToolCallsForRun(runId: string): void {
   }
 }
 
-/** Clear adjusted tool parameters between isolated tests. */
 export function resetAdjustedParamsByToolCallIdForTests(): void {
   adjustedParamsByToolCallId.clear();
   preExecutionBlockedToolCallIds.clear();
   trackedToolCallIds.clear();
-  startedToolCallIds.clear();
   structuredReplaySafeToolCallIds.clear();
   batchAdmittedToolCallIds.clear();
 }

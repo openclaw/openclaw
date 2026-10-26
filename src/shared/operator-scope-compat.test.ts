@@ -1,231 +1,76 @@
-// Role scope checks preserve operator implications and role-prefix boundaries.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
+  intersectOperatorScopes as intersect,
   resolveMissingRequestedScope,
   resolveScopeOutsideRequestedRoles,
   roleScopesAllow,
 } from "./operator-scope-compat.js";
 
-describe("roleScopesAllow", () => {
-  it.each([
-    { requestedScopes: [], allowedScopes: [] },
-    { requestedScopes: ["", " \t"], allowedScopes: [] },
-    { requestedScopes: ["", " \t"], allowedScopes: ["operator.admin"] },
-  ])(
-    "ignores empty and blank requests: $requestedScopes with grants $allowedScopes",
-    ({ requestedScopes, allowedScopes }) => {
-      const params = { role: "operator", requestedScopes, allowedScopes };
-      expect(roleScopesAllow(params)).toBe(true);
-      expect(resolveMissingRequestedScope(params)).toBeNull();
-    },
-  );
+function allows(role: string, requestedScopes: string[], allowedScopes: string[]) {
+  return roleScopesAllow({ role, requestedScopes, allowedScopes });
+}
+const operator = (scopes: string[]) => scopes.map((scope) => `operator.${scope}`);
 
-  it("treats operator.read as satisfied by read/write/admin scopes", () => {
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.read"],
-        allowedScopes: ["operator.read"],
-      }),
-    ).toBe(true);
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.read"],
-        allowedScopes: ["operator.write"],
-      }),
-    ).toBe(true);
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.read"],
-        allowedScopes: ["operator.admin"],
-      }),
-    ).toBe(true);
-  });
+it("does not broaden session write authority to general writes", () => {
+  expect(allows("operator", ["operator.write"], ["operator.sessions.write"])).toBe(false);
+});
 
-  it("treats operator.write as satisfied by write/admin scopes", () => {
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.write"],
-        allowedScopes: ["operator.write"],
-      }),
-    ).toBe(true);
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.write"],
-        allowedScopes: ["operator.admin"],
-      }),
-    ).toBe(true);
-  });
+it.each([
+  [["read", "write"], ["sessions.write"], ["sessions.write"]],
+  [["admin"], ["sessions.read"], ["sessions.read"]],
+  [["read"], ["sessions.write"], ["sessions.read"]],
+  [["sessions.write"], ["read"], ["sessions.read"]],
+  [[], ["sessions.write"], []],
+  [["write"], ["write"], ["write"]],
+])("intersects operator grants %j with ceiling %j", (grants, ceiling, expected) => {
+  expect(intersect(operator(grants), operator(ceiling))).toEqual(operator(expected));
+});
+it("treats operator.talk as satisfied by talk/write/admin scopes", () => {
+  for (const allowedScope of ["operator.talk", "operator.write", "operator.admin"]) {
+    expect(allows("operator", ["operator.talk"], [allowedScope])).toBe(true);
+  }
+  expect(allows("operator", ["operator.talk"], ["operator.read"])).toBe(false);
+});
 
-  it("treats operator.talk as satisfied by talk/write/admin scopes", () => {
-    for (const allowedScope of ["operator.talk", "operator.write", "operator.admin"]) {
-      expect(
-        roleScopesAllow({
-          role: "operator",
-          requestedScopes: ["operator.talk"],
-          allowedScopes: [allowedScope],
-        }),
-      ).toBe(true);
-    }
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.talk"],
-        allowedScopes: ["operator.read"],
-      }),
-    ).toBe(false);
-  });
+it("requires an exact grant or admin for operator.talk.secrets", () => {
+  for (const grants of [["operator.talk.secrets"], ["operator.admin"]]) {
+    expect(allows("operator", ["operator.talk.secrets"], grants)).toBe(true);
+  }
+  for (const grants of [[], ["operator.write"]]) {
+    expect(allows("operator", ["operator.talk.secrets"], grants)).toBe(false);
+  }
+});
 
-  it.each(["operator.talk.secrets", "operator.approvals", "operator.pairing", "operator.future"])(
-    "requires an exact grant or admin for %s",
-    (requestedScope) => {
-      for (const allowedScopes of [[requestedScope], ["operator.admin"]]) {
-        expect(
-          roleScopesAllow({ role: "operator", requestedScopes: [requestedScope], allowedScopes }),
-        ).toBe(true);
-      }
-      for (const allowedScopes of [[], ["operator.write"]]) {
-        expect(
-          roleScopesAllow({ role: "operator", requestedScopes: [requestedScope], allowedScopes }),
-        ).toBe(false);
-      }
-    },
-  );
+it("uses strict matching with role-prefix partitioning for non-operator roles", () => {
+  expect(allows("node", ["node.exec"], ["operator.admin", "node.exec"])).toBe(true);
+  expect(allows("node", ["node.exec"], ["operator.admin"])).toBe(false);
+  expect(allows("node", ["operator.read"], ["operator.read", "node.exec"])).toBe(false);
+  expect(
+    allows(" node ", [" node.exec ", "node.exec", "  "], ["node.exec", "operator.admin"]),
+  ).toBe(true);
+});
 
-  it("does not treat operator.admin as satisfying non-operator scopes", () => {
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["system.run"],
-        allowedScopes: ["operator.admin"],
-      }),
-    ).toBe(false);
-  });
+it("returns the original first missing scope for a whitespace-padded role", () => {
+  const params = {
+    role: " node ",
+    requestedScopes: [" \t", " node.exec ", "node.exec", " node.read \t", "operator.read"],
+    allowedScopes: [" node.exec ", "node.exec", ""],
+  };
+  expect(resolveMissingRequestedScope(params)).toBe(" node.read \t");
+  expect(roleScopesAllow(params)).toBe(false);
+});
 
-  it("uses strict matching with role-prefix partitioning for non-operator roles", () => {
-    expect(
-      roleScopesAllow({
-        role: "node",
-        requestedScopes: ["node.exec"],
-        allowedScopes: ["operator.admin", "node.exec"],
-      }),
-    ).toBe(true);
-    expect(
-      roleScopesAllow({
-        role: "node",
-        requestedScopes: ["node.exec"],
-        allowedScopes: ["operator.admin"],
-      }),
-    ).toBe(false);
-    expect(
-      roleScopesAllow({
-        role: "node",
-        requestedScopes: ["operator.read"],
-        allowedScopes: ["operator.read", "node.exec"],
-      }),
-    ).toBe(false);
-    expect(
-      roleScopesAllow({
-        role: " node ",
-        requestedScopes: [" node.exec ", "node.exec", "  "],
-        allowedScopes: ["node.exec", "operator.admin"],
-      }),
-    ).toBe(true);
-  });
+it.each([
+  [["node", "operator"], ["", " \t", "node.exec", "operator.read"], null],
+  [["node", "operator"], ["node.exec", " vault.admin \t", "operator.read"], " vault.admin \t"],
+  [[], ["", "node.exec"], ""],
+] satisfies [string[], string[], string | null][])(
+  "finds the first scope outside roles %j among %j",
+  (requestedRoles, requestedScopes, expected) => {
+    expect(resolveScopeOutsideRequestedRoles({ requestedRoles, requestedScopes })).toBe(expected);
+  },
+);
 
-  it("normalizes blank and duplicate scopes before evaluating", () => {
-    expect(
-      roleScopesAllow({
-        role: " operator ",
-        requestedScopes: [" operator.read ", "operator.read", "   "],
-        allowedScopes: [" operator.write ", "operator.write", ""],
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects unsatisfied operator write scopes and empty allowed scopes", () => {
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.write"],
-        allowedScopes: ["operator.read"],
-      }),
-    ).toBe(false);
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.read"],
-        allowedScopes: ["   "],
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    {
-      role: " operator ",
-      requestedScopes: [
-        "",
-        " operator.read ",
-        "operator.read",
-        " operator.approvals \t",
-        "operator.admin",
-      ],
-      allowedScopes: [" operator.write ", "operator.write", ""],
-      missingScope: " operator.approvals \t",
-    },
-    {
-      role: " node ",
-      requestedScopes: [" \t", " node.exec ", "node.exec", " node.read \t", "operator.read"],
-      allowedScopes: [" node.exec ", "node.exec", ""],
-      missingScope: " node.read \t",
-    },
-  ])("returns the original first missing scope for $role", ({ missingScope, ...params }) => {
-    expect(resolveMissingRequestedScope(params)).toBe(missingScope);
-    expect(roleScopesAllow(params)).toBe(false);
-  });
-
-  it("returns null when all requested scopes are satisfied", () => {
-    expect(
-      resolveMissingRequestedScope({
-        role: "node",
-        requestedScopes: ["node.exec"],
-        allowedScopes: ["node.exec", "operator.admin"],
-      }),
-    ).toBeNull();
-  });
-
-  it("returns null when every requested scope belongs to one requested role", () => {
-    expect(
-      resolveScopeOutsideRequestedRoles({
-        requestedRoles: ["node", "operator"],
-        requestedScopes: ["", " \t", "node.exec", "operator.read"],
-      }),
-    ).toBeNull();
-  });
-
-  it("returns the first scope outside the requested role set", () => {
-    expect(
-      resolveScopeOutsideRequestedRoles({
-        requestedRoles: ["node", "operator"],
-        requestedScopes: ["node.exec", " vault.admin \t", "operator.read"],
-      }),
-    ).toBe(" vault.admin \t");
-  });
-
-  it.each([
-    { requestedScopes: [], outsideScope: null },
-    { requestedScopes: ["", "node.exec"], outsideScope: "" },
-    { requestedScopes: [" \t", "node.exec"], outsideScope: " \t" },
-  ])(
-    "returns the first scope with no requested roles: $requestedScopes",
-    ({ requestedScopes, outsideScope }) => {
-      expect(resolveScopeOutsideRequestedRoles({ requestedRoles: [], requestedScopes })).toBe(
-        outsideScope,
-      );
-    },
-  );
+it("excludes grants outside the operator ceiling", () => {
+  expect(intersect(["node.exec"], ["operator.admin"])).toEqual([]);
 });

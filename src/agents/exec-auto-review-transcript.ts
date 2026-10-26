@@ -3,15 +3,14 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ExecAutoReviewTranscript,
   ExecAutoReviewTranscriptEntry,
 } from "../infra/exec-auto-review.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
-import { redactTranscriptMessage } from "./transcript-redact.js";
+import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
 
-const DEFAULT_LIMITS = {
+const TRANSCRIPT_LIMITS = {
   userAssistantChars: 4_000,
   toolChars: 1_000,
   nonUserEntries: 40,
@@ -67,26 +66,11 @@ function userOrigin(message: AgentMessage): ExecAutoReviewTranscriptEntry["origi
   return identity?.type === "observation" ? "channel" : "unknown";
 }
 
-/** Projects current live messages into bounded, redacted reviewer evidence. */
+/** Projects current live messages into bounded reviewer evidence. */
 export function buildExecAutoReviewTranscript(params: {
   messages: readonly AgentMessage[];
-  config?: OpenClawConfig;
   userTurnOrigins?: ReadonlyMap<AgentMessage, AgentMessage>;
-  limits?: Partial<Record<keyof typeof DEFAULT_LIMITS, number>>;
 }): ExecAutoReviewTranscript {
-  const limit = (key: keyof typeof DEFAULT_LIMITS, minimum = 0) => {
-    const value = params.limits?.[key];
-    return value === undefined || !Number.isFinite(value)
-      ? DEFAULT_LIMITS[key]
-      : Math.max(minimum, Math.min(DEFAULT_LIMITS[key], Math.floor(value)));
-  };
-  const limits = {
-    userAssistantChars: limit("userAssistantChars"),
-    toolChars: limit("toolChars"),
-    nonUserEntries: limit("nonUserEntries"),
-    // Two empty user anchors and the envelope must always fit.
-    totalChars: limit("totalChars", 256),
-  };
   const messages = params.messages.map((message) =>
     message.role === "user" ? (params.userTurnOrigins?.get(message) ?? message) : message,
   );
@@ -121,8 +105,8 @@ export function buildExecAutoReviewTranscript(params: {
   const add = (entry: ExecAutoReviewTranscriptEntry) => {
     const cap =
       entry.kind === "user" || entry.kind === "assistant"
-        ? limits.userAssistantChars
-        : limits.toolChars;
+        ? TRANSCRIPT_LIMITS.userAssistantChars
+        : TRANSCRIPT_LIMITS.toolChars;
     const text = scrubIdentifiers(textOnly(entry.text));
     if (entry.toolCallId) {
       let alias = toolIds.get(entry.toolCallId);
@@ -141,14 +125,13 @@ export function buildExecAutoReviewTranscript(params: {
     });
   };
   for (const source of messages) {
-    const message = redactTranscriptMessage(source, params.config);
+    const message = sanitizeTranscriptMessage(source);
     if (message.role === "user" || message.role === "toolResult") {
       const text =
         typeof message.content === "string"
           ? message.content
           : message.content
-              .filter((block) => block.type === "text")
-              .map((block) => textOnly(block.text))
+              .flatMap((block) => (block.type === "text" ? [textOnly(block.text)] : []))
               .join("\n");
       if (text) {
         add(
@@ -186,7 +169,7 @@ export function buildExecAutoReviewTranscript(params: {
       truncated: false,
     }),
   );
-  const budget = Math.max(0, limits.totalChars - envelopeChars);
+  const budget = Math.max(0, TRANSCRIPT_LIMITS.totalChars - envelopeChars);
   const candidates = entries.map((entry) => ({
     entry,
     cost: estimateStringChars(JSON.stringify(entry)) + 1,
@@ -250,7 +233,7 @@ export function buildExecAutoReviewTranscript(params: {
     group.forEach((member) => visited.add(member));
     const nonUserCount = group.filter(({ entry }) => entry.kind !== "user").length;
     const cost = group.reduce((sum, member) => sum + member.cost, 0);
-    if (used + cost > budget || nonUsers + nonUserCount > limits.nonUserEntries) {
+    if (used + cost > budget || nonUsers + nonUserCount > TRANSCRIPT_LIMITS.nonUserEntries) {
       continue;
     }
     group.forEach((member) => selected.add(member));

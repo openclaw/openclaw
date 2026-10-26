@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createFixtureGit } from "./pr-merge-fixture-git.test-support.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
-const headSha = "0123456789abcdef0123456789abcdef01234567";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 type BodyScenario = {
   sourceMessages?: string[];
@@ -27,6 +28,8 @@ type BodyScenario = {
   previewQueue?: boolean;
   previewError?: boolean;
   restPreview?: boolean;
+  squashTitle?: string;
+  squashMessage?: string;
   authorReadError?: boolean;
   authorReadFault?: "empty" | "malformed" | "wrong-head" | "multiple";
   prAuthor?: string;
@@ -38,163 +41,107 @@ type BodyScenario = {
   overrideBody?: string;
 };
 
-function prepareBody(scenario: BodyScenario) {
+type SourceCommit = NonNullable<BodyScenario["sourceCommits"]>[number];
+const person = (name: string, email = `${name.toLowerCase()}@example.com`) => ({ name, email });
+const contributor = person("Contributor");
+const robot = { name: "roboclaw-bot", email: "309084314+roboclaw-bot@users.noreply.github.com" };
+const refreshAuthor = { name: "Refresh Author", email: "refresh@example.com" };
+const source = (
+  message: string,
+  author?: SourceCommit["author"],
+  extra: Partial<SourceCommit> = {},
+): SourceCommit => ({ message, ...(author ? { author } : {}), ...extra });
+function prepareBody(scenario: BodyScenario = {}, parentEnv: NodeJS.ProcessEnv = process.env) {
   const root = tempDirs.make("openclaw-merge-attribution-");
   const sourceRepo = join(root, "source");
   const authorTrace = join(root, "author-requests");
+  const failureTrace = join(root, "injected-failures");
   const trailerMarker = join(root, "trailer-command-called");
   const body = join(root, "body");
   const override = join(root, "operator body.md");
   if (scenario.overrideBody !== undefined) {
     writeFileSync(override, scenario.overrideBody);
   }
-  let localHead = headSha;
-  let publishedHead = headSha;
   const githubCommits: Record<string, unknown> = {};
-  if (scenario.sourceMessages || scenario.sourceCommits) {
-    mkdirSync(sourceRepo);
-    const git = (args: string[], env?: NodeJS.ProcessEnv) => {
-      const result = spawnSync(
-        "git",
-        [
-          "-c",
-          "user.name=Maintainer",
-          "-c",
-          "user.email=maintainer@example.com",
-          "-c",
-          "commit.gpgsign=false",
-          "-c",
-          "core.hooksPath=/dev/null",
-          ...args,
-        ],
-        { cwd: sourceRepo, encoding: "utf8", env: { ...process.env, ...env } },
-      );
-      if (result.status !== 0) {
-        throw new Error(`Git fixture failed: ${result.stderr}`);
-      }
-      return result.stdout.trim();
-    };
-    git(["init", "-q"]);
-    git([
-      "commit",
-      "--allow-empty",
-      "-qm",
-      "Main change\n\nCo-authored-by: Main Only <main@example.com>",
-    ]);
-    const base = git(["rev-parse", "HEAD"]);
-    let main = base;
-    if (scenario.refreshMergeAuthor) {
-      git(["switch", "-qc", "main-refresh"]);
-      git(["commit", "--allow-empty", "-qm", "Main refresh"], {
-        GIT_AUTHOR_NAME: "Main Author",
-        GIT_AUTHOR_EMAIL: "main@example.com",
-        GIT_COMMITTER_NAME: "Main Author",
-        GIT_COMMITTER_EMAIL: "main@example.com",
-      });
-      main = git(["rev-parse", "HEAD"]);
-      git(["switch", "-qc", "pr", base]);
-    }
-    git(["update-ref", "refs/remotes/origin/main", main]);
-    if (scenario.signedSource) {
-      const key = join(root, "fixture-signing-key");
-      const generated = spawnSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key]);
-      expect(generated.status, generated.stderr.toString()).toBe(0);
-      const allowedSigners = join(root, "allowed-signers");
-      writeFileSync(allowedSigners, `fixture@example.com ${readFileSync(`${key}.pub`, "utf8")}`);
-      git(["config", "gpg.format", "ssh"]);
-      git(["config", "user.signingKey", key]);
-      git(["config", "gpg.ssh.allowedSignersFile", allowedSigners]);
-    }
-    const sourceCommits: NonNullable<BodyScenario["sourceCommits"]> =
-      scenario.sourceCommits ??
-      scenario.sourceMessages?.map((message) => ({
-        message,
-      })) ??
-      [];
-    for (const [index, { message, author, githubAuthor, empty }] of sourceCommits.entries()) {
-      if (!empty) {
-        writeFileSync(join(sourceRepo, "change.txt"), `${index}\n`);
-        git(["add", "change.txt"]);
-      }
-      git(
-        [
-          "-c",
-          `commit.gpgsign=${scenario.signedSource ?? false}`,
-          "commit",
-          "--allow-empty",
-          "-qm",
-          message,
-        ],
-        author
-          ? {
-              GIT_AUTHOR_NAME: author.name,
-              GIT_AUTHOR_EMAIL: author.email,
-              GIT_COMMITTER_NAME: author.name,
-              GIT_COMMITTER_EMAIL: author.email,
-            }
-          : undefined,
-      );
-      const sha = git(["rev-parse", "HEAD"]);
-      githubCommits[sha] = {
-        sha,
-        commit: {
-          author: {
-            name: author?.name ?? "Maintainer",
-            email: author?.email ?? "maintainer@example.com",
-          },
-        },
-        author:
-          githubAuthor === undefined ? { login: "fixture-human", type: "User" } : githubAuthor,
-      };
-    }
-    if (scenario.refreshMergeAuthor) {
-      const author = scenario.refreshMergeAuthor;
-      git(
-        [
-          "merge",
-          "--no-ff",
-          "-qm",
-          scenario.refreshMergeMessage ?? "Merge branch 'main' into repair",
-          main,
-        ],
-        {
-          GIT_AUTHOR_NAME: author.name,
-          GIT_AUTHOR_EMAIL: author.email,
-          GIT_COMMITTER_NAME: author.name,
-          GIT_COMMITTER_EMAIL: author.email,
-        },
-      );
-    }
-    publishedHead = git(["rev-parse", "HEAD"]);
-    if (scenario.localFixup) {
-      const { author, message } = scenario.localFixup;
-      git(["commit", "--allow-empty", "-qm", message], {
-        GIT_AUTHOR_NAME: author.name,
-        GIT_AUTHOR_EMAIL: author.email,
-        GIT_COMMITTER_NAME: author.name,
-        GIT_COMMITTER_EMAIL: author.email,
-      });
-    }
-    localHead = git(["rev-parse", "HEAD"]);
-    if (scenario.signedSource) {
-      git(["verify-commit", localHead]);
-      git(["notes", "add", "-m", "Unrelated operator note", localHead]);
-      git(["config", "log.showSignature", "true"]);
-      git(["config", "color.ui", "always"]);
-      git(["config", "log.decorate", "full"]);
-      git(["config", "i18n.logOutputEncoding", "ISO-8859-1"]);
-    }
-    git([
-      "commit",
-      "--allow-empty",
-      "-qm",
-      "Unprepared change\n\nCo-authored-by: Unprepared <unprepared@example.com>",
-    ]);
+  mkdirSync(sourceRepo);
+  const {
+    git,
+    tree,
+    commit: commitTree,
+  } = createFixtureGit(sourceRepo, {
+    ...process.env,
+    GIT_AUTHOR_NAME: "Maintainer",
+    GIT_AUTHOR_EMAIL: "maintainer@example.com",
+    GIT_COMMITTER_NAME: "Maintainer",
+    GIT_COMMITTER_EMAIL: "maintainer@example.com",
+  });
+  // Preserve the newline-normalized messages produced by the former porcelain fixture.
+  const commit: typeof commitTree = (contents, parents, message, author, signed) =>
+    commitTree(contents, parents, `${(message ?? "").trimEnd()}\n`, author, signed);
+  git(["init", "-q"]);
+  let contents = git(["mktree"], "");
+  let head = commit(contents, [], "Main change\n\nCo-authored-by: Main Only <main@example.com>");
+  const main = scenario.refreshMergeAuthor
+    ? commit(contents, [head], "Main refresh", person("Main Author", "main@example.com"))
+    : head;
+  git(["update-ref", "refs/remotes/origin/main", main]);
+  if (scenario.signedSource) {
+    const key = join(root, "fixture-signing-key");
+    const generated = spawnSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key]);
+    expect(generated.status, generated.stderr.toString()).toBe(0);
+    const allowedSigners = join(root, "allowed-signers");
+    writeFileSync(allowedSigners, `fixture@example.com ${readFileSync(`${key}.pub`, "utf8")}`);
+    git(["config", "gpg.format", "ssh"]);
+    git(["config", "user.signingKey", key]);
+    git(["config", "gpg.ssh.allowedSignersFile", allowedSigners]);
   }
+  const sourceCommits: NonNullable<BodyScenario["sourceCommits"]> =
+    scenario.sourceCommits ??
+    (scenario.sourceMessages ?? ["Repair"]).map((message) => ({ message }));
+  for (const [index, { message, author, githubAuthor, empty }] of sourceCommits.entries()) {
+    if (!empty) {
+      contents = tree(`${index}\n`);
+    }
+    head = commit(contents, [head], message, author, scenario.signedSource);
+    githubCommits[head] = {
+      sha: head,
+      commit: { author: author ?? person("Maintainer") },
+      author: githubAuthor === undefined ? { login: "fixture-human", type: "User" } : githubAuthor,
+    };
+  }
+  if (scenario.refreshMergeAuthor) {
+    head = commit(
+      contents,
+      [head, main],
+      scenario.refreshMergeMessage ?? "Merge branch 'main' into repair",
+      scenario.refreshMergeAuthor,
+    );
+  }
+  const publishedHead = head;
+  if (scenario.localFixup) {
+    const { author, message } = scenario.localFixup;
+    head = commit(contents, [head], message, author);
+  }
+  const localHead = head;
+  if (scenario.signedSource) {
+    git(["verify-commit", localHead]);
+    git(["notes", "add", "-m", "Unrelated operator note", localHead]);
+    git(["config", "log.showSignature", "true"]);
+    git(["config", "color.ui", "always"]);
+    git(["config", "log.decorate", "full"]);
+    git(["config", "i18n.logOutputEncoding", "ISO-8859-1"]);
+  }
+  const unprepared = commit(
+    contents,
+    [head],
+    "Unprepared change\n\nCo-authored-by: Unprepared <unprepared@example.com>",
+  );
+  git(["update-ref", "HEAD", unprepared]);
   // Match the native worktree: Git setup may change cwd when the temp root
   // itself is inside another repository, so the body belongs in sourceRepo.
   mkdirSync(join(sourceRepo, ".local"));
   writeFileSync(authorTrace, "");
+  writeFileSync(failureTrace, "");
   writeFileSync(
     join(root, "gh"),
     `#!/usr/bin/env node
@@ -207,7 +154,10 @@ if (args[0] !== "api" || args[1] !== "--hostname" || args[2] !== "fixture.github
 const endpoint = new URL(args[3], "https://fixture.github.invalid/");
 if (endpoint.pathname !== "/repos/fixture/repo/commits") throw new Error("Unexpected API endpoint");
 fs.appendFileSync(process.env.BODY_AUTHOR_TRACE, JSON.stringify(args) + "\\n");
-if (process.env.BODY_AUTHOR_READ_ERROR === "true") process.exit(1);
+if (process.env.BODY_AUTHOR_READ_ERROR === "true") {
+  fs.appendFileSync(process.env.BODY_FAILURE_TRACE, "author-read\\n");
+  process.exit(1);
+}
 const sha = endpoint.searchParams.get("sha");
 const limit = Number(endpoint.searchParams.get("per_page"));
 const commits = JSON.parse(process.env.BODY_COMMITS);
@@ -216,6 +166,7 @@ let page = git(["rev-list", "--max-count=" + limit, sha]).split("\\n").map((oid)
   sha: oid, commit: { author: { name: "Unselected Author", email: "unselected@example.com" } },
   author: { login: "unselected", type: "User" },
 });
+if (process.env.BODY_AUTHOR_FAULT) fs.appendFileSync(process.env.BODY_FAILURE_TRACE, "author-" + process.env.BODY_AUTHOR_FAULT + "\\n");
 switch (process.env.BODY_AUTHOR_FAULT) {
   case "empty": page = []; break;
   case "malformed": page = null; break;
@@ -234,12 +185,16 @@ LOCAL_PREP_HEAD_SHA="$BODY_LOCAL_HEAD"
 MERGE_REPO_NAME=fixture/repo
 MERGE_REPO_HOST=fixture.github.invalid
 pr_git() {
-  if [ "$BODY_READ_ERROR" = true ] && [[ " $* " = *" log "* ]]; then return 1; fi
+  if [ "$BODY_READ_ERROR" = true ] && [[ " $* " = *" log "* ]]; then printf 'source-read\\n' >> "$BODY_FAILURE_TRACE"; return 1; fi
   command git -C "$BODY_SOURCE_REPO" "$@"
 }
 PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main)
-pr_gh_plain() { [ "$BODY_PREVIEW_ERROR" = false ] || return 1; printf '%s\\n' "$BODY_PREVIEW"; }
-mktemp() { [ "$BODY_WRITE_ERROR" = false ] || return 1; command mktemp "$@"; }
+merge_read() {
+  [ "$*" = "preview 123" ] || return 99
+  [ "$BODY_PREVIEW_ERROR" = false ] || { printf 'preview-read\\n' >> "$BODY_FAILURE_TRACE"; return 1; }
+  printf '%s\\n' "$BODY_PREVIEW"
+}
+mktemp() { [ "$BODY_WRITE_ERROR" = false ] || { printf 'body-write\\n' >> "$BODY_FAILURE_TRACE"; return 1; }; command mktemp "$@"; }
 snapshot=""
 [ -z "$BODY_OVERRIDE" ] || snapshot=$(snapshot_merge_body "$BODY_OVERRIDE")
 file=$(prepare_squash_merge_body 123 "$snapshot")
@@ -249,7 +204,8 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
     cwd: sourceRepo,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...createIndependentPrFixtureEnv(parentEnv),
+      OPENCLAW_GH_BIN: join(root, "gh"),
       PATH: `${root}:${process.env.PATH}`,
       ...(scenario.configuredTrailer
         ? {
@@ -281,19 +237,25 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
       BODY_AUTHOR_READ_ERROR: String(scenario.authorReadError ?? false),
       BODY_AUTHOR_FAULT: scenario.authorReadFault ?? "",
       BODY_AUTHOR_TRACE: authorTrace,
+      BODY_FAILURE_TRACE: failureTrace,
       BODY_COMMITS: JSON.stringify(githubCommits),
       BODY_PREVIEW: JSON.stringify({
-        ...(scenario.restPreview ? { transport: "rest" } : {}),
-        data: {
-          repository: {
-            pullRequest: {
-              author: { login: scenario.prAuthor ?? "maintainer", __typename: "User" },
-              headRefOid: scenario.previewHead ?? publishedHead,
-              isMergeQueueEnabled: scenario.previewQueue ?? false,
-              viewerMergeBodyText:
-                scenario.previewBody === undefined
-                  ? "Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n\n"
-                  : scenario.previewBody,
+        transport: scenario.restPreview ? "rest" : "graphql",
+        payload: {
+          data: {
+            repository: {
+              squashMergeCommitTitle: scenario.squashTitle ?? "PR_TITLE",
+              squashMergeCommitMessage: scenario.squashMessage ?? "PR_BODY",
+              pullRequest: {
+                author: { login: scenario.prAuthor ?? "maintainer", __typename: "User" },
+                headRefOid: scenario.previewHead ?? publishedHead,
+                isMergeQueueEnabled: scenario.previewQueue ?? false,
+                viewerMergeHeadlineText: "Fixture merge headline",
+                viewerMergeBodyText:
+                  scenario.previewBody === undefined
+                    ? "Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n\n"
+                    : scenario.previewBody,
+              },
             },
           },
         },
@@ -304,6 +266,7 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
     ...result,
     mergeBody: existsSync(body) ? readFileSync(body, "utf8") : null,
     trailerCommandCalled: existsSync(trailerMarker),
+    injectedFailures: readFileSync(failureTrace, "utf8").trim().split("\n").filter(Boolean),
     authorRequests: readFileSync(authorTrace, "utf8")
       .split("\n")
       .filter(Boolean)
@@ -311,31 +274,391 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
   };
 }
 
+const contributorTrailer = "Co-authored-by: Contributor <contributor@example.com>";
+const maintainerTrailer = "Co-authored-by: Maintainer <maintainer@example.com>";
+const machineTrailer = "Co-authored-by: Claude <noreply@anthropic.com>";
+
 describePosix("native squash attribution", () => {
-  it("batches published author reads while preserving human credit in source order", () => {
-    const result = prepareBody({
-      restPreview: true,
-      previewBody: "Reviewed repair",
-      sourceCommits: [
-        { message: "First repair", author: { name: "First", email: "first@example.com" } },
-        {
-          message: "Automated repair",
-          author: { name: "Automation", email: "automation@example.com" },
-          githubAuthor: { login: "automation", type: "Bot" },
-        },
-        { message: "Second repair", author: { name: "Second", email: "second@example.com" } },
-        {
-          message: "Unlinked repair",
-          author: { name: "Unlinked", email: "unlinked@example.com" },
-          githubAuthor: null,
-        },
-      ],
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(
-      "Reviewed repair\n\nCo-authored-by: First <first@example.com>\nCo-authored-by: Second <second@example.com>\n",
+  it("composes the real body despite unrelated inherited PR controls and gh selectors", () => {
+    const result = prepareBody(
+      {},
+      {
+        ...process.env,
+        OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-merge-snapshot-"),
+        OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
+        OPENCLAW_GH_BIN: join(tempDirs.make("unrelated-gh-selector-"), "must-not-run"),
+      },
     );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.mergeBody).toBe(`Server description\n\n${maintainerTrailer}\n`);
     expect(result.authorRequests).toHaveLength(1);
+  });
+
+  it.each<
+    [
+      string,
+      string,
+      number,
+      string,
+      { localFixup?: boolean; refresh?: boolean; override?: string }?,
+    ]
+  >([
+    [
+      "COMMIT_OR_PR_TITLE",
+      "COMMIT_MESSAGES",
+      1,
+      "First description\n\n- Detail",
+      { localFixup: true },
+    ],
+    [
+      "COMMIT_OR_PR_TITLE",
+      "COMMIT_MESSAGES",
+      2,
+      "* First title\n\nFirst description\n\n- Detail\n\n* Second title\n\nSecond description\n\n* Merge refreshed main\n\nRefresh description",
+      { refresh: true },
+    ],
+    ["PR_TITLE", "COMMIT_MESSAGES", 1, "* First title\n\nFirst description\n\n- Detail"],
+    ["PR_TITLE", "BLANK", 1, ""],
+    ["PR_TITLE", "PR_BODY", 1, "PR description"],
+    [
+      "COMMIT_OR_PR_TITLE",
+      "COMMIT_MESSAGES",
+      2,
+      "Reviewed bytes",
+      { override: "Reviewed bytes\n" },
+    ],
+  ])(
+    "preserves REST squash defaults %s/%s for %i source commits",
+    (
+      title,
+      message,
+      count,
+      expected,
+      {
+        refresh,
+        localFixup,
+        override,
+      }: { localFixup?: boolean; refresh?: boolean; override?: string } = {},
+    ) => {
+      const result = prepareBody({
+        restPreview: true,
+        squashTitle: title,
+        squashMessage: message,
+        previewBody: "PR description",
+        sourceCommits: [
+          { message: "First title\n\nFirst description\n\n- Detail" },
+          { message: "Second title\n\nSecond description", empty: true },
+        ].slice(0, count),
+        refreshMergeAuthor: refresh ? { name: "Refresh", email: "refresh@example.com" } : undefined,
+        refreshMergeMessage: "Merge refreshed main\n\nRefresh description",
+        localFixup: localFixup
+          ? {
+              message: "Unpublished description",
+              author: { name: "Local", email: "local@example.com" },
+            }
+          : undefined,
+        overrideBody: override,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.mergeBody).toBe(
+        `${expected}${expected ? "\n\n" : ""}Co-authored-by: Maintainer <maintainer@example.com>\n`,
+      );
+    },
+  );
+
+  it.each<
+    [string, BodyScenario, string | null, { dropped?: string; requests?: number; absent?: string }?]
+  >([
+    [
+      "batches published author reads while preserving human credit in source order",
+      {
+        restPreview: true,
+        previewBody: "Reviewed repair",
+        sourceCommits: [
+          source("First repair", person("First")),
+          source("Automated repair", person("Automation"), {
+            githubAuthor: { login: "automation", type: "Bot" },
+          }),
+          source("Second repair", person("Second")),
+          source("Unlinked repair", person("Unlinked"), { githubAuthor: null }),
+        ],
+      },
+      "Reviewed repair\n\nCo-authored-by: First <first@example.com>\nCo-authored-by: Second <second@example.com>\n",
+      { requests: 1 },
+    ],
+    [
+      "drops the unlinked local author in the #145094 shape and keeps the PR author",
+      {
+        prAuthor: "contributor",
+        sourceCommits: [
+          source(
+            "Repair\n\nCo-authored-by: Contributor <123+contributor@users.noreply.github.com>",
+            person("local-agent", "local-agent@openclaw.local"),
+            { githubAuthor: null },
+          ),
+        ],
+        previewBody:
+          "Repair\n\nCo-authored-by: Contributor <123+contributor@users.noreply.github.com>\nCo-authored-by: local-agent <local-agent@openclaw.local>",
+      },
+      "Repair\n\nCo-authored-by: Contributor <123+contributor@users.noreply.github.com>\n",
+      {
+        dropped:
+          'Dropped squash co-author credit: ["Co-authored-by: local-agent <local-agent@openclaw.local>"]',
+      },
+    ],
+    [
+      "omits preview credit backed only by a refresh merge author",
+      {
+        previewBody:
+          "Repair summary\n\n---------\n\nCo-authored-by: Vincent Koc <vincent@example.com>",
+        sourceCommits: [source("Repair", contributor)],
+        refreshMergeAuthor: { name: "Vincent Koc", email: "vincent@example.com" },
+      },
+      "Repair summary\n",
+    ],
+    [
+      "preserves reviewed explicit credit for a tree-identical commit author",
+      {
+        sourceCommits: [source("Repair"), source("Refresh", refreshAuthor, { empty: true })],
+        previewBody: "Repair\n\nCo-authored-by: Refresh Author <refresh@example.com>",
+        overrideBody:
+          "Reviewed credit.\r\n\r\nCo-authored-by: Refresh Author <refresh@example.com>\r\n\r\n",
+      },
+      "Reviewed credit.\r\n\r\nCo-authored-by: Refresh Author <refresh@example.com>\r\n\r\n",
+    ],
+    [
+      "keeps exact reviewed human credit instead of adding the machine source author",
+      {
+        sourceCommits: [
+          source(
+            "Repair\n\nCo-authored-by: Takhoffman <781889+Takhoffman@users.noreply.github.com>",
+            robot,
+          ),
+        ],
+        previewBody:
+          "Repair summary\n\nCo-authored-by: Takhoffman <781889+Takhoffman@users.noreply.github.com>\nCo-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
+        overrideBody:
+          "Worked on by:\n- @Takhoffman\n\nCo-authored-by: Takhoffman <781889+Takhoffman@users.noreply.github.com>\n",
+      },
+      "Worked on by:\n- @Takhoffman\n\nCo-authored-by: Takhoffman <781889+Takhoffman@users.noreply.github.com>\n",
+    ],
+    [
+      "drops a machine source-author preview credit without a reviewed body",
+      {
+        sourceCommits: [source("Repair", robot)],
+        previewBody:
+          "Repair\n\nCo-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
+      },
+      "Repair\n",
+    ],
+    [
+      "retains explicit source credit carried by a merge commit",
+      {
+        sourceMessages: ["Repair"],
+        refreshMergeAuthor: { name: "Refresh Author", email: "refresh@example.com" },
+        refreshMergeMessage:
+          "Merge branch 'main' into repair\n\nCo-authored-by: Merge Helper <helper@example.com>",
+        previewBody: "Repair summary",
+      },
+      "Repair summary\n\nCo-authored-by: Merge Helper <helper@example.com>\n",
+    ],
+    [
+      "drops machine credit present only in the default server preview",
+      {
+        sourceMessages: ["Repair"],
+        previewBody: "Server description\n\nCo-authored-by: Claude <noreply@anthropic.com>",
+      },
+      "Server description\n",
+    ],
+    [
+      "drops machine credit replayed in commit bullets and keeps human source credit",
+      {
+        sourceCommits: [
+          source(
+            "First repair\n\nDetails.\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+            contributor,
+          ),
+          source("Second repair\n\nCo-Authored-By: Claude <noreply@anthropic.com>", contributor),
+        ],
+        refreshMergeAuthor: { name: "Maintainer", email: "maintainer@example.com" },
+        refreshMergeMessage:
+          "Integrate the repair\n\nCo-authored-by: Reviewer <reviewer@example.com>",
+        previewBody: `* First repair\n\nDetails.\n\n${machineTrailer}\n\n* Second repair\n\n${machineTrailer}\n\n---------\n\n${contributorTrailer}\n${machineTrailer}\n${maintainerTrailer}\nCo-authored-by: Reviewer <reviewer@example.com>\n`,
+      },
+      `* First repair\n\nDetails.\n\n* Second repair\n\n---------\n\n${contributorTrailer}\nCo-authored-by: Reviewer <reviewer@example.com>\n`,
+    ],
+    [
+      "appends human source trailers the preview omitted while dropping machine ones",
+      {
+        sourceCommits: [
+          source(
+            "Repair\n\nCo-authored-by: Codex <codex@openai.com>\nCo-authored-by: Pair Partner <pair@example.com>",
+            contributor,
+          ),
+        ],
+        previewBody: `Repair\n\nCo-authored-by: Codex <codex@openai.com>\n\n---------\n\n${contributorTrailer}\nCo-authored-by: Codex <codex@openai.com>\n`,
+      },
+      `Repair\n\n---------\n\n${contributorTrailer}\nCo-authored-by: Pair Partner <pair@example.com>\n`,
+    ],
+    [
+      "drops a folded machine trailer replayed inside a commit bullet",
+      {
+        sourceCommits: [
+          source("Repair\n\nCo-Authored-By: Claude\n <noreply@anthropic.com>", contributor),
+          source("Follow-up", contributor),
+        ],
+        previewBody: `* Repair\n\nCo-Authored-By: Claude\n <noreply@anthropic.com>\n\n* Follow-up\n\n---------\n\n${contributorTrailer}\n`,
+      },
+      `* Repair\n\n* Follow-up\n\n---------\n\n${contributorTrailer}\n`,
+    ],
+    [
+      "drops an indented machine credit line from the default preview",
+      {
+        sourceCommits: [source("Repair", contributor)],
+        previewBody: `Repair\n\n  ${machineTrailer}\n\n---------\n\n${contributorTrailer}\n`,
+      },
+      `Repair\n\n---------\n\n${contributorTrailer}\n`,
+    ],
+    [
+      "drops a machine trailer followed by indented text from the default preview",
+      {
+        sourceCommits: [source("Repair", contributor)],
+        previewBody: `Repair\n\n${machineTrailer}\n  indented note\n\n---------\n\n${contributorTrailer}\n`,
+      },
+      `Repair\n\n  indented note\n\n---------\n\n${contributorTrailer}\n`,
+    ],
+    [
+      "keeps queue admission without a body override or source trailers",
+      { previewQueue: true },
+      null,
+    ],
+    [
+      "replaces obsolete closing prose while preserving operator, server and source credit",
+      {
+        sourceCommits: [
+          source("Repair\n\nCo-authored-by: Source <source@example.com>", person("Server")),
+        ],
+        previewBody:
+          "Obsolete complete fix.\n\nFixes #42\n\nCo-authored-by: Server <server@example.com>",
+        overrideBody:
+          "Partial repair. Related: #42.\r\n\r\nCo-authored-by: Operator <operator@example.com>\r\n\r\n",
+      },
+      "Partial repair. Related: #42.\r\n\r\nCo-authored-by: Operator <operator@example.com>\nCo-authored-by: Server <server@example.com>\nCo-authored-by: Source <source@example.com>\r\n\r\n",
+      { absent: "Fixes #42" },
+    ],
+    [
+      "appends credit without inventing a final newline in an explicit body",
+      {
+        sourceMessages: ["Repair\n\nCo-authored-by: Source <source@example.com>"],
+        previewBody: "Old prose",
+        overrideBody: "Corrected prose",
+      },
+      "Corrected prose\n\nCo-authored-by: Source <source@example.com>",
+    ],
+    [
+      "preserves canonical GitHub trailers despite configured separators",
+      {
+        sourceMessages: [`Repair\n\n${contributorTrailer}`],
+        trailerSeparators: "%",
+      },
+      `Server description\n\n${maintainerTrailer}\n${contributorTrailer}\n`,
+    ],
+    [
+      "extracts only UTF-8 credit from signed commits despite configured log presentation",
+      {
+        sourceMessages: ["Repair\n\nCo-authored-by: Élodie <elodie@example.com>"],
+        signedSource: true,
+      },
+      `Server description\n\n${maintainerTrailer}\nCo-authored-by: Élodie <elodie@example.com>\n`,
+    ],
+  ])("%s", (_name, scenario, body, extra) => {
+    const result = prepareBody(scenario);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.mergeBody).toBe(body);
+    if (extra?.dropped !== undefined) {
+      expect(result.stderr.trim()).toBe(extra.dropped);
+    }
+    if (extra?.requests !== undefined) {
+      expect(result.authorRequests).toHaveLength(extra.requests);
+    }
+    if (extra?.absent !== undefined) {
+      expect(result.mergeBody).not.toContain(extra.absent);
+    }
+  });
+  it.each<[string, BodyScenario, string]>([
+    [
+      "rejects queue admission when tree-identical refresh credit needs removal",
+      {
+        sourceCommits: [source("Repair"), source("Refresh", refreshAuthor, { empty: true })],
+        previewBody: "Repair\n\nCo-authored-by: Refresh Author <refresh@example.com>",
+        previewQueue: true,
+      },
+      "Cannot queue",
+    ],
+    [
+      "rejects queue admission when the preview carries machine credit",
+      {
+        sourceCommits: [source("Repair", robot)],
+        previewBody:
+          "Repair\n\nCo-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
+        previewQueue: true,
+      },
+      "Cannot queue",
+    ],
+    [
+      "does not trust an unpublished local fixup author for preview credit",
+      {
+        localFixup: {
+          message: "Local fixup",
+          author: { name: "Local Fixup", email: "local@example.com" },
+        },
+        previewBody: "Repair summary\n\nCo-authored-by: Local Fixup <local@example.com>",
+        previewQueue: true,
+      },
+      "Cannot queue",
+    ],
+    [
+      "refuses ambiguous removal of unsupported preview credit",
+      {
+        previewBody:
+          "Co-authored-by: Preview Only <preview@example.com>\n\nQuoted example.\n\nCo-authored-by: Preview Only <preview@example.com>",
+      },
+      "unambiguously",
+    ],
+    [
+      "rejects a reviewed body with machine credit outside its trailer block",
+      {
+        overrideBody: `Reviewed correction.\n\n${machineTrailer}\n\nMore context.\n`,
+      },
+      "--body-file",
+    ],
+    [
+      "rejects a reviewed body whose machine trailer is followed by indented text",
+      {
+        overrideBody: `Reviewed correction.\n\n${machineTrailer}\n  indented note\n\nMore context.\n`,
+      },
+      "--body-file",
+    ],
+    [
+      "rejects a reviewed body with an indented machine credit line",
+      {
+        overrideBody: `Reviewed correction.\n\n  ${machineTrailer}\n\nMore context.\n`,
+      },
+      "--body-file",
+    ],
+    [
+      "rejects queue admission when preview credit requires removal",
+      {
+        refreshMergeAuthor: { name: "Refresh Author", email: "refresh@example.com" },
+        previewBody: "Repair summary\n\nCo-authored-by: Refresh Author <refresh@example.com>",
+        previewQueue: true,
+      },
+      "Cannot queue",
+    ],
+  ])("%s", (_name, scenario, diagnostic) => {
+    const result = prepareBody(scenario);
+    expect(result, result.stderr).toMatchObject({ status: 1, mergeBody: null });
+    expect(result.stderr).toContain(diagnostic);
   });
 
   it.each([
@@ -378,58 +701,23 @@ describePosix("native squash attribution", () => {
     },
   );
 
-  it("drops the unlinked local author in the #145094 shape and keeps the PR author", () => {
-    const humanCredit = "Co-authored-by: Contributor <123+contributor@users.noreply.github.com>";
-    const machineCredit = "Co-authored-by: local-agent <local-agent@openclaw.local>";
-    const result = prepareBody({
-      prAuthor: "contributor",
-      sourceCommits: [
-        {
-          message: `Repair\n\n${humanCredit}`,
-          author: { name: "local-agent", email: "local-agent@openclaw.local" },
-          githubAuthor: null,
-        },
-      ],
-      previewBody: `Repair\n\n${humanCredit}\n${machineCredit}`,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(`Repair\n\n${humanCredit}\n`);
-    expect(result.stderr.trim()).toBe(
-      `Dropped squash co-author credit: ${JSON.stringify([machineCredit])}`,
-    );
-  });
-
-  it.each([
-    "agent@host.local",
-    "agent@localhost",
-    "agent@host.LOCALHOST",
-    "agent@host.internal",
-    "agent@host.lan",
-    "agent@host.home",
-    "agent@host.test",
-    "agent@host.invalid",
-    "agent@host.example",
-    "unknown@users.noreply.github.com",
-    "123+unknown@users.noreply.github.com",
-    "unlinked@example.com",
-  ])("drops unverified commit-author credit from both preview and source: %s", (email) => {
-    const credit = `Co-authored-by: Local Author <${email}>`;
-    const result = prepareBody({
-      sourceCommits: [
-        {
-          message: `Repair\n\n${credit}`,
-          author: { name: "Local Author", email },
-          githubAuthor: null,
-        },
-      ],
-      previewBody: `Repair\n\n${credit}`,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe("Repair\n");
-    expect(result.stderr.trim()).toBe(
-      `Dropped squash co-author credit: ${JSON.stringify([credit])}`,
-    );
-  });
+  it.each(["agent@host.LOCALHOST", "123+unknown@users.noreply.github.com", "unlinked@example.com"])(
+    "drops unverified commit-author credit from both preview and source: %s",
+    (email) => {
+      const credit = `Co-authored-by: Local Author <${email}>`;
+      const result = prepareBody({
+        sourceCommits: [
+          source(`Repair\n\n${credit}`, person("Local Author", email), { githubAuthor: null }),
+        ],
+        previewBody: `Repair\n\n${credit}`,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.mergeBody).toBe("Repair\n");
+      expect(result.stderr.trim()).toBe(
+        `Dropped squash co-author credit: ${JSON.stringify([credit])}`,
+      );
+    },
+  );
 
   it.each([
     { email: "contributor@example.com", keep: true },
@@ -440,33 +728,12 @@ describePosix("native squash attribution", () => {
     const result = prepareBody({
       prAuthor: "contributor",
       sourceCommits: [
-        {
-          message: "Refresh",
-          empty: true,
-          author: { name: "Contributor", email },
-          githubAuthor: null,
-        },
+        source("Refresh", person("Contributor", email), { empty: true, githubAuthor: null }),
       ],
       previewBody: `Repair\n\n${credit}`,
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.mergeBody).toBe(keep ? `Repair\n\n${credit}\n` : "Repair\n");
-  });
-
-  it("omits preview credit backed only by a refresh merge author", () => {
-    const previewCredit = "Co-authored-by: Vincent Koc <vincent@example.com>";
-    const result = prepareBody({
-      sourceCommits: [
-        {
-          message: "Repair",
-          author: { name: "Contributor", email: "contributor@example.com" },
-        },
-      ],
-      refreshMergeAuthor: { name: "Vincent Koc", email: "vincent@example.com" },
-      previewBody: `Repair summary\n\n---------\n\n${previewCredit}`,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe("Repair summary\n");
   });
 
   it.each([
@@ -475,29 +742,22 @@ describePosix("native squash attribution", () => {
     { kind: "PR author", keep: true },
     { kind: "source trailer", keep: true },
   ])("handles tree-identical refresh commits for $kind credit", ({ kind, keep }) => {
-    const contributorCredit = "Co-authored-by: Contributor <contributor@example.com>";
+    const contributorCredit = contributorTrailer;
     const refreshCredit = "Co-authored-by: Refresh Author <refresh@example.com>";
     for (const overrideBody of [undefined, `Reviewed correction.\n\n${contributorCredit}\n`]) {
       const result = prepareBody({
         prAuthor: kind === "PR author" ? "refresh-author" : "contributor",
         sourceCommits: [
-          {
-            message: "Repair",
-            author: { name: "Contributor", email: "contributor@example.com" },
-            githubAuthor: { login: "contributor", type: "User" },
-          },
-          {
-            message: kind === "source trailer" ? `Refresh\n\n${refreshCredit}` : "Refresh",
-            empty: true,
-            author: { name: "Refresh Author", email: "refresh@example.com" },
-            githubAuthor: { login: "refresh-author", type: "User" },
-          },
-          {
-            message: kind === "mixed" ? "Follow-up repair" : "Refresh again",
+          source("Repair", contributor, { githubAuthor: { login: "contributor", type: "User" } }),
+          source(
+            kind === "source trailer" ? `Refresh\n\n${refreshCredit}` : "Refresh",
+            refreshAuthor,
+            { empty: true, githubAuthor: { login: "refresh-author", type: "User" } },
+          ),
+          source(kind === "mixed" ? "Follow-up repair" : "Refresh again", refreshAuthor, {
             empty: kind !== "mixed",
-            author: { name: "Refresh Author", email: "refresh@example.com" },
             githubAuthor: { login: "refresh-author", type: "User" },
-          },
+          }),
         ],
         previewBody: `Repair summary\n\n${contributorCredit}\n${refreshCredit}`,
         overrideBody,
@@ -507,43 +767,6 @@ describePosix("native squash attribution", () => {
         `${overrideBody?.trimEnd() ?? `Repair summary\n\n${contributorCredit}`}${keep ? `\n${refreshCredit}` : ""}\n`,
       );
     }
-  });
-
-  it("preserves reviewed explicit credit for a tree-identical commit author", () => {
-    const credit = "Co-authored-by: Refresh Author <refresh@example.com>";
-    const overrideBody = `Reviewed credit.\r\n\r\n${credit}\r\n\r\n`;
-    const result = prepareBody({
-      sourceCommits: [
-        { message: "Repair" },
-        {
-          message: "Refresh",
-          empty: true,
-          author: { name: "Refresh Author", email: "refresh@example.com" },
-        },
-      ],
-      previewBody: `Repair\n\n${credit}`,
-      overrideBody,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(overrideBody);
-  });
-
-  it("rejects queue admission when tree-identical refresh credit needs removal", () => {
-    const result = prepareBody({
-      sourceCommits: [
-        { message: "Repair" },
-        {
-          message: "Refresh",
-          empty: true,
-          author: { name: "Refresh Author", email: "refresh@example.com" },
-        },
-      ],
-      previewBody: "Repair\n\nCo-authored-by: Refresh Author <refresh@example.com>",
-      previewQueue: true,
-    });
-    expect(result.status).toBe(1);
-    expect(result.mergeBody).toBeNull();
-    expect(result.stderr).toContain("Cannot queue");
   });
 
   it.each(["second@example.com", "123+second-author@users.noreply.github.com"])(
@@ -574,157 +797,31 @@ describePosix("native squash attribution", () => {
   ])(
     "omits machine author preview credit from a reviewed body while retaining human authors: %j",
     (machine) => {
-      const humanCredit = "Co-authored-by: Contributor <contributor@example.com>";
       const result = prepareBody({
-        sourceCommits: [
-          {
-            message: "Repair",
-            author: { name: "Contributor", email: "contributor@example.com" },
-          },
-          {
-            message: "Test fixture",
-            author: machine,
-          },
-        ],
-        previewBody: `Repair summary\n\nCo-authored-by: ${machine.name} <${machine.email}>\n${humanCredit}`,
+        sourceCommits: [source("Repair", contributor), source("Test fixture", machine)],
+        previewBody: `Repair summary\n\nCo-authored-by: ${machine.name} <${machine.email}>\n${contributorTrailer}`,
         overrideBody: "Reviewed correction.\n",
       });
       expect(result.status, result.stderr).toBe(0);
-      expect(result.mergeBody).toBe(`Reviewed correction.\n\n${humanCredit}\n`);
+      expect(result.mergeBody).toBe(`Reviewed correction.\n\n${contributorTrailer}\n`);
     },
   );
 
-  it("keeps exact reviewed human credit instead of adding the machine source author", () => {
-    const humanCredit = "Co-authored-by: Takhoffman <781889+Takhoffman@users.noreply.github.com>";
-    const machineCredit =
-      "Co-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>";
-    const overrideBody = `Worked on by:\n- @Takhoffman\n\n${humanCredit}\n`;
-    const result = prepareBody({
-      sourceCommits: [
-        {
-          message: `Repair\n\n${humanCredit}`,
-          author: {
-            name: "roboclaw-bot",
-            email: "309084314+roboclaw-bot@users.noreply.github.com",
-          },
-        },
-      ],
-      previewBody: `Repair summary\n\n${humanCredit}\n${machineCredit}`,
-      overrideBody,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(overrideBody);
-  });
-
-  it("drops a machine source-author preview credit without a reviewed body", () => {
-    const result = prepareBody({
-      sourceCommits: [
-        {
-          message: "Repair",
-          author: {
-            name: "roboclaw-bot",
-            email: "309084314+roboclaw-bot@users.noreply.github.com",
-          },
-        },
-      ],
-      previewBody:
-        "Repair\n\nCo-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe("Repair\n");
-  });
-
-  it("rejects queue admission when the preview carries machine credit", () => {
-    const result = prepareBody({
-      sourceCommits: [
-        {
-          message: "Repair",
-          author: {
-            name: "roboclaw-bot",
-            email: "309084314+roboclaw-bot@users.noreply.github.com",
-          },
-        },
-      ],
-      previewBody:
-        "Repair\n\nCo-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
-      previewQueue: true,
-    });
-    expect(result.status).toBe(1);
-    expect(result.mergeBody).toBeNull();
-    expect(result.stderr).toContain("Cannot queue");
-  });
-
-  it("does not trust an unpublished local fixup author for preview credit", () => {
-    const previewCredit = "Co-authored-by: Local Fixup <local@example.com>";
-    const result = prepareBody({
-      sourceMessages: ["Repair"],
-      localFixup: {
-        message: "Local fixup",
-        author: { name: "Local Fixup", email: "local@example.com" },
-      },
-      previewBody: `Repair summary\n\n${previewCredit}`,
-      previewQueue: true,
-    });
-    expect(result.status).toBe(1);
-    expect(result.mergeBody).toBeNull();
-    expect(result.stderr).toContain("Cannot queue");
-  });
-
-  it("retains explicit source credit carried by a merge commit", () => {
-    const sourceCredit = "Co-authored-by: Merge Helper <helper@example.com>";
-    const result = prepareBody({
-      sourceMessages: ["Repair"],
-      refreshMergeAuthor: { name: "Refresh Author", email: "refresh@example.com" },
-      refreshMergeMessage: `Merge branch 'main' into repair\n\n${sourceCredit}`,
-      previewBody: "Repair summary",
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(`Repair summary\n\n${sourceCredit}\n`);
-  });
-
-  it("refuses ambiguous removal of unsupported preview credit", () => {
-    const previewCredit = "Co-authored-by: Preview Only <preview@example.com>";
-    const result = prepareBody({
-      sourceMessages: ["Repair"],
-      previewBody: `${previewCredit}\n\nQuoted example.\n\n${previewCredit}`,
-    });
-    expect(result.status).toBe(1);
-    expect(result.mergeBody).toBeNull();
-    expect(result.stderr).toContain("unambiguously");
-  });
-
   it.each([
-    "Co-authored-by: Claude <noreply@anthropic.com>",
+    machineTrailer,
     "co-authored-by: Claude <NOREPLY@ANTHROPIC.COM>",
     "Co-Authored-By: Claude\n <noreply@anthropic.com>",
     "Co-authored-by: Cursor <cursoragent@cursor.com>",
-    "co-authored-by: Cursor <CURSORAGENT@CURSOR.COM>",
-    "Co-Authored-By: Cursor\n <cursoragent@cursor.com>",
     "Co-authored-by: Amp <amp@ampcode.com>",
-    "co-authored-by: Amp <AMP@AMPCODE.COM>",
-    "Co-Authored-By: Amp\n <amp@ampcode.com>",
     "Co-authored-by: Codex <codex@openai.com>",
-    "co-authored-by: Codex <CODEX@OPENAI.COM>",
-    "Co-Authored-By: Codex\n <codex@openai.com>",
     "Co-authored-by: Trae Solo <solo-agent@trae.ai>",
-    "co-authored-by: Trae Solo <SOLO-AGENT@TRAE.AI>",
-    "Co-Authored-By: Trae Solo\n <solo-agent@trae.ai>",
     "Co-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
-    "co-authored-by: RoboClaw <309084314+ROBOCLAW-BOT@USERS.NOREPLY.GITHUB.COM>",
-    "Co-Authored-By: RoboClaw\n <309084314+roboclaw-bot@users.noreply.github.com>",
     "Co-authored-by: RoboClaw <services+roboclaw@openclaw.org>",
-    "co-authored-by: RoboClaw <SERVICES+ROBOCLAW@OPENCLAW.ORG>",
-    "Co-Authored-By: RoboClaw\n <services+roboclaw@openclaw.org>",
     "Co-authored-by: clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>",
-    "co-authored-by: ClawSweeper <274271284+CLAWSWEEPER[BOT]@USERS.NOREPLY.GITHUB.COM>",
-    "Co-Authored-By: clawsweeper\n <274271284+clawsweeper[bot]@users.noreply.github.com>",
     "Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>",
     "Co-authored-by: Copilot <198982749+Copilot@users.noreply.github.com>",
     "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
     "Co-authored-by: Codex <noreply@openai.com>",
-    "Co-authored-by: claude <209825114+claude[bot]@users.noreply.github.com>",
-    "Co-authored-by: cursor <206951365+cursor[bot]@users.noreply.github.com>",
-    "Co-authored-by: chatgpt-codex-connector <199175422+chatgpt-codex-connector[bot]@users.noreply.github.com>",
     "Co-authored-by: Any App <1274271284+clawsweeper[bot]@users.noreply.github.com>",
   ])("omits imported machine credit while preserving human credit: %j", (machineCredit) => {
     const humanCredit = [
@@ -792,185 +889,8 @@ describePosix("native squash attribution", () => {
       previewBody: `Server description\n\n${machineCredit}`,
       overrideBody,
     });
-    expect(result.status).toBe(1);
-    expect(result.mergeBody).toBeNull();
+    expect(result).toMatchObject({ status: 1, mergeBody: null });
     expect(result.stderr).toContain("--body-file");
-  });
-
-  it.each([
-    "Claude <noreply@anthropic.com>",
-    "Cursor <cursoragent@cursor.com>",
-    "Amp <amp@ampcode.com>",
-    "Codex <codex@openai.com>",
-    "Trae Solo <solo-agent@trae.ai>",
-    "roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
-    "clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>",
-    "Copilot <175728472+Copilot@users.noreply.github.com>",
-    "Copilot <198982749+Copilot@users.noreply.github.com>",
-    "Copilot <223556219+Copilot@users.noreply.github.com>",
-    "Codex <noreply@openai.com>",
-    "claude <209825114+claude[bot]@users.noreply.github.com>",
-    "cursor <206951365+cursor[bot]@users.noreply.github.com>",
-    "chatgpt-codex-connector <199175422+chatgpt-codex-connector[bot]@users.noreply.github.com>",
-  ])("drops machine credit present only in the default server preview: %s", (identity) => {
-    const result = prepareBody({
-      sourceMessages: ["Repair"],
-      previewBody: `Server description\n\nCo-authored-by: ${identity}`,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe("Server description\n");
-  });
-
-  it("drops machine credit replayed in commit bullets and keeps human source credit", () => {
-    const machineCredit = "Co-authored-by: Claude <noreply@anthropic.com>";
-    const contributorCredit = "Co-authored-by: Contributor <contributor@example.com>";
-    const reviewerCredit = "Co-authored-by: Reviewer <reviewer@example.com>";
-    const maintainerCredit = "Co-authored-by: Maintainer <maintainer@example.com>";
-    const contributor = { name: "Contributor", email: "contributor@example.com" };
-    // Mirrors PR #126816: contributor commits carry Claude trailers, and the
-    // maintainer's merge commit carries the only trailer for a human reviewer.
-    const result = prepareBody({
-      sourceCommits: [
-        {
-          message: "First repair\n\nDetails.\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
-          author: contributor,
-        },
-        {
-          message: "Second repair\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
-          author: contributor,
-        },
-      ],
-      refreshMergeAuthor: { name: "Maintainer", email: "maintainer@example.com" },
-      refreshMergeMessage: `Integrate the repair\n\n${reviewerCredit}`,
-      previewBody: [
-        "* First repair",
-        "",
-        "Details.",
-        "",
-        machineCredit,
-        "",
-        "* Second repair",
-        "",
-        machineCredit,
-        "",
-        "---------",
-        "",
-        contributorCredit,
-        machineCredit,
-        maintainerCredit,
-        reviewerCredit,
-        "",
-      ].join("\n"),
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(
-      [
-        "* First repair",
-        "",
-        "Details.",
-        "",
-        "* Second repair",
-        "",
-        "---------",
-        "",
-        contributorCredit,
-        reviewerCredit,
-        "",
-      ].join("\n"),
-    );
-  });
-
-  it("appends human source trailers the preview omitted while dropping machine ones", () => {
-    const machineCredit = "Co-authored-by: Codex <codex@openai.com>";
-    const humanCredit = "Co-authored-by: Pair Partner <pair@example.com>";
-    const contributorCredit = "Co-authored-by: Contributor <contributor@example.com>";
-    const result = prepareBody({
-      sourceCommits: [
-        {
-          message: `Repair\n\n${machineCredit}\n${humanCredit}`,
-          author: { name: "Contributor", email: "contributor@example.com" },
-        },
-      ],
-      previewBody: `Repair\n\n${machineCredit}\n\n---------\n\n${contributorCredit}\n${machineCredit}\n`,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(`Repair\n\n---------\n\n${contributorCredit}\n${humanCredit}\n`);
-  });
-
-  it("drops a folded machine trailer replayed inside a commit bullet", () => {
-    const contributor = { name: "Contributor", email: "contributor@example.com" };
-    const contributorCredit = "Co-authored-by: Contributor <contributor@example.com>";
-    const result = prepareBody({
-      sourceCommits: [
-        {
-          message: "Repair\n\nCo-Authored-By: Claude\n <noreply@anthropic.com>",
-          author: contributor,
-        },
-        { message: "Follow-up", author: contributor },
-      ],
-      previewBody: `* Repair\n\nCo-Authored-By: Claude\n <noreply@anthropic.com>\n\n* Follow-up\n\n---------\n\n${contributorCredit}\n`,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(`* Repair\n\n* Follow-up\n\n---------\n\n${contributorCredit}\n`);
-  });
-
-  it("rejects a reviewed body with machine credit outside its trailer block", () => {
-    const result = prepareBody({
-      sourceMessages: ["Repair"],
-      overrideBody:
-        "Reviewed correction.\n\nCo-authored-by: Claude <noreply@anthropic.com>\n\nMore context.\n",
-    });
-    expect(result.status).toBe(1);
-    expect(result.mergeBody).toBeNull();
-    expect(result.stderr).toContain("--body-file");
-  });
-
-  it("rejects a reviewed body whose machine trailer is followed by indented text", () => {
-    const result = prepareBody({
-      sourceMessages: ["Repair"],
-      overrideBody:
-        "Reviewed correction.\n\nCo-authored-by: Claude <noreply@anthropic.com>\n  indented note\n\nMore context.\n",
-    });
-    expect(result.status).toBe(1);
-    expect(result.mergeBody).toBeNull();
-    expect(result.stderr).toContain("--body-file");
-  });
-
-  it("rejects a reviewed body with an indented machine credit line", () => {
-    const result = prepareBody({
-      sourceMessages: ["Repair"],
-      overrideBody:
-        "Reviewed correction.\n\n  Co-authored-by: Claude <noreply@anthropic.com>\n\nMore context.\n",
-    });
-    expect(result.status).toBe(1);
-    expect(result.mergeBody).toBeNull();
-    expect(result.stderr).toContain("--body-file");
-  });
-
-  it("drops an indented machine credit line from the default preview", () => {
-    const contributorCredit = "Co-authored-by: Contributor <contributor@example.com>";
-    const result = prepareBody({
-      sourceCommits: [
-        { message: "Repair", author: { name: "Contributor", email: "contributor@example.com" } },
-      ],
-      previewBody: `Repair\n\n  Co-authored-by: Claude <noreply@anthropic.com>\n\n---------\n\n${contributorCredit}\n`,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(`Repair\n\n---------\n\n${contributorCredit}\n`);
-  });
-
-  it("drops a machine trailer followed by indented text from the default preview", () => {
-    const contributorCredit = "Co-authored-by: Contributor <contributor@example.com>";
-    const result = prepareBody({
-      sourceCommits: [
-        { message: "Repair", author: { name: "Contributor", email: "contributor@example.com" } },
-      ],
-      previewBody: `Repair\n\nCo-authored-by: Claude <noreply@anthropic.com>\n  indented note\n\n---------\n\n${contributorCredit}\n`,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(
-      `Repair\n\n  indented note\n\n---------\n\n${contributorCredit}\n`,
-    );
   });
 
   it("refuses queue admission when a human source trailer is missing from the preview", () => {
@@ -982,12 +902,11 @@ describePosix("native squash attribution", () => {
       {
         encoding: "utf8",
         input: JSON.stringify({
-          preview: "Repair\n\nCo-authored-by: Contributor <contributor@example.com>\n",
+          preview: `Repair\n\n${contributorTrailer}\n`,
           source: "Co-authored-by: Pair Partner <pair@example.com>\n",
           authors: [
             {
-              name: "Contributor",
-              email: "contributor@example.com",
+              ...contributor,
               user: { login: "contributor", type: "User" },
               changesTree: true,
             },
@@ -997,49 +916,8 @@ describePosix("native squash attribution", () => {
         }),
       },
     );
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
+    expect(result).toMatchObject({ status: 1, stdout: "" });
     expect(result.stderr).toContain("Cannot queue");
-  });
-
-  it("keeps queue admission without a body override or source trailers", () => {
-    const result = prepareBody({ sourceMessages: ["Repair"], previewQueue: true });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBeNull();
-  });
-
-  it("rejects queue admission when preview credit requires removal", () => {
-    const previewCredit = "Co-authored-by: Refresh Author <refresh@example.com>";
-    const result = prepareBody({
-      sourceMessages: ["Repair"],
-      refreshMergeAuthor: { name: "Refresh Author", email: "refresh@example.com" },
-      previewBody: `Repair summary\n\n${previewCredit}`,
-      previewQueue: true,
-    });
-    expect(result.status).toBe(1);
-    expect(result.mergeBody).toBeNull();
-    expect(result.stderr).toContain("Cannot queue");
-  });
-
-  it("replaces obsolete closing prose while preserving operator, server and source credit", () => {
-    const source = "Co-authored-by: Source <source@example.com>";
-    const server = "Co-authored-by: Server <server@example.com>";
-    const operator = "Co-authored-by: Operator <operator@example.com>";
-    const result = prepareBody({
-      sourceCommits: [
-        {
-          message: `Repair\n\n${source}`,
-          author: { name: "Server", email: "server@example.com" },
-        },
-      ],
-      previewBody: `Obsolete complete fix.\n\nFixes #42\n\n${server}`,
-      overrideBody: `Partial repair. Related: #42.\r\n\r\n${operator}\r\n\r\n`,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(
-      `Partial repair. Related: #42.\r\n\r\n${operator}\n${server}\n${source}\r\n\r\n`,
-    );
-    expect(result.mergeBody).not.toContain("Fixes #42");
   });
 
   it.each([
@@ -1060,12 +938,7 @@ describePosix("native squash attribution", () => {
   it("preserves only server credit for an empty explicit body and deduplicates supplied credit", () => {
     const credit = "Co-authored-by: Server <server@example.com>";
     const result = prepareBody({
-      sourceCommits: [
-        {
-          message: "Repair",
-          author: { name: "Server", email: "server@example.com" },
-        },
-      ],
+      sourceCommits: [source("Repair", person("Server"))],
       previewBody: `Fixes: #42\n${credit}`,
       overrideBody: "",
     });
@@ -1082,17 +955,6 @@ describePosix("native squash attribution", () => {
     expect(duplicate.trailerCommandCalled).toBe(false);
   });
 
-  it("appends credit without inventing a final newline in an explicit body", () => {
-    const credit = "Co-authored-by: Source <source@example.com>";
-    const result = prepareBody({
-      sourceMessages: [`Repair\n\n${credit}`],
-      previewBody: "Old prose",
-      overrideBody: "Corrected prose",
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.mergeBody).toBe(`Corrected prose\n\n${credit}`);
-  });
-
   it.each(["missing", "directory", "symlink", "fifo", "nul", "invalid-utf8"])(
     "rejects an invalid explicit body boundary: %s",
     (kind) => {
@@ -1102,7 +964,9 @@ describePosix("native squash attribution", () => {
         mkdirSync(input);
       }
       if (kind === "symlink") {
-        symlinkSync(join(root, "target"), input);
+        const target = join(root, "target");
+        writeFileSync(target, "Valid merge body\n");
+        symlinkSync(target, input);
       }
       if (kind === "fifo") {
         expect(spawnSync("mkfifo", [input]).status).toBe(0);
@@ -1118,31 +982,10 @@ describePosix("native squash attribution", () => {
         [join(process.cwd(), "scripts/pr-lib/merge-body.mjs"), "read", input],
         { encoding: "utf8", timeout: 5000 },
       );
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stdout).toBe("");
+      expect(result, result.stderr).toMatchObject({ status: 1, stdout: "" });
+      expect(result.stderr).toContain("Cannot prepare merge body:");
     },
   );
-
-  it("preserves canonical GitHub trailers despite configured separators", () => {
-    const credit = "Co-authored-by: Contributor <contributor@example.com>";
-    const result = prepareBody({ sourceMessages: [`Repair\n\n${credit}`], trailerSeparators: "%" });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.mergeBody).toBe(
-      `Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n${credit}\n`,
-    );
-  });
-
-  it("does not execute configured trailer commands or add unrelated metadata", () => {
-    const credit = "Co-authored-by: Contributor <contributor@example.com>";
-    const result = prepareBody({
-      sourceMessages: [`Repair\n\n${credit}`],
-      configuredTrailer: true,
-    });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.trailerCommandCalled).toBe(false);
-    expect(result.mergeBody).toContain(credit);
-    expect(result.mergeBody).not.toContain("Unrequested-Metadata");
-  });
 
   it("preserves source coauthors with the server authors in one parsed trailer block", () => {
     const credit = "Co-authored-by: 唐梓夷0668001293 <tang.ziyi@example.com>";
@@ -1161,21 +1004,12 @@ describePosix("native squash attribution", () => {
     });
     expect(parsed.status, parsed.stderr).toBe(0);
     expect(parsed.stdout.trim().split("\n")).toEqual([
-      "Co-authored-by: Maintainer <maintainer@example.com>",
+      maintainerTrailer,
       credit,
       "Co-authored-by: Another Contributor <another@example.com>",
     ]);
     expect(result.mergeBody).not.toContain("Main Only");
     expect(result.mergeBody).not.toContain("Unprepared");
-  });
-
-  it("extracts only UTF-8 credit from signed commits despite configured log presentation", () => {
-    const credit = "Co-authored-by: Élodie <elodie@example.com>";
-    const result = prepareBody({ sourceMessages: [`Repair\n\n${credit}`], signedSource: true });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.mergeBody).toBe(
-      `Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n${credit}\n`,
-    );
   });
 
   it.each([
@@ -1216,15 +1050,36 @@ describePosix("native squash attribution", () => {
     { authorReadFault: "wrong-head" },
     { authorReadFault: "multiple" },
     { bodyWriteError: true },
+    { restPreview: true, squashTitle: "UNKNOWN" },
+    { restPreview: true, squashMessage: "UNKNOWN" },
   ])("refuses before merge when attribution evidence is unavailable: %j", (failure) => {
     for (const overrideBody of [undefined, "Explicit corrected prose"]) {
       const result = prepareBody({
-        sourceMessages: ["Repair\n\nCo-authored-by: Contributor <contributor@example.com>"],
+        sourceMessages: [`Repair\n\n${contributorTrailer}`],
         overrideBody,
         ...failure,
       });
-      expect(result.status).toBe(1);
-      expect(result.mergeBody).toBeNull();
+      expect(result, result.stderr).toMatchObject({ status: 1, mergeBody: null });
+      const injectedFailure = failure.sourceReadError
+        ? "source-read"
+        : failure.authorReadError
+          ? "author-read"
+          : failure.authorReadFault
+            ? `author-${failure.authorReadFault}`
+            : failure.previewError
+              ? "preview-read"
+              : failure.bodyWriteError
+                ? "body-write"
+                : undefined;
+      if (injectedFailure) {
+        expect(result.injectedFailures).toContain(injectedFailure);
+      } else if (failure.previewQueue) {
+        expect(result.stderr).toContain("body overrides require a non-queue PR");
+      } else if (failure.restPreview) {
+        expect(result.stderr).toContain("Cannot prepare merge body:");
+      } else {
+        expect(result.stderr).toContain("require a current-head preview");
+      }
     }
   });
 });

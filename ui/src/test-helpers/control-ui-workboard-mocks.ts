@@ -1,5 +1,5 @@
 import type { WorkboardCard } from "@openclaw/workboard-contract";
-import type { ControlUiMockGateway } from "./control-ui-e2e.ts";
+import type { ControlUiMockGateway, ControlUiMockRequestHandler } from "./control-ui-e2e.ts";
 import type { buildWorkboardMocks } from "./control-ui-workboard-fixtures.ts";
 
 // The launcher serializes this installer into the browser; keep it free of module captures.
@@ -43,46 +43,14 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
     return undefined;
   }
   const workboardCards = new Map<string, MockCard>(seed.cards.map((card) => [card.id, card]));
-  const tasks = new Map(seed.tasks.map((task) => [task.id, task]));
-  gateway.setRequestHandler("tasks.list", ({ params, respond }) => {
-    const input = params as { sessionKey?: string; status?: string | string[] };
-    respond({
-      tasks: [...tasks.values()].filter(
-        (task) =>
-          (!input.sessionKey || task.sessionKey === input.sessionKey) &&
-          (!input.status ||
-            (Array.isArray(input.status)
-              ? input.status.includes(task.status)
-              : input.status === task.status)),
-      ),
-    });
-  });
-  gateway.setRequestHandler("tasks.get", ({ params, respond }) => {
-    const task = tasks.get((params as { taskId: string }).taskId);
-    respond(
-      task ? { task } : { __mockError: { code: "INVALID_REQUEST", message: "Task not found" } },
-    );
-  });
-  gateway.setRequestHandler("tasks.cancel", ({ params, respond, emit }) => {
-    const task = tasks.get((params as { taskId: string }).taskId);
-    if (!task) {
-      respond({ found: false, cancelled: false, reason: "Mock task not found." });
-      return;
-    }
-    const cancelled = task.status === "queued" || task.status === "running";
-    if (cancelled) {
-      task.status = "cancelled";
-      task.updatedAt = Date.now();
-      task.terminalSummary = "Stopped by the operator in this synthetic fixture.";
-    }
-    respond({ found: true, task, cancelled });
-    if (cancelled) {
-      emit("task", { action: "upserted", task });
-      emit("plugin.workboard.changed", { epoch: "workboard-mock", revision: ++revision });
-    }
-  });
   const statuses = seed.methodResponses["workboard.cards.list"].statuses;
   let revision = Date.now();
+  type Request = Parameters<ControlUiMockRequestHandler>[0];
+  const publishCard = (card: MockCard, respond: Request["respond"], emit: Request["emit"]) => {
+    workboardCards.set(card.id, card);
+    respond({ card });
+    emit("plugin.workboard.changed", { epoch: "workboard-mock", revision });
+  };
   const boardSummaries = () =>
     [...workboardBoards.values()].map((board) => {
       const cards = [...workboardCards.values()].filter(
@@ -212,9 +180,7 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
       if (!workboardBoards.has(boardId)) {
         workboardBoards.set(boardId, { id: boardId, updatedAt: now });
       }
-      workboardCards.set(card.id, card);
-      respond({ card });
-      emit("plugin.workboard.changed", { epoch: "workboard-mock", revision });
+      publishCard(card, respond, emit);
     });
   }
   gateway.setRequestHandler("workboard.cards.comment", ({ params, respond, emit }) => {
@@ -248,9 +214,7 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
         { id: `mock-comment-event-${revision}`, kind: "comment_added", at: now },
       ].slice(-50),
     };
-    workboardCards.set(card.id, updated);
-    respond({ card: updated });
-    emit("plugin.workboard.changed", { epoch: "workboard-mock", revision });
+    publishCard(updated, respond, emit);
   });
   gateway.setRequestHandler("workboard.cards.archive", ({ params, respond, emit }) => {
     const input = params as { id: string; expectedUpdatedAt?: number; archived?: boolean };
@@ -275,9 +239,7 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
         { id: `mock-archive-${++revision}`, kind: archived ? "archived" : "unarchived", at: now },
       ].slice(-50),
     };
-    workboardCards.set(card.id, updated);
-    respond({ card: updated });
-    emit("plugin.workboard.changed", { epoch: "workboard-mock", revision });
+    publishCard(updated, respond, emit);
   });
   gateway.setRequestHandler("workboard.cards.delete", ({ params, respond, emit }) => {
     const input = params as { id: string; expectedUpdatedAt?: number };
@@ -345,9 +307,7 @@ export function installWorkboardBoardMock(seed: ReturnType<typeof buildWorkboard
         },
       ].slice(-50),
     };
-    workboardCards.set(card.id, moved);
-    respond({ card: moved });
-    emit("plugin.workboard.changed", { epoch: "workboard-mock", revision });
+    publishCard(moved, respond, emit);
   });
   gateway.setRequestHandler("workboard.boards.upsert", ({ params, respond, emit }) => {
     const input = params as Record<string, unknown>;

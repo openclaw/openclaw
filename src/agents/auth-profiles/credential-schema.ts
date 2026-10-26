@@ -6,8 +6,13 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 export const oauthCredentialMetadataSchema = z.strictObject({
   idToken: z.string().optional(),
   clientId: z.string().optional(),
+  /** Scope vocabulary approved for this OAuth registration's authorization requests. */
+  authorizationScope: z.string().optional(),
+  /** Actual scopes returned by the token endpoint, independent of the requested permissions. */
+  grantedScope: z.string().optional(),
   enterpriseUrl: z.string().optional(),
   projectId: z.string().optional(),
+  /** Provider-owned identity; issuer/clientId registrations bind their verified subject here. */
   accountId: z.string().optional(),
   chatgptPlanType: z.string().optional(),
   /** Non-secret subscription plan captured from external CLI logins. */
@@ -31,6 +36,7 @@ const commonCredentialFields = {
   provider: z.string().min(1),
   email: z.string().optional(),
   displayName: z.string().optional(),
+  /** Explicit copy policy: API keys and static tokens copy by default; OAuth does not. */
   copyToAgents: z.boolean().optional(),
 };
 
@@ -40,12 +46,14 @@ export const inlineAuthProfileCredentialSchema = z.discriminatedUnion("type", [
     ...commonCredentialFields,
     type: z.literal("api_key"),
     key: normalizedSecretSchema,
+    /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
     metadata: z.record(z.string(), z.string()).optional(),
   }),
   z.strictObject({
     ...commonCredentialFields,
     type: z.literal("token"),
     token: normalizedSecretSchema,
+    /** Optional expiry timestamp (ms since epoch). */
     expires: z.number().positive().optional(),
   }),
   z.strictObject({

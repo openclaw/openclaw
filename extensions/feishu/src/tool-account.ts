@@ -3,7 +3,6 @@ import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-resoluti
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
-  listEnabledFeishuAccounts,
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
@@ -20,12 +19,14 @@ type FeishuToolRequirement = {
   label: string;
 };
 
-function resolveImplicitToolAccountId(params: {
+type FeishuToolAccountParams = {
   cfg: OpenClawConfig;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
   requiredTool: FeishuToolRequirement;
-}): string {
+};
+
+function resolveImplicitToolAccountId(params: FeishuToolAccountParams): string {
   const explicitAccountId = normalizeOptionalString(params.executeParams?.accountId);
   if (explicitAccountId) {
     const normalizedAccountId = normalizeOptionalAccountId(explicitAccountId);
@@ -45,29 +46,35 @@ function resolveImplicitToolAccountId(params: {
     if (!listedAccountId) {
       throw new Error(`Unknown Feishu account "${explicitAccountId}"`);
     }
+    // An explicit alias must stay bound to the exact configured key it
+    // matched; resolving with the normalized alias alone can pick up the root
+    // account's credentials and tool policy for punctuation-bearing keys.
     const account = resolveFeishuAccount({
       cfg: params.cfg,
-      accountId: normalizedAccountId,
+      accountId: listedAccountId,
     });
     if (!account.enabled) {
       throw new Error(`Feishu account "${listedAccountId}" is disabled`);
     }
-    return normalizedAccountId;
+    return listedAccountId;
   }
 
   const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
-  const hasContextualAccount =
-    contextualAccountId !== undefined &&
-    listFeishuAccountIds(params.cfg).some(
-      (accountId) => normalizeOptionalAccountId(accountId) === contextualAccountId,
-    );
-  if (hasContextualAccount) {
+  const contextualAccountKey = contextualAccountId
+    ? listFeishuAccountIds(params.cfg).find(
+        (accountId) => normalizeOptionalAccountId(accountId) === contextualAccountId,
+      )
+    : undefined;
+  if (contextualAccountKey !== undefined) {
     const contextualAccount = resolveFeishuAccount({
       cfg: params.cfg,
-      accountId: contextualAccountId,
+      accountId: contextualAccountKey,
     });
     if (contextualAccount.enabled) {
-      return contextualAccountId;
+      // Resolve with the exact configured key; a normalized alias can lose
+      // punctuation and silently inherit the root account's credentials
+      // and tool policy.
+      return contextualAccountKey;
     }
   }
 
@@ -96,12 +103,7 @@ function resolveImplicitToolAccountId(params: {
   throw new Error(`No usable Feishu account has ${params.requiredTool.label} tools enabled`);
 }
 
-export function resolveFeishuToolAccount(params: {
-  cfg: OpenClawConfig;
-  executeParams?: AccountAwareParams;
-  defaultAccountId?: string;
-  requiredTool: FeishuToolRequirement;
-}): ResolvedFeishuAccount {
+export function resolveFeishuToolAccount(params: FeishuToolAccountParams): ResolvedFeishuAccount {
   const account = resolveFeishuRuntimeAccount({
     cfg: params.cfg,
     accountId: resolveImplicitToolAccountId(params),
@@ -114,37 +116,6 @@ export function resolveFeishuToolAccount(params: {
   return account;
 }
 
-export function createFeishuToolClient(params: {
-  cfg: OpenClawConfig;
-  executeParams?: AccountAwareParams;
-  defaultAccountId?: string;
-  requiredTool: FeishuToolRequirement;
-}): Lark.Client {
+export function createFeishuToolClient(params: FeishuToolAccountParams): Lark.Client {
   return createFeishuClient(resolveFeishuToolAccount(params));
-}
-
-export function resolveAnyEnabledFeishuToolsConfig(
-  config: OpenClawConfig,
-): Required<FeishuToolsConfig> {
-  const accounts = listEnabledFeishuAccounts(config);
-  const merged: Required<FeishuToolsConfig> = {
-    doc: false,
-    chat: false,
-    wiki: false,
-    drive: false,
-    perm: false,
-    scopes: false,
-    bitable: false,
-  };
-  for (const account of accounts) {
-    const cfg = resolveToolsConfig(account.config.tools);
-    merged.doc = merged.doc || cfg.doc;
-    merged.chat = merged.chat || cfg.chat;
-    merged.wiki = merged.wiki || cfg.wiki;
-    merged.drive = merged.drive || cfg.drive;
-    merged.perm = merged.perm || cfg.perm;
-    merged.scopes = merged.scopes || cfg.scopes;
-    merged.bitable = merged.bitable || cfg.bitable;
-  }
-  return merged;
 }

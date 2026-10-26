@@ -1,20 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ChannelAccountSnapshot } from "../plugins/types.core.js";
 import {
   applyChannelAccountState,
   projectChannelAccountDisplayState,
   resolveChannelAccountLinked,
   resolveChannelAccountState,
 } from "./account-state.js";
-
-// The projection is module-internal; exercise it through the public merge helper
-// so the test does not force a wider export surface than production needs.
-function projectChannelAccountState(state: Parameters<typeof applyChannelAccountState>[1]) {
-  const snapshot: ChannelAccountSnapshot = { accountId: "default" };
-  applyChannelAccountState(snapshot, state);
-  const { accountId: _accountId, ...projected } = snapshot;
-  return projected;
-}
 
 const baseInput = {
   enabled: true,
@@ -25,58 +15,61 @@ const baseInput = {
   unconfiguredReason: "unconfigured reason",
   unlinkedReason: "unlinked reason",
 } as const;
+const stoppedState = { configured: true, running: false, lastError: null };
 
 describe("resolveChannelAccountState", () => {
   it.each([
     [
       "disabled wins over later states",
       { enabled: false, configured: false, linked: false, runtime: { running: true } },
-      {
-        kind: "disabled",
-        configured: false,
-        linked: false,
-        reason: "disabled reason",
-        failure: null,
-      },
+      { configured: false, linked: false, stateReason: "disabled reason" },
     ],
     [
       "unconfigured wins over linkage and runtime",
       { configured: false, linked: false, runtime: { running: true } },
-      { kind: "unconfigured", reason: "unconfigured reason", failure: null },
+      { configured: false, stateReason: "unconfigured reason" },
     ],
     [
       "explicitly unlinked wins over runtime",
       { linked: false, runtime: { running: true } },
-      { kind: "unlinked", reason: "unlinked reason", failure: null },
+      { linked: false, stateReason: "unlinked reason" },
     ],
     [
       "running owns linkage, connectivity, and failure",
       { runtime: { running: true, connected: true, lastError: "not linked" } },
-      { kind: "running", linked: true, connected: true, failure: "not linked" },
+      { linked: true, running: true, connected: true, lastError: "not linked" },
     ],
     [
+      "running preserves explicit disconnected status",
+      { runtime: { running: true, connected: false } },
+      { linked: true, running: true, connected: false },
+    ],
+    [
+      // Manufacturing connected:false restarts socketless channels every cooldown window.
       "running keeps connectivity absent when the transport publishes none",
       { runtime: { running: true } },
-      { kind: "running", linked: true, connected: undefined, failure: null },
+      { linked: true, running: true },
     ],
     [
       "stopped owns linkage, connectivity, and failure",
-      {},
-      { kind: "stopped", linked: true, connected: undefined, failure: null },
+      { runtime: { connected: true, lastError: "transport failed" } },
+      { linked: true, connected: true, lastError: "transport failed" },
     ],
   ] as const)("%s", (_name, input, expected) => {
-    expect(resolveChannelAccountState({ ...baseInput, ...input })).toEqual(expected);
+    expect(resolveChannelAccountState({ ...baseInput, ...input }).snapshot).toEqual({
+      ...stoppedState,
+      ...expected,
+    });
   });
 
   it.each([false, true])("keeps unknown linkage configured (running=%s)", (running) => {
-    const state = resolveChannelAccountState({
+    const { snapshot } = resolveChannelAccountState({
       ...baseInput,
       linked: undefined,
       runtime: { running },
     });
-    expect(state.kind).toBe(running ? "running" : "stopped");
-    expect(projectChannelAccountState(state)).toMatchObject({ configured: true });
-    expect(projectChannelAccountState(state)).not.toHaveProperty("linked");
+    expect(snapshot).toMatchObject({ configured: true, running });
+    expect(snapshot).not.toHaveProperty("linked");
   });
 
   it.each([
@@ -87,59 +80,6 @@ describe("resolveChannelAccountState", () => {
   ] as const)("maps link state %s", (state, expected) => {
     expect(resolveChannelAccountLinked(state, true)).toBe(expected);
   });
-});
-
-describe("projectChannelAccountState", () => {
-  it.each([
-    [
-      {
-        kind: "disabled",
-        configured: false,
-        linked: false,
-        reason: "disabled",
-        failure: null,
-      },
-      {
-        configured: false,
-        linked: false,
-        running: false,
-        stateReason: "disabled",
-        lastError: null,
-      },
-    ],
-    [
-      { kind: "unconfigured", reason: "not configured", failure: null },
-      { configured: false, running: false, stateReason: "not configured", lastError: null },
-    ],
-    [
-      { kind: "unlinked", reason: "not linked", failure: null },
-      {
-        configured: true,
-        linked: false,
-        running: false,
-        stateReason: "not linked",
-        lastError: null,
-      },
-    ],
-    [
-      { kind: "running", linked: true, connected: false, failure: null },
-      { configured: true, linked: true, running: true, connected: false, lastError: null },
-    ],
-    [
-      // Socketless channels never publish connectivity; a manufactured
-      // `connected: false` here reads as a transport disconnect and makes the
-      // gateway health monitor restart them every cooldown window.
-      { kind: "running", linked: true, failure: null },
-      { configured: true, linked: true, running: true, lastError: null },
-    ],
-    [
-      { kind: "stopped", connected: true, failure: "transport failed" },
-      { configured: true, running: false, connected: true, lastError: "transport failed" },
-    ],
-  ] as const)("projects %s without stale fields", (state, expected) => {
-    expect(projectChannelAccountState(state)).toEqual(expected);
-  });
-
   it("replaces owner fields while preserving unrelated snapshot data", () => {
     const state = resolveChannelAccountState({ ...baseInput, linked: undefined });
     const snapshot = {
@@ -153,13 +93,7 @@ describe("projectChannelAccountState", () => {
       mode: "polling",
     };
     applyChannelAccountState(snapshot, state);
-    expect(snapshot).toEqual({
-      accountId: "default",
-      configured: true,
-      running: false,
-      lastError: null,
-      mode: "polling",
-    });
+    expect(snapshot).toEqual({ accountId: "default", ...stoppedState, mode: "polling" });
     expect(projectChannelAccountDisplayState(state)).toBe("configured");
     expect(projectChannelAccountDisplayState(state, "enabled")).toBe("enabled");
   });

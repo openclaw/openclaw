@@ -120,7 +120,8 @@ a subsequent turn is admitted; this is not a timer that writes memory at the
 daily boundary while the session is idle.
 
 The artifact is `<workspace>/memory/YYYY-MM-DD-HHMM.md` by default, with a
-numeric suffix if that filename already exists. Dates use
+numeric suffix if that filename already exists. Overlapping resets sharing a
+workspace keep separate files and matching session provenance. Dates use
 `agents.defaults.userTimezone`, then process `TZ` when no user timezone is set,
 and the host timezone as fallback. The file records session identity and the
 command source or automatic reset reason.
@@ -133,7 +134,8 @@ command source or automatic reset reason.
 
 The hook captures the departing conversation before a reset closes its active
 window, then writes the snapshot in the background. Capture is bounded to
-4,096 scanned messages and 8 MiB.
+4,096 scanned messages and 8 MiB. Incognito sessions do not create memory
+artifacts, including on manual or automatic reset.
 Manual resets do not await the file write or optional slug-model call; automatic
 reset dispatch also runs independently of the successor turn. Wait for
 `Session context saved to ...` in logs before expecting the file.

@@ -1,25 +1,35 @@
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
-// Devices page view contracts.
 import type { PresenceEntry } from "../../api/types.ts";
-import type { DevicePairingList } from "../../lib/nodes/index.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import type {
-  ExecApprovalsFile,
-  ExecApprovalsSnapshot,
+  DevicesPageDataState,
   InventoryRemovalRequest,
 } from "../../lib/nodes/page-operations.ts";
+import type { DevicePolicyRead } from "./devices-policy-reads.ts";
 
-export type DevicesProps = {
+export type DevicesRouteData = {
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
+  devices: DevicesPageDataState;
+};
+
+export type DevicesProps = Omit<
+  DevicesPageDataState,
+  "client" | "requestGeneration" | "nodesLoading" | "nodesQueuedRefresh" | "devicesQueuedRefresh"
+> & {
   loading: boolean;
-  nodes: Array<Record<string, unknown>>;
+  configRead: DevicePolicyRead;
+  execApprovalsRead: DevicePolicyRead;
+  inventoryRead: () => void;
+  inventoryScope: object;
+  inventorySaving?: boolean;
+  onReloadInventory: () => void;
   presence: PresenceEntry[];
   gatewayVersion: string | null;
   basePath: string;
   gatewaySystemInfo?: SystemInfoResult | null;
   desktopEnvironments?: EnvironmentSummary[];
-  lastError: string | null;
-  devicesLoading: boolean;
-  devicesError: string | null;
-  devicesList: DevicePairingList | null;
   canPairDevice: boolean;
   canManagePairing: boolean;
   canAdmin: boolean;
@@ -28,12 +38,6 @@ export type DevicesProps = {
   configSaving: boolean;
   configDirty: boolean;
   configFormMode: "form" | "raw";
-  execApprovalsLoading: boolean;
-  execApprovalsSaving: boolean;
-  execApprovalsDirty: boolean;
-  execApprovalsSnapshot: ExecApprovalsSnapshot | null;
-  execApprovalsForm: ExecApprovalsFile | null;
-  execApprovalsSelectedAgent: string | null;
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
   onDevicePairSetupOpen: () => void;

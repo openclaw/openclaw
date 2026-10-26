@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { generateConversationLabel } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 
 const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 60_000;
 const MAX_THREAD_TITLE_SOURCE_CHARS = 600;
@@ -25,19 +25,30 @@ export async function generateThreadTitle(params: {
   }
 
   try {
-    const userMessage = buildThreadTitleCompletionUserMessage({
-      sourceText,
-      channelName: params.channelName,
-      channelDescription: params.channelDescription,
-    });
-    const timeoutMs = resolveThreadTitleTimeoutMs(params.timeoutMs);
+    const { channelName: rawChannelName, channelDescription: rawChannelDescription } = params;
+    const titleSourceText = truncateThreadTitleText(sourceText, MAX_THREAD_TITLE_SOURCE_CHARS);
+    const channelName = normalizeTitleContextField(
+      rawChannelName,
+      MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
+    );
+    const channelDescription = normalizeTitleContextField(
+      rawChannelDescription,
+      MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS,
+    );
+    const userMessage = [
+      channelName ? `Channel: ${channelName}` : undefined,
+      channelDescription ? `Channel description: ${channelDescription}` : undefined,
+      `Message:\n${titleSourceText}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     const generated = await generateConversationLabel({
       cfg: params.cfg,
       agentId: params.agentId,
       userMessage,
       prompt: DISCORD_THREAD_TITLE_SYSTEM_PROMPT,
       ...(params.modelRef ? { modelRef: params.modelRef } : {}),
-      timeoutMs,
+      timeoutMs: Math.max(100, Math.floor(params.timeoutMs ?? DEFAULT_THREAD_TITLE_TIMEOUT_MS)),
       maxLength: MAX_THREAD_TITLE_SOURCE_CHARS,
     });
     return generated ? normalizeGeneratedThreadTitle(generated) : null;
@@ -47,57 +58,16 @@ export async function generateThreadTitle(params: {
   }
 }
 
-function buildThreadTitleCompletionUserMessage(params: {
-  sourceText: string;
-  channelName?: string;
-  channelDescription?: string;
-}): string {
-  const sourceText = truncateThreadTitleSourceText(params.sourceText);
-  const channelName = normalizeTitleContextField(
-    params.channelName,
-    MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
-  );
-  const channelDescription = normalizeTitleContextField(
-    params.channelDescription,
-    MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS,
-  );
-  const messageLines: string[] = [];
-  if (channelName) {
-    messageLines.push(`Channel: ${channelName}`);
-  }
-  if (channelDescription) {
-    messageLines.push(`Channel description: ${channelDescription}`);
-  }
-  messageLines.push(`Message:\n${sourceText}`);
-  return messageLines.join("\n\n");
-}
-
-function truncateThreadTitleSourceText(sourceText: string): string {
-  if (sourceText.length <= MAX_THREAD_TITLE_SOURCE_CHARS) {
-    return sourceText;
-  }
-  return `${truncateUtf16Safe(sourceText, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
-}
-
-function resolveThreadTitleTimeoutMs(timeoutMs: number | undefined): number {
-  return Math.max(100, Math.floor(timeoutMs ?? DEFAULT_THREAD_TITLE_TIMEOUT_MS));
+function truncateThreadTitleText(text: string, maxChars: number): string {
+  return truncateWithMarker(text, maxChars, { marker: "...", reserve: 0, trimEnd: false });
 }
 
 function normalizeGeneratedThreadTitle(raw: string): string {
-  const lines = raw.replace(/\r/g, "").split("\n");
-  let firstLine = "";
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (!firstLine && trimmed.startsWith("```")) {
-      continue;
-    }
-    firstLine = trimmed;
-    break;
-  }
-  return stripThreadTitleWrappers(firstLine);
+  const firstLine = raw
+    .replace(/\r/g, "")
+    .split("\n")
+    .find((line) => line.trim() && !line.trim().startsWith("```"));
+  return stripThreadTitleWrappers(firstLine ?? "");
 }
 
 function stripThreadTitleWrappers(raw: string): string {
@@ -106,34 +76,20 @@ function stripThreadTitleWrappers(raw: string): string {
   while (current && current !== previous) {
     previous = current;
     current = current.replace(/^["'`]+|["'`]+$/g, "").trim();
-    // Unwrap only a title that is a SINGLE wrapped span. The inner content
-    // must not contain the same marker, so a title with two separate spans
-    // (e.g. "*Plan* for *project*") is left intact instead of having its
-    // outer markers stripped and stray ones left mid-string. For two-char
-    // bold markers (`**`, `__`), a single nested emphasis marker is allowed
-    // inside (e.g. `**Release *plan***` -> `Release *plan*`), because bold
-    // legitimately wraps italic/underscore but never itself.
-    current = stripBalancedWrapper(current, "**");
-    current = stripBalancedWrapper(current, "__");
-    current = stripBalancedWrapper(current, "*");
-    current = stripBalancedWrapper(current, "_");
-    current = stripBalancedWrapper(current, "~~");
+    // Preserve separate spans ("*Plan* for *project*") while unwrapping nested emphasis.
+    for (const marker of ["**", "__", "*", "_", "~~"]) {
+      current = stripBalancedWrapper(current, marker);
+    }
   }
   return current;
 }
 
 function stripBalancedWrapper(text: string, marker: string): string {
-  if (text.length < marker.length * 2 + 1) {
-    return text;
-  }
-  if (!text.startsWith(marker) || !text.endsWith(marker)) {
+  if (text.length < marker.length * 2 + 1 || !text.startsWith(marker) || !text.endsWith(marker)) {
     return text;
   }
   const inner = text.slice(marker.length, text.length - marker.length);
-  if (!inner || inner.includes(marker)) {
-    return text;
-  }
-  return inner;
+  return inner.includes(marker) ? text : inner;
 }
 
 function normalizeTitleContextField(raw: string | undefined, maxChars: number): string | undefined {
@@ -141,9 +97,5 @@ function normalizeTitleContextField(raw: string | undefined, maxChars: number): 
   if (!value) {
     return undefined;
   }
-  const singleLine = value.replace(/\s+/g, " ");
-  if (singleLine.length <= maxChars) {
-    return singleLine;
-  }
-  return `${truncateUtf16Safe(singleLine, maxChars)}...`;
+  return truncateThreadTitleText(value.replace(/\s+/g, " "), maxChars);
 }

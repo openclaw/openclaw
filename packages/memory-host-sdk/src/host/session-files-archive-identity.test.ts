@@ -1,44 +1,82 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import * as config from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it } from "vitest";
 import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import * as agentDb from "../../../../src/state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
-import { listSessionTranscriptCorpusEntriesForAgent } from "./session-files.js";
+import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import { buildSessionEntry, listSessionTranscriptCorpusEntriesForAgent } from "./session-files.js";
 
 describe("session archive identity", () => {
+  it("classifies canonical archives after owner writes without caller-thread SQLite", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await config.captureRuntimeConfigAsyncReader()();
+      const sessionsDir = state.sessionsDir();
+      const sessionId = "classified-archive";
+      const sessionKey = "agent:main:chat:classified-archive";
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const archivePath = path.join(
+        sessionsDir,
+        `${sessionId}.jsonl.reset.2026-10-01T12-00-00.000Z`,
+      );
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        archivePath,
+        '{"type":"message","message":{"role":"assistant","content":"Retained archive text."}}',
+      );
+
+      for (const [spawnedBy, dreaming, cron] of [
+        [undefined, false, false],
+        ["agent:main:dreaming-narrative-run", true, false],
+        ["agent:main:cron:job-1:run:run-1", false, true],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey, storePath },
+          { sessionId, updatedAt: 1, spawnedBy },
+        );
+        const observed = observeHostDataSql();
+        try {
+          const entry = await buildSessionEntry(archivePath);
+          expect([
+            entry?.generatedByDreamingNarrative === true,
+            entry?.generatedByCronRun === true,
+            entry?.content,
+          ]).toEqual([dreaming, cron, dreaming || cron ? "" : "Assistant: Retained archive text."]);
+          expect(observed.queries).toEqual([]);
+        } finally {
+          observed.restore();
+        }
+      }
+    });
+  });
+
   it("keeps registered archives from a shared custom store", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = path.join(state.root, "custom", "shared.sqlite");
       const sessionId = `oversized-${"x".repeat(300)}`;
       const sessionKey = "agent:main:chat:archived-custom";
+      const identity = { agentId: "main", sessionId, sessionKey, storePath };
       await fs.mkdir(path.dirname(storePath), { recursive: true });
       await state.writeConfig({ session: { store: storePath } });
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 1 },
-      );
-      await appendTranscriptMessage(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        { message: { role: "user", content: "Retain custom-store archive identity." } },
-      );
+      config.clearRuntimeConfigSnapshot();
+      config.clearConfigCache();
+      await config.captureRuntimeConfigAsyncReader()();
+      await upsertSessionEntryCore(identity, { sessionId, updatedAt: 1 });
+      await appendTranscriptMessage(identity, {
+        message: { role: "user", content: "Retain custom-store archive identity." },
+      });
       const deleted = await deleteSessionEntryLifecycle({
-        agentId: "main",
+        ...identity,
         archiveTranscript: true,
-        storePath,
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
-      closeOpenClawAgentDatabasesForTest();
+      await agentDb.closeOpenClawAgentDatabasesAsync(state.root);
+      agentDb.closeOpenClawAgentDatabasesForTest();
 
       const archivedPath = deleted.archivedTranscripts[0]?.archivedPath;
       expect(archivedPath).toEqual(expect.any(String));
@@ -46,9 +84,7 @@ describe("session archive identity", () => {
         expect.objectContaining({
           artifactKind: "archive-artifact",
           sessionFile: archivedPath,
-          sessionId,
-          sessionKey,
-          storePath,
+          ...identity,
         }),
       );
     });

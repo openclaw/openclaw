@@ -1,10 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import {
   estimateCheckoutObjectBytes,
   estimateCheckoutTransitionBytes,
   measureDirectoryTreeBytes,
 } from "./capacity.runtime.js";
+import {
+  classifyWorktreeEvictions,
+  prepareWorktreeEvictionRepositories,
+  purgeWorktreeCheckout,
+  readWorktreeSourceDependencies,
+} from "./eviction.runtime.js";
+import { readWorktreeCleanupFingerprint } from "./gc-fingerprint.runtime.js";
 import { gitPathspecBatches, splitNullBuffer } from "./git-path-inventory.js";
 import type {
   GitWorktreeOperation,
@@ -15,11 +23,14 @@ import { requireGitBuffer, worktreePathExists } from "./git.js";
 import {
   hasSafeParentDirectories,
   hasUnsnapshotableProvisionedFiles,
-  lstatIfExists,
   normalizeProvisionedRelativePath,
   resolveGitPath,
 } from "./provisioned-file-inspection.js";
-import { inspectNestedRepository, snapshotWorktree } from "./snapshot-inventory.js";
+import {
+  inspectNestedRepository,
+  snapshotWorktree,
+  verifyExactStateSnapshot,
+} from "./snapshot-inventory.js";
 
 async function inspectProvisioning(
   sourceRoot: string,
@@ -62,7 +73,7 @@ async function inspectProvisioning(
     if (!normalized || !(await hasSafeParentDirectories(sourceRoot, normalized))) {
       continue;
     }
-    const stat = await lstatIfExists(resolveGitPath(sourceRoot, normalized));
+    const stat = await lstatIfExists(resolveGitPath(sourceRoot, normalized), "ENOENT");
     if (stat?.isFile()) {
       estimatedBytes += Math.max(4096, stat.size);
     }
@@ -116,6 +127,18 @@ export async function executeGitWorktreeOperation(
   operation: GitWorktreeOperation,
 ): Promise<GitWorktreeOperationResult> {
   switch (operation.type) {
+    case "worktree.eviction-source":
+      return readWorktreeSourceDependencies(operation.input);
+    case "worktree.eviction-repositories":
+      return await prepareWorktreeEvictionRepositories(operation.input.repoRoots);
+    case "worktree.eviction-classify":
+      return await classifyWorktreeEvictions(operation.input.records);
+    case "worktree.eviction-purge":
+      return await purgeWorktreeCheckout(operation.input.record, operation.input.live);
+    case "worktree.cleanup-fingerprint":
+      return await readWorktreeCleanupFingerprint(operation.input.checkoutPath);
+    case "worktree.snapshot-verify-exact":
+      return await verifyExactStateSnapshot(operation.input);
     case "worktree.snapshot":
       return await snapshotWorktree(operation.input);
     case "worktree.provisioning-inspection":
@@ -127,6 +150,7 @@ export async function executeGitWorktreeOperation(
         operation.input.repoRoot,
         operation.input.ref,
         operation.input.replacementRefBase,
+        operation.input.preparationKey,
       );
     case "worktree.checkout-transition-size":
       return await estimateCheckoutTransitionBytes(
@@ -136,7 +160,7 @@ export async function executeGitWorktreeOperation(
         operation.input.replacementRefBase,
       );
     case "worktree.directory-size":
-      return await measureDirectoryTreeBytes(operation.input.root, operation.input.excludeGit);
+      return await measureDirectoryTreeBytes(operation.input.root);
     default:
       throw new Error("Unknown managed-worktree Git operation");
   }

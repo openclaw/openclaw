@@ -1,60 +1,45 @@
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Bot } from "grammy";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS as TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
-import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
-  isIngressClaimOwnedByOtherLiveProcess as isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
-  resolveIngressRetryDelayMs,
-  shouldDeadLetterRetryableIngressEvent,
   closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests as createChannelIngressQueue,
   executeSqliteQuerySync,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { commitTelegramMessageDispatchReplay } from "./message-dispatch-dedupe.js";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { resolveRuntimeWorkerThreadExecArgv } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+import type * as TelegramProcessingOutcome from "./bot-processing-outcome.js";
+import type { TelegramBotOptions } from "./bot.types.js";
+import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import {
-  createTelegramRestartBackoffState,
-  resetTelegramRestartBackoffState,
-  resolveTelegramRestartDelayMs,
-} from "./polling-session-restart-policy.js";
-import {
-  adoptClaimOwner,
   directUpdate,
   failedUpdateIds,
-  failedUpdateReasons,
   forumUpdate,
   openTelegramSpoolTestKysely,
   topicUpdate,
   type TestTelegramUpdate,
 } from "./polling-session-spool.test-support.js";
-import { setTelegramRuntime } from "./runtime.js";
-import {
-  clearTelegramRuntimeForTest as clearTelegramRuntime,
-  resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests,
-} from "./runtime.test-support.js";
-import type { TelegramRuntime } from "./runtime.types.js";
-import { createTelegramUpdateOffsetPersistence } from "./update-offset-persistence.js";
-const resolveSpooledUpdateRetryDelayMs = (
-  update: { attempts?: number; lastAttemptAt?: number; lastError?: string; receivedAt: number },
-  now?: number,
-) => resolveIngressRetryDelayMs(update, undefined, now);
-const shouldDeadLetterRetryableSpooledUpdate = (
-  update: { receivedAt: number },
-  attempt: number,
-  now?: number,
-) => shouldDeadLetterRetryableIngressEvent(update, attempt, undefined, now);
-import type { TelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
+import { installPollingStallWatchdogHarness } from "./polling-session-watchdog.test-support.js";
+import { installTelegramIngressQueueRuntime } from "./runtime-state.test-support.js";
+import { getTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import {
   TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER,
+  type TelegramIngressWorkerCommand,
   type TelegramIngressWorkerMessage,
+  type TelegramIngressWorkerOptions,
 } from "./telegram-ingress-worker.js";
+import { createTestLifetime } from "./test-lifetime.test-support.js";
+import { createTelegramUpdateOffsetPersistence } from "./update-offset-persistence.js";
 
 async function waitForTelegramTestState<T>(assertion: () => T | Promise<T>): Promise<T> {
   return await vi.waitFor(assertion, { interval: 1 });
@@ -104,77 +89,14 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
-const telegramSpooledRetryDeadLetterMinAgeMs = 24 * 60 * 60 * 1000;
-const pollingSessionTesting = {
-  createTelegramRestartBackoffState,
-  ingressBacklogStallMs: 25 * 60_000,
-  resetTelegramRestartBackoffState,
-  resolveSpooledUpdateRetryDelayMs,
-  resolveTelegramRestartDelayMs,
-  shouldDeadLetterRetryableSpooledUpdate,
-  // Core drain refreshes every claimLeaseMs/3 (default 30m lease → 10m).
-  spooledClaimRefreshIntervalMs: 10 * 60 * 1000,
-  spooledRetryDeadLetterMinAgeMs: telegramSpooledRetryDeadLetterMinAgeMs,
-  spooledRetryMaxAttempts: TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
-};
-// Mirrors core INGRESS_CLAIM_LEASE_MS (ingress-claim-owner).
-const telegramSpooledUpdateClaimLeaseMs = 30 * 60 * 1000;
-let claimNextTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.test-support.js").claimNextTelegramSpooledUpdate;
+let createHeldTelegramReplay: typeof import("./telegram-ingress-spool.test-support.js").createHeldTelegramReplay;
 let listTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.test-support.js").listTelegramSpooledUpdateClaims;
 let listTelegramSpooledUpdates: typeof import("./telegram-ingress-spool.test-support.js").listTelegramSpooledUpdates;
-let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.test-support.js").recoverStaleTelegramSpooledUpdateClaims;
 let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.test-support.js").writeTelegramSpooledUpdate;
-let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
-type TelegramMessageProcessingResult =
-  import("./bot-processing-outcome.js").TelegramMessageProcessingResult;
+let createTelegramSpooledReplayDeferredParticipant: typeof TelegramProcessingOutcome.createTelegramSpooledReplayDeferredParticipant;
+let getTelegramSpooledReplayLifecycle: typeof TelegramProcessingOutcome.getTelegramSpooledReplayLifecycle;
 type TelegramSpooledReplayDeferredParticipant =
-  import("./bot-processing-outcome.js").TelegramSpooledReplayDeferredParticipant;
-async function claimSpooledUpdate(update: TelegramSpooledUpdate) {
-  return await claimNextTelegramSpooledUpdate({
-    spoolDir: path.dirname(update.path),
-    candidateUpdateIds: [update.updateId],
-  });
-}
-
-async function claimSpooledUpdateById(spoolDir: string, updateId: number) {
-  const update = expectDefined(
-    (await listTelegramSpooledUpdates({ spoolDir })).find((entry) => entry.updateId === updateId),
-    `spooled update ${updateId}`,
-  );
-  return expectDefined(await claimSpooledUpdate(update), `claimed update ${updateId}`);
-}
-
-async function createTelegramMessageDispatchReplayForgetError(): Promise<unknown> {
-  type ReplayGuard = Parameters<typeof commitTelegramMessageDispatchReplay>[0]["guard"];
-  type ReplayClaim = import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle;
-  const diskError = new Error("dedupe disk write failed");
-  const guard: ReplayGuard = {
-    claim: async () => ({ kind: "invalid" }),
-    forget: async (event) => !("keys" in event && event.keys?.[0] === "first"),
-    warmup: async () => 0,
-  };
-  const claims: ReplayClaim[] = ["first", "second"].map((key) => ({
-    keys: [key],
-    commit: async (options) => {
-      if (key === "second") {
-        options?.onDiskError?.(diskError);
-      }
-      return true;
-    },
-    release: () => undefined,
-  }));
-  try {
-    await commitTelegramMessageDispatchReplay({
-      guard,
-      claims,
-      requirePersistent: true,
-    });
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected Telegram dispatch rollback failure");
-}
-
+  TelegramProcessingOutcome.TelegramSpooledReplayDeferredParticipant;
 function collectDeferredParticipant(
   participants: TelegramSpooledReplayDeferredParticipant[],
   key: string,
@@ -199,18 +121,6 @@ type DrainPendingDeliveriesCall = {
     now: number,
   ) => { match: boolean; bypassBackoff: boolean };
 };
-type WorkerPollSuccessListener = (message: {
-  type: "poll-success";
-  offset: null;
-  count: number;
-  finishedAt: number;
-}) => void;
-type WorkerPollErrorListener = (message: {
-  type: "poll-error";
-  message: string;
-  errorCode?: number;
-  finishedAt: number;
-}) => void;
 type WorkerMessageListener = (message: TelegramIngressWorkerMessage) => void;
 type TestWorkerMessage =
   | TelegramIngressWorkerMessage
@@ -221,43 +131,26 @@ type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 type IsolatedIngressOptions = NonNullable<
   ConstructorParameters<typeof TelegramPollingSession>[0]["ingress"]
 >;
-
-const POLLING_TEST_WATCHDOG_INTERVAL_MS = 30_000;
-
-function installTelegramIngressQueueRuntime(
-  resolveStateDir: () => string,
-  queueOpenError?: Error,
-): void {
-  setTelegramRuntime({
-    state: {
-      resolveStateDir,
-      openChannelIngressQueue: (
-        options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-      ) => {
-        if (queueOpenError) {
-          throw queueOpenError;
-        }
-        return createChannelIngressQueue({ ...options, channelId: "telegram" });
-      },
-    },
-  } as TelegramRuntime);
+type SessionOptions = ConstructorParameters<typeof TelegramPollingSession>[0];
+const noop: AsyncVoidFn = async () => undefined;
+const mockNoop = () => vi.fn(noop);
+function makeWorker(
+  task: AsyncVoidFn = noop,
+  stop: AsyncVoidFn = noop,
+): {
+  task: Mock<AsyncVoidFn>;
+  stop: Mock<AsyncVoidFn>;
+  onMessage?: WorkerMessageListener;
+} {
+  return {
+    task: vi.fn(task),
+    stop: vi.fn(stop),
+  };
 }
-
-function mockObjectArg(
-  source: MockCallSource,
-  label: string,
-  callIndex = 0,
-  argIndex = 0,
-): Record<string, unknown> {
-  const call = source.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${callIndex} to exist`);
-  }
-  const value = call[argIndex];
-  if (!value || typeof value !== "object") {
-    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex} to be an object`);
-  }
-  return value as Record<string, unknown>;
+function makeReportingWorker(run: (emit: WorkerMessageListener) => Promise<void>, stop = noop) {
+  const worker = makeWorker(noop, stop);
+  worker.task.mockImplementation(() => run((message) => worker.onMessage?.(message)));
+  return worker;
 }
 
 function logContains(source: MockCallSource, text: string): boolean {
@@ -282,14 +175,6 @@ function statusPatches(source: MockCallSource): Record<string, unknown>[] {
   });
 }
 
-function expectPollingConnectedPatch(patch: Record<string, unknown> | undefined): void {
-  if (!patch) {
-    throw new Error("Expected polling connected patch");
-  }
-  expect(patch.connected).toBe(true);
-  expect(patch.mode).toBe("polling");
-}
-
 function makeIsolatedBot(params?: {
   deleteWebhook?: () => Promise<boolean>;
   handleUpdate?: (update: { update_id?: number }) => Promise<unknown>;
@@ -301,7 +186,7 @@ function makeIsolatedBot(params?: {
       deleteWebhook: vi.fn(params?.deleteWebhook ?? (async () => true)),
       config: { use: vi.fn() },
     },
-    init: vi.fn(params?.init ?? (async () => undefined)),
+    init: vi.fn(params?.init ?? noop),
     botInfo: {
       id: 123,
       is_bot: true,
@@ -309,106 +194,8 @@ function makeIsolatedBot(params?: {
       username: "openclaw_bot",
       has_topics_enabled: false,
     } as NonNullable<ConstructorParameters<typeof TelegramPollingSession>[0]["botInfo"]>,
-    handleUpdate: vi.fn(params?.handleUpdate ?? (async () => undefined)),
-    stop: vi.fn(params?.stop ?? (async () => undefined)),
-  };
-}
-
-function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] = [0, 0]) {
-  let monotonicNow = dateNowSequence[0] ?? 0;
-  let watchdog: (() => void) | undefined;
-  let resolveWatchdog: ((fn: () => void) => void) | undefined;
-  const watchdogReady = new Promise<() => void>((resolve) => {
-    resolveWatchdog = resolve;
-  });
-  const realSetTimeout = globalThis.setTimeout;
-  const realClearTimeout = globalThis.clearTimeout;
-  const watchdogs: Array<() => void> = [];
-  const watchdogWaiters: Array<{
-    count: number;
-    resolve: (fn: () => void) => void;
-    reject: (err: Error) => void;
-    timeout: ReturnType<typeof realSetTimeout>;
-  }> = [];
-  const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn, delay) => {
-    if (delay === POLLING_TEST_WATCHDOG_INTERVAL_MS) {
-      watchdog = fn as () => void;
-      watchdogs.push(watchdog);
-      resolveWatchdog?.(watchdog);
-      for (let index = watchdogWaiters.length - 1; index >= 0; index -= 1) {
-        const waiter = expectDefined(watchdogWaiters[index], `watchdog waiter ${index}`);
-        if (watchdogs.length < waiter.count) {
-          continue;
-        }
-        realClearTimeout(waiter.timeout);
-        watchdogWaiters.splice(index, 1);
-        waiter.resolve(
-          expectDefined(watchdogs[waiter.count - 1], `watchdog callback ${waiter.count}`),
-        );
-      }
-    }
-    return 1 as unknown as ReturnType<typeof setInterval>;
-  });
-  const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
-  const setTimeoutSpy = vi
-    .spyOn(globalThis, "setTimeout")
-    .mockImplementation((fn) => realSetTimeout(fn as () => void, 0));
-  const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation((timeoutId) => {
-    realClearTimeout(timeoutId);
-  });
-  const dateNowSpy = vi.spyOn(Date, "now");
-  const performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
-  for (const value of dateNowSequence) {
-    dateNowSpy.mockImplementationOnce(() => value);
-  }
-  dateNowSpy.mockImplementation(() => 0);
-
-  return {
-    async waitForWatchdog() {
-      if (watchdog) {
-        return watchdog;
-      }
-      return await new Promise<() => void>((resolve, reject) => {
-        const timeout = realSetTimeout(() => {
-          reject(new Error("Timed out waiting for polling watchdog interval registration"));
-        }, 5_000);
-        watchdogReady.then(
-          (fn) => {
-            realClearTimeout(timeout);
-            resolve(fn);
-          },
-          (error: unknown) => {
-            realClearTimeout(timeout);
-            reject(toLintErrorObject(error, "Non-Error rejection"));
-          },
-        );
-      });
-    },
-    async waitForWatchdogRegistration(count: number) {
-      const registered = watchdogs[count - 1];
-      if (registered) {
-        return registered;
-      }
-      return await new Promise<() => void>((resolve, reject) => {
-        const timeout = realSetTimeout(() => {
-          reject(new Error(`Timed out waiting for polling watchdog registration ${count}`));
-        }, 5_000);
-        watchdogWaiters.push({ count, resolve, reject, timeout });
-      });
-    },
-    setNow(now: number) {
-      monotonicNow = now;
-      dateNowSpy.mockReset();
-      dateNowSpy.mockImplementation(() => now);
-    },
-    restore() {
-      setIntervalSpy.mockRestore();
-      clearIntervalSpy.mockRestore();
-      setTimeoutSpy.mockRestore();
-      clearTimeoutSpy.mockRestore();
-      dateNowSpy.mockRestore();
-      performanceNowSpy.mockRestore();
-    },
+    handleUpdate: vi.fn(params?.handleUpdate ?? noop),
+    stop: vi.fn(params?.stop ?? noop),
   };
 }
 
@@ -430,40 +217,23 @@ function makeTelegramTransport() {
   return {
     fetch: globalThis.fetch,
     sourceFetch: globalThis.fetch,
-    close: vi.fn(async () => undefined),
+    close: mockNoop(),
   };
 }
 
-function createPollingSession(params: {
-  abortSignal: AbortSignal;
-  log?: (message: string) => void;
-  telegramTransport?: ReturnType<typeof makeTelegramTransport>;
-  createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
-  getCommittedUpdateId?: () => number | null;
-  persistUpdateId?: ConstructorParameters<typeof TelegramPollingSession>[0]["persistUpdateId"];
-  stallThresholdMs?: number;
-  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
-  ingress: ConstructorParameters<typeof TelegramPollingSession>[0]["ingress"];
-  botInfo?: ConstructorParameters<typeof TelegramPollingSession>[0]["botInfo"];
-}) {
+function createPollingSession(
+  params: Pick<SessionOptions, "abortSignal" | "ingress"> & Partial<SessionOptions>,
+) {
   return new TelegramPollingSession({
     token: "tok",
     config: {},
     accountId: "default",
     runtime: undefined,
     proxyFetch: undefined,
-    abortSignal: params.abortSignal,
+    ...params,
     getCommittedUpdateId: params.getCommittedUpdateId ?? (() => null),
     persistUpdateId: params.persistUpdateId ?? (async () => undefined),
     log: params.log ?? (() => undefined),
-    telegramTransport: params.telegramTransport,
-    stallThresholdMs: params.stallThresholdMs,
-    setStatus: params.setStatus,
-    ingress: params.ingress,
-    ...(params.botInfo ? { botInfo: params.botInfo } : {}),
-    ...(params.createTelegramTransport
-      ? { createTelegramTransport: params.createTelegramTransport }
-      : {}),
   });
 }
 
@@ -477,122 +247,141 @@ async function waitForAbortSignal(signal: AbortSignal): Promise<void> {
 }
 
 async function writeSpooledTestUpdates(
-  spoolDir: string,
+  stateDir: string,
   updates: readonly TestTelegramUpdate[],
-  options?: { now?: number },
 ): Promise<void> {
   for (const update of updates) {
-    await writeTelegramSpooledUpdate({ spoolDir, update, now: options?.now });
+    await writeTelegramSpooledUpdate({ stateDir, update });
   }
 }
 
-async function pendingUpdateIds(spoolDir: string, limit: number | "all" = 100): Promise<number[]> {
-  return (await listTelegramSpooledUpdates({ spoolDir, limit })).map((update) => update.updateId);
+async function pendingUpdateIds(stateDir: string, limit: number | "all" = 100): Promise<number[]> {
+  return (await listTelegramSpooledUpdates({ stateDir, limit })).map((update) => update.updateId);
 }
 
-async function claimedAtForUpdate(spoolDir: string, updateId: number): Promise<number> {
-  const claim = (await listTelegramSpooledUpdateClaims({ spoolDir })).find(
-    (entry) => entry.updateId === updateId,
-  );
-  if (!claim?.claim) {
-    throw new Error(`Expected claimed spooled update ${updateId}`);
-  }
-  return claim.claim.claimedAt;
+function storedUpdateIds(stateDir: string): number[] {
+  const { database, kysely } = openTelegramSpoolTestKysely(stateDir);
+  return executeSqliteQuerySync(
+    database.db,
+    kysely.selectFrom("channel_ingress_events").select("event_id").orderBy("event_id"),
+  ).rows.map((row) => Number(row.event_id));
 }
 
-function installSpooledClaimRefreshHarness(): {
-  restore: () => void;
-  triggerRefresh: () => void;
-} {
-  let refresh: (() => void) | undefined;
-  const realSetInterval = globalThis.setInterval.bind(globalThis);
-  const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation(((
-    handler: Parameters<typeof setInterval>[0],
-    timeout?: number,
-  ) => {
-    if (timeout === pollingSessionTesting.spooledClaimRefreshIntervalMs) {
-      refresh = () => {
-        if (typeof handler === "function") {
-          handler();
-        }
-      };
-      const timer = realSetInterval(() => undefined, 2_147_483_647);
-      timer.unref?.();
-      return timer;
-    }
-    return realSetInterval(handler, timeout);
-  }) as typeof setInterval);
-  return {
-    restore: () => setIntervalSpy.mockRestore(),
-    triggerRefresh: () => {
-      if (!refresh) {
-        throw new Error("Expected spooled claim refresh interval to be registered");
-      }
-      refresh();
-    },
-  };
-}
-
-async function withTempSpool<T>(fn: (spoolDir: string) => Promise<T>): Promise<T> {
-  const spoolDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+async function withTempSpool<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
   try {
-    return await fn(spoolDir);
+    return await fn(stateDir);
   } finally {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    await fs.rm(spoolDir, { recursive: true, force: true });
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
+}
+
+async function listen(server: Server) {
+  const port = await listenOnLoopback(server);
+  return `http://127.0.0.1:${port}`;
+}
+
+async function closeServer(server: Server) {
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function startRuntimeWorker(
+  workerData: TelegramIngressWorkerOptions,
+  failure: { reject: (error: Error) => void },
+) {
+  const workerUrl = resolveRuntimeWorkerUrl({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "telegram-ingress-worker.runtime",
+    distWorkerPath: "telegram-ingress-worker.runtime.js",
+  });
+  const worker = new Worker(workerUrl, {
+    execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+    workerData: { ...workerData, runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER },
+  });
+  const task = new Promise<void>((resolve, reject) => {
+    const fail = (error: Error) => {
+      failure.reject(error);
+      reject(error);
+    };
+    worker.once("error", (cause) => fail(toErrorObject(cause, "Telegram test worker failed")));
+    worker.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        fail(new Error(`Telegram test worker exited with code ${code}`));
+      }
+    });
+  });
+  return { worker, task };
 }
 
 function createIdleIngressWorker() {
-  let stopWorker: (() => void) | undefined;
-  const workerDone = new Promise<void>((resolve) => {
-    stopWorker = resolve;
-  });
+  const workerDone = createDeferred<void>();
   const workerStop = vi.fn(async () => {
-    stopWorker?.();
+    workerDone.resolve();
   });
-  const createWorker = vi.fn(() => ({
-    onMessage: vi.fn(() => () => undefined),
-    stop: workerStop,
-    task: vi.fn(async () => {
-      await workerDone;
-    }),
-  }));
+  const createWorker = vi.fn(() =>
+    makeWorker(async () => {
+      await workerDone.promise;
+    }, workerStop),
+  );
   return {
     createWorker,
-    stop: () => stopWorker?.(),
+    stop: () => workerDone.resolve(),
     workerStop,
   };
 }
 
 function createListeningIngressWorker() {
   let listener: WorkerMessageListener | undefined;
+  const listening = createDeferred<void>();
+  const firstAck = createDeferred<void>();
   const idle = createIdleIngressWorker();
-  const ackSpooledUpdate = vi.fn();
+  const ackSpooledUpdate = vi.fn(() => firstAck.resolve());
   const createWorker = vi.fn(() => {
     const worker = idle.createWorker();
     return {
       ...worker,
       ackSpooledUpdate,
-      onMessage: vi.fn((nextListener: WorkerMessageListener) => {
+      set onMessage(nextListener: WorkerMessageListener | undefined) {
         listener = nextListener;
-        return () => undefined;
-      }),
+        listening.resolve();
+      },
     };
   });
   return {
     ackSpooledUpdate,
+    firstAck: firstAck.promise,
     createWorker,
     emit: (message: TestWorkerMessage) => listener?.(message as TelegramIngressWorkerMessage),
     hasListener: () => listener !== undefined,
+    listening: listening.promise,
     stop: idle.stop,
     workerStop: idle.workerStop,
   };
 }
 
+async function expectIntakeAck(
+  lifetime: ReturnType<typeof createTestLifetime>,
+  worker: ReturnType<typeof createListeningIngressWorker>,
+  requestId: string,
+  update: unknown,
+  expected: Extract<TelegramIngressWorkerCommand, { type: "spool-ack" }>["result"],
+) {
+  await lifetime.wait(worker.listening);
+  worker.emit({ type: "updates", requestId, updates: [update], queued: 1 });
+  await lifetime.wait(worker.firstAck);
+  expect(worker.ackSpooledUpdate).toHaveBeenCalledWith(requestId, expected);
+}
+
 function startIsolatedIngressSession(params: {
   abort: AbortController;
-  spoolDir?: string;
+  stateDir?: string;
   handleUpdate: (update: { update_id?: number }) => Promise<void>;
   createWorker?: IsolatedIngressOptions["createWorker"];
   drainIntervalMs?: number;
@@ -623,7 +412,7 @@ function startIsolatedIngressSession(params: {
     ingress: {
       createWorker,
       drainIntervalMs: params.drainIntervalMs ?? 10,
-      ...(params.spoolDir ? { spoolDir: params.spoolDir } : {}),
+      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
       ...(params.spooledUpdateHandlerTimeoutMs !== undefined
         ? { spooledUpdateHandlerTimeoutMs: params.spooledUpdateHandlerTimeoutMs }
         : {}),
@@ -636,17 +425,78 @@ function startIsolatedIngressSession(params: {
   };
 }
 
+function startIntake(
+  context: Parameters<typeof createTestLifetime>[0],
+  params: Omit<
+    Parameters<typeof startIsolatedIngressSession>[0],
+    "abort" | "createWorker" | "handleUpdate"
+  > & {
+    handleUpdate?: Parameters<typeof startIsolatedIngressSession>[0]["handleUpdate"];
+  },
+  beforeClose: AsyncVoidFn = noop,
+  afterClose: AsyncVoidFn = noop,
+) {
+  const abort = new AbortController();
+  const worker = createListeningIngressWorker();
+  const { runPromise } = startIsolatedIngressSession({
+    handleUpdate: noop,
+    ...params,
+    abort,
+    createWorker: worker.createWorker,
+  });
+  const lifetime = createTestLifetime(context, async () => {
+    await beforeClose();
+    abort.abort();
+    await runPromise;
+    await afterClose();
+  });
+  return { worker, lifetime };
+}
+
+async function withListeningWatchdog(
+  run: (fixture: {
+    worker: ReturnType<typeof createListeningIngressWorker>;
+    harness: ReturnType<typeof installPollingStallWatchdogHarness>;
+    watchdog: Awaited<
+      ReturnType<ReturnType<typeof installPollingStallWatchdogHarness>["waitForWatchdog"]>
+    >;
+    log: ReturnType<typeof vi.fn>;
+  }) => Promise<void>,
+  options: Pick<
+    Parameters<typeof startIsolatedIngressSession>[0],
+    "stallThresholdMs" | "drainIntervalMs"
+  > = {},
+) {
+  const abort = new AbortController();
+  const worker = createListeningIngressWorker();
+  const harness = installPollingStallWatchdogHarness();
+  const log = vi.fn();
+  const { runPromise } = startIsolatedIngressSession({
+    abort,
+    handleUpdate: noop,
+    createWorker: worker.createWorker,
+    log,
+    ...options,
+  });
+  try {
+    await run({ worker, harness, watchdog: await harness.waitForWatchdog(), log });
+  } finally {
+    harness.restore();
+    abort.abort();
+    await runPromise;
+  }
+}
+
 describe("TelegramPollingSession", () => {
   beforeAll(async () => {
     ({ TelegramPollingSession } = await import("./polling-session.js"));
     ({
-      claimNextTelegramSpooledUpdate,
+      createHeldTelegramReplay,
       listTelegramSpooledUpdateClaims,
       listTelegramSpooledUpdates,
-      recoverStaleTelegramSpooledUpdateClaims,
       writeTelegramSpooledUpdate,
     } = await import("./telegram-ingress-spool.test-support.js"));
-    ({ createTelegramSpooledReplayDeferredParticipant } =
+    ({ createTelegramSpooledReplayDeferredParticipant, getTelegramSpooledReplayLifecycle } =
       await import("./bot-processing-outcome.js"));
   });
 
@@ -656,135 +506,32 @@ describe("TelegramPollingSession", () => {
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
     drainPendingDeliveriesMock.mockReset().mockResolvedValue(undefined);
-    resetTelegramReplyFenceForTests();
     installTelegramIngressQueueRuntime(() =>
       path.join(os.tmpdir(), "openclaw-telegram-test-state"),
     );
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearTelegramRuntime();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("resets restart backoff after a healthy polling cycle", () => {
-    const state = pollingSessionTesting.createTelegramRestartBackoffState();
-    pollingSessionTesting.resolveTelegramRestartDelayMs(state, { stopTimedOut: true });
-    pollingSessionTesting.resolveTelegramRestartDelayMs(state, { stopTimedOut: true });
-    pollingSessionTesting.resetTelegramRestartBackoffState(state);
-    pollingSessionTesting.resolveTelegramRestartDelayMs(state);
-
-    expect(computeBackoffMock.mock.calls.map((call) => call[1])).toEqual([1, 2, 1, 1]);
-    expect(
-      computeBackoffMock.mock.calls.map((call) => (call[0] as { initialMs: number }).initialMs),
-    ).toEqual([30_000, 30_000, 120_000, 30_000]);
-  });
-
-  it("backs off every retryable spooled handler failure with an error marker", () => {
-    expect(
-      pollingSessionTesting.resolveSpooledUpdateRetryDelayMs(
-        {
-          receivedAt: 0,
-          attempts: 1,
-          lastAttemptAt: 1_000,
-          lastError: "plain TypeError from handler",
-        },
-        1_999,
-      ),
-    ).toBe(1);
-    expect(
-      pollingSessionTesting.resolveSpooledUpdateRetryDelayMs(
-        {
-          receivedAt: 0,
-          attempts: 1,
-          lastAttemptAt: 1_000,
-        },
-        1_999,
-      ),
-    ).toBe(0);
-    expect(
-      pollingSessionTesting.resolveSpooledUpdateRetryDelayMs(
-        {
-          receivedAt: 0,
-          attempts: pollingSessionTesting.spooledRetryMaxAttempts,
-          lastAttemptAt: 1_000,
-          lastError: "state store outage",
-        },
-        1_999,
-      ),
-    ).toBeGreaterThan(0);
-  });
-
-  it("keeps generic retryable failures pending until they are old enough to dead-letter", () => {
-    const update = {
-      updateId: 42,
-      path: "/tmp/42.json",
-      update: { update_id: 42 },
-      receivedAt: 1_000,
-      attempts: pollingSessionTesting.spooledRetryMaxAttempts - 1,
-      lastAttemptAt: 2_000,
-      lastError: "state store outage",
-    };
-
-    expect(
-      pollingSessionTesting.shouldDeadLetterRetryableSpooledUpdate(
-        update,
-        pollingSessionTesting.spooledRetryMaxAttempts,
-        1_000 + pollingSessionTesting.spooledRetryDeadLetterMinAgeMs - 1,
-      ),
-    ).toBe(false);
-    expect(
-      pollingSessionTesting.shouldDeadLetterRetryableSpooledUpdate(
-        update,
-        pollingSessionTesting.spooledRetryMaxAttempts,
-        1_000 + pollingSessionTesting.spooledRetryDeadLetterMinAgeMs,
-      ),
-    ).toBe(true);
-  });
-
   it("does not start an isolated ingress worker when durable queue acquisition fails", async () => {
-    await withTempSpool(async (spoolDir) => {
+    await withTempSpool(async (stateDir) => {
       const abort = new AbortController();
       const queueOpenError = new Error("Telegram ingress queue could not be opened");
       const transport = makeTelegramTransport();
       const bot = makeIsolatedBot();
       createTelegramBotMock.mockReturnValueOnce(bot);
-      installTelegramIngressQueueRuntime(() => spoolDir, queueOpenError);
+      installTelegramIngressQueueRuntime(() => stateDir, queueOpenError);
 
-      let actualWorker: Worker | undefined;
-      let workerReady: Promise<number> | undefined;
-      const stopWorker = vi.fn(async () => {
-        await actualWorker?.terminate();
-      });
-      const createWorker = vi.fn(() => {
-        actualWorker = new Worker(
-          `
-            const http = require("node:http");
-            const { parentPort } = require("node:worker_threads");
-            const server = http.createServer((_request, response) => {
-              response.end("worker-alive");
-            });
-            server.listen(0, "127.0.0.1", () => {
-              parentPort.postMessage(server.address().port);
-            });
-          `,
-          { eval: true, execArgv: [] },
-        );
-        workerReady = new Promise<number>((resolve, reject) => {
-          actualWorker?.once("message", (port: number) => resolve(port));
-          actualWorker?.once("error", reject);
-        });
-        return {
-          onMessage: vi.fn(() => () => undefined),
-          stop: stopWorker,
-          task: vi.fn(async () => undefined),
-        };
-      });
+      const { createWorker } = createIdleIngressWorker();
       const session = createPollingSession({
         abortSignal: abort.signal,
         telegramTransport: transport,
         ingress: {
-          spoolDir,
+          stateDir,
           createWorker,
         },
       });
@@ -793,322 +540,222 @@ describe("TelegramPollingSession", () => {
         await expect(session.runUntilAbort()).rejects.toBe(queueOpenError);
         expect(bot.api.deleteWebhook).toHaveBeenCalledTimes(1);
         expect(transport.close).toHaveBeenCalledTimes(1);
-
-        if (workerReady) {
-          const port = await workerReady;
-          const response = await fetch(`http://127.0.0.1:${port}/health`);
-          expect(response.status).toBe(200);
-          expect(await response.text()).toBe("worker-alive");
-          expect(stopWorker).not.toHaveBeenCalled();
-        }
-
         expect(createWorker).not.toHaveBeenCalled();
       } finally {
         abort.abort();
-        await actualWorker?.terminate();
       }
     });
   });
 
-  it("initializes the main-thread bot before draining isolated ingress spool", async () => {
+  it("shares the installed grammY bot capability snapshot: initializes an uncached bot with exactly one getMe request", async (context) => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
-      const handleUpdate = vi.fn(async () => undefined);
-      const init = vi.fn(async () => undefined);
-      const update = directUpdate(42, 123, "hello");
-      await writeTelegramSpooledUpdate({
-        spoolDir: tempDir,
-        update,
+      const worker = createListeningIngressWorker();
+      const botInfo = {
+        id: 123,
+        is_bot: true,
+        first_name: "OpenClaw",
+        username: "openclaw_bot",
+        has_topics_enabled: true,
+      } as NonNullable<ConstructorParameters<typeof TelegramPollingSession>[0]["botInfo"]>;
+      const bot = new Bot("tok");
+      const getMe = vi.spyOn(bot.api, "getMe").mockResolvedValue(botInfo);
+      vi.spyOn(bot.api, "deleteWebhook").mockResolvedValue(true);
+      vi.spyOn(bot, "stop").mockResolvedValue(undefined);
+      const handlerStarted = createDeferred<void>();
+      const handlerCompleted = createDeferred<void>();
+      const handleUpdate = vi.spyOn(bot, "handleUpdate").mockImplementation(async () => {
+        handlerStarted.resolve();
+        await handlerCompleted.promise;
       });
-
-      const { createWorker, runPromise } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate,
-        init,
+      createTelegramBotMock.mockReturnValueOnce(bot);
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        ingress: {
+          stateDir: tempDir,
+          createWorker: worker.createWorker,
+          drainIntervalMs: 10,
+        },
       });
-      try {
-        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
-        await waitForTelegramTestState(async () =>
-          expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-        );
-        await waitForTelegramTestState(async () =>
-          expect(
-            await listTelegramSpooledUpdateClaims({
-              spoolDir: tempDir,
-            }),
-          ).toEqual([]),
-        );
-      } finally {
+      const runPromise = session.runUntilAbort();
+      const lifetime = createTestLifetime(context, async () => {
+        handlerCompleted.resolve();
         abort.abort();
         await runPromise;
-      }
-
-      expect(createWorker).toHaveBeenCalledWith(
-        expect.objectContaining({
-          initialUpdateId: null,
-          spoolDir: tempDir,
-          token: "tok",
-        }),
-      );
-      expect(mockObjectArg(createTelegramBotMock, "createTelegramBot").updateOffset).toEqual({
-        lastUpdateId: null,
-        persistenceFloorUpdateId: null,
       });
-      expect(init).toHaveBeenCalledBefore(handleUpdate);
-      expect(handleUpdate).toHaveBeenCalledWith(update);
+      try {
+        await expectIntakeAck(
+          lifetime,
+          worker,
+          "topic-capability-1",
+          {
+            update_id: 143,
+            message: {
+              chat: { id: 1234, type: "private" },
+              message_thread_id: 42,
+              text: "installed bot capability snapshot",
+            },
+          },
+          {
+            ok: true,
+            updateId: 143,
+          },
+        );
+        await lifetime.wait(handlerStarted.promise);
+        expect(handleUpdate).toHaveBeenCalledOnce();
+        const { database, kysely } = openTelegramSpoolTestKysely(tempDir);
+        const rows = executeSqliteQuerySync(
+          database.db,
+          kysely
+            .selectFrom("channel_ingress_events")
+            .select(["lane_key", "status"])
+            .where("event_id", "=", String(143).padStart(16, "0")),
+        ).rows;
+        expect(rows).toMatchObject([{ lane_key: "telegram:1234:topic:42", status: "claimed" }]);
+        expect(getMe).toHaveBeenCalledTimes(1);
+        expect(bot.botInfo).toBe(botInfo);
+      } finally {
+        await lifetime.close();
+      }
     });
   });
 
-  it("writes isolated worker updates through the main runtime queue", async () => {
-    await withTempSpool(async (tempDir) => {
+  it("durably admits a getUpdates response before advancing its offset", async (context) => {
+    await withTempSpool(async (stateDir) => {
+      const updates = [
+        directUpdate(42, 123, "hello"),
+        directUpdate(42, 123, "hello"),
+        directUpdate(44, 123, "again"),
+      ];
+      const advancedOffset = createDeferred<number>();
+      const pollOffsets: Array<number | undefined> = [];
+      let durableIdsAtAdvance: number[] = [];
+      const server = createServer((request, response) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          const { offset } = JSON.parse(body) as { offset?: number };
+          pollOffsets.push(offset);
+          if (pollOffsets.length === 1) {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(JSON.stringify({ ok: true, result: updates }));
+            return;
+          }
+          durableIdsAtAdvance = storedUpdateIds(stateDir);
+          advancedOffset.resolve(offset ?? -1);
+        });
+      });
+      const apiRoot = await listen(server);
+      const createWorker: NonNullable<IsolatedIngressOptions["createWorker"]> = (options) => {
+        const { worker, task } = startRuntimeWorker({ ...options, apiRoot }, advancedOffset);
+        const handle: ReturnType<NonNullable<IsolatedIngressOptions["createWorker"]>> = {
+          ackSpooledUpdate(requestId, result) {
+            worker.postMessage({ type: "spool-ack", requestId, result }, []);
+          },
+          async stop() {
+            worker.postMessage({ type: "stop" }, []);
+            await task;
+          },
+          task: () => task,
+        };
+        worker.on("message", (message) => handle.onMessage?.(message));
+        return handle;
+      };
       const abort = new AbortController();
-      const handleUpdate = vi.fn(async () => undefined);
-      const worker = createListeningIngressWorker();
-      const update = directUpdate(42, 123, "hello");
+      const persistUpdateId = vi.fn(async () => undefined);
+      const handleUpdate = vi.fn(async (_update: { update_id?: number }) => undefined);
       const { runPromise } = startIsolatedIngressSession({
         abort,
-        spoolDir: tempDir,
+        stateDir,
+        createWorker,
         handleUpdate,
-        createWorker: worker.createWorker,
+        persistUpdateId,
+        getCommittedUpdateId: () => 40,
       });
-      try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
-        worker.emit({
-          type: "update",
-          requestId: "write-1",
-          update,
-          queued: 1,
-        });
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("write-1", {
-            ok: true,
-            updateId: 42,
-          }),
-        );
-        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledWith(update));
-        await waitForTelegramTestState(async () =>
-          expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-        );
-      } finally {
+      const lifetime = createTestLifetime(context, async () => {
         abort.abort();
-        await runPromise;
-      }
-    });
-  });
-
-  it.each([
-    {
-      name: "preserves a cached bot without making another getMe request",
-      seeded: true,
-      topicsEnabled: false,
-      expectedGetMeCalls: 0,
-      expectedLaneKey: "telegram:1234",
-    },
-    {
-      name: "initializes an uncached bot with exactly one getMe request",
-      seeded: false,
-      topicsEnabled: true,
-      expectedGetMeCalls: 1,
-      expectedLaneKey: "telegram:1234:topic:42",
-    },
-  ])(
-    "shares the installed grammY bot capability snapshot: $name",
-    async ({ seeded, topicsEnabled, expectedGetMeCalls, expectedLaneKey }) => {
-      await withTempSpool(async (tempDir) => {
-        const abort = new AbortController();
-        const worker = createListeningIngressWorker();
-        const botInfo = {
-          id: 123,
-          is_bot: true,
-          first_name: "OpenClaw",
-          username: "openclaw_bot",
-          has_topics_enabled: topicsEnabled,
-        } as NonNullable<ConstructorParameters<typeof TelegramPollingSession>[0]["botInfo"]>;
-        const bot = new Bot("tok", seeded ? { botInfo } : undefined);
-        const getMe = vi.spyOn(bot.api, "getMe").mockResolvedValue(botInfo);
-        vi.spyOn(bot.api, "deleteWebhook").mockResolvedValue(true);
-        vi.spyOn(bot, "stop").mockResolvedValue(undefined);
-        let releaseHandler: (() => void) | undefined;
-        const handlerCompleted = new Promise<void>((resolve) => {
-          releaseHandler = resolve;
-        });
-        const handleUpdate = vi.spyOn(bot, "handleUpdate").mockImplementation(async () => {
-          await handlerCompleted;
-        });
-        createTelegramBotMock.mockReturnValueOnce(bot);
-        const session = createPollingSession({
-          abortSignal: abort.signal,
-          ...(seeded ? { botInfo } : {}),
-          ingress: {
-            spoolDir: tempDir,
-            createWorker: worker.createWorker,
-            drainIntervalMs: 10,
-          },
-        });
-        const runPromise = session.runUntilAbort();
         try {
-          await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
-          worker.emit({
-            type: "update",
-            requestId: "topic-capability-1",
-            update: {
-              update_id: 143,
-              message: {
-                chat: { id: 1234, type: "private" },
-                message_thread_id: 42,
-                text: "installed bot capability snapshot",
-              },
-            },
-            queued: 1,
-          });
-          await waitForTelegramTestState(() =>
-            expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("topic-capability-1", {
-              ok: true,
-              updateId: 143,
-            }),
-          );
-          await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
-          const { database, kysely } = openTelegramSpoolTestKysely(tempDir);
-          const rows = executeSqliteQuerySync(
-            database.db,
-            kysely
-              .selectFrom("channel_ingress_events")
-              .select(["lane_key", "status"])
-              .where("event_id", "=", String(143).padStart(16, "0")),
-          ).rows;
-          expect(rows).toMatchObject([{ lane_key: expectedLaneKey, status: "claimed" }]);
-          expect(getMe).toHaveBeenCalledTimes(expectedGetMeCalls);
-          expect(bot.botInfo).toBe(botInfo);
-        } finally {
-          releaseHandler?.();
-          abort.abort();
           await runPromise;
+        } finally {
+          await closeServer(server);
         }
       });
-    },
-  );
-
-  it("spools, persists the actual update id, then acknowledges", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const persistUpdateId = vi.fn(async (updateId: number) => {
-        expect(updateId).toBe(42);
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]);
-      });
-      const worker = createListeningIngressWorker();
-      const { runPromise } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate: vi.fn(async () => undefined),
-        createWorker: worker.createWorker,
-        drainIntervalMs: 60_000,
-        getCommittedUpdateId: () => 40,
-        persistUpdateId,
-      });
       try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
-        const update = directUpdate(42, 123, "hello");
-        worker.emit({
-          type: "update",
-          requestId: "offset-gap",
-          update,
-          queued: 1,
-        });
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-gap", {
-            ok: true,
-            updateId: 42,
-          }),
-        );
-        expect(
-          expectDefined(persistUpdateId.mock.invocationCallOrder[0], "offset persistence order"),
-        ).toBeLessThan(
-          expectDefined(worker.ackSpooledUpdate.mock.invocationCallOrder[0], "worker ack order"),
-        );
+        expect(await lifetime.wait(advancedOffset.promise)).toBe(45);
+        expect(pollOffsets).toEqual([41, 45]);
+        expect(durableIdsAtAdvance).toEqual([42, 44]);
+        expect(persistUpdateId).toHaveBeenLastCalledWith(44);
+        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(2));
+        expect(handleUpdate.mock.calls.map(([update]) => update.update_id)).toEqual([42, 44]);
       } finally {
-        abort.abort();
-        await runPromise;
+        await lifetime.close();
       }
     });
   });
 
-  it("acknowledges a durable update when offset persistence fails", async () => {
+  it("acknowledges a durable update when offset persistence fails", async (context) => {
     await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
       const log = vi.fn();
-      const worker = createListeningIngressWorker();
-      const { runPromise } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate: vi.fn(async () => undefined),
-        createWorker: worker.createWorker,
+      const { worker, lifetime } = startIntake(context, {
+        stateDir: tempDir,
         log,
         persistUpdateId: vi.fn(async () => {
           throw new Error("offset store unavailable");
         }),
       });
       try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
         const update = directUpdate(43, 123, "hello");
-        worker.emit({
-          type: "update",
-          requestId: "offset-failure",
-          update,
-          queued: 1,
+        await expectIntakeAck(lifetime, worker, "offset-failure", update, {
+          ok: true,
+          updateId: 43,
         });
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-failure", {
-            ok: true,
-            updateId: 43,
-          }),
-        );
         expectLogIncludes(log, "isolated polling offset persist failed updateId=43");
       } finally {
-        abort.abort();
-        await runPromise;
+        await lifetime.close();
       }
     });
   });
 
-  it("keeps isolated intake moving while the durable offset catches up", async () => {
+  it("keeps isolated intake moving while the durable offset catches up", async (context) => {
     await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
       const offsetWrite = createDeferred<void>();
-      const handleUpdate = vi.fn(async () => undefined);
-      const worker = createListeningIngressWorker();
-      const { runPromise } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate,
-        createWorker: worker.createWorker,
-        persistUpdateId: vi.fn(async () => await offsetWrite.promise),
+      let offsetPersisted = false;
+      const persistUpdateId = vi.fn(async () => {
+        await offsetWrite.promise;
+        offsetPersisted = true;
       });
+      const handled = createDeferred<void>();
+      const handleUpdate = vi.fn(async () => handled.resolve());
+      const { worker, lifetime } = startIntake(
+        context,
+        {
+          stateDir: tempDir,
+          handleUpdate,
+          persistUpdateId,
+        },
+        async () => offsetWrite.resolve(),
+      );
       try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
         const update = directUpdate(44, 123, "hello");
-        worker.emit({
-          type: "update",
-          requestId: "offset-catching-up",
-          update,
-          queued: 1,
+        await expectIntakeAck(lifetime, worker, "offset-catching-up", update, {
+          ok: true,
+          updateId: 44,
         });
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("offset-catching-up", {
-            ok: true,
-            updateId: 44,
-          }),
-        );
-        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
+        expect(persistUpdateId).toHaveBeenCalledWith(44);
+        expect(offsetPersisted).toBe(false);
+        await lifetime.wait(handled.promise);
+        expect(handleUpdate).toHaveBeenCalledOnce();
+        expect(offsetPersisted).toBe(false);
       } finally {
-        offsetWrite.resolve();
-        abort.abort();
-        await runPromise;
+        await lifetime.close();
       }
     });
   });
 
-  it("recovers offset persistence and suppresses restart replay", async () => {
+  it("suppresses restart replay after checkpoint persistence fails", async (context) => {
     await withTempSpool(async (tempDir) => {
       let durableUpdateId = 40;
       const writeUpdateId = vi
@@ -1120,298 +767,113 @@ describe("TelegramPollingSession", () => {
         initialUpdateId: durableUpdateId,
         writeUpdateId,
         onInvalidUpdateId: vi.fn(),
-        onRetry: vi.fn(),
+        onError: vi.fn(),
       });
       const handleUpdate = vi.fn(async () => undefined);
-      const firstAbort = new AbortController();
-      const firstWorker = createListeningIngressWorker();
-      const firstSession = startIsolatedIngressSession({
-        abort: firstAbort,
-        spoolDir: tempDir,
-        handleUpdate,
-        createWorker: firstWorker.createWorker,
-        getCommittedUpdateId: firstOffsetPersistence.getCommittedUpdateId,
-        persistUpdateId: firstOffsetPersistence.persistUpdateId,
-      });
+      const { worker: firstWorker, lifetime: firstLifetime } = startIntake(
+        context,
+        {
+          stateDir: tempDir,
+          handleUpdate,
+          getCommittedUpdateId: firstOffsetPersistence.getCommittedUpdateId,
+          persistUpdateId: firstOffsetPersistence.persistUpdateId,
+        },
+        noop,
+        () => firstOffsetPersistence.stop(),
+      );
       const update = directUpdate(42, 123, "hello");
       try {
-        await waitForTelegramTestState(() => expect(firstWorker.hasListener()).toBe(true));
-        firstWorker.emit({
-          type: "update",
-          requestId: "first-delivery",
-          update,
-          queued: 1,
+        await expectIntakeAck(firstLifetime, firstWorker, "first-delivery", update, {
+          ok: true,
+          updateId: 42,
         });
-        await waitForTelegramTestState(() =>
-          expect(firstWorker.ackSpooledUpdate).toHaveBeenCalledWith("first-delivery", {
-            ok: true,
-            updateId: 42,
-          }),
-        );
         await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledOnce());
-        await waitForTelegramTestState(() =>
-          expect(firstOffsetPersistence.getCommittedUpdateId()).toBe(42),
-        );
         await waitForTelegramTestState(async () =>
           expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
         );
+        expect(firstOffsetPersistence.getCommittedUpdateId()).toBe(40);
       } finally {
-        firstAbort.abort();
-        await firstSession.runPromise;
-        await firstOffsetPersistence.stop();
+        await firstLifetime.close();
       }
 
-      expect(writeUpdateId).toHaveBeenCalledTimes(2);
-      expect(durableUpdateId).toBe(42);
+      expect(writeUpdateId).toHaveBeenCalledTimes(1);
+      expect(durableUpdateId).toBe(40);
 
       const restartWriteUpdateId = vi.fn(async () => undefined);
       const restartedOffsetPersistence = createTelegramUpdateOffsetPersistence({
         initialUpdateId: durableUpdateId,
         writeUpdateId: restartWriteUpdateId,
         onInvalidUpdateId: vi.fn(),
-        onRetry: vi.fn(),
+        onError: vi.fn(),
       });
-      const restartAbort = new AbortController();
-      const restartWorker = createListeningIngressWorker();
-      const restartedSession = startIsolatedIngressSession({
-        abort: restartAbort,
-        spoolDir: tempDir,
-        handleUpdate,
-        createWorker: restartWorker.createWorker,
-        getCommittedUpdateId: restartedOffsetPersistence.getCommittedUpdateId,
-        persistUpdateId: restartedOffsetPersistence.persistUpdateId,
-      });
+      const { worker: restartWorker, lifetime: restartedLifetime } = startIntake(
+        context,
+        {
+          stateDir: tempDir,
+          handleUpdate,
+          getCommittedUpdateId: restartedOffsetPersistence.getCommittedUpdateId,
+          persistUpdateId: restartedOffsetPersistence.persistUpdateId,
+        },
+        noop,
+        () => restartedOffsetPersistence.stop(),
+      );
       try {
-        await waitForTelegramTestState(() => expect(restartWorker.hasListener()).toBe(true));
-        restartWorker.emit({
-          type: "update",
-          requestId: "restart-replay",
-          update,
-          queued: 1,
+        await expectIntakeAck(restartedLifetime, restartWorker, "restart-replay", update, {
+          ok: true,
+          updateId: 42,
         });
-        await waitForTelegramTestState(() =>
-          expect(restartWorker.ackSpooledUpdate).toHaveBeenCalledWith("restart-replay", {
-            ok: true,
-            updateId: 42,
-          }),
-        );
         expect(handleUpdate).toHaveBeenCalledOnce();
-        expect(restartWriteUpdateId).not.toHaveBeenCalled();
+        await waitForTelegramTestState(() =>
+          expect(restartWriteUpdateId).toHaveBeenCalledExactlyOnceWith(42),
+        );
       } finally {
-        restartAbort.abort();
-        await restartedSession.runPromise;
-        await restartedOffsetPersistence.stop();
+        await restartedLifetime.close();
       }
     });
   });
 
-  it("does not persist or acknowledge success when spooling fails", async () => {
+  it("rejects a malformed response before admitting any updates or advancing the offset", async (context) => {
     await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
       const persistUpdateId = vi.fn(async () => undefined);
-      const worker = createListeningIngressWorker();
-      const { runPromise } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate: vi.fn(async () => undefined),
-        createWorker: worker.createWorker,
+      const { worker, lifetime } = startIntake(context, {
+        stateDir: tempDir,
         persistUpdateId,
       });
       try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
+        await lifetime.wait(worker.listening);
         worker.emit({
-          type: "update",
+          type: "updates",
           requestId: "spool-failure",
-          update: { message: { text: "missing update id" } },
-          queued: 1,
+          updates: [directUpdate(42, 123, "hello"), { message: { text: "missing update id" } }],
+          queued: 2,
         });
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("spool-failure", {
-            ok: false,
-            message: "Telegram update missing numeric update_id.",
-          }),
-        );
+        await lifetime.wait(worker.firstAck);
+        expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("spool-failure", {
+          ok: false,
+          message: "Telegram update missing numeric update_id.",
+        });
         expect(persistUpdateId).not.toHaveBeenCalled();
+        expect(storedUpdateIds(tempDir)).toEqual([]);
       } finally {
-        abort.abort();
-        await runPromise;
+        await lifetime.close();
       }
-    });
-  });
-
-  it("drains worker-spooled updates without waiting for the next drain interval", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const handleUpdate = vi.fn(async () => abort.abort());
-      const worker = createListeningIngressWorker();
-      const update = directUpdate(42, 123, "hello");
-      const { runPromise } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate,
-        createWorker: worker.createWorker,
-        drainIntervalMs: 60_000,
-      });
-      try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
-        worker.emit({
-          type: "update",
-          requestId: "write-1",
-          update,
-          queued: 1,
-        });
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("write-1", {
-            ok: true,
-            updateId: 42,
-          }),
-        );
-        worker.emit({ type: "spooled", updateId: 42, queued: 1 });
-        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledWith(update));
-        await waitForTelegramTestState(async () =>
-          expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-        );
-      } finally {
-        abort.abort();
-        await runPromise;
-      }
-    });
-  });
-
-  it("drains worker-spooled updates that arrive during an active drain", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      let releaseFirstClaim: (() => void) | undefined;
-      let firstClaimStarted: (() => void) | undefined;
-      const firstClaimGate = new Promise<void>((resolve) => {
-        releaseFirstClaim = resolve;
-      });
-      const firstClaimStartedPromise = new Promise<void>((resolve) => {
-        firstClaimStarted = resolve;
-      });
-      let blockedFirstClaim = false;
-      setTelegramRuntime({
-        state: {
-          resolveStateDir: () => tempDir,
-          openChannelIngressQueue: (
-            options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-          ) => {
-            const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
-            return {
-              ...queue,
-              claimNext: async (...args: Parameters<typeof queue.claimNext>) => {
-                if (!blockedFirstClaim) {
-                  blockedFirstClaim = true;
-                  firstClaimStarted?.();
-                  await firstClaimGate;
-                }
-                return queue.claimNext(...args);
-              },
-            };
-          },
-        },
-      } as TelegramRuntime);
-
-      const firstUpdate = directUpdate(1, 123, "pre-seeded");
-      const secondUpdate = directUpdate(2, 123, "during-drain");
-      await writeTelegramSpooledUpdate({
-        spoolDir: tempDir,
-        update: firstUpdate,
-      });
-      const handleUpdate = vi.fn(async () => undefined);
-      const worker = createListeningIngressWorker();
-
-      const { runPromise } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate,
-        createWorker: worker.createWorker,
-        drainIntervalMs: 60_000,
-      });
-
-      try {
-        await waitForTelegramTestState(() => expect(worker.hasListener()).toBe(true));
-        await firstClaimStartedPromise;
-        worker.emit({
-          type: "update",
-          requestId: "write-2",
-          update: secondUpdate,
-          queued: 1,
-        });
-        expect(worker.ackSpooledUpdate).not.toHaveBeenCalledWith("write-2", expect.anything());
-        releaseFirstClaim?.();
-        releaseFirstClaim = undefined;
-        await waitForTelegramTestState(() =>
-          expect(worker.ackSpooledUpdate).toHaveBeenCalledWith("write-2", {
-            ok: true,
-            updateId: 2,
-          }),
-        );
-        worker.emit({ type: "spooled", updateId: 2, queued: 1 });
-
-        await waitForTelegramTestState(() =>
-          expect(handleUpdate).toHaveBeenCalledWith(firstUpdate),
-        );
-        await waitForTelegramTestState(() =>
-          expect(handleUpdate).toHaveBeenCalledWith(secondUpdate),
-        );
-        await waitForTelegramTestState(async () =>
-          expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-        );
-      } finally {
-        releaseFirstClaim?.();
-        abort.abort();
-        await runPromise;
-      }
-    });
-  });
-
-  it("drains existing isolated ingress spool entries below the persisted offset", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const handleUpdate = vi.fn(async () => undefined);
-      const update = directUpdate(42, 123, "pre-upgrade pending");
-      await writeTelegramSpooledUpdate({
-        spoolDir: tempDir,
-        update,
-      });
-
-      const { createWorker, runPromise } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate,
-        getCommittedUpdateId: () => 42,
-      });
-      try {
-        await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
-        await waitForTelegramTestState(async () =>
-          expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-        );
-        await waitForTelegramTestState(async () =>
-          expect(
-            await listTelegramSpooledUpdateClaims({
-              spoolDir: tempDir,
-            }),
-          ).toEqual([]),
-        );
-      } finally {
-        abort.abort();
-        await runPromise;
-      }
-
-      expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({ initialUpdateId: 42 }));
-      expect(mockObjectArg(createTelegramBotMock, "createTelegramBot").updateOffset).toEqual({
-        lastUpdateId: null,
-        persistenceFloorUpdateId: 42,
-      });
-      expect(handleUpdate).toHaveBeenCalledWith(update);
     });
   });
 
   it("drains Telegram delivery queue after isolated ingress reports poll success", async () => {
     const abort = new AbortController();
     const init = vi.fn(async () => undefined);
-    const setStatus = vi.fn();
+    const status: Partial<ChannelAccountSnapshot> = {
+      connected: true,
+      lastConnectedAt: 1,
+      lastEventAt: 2,
+      lastTransportActivityAt: 3,
+      terminalDisconnect: true,
+      lastError: "stale failure",
+    };
+    const setStatus = vi.fn((patch: Partial<ChannelAccountSnapshot>) =>
+      Object.assign(status, patch),
+    );
     const worker = createListeningIngressWorker();
     const { runPromise } = startIsolatedIngressSession({
       abort,
@@ -1422,6 +884,12 @@ describe("TelegramPollingSession", () => {
     });
 
     await waitForTelegramTestState(() => expect(init).toHaveBeenCalledTimes(1));
+    expect(status).toMatchObject({
+      connected: false,
+      lastConnectedAt: null,
+      lastEventAt: null,
+      lastTransportActivityAt: null,
+    });
     worker.emit({ type: "poll-success", finishedAt: 10_000, count: 0 });
     worker.emit({ type: "poll-success", finishedAt: 10_001, count: 0 });
 
@@ -1445,12 +913,21 @@ describe("TelegramPollingSession", () => {
     );
 
     const connected = statusPatches(setStatus).find((patch) => patch.connected === true);
-    expectPollingConnectedPatch(connected);
     expect(connected).toMatchObject({
+      connected: true,
+      mode: "polling",
       lastConnectedAt: 10_000,
       lastEventAt: 10_000,
       lastTransportActivityAt: 10_000,
       lifecycle: "ready",
+      running: true,
+    });
+    expect(status).toMatchObject({
+      running: true,
+      connected: true,
+      terminalDisconnect: undefined,
+      lastError: null,
+      lastEventAt: 15_002,
     });
     const drain = expectDrainPendingDeliveriesCall();
     expect(drain.drainKey).toBe("telegram:default");
@@ -1479,25 +956,17 @@ describe("TelegramPollingSession", () => {
 
     let cycle = 0;
     const createWorker = vi.fn(() => {
-      let onMessage: WorkerPollSuccessListener | undefined;
       cycle += 1;
-      return {
-        onMessage: vi.fn((handler) => {
-          onMessage = handler;
-          return () => undefined;
-        }),
-        stop: vi.fn(async () => undefined),
-        task: vi.fn(async () => {
-          if (cycle === 2) {
-            onMessage?.({
-              type: "poll-success",
-              offset: null,
-              finishedAt: Date.now(),
-              count: 0,
-            });
-          }
-        }),
-      };
+      return makeReportingWorker(async (emit) => {
+        if (cycle === 2) {
+          emit({
+            type: "poll-success",
+            offset: null,
+            finishedAt: Date.now(),
+            count: 0,
+          });
+        }
+      });
     });
 
     const session = createPollingSession({
@@ -1515,7 +984,7 @@ describe("TelegramPollingSession", () => {
   });
 
   it("keeps a real polling worker alive during Telegram's server-directed flood wait", async () => {
-    await withTempSpool(async (spoolDir) => {
+    await withTempSpool(async (stateDir) => {
       let requestCount = 0;
       const server = createServer((_request, response) => {
         requestCount += 1;
@@ -1529,23 +998,14 @@ describe("TelegramPollingSession", () => {
           }),
         );
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Expected a real loopback Bot API listener");
-      }
+      const apiRoot = await listen(server);
 
       const abort = new AbortController();
       const log = vi.fn();
-      const watchdogHarness = installPollingStallWatchdogHarness([0]);
+      const watchdogHarness = installPollingStallWatchdogHarness();
       createTelegramBotMock.mockReturnValue(makeIsolatedBot());
       let actualWorker: Worker | undefined;
-      let reportPollError: ((message: TelegramIngressWorkerMessage) => void) | undefined;
-      const pollErrorReceived = new Promise<TelegramIngressWorkerMessage>((resolve) => {
-        reportPollError = resolve;
-      });
+      const pollErrorReceived = createDeferred<TelegramIngressWorkerMessage>();
       const workerStop = vi.fn(async () => {
         if (actualWorker) {
           Reflect.apply(
@@ -1557,59 +1017,42 @@ describe("TelegramPollingSession", () => {
         }
       });
       const createWorker = vi.fn(() => {
-        const worker = new Worker(
-          new URL("../../../dist/telegram-ingress-worker.runtime.js", import.meta.url),
+        const { worker, task } = startRuntimeWorker(
           {
-            workerData: {
-              runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER,
-              token: "tok",
-              accountId: "default",
-              initialUpdateId: null,
-              spoolDir,
-              apiRoot: `http://127.0.0.1:${address.port}`,
-              timeoutSeconds: 1,
-            },
+            token: "tok",
+            accountId: "default",
+            initialUpdateId: null,
+            apiRoot,
+            timeoutSeconds: 1,
           },
+          pollErrorReceived,
         );
         actualWorker = worker;
-        const task = new Promise<void>((resolve, reject) => {
-          worker.once("error", reject);
-          worker.once("exit", (code) => {
-            if (code === 0) {
-              resolve();
-            } else {
-              reject(new Error(`Telegram test worker exited with code ${code}`));
-            }
-          });
-        });
-        return {
-          onMessage: vi.fn((listener: WorkerMessageListener) => {
-            const forwardMessage = (message: TelegramIngressWorkerMessage) => {
-              listener(message);
-              if (message.type === "poll-error") {
-                reportPollError?.(message);
-              }
-            };
-            worker.on("message", forwardMessage);
-            return () => worker.off("message", forwardMessage);
-          }),
+        const handle: ReturnType<NonNullable<IsolatedIngressOptions["createWorker"]>> = {
           stop: workerStop,
           task: () => task,
         };
+        worker.on("message", (message: TelegramIngressWorkerMessage) => {
+          handle.onMessage?.(message);
+          if (message.type === "poll-error") {
+            pollErrorReceived.resolve(message);
+          }
+        });
+        return handle;
       });
       const session = createPollingSession({
         abortSignal: abort.signal,
         log,
         ingress: {
           createWorker,
-          spoolDir,
+          stateDir,
         },
       });
       const runPromise = session.runUntilAbort();
 
       try {
         const watchdog = await watchdogHarness.waitForWatchdog();
-        const pollError = await pollErrorReceived;
+        const pollError = await pollErrorReceived.promise;
         expect(pollError).toMatchObject({ type: "poll-error", errorCode: 429 });
         expect(requestCount).toBe(1);
 
@@ -1623,35 +1066,17 @@ describe("TelegramPollingSession", () => {
         expect(pollError).toMatchObject({ retryAfterMs: 180_000 });
         expectLogExcludes(log, "Polling stall detected");
       } finally {
+        watchdogHarness.restore();
         abort.abort();
         await runPromise.catch(() => undefined);
         await actualWorker?.terminate();
-        watchdogHarness.restore();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => {
-            if (error) {
-              reject(error);
-            } else {
-              resolve();
-            }
-          });
-        });
+        await closeServer(server);
       }
     });
   });
 
   it("caps an untrusted Telegram flood wait at the existing maximum polling threshold", async () => {
-    const abort = new AbortController();
-    const worker = createListeningIngressWorker();
-    const watchdogHarness = installPollingStallWatchdogHarness([0]);
-    const { runPromise } = startIsolatedIngressSession({
-      abort,
-      handleUpdate: async () => undefined,
-      createWorker: worker.createWorker,
-    });
-
-    try {
-      const watchdog = await watchdogHarness.waitForWatchdog();
+    await withListeningWatchdog(async ({ worker, harness, watchdog }) => {
       worker.emit({
         type: "poll-error",
         errorCode: 429,
@@ -1661,72 +1086,19 @@ describe("TelegramPollingSession", () => {
       });
 
       for (let elapsedMs = 30_000; elapsedMs <= 600_000; elapsedMs += 30_000) {
-        watchdogHarness.setNow(elapsedMs);
+        harness.setNow(elapsedMs);
         watchdog();
         expect(worker.workerStop).not.toHaveBeenCalled();
       }
 
-      watchdogHarness.setNow(630_000);
+      harness.setNow(630_000);
       watchdog();
       expect(worker.workerStop).toHaveBeenCalledTimes(1);
-    } finally {
-      abort.abort();
-      await runPromise;
-      watchdogHarness.restore();
-    }
-  });
-
-  it.each([
-    { name: "missing flood wait", errorCode: 429, retryAfterMs: undefined },
-    { name: "negative flood wait", errorCode: 429, retryAfterMs: -1 },
-    { name: "zero flood wait", errorCode: 429, retryAfterMs: 0 },
-    { name: "non-finite flood wait", errorCode: 429, retryAfterMs: Number.POSITIVE_INFINITY },
-    { name: "server error", errorCode: 502, retryAfterMs: 180_000 },
-    { name: "unauthorized bot", errorCode: 401, retryAfterMs: 180_000 },
-    { name: "missing bot", errorCode: 404, retryAfterMs: 180_000 },
-    { name: "webhook conflict", errorCode: 409, retryAfterMs: 180_000 },
-  ])("does not disable the polling watchdog for $name", async ({ errorCode, retryAfterMs }) => {
-    const abort = new AbortController();
-    const worker = createListeningIngressWorker();
-    const watchdogHarness = installPollingStallWatchdogHarness([0]);
-    const { runPromise } = startIsolatedIngressSession({
-      abort,
-      handleUpdate: async () => undefined,
-      createWorker: worker.createWorker,
     });
-
-    try {
-      const watchdog = await watchdogHarness.waitForWatchdog();
-      worker.emit({
-        type: "poll-error",
-        errorCode,
-        message: "Telegram polling error",
-        finishedAt: 0,
-        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-      });
-
-      watchdogHarness.setNow(150_000);
-      watchdog();
-      expect(worker.workerStop).toHaveBeenCalledTimes(1);
-    } finally {
-      abort.abort();
-      await runPromise;
-      watchdogHarness.restore();
-    }
   });
 
   it("restores hung-poll detection when a new request ends a Telegram flood wait", async () => {
-    const abort = new AbortController();
-    const worker = createListeningIngressWorker();
-    const watchdogHarness = installPollingStallWatchdogHarness([0]);
-    const { runPromise } = startIsolatedIngressSession({
-      abort,
-      handleUpdate: async () => undefined,
-      createWorker: worker.createWorker,
-    });
-
-    try {
-      const watchdog = await watchdogHarness.waitForWatchdog();
+    await withListeningWatchdog(async ({ worker, harness, watchdog }) => {
       worker.emit({
         type: "poll-error",
         errorCode: 429,
@@ -1735,90 +1107,102 @@ describe("TelegramPollingSession", () => {
         retryAfterMs: 180_000,
       });
 
-      watchdogHarness.setNow(150_000);
+      harness.setNow(150_000);
       watchdog();
       expect(worker.workerStop).not.toHaveBeenCalled();
 
       worker.emit({ type: "poll-start", offset: null, startedAt: 150_000 });
-      watchdogHarness.setNow(300_001);
+      harness.setNow(300_001);
       watchdog();
       expect(worker.workerStop).toHaveBeenCalledTimes(1);
-    } finally {
-      abort.abort();
-      await runPromise;
-      watchdogHarness.restore();
-    }
+    });
   });
 
-  it("restarts isolated ingress when worker liveness stalls", async () => {
-    const abort = new AbortController();
-    const log = vi.fn();
-    const transport = makeTelegramTransport();
-    const replacement = makeTelegramTransport();
-    const createTelegramTransport = vi.fn(() => replacement);
-    createTelegramBotMock.mockReturnValue(makeIsolatedBot());
+  it.each(["same", "different"] as const)(
+    "restarts isolated ingress when worker liveness stalls with a %s transport",
+    async (replacementKind) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const setStatus = vi.fn();
+      const transport = makeTelegramTransport();
+      const replacement = replacementKind === "same" ? transport : makeTelegramTransport();
+      const releaseClose = createDeferred<void>();
+      replacement.close.mockImplementation(async () => await releaseClose.promise);
+      const createTelegramTransport = vi.fn(() => replacement);
+      createTelegramBotMock.mockReturnValue(makeIsolatedBot());
 
-    let firstWorkerDone: (() => void) | undefined;
-    const firstWorkerTask = new Promise<void>((resolve) => {
-      firstWorkerDone = resolve;
-    });
-    const firstWorkerStop = vi.fn(async () => {
-      firstWorkerDone?.();
-    });
-    let workerCycle = 0;
-    const createWorker = vi.fn(() => {
-      workerCycle += 1;
-      if (workerCycle === 1) {
+      const { promise: firstWorkerTask, resolve: firstWorkerDone } = createDeferred<void>();
+      const firstWorkerStop = vi.fn(async () => {
+        firstWorkerDone?.();
+      });
+      let workerCycle = 0;
+      const createWorker = vi.fn(() => {
+        workerCycle += 1;
+        if (workerCycle === 1) {
+          return {
+            stop: firstWorkerStop,
+            task: vi.fn(async () => {
+              await firstWorkerTask;
+            }),
+          };
+        }
         return {
-          onMessage: vi.fn(() => () => undefined),
-          stop: firstWorkerStop,
+          stop: vi.fn(async () => undefined),
           task: vi.fn(async () => {
-            await firstWorkerTask;
+            expect(replacement.close).not.toHaveBeenCalled();
+            abort.abort();
           }),
         };
+      });
+      const watchdogHarness = installPollingStallWatchdogHarness();
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        setStatus,
+        telegramTransport: transport,
+        createTelegramTransport,
+        stallThresholdMs: 30_000,
+        ingress: {
+          createWorker,
+          drainIntervalMs: 500,
+        },
+      });
+
+      try {
+        let stopped = false;
+        const runPromise = session.runUntilAbort().then(() => {
+          stopped = true;
+        });
+        const watchdog = await watchdogHarness.waitForWatchdog();
+        watchdogHarness.setNow(31_000);
+        watchdog?.();
+
+        await waitForTelegramTestState(() => expect(firstWorkerStop).toHaveBeenCalledTimes(1));
+        await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(2));
+        await waitForTelegramTestState(() => expect(replacement.close).toHaveBeenCalledOnce());
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stopped).toBe(false);
+        releaseClose.resolve();
+        await runPromise;
+        expectTelegramBotTransportSequence(transport, replacement);
+        expect(transport.close).toHaveBeenCalledOnce();
+        expect(replacement.close).toHaveBeenCalledOnce();
+        expect(statusPatches(setStatus).some((patch) => patch.lifecycle === "recovering")).toBe(
+          true,
+        );
+
+        expectLogIncludes(log, "Polling stall detected");
+        expectLogIncludes(log, "isolated polling ingress finished reason=polling stall detected");
+        expectLogExcludes(log, "Isolated polling ingress stop timed out");
+      } finally {
+        releaseClose.resolve();
+        watchdogHarness.restore();
+        abort.abort();
       }
-      return {
-        onMessage: vi.fn(() => () => undefined),
-        stop: vi.fn(async () => undefined),
-        task: vi.fn(async () => {
-          abort.abort();
-        }),
-      };
-    });
-    const watchdogHarness = installPollingStallWatchdogHarness([0]);
-    const session = createPollingSession({
-      abortSignal: abort.signal,
-      log,
-      telegramTransport: transport,
-      createTelegramTransport,
-      stallThresholdMs: 30_000,
-      ingress: {
-        createWorker,
-        drainIntervalMs: 500,
-      },
-    });
-
-    try {
-      const runPromise = session.runUntilAbort();
-      const watchdog = await watchdogHarness.waitForWatchdog();
-      watchdogHarness.setNow(31_000);
-      watchdog?.();
-
-      await waitForTelegramTestState(() => expect(firstWorkerStop).toHaveBeenCalledTimes(1));
-      await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(2));
-      await runPromise;
-      expectTelegramBotTransportSequence(transport, replacement);
-      expect(transport.close).toHaveBeenCalledOnce();
-      expect(replacement.close).toHaveBeenCalledOnce();
-
-      expectLogIncludes(log, "Polling stall detected");
-      expectLogIncludes(log, "isolated polling ingress finished reason=polling stall detected");
-      expectLogExcludes(log, "Isolated polling ingress stop timed out");
-    } finally {
-      watchdogHarness.restore();
-      abort.abort();
-    }
-  });
+    },
+  );
 
   it("applies stop-timeout cooldown to isolated ingress forced restarts", async () => {
     const abort = new AbortController();
@@ -1836,35 +1220,22 @@ describe("TelegramPollingSession", () => {
     const createWorker = vi.fn(() => {
       workerCycle += 1;
       if (workerCycle <= 2) {
-        let finishTask: (() => void) | undefined;
-        const task = new Promise<void>((resolve) => {
-          finishTask = resolve;
-        });
-        let finishStop: (() => void) | undefined;
-        const stop = new Promise<void>((resolve) => {
-          finishStop = resolve;
-        });
+        const task = createDeferred<void>();
+        const stop = createDeferred<void>();
         finishStoppedWorkers.push(() => {
-          finishStop?.();
-          finishTask?.();
+          stop.resolve();
+          task.resolve();
         });
-        return {
-          onMessage: vi.fn(() => () => undefined),
-          stop: vi.fn(() => stop),
-          task: vi.fn(async () => {
-            await task;
-          }),
-        };
+        return makeWorker(
+          async () => {
+            await task.promise;
+          },
+          () => stop.promise,
+        );
       }
-      return {
-        onMessage: vi.fn(() => () => undefined),
-        stop: vi.fn(async () => undefined),
-        task: vi.fn(async () => {
-          abort.abort();
-        }),
-      };
+      return makeWorker(async () => abort.abort());
     });
-    const watchdogHarness = installPollingStallWatchdogHarness([0]);
+    const watchdogHarness = installPollingStallWatchdogHarness();
     const session = createPollingSession({
       abortSignal: abort.signal,
       log,
@@ -1906,1468 +1277,110 @@ describe("TelegramPollingSession", () => {
   });
 
   it("keeps isolated ingress alive when spooled messages show worker activity", async () => {
-    const abort = new AbortController();
-    const log = vi.fn();
-    const worker = createListeningIngressWorker();
-    const watchdogHarness = installPollingStallWatchdogHarness([0]);
-    const { runPromise } = startIsolatedIngressSession({
-      abort,
-      handleUpdate: async () => undefined,
-      log,
-      stallThresholdMs: 30_000,
-      createWorker: worker.createWorker,
-      drainIntervalMs: 500,
-    });
+    await withListeningWatchdog(
+      async ({ worker, harness, watchdog, log }) => {
+        worker.emit({ type: "poll-start", offset: null, startedAt: 0 });
+        harness.setNow(31_000);
+        worker.emit({ type: "spooled", updateId: 42, queued: 1 });
+        harness.setNow(45_000);
+        watchdog?.();
 
-    try {
-      const watchdog = await watchdogHarness.waitForWatchdog();
-      worker.emit({ type: "poll-start", offset: null, startedAt: 0 });
-      watchdogHarness.setNow(31_000);
-      worker.emit({ type: "spooled", updateId: 42, queued: 1 });
-      watchdogHarness.setNow(45_000);
-      watchdog?.();
-
-      expect(worker.workerStop).not.toHaveBeenCalled();
-      expectLogExcludes(log, "Polling stall detected");
-      expectLogExcludes(log, "isolated polling worker poll-start");
-    } finally {
-      watchdogHarness.restore();
-      abort.abort();
-      await runPromise;
-    }
+        expect(worker.workerStop).not.toHaveBeenCalled();
+        expectLogExcludes(log, "Polling stall detected");
+        expectLogExcludes(log, "isolated polling worker poll-start");
+      },
+      { stallThresholdMs: 30_000, drainIntervalMs: 500 },
+    );
   });
 
-  it("keeps failed lanes blocked for the rest of the drain pass", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const log = vi.fn();
-      const events: string[] = [];
-      await writeSpooledTestUpdates(tempDir, [
-        topicUpdate(42, 10, "first topic 10 turn"),
-        topicUpdate(43, 11, "topic 11 turn"),
-        topicUpdate(44, 10, "second topic 10 turn"),
-      ]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        log,
-        drainIntervalMs: 500,
-        handleUpdate: async (update) => {
-          if (update.update_id === 42) {
-            events.push("topic10:first");
-            throw new Error("handler boom");
-          }
-          if (update.update_id === 43) {
-            events.push("topic11");
-            return;
-          }
-          if (update.update_id === 44) {
-            events.push("topic10:second");
-          }
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(events).toEqual(["topic10:first", "topic11"]));
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([42, 44]);
-      expectLogIncludes(log, "spooled update 42 failed; keeping for retry");
-      abort.abort();
-      stopWorker();
-      await runPromise;
-    });
-  });
-
-  it("does not re-dispatch refetched updates after spooled completion", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      await withTempSpool(async (tempDir) => {
-        const abort = new AbortController();
-        const events: number[] = [];
-        await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "first delivery")]);
-
-        const { runPromise, stopWorker } = startIsolatedIngressSession({
-          abort,
-          spoolDir: tempDir,
-          drainIntervalMs: 10,
-          handleUpdate: async (update) => {
-            events.push(Number(update.update_id));
-          },
-        });
-
-        await waitForTelegramTestState(() => expect(events).toEqual([42]));
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-
-        await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "telegram refetch")]);
-        await vi.advanceTimersByTimeAsync(50);
-
-        expect(events).toEqual([42]);
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-
-        abort.abort();
-        stopWorker();
-        await runPromise;
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("refreshes active spooled claims while the handler is still running", async () => {
-    const refreshHarness = installSpooledClaimRefreshHarness();
+  it("lets isolated ingress control updates bypass an active spooled turn", async (context) => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const events: string[] = [];
-      let releaseHandler: (() => void) | undefined;
-      const handlerDone = new Promise<void>((resolve) => {
-        releaseHandler = resolve;
-      });
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "long topic 10 turn")]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate: async (update) => {
-          events.push(`topic10:${update.update_id}`);
-          await handlerDone;
-        },
-      });
-
-      try {
-        await waitForTelegramTestState(() => expect(events).toEqual(["topic10:42"]));
-        const before = await claimedAtForUpdate(tempDir, 42);
-
-        await new Promise((resolve) => {
-          setTimeout(resolve, 2);
-        });
-        refreshHarness.triggerRefresh();
-        await waitForTelegramTestState(async () =>
-          expect(await claimedAtForUpdate(tempDir, 42)).toBeGreaterThan(before),
-        );
-
-        releaseHandler?.();
-        await waitForTelegramTestState(async () =>
-          expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
-        );
-      } finally {
-        releaseHandler?.();
-        abort.abort();
-        stopWorker();
-        refreshHarness.restore();
-        await runPromise;
-      }
-    });
-  });
-
-  it("holds buffered spooled claims until deferred processing settles without blocking same-lane buffering", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
-      const events: string[] = [];
-      await writeSpooledTestUpdates(tempDir, [
-        topicUpdate(42, 10, "first buffered topic 10 turn"),
-        topicUpdate(43, 10, "second buffered topic 10 turn"),
-      ]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        drainIntervalMs: 10,
-        handleUpdate: async (update) => {
-          events.push(`topic10:${update.update_id}`);
-          collectDeferredParticipant(participants, `test-buffer:${update.update_id}`);
-        },
-      });
-
-      // Telegram releases lane occupancy after each buffered update defers, while
-      // retaining both durable claims until their participants settle.
-      await waitForTelegramTestState(() => expect(events).toEqual(["topic10:42", "topic10:43"]));
-      await waitForTelegramTestState(() => expect(participants).toHaveLength(2));
-      await waitForTelegramTestState(async () =>
-        expect(
-          (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
-            (claim) => claim.updateId,
-          ),
-        ).toEqual([42, 43]),
-      );
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-
-      const completed: TelegramMessageProcessingResult = { kind: "completed" };
-      participants[0]?.settle(completed);
-      await waitForTelegramTestState(async () =>
-        expect(
-          (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
-            (claim) => claim.updateId,
-          ),
-        ).toEqual([43]),
-      );
-      participants[1]?.settle(completed);
-      await waitForTelegramTestState(async () =>
-        expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
-      );
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-      abort.abort();
-      stopWorker();
-      await runPromise;
-    });
-  });
-
-  it("refreshes deferred spooled claims after the active handler hands off", async () => {
-    const refreshHarness = installSpooledClaimRefreshHarness();
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "buffered topic 10 turn")]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate: async (update) => {
-          collectDeferredParticipant(participants, `test-buffer:${update.update_id}`);
-        },
-      });
-
-      try {
-        await waitForTelegramTestState(() => expect(participants).toHaveLength(1));
-        const before = await claimedAtForUpdate(tempDir, 42);
-
-        await new Promise((resolve) => {
-          setTimeout(resolve, 2);
-        });
-        refreshHarness.triggerRefresh();
-        await waitForTelegramTestState(async () =>
-          expect(await claimedAtForUpdate(tempDir, 42)).toBeGreaterThan(before),
-        );
-
-        participants[0]?.settle({ kind: "completed" });
-        await waitForTelegramTestState(async () =>
-          expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
-        );
-      } finally {
-        participants[0]?.settle({ kind: "completed" });
-        abort.abort();
-        stopWorker();
-        refreshHarness.restore();
-        await runPromise;
-      }
-    });
-  });
-
-  it("releases buffered spooled claims for retry when deferred processing fails", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "buffered failure")]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        drainIntervalMs: 10,
-        handleUpdate: async (update) => {
-          collectDeferredParticipant(participants, `test-buffer:${update.update_id}`);
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(participants).toHaveLength(1));
-      await waitForTelegramTestState(async () =>
-        expect(
-          (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
-            (claim) => claim.updateId,
-          ),
-        ).toEqual([42]),
-      );
-
-      abort.abort();
-      participants[0]?.settle({
-        kind: "failed-retryable",
-        error: new Error("buffered dispatch failed"),
-      });
-      stopWorker();
-      await runPromise;
-      // Shutdown may dispose before the retry result is persisted. The held
-      // claim is still at-least-once state and is recovered by the next owner.
-      await recoverStaleTelegramSpooledUpdateClaims({ spoolDir: tempDir, staleMs: 0 });
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]);
-      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
-    });
-  });
-
-  it("dead-letters buffered spooled claims when dispatch dedupe rollback fails", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const log = vi.fn();
-      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
-      const events: string[] = [];
-      let attempts = 0;
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "buffered rollback failure")]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        log,
-        drainIntervalMs: 10,
-        handleUpdate: async (update) => {
-          attempts += 1;
-          if (attempts === 1) {
-            events.push(`dispatch:${update.update_id}`);
-            collectDeferredParticipant(participants, `test-buffer:${update.update_id}`);
-            return;
-          }
-          events.push(`duplicate-skip:${update.update_id}`);
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(participants).toHaveLength(1));
-      participants[0]?.settle({
-        kind: "failed-retryable",
-        error: await createTelegramMessageDispatchReplayForgetError(),
-      });
-
-      await waitForTelegramTestState(async () =>
-        expect(await failedUpdateIds(tempDir)).toEqual([42]),
-      );
-      expect(events).toEqual(["dispatch:42"]);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
-      expectLogIncludes(log, "non-retryable dispatch-dedupe-rollback-failed");
-      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
-
-      abort.abort();
-      stopWorker();
-      await runPromise;
-    });
-  });
-
-  it("requeues buffered spooled claims when deferred processing times out", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const log = vi.fn();
-      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "buffered timeout")]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        log,
-        drainIntervalMs: 10,
-        spooledUpdateHandlerTimeoutMs: 20,
-        handleUpdate: async (update) => {
-          collectDeferredParticipant(participants, `test-buffer:${update.update_id}`);
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(participants).toHaveLength(1));
-      await waitForTelegramTestState(async () =>
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]),
-      );
-      expect(await failedUpdateIds(tempDir)).toEqual([]);
-      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
-      // Core drain watchdog log (display-id stripped of zero padding).
-      expectLogIncludes(log, "claim→adoption stalled for event");
-      expectLogIncludes(log, "handler-timeout");
-      expectLogIncludes(log, "spooled update 42 failed; keeping for retry");
-      expect(await failedUpdateReasons(tempDir)).toEqual([]);
-      abort.abort();
-      stopWorker();
-      await runPromise;
-    });
-  });
-
-  it("completes spooled row at adoption while a long turn is still settling (healthy long turn)", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const log = vi.fn();
-      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "healthy long turn")]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        log,
-        drainIntervalMs: 10,
-        spooledUpdateHandlerTimeoutMs: 80,
-        handleUpdate: async (update) => {
-          const participant = collectDeferredParticipant(
-            participants,
-            `test-adopt:${update.update_id}`,
-          );
-          // Return immediately (deferred registered). Adoption settles the
-          // spool row; the agent turn would continue under run lifecycle.
-          queueMicrotask(() => {
-            participant.settle({ kind: "completed" });
-          });
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(participants).toHaveLength(1));
-      await waitForTelegramTestState(async () =>
-        expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
-      );
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-      expect(await failedUpdateIds(tempDir)).toEqual([]);
-
-      // Past the handler/adoption timeout after adoption: no dead-letter.
-      await new Promise((resolve) => {
-        setTimeout(resolve, 150);
-      });
-      expect(await failedUpdateIds(tempDir)).toEqual([]);
-      expectLogExcludes(log, "timed out");
-      expectLogExcludes(log, "handler-timeout");
-
-      abort.abort();
-      stopWorker();
-      await runPromise;
-    });
-  });
-
-  it("replays claimed spooled updates after a crash before adoption", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      await withTempSpool(async (tempDir) => {
-        const abort = new AbortController();
-        const participants: TelegramSpooledReplayDeferredParticipant[] = [];
-        await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "pre-adoption crash")]);
-
-        const { runPromise, stopWorker } = startIsolatedIngressSession({
-          abort,
-          spoolDir: tempDir,
-          drainIntervalMs: 10,
-          handleUpdate: async (update) => {
-            collectDeferredParticipant(participants, `test-pre-crash:${update.update_id}`);
-            // Never adopt: process dies with claim held.
-          },
-        });
-
-        await waitForTelegramTestState(() => expect(participants).toHaveLength(1));
-        await waitForTelegramTestState(async () =>
-          expect(
-            (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map((c) => c.updateId),
-          ).toEqual([42]),
-        );
-
-        abort.abort();
-        stopWorker();
-        // Establish the same post-stop boundary as production without burning
-        // the real 15-second graceful-stop ceiling on the abandoned handler.
-        await vi.advanceTimersByTimeAsync(15_000);
-        await runPromise;
-
-        // Stale-claim recovery after crash: row is still claimed → replayable.
-        await recoverStaleTelegramSpooledUpdateClaims({
-          spoolDir: tempDir,
-          staleMs: 0,
-        });
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]);
-        expect(await failedUpdateIds(tempDir)).toEqual([]);
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not replay spooled updates after crash post-adoption (row already tombstoned)", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "post-adoption crash")]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        drainIntervalMs: 10,
-        handleUpdate: async (update) => {
-          const participant = collectDeferredParticipant(
-            participants,
-            `test-post-crash:${update.update_id}`,
-          );
-          participant.settle({ kind: "completed" });
-          // Turn would continue under run lifecycle; process crash after this is fine.
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(participants).toHaveLength(1));
-      await waitForTelegramTestState(async () =>
-        expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
-      );
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-
-      abort.abort();
-      stopWorker();
-      await runPromise;
-
-      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
-        spoolDir: tempDir,
-        staleMs: 0,
-      });
-      expect(recovered).toBe(0);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-      expect(await failedUpdateIds(tempDir)).toEqual([]);
-    });
-  });
-
-  it("records failed-retryable when dispatch throws before adoption", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const log = vi.fn();
-      const events: string[] = [];
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "pre-adoption failure")]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        log,
-        drainIntervalMs: 500,
-        handleUpdate: async (update) => {
-          events.push(`throw:${update.update_id}`);
-          throw new Error("session resolve failed before adoption");
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(events).toEqual(["throw:42"]));
-      await waitForTelegramTestState(async () =>
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]),
-      );
-      expect(await failedUpdateIds(tempDir)).toEqual([]);
-      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
-      expectLogIncludes(log, "spooled update 42 failed; keeping for retry");
-      expectLogExcludes(log, "handler-timeout");
-
-      abort.abort();
-      stopWorker();
-      await runPromise;
-    });
-  });
-
-  it("drains a second same-lane update after the first turn is adopted", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
-      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
-      await writeSpooledTestUpdates(tempDir, [
-        topicUpdate(42, 10, "first long turn"),
-        topicUpdate(43, 10, "second turn same lane"),
-      ]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        drainIntervalMs: 10,
-        handleUpdate: async (update) => {
-          events.push(`dispatch:${update.update_id}`);
-          if (update.update_id === 42) {
-            const participant = collectDeferredParticipant(
-              participants,
-              `test-lane:${update.update_id}`,
-            );
-            // Adopt immediately so the lane frees while a long turn would
-            // continue under run lifecycle (not retested here).
-            participant.settle({ kind: "completed" });
-          }
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(events).toContain("dispatch:42"));
-      await waitForTelegramTestState(async () =>
-        expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
-      );
-      // Lane free after adoption: second update reaches kernel dispatch.
-      await waitForTelegramTestState(() => expect(events).toEqual(["dispatch:42", "dispatch:43"]));
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-
-      abort.abort();
-      stopWorker();
-      await runPromise;
-    });
-  });
-
-  it("dead-letters missing harness failures so later same-lane updates can drain", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const log = vi.fn();
-      const events: string[] = [];
-      await writeSpooledTestUpdates(tempDir, [
-        topicUpdate(42, 10, "missing harness turn"),
-        topicUpdate(43, 11, "other topic turn"),
-        topicUpdate(44, 10, "same topic after missing harness"),
-      ]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        log,
-        drainIntervalMs: 10,
-        handleUpdate: async (update) => {
-          if (update.update_id === 42) {
-            events.push("topic10:first");
-            const err = new Error(
-              'Requested agent harness "missing-harness-85470" is not registered.',
-            );
-            err.name = "MissingAgentHarnessError";
-            throw err;
-          }
-          if (update.update_id === 43) {
-            events.push("topic11");
-            return;
-          }
-          if (update.update_id === 44) {
-            events.push("topic10:second");
-            abort.abort();
-          }
-        },
-      });
-
-      await waitForTelegramTestState(() =>
-        expect(events).toEqual(["topic10:first", "topic11", "topic10:second"]),
-      );
-      await waitForTelegramTestState(async () =>
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-      );
-      expect(await failedUpdateIds(tempDir)).toEqual([42]);
-      expectLogIncludes(log, "spooled update 42 failed with non-retryable missing-agent-harness");
-      expectLogIncludes(log, "dead-lettered");
-      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
-      stopWorker();
-      await runPromise;
-    });
-  });
-
-  it("dead-letters retryable poison updates after bounded retries so the lane can drain", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      await withTempSpool(async (tempDir) => {
-        const abort = new AbortController();
-        const log = vi.fn();
-        const events: string[] = [];
-        let poisonAttempts = 0;
-        await writeSpooledTestUpdates(
-          tempDir,
-          [topicUpdate(42, 10, "poison"), topicUpdate(44, 10, "after poison")],
-          {
-            now: Date.now() - pollingSessionTesting.spooledRetryDeadLetterMinAgeMs,
-          },
-        );
-
-        const { runPromise, stopWorker } = startIsolatedIngressSession({
-          abort,
-          spoolDir: tempDir,
-          log,
-          drainIntervalMs: 100,
-          handleUpdate: async (update) => {
-            if (update.update_id === 42) {
-              poisonAttempts += 1;
-              events.push(`poison:${poisonAttempts}`);
-              throw new Error("deterministic handler failure");
-            }
-            if (update.update_id === 44) {
-              events.push("after-poison");
-              abort.abort();
-            }
-          },
-        });
-
-        await waitForTelegramTestState(() => expect(poisonAttempts).toBe(1));
-        await vi.advanceTimersByTimeAsync(130_000);
-
-        await waitForTelegramTestState(() => expect(events.at(-1)).toBe("after-poison"));
-        expect(poisonAttempts).toBe(pollingSessionTesting.spooledRetryMaxAttempts);
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-        expect(await failedUpdateReasons(tempDir)).toEqual([
-          { id: 42, reason: "retry-limit-exceeded" },
-        ]);
-        expectLogIncludes(log, "spooled update 42 on lane");
-        expectLogIncludes(log, "reached retry limit after 8 attempts; dead-lettered");
-
-        stopWorker();
-        await runPromise;
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  for (const scenario of [
-    {
-      name: "topic",
-      conflict: topicUpdate(42, 10, "retryable session init conflict"),
-      blocked: topicUpdate(43, 10, "same topic must wait behind retry backoff"),
-      other: topicUpdate(44, 11, "other topic can continue"),
-      conflictEvent: "topic10:conflict",
-      blockedEvent: "topic10:overtook",
-      otherEvent: "topic11",
-      error: "reply session initialization conflicted for agent:main:telegram:group:-100:topic:10",
-    },
-    {
-      name: "direct message",
-      conflict: directUpdate(42, 100, "retryable session init conflict"),
-      blocked: directUpdate(43, 100, "same DM must wait behind retry backoff"),
-      other: directUpdate(44, 101, "other DM can continue"),
-      conflictEvent: "dm100:conflict",
-      blockedEvent: "dm100:overtook",
-      otherEvent: "dm101",
-      error: "reply session initialization conflicted for agent:main:telegram:direct:100",
-    },
-  ]) {
-    it(`backs off retryable reply session init conflicts for ${scenario.name} lanes`, async () => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
-      try {
-        await withTempSpool(async (tempDir) => {
-          const abort = new AbortController();
-          const log = vi.fn();
-          let attempts = 0;
-          const events: string[] = [];
-          await writeSpooledTestUpdates(tempDir, [
-            scenario.conflict,
-            scenario.blocked,
-            scenario.other,
-          ]);
-
-          const { runPromise, stopWorker } = startIsolatedIngressSession({
-            abort,
-            spoolDir: tempDir,
-            log,
-            drainIntervalMs: 100,
-            handleUpdate: async (update) => {
-              if (update.update_id === scenario.conflict.update_id) {
-                attempts += 1;
-                events.push(`${scenario.conflictEvent}:${attempts}`);
-                throw new Error(scenario.error);
-              }
-              if (update.update_id === scenario.blocked.update_id) {
-                events.push(scenario.blockedEvent);
-                return;
-              }
-              if (update.update_id === scenario.other.update_id) {
-                events.push(scenario.otherEvent);
-              }
-            },
-          });
-
-          await waitForTelegramTestState(() => expect(attempts).toBeGreaterThanOrEqual(1));
-          await waitForTelegramTestState(() => expect(events).toContain(scenario.otherEvent));
-          expect(events).not.toContain(scenario.blockedEvent);
-          expect(await pendingUpdateIds(tempDir, "all")).toEqual([
-            scenario.conflict.update_id,
-            scenario.blocked.update_id,
-          ]);
-          expect(await failedUpdateIds(tempDir)).toEqual([]);
-
-          await vi.advanceTimersByTimeAsync(1_200);
-          await waitForTelegramTestState(() => expect(attempts).toBeGreaterThanOrEqual(2));
-          expect(events).not.toContain(scenario.blockedEvent);
-          expectLogIncludes(
-            log,
-            `spooled update ${scenario.conflict.update_id} failed; keeping for retry`,
-          );
-
-          abort.abort();
-          stopWorker();
-          await runPromise;
-        });
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-  }
-
-  it.each([
-    {
-      name: "dead-letters wrapped missing harness failures",
-      text: "wrapped missing harness",
-      wrap: (cause: Error) => new Error("Agent turn failed", { cause }),
-    },
-    {
-      name: "dead-letters grammY BotError-wrapped missing harness failures",
-      text: "bot error wrapped missing harness",
-      wrap: (cause: Error) =>
-        Object.assign(new Error("Error in middleware: Agent turn failed"), {
-          name: "BotError",
-          error: new Error("Agent turn failed", { cause }),
-        }),
-    },
-  ])("$name", async ({ text, wrap }) => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const log = vi.fn();
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, text)]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        log,
-        drainIntervalMs: 10,
-        handleUpdate: async () => {
-          const cause = new Error(
-            'Requested agent harness "missing-harness-85470" is not registered.',
-          );
-          throw wrap(cause);
-        },
-      });
-
-      await waitForTelegramTestState(async () =>
-        expect(await failedUpdateIds(tempDir)).toEqual([42]),
-      );
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-      expectLogIncludes(log, "spooled update 42 failed with non-retryable missing-agent-harness");
-      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
-      abort.abort();
-      stopWorker();
-      await runPromise;
-    });
-  });
-
-  it("recovers restart processing claims before draining later same-lane updates", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
-      await writeSpooledTestUpdates(tempDir, [
-        topicUpdate(42, 10, "interrupted topic 10 turn"),
-        topicUpdate(43, 10, "later topic 10 turn"),
-        topicUpdate(44, 11, "topic 11 turn"),
-      ]);
-      await claimSpooledUpdateById(tempDir, 42);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate: async (update) => {
-          events.push(`handled:${update.update_id}`);
-          if (update.update_id === 44) {
-            abort.abort();
-          }
-        },
-      });
-
-      await runPromise;
-      expect(events).toEqual(["handled:42", "handled:44"]);
-      expect(await pendingUpdateIds(tempDir)).toEqual([43]);
-      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
-      stopWorker();
-    });
-  });
-
-  it("recovers unowned processing claims after the initial drain", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(40, 11, "warmup topic 11 turn")]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate: async (update) => {
-          events.push(`handled:${update.update_id}`);
-          if (update.update_id === 42) {
-            abort.abort();
-          }
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(events).toEqual(["handled:40"]));
-      await waitForTelegramTestState(async () =>
-        expect(await pendingUpdateIds(tempDir)).toEqual([]),
-      );
-
-      await writeSpooledTestUpdates(tempDir, [
-        topicUpdate(42, 10, "interrupted topic 10 turn"),
-        topicUpdate(43, 10, "later topic 10 turn"),
-      ]);
-      await claimSpooledUpdateById(tempDir, 42);
-
-      await runPromise;
-      expect(events).toEqual(["handled:40", "handled:42"]);
-      expect(await pendingUpdateIds(tempDir)).toEqual([43]);
-      stopWorker();
-    });
-  });
-
-  it("keeps claims owned by another live process blocked", async () => {
-    await withTempSpool(async (tempDir) => {
-      const interruptedUpdate = topicUpdate(42, 10, "active topic 10 turn");
-      await writeSpooledTestUpdates(tempDir, [
-        interruptedUpdate,
-        topicUpdate(43, 10, "later topic 10 turn"),
-      ]);
-      await claimSpooledUpdateById(tempDir, 42);
-      const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
-      await adoptClaimOwner({
-        spoolDir: tempDir,
-        updateId: 42,
-        // starttime matches the live owner so process identity proves ownership.
-        ownerId: `${liveOwnerPid}:5555:other-process`,
-        claimedAt: Date.now(),
-      });
-
-      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
-        spoolDir: tempDir,
-        staleMs: 0,
-        shouldRecover: (claim) =>
-          !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
-            processExists: (pid: number) => pid === liveOwnerPid,
-            readProcessStartTime: (pid: number) => (pid === liveOwnerPid ? 5555 : null),
-          }),
-      });
-
-      expect(recovered).toBe(0);
-      expect(await pendingUpdateIds(tempDir)).toEqual([43]);
-      expect(
-        (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
-          (claim) => claim.updateId,
-        ),
-      ).toEqual([42]);
-    });
-  });
-
-  it("releases pid-reused claims before draining later same-lane updates", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
-      await writeSpooledTestUpdates(tempDir, [
-        topicUpdate(42, 10, "wedged topic 10 turn"),
-        topicUpdate(43, 10, "later topic 10 turn"),
-      ]);
-      await claimSpooledUpdateById(tempDir, 42);
-      await adoptClaimOwner({
-        spoolDir: tempDir,
-        updateId: 42,
-        ownerId: `${process.pid}:1:other-process`,
-        claimedAt: Date.now() - 101,
-      });
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        spooledUpdateHandlerTimeoutMs: 100,
-        handleUpdate: async (update) => {
-          events.push(`handled:${update.update_id}`);
-          abort.abort();
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(events).toEqual(["handled:42"]));
-      await runPromise;
-      expect(await failedUpdateReasons(tempDir)).toEqual([]);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
-      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
-      stopWorker();
-    });
-  });
-
-  it("recovers a fresh claim whose pid now belongs only to a thread of this process", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
-      await writeSpooledTestUpdates(tempDir, [
-        topicUpdate(42, 10, "tid-reuse wedged turn"),
-        topicUpdate(43, 10, "later same-lane turn"),
-      ]);
-      await claimSpooledUpdateById(tempDir, 42);
-      // Old owner PID 9 is gone; a thread of this process now occupies numeric id 9.
-      await adoptClaimOwner({
-        spoolDir: tempDir,
-        updateId: 42,
-        ownerId: "9:1000:dead-owner",
-        claimedAt: Date.now(),
-      });
-
-      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
-        spoolDir: tempDir,
-        staleMs: 0,
-        shouldRecover: (claim) =>
-          !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
-            maxAgeMs: telegramSpooledUpdateClaimLeaseMs,
-            processExists: (pid: number) => pid === 9,
-            readProcessStartTime: (pid: number) => (pid === 9 ? 2000 : null),
-          }),
-      });
-      expect(recovered).toBe(1);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([42, 43]);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        drainIntervalMs: 10,
-        handleUpdate: async (update) => {
-          events.push(`handled:${update.update_id}`);
-          if (events.length >= 2) {
-            // Abort after this dispatch returns so 43 can tombstone first.
-            queueMicrotask(() => abort.abort());
-          }
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(events).toEqual(["handled:42", "handled:43"]));
-      await runPromise;
-      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
-      stopWorker();
-    });
-  });
-
-  it("tombstones a post-adoption claim after restart without re-running the turn", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
-      // Simulate the crash window: turn was durably adopted (dispatch dedupe
-      // committed / restart recovery will complete the run), but the ingress
-      // claim was not yet tombstoned. Restart recovery does not store update_id,
-      // so the claim is reclaimed and replayed; handleUpdate completes it with
-      // no model re-dispatch (dedupe / skip path).
-      await writeSpooledTestUpdates(tempDir, [
-        topicUpdate(42, 10, "adopted before crash"),
-        topicUpdate(43, 10, "later same-lane turn"),
-      ]);
-      await claimSpooledUpdateById(tempDir, 42);
-      await adoptClaimOwner({
-        spoolDir: tempDir,
-        updateId: 42,
-        ownerId: "9:1000:dead-owner",
-        claimedAt: Date.now(),
-      });
-
-      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
-        spoolDir: tempDir,
-        staleMs: 0,
-        shouldRecover: (claim) =>
-          !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
-            maxAgeMs: telegramSpooledUpdateClaimLeaseMs,
-            processExists: (pid: number) => pid === 9,
-            readProcessStartTime: (pid: number) => (pid === 9 ? 2000 : null),
-          }),
-      });
-      expect(recovered).toBe(1);
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        drainIntervalMs: 10,
-        handleUpdate: async (update) => {
-          // Replay of already-adopted update: no deferred participant / no model
-          // dispatch — spool drain completes the row as a tombstone.
-          events.push(`replay:${update.update_id}`);
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(events).toEqual(["replay:42", "replay:43"]));
-      await waitForTelegramTestState(async () =>
-        expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
-      );
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-      abort.abort();
-      stopWorker();
-      await runPromise;
-    });
-  });
-
-  it("reclaims an expired foreign claim so the lane can drain", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: number[] = [];
-      await writeSpooledTestUpdates(tempDir, [
-        topicUpdate(42, 10, "expired foreign claim"),
-        topicUpdate(43, 10, "later topic 10 turn"),
-      ]);
-      await claimSpooledUpdateById(tempDir, 42);
-      await adoptClaimOwner({
-        spoolDir: tempDir,
-        updateId: 42,
-        ownerId: "1:other-process",
-        claimedAt: Date.now() - telegramSpooledUpdateClaimLeaseMs - 1,
-      });
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        spooledUpdateHandlerTimeoutMs: 100,
-        handleUpdate: async (update) => {
-          events.push(update.update_id ?? -1);
-          if (events.length === 2) {
-            abort.abort();
-          }
-        },
-      });
-
-      await waitForTelegramTestState(() => expect(events).toEqual([42, 43]));
-      stopWorker();
-      await runPromise;
-    });
-  });
-
-  it("scans past active-lane backlogs to start unrelated lanes", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
-      let releaseTopicTenTurn: (() => void) | undefined;
-      const topicTenTurnDone = new Promise<void>((resolve) => {
-        releaseTopicTenTurn = resolve;
-      });
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(0, 10, "active topic 10 turn")]);
-      for (let updateId = 1; updateId <= 100; updateId += 1) {
-        await writeTelegramSpooledUpdate({
-          spoolDir: tempDir,
-          update: topicUpdate(updateId, 10, `blocked topic 10 turn ${updateId}`),
-        });
-      }
-      await writeTelegramSpooledUpdate({
-        spoolDir: tempDir,
-        update: topicUpdate(101, 11, "topic 11 turn"),
-      });
-
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate: async (update) => {
-          if (update.update_id === 0) {
-            events.push("topic10:start");
-            await topicTenTurnDone;
-            events.push("topic10:end");
-            return;
-          }
-          if (update.update_id === 101) {
-            events.push("handled:101");
-            abort.abort();
-          }
-        },
-      });
-
-      await waitForTelegramTestState(() =>
-        expect(events).toEqual(["topic10:start", "handled:101"]),
-      );
-      releaseTopicTenTurn?.();
-      await runPromise;
-      expect(events).toEqual(["topic10:start", "handled:101", "topic10:end"]);
-      releaseTopicTenTurn?.();
-      stopWorker();
-    });
-  });
-
-  it("retries a lone active spooled handler in a replacement session (#84158)", async () => {
-    // Core drain releases a hanging claim so a replacement session retries it.
-    vi.useFakeTimers();
-    const firstAbort = new AbortController();
-    const secondAbort = new AbortController();
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
-    let releaseTurn: (() => void) | undefined;
-    const turnDone = new Promise<void>((resolve) => {
-      releaseTurn = resolve;
-    });
-    const handleUpdate = vi.fn(async () => {
-      if (handleUpdate.mock.calls.length === 1) {
-        await turnDone;
-      }
-    });
-    createTelegramBotMock.mockImplementation(() => makeIsolatedBot({ handleUpdate }));
-    await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "lone active topic turn")]);
-    const createWorker = vi.fn(() => {
-      let stopWorker: (() => void) | undefined;
-      const workerDone = new Promise<void>((resolve) => {
-        stopWorker = resolve;
-      });
-      return {
-        onMessage: vi.fn(() => () => undefined),
-        stop: vi.fn(async () => {
-          stopWorker?.();
-        }),
-        task: vi.fn(async () => {
-          await workerDone;
-        }),
-      };
-    });
-
-    try {
-      const firstSession = createPollingSession({
-        abortSignal: firstAbort.signal,
-        log: vi.fn(),
-        ingress: {
-          spoolDir: tempDir,
-          createWorker,
-          drainIntervalMs: 100,
-          spooledUpdateHandlerTimeoutMs: 100,
-        },
-      });
-      const firstRunPromise = firstSession.runUntilAbort();
-      await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
-      // Watchdog releases the hanging claim before the session is replaced.
-      await vi.advanceTimersByTimeAsync(1_000);
-      await waitForTelegramTestState(async () =>
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]),
-      );
-      firstAbort.abort();
-      await vi.advanceTimersByTimeAsync(16_000);
-      await firstRunPromise;
-
-      const secondSession = createPollingSession({
-        abortSignal: secondAbort.signal,
-        ingress: {
-          spoolDir: tempDir,
-          createWorker,
-          drainIntervalMs: 100,
-          spooledUpdateHandlerTimeoutMs: 100,
-        },
-      });
-      const secondRunPromise = secondSession.runUntilAbort();
-      await vi.advanceTimersByTimeAsync(2_000);
-      await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(2));
-      await waitForTelegramTestState(async () =>
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-      );
-      expect(await failedUpdateIds(tempDir)).toEqual([]);
-
-      secondAbort.abort();
-      await vi.advanceTimersByTimeAsync(20_000);
-      await secondRunPromise;
-    } finally {
-      releaseTurn?.();
-      firstAbort.abort();
-      secondAbort.abort();
-      vi.useRealTimers();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it.each([
-    {
-      name: "lets isolated ingress drain interleave different Telegram topic lanes",
-      updates: [
-        topicUpdate(42, 10, "long topic 10 turn"),
-        topicUpdate(43, 11, "topic 11 turn"),
-        topicUpdate(44, 10, "second topic 10 turn"),
-      ],
-      labels: ["topic10:start", "topic11", "topic10:end", "topic10:second"] as const,
-    },
-    {
-      name: "lets isolated ingress drain interleave different Telegram chats",
-      updates: [
-        directUpdate(42, -100, "long first chat turn"),
-        directUpdate(43, 854067528, "second chat turn"),
-        directUpdate(44, -100, "second first chat turn"),
-      ],
-      labels: ["chatA:start", "chatB", "chatA:end", "chatA:second"] as const,
-    },
-  ])("$name", async ({ updates, labels }) => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
-      let releaseFirstLane: (() => void) | undefined;
-      const firstLaneDone = new Promise<void>((resolve) => {
-        releaseFirstLane = resolve;
-      });
-      await writeSpooledTestUpdates(tempDir, updates);
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate: async (update) => {
-          if (update.update_id === 42) {
-            events.push(labels[0]);
-            await firstLaneDone;
-            events.push(labels[2]);
-          } else if (update.update_id === 43) {
-            events.push(labels[1]);
-          } else if (update.update_id === 44) {
-            events.push(labels[3]);
-          }
-        },
-      });
-
-      try {
-        await waitForTelegramTestState(() => expect(events).toEqual(labels.slice(0, 2)));
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([44]);
-        releaseFirstLane?.();
-        await waitForTelegramTestState(() => expect(events).toEqual(labels));
-        await waitForTelegramTestState(async () =>
-          expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-        );
-      } finally {
-        releaseFirstLane?.();
-        abort.abort();
-        stopWorker();
-        await runPromise;
-      }
-    });
-  });
-
-  it("lets isolated ingress control updates bypass an active spooled turn", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
-      let releaseRegularTurn: (() => void) | undefined;
-      const regularTurnDone = new Promise<void>((resolve) => {
-        releaseRegularTurn = resolve;
-      });
+      const regularTurnStarted = createDeferred<void>();
+      const regularTurnDone = createDeferred<void>();
+      const regularTurnFinished = createDeferred<void>();
+      const controlsHandled = createDeferred<void>();
+      const worker = createListeningIngressWorker();
       await writeSpooledTestUpdates(tempDir, [forumUpdate(42, "summarize this")]);
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
+      const { runPromise } = startIsolatedIngressSession({
         abort,
-        spoolDir: tempDir,
+        stateDir: tempDir,
+        createWorker: worker.createWorker,
         handleUpdate: async (update) => {
           if (update.update_id === 42) {
             events.push("regular:start");
-            await regularTurnDone;
+            regularTurnStarted.resolve();
+            await regularTurnDone.promise;
             events.push("regular:end");
+            regularTurnFinished.resolve();
           } else if (update.update_id === 43) {
             events.push("status");
           } else if (update.update_id === 44) {
             events.push("stop");
+            controlsHandled.resolve();
           }
         },
       });
+      const lifetime = createTestLifetime(context, async () => {
+        regularTurnDone.resolve();
+        abort.abort();
+        await runPromise;
+      });
 
       try {
-        await waitForTelegramTestState(() => expect(events).toEqual(["regular:start"]));
-        await writeSpooledTestUpdates(tempDir, [
-          forumUpdate(43, "/status"),
-          forumUpdate(44, "/stop@vacs_tars_bot"),
-        ]);
-        await waitForTelegramTestState(() =>
-          expect(events).toEqual(["regular:start", "status", "stop"]),
-        );
+        await lifetime.wait(Promise.all([regularTurnStarted.promise, worker.listening]));
+        // Live intake owns both the durable append and the wakeup for newly received controls.
+        worker.emit({
+          type: "updates",
+          requestId: "controls",
+          updates: [forumUpdate(43, "/status"), forumUpdate(44, "/stop@openclaw_bot")],
+          queued: 2,
+        });
+        await lifetime.wait(worker.firstAck);
+        expect(worker.ackSpooledUpdate).toHaveBeenCalledExactlyOnceWith("controls", {
+          ok: true,
+          updateId: 44,
+        });
+        await lifetime.wait(controlsHandled.promise);
+        expect(events).toEqual(["regular:start", "status", "stop"]);
         expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-        releaseRegularTurn?.();
-        await waitForTelegramTestState(async () =>
-          expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-        );
+        regularTurnDone.resolve();
+        await lifetime.wait(regularTurnFinished.promise);
+        expect(events).toEqual(["regular:start", "status", "stop", "regular:end"]);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
       } finally {
-        releaseRegularTurn?.();
-        abort.abort();
-        stopWorker();
-        await runPromise;
+        await lifetime.close();
       }
     });
   });
 
-  it("preserves spool order when a control update is already queued after a regular turn", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
-      let releaseRegularTurn: (() => void) | undefined;
-      const regularTurnDone = new Promise<void>((resolve) => {
-        releaseRegularTurn = resolve;
-      });
-      await writeSpooledTestUpdates(tempDir, [
-        directUpdate(42, -100, "summarize this"),
-        directUpdate(43, -100, "/status"),
-      ]);
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate: async (update) => {
-          if (update.update_id === 42) {
-            events.push("regular:start");
-            await regularTurnDone;
-            events.push("regular:end");
-          } else if (update.update_id === 43) {
-            events.push("status");
-          }
-        },
-      });
-
-      try {
-        await waitForTelegramTestState(() => expect(events).toEqual(["regular:start", "status"]));
-        releaseRegularTurn?.();
-        await waitForTelegramTestState(async () =>
-          expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-        );
-      } finally {
-        releaseRegularTurn?.();
-        abort.abort();
-        stopWorker();
-        await runPromise;
-      }
-    });
-  });
-
-  it("waits for active spooled handlers before stopping the bot", async () => {
-    await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
-      let releaseRegularTurn: (() => void) | undefined;
-      const regularTurnDone = new Promise<void>((resolve) => {
-        releaseRegularTurn = resolve;
-      });
-      await writeSpooledTestUpdates(tempDir, [directUpdate(42, -100, "summarize this")]);
-      const { runPromise } = startIsolatedIngressSession({
-        abort,
-        spoolDir: tempDir,
-        handleUpdate: async () => {
-          events.push("regular:start");
-          await regularTurnDone;
-          events.push("regular:end");
-        },
-        stop: async () => {
-          events.push("bot:stop");
-        },
-      });
-
-      try {
-        await waitForTelegramTestState(() => expect(events).toEqual(["regular:start"]));
-        abort.abort();
-        releaseRegularTurn?.();
-        await runPromise;
-        expect(events).toEqual(["regular:start", "regular:end", "bot:stop"]);
-      } finally {
-        releaseRegularTurn?.();
-      }
-    });
-  });
-
-  it.each(
-    (["buffered", "inline"] as const).flatMap((admission) =>
-      (["commit", "rollback"] as const).map((operation) => ({ admission, operation })),
-    ),
-  )(
+  it.each([
+    { admission: "buffered", operation: "commit" },
+    { admission: "inline", operation: "rollback" },
+  ] as const)(
     "joins a held $admission replay $operation beyond polling stop grace",
     async ({ admission, operation }) => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
-        await withTempSpool(async (spoolDir) => {
+        await withTempSpool(async (stateDir) => {
           const abort = new AbortController();
-          const operationStarted = createDeferred<void>();
-          const releaseOperation = createDeferred<void>();
-          const recorded = new Set<string>();
+          const replay = createHeldTelegramReplay(operation);
+          const { operationStarted, releaseOperation, recorded } = replay;
+          const stopBot = vi.fn(async () => undefined);
           const participants: TelegramSpooledReplayDeferredParticipant[] = [];
           let settlement: Promise<void> | undefined;
-          await writeSpooledTestUpdates(spoolDir, [directUpdate(42, 111, "held replay write")]);
+          await writeSpooledTestUpdates(stateDir, [directUpdate(42, 111, "held replay write")]);
           const { runPromise, stopWorker } = startIsolatedIngressSession({
             abort,
-            spoolDir,
+            stateDir,
+            stop: stopBot,
+            ...(admission === "buffered" && operation === "commit"
+              ? { spooledUpdateHandlerTimeoutMs: 100 }
+              : {}),
             handleUpdate: async () => {
               const participant = collectDeferredParticipant(participants, "held-replay-write");
-              const hold = expectDefined(participant.beginSettlementHold(), "adoption hold");
-              settlement = (async () => {
-                try {
-                  await commitTelegramMessageDispatchReplay({
-                    requirePersistent: true,
-                    guard: {
-                      claim: async () => ({ kind: "invalid" }),
-                      warmup: async () => 0,
-                      forget: async (event) => {
-                        operationStarted.resolve();
-                        await releaseOperation.promise;
-                        for (const key of "keys" in event ? (event.keys ?? []) : []) {
-                          recorded.delete(key);
-                        }
-                        return true;
-                      },
-                    },
-                    claims: ["first", "second"].map((key) => ({
-                      keys: [key],
-                      commit: async (options) => {
-                        if (operation === "commit" && key === "first") {
-                          operationStarted.resolve();
-                          await releaseOperation.promise;
-                        }
-                        recorded.add(key);
-                        if (operation === "rollback" && key === "second") {
-                          options?.onDiskError?.(new Error("synthetic commit failure"));
-                        }
-                        return true;
-                      },
-                      release: () => undefined,
-                    })),
-                  });
-                  hold.release("discard-pending");
-                  participant.settle({ kind: "completed" });
-                } catch (error) {
-                  hold.release("replay-pending");
-                  participant.settle({ kind: "failed-retryable", error });
-                }
-              })();
+              settlement = replay.settle(participant);
               if (admission === "inline") {
                 await settlement;
               }
@@ -3379,10 +1392,20 @@ describe("TelegramPollingSession", () => {
           });
           try {
             await operationStarted.promise;
+            if (admission === "buffered" && operation === "commit") {
+              await vi.advanceTimersByTimeAsync(200);
+              expect(participants[0]?.abortSignal.aborted).toBe(false);
+              expect(
+                (await listTelegramSpooledUpdateClaims({ stateDir })).map(
+                  (claim) => claim.updateId,
+                ),
+              ).toEqual([42]);
+            }
             abort.abort();
             stopWorker();
             await vi.advanceTimersByTimeAsync(16_000);
             expect(accountStopped).toBe(false);
+            expect(stopBot).not.toHaveBeenCalled();
           } finally {
             releaseOperation.resolve();
             await settlement;
@@ -3390,14 +1413,15 @@ describe("TelegramPollingSession", () => {
             stopWorker();
             await accountRun;
             await waitForTelegramTestState(async () =>
-              expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]),
+              expect(await listTelegramSpooledUpdateClaims({ stateDir })).toEqual([]),
             );
           }
+          expect(stopBot).toHaveBeenCalledOnce();
           expect([...recorded]).toEqual(operation === "commit" ? ["first", "second"] : []);
-          expect(await pendingUpdateIds(spoolDir, "all")).toEqual(
+          expect(await pendingUpdateIds(stateDir, "all")).toEqual(
             operation === "commit" ? [] : [42],
           );
-          expect(await failedUpdateIds(spoolDir)).toEqual([]);
+          expect(await failedUpdateIds(stateDir)).toEqual([]);
         });
       } finally {
         vi.useRealTimers();
@@ -3405,166 +1429,139 @@ describe("TelegramPollingSession", () => {
     },
   );
 
-  it("recovers orphaned spooled claims across isolated ingress restarts", async () => {
-    // Core drain dispose leaves the claim for recover; the next cycle re-dispatches.
+  it("keeps an adopted reply usable across an isolated worker crash until account shutdown", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const abort = new AbortController();
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
-    let releaseRegularTurn: (() => void) | undefined;
-    const regularTurnDone = new Promise<void>((resolve) => {
-      releaseRegularTurn = resolve;
-    });
-    const handleUpdate = vi.fn(async () => {
-      await regularTurnDone;
-    });
-    createTelegramBotMock.mockImplementation(() => makeIsolatedBot({ handleUpdate }));
-    await writeTelegramSpooledUpdate({
-      spoolDir: tempDir,
-      update: {
-        update_id: 42,
-        message: { text: "summarize this", chat: { id: -100, type: "supergroup" } },
-      },
-    });
-
-    let workerTaskCalls = 0;
-    const createWorker = vi.fn(() => ({
-      onMessage: vi.fn(() => () => undefined),
-      stop: vi.fn(async () => undefined),
-      task: vi.fn(async () => {
-        workerTaskCalls += 1;
-        if (workerTaskCalls === 1) {
-          return;
-        }
-        await new Promise<void>((resolve) => {
-          abort.signal.addEventListener("abort", () => resolve(), { once: true });
+    try {
+      await withTempSpool(async (stateDir) => {
+        const requests: Array<{ chat_id: number; text: string }> = [];
+        const server = createServer((request, response) => {
+          let body = "";
+          request.setEncoding("utf8");
+          request.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          request.on("end", () => {
+            const isReply = request.url?.endsWith("/sendMessage");
+            if (isReply) {
+              requests.push(JSON.parse(body));
+            }
+            response.writeHead(200, { connection: "close", "content-type": "application/json" });
+            response.end(
+              JSON.stringify({
+                ok: true,
+                result: isReply
+                  ? {
+                      message_id: 900,
+                      date: 0,
+                      chat: { id: -100, type: "supergroup", title: "Test group" },
+                      text: "reply after worker crash",
+                    }
+                  : true,
+              }),
+            );
+          });
         });
-      }),
-    }));
+        const apiRoot = await listen(server);
 
-    try {
-      const session = createPollingSession({
-        abortSignal: abort.signal,
-        ingress: {
-          spoolDir: tempDir,
-          createWorker,
-          drainIntervalMs: 100,
-        },
+        const abort = new AbortController();
+        const adopted = createDeferred<void>();
+        const releaseReply = createDeferred<void>();
+        const delivery = createDeferred<{ messageId: number } | { error: unknown }>();
+        const transport = makeTelegramTransport();
+        const replacementBot = makeIsolatedBot();
+        let firstFetchSignal: AbortSignal | undefined;
+        let firstMediaSignal: AbortSignal | undefined;
+        createTelegramBotMock
+          .mockImplementationOnce((opts: TelegramBotOptions) => {
+            firstFetchSignal = opts.fetchAbortSignal;
+            firstMediaSignal = opts.mediaAbortSignal;
+            const botTransport = expectDefined(opts.telegramTransport, "polling transport");
+            const clientFetch = expectDefined(
+              createTelegramClientFetch({
+                fetchImpl: asTelegramClientFetch(botTransport.fetch),
+                shutdownSignal: opts.fetchAbortSignal,
+                transport: botTransport,
+              }),
+              "Bot API fetch",
+            );
+            const bot = new Bot("tok", {
+              botInfo: replacementBot.botInfo,
+              client: {
+                apiRoot,
+                fetch: asTelegramClientFetch(clientFetch),
+              },
+            });
+            vi.spyOn(bot, "stop").mockResolvedValue(undefined);
+            bot.on("message", async (ctx) => {
+              const lifecycle = expectDefined(
+                getTelegramSpooledReplayLifecycle(),
+                "replay lifecycle",
+              );
+              await lifecycle.onAdopted();
+              adopted.resolve();
+              await releaseReply.promise;
+              try {
+                const message = await ctx.reply("reply after worker crash");
+                delivery.resolve({ messageId: message.message_id });
+              } catch (error) {
+                delivery.resolve({ error });
+              }
+            });
+            return bot;
+          })
+          .mockReturnValue(replacementBot);
+        const idleWorker = createIdleIngressWorker();
+        const firstWorkerStop = vi.fn(async () => undefined);
+        const createWorker = vi.fn(idleWorker.createWorker).mockImplementationOnce(() =>
+          makeWorker(async () => {
+            await adopted.promise;
+            throw new Error("worker crashed after adoption");
+          }, firstWorkerStop),
+        );
+        let runPromise: Promise<void> | undefined;
+        try {
+          const update = topicUpdate(42, 10, "finish after worker crash");
+          await writeSpooledTestUpdates(stateDir, [update]);
+          const session = createPollingSession({
+            abortSignal: abort.signal,
+            telegramTransport: transport,
+            ingress: { stateDir, createWorker, drainIntervalMs: 100 },
+          });
+          runPromise = session.runUntilAbort();
+          await adopted.promise;
+          await waitForTelegramTestState(() => expect(firstWorkerStop).toHaveBeenCalledTimes(1));
+          expect(firstMediaSignal?.aborted).toBe(true);
+          expect(firstFetchSignal?.aborted).toBe(false);
+          expect(await listTelegramSpooledUpdateClaims({ stateDir })).toEqual([]);
+          await writeSpooledTestUpdates(stateDir, [update]);
+          expect(await pendingUpdateIds(stateDir, "all")).toEqual([]);
+
+          // The adopted handler may outlive the old ingress monitor's stop grace.
+          await vi.advanceTimersByTimeAsync(20_000);
+          await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(2));
+          expect(transport.close).not.toHaveBeenCalled();
+          expect(requests).toEqual([]);
+          releaseReply.resolve();
+          await expect(delivery.promise).resolves.toEqual({ messageId: 900 });
+          expect(requests).toEqual([
+            expect.objectContaining({ chat_id: -100, text: "reply after worker crash" }),
+          ]);
+          expect(replacementBot.handleUpdate).not.toHaveBeenCalled();
+          expect(transport.close).not.toHaveBeenCalled();
+        } finally {
+          releaseReply.resolve();
+          adopted.resolve();
+          abort.abort();
+          idleWorker.stop();
+          await vi.advanceTimersByTimeAsync(20_000);
+          await runPromise;
+          await closeServer(server);
+        }
+        expect(firstFetchSignal?.aborted).toBe(true);
+        expect(transport.close).toHaveBeenCalledTimes(1);
       });
-
-      const runPromise = session.runUntilAbort();
-      await waitForTelegramTestState(() =>
-        expect(handleUpdate.mock.calls.length).toBeGreaterThanOrEqual(1),
-      );
-      await vi.advanceTimersByTimeAsync(16_000);
-      await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(2));
-      // After cycle restart the orphaned claim is recovered (may already have
-      // been re-dispatched by the time createWorker hits 2).
-      await waitForTelegramTestState(() =>
-        expect(handleUpdate.mock.calls.length).toBeGreaterThanOrEqual(1),
-      );
-
-      releaseRegularTurn?.();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await waitForTelegramTestState(async () =>
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-      );
-      abort.abort();
-      await vi.advanceTimersByTimeAsync(20_000);
-      await runPromise;
-    } finally {
-      releaseRegularTurn?.();
-      vi.useRealTimers();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("restarts isolated ingress when the worker task rejects before shutdown", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const abort = new AbortController();
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
-    const log = vi.fn();
-    const setStatus = vi.fn();
-    createTelegramBotMock.mockImplementation(() => makeIsolatedBot());
-
-    let workerTaskCalls = 0;
-    const createWorker = vi.fn(() => {
-      let stopWorker: (() => void) | undefined;
-      const workerDone = new Promise<void>((resolve) => {
-        stopWorker = resolve;
-      });
-      return {
-        onMessage: vi.fn(() => () => undefined),
-        stop: vi.fn(async () => {
-          stopWorker?.();
-        }),
-        task: vi.fn(async () => {
-          workerTaskCalls += 1;
-          if (workerTaskCalls === 1) {
-            throw new Error("worker crashed");
-          }
-          await workerDone;
-        }),
-      };
-    });
-
-    try {
-      const session = createPollingSession({
-        abortSignal: abort.signal,
-        log,
-        setStatus,
-        ingress: {
-          spoolDir: tempDir,
-          createWorker,
-          drainIntervalMs: 100,
-        },
-      });
-
-      const runPromise = session.runUntilAbort();
-      await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(2));
-      const firstFetchSignal = mockObjectArg(
-        createTelegramBotMock,
-        "first createTelegramBot",
-        0,
-      ).fetchAbortSignal;
-      const firstMediaSignal = mockObjectArg(
-        createTelegramBotMock,
-        "first createTelegramBot",
-        0,
-      ).mediaAbortSignal;
-      const secondFetchSignal = mockObjectArg(
-        createTelegramBotMock,
-        "second createTelegramBot",
-        1,
-      ).fetchAbortSignal;
-      const secondMediaSignal = mockObjectArg(
-        createTelegramBotMock,
-        "second createTelegramBot",
-        1,
-      ).mediaAbortSignal;
-      expect(firstFetchSignal).toBeInstanceOf(AbortSignal);
-      expect(firstMediaSignal).toBeInstanceOf(AbortSignal);
-      expect(secondFetchSignal).toBeInstanceOf(AbortSignal);
-      expect(secondMediaSignal).toBeInstanceOf(AbortSignal);
-      expect((firstFetchSignal as AbortSignal).aborted).toBe(false);
-      expect((firstMediaSignal as AbortSignal).aborted).toBe(true);
-      expect((secondFetchSignal as AbortSignal).aborted).toBe(false);
-      expect((secondMediaSignal as AbortSignal).aborted).toBe(false);
-      expectLogIncludes(log, "isolated polling ingress failed: worker crashed");
-      expect(
-        statusPatches(setStatus).some(
-          (patch) => patch.connected === false && patch.lastError === "worker crashed",
-        ),
-      ).toBe(true);
-
-      abort.abort();
-      await vi.advanceTimersByTimeAsync(20_000);
-      await runPromise;
-      expect((firstFetchSignal as AbortSignal).aborted).toBe(true);
-      expect((secondFetchSignal as AbortSignal).aborted).toBe(true);
-      expect((secondMediaSignal as AbortSignal).aborted).toBe(true);
     } finally {
       vi.useRealTimers();
-      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -3572,22 +1569,43 @@ describe("TelegramPollingSession", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
-    let releaseBackoff: (() => void) | undefined;
-    const backoff = new Promise<void>((resolve) => {
-      releaseBackoff = resolve;
-    });
+    const completed = createDeferred<void>();
+    const pendingCompletions = new Set([42, 43]);
+    const state = getTelegramRuntime().state;
+    const openQueue = state.openChannelIngressQueue;
+    const queueFactory = vi
+      .spyOn(state, "openChannelIngressQueue")
+      .mockImplementation(
+        <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+          options?: Parameters<typeof openQueue>[0],
+        ) => {
+          const queue = openQueue<TPayload, TMetadata, TCompletedMetadata>(options);
+          return {
+            ...queue,
+            complete: async (...args: Parameters<typeof queue.complete>) => {
+              const committed = await queue.complete(...args);
+              if (committed) {
+                const id = typeof args[0] === "string" ? args[0] : args[0].id;
+                pendingCompletions.delete(Number(id));
+                if (pendingCompletions.size === 0) {
+                  completed.resolve();
+                }
+              }
+              return committed;
+            },
+          };
+        },
+      );
+    const backoff = createDeferred<void>();
     sleepWithAbortMock.mockImplementationOnce(async () => {
-      await backoff;
+      await backoff.promise;
       return undefined;
     });
 
     let firstMediaSignal: AbortSignal | undefined;
-    let rejectFirstWorker: ((err: Error) => void) | undefined;
-    const firstWorkerDone = new Promise<void>((_resolve, reject) => {
-      rejectFirstWorker = reject;
-    });
+    const firstWorkerDone = createDeferred<void>();
     const firstHandleUpdate = vi.fn(async () => {
-      rejectFirstWorker?.(new Error("worker crashed"));
+      firstWorkerDone.reject(new Error("worker crashed"));
       if (!firstMediaSignal) {
         throw new Error("Expected the first polling cycle signal");
       }
@@ -3596,10 +1614,7 @@ describe("TelegramPollingSession", () => {
     });
     const secondHandleUpdate = vi.fn(async () => undefined);
     const createBot = (handleUpdate: (update: { update_id?: number }) => Promise<unknown>) => ({
-      api: {
-        deleteWebhook: vi.fn(async () => true),
-        config: { use: vi.fn() },
-      },
+      api: { deleteWebhook: vi.fn(async () => true), config: { use: vi.fn() } },
       init: vi.fn(async () => undefined),
       handleUpdate,
       stop: vi.fn(async () => undefined),
@@ -3612,33 +1627,23 @@ describe("TelegramPollingSession", () => {
       .mockReturnValueOnce(createBot(secondHandleUpdate));
 
     let workerIndex = 0;
-    let stopSecondWorker: (() => void) | undefined;
-    const secondWorkerDone = new Promise<void>((resolve) => {
-      stopSecondWorker = resolve;
-    });
+    const secondWorkerDone = createDeferred<void>();
     const createWorker = vi.fn(() => {
       workerIndex += 1;
       if (workerIndex === 1) {
-        return {
-          onMessage: vi.fn(() => () => undefined),
-          stop: vi.fn(async () => undefined),
-          task: vi.fn(async () => await firstWorkerDone),
-        };
+        return makeWorker(() => firstWorkerDone.promise);
       }
-      return {
-        onMessage: vi.fn(() => () => undefined),
-        stop: vi.fn(async () => {
-          stopSecondWorker?.();
-        }),
-        task: vi.fn(async () => await secondWorkerDone),
-      };
+      return makeWorker(
+        () => secondWorkerDone.promise,
+        async () => secondWorkerDone.resolve(),
+      );
     });
 
     try {
       const session = createPollingSession({
         abortSignal: abort.signal,
         ingress: {
-          spoolDir: tempDir,
+          stateDir: tempDir,
           createWorker,
           drainIntervalMs: 10,
         },
@@ -3661,12 +1666,13 @@ describe("TelegramPollingSession", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       expect(secondHandleUpdate).toHaveBeenCalledTimes(0);
 
-      releaseBackoff?.();
+      backoff.resolve();
       await vi.advanceTimersByTimeAsync(2_000);
       // Fresh bot drains remaining work (both lanes if still pending).
       await waitForTelegramTestState(() =>
         expect(secondHandleUpdate.mock.calls.length).toBeGreaterThanOrEqual(1),
       );
+      await completed.promise;
       abort.abort();
       await vi.advanceTimersByTimeAsync(20_000);
       await runPromise;
@@ -3674,119 +1680,12 @@ describe("TelegramPollingSession", () => {
       expect(createWorker).toHaveBeenCalledTimes(2);
       expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
     } finally {
-      releaseBackoff?.();
+      backoff.resolve();
       abort.abort();
-      stopSecondWorker?.();
+      secondWorkerDone.resolve();
+      queueFactory.mockRestore();
       vi.useRealTimers();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps adopted-turn Bot API delivery alive when an isolated worker crashes", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const abort = new AbortController();
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
-    let releaseBackoff: (() => void) | undefined;
-    const backoff = new Promise<void>((resolve) => {
-      releaseBackoff = resolve;
-    });
-    sleepWithAbortMock.mockImplementationOnce(async () => {
-      await backoff;
-      return undefined;
-    });
-
-    let adopted: (() => void) | undefined;
-    const adoptedTurn = new Promise<void>((resolve) => {
-      adopted = resolve;
-    });
-    let deliveryResolve: (() => void) | undefined;
-    let deliveryReject: ((err: unknown) => void) | undefined;
-    const delivery = new Promise<void>((resolve, reject) => {
-      deliveryResolve = resolve;
-      deliveryReject = reject;
-    });
-    let firstFetchSignal: AbortSignal | undefined;
-    let firstMediaSignal: AbortSignal | undefined;
-    const sendMessage = vi.fn(async () => {
-      if (firstFetchSignal?.aborted) {
-        throw new Error("adopted-turn Bot API client was aborted");
-      }
-    });
-    createTelegramBotMock.mockImplementationOnce(
-      (opts: { fetchAbortSignal?: AbortSignal; mediaAbortSignal?: AbortSignal }) => {
-        firstFetchSignal = opts.fetchAbortSignal;
-        firstMediaSignal = opts.mediaAbortSignal;
-        const api = {
-          deleteWebhook: vi.fn(async () => true),
-          sendMessage,
-          config: { use: vi.fn() },
-        };
-        return {
-          api,
-          init: vi.fn(async () => undefined),
-          handleUpdate: vi.fn(async (update: { update_id?: number }) => {
-            const participant = createTelegramSpooledReplayDeferredParticipant(
-              `test-adopted-delivery:${update.update_id}`,
-            );
-            if (!participant || !firstMediaSignal) {
-              throw new Error("Expected a spooled participant and media signal");
-            }
-            participant.settle({ kind: "completed" });
-            adopted?.();
-            void (async () => {
-              try {
-                await waitForAbortSignal(firstMediaSignal);
-                // Streaming, edits, and native-quote fallbacks retain this adopted bot client.
-                await api.sendMessage();
-                deliveryResolve?.();
-              } catch (err) {
-                deliveryReject?.(err);
-              }
-            })();
-          }),
-          stop: vi.fn(async () => undefined),
-        };
-      },
-    );
-
-    const createWorker = vi.fn(() => ({
-      onMessage: vi.fn(() => () => undefined),
-      stop: vi.fn(async () => undefined),
-      task: vi.fn(async () => {
-        await adoptedTurn;
-        throw new Error("worker crashed after turn adoption");
-      }),
-    }));
-
-    try {
-      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "finish after worker crash")]);
-      const session = createPollingSession({
-        abortSignal: abort.signal,
-        ingress: {
-          spoolDir: tempDir,
-          createWorker,
-          drainIntervalMs: 10,
-        },
-      });
-      const runPromise = session.runUntilAbort();
-
-      await delivery;
-      expect(sendMessage).toHaveBeenCalledTimes(1);
-      expect(firstMediaSignal?.aborted).toBe(true);
-      expect(firstFetchSignal?.aborted).toBe(false);
-      await waitForTelegramTestState(async () =>
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-      );
-
-      abort.abort();
-      releaseBackoff?.();
-      await vi.advanceTimersByTimeAsync(20_000);
-      await runPromise;
-      expect(firstFetchSignal?.aborted).toBe(true);
-    } finally {
-      releaseBackoff?.();
-      abort.abort();
-      vi.useRealTimers();
+      await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -3798,26 +1697,20 @@ describe("TelegramPollingSession", () => {
     const log = vi.fn();
     createTelegramBotMock.mockImplementation(() => makeIsolatedBot());
 
-    let rejectWorker: ((err: Error) => void) | undefined;
-    const workerDone = new Promise<void>((_resolve, reject) => {
-      rejectWorker = reject;
-    });
-    const createWorker = vi.fn(() => ({
-      onMessage: vi.fn(() => () => undefined),
-      stop: vi.fn(async () => {
-        rejectWorker?.(new Error("worker exited with code 1"));
-      }),
-      task: vi.fn(async () => {
-        await workerDone;
-      }),
-    }));
+    const workerDone = createDeferred<void>();
+    const createWorker = vi.fn(() =>
+      makeWorker(
+        () => workerDone.promise,
+        async () => workerDone.reject(new Error("worker exited with code 1")),
+      ),
+    );
 
     try {
       const session = createPollingSession({
         abortSignal: abort.signal,
         log,
         ingress: {
-          spoolDir: tempDir,
+          stateDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
         },
@@ -3833,6 +1726,7 @@ describe("TelegramPollingSession", () => {
       expectLogExcludes(log, "isolated polling ingress failed");
     } finally {
       vi.useRealTimers();
+      await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -3843,34 +1737,32 @@ describe("TelegramPollingSession", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
     const log = vi.fn();
     const setStatus = vi.fn();
+    const transport = makeTelegramTransport();
+    transport.close.mockRejectedValueOnce(new Error("transport close failed"));
+    const workerStop = vi.fn(async () => undefined);
     isRecoverableTelegramNetworkErrorMock.mockReturnValue(false);
     createTelegramBotMock.mockImplementation(() => makeIsolatedBot());
 
-    let listener: WorkerPollErrorListener | undefined;
-    const createWorker = vi.fn(() => ({
-      onMessage: vi.fn((next: WorkerPollErrorListener) => {
-        listener = next;
-        return () => undefined;
-      }),
-      stop: vi.fn(async () => undefined),
-      task: vi.fn(async () => {
-        listener?.({
+    const createWorker = vi.fn(() =>
+      makeReportingWorker(async (emit) => {
+        emit({
           type: "poll-error",
           message: "Unauthorized",
           errorCode: 401,
           finishedAt: Date.now(),
         });
         throw new Error("Telegram ingress worker exited with code 1");
-      }),
-    }));
+      }, workerStop),
+    );
 
     try {
       const session = createPollingSession({
         abortSignal: abort.signal,
         log,
         setStatus,
+        telegramTransport: transport,
         ingress: {
-          spoolDir: tempDir,
+          stateDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
         },
@@ -3879,18 +1771,23 @@ describe("TelegramPollingSession", () => {
       await expect(session.runUntilAbort()).rejects.toThrow("Unauthorized");
 
       expect(createWorker).toHaveBeenCalledTimes(1);
+      expect(workerStop).toHaveBeenCalledOnce();
+      expect(transport.close).toHaveBeenCalledOnce();
+      expect(statusPatches(setStatus).at(-1)).toMatchObject({ connected: false });
       expectLogExcludes(log, "isolated polling ingress failed");
       expect(
         statusPatches(setStatus).some(
           (patch) =>
             patch.connected === false &&
             patch.lifecycle === "blocked" &&
+            patch.terminalDisconnect === true &&
             patch.lastError === "Unauthorized",
         ),
       ).toBe(true);
     } finally {
       abort.abort();
       vi.useRealTimers();
+      await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -3912,17 +1809,11 @@ describe("TelegramPollingSession", () => {
       .mockReturnValueOnce(transport2);
 
     let workerCycle = 0;
-    let listener: WorkerPollErrorListener | undefined;
-    const createWorker = vi.fn(() => ({
-      onMessage: vi.fn((next: WorkerPollErrorListener) => {
-        listener = next;
-        return () => undefined;
-      }),
-      stop: vi.fn(async () => undefined),
-      task: vi.fn(async () => {
+    const createWorker = vi.fn(() =>
+      makeReportingWorker(async (emit) => {
         workerCycle += 1;
         if (workerCycle === 1) {
-          listener?.({
+          emit({
             type: "poll-error",
             message: "Conflict: terminated by other getUpdates request",
             errorCode: 409,
@@ -3932,7 +1823,7 @@ describe("TelegramPollingSession", () => {
         }
         abort.abort();
       }),
-    }));
+    );
 
     try {
       const session = createPollingSession({
@@ -3942,7 +1833,7 @@ describe("TelegramPollingSession", () => {
         telegramTransport: transport1,
         createTelegramTransport,
         ingress: {
-          spoolDir: tempDir,
+          stateDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
         },
@@ -3967,88 +1858,7 @@ describe("TelegramPollingSession", () => {
       ).toBe(true);
     } finally {
       abort.abort();
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("recovers orphaned spooled claims across account restarts", async () => {
-    // Same as cycle restart: dispose leaves the claim; the new session recovers it.
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const firstAbort = new AbortController();
-    const secondAbort = new AbortController();
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
-    let releaseRegularTurn: (() => void) | undefined;
-    const regularTurnDone = new Promise<void>((resolve) => {
-      releaseRegularTurn = resolve;
-    });
-    const handleUpdate = vi.fn(async () => {
-      await regularTurnDone;
-    });
-    createTelegramBotMock.mockImplementation(() => makeIsolatedBot({ handleUpdate }));
-    await writeTelegramSpooledUpdate({
-      spoolDir: tempDir,
-      update: {
-        update_id: 42,
-        message: { text: "summarize this", chat: { id: -100, type: "supergroup" } },
-      },
-    });
-
-    const createWorker = vi.fn(() => {
-      let stopWorker: (() => void) | undefined;
-      const workerDone = new Promise<void>((resolve) => {
-        stopWorker = resolve;
-      });
-      return {
-        onMessage: vi.fn(() => () => undefined),
-        stop: vi.fn(async () => {
-          stopWorker?.();
-        }),
-        task: vi.fn(async () => {
-          await workerDone;
-        }),
-      };
-    });
-
-    try {
-      const firstSession = createPollingSession({
-        abortSignal: firstAbort.signal,
-        ingress: {
-          spoolDir: tempDir,
-          createWorker,
-          drainIntervalMs: 100,
-        },
-      });
-
-      const firstRunPromise = firstSession.runUntilAbort();
-      await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
-      firstAbort.abort();
-      await vi.advanceTimersByTimeAsync(16_000);
-      await firstRunPromise;
-
-      const secondSession = createPollingSession({
-        abortSignal: secondAbort.signal,
-        ingress: {
-          spoolDir: tempDir,
-          createWorker,
-          drainIntervalMs: 100,
-        },
-      });
-      const secondRunPromise = secondSession.runUntilAbort();
-      await waitForTelegramTestState(() => expect(createWorker).toHaveBeenCalledTimes(2));
-      await vi.advanceTimersByTimeAsync(1_000);
-      await waitForTelegramTestState(() => expect(handleUpdate).toHaveBeenCalledTimes(2));
-
-      releaseRegularTurn?.();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await waitForTelegramTestState(async () =>
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-      );
-      secondAbort.abort();
-      await vi.advanceTimersByTimeAsync(20_000);
-      await secondRunPromise;
-    } finally {
-      releaseRegularTurn?.();
-      vi.useRealTimers();
+      await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -4089,7 +1899,7 @@ describe("TelegramPollingSession", () => {
       abortSignal: abort.signal,
       log,
       ingress: {
-        spoolDir: tempDir,
+        stateDir: tempDir,
         createWorker: worker.createWorker,
         drainIntervalMs: 10,
         spooledUpdateHandlerTimeoutMs: 100,
@@ -4115,39 +1925,9 @@ describe("TelegramPollingSession", () => {
       abort.abort();
       worker.stop();
       vi.useRealTimers();
+      await closeOpenClawStateDatabaseAsync();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
-  });
-
-  it("cools down repeated stop-timeout restart bursts", () => {
-    computeBackoffMock.mockImplementation((policy: { initialMs: number }, attempt: number) => {
-      if (policy.initialMs === 120_000) {
-        return attempt * 100_000;
-      }
-      return attempt * 1_000;
-    });
-
-    const state = pollingSessionTesting.createTelegramRestartBackoffState();
-    expect(
-      pollingSessionTesting.resolveTelegramRestartDelayMs(state, { stopTimedOut: true }),
-    ).toEqual({ delayMs: 1_000, stopTimeoutSuffix: "" });
-    expect(
-      pollingSessionTesting.resolveTelegramRestartDelayMs(state, { stopTimedOut: true }),
-    ).toEqual({
-      delayMs: 100_000,
-      stopTimeoutSuffix: " Stop timeout burst=2; applying cooldown.",
-    });
-    expect(
-      pollingSessionTesting.resolveTelegramRestartDelayMs(state, { stopTimedOut: true }),
-    ).toEqual({
-      delayMs: 200_000,
-      stopTimeoutSuffix: " Stop timeout burst=3; applying cooldown.",
-    });
-
-    const stopCooldownCalls = computeBackoffMock.mock.calls.filter(
-      ([policy]) => (policy as { initialMs: number }).initialMs === 120_000,
-    );
-    expect(stopCooldownCalls.map((call) => call[1])).toEqual([1, 2]);
   });
 
   it("starts the worker after recoverable webhook cleanup failure", async () => {
@@ -4158,7 +1938,6 @@ describe("TelegramPollingSession", () => {
     const bot = makeIsolatedBot({ deleteWebhook: cleanup });
     createTelegramBotMock.mockReturnValueOnce(bot);
     const createWorker = vi.fn(() => ({
-      onMessage: () => () => {},
       task: async () => {
         abort.abort();
       },

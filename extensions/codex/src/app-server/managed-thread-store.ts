@@ -22,26 +22,6 @@ export type CodexManagedThreadStore = {
   snapshot(): Promise<ReadonlyMap<string, ReadonlySet<string>>>;
 };
 
-export async function markStartedCodexManagedThread(
-  store: CodexManagedThreadStore | undefined,
-  params: { sourceHomeId: string; rolloutPath?: string; threadId: string },
-): Promise<void> {
-  if (!store) {
-    return;
-  }
-  try {
-    await store.mark({
-      sourceHomeId: params.sourceHomeId,
-      threadId: params.threadId,
-      ...(params.rolloutPath ? { rolloutPath: params.rolloutPath } : {}),
-    });
-  } catch (error) {
-    // Keep this boundary fail-open even for a custom or legacy store implementation.
-    // A catalog duplicate is less harmful than rejecting an otherwise valid new session.
-    embeddedAgentLog.warn("failed to record Codex managed thread ownership", { error });
-  }
-}
-
 function managedThreadStoreKey(sourceHomeId: string, threadId: string): string {
   return `sha256:${createHash("sha256")
     .update("openclaw:codex-managed-thread:v1\0")
@@ -65,11 +45,8 @@ export function createCodexManagedThreadStore(
       return key;
     }
     memberships.set(key, { sourceHomeId, threadId });
-    let ids = byHome.get(sourceHomeId);
-    if (!ids) {
-      ids = new Set();
-      byHome.set(sourceHomeId, ids);
-    }
+    const ids = byHome.get(sourceHomeId) ?? new Set<string>();
+    byHome.set(sourceHomeId, ids);
     ids.add(threadId);
     if (memberships.size > CODEX_MANAGED_THREAD_MAX_ENTRIES) {
       const oldest = memberships.entries().next().value;

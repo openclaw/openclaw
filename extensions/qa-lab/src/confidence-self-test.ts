@@ -1,17 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { evaluateJsonlReplaySummary, type QaConfidenceVerdict } from "./confidence-report.js";
 import {
-  escapeTableCell,
-  evaluateJsonlReplaySummary,
-  type QaConfidenceVerdict,
-} from "./confidence-report.js";
-import {
-  buildHarnessParityCell,
-  buildHarnessParityResult,
+  classifyHarnessParityDrift,
   type HarnessParityDrift,
   type HarnessRuntimeParityCell,
   type RuntimeParitySystemPromptReport,
 } from "./harness-parity.js";
+import { escapeTableCell } from "./report.js";
 import {
   runRuntimeParityScenario,
   type RuntimeParityCell,
@@ -73,29 +69,31 @@ function syntheticToolCall(overrides: Partial<RuntimeParityToolCall> = {}): Runt
 
 async function detectRuntimeDrift(params: {
   scenarioId: string;
-  openclaw: RuntimeParityCell;
-  codex: RuntimeParityCell;
+  openclaw?: Partial<HarnessRuntimeParityCell>;
+  codex: Partial<HarnessRuntimeParityCell>;
   expectedDrift: RuntimeParityDrift;
 }): Promise<boolean> {
   const result = await runRuntimeParityScenario({
     scenarioId: params.scenarioId,
     runCell: async (runtime) => ({
       status: "pass",
-      cell: runtime === "openclaw" ? params.openclaw : params.codex,
+      cell: syntheticRuntimeCell(runtime, params[runtime]),
     }),
   });
   return result.drift === params.expectedDrift;
 }
 
-function syntheticPromptReport(
-  overrides: Partial<RuntimeParitySystemPromptReport> = {},
-): RuntimeParitySystemPromptReport {
+function syntheticPromptReport({
+  systemPromptHash = "system-prompt-a",
+  toolDescriptionHash = "summary-a",
+  toolSchemaHash = "schema-a",
+} = {}): RuntimeParitySystemPromptReport {
   return {
     systemPrompt: {
       chars: 100,
       projectContextChars: 10,
       nonProjectContextChars: 90,
-      hash: "system-prompt-a",
+      hash: systemPromptHash,
     },
     skills: {
       promptChars: 20,
@@ -108,38 +106,25 @@ function syntheticPromptReport(
         {
           name: "openclaw.synthetic",
           summaryChars: 12,
-          summaryHash: "summary-a",
+          summaryHash: toolDescriptionHash,
           schemaChars: 18,
-          schemaHash: "schema-a",
+          schemaHash: toolSchemaHash,
           propertiesCount: 2,
         },
       ],
     },
-    ...overrides,
   };
 }
 
-function detectHarnessDrift(params: {
-  leftReport: RuntimeParitySystemPromptReport;
-  rightReport: RuntimeParitySystemPromptReport;
-  expectedDrift: HarnessParityDrift;
-}): boolean {
-  const left = buildHarnessParityCell({
-    variant: { id: "left", label: "Left" },
-    cell: syntheticRuntimeCell("openclaw", { systemPromptReport: params.leftReport }),
-    tokenUsageSource: "mock-estimate",
-  });
-  const right = buildHarnessParityCell({
-    variant: { id: "right", label: "Right" },
-    cell: syntheticRuntimeCell("codex", { systemPromptReport: params.rightReport }),
-    tokenUsageSource: "mock-estimate",
-  });
+function detectHarnessDrift(
+  changes: Parameters<typeof syntheticPromptReport>[0],
+  expectedDrift: HarnessParityDrift,
+): boolean {
   return (
-    buildHarnessParityResult({
-      scenarioId: "confidence-self-test",
-      left,
-      right,
-    }).drift === params.expectedDrift
+    classifyHarnessParityDrift({
+      left: syntheticRuntimeCell("openclaw", { systemPromptReport: syntheticPromptReport() }),
+      right: syntheticRuntimeCell("codex", { systemPromptReport: syntheticPromptReport(changes) }),
+    }) === expectedDrift
   );
 }
 
@@ -172,7 +157,6 @@ function detectTokenEfficiencyRegression(): boolean {
         },
       ],
     },
-    thresholdPercent: 15,
     generatedAt: "2026-05-12T00:00:00.000Z",
   });
   return !report.pass && report.failures.length === 1;
@@ -193,114 +177,61 @@ function detectJsonlReplayDrift(): boolean {
   return !evaluation.passed && evaluation.status !== "unknown";
 }
 
-async function buildQaConfidenceSelfTestSummary(
-  generatedAt = new Date().toISOString(),
-): Promise<QaConfidenceSelfTestSummary> {
-  const promptDriftDetected = detectHarnessDrift({
-    leftReport: syntheticPromptReport(),
-    rightReport: syntheticPromptReport({
-      systemPrompt: {
-        chars: 100,
-        projectContextChars: 10,
-        nonProjectContextChars: 90,
-        hash: "system-prompt-b",
-      },
-    }),
-    expectedDrift: "system-prompt",
-  });
-  const toolDescriptionDetected = detectHarnessDrift({
-    leftReport: syntheticPromptReport(),
-    rightReport: syntheticPromptReport({
-      tools: {
-        listChars: 30,
-        schemaChars: 40,
-        entries: [
-          {
-            name: "openclaw.synthetic",
-            summaryChars: 12,
-            summaryHash: "summary-b",
-            schemaChars: 18,
-            schemaHash: "schema-a",
-            propertiesCount: 2,
-          },
-        ],
-      },
-    }),
-    expectedDrift: "tool-description",
-  });
-  const toolSchemaDetected = detectHarnessDrift({
-    leftReport: syntheticPromptReport(),
-    rightReport: syntheticPromptReport({
-      tools: {
-        listChars: 30,
-        schemaChars: 40,
-        entries: [
-          {
-            name: "openclaw.synthetic",
-            summaryChars: 12,
-            summaryHash: "summary-a",
-            schemaChars: 18,
-            schemaHash: "schema-b",
-            propertiesCount: 2,
-          },
-        ],
-      },
-    }),
-    expectedDrift: "tool-schema",
-  });
-  const runtimeToolCallDropDetected = await detectRuntimeDrift({
-    scenarioId: "runtime-tool-call-drop",
-    openclaw: syntheticRuntimeCell("openclaw", { toolCalls: [syntheticToolCall()] }),
-    codex: syntheticRuntimeCell("codex", { toolCalls: [] }),
-    expectedDrift: "tool-call-shape",
-  });
-  const toolResultMismatchDetected = await detectRuntimeDrift({
-    scenarioId: "tool-result-mismatch",
-    openclaw: syntheticRuntimeCell("openclaw", { toolCalls: [syntheticToolCall()] }),
-    codex: syntheticRuntimeCell("codex", {
-      toolCalls: [syntheticToolCall({ resultHash: "result-b" })],
-    }),
-    expectedDrift: "tool-result-shape",
-  });
-  const failureModeDriftDetected = await detectRuntimeDrift({
-    scenarioId: "failure-mode-drift",
-    openclaw: syntheticRuntimeCell("openclaw"),
-    codex: syntheticRuntimeCell("codex", { transportErrorClass: "synthetic-transport" }),
-    expectedDrift: "failure-mode",
-  });
+export async function writeQaConfidenceSelfTestArtifacts(params: {
+  outputDir: string;
+}): Promise<{ reportPath: string; summaryPath: string; summary: QaConfidenceSelfTestSummary }> {
+  await fs.mkdir(params.outputDir, { recursive: true });
+  const generatedAt = new Date().toISOString();
   const canaries: QaConfidenceSelfTestCanary[] = [
     {
       id: "prompt-drift",
       category: "prompt",
-      detected: promptDriftDetected,
+      detected: detectHarnessDrift({ systemPromptHash: "system-prompt-b" }, "system-prompt"),
       expectedVerdict: "qa-harness-bug",
       details: "synthetic harness prompt hash changed",
     },
     {
       id: "tool-description-schema-drift",
       category: "tool-schema",
-      detected: toolDescriptionDetected && toolSchemaDetected,
+      detected: [
+        detectHarnessDrift({ toolDescriptionHash: "summary-b" }, "tool-description"),
+        detectHarnessDrift({ toolSchemaHash: "schema-b" }, "tool-schema"),
+      ].every(Boolean),
       expectedVerdict: "qa-harness-bug",
       details: "synthetic tool description/schema hash changed",
     },
     {
       id: "runtime-tool-call-drop",
       category: "tool-call",
-      detected: runtimeToolCallDropDetected,
+      detected: await detectRuntimeDrift({
+        scenarioId: "runtime-tool-call-drop",
+        openclaw: { toolCalls: [syntheticToolCall()] },
+        codex: { toolCalls: [] },
+        expectedDrift: "tool-call-shape",
+      }),
       expectedVerdict: "product-bug",
       details: "synthetic runtime transcript omitted a required tool call",
     },
     {
       id: "tool-result-mismatch",
       category: "tool-result",
-      detected: toolResultMismatchDetected,
+      detected: await detectRuntimeDrift({
+        scenarioId: "tool-result-mismatch",
+        openclaw: { toolCalls: [syntheticToolCall()] },
+        codex: { toolCalls: [syntheticToolCall({ resultHash: "result-b" })] },
+        expectedDrift: "tool-result-shape",
+      }),
       expectedVerdict: "product-bug",
       details: "synthetic runtime transcript returned a mismatched tool result",
     },
     {
       id: "failure-mode-drift",
       category: "failure-mode",
-      detected: failureModeDriftDetected,
+      detected: await detectRuntimeDrift({
+        scenarioId: "failure-mode-drift",
+        codex: { transportErrorClass: "synthetic-transport" },
+        expectedDrift: "failure-mode",
+      }),
       expectedVerdict: "product-bug",
       details: "synthetic runtime failed with a different failure mode",
     },
@@ -319,14 +250,11 @@ async function buildQaConfidenceSelfTestSummary(
       details: "synthetic JSONL replay drifted after turn ordering changed",
     },
   ];
-  return {
+  const summary: QaConfidenceSelfTestSummary = {
     generatedAt,
     pass: canaries.every((canary) => canary.detected),
     canaries,
   };
-}
-
-function renderQaConfidenceSelfTestMarkdownReport(summary: QaConfidenceSelfTestSummary): string {
   const lines = [
     "# OpenClaw QA Confidence Self-Test",
     "",
@@ -341,16 +269,7 @@ function renderQaConfidenceSelfTestMarkdownReport(summary: QaConfidenceSelfTestS
       `| ${canary.id} | ${canary.category} | ${canary.detected ? "yes" : "no"} | ${canary.expectedVerdict} | ${escapeTableCell(canary.details)} |`,
     );
   }
-  return `${lines.join("\n")}\n`;
-}
-
-export async function writeQaConfidenceSelfTestArtifacts(params: {
-  outputDir: string;
-  generatedAt?: string;
-}): Promise<{ reportPath: string; summaryPath: string; summary: QaConfidenceSelfTestSummary }> {
-  await fs.mkdir(params.outputDir, { recursive: true });
-  const summary = await buildQaConfidenceSelfTestSummary(params.generatedAt);
-  const report = renderQaConfidenceSelfTestMarkdownReport(summary);
+  const report = `${lines.join("\n")}\n`;
   const reportPath = path.join(params.outputDir, "qa-confidence-self-test-report.md");
   const summaryPath = path.join(params.outputDir, "qa-confidence-self-test-summary.json");
   await fs.writeFile(reportPath, report, "utf8");

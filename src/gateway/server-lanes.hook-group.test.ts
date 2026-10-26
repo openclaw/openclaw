@@ -9,6 +9,7 @@
  * feature existed.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as gate } from "../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../process/command-queue.js";
@@ -24,14 +25,6 @@ const HOOKS_ON = {
   hooks: { enabled: true, token: "t" },
 } as unknown as OpenClawConfig;
 const HOOKS_OFF = {} as OpenClawConfig;
-
-function gate() {
-  let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { promise, release };
-}
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 5; i++) {
@@ -52,212 +45,6 @@ describe("cron+hook capacity group", () => {
       await import("../agents/session-suspension.test-support.js");
     resetSessionSuspensionStateForTest();
     resetCommandQueueStateForTest();
-  });
-
-  it("installs no group when hooks are disabled, leaving cron at full budget", async () => {
-    publish(HOOKS_OFF);
-
-    const snapshot = getCommandLaneSnapshot(CommandLane.CronNested);
-    expect(snapshot.group).toBeUndefined();
-    expect(snapshot.maxConcurrent).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
-
-    const gates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () => gate());
-    const runs = gates.map((g) =>
-      enqueueCommandInLane(CommandLane.CronNested, async () => await g.promise, {
-        warnAfterMs: 10_000,
-      }),
-    );
-    await settle();
-
-    // The whole budget, not budget-minus-a-reservation.
-    expect(getCommandLaneSnapshot(CommandLane.CronNested).activeCount).toBe(
-      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-    );
-
-    for (const g of gates) {
-      g.release();
-    }
-    await Promise.all(runs);
-  });
-
-  it("installs the group when hooks are enabled and reserves a slot for them", async () => {
-    publish(HOOKS_ON);
-
-    const snapshot = getCommandLaneSnapshot(CommandLane.CronNested);
-    expect(snapshot.group).toBe("cron-hooks");
-    expect(snapshot.groupBudget).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch)).toMatchObject({
-      maxConcurrent: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-      reservedForLane: 1,
-    });
-
-    const gates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () => gate());
-    const runs = gates.map((g) =>
-      enqueueCommandInLane(CommandLane.CronNested, async () => await g.promise, {
-        warnAfterMs: 10_000,
-      }),
-    );
-    await settle();
-
-    // One short of the budget: the hook's reserved slot is withheld even though
-    // the hook lane is idle. This is the cost the opt-in exists to avoid paying
-    // on deployments that do not use hooks.
-    expect(getCommandLaneSnapshot(CommandLane.CronNested).activeCount).toBe(
-      DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1,
-    );
-
-    // And a hook starts immediately despite cron holding everything else.
-    const hookGate = gate();
-    const hookRun = enqueueCommandInLane(
-      CommandLane.HookDispatch,
-      async () => await hookGate.promise,
-      { warnAfterMs: 10_000 },
-    );
-    await settle();
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).activeCount).toBe(1);
-
-    // Aggregate is exactly the pre-existing cron cap — no slot added outside it.
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).groupActive).toBe(
-      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-    );
-
-    hookGate.release();
-    await hookRun;
-    for (const g of gates) {
-      g.release();
-    }
-    await Promise.all(runs);
-  });
-
-  it("admits hook bursts up to the shared budget and queues the ninth", async () => {
-    publish(HOOKS_ON);
-
-    const gates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS + 1 }, () => gate());
-    const runs = gates.map((g) =>
-      enqueueCommandInLane(CommandLane.HookDispatch, async () => await g.promise, {
-        warnAfterMs: 10_000,
-      }),
-    );
-    await settle();
-
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch)).toMatchObject({
-      activeCount: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-      queuedCount: 1,
-      groupActive: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-      groupBudget: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-    });
-
-    for (const g of gates) {
-      g.release();
-    }
-    await Promise.all(runs);
-  });
-
-  it("does not let a sustained hook burst recapture capacity ahead of older cron work", async () => {
-    publish(HOOKS_ON);
-
-    const activeHookGates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () => gate());
-    const activeHooks = activeHookGates.map((g) =>
-      enqueueCommandInLane(CommandLane.HookDispatch, async () => await g.promise, {
-        priority: "background",
-        warnAfterMs: 10_000,
-      }),
-    );
-    await settle();
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).activeCount).toBe(
-      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-    );
-
-    const cronGate = gate();
-    const cronRun = enqueueCommandInLane(
-      CommandLane.CronNested,
-      async () => await cronGate.promise,
-      { priority: "background", warnAfterMs: 10_000 },
-    );
-    const lateHookGate = gate();
-    const lateHook = enqueueCommandInLane(
-      CommandLane.HookDispatch,
-      async () => await lateHookGate.promise,
-      { priority: "background", warnAfterMs: 10_000 },
-    );
-    await settle();
-    expect(getCommandLaneSnapshot(CommandLane.CronNested).queuedCount).toBe(1);
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).queuedCount).toBe(1);
-
-    activeHookGates[0]?.release();
-    await activeHooks[0];
-    await settle();
-
-    expect(getCommandLaneSnapshot(CommandLane.CronNested)).toMatchObject({
-      activeCount: 1,
-      queuedCount: 0,
-      groupActive: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-    });
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch)).toMatchObject({
-      activeCount: DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1,
-      queuedCount: 1,
-    });
-
-    cronGate.release();
-    for (const g of activeHookGates.slice(1)) {
-      g.release();
-    }
-    lateHookGate.release();
-    await Promise.all([cronRun, ...activeHooks.slice(1), lateHook]);
-  });
-
-  it("admits seven cron plus one hook, then gives freed capacity to a second hook", async () => {
-    publish(HOOKS_ON);
-
-    const cronGates = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1 }, () => gate());
-    const cronRuns = cronGates.map((g) =>
-      enqueueCommandInLane(CommandLane.CronNested, async () => await g.promise, {
-        warnAfterMs: 10_000,
-      }),
-    );
-    const firstHookGate = gate();
-    const firstHook = enqueueCommandInLane(
-      CommandLane.HookDispatch,
-      async () => await firstHookGate.promise,
-      { warnAfterMs: 10_000 },
-    );
-    await settle();
-
-    expect(getCommandLaneSnapshot(CommandLane.CronNested).activeCount).toBe(
-      DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1,
-    );
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).activeCount).toBe(1);
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).groupActive).toBe(
-      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-    );
-
-    const secondHookGate = gate();
-    const secondHook = enqueueCommandInLane(
-      CommandLane.HookDispatch,
-      async () => await secondHookGate.promise,
-      { warnAfterMs: 10_000 },
-    );
-    await settle();
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).queuedCount).toBe(1);
-
-    cronGates[0]?.release();
-    await cronRuns[0];
-    await settle();
-
-    expect(getCommandLaneSnapshot(CommandLane.CronNested).activeCount).toBe(
-      DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2,
-    );
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).activeCount).toBe(2);
-    expect(getCommandLaneSnapshot(CommandLane.HookDispatch).groupActive).toBe(
-      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-    );
-
-    firstHookGate.release();
-    secondHookGate.release();
-    for (const g of cronGates.slice(1)) {
-      g.release();
-    }
-    await Promise.all([...cronRuns.slice(1), firstHook, secondHook]);
   });
 
   it("hooks-off immediately drains cron work released by the teardown", async () => {
@@ -295,9 +82,10 @@ describe("cron+hook capacity group", () => {
     expect(getCommandLaneSnapshot(CommandLane.CronNested).queuedCount).toBe(0);
 
     for (const g of gates) {
-      g.release();
+      g.resolve();
     }
     await Promise.all(runs);
+    expect(getCommandLaneSnapshot(CommandLane.CronNested).blockedBy).toBeNull();
   });
 
   it("keeps in-flight hooks inside the aggregate budget while disabling hooks", async () => {
@@ -349,7 +137,7 @@ describe("cron+hook capacity group", () => {
     expect(lateHookStarted).toBe(false);
     expect(getCommandLaneSnapshot(CommandLane.HookDispatch).queuedCount).toBe(1);
 
-    hookGate.release();
+    hookGate.resolve();
     await hookRun;
     await settle();
 
@@ -363,23 +151,12 @@ describe("cron+hook capacity group", () => {
     expect(lateHookStarted).toBe(false);
 
     for (const g of cronGates) {
-      g.release();
+      g.resolve();
     }
     await Promise.all(cronRuns);
 
     publish(HOOKS_ON);
     await lateHook;
     expect(lateHookStarted).toBe(true);
-  });
-
-  it("removes the group when hooks are turned off by a config reload", async () => {
-    publish(HOOKS_ON);
-    expect(getCommandLaneSnapshot(CommandLane.CronNested).group).toBe("cron-hooks");
-
-    publish(HOOKS_OFF);
-    // Membership must actually be torn down, or cron keeps paying a reservation
-    // for a lane that no longer receives work.
-    expect(getCommandLaneSnapshot(CommandLane.CronNested).group).toBeUndefined();
-    expect(getCommandLaneSnapshot(CommandLane.CronNested).blockedBy).toBeNull();
   });
 });

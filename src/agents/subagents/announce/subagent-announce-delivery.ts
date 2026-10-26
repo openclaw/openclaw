@@ -1,14 +1,15 @@
-/**
- * Subagent completion announcement delivery.
- *
- * Routes completion payloads through gateway/channel/session paths and records delivery evidence.
- */
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery,
   releaseSessionDeliveryClaim,
 } from "../../../infra/session-delivery-queue-storage.js";
+import {
+  SessionDeliveryDeadLetteredError,
+  type SessionDeliveryRequesterBinding,
+} from "../../../infra/session-delivery-queue.records.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
@@ -23,46 +24,39 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { hasGeneratedMediaCompletionEvent } from "../../internal-event-contract.js";
 import {
+  buildAgentInternalEventContext,
   collectAgentInternalEventMedia,
-  formatAgentInternalEventsForPrompt,
+  resolveAcpPromptBody,
   type AgentInternalEvent,
 } from "../../internal-events.js";
+import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import { admitCorrelatedSubagentSessionDelivery } from "../completion/subagent-completion-delivery.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
-import { maybeSteerSubagentAnnounce } from "./subagent-announce-active-wake.js";
 import {
-  hasAnnounceSendEvidence,
-  isWriterClaimReboundAnnounceError,
   resolveSubagentAnnounceTimeoutMs,
-  runAnnounceDeliveryWithRetry,
-  sourceOwnerChangedResult,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
   getSubagentAnnounceRuntimeConfig,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
-  setSubagentAnnounceDeliveryDepsForTest,
-  type SubagentAnnounceDeliveryDeps,
+  withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import {
-  runSubagentAnnounceDispatch,
+  sourceOwnerChangedResult,
   type SubagentAnnounceDeliveryResult,
+  type SubagentAnnounceDirectParams,
 } from "./subagent-announce-dispatch.js";
 import {
   resolveCompletionDeliveryOrigins,
   resolveGeneratedMediaSessionDeliveryRoute,
-  type DeliveryContext,
 } from "./subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
-export {
-  loadRequesterSessionEntry,
-  loadSessionEntryByKey,
-  resolveSubagentAnnounceTimeoutMs,
-  runAnnounceDeliveryWithRetry,
-};
+const log = createSubsystemLogger("agents/subagent-announce");
+
+export { loadRequesterSessionEntry, loadSessionEntryByKey, resolveSubagentAnnounceTimeoutMs };
 
 export function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boolean {
   return getSubagentDepthFromSessionStore(sessionKey) >= 1 || isCronSessionKey(sessionKey);
@@ -82,90 +76,22 @@ function collectExpectedMediaFromInternalEvents(events: AgentInternalEvent[] | u
   };
 }
 
-function createCompletionUserTurnTranscriptRecorderFactory(params: {
-  directIdempotencyKey: string;
-  requesterAgentId?: string;
-  sourceSessionKey?: string;
-  sourceTool?: string;
-  targetRequesterSessionKey: string;
-  triggerMessage: string;
-}): (sessionId: string) => UserTurnTranscriptRecorder {
-  const provenance: InputProvenance = {
-    kind: "inter_session",
-    ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-    sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
-    sourceTool: params.sourceTool ?? "subagent_announce",
-  };
-  const recorders = new Map<string, UserTurnTranscriptRecorder>();
-  return (sessionId) => {
-    const existing = recorders.get(sessionId);
-    if (existing) {
-      return existing;
-    }
-    // Retries targeting one session share a recorder. A successor session gets
-    // its own target guard while the logical idempotency key remains stable.
-    const recorder = createUserTurnTranscriptRecorder({
-      input: {
-        text: params.triggerMessage,
-        idempotencyKey: `${params.directIdempotencyKey}:active-wake`,
-        provenance,
-      },
-      target: () => {
-        const loaded = loadRequesterSessionEntry(
-          params.targetRequesterSessionKey,
-          params.requesterAgentId,
-        );
-        if (!loaded.entry || loaded.entry.sessionId?.trim() !== sessionId || !loaded.agentId) {
-          return undefined;
-        }
-        return {
-          sessionId,
-          expectedSessionId: sessionId,
-          sessionKey: loaded.canonicalKey,
-          sessionEntry: loaded.entry,
-          ...(loaded.storePath ? { storePath: loaded.storePath } : {}),
-          agentId: loaded.agentId,
-          config: loaded.cfg,
-        };
-      },
-      errorContext: "active requester completion transcript",
-    });
-    recorders.set(sessionId, recorder);
-    return recorder;
-  };
+export async function deliverSubagentAnnouncement(
+  params: Omit<SubagentAnnounceDirectParams, "createUserTurnTranscriptRecorder"> & {
+    sourceRunId?: string;
+    preparedRequester?: { binding: SessionDeliveryRequesterBinding; entry: SessionEntry };
+  },
+): Promise<SubagentAnnounceDeliveryResult> {
+  return withSubagentRequesterDelivery(
+    params.targetRequesterSessionKey,
+    params,
+    deliverSubagentAnnouncementBound,
+  );
 }
 
-export async function deliverSubagentAnnouncement(params: {
-  requesterSessionKey: string;
-  requesterAgentId?: string;
-  requesterRunTimeoutSeconds?: number;
-  triggerMessage: string;
-  steerMessage: string;
-  internalEvents?: AgentInternalEvent[];
-  requesterSessionOrigin?: DeliveryContext;
-  completionDirectOrigin?: DeliveryContext;
-  directOrigin?: DeliveryContext;
-  sourceSessionKey?: string;
-  sourceRunId?: string;
-  sourceTool?: string;
-  settleWakeSourceSessionKeys?: readonly string[];
-  isSourceSessionEffectsAllowed?: () => boolean;
-  /** Additional source guard released by the accepting Gateway or injection owner. */
-  isSourceSessionAdmissionAllowed?: () => boolean;
-  isCompletionOwnedByRequesterYield?: () => boolean;
-  targetRequesterSessionKey: string;
-  requesterIsSubagent: boolean;
-  expectsCompletionMessage: boolean;
-  completionTarget?: "parent";
-  completionRequesterSessionId?: string;
-  requireDirectDelivery?: boolean;
-  requireVisibleReply?: boolean;
-  bestEffortDeliver?: boolean;
-  directIdempotencyKey: string;
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
-  signal?: AbortSignal;
-  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
-}): Promise<SubagentAnnounceDeliveryResult> {
+async function deliverSubagentAnnouncementBound(
+  params: Parameters<typeof deliverSubagentAnnouncement>[0],
+): ReturnType<typeof deliverSubagentAnnouncement> {
   const sourceOwnerChanged = () =>
     params.isSourceSessionEffectsAllowed?.() === false ||
     params.isSourceSessionAdmissionAllowed?.() === false;
@@ -182,27 +108,19 @@ export async function deliverSubagentAnnouncement(params: {
   if (durableGeneratedMediaHandoff) {
     try {
       const cfg = getSubagentAnnounceRuntimeConfig();
-      const canonicalSessionKey = resolveRequesterStoreKey(
-        cfg,
-        params.targetRequesterSessionKey,
-        params.requesterAgentId,
-      );
+      const canonicalSessionKey =
+        params.preparedRequester?.binding.sessionKey ??
+        resolveRequesterStoreKey(cfg, params.targetRequesterSessionKey, params.requesterAgentId);
       const queuedRoute = resolveGeneratedMediaSessionDeliveryRoute({
+        ...params,
         sessionKey: canonicalSessionKey,
-        completionDirectOrigin: params.completionDirectOrigin,
-        directOrigin: params.directOrigin,
-        requesterSessionOrigin: params.requesterSessionOrigin,
       });
-      const { requesterSessionOrigin, effectiveDirectOrigin } = resolveCompletionDeliveryOrigins({
-        expectsCompletionMessage: params.expectsCompletionMessage,
-        completionDirectOrigin: params.completionDirectOrigin,
-        directOrigin: params.directOrigin,
-        requesterSessionOrigin: params.requesterSessionOrigin,
-      });
-      const requesterEntry = loadRequesterSessionEntry(
-        params.targetRequesterSessionKey,
-        params.requesterAgentId,
-      ).entry;
+      const { requesterSessionOrigin, effectiveDirectOrigin } =
+        resolveCompletionDeliveryOrigins(params);
+      const requesterEntry =
+        params.preparedRequester?.entry ??
+        (await loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId))
+          .entry;
       // No external route exists for an internal-only handoff. Let the normal
       // agent final enter the owning transcript instead of requiring a message tool target.
       const sourceReplyDeliveryMode =
@@ -222,7 +140,7 @@ export async function deliverSubagentAnnouncement(params: {
       const queuePayload = {
         kind: "agentTurn",
         sessionKey: canonicalSessionKey,
-        message: formatAgentInternalEventsForPrompt(params.internalEvents) || params.triggerMessage,
+        message: resolveAcpPromptBody("", params.internalEvents) || params.triggerMessage,
         messageId: `${params.directIdempotencyKey}:agent-loop`,
         route: queuedRoute.route,
         ...(queuedRoute.deliveryContext ? { deliveryContext: queuedRoute.deliveryContext } : {}),
@@ -235,32 +153,51 @@ export async function deliverSubagentAnnouncement(params: {
         sourceReplyDeliveryMode,
         ...expectedMedia,
         idempotencyKey: `${params.directIdempotencyKey}:agent-loop`,
+        ...(params.preparedRequester ? { requesterBinding: params.preparedRequester.binding } : {}),
       } as const;
       const queueContext = captureOpenClawStateWorkerContext();
+      const enqueueContext = {
+        ...queueContext,
+        admission: {
+          ...queueContext.admission,
+          assertCurrent: () => {
+            queueContext.admission.assertCurrent();
+            if (sourceOwnerChanged()) {
+              throw new SessionDeliveryDeadLetteredError("media completion source owner changed");
+            }
+          },
+        },
+      };
       const queued = params.sourceRunId
-        ? admitCorrelatedSubagentSessionDelivery({
+        ? await admitCorrelatedSubagentSessionDelivery({
             runId: params.sourceRunId,
             payload: queuePayload,
+            queueContext: enqueueContext,
           })
         : await enqueueClaimedSessionDelivery(
             queuePayload,
             resolveSubagentAnnounceTimeoutMs(cfg),
-            queueContext,
+            enqueueContext,
           );
       if (queued.status === "failed") {
-        return {
-          delivered: false,
-          path: "queued",
-          reason: "completion_handoff_unavailable",
-          error: "generated media session handoff was already dead-lettered",
-          disposition: "permanent_failure",
-        };
+        throw new SessionDeliveryDeadLetteredError(
+          "generated media session handoff was already dead-lettered",
+        );
       }
       if (queued.status === "completed") {
         return { delivered: true, path: "queued", disposition: "delivered" };
       }
       durableQueue = { id: queued.id, claimed: queued.claimed, context: queueContext };
     } catch (error) {
+      if (error instanceof SessionDeliveryDeadLetteredError) {
+        return {
+          delivered: false,
+          path: "queued",
+          reason: "completion_handoff_unavailable",
+          error: error.message,
+          disposition: "permanent_failure",
+        };
+      }
       defaultRuntime.log(
         `[warn] Generated media session handoff could not be persisted; refusing ambiguous fallback: ${summarizeDeliveryError(error)}`,
       );
@@ -292,90 +229,102 @@ export async function deliverSubagentAnnouncement(params: {
     return { delivered: false, path: "queued", disposition: "session_queued" };
   }
 
-  const createCompletionUserTurnTranscriptRecorder = params.expectsCompletionMessage
-    ? createCompletionUserTurnTranscriptRecorderFactory(params)
-    : undefined;
-
-  const delivery = await runSubagentAnnounceDispatch({
-    expectsCompletionMessage: params.expectsCompletionMessage,
-    requireDirectDelivery: params.requireDirectDelivery || params.completionTarget === "parent",
-    signal: params.signal,
-    steer: async () => {
-      if (sourceOwnerChanged()) {
-        return { status: "source_owner_changed" };
-      }
-      return await maybeSteerSubagentAnnounce({
-        deliveryTimeoutMs: resolveSubagentAnnounceTimeoutMs(getSubagentAnnounceRuntimeConfig()),
-        requesterSessionKey: params.requesterSessionKey,
-        requesterAgentId: params.requesterAgentId,
-        steerMessage: params.steerMessage,
-        createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
-        signal: params.signal,
-        isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
-        isSourceSessionAdmissionAllowed: params.isSourceSessionAdmissionAllowed,
+  const runtimeContextFragments = buildAgentInternalEventContext(params.internalEvents);
+  let createCompletionUserTurnTranscriptRecorder:
+    | ((sessionId: string) => UserTurnTranscriptRecorder)
+    | undefined;
+  if (params.expectsCompletionMessage) {
+    const directIdempotencyKey = params.directIdempotencyKey;
+    const requesterAgentId = params.requesterAgentId;
+    const sourceSessionKey = params.sourceSessionKey;
+    const sourceTool = params.sourceTool;
+    const targetRequesterSessionKey = params.targetRequesterSessionKey;
+    const transcriptMessage = runtimeContextFragments.length
+      ? RUNTIME_EVENT_USER_PROMPT
+      : params.triggerMessage;
+    const provenance: InputProvenance = {
+      kind: "inter_session",
+      ...(sourceSessionKey ? { sourceSessionKey } : {}),
+      sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
+      sourceTool: sourceTool ?? "subagent_announce",
+    };
+    // The recorder guards the exact requester session the completion steers into.
+    createCompletionUserTurnTranscriptRecorder = (sessionId) =>
+      createUserTurnTranscriptRecorder({
+        input: {
+          text: transcriptMessage,
+          idempotencyKey: `${directIdempotencyKey}:active-wake`,
+          provenance,
+        },
+        target: async () => {
+          const loaded = await loadRequesterSessionEntry(
+            targetRequesterSessionKey,
+            requesterAgentId,
+          );
+          if (!loaded.entry || loaded.entry.sessionId?.trim() !== sessionId || !loaded.agentId) {
+            return undefined;
+          }
+          return {
+            sessionId,
+            expectedSessionId: sessionId,
+            sessionKey: loaded.canonicalKey,
+            sessionEntry: loaded.entry,
+            ...(loaded.storePath ? { storePath: loaded.storePath } : {}),
+            agentId: loaded.agentId,
+            config: loaded.cfg,
+          };
+        },
+        errorContext: "active requester completion transcript",
       });
-    },
-    direct: async () => {
-      if (sourceOwnerChanged()) {
-        return sourceOwnerChangedResult();
-      }
-      return await sendSubagentAnnounceDirectly({
-        requesterSessionKey: params.requesterSessionKey,
-        requesterAgentId: params.requesterAgentId,
-        requesterRunTimeoutSeconds: params.requesterRunTimeoutSeconds,
-        targetRequesterSessionKey: params.targetRequesterSessionKey,
-        triggerMessage: params.triggerMessage,
-        internalEvents: params.internalEvents,
-        directIdempotencyKey: params.directIdempotencyKey,
-        completionDirectOrigin: params.completionDirectOrigin,
-        directOrigin: params.directOrigin,
-        requesterSessionOrigin: params.requesterSessionOrigin,
-        sourceSessionKey: params.sourceSessionKey,
-        sourceTool: params.sourceTool,
-        settleWakeSourceSessionKeys: params.settleWakeSourceSessionKeys,
-        isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
-        isSourceSessionAdmissionAllowed: params.isSourceSessionAdmissionAllowed,
-        isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
-        requesterIsSubagent: params.requesterIsSubagent,
-        completionTarget: params.completionTarget,
-        completionRequesterSessionId: params.completionRequesterSessionId,
-        expectsCompletionMessage: params.expectsCompletionMessage,
-        createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
-        requireVisibleReply: params.requireVisibleReply,
-        onDeliveryResult: params.onDeliveryResult,
-        signal: params.signal,
-        bestEffortDeliver: params.bestEffortDeliver,
-        resolveGatewayContext: params.resolveGatewayContext,
-      });
+  }
+  if (sourceOwnerChanged()) {
+    return sourceOwnerChangedResult();
+  }
+  if (params.signal?.aborted) {
+    return { delivered: false, path: "none", phases: [] };
+  }
+  let directError: unknown;
+  const delivery = await sendSubagentAnnounceDirectly({
+    ...params,
+    createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
+    onDeliveryError: (error) => {
+      directError = error;
+      params.onDeliveryError?.(error);
     },
   });
   const failedDirect =
-    params.expectsCompletionMessage || params.sourceTool === "subagent_announce"
-      ? delivery.phases?.find(
-          (phase) =>
-            phase.phase === "direct-primary" && !phase.delivered && phase.path === "direct",
-        )
+    (params.expectsCompletionMessage ||
+      params.sourceTool === "subagent_announce" ||
+      params.sourceTool === "subagent_settle") &&
+    !delivery.delivered &&
+    delivery.path === "direct"
+      ? delivery
       : undefined;
   if (failedDirect?.error) {
     const source = params.sourceRunId
       ? `run ${params.sourceRunId}`
       : `session ${params.sourceSessionKey ?? params.requesterSessionKey}`;
-    defaultRuntime.log(
-      `[warn] Subagent completion direct announce failed for ${source}: ${failedDirect.error}${delivery.delivered ? "; recovered via steered" : ""}`,
-    );
+    log.warn(`Subagent completion direct announce failed for ${source}`, {
+      err: directError ?? failedDirect.error,
+      runId: params.sourceRunId,
+      requesterSessionKey: params.targetRequesterSessionKey,
+      sourceTool: params.sourceTool,
+      directIdempotencyKey: params.directIdempotencyKey,
+    });
   }
-  return delivery;
-}
-
-const testing = {
-  setDepsForTest(overrides?: Partial<SubagentAnnounceDeliveryDeps>) {
-    setSubagentAnnounceDeliveryDepsForTest(overrides);
-  },
-  hasAnnounceSendEvidence,
-  isWriterClaimReboundAnnounceError,
-};
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.subagentAnnounceDeliveryTestApi")
-  ] = testing;
+  return {
+    ...delivery,
+    // Phase names describe the dispatch stage, even when direct delivery steers internally.
+    phases: [
+      {
+        phase: "direct-primary",
+        delivered: delivery.delivered,
+        path: delivery.path,
+        deliveredAt: delivery.deliveredAt,
+        enqueuedAt: delivery.enqueuedAt,
+        ...(delivery.reason ? { reason: delivery.reason } : {}),
+        error: delivery.error,
+      },
+    ],
+  };
 }

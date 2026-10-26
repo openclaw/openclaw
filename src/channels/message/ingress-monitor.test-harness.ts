@@ -1,7 +1,12 @@
+import { afterEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelIngressMonitor,
   type CreateChannelIngressMonitorOptions,
 } from "./ingress-monitor.js";
+import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
 
 export type RawEvent = { id: string; lane: string; text: string };
 export type StoredEvent = { version: 1; rawEvent: string };
@@ -53,4 +58,27 @@ export function createMonitor(
     ...(onError ? { onError } : {}),
     ...(abortSignal ? { abortSignal } : {}),
   });
+}
+
+export function useIngressMonitorQueueFixture() {
+  afterEach(() => {
+    resetGatewayWorkAdmission();
+    closeOpenClawStateDatabaseForTest();
+    vi.restoreAllMocks();
+  });
+
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  return async function withQueue<T>(
+    run: (queue: ChannelIngressQueue<StoredEvent>) => Promise<T>,
+  ): Promise<T> {
+    const stateDir = tempDirs.make("openclaw-ingress-monitor-");
+    try {
+      return await run(
+        createChannelIngressQueue<StoredEvent>({ channelId: "test", accountId: "a", stateDir }),
+      );
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+    }
+  };
 }

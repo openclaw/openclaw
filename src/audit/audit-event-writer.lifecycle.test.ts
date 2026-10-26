@@ -1,22 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withSqliteWorkerCleanupFailure } from "../infra/sqlite-worker-broker-reply.js";
 import { SqliteWorkerError, type SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { AuditEventInput } from "./audit-event-types.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import type { AgentRunStartedAuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
-import type { AuditWriterOperations, AuditWriterResult } from "./audit-event-writer.types.js";
+import { input } from "./audit-event-writer.test-support.js";
+import type { AuditWriterResult } from "./audit-event-writer.types.js";
+import type { AuditWriterOperations } from "./audit-event-writer.worker.js";
 
 const { execute } = vi.hoisted(() => ({
   execute:
-    vi.fn<(command: SqliteWorkerCommand<AuditWriterOperations>) => Promise<AuditWriterResult>>(),
+    vi.fn<
+      (
+        command: SqliteWorkerCommand<AuditWriterOperations>,
+      ) => Promise<AuditWriterResult[] | undefined>
+    >(),
 }));
 
+// mock-isolation: Exercise FIFO scheduling without opening the shared-state worker.
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: (
     _context: OpenClawStateWorkerContext,
-    operation: (scope: { execute: typeof execute }) => Promise<AuditWriterResult>,
+    operation: (scope: { execute: typeof execute }) => Promise<AuditWriterResult[] | undefined>,
   ) => operation({ execute }),
 }));
 
@@ -41,19 +53,33 @@ afterEach(async () => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function event(sourceId: string): AuditEventInput {
-  return {
-    sourceId,
-    sourceSequence: 1,
-    occurredAt: Date.now(),
-    kind: "agent_run",
-    action: "agent.run.started",
-    status: "started",
-    actorType: "agent",
-    actorId: "main",
-    agentId: "main",
-    runId: sourceId,
-  };
+function event(sourceId: string): AgentRunStartedAuditEventInput {
+  return { ...input(), sourceId, runId: sourceId };
+}
+
+function mockEventRequests(handler: (sourceId: string) => Promise<AuditWriterResult>) {
+  const requests: string[] = [];
+  execute.mockImplementation(async (command) => {
+    if (command.type === "audit.writer.prune") {
+      return [];
+    }
+    const results: AuditWriterResult[] = [];
+    for (const request of command.input) {
+      if (request.type !== "record-event" && request.type !== "record-run") {
+        throw new Error("Unexpected audit request in event lifecycle test");
+      }
+      const sourceId =
+        request.type === "record-run" ? request.start.sourceId : request.input.sourceId;
+      requests.push(sourceId);
+      const result = await handler(sourceId);
+      results.push(result);
+      if (result.status === "retry") {
+        break;
+      }
+    }
+    return results;
+  });
+  return requests;
 }
 
 async function advanceDispatch() {
@@ -62,23 +88,158 @@ async function advanceDispatch() {
 }
 
 describe("audit writer async settlement", () => {
+  it("counts both run records against the pending budget and releases them after settlement", async () => {
+    const requests = mockEventRequests(async () => ({ status: "settled" }));
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir: tempDirs.make("audit-writer-pair-budget-"),
+      maxPending: 2,
+      onError: (error) => errors.push(error),
+    });
+    try {
+      await advanceDispatch();
+      await writer.ready;
+      const start = event("pair");
+      expect(
+        writer.recordRun(start, {
+          ...start,
+          sourceId: "pair:end",
+          sourceSequence: 2,
+          action: "agent.run.finished",
+          status: "succeeded",
+        }),
+      ).toBe(true);
+      expect(writer.record(event("full"))).toBe(false);
+      await advanceDispatch();
+      expect(writer.record(event("after"))).toBe(true);
+      await advanceDispatch();
+      expect(requests).toEqual(["pair", "after"]);
+      expect(errors).toEqual(["audit event queue is full (2); dropping metadata"]);
+    } finally {
+      const stopping = writer.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await stopping;
+    }
+  });
+
+  it("coalesces overdue idle maintenance and cancels it after writer shutdown", async () => {
+    vi.useRealTimers();
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    execute.mockResolvedValue([]);
+    const writer = createAuditEventWriter({
+      scheduler,
+      stateDir: tempDirs.make("audit-writer-maintenance-"),
+    });
+    try {
+      await writer.ready;
+      execute.mockClear();
+      const pruned = createDeferred();
+      execute.mockImplementation(async (command) => {
+        if (command.type === "audit.writer.prune") {
+          pruned.resolve();
+          return [];
+        }
+        return [{ status: "settled" }];
+      });
+      await clock.advanceBy(60 * 60_000 - 1);
+      expect(execute).not.toHaveBeenCalled();
+      await clock.advanceBy(2 * 60 * 60_000 + 1);
+      await pruned.promise;
+      expect(
+        execute.mock.calls.filter(([command]) => command.type === "audit.writer.prune"),
+      ).toHaveLength(1);
+
+      await writer.stop();
+      execute.mockClear();
+      await clock.advanceBy(60 * 60_000);
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      await writer.stop();
+      await scheduler.stop();
+    }
+  });
+
+  it("reports maintenance errors before backing off contention and draining queued writes", async () => {
+    const requests = mockEventRequests(async () => ({ status: "settled" }));
+    execute.mockResolvedValueOnce([
+      { status: "settled", deleted: 1 },
+      { status: "settled", error: "synthetic identity prune failure" },
+      { status: "retry" },
+    ]);
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir: tempDirs.make("audit-writer-maintenance-retry-"),
+      onError: (error) => errors.push(error),
+    });
+    try {
+      await advanceDispatch();
+      await writer.ready;
+      expect(errors).toEqual(["synthetic identity prune failure"]);
+      expect(writer.record(event("after-maintenance"))).toBe(true);
+      await vi.advanceTimersByTimeAsync(23);
+      expect(requests).toEqual([]);
+      expect(execute).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(requests).toEqual(["after-maintenance"]);
+      expect(errors).toEqual(["synthetic identity prune failure"]);
+    } finally {
+      const stopping = writer.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await stopping;
+    }
+  });
+
+  it("joins a submitted maintenance pass after shutdown drops waiting metadata", async () => {
+    const finish = createDeferred<AuditWriterResult[]>();
+    execute.mockReturnValue(finish.promise);
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir: tempDirs.make("audit-writer-maintenance-settlement-"),
+      onError: (error) => errors.push(error),
+    });
+    try {
+      expect(writer.record(event("waiting"))).toBe(true);
+      await advanceDispatch();
+      expect(execute).toHaveBeenCalledTimes(1);
+      let stopped = false;
+      const stopping = writer.stop();
+      void stopping.then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(stopped).toBe(false);
+      expect(errors).toEqual([
+        "audit event writer shutdown timed out; pending metadata may be lost",
+      ]);
+      finish.resolve([{ status: "settled", deleted: 1 }]);
+      await stopping;
+      await writer.ready;
+      expect(stopped).toBe(true);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(errors).toHaveLength(1);
+    } finally {
+      finish.resolve([]);
+      const stopping = writer.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await stopping;
+    }
+  });
+
   it("retains in-flight capacity and joins submission after the shutdown deadline", async () => {
     const submitted = createDeferred();
     const finish = createDeferred<AuditWriterResult>();
-    const requests: string[] = [];
-    execute.mockImplementation(async (command) => {
-      if (command.type === "audit.writer.prune") {
-        return { status: "settled" };
-      }
-      if (command.input.type !== "record-event") {
-        throw new Error("Unexpected audit request in event lifecycle test");
-      }
-      requests.push(command.input.input.sourceId);
+    const requests = mockEventRequests(async () => {
       submitted.resolve();
       return await finish.promise;
     });
     const errors: string[] = [];
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir: tempDirs.make("audit-writer-settlement-"),
       maxPending: 2,
       onError: (error) => errors.push(error),
@@ -125,102 +286,105 @@ describe("audit writer async settlement", () => {
     }
   });
 
-  it("does not replay an unknown transport outcome with SQLite busy fields", async () => {
-    const submitted = createDeferred();
-    const firstResult = createDeferred<AuditWriterResult>();
-    const requests: string[] = [];
-    execute.mockImplementation(async (command) => {
-      if (command.type === "audit.writer.prune") {
-        return { status: "settled" };
+  it("retries only the uncommitted suffix before newer queued events", async () => {
+    let contended = false;
+    const requests = mockEventRequests(async (sourceId) => {
+      if (sourceId === "blocked" && !contended) {
+        contended = true;
+        return { status: "retry" };
       }
-      if (command.input.type !== "record-event") {
-        throw new Error("Unexpected audit request in event lifecycle test");
+      return { status: "settled" };
+    });
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir: tempDirs.make("audit-writer-batch-retry-"),
+    });
+    try {
+      await advanceDispatch();
+      await writer.ready;
+      for (const sourceId of ["committed", "blocked", "tail"]) {
+        expect(writer.record(event(sourceId))).toBe(true);
       }
-      const sourceId = command.input.input.sourceId;
-      requests.push(sourceId);
-      if (sourceId === "unknown-outcome") {
-        submitted.resolve();
-        return await firstResult.promise;
+      await advanceDispatch();
+      expect(requests).toEqual(["committed", "blocked"]);
+      expect(writer.record(event("newer"))).toBe(true);
+      await vi.advanceTimersByTimeAsync(25);
+      expect(requests).toEqual(["committed", "blocked", "blocked", "tail", "newer"]);
+    } finally {
+      const stopping = writer.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await stopping;
+    }
+  });
+
+  it("replays a cleanup-wrapped unknown outcome before newer queued events", async () => {
+    let failed = false;
+    const unknown = new SqliteWorkerError("Audit write outcome is unknown", "outcome-unknown");
+    const failure = withSqliteWorkerCleanupFailure(unknown, new Error("Synthetic cleanup failure"));
+    const requests = mockEventRequests(async (sourceId) => {
+      if (sourceId === "unknown-outcome" && !failed) {
+        failed = true;
+        throw failure;
       }
       return { status: "settled" };
     });
     const errors: string[] = [];
     const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
       stateDir: tempDirs.make("audit-writer-unknown-outcome-"),
       onError: (error) => errors.push(error),
     });
     try {
       await advanceDispatch();
       await writer.ready;
-      expect(writer.record(event("unknown-outcome"))).toBe(true);
-      expect(writer.record(event("next"))).toBe(true);
+      const start = event("unknown-outcome");
+      expect(
+        writer.recordRun(start, {
+          ...start,
+          sourceId: "unknown-outcome:end",
+          sourceSequence: 2,
+          action: "agent.run.finished",
+          status: "succeeded",
+        }),
+      ).toBe(true);
+      expect(writer.record(event("tail"))).toBe(true);
       await advanceDispatch();
-      await submitted.promise;
       expect(requests).toEqual(["unknown-outcome"]);
-      const stopping = writer.stop();
-      const failure = Object.assign(
-        new SqliteWorkerError(
-          "Audit write outcome is unknown: database is locked",
-          "outcome-unknown",
-        ),
-        { errcode: 5, errstr: "SQLITE_BUSY" },
+      expect(writer.record(event("newer"))).toBe(true);
+      await vi.advanceTimersByTimeAsync(25);
+      await advanceDispatch();
+      expect(requests).toEqual(["unknown-outcome", "unknown-outcome", "tail", "newer"]);
+      const batches = execute.mock.calls.flatMap(([command]) =>
+        command.type === "audit.writer.process" ? [command.input] : [],
       );
-      firstResult.reject(failure);
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
+      expect(batches[0]?.[0]).toMatchObject({ eventIds: [expect.any(String), expect.any(String)] });
+      expect(batches[1]).toEqual(batches[0]);
       expect(errors).toEqual([failure.message]);
-      expect(requests).toEqual(["unknown-outcome", "next"]);
-      await vi.advanceTimersByTimeAsync(60 * 60_000);
-      expect(errors).toEqual([failure.message]);
-      expect(requests).toEqual(["unknown-outcome", "next"]);
     } finally {
-      firstResult.resolve({ status: "settled" });
       const stopping = writer.stop();
       await vi.advanceTimersByTimeAsync(10_000);
       await stopping;
     }
   });
-  it("releases settled capacity before notifying the error observer", async () => {
-    const requests: string[] = [];
-    execute.mockImplementation(async (command) => {
-      if (command.type === "audit.writer.prune") {
-        return { status: "settled" };
-      }
-      if (command.input.type !== "record-event") {
-        throw new Error("Unexpected audit request");
-      }
-      const sourceId = command.input.input.sourceId;
-      requests.push(sourceId);
-      if (sourceId === "unknown-outcome") {
-        throw new SqliteWorkerError("Audit write outcome is unknown", "outcome-unknown");
-      }
-      return { status: "settled" };
-    });
-    const errors: string[] = [];
-    let offered = false;
-    let followUpAccepted: boolean | undefined;
+
+  it("settles an absent-database batch once without rescheduling", async () => {
+    execute.mockResolvedValue(undefined);
     const writer = createAuditEventWriter({
-      stateDir: tempDirs.make("audit-writer-error-notification-"),
-      maxPending: 1,
-      onError: (error) => {
-        errors.push(error);
-        if (!offered) {
-          offered = true;
-          followUpAccepted = writer.record(event("from-error-observer"));
-        }
-      },
+      scheduler: createTestGatewayScheduler(),
+      stateDir: tempDirs.make("audit-writer-absent-database-"),
     });
     try {
       await advanceDispatch();
       await writer.ready;
-      expect(writer.record(event("unknown-outcome"))).toBe(true);
+      execute.mockClear();
+      expect(writer.record(event("first"))).toBe(true);
+      expect(writer.record(event("second"))).toBe(true);
       await advanceDispatch();
-      const stopping = writer.stop();
-      await vi.advanceTimersByTimeAsync(10_000);
-      await stopping;
-      expect(followUpAccepted).toBe(true);
-      expect(errors).toEqual(["Audit write outcome is unknown"]);
-      expect(requests).toEqual(["unknown-outcome", "from-error-observer"]);
+      const attempts = execute.mock.calls.length;
+      // The absent existing-only attempt falls back to the normal worker open once.
+      expect(attempts).toBe(2);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(execute).toHaveBeenCalledTimes(attempts);
     } finally {
       const stopping = writer.stop();
       await vi.advanceTimersByTimeAsync(10_000);

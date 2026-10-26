@@ -1,9 +1,9 @@
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { readQuestionResourcePreview } from "../../../packages/gateway-protocol/src/question-media.js";
 import {
-  boundStructuredInputText as boundText,
   hasUnsafeVisibleCharacters,
   isStructuredInputRecord,
   quoteStructuredInputValue as quote,
-  readStructuredInputText,
   structuredInputArray as ownArray,
   structuredInputEntries,
   structuredInputFiniteNumber as ownFiniteNumber,
@@ -13,233 +13,330 @@ import {
   structuredInputValue as ownValue,
 } from "./structured-input-boundary.js";
 import type {
-  StructuredInputAnswerValue,
   StructuredInputCompilerOptions,
   StructuredInputField,
   StructuredInputRecord,
 } from "./structured-input-boundary.js";
-import type { AgentHarnessUserInputOption } from "./user-input-bridge.js";
+import {
+  buildField,
+  compileStringField,
+  findChoice,
+  invalid,
+  MAX_CHOICE_COUNT,
+  MAX_CHOICE_LABEL,
+  normalizeChoices,
+  readStructuredInputChoice,
+  readSuggestions,
+  validateChoices,
+  type Choice,
+  type DecodeValue,
+  type FieldContext,
+} from "./structured-input-field.js";
 
 const MAX_SCHEMA_KEYS = 24;
-const MAX_FIELD_TEXT = 512;
-const MAX_CHOICE_COUNT = 4;
-const MAX_CHOICE_LABEL = 64;
-const MAX_CHOICE_VALUE = 256;
 const MAX_IMAGE_PICKER_ID = 128;
-const MAX_INPUT_TEXT = 4_096;
-
-type FieldContext = {
-  fieldId: string;
-  questionId: string;
-  required: boolean;
-  secret: boolean;
-  otherFieldId?: string;
-};
-
-type Choice = { value: string; label: string; description?: string };
-type DecodeValue =
-  | { kind: "absent" }
-  | { kind: "invalid"; message: string }
-  | { kind: "present"; value: StructuredInputAnswerValue };
 
 export function compileStructuredInputField(
-  context: FieldContext,
+  fieldContext: FieldContext,
   schema: StructuredInputRecord,
   options: StructuredInputCompilerOptions,
 ): StructuredInputField | string {
+  const context = { ...fieldContext, explicitDefaults: options.allowRichForms === true };
   if (!structuredInputEntries(schema, MAX_SCHEMA_KEYS)) {
     return "has an over-limit schema.";
   }
+  if (options.allowRichForms) {
+    const supported = new Set([
+      "type",
+      "title",
+      "description",
+      "default",
+      "minLength",
+      "maxLength",
+      "pattern",
+      "format",
+      "minimum",
+      "maximum",
+      "minItems",
+      "maxItems",
+      "uniqueItems",
+      "items",
+      "enum",
+      "enumNames",
+      "oneOf",
+      "isSecret",
+      "_meta",
+      "x-openai-input",
+      "x-openai-suggestions",
+    ]);
+    if (Object.keys(schema).some((key) => !supported.has(key))) {
+      return "uses unsupported field constraints.";
+    }
+    if (
+      ownValue(schema, "x-openai-suggestions") !== undefined &&
+      (ownValue(schema, "enum") !== undefined || ownValue(schema, "oneOf") !== undefined)
+    ) {
+      return "combines suggestions with a closed choice list.";
+    }
+  }
   const type = ownString(schema, "type");
+  if (ownValue(schema, "x-openai-input") !== undefined) {
+    return options.allowRichForms
+      ? compileResourceField(context, schema, options)
+      : "uses an unsupported semantic input.";
+  }
   if (type === "openai/imagePicker") {
-    return options.allowImagePicker === true
-      ? compileImagePickerField(context, schema)
-      : `uses unsupported type ${quote(type)}.`;
+    if (options.allowImagePicker !== true) {
+      return `uses unsupported type ${quote(type)}.`;
+    }
+    const items = ownArray(schema, "items", MAX_CHOICE_COUNT);
+    if (!items || items.length === 0) {
+      return `must contain 1 to ${MAX_CHOICE_COUNT} image choices.`;
+    }
+    const choices: Choice[] = [];
+    for (const item of items) {
+      if (!isStructuredInputRecord(item)) {
+        return "has an invalid image choice.";
+      }
+      const id = ownString(item, "id");
+      const title = ownString(item, "title");
+      if (
+        !id ||
+        !title ||
+        id.length > MAX_IMAGE_PICKER_ID ||
+        title.length > MAX_CHOICE_LABEL ||
+        hasUnsafeVisibleCharacters(id) ||
+        hasUnsafeVisibleCharacters(title)
+      ) {
+        return "has an image choice with an invalid or over-limit id/title.";
+      }
+      choices.push({ value: id, label: title });
+    }
+    const error = validateChoices(choices);
+    return error ?? compileChoiceField(context, schema, choices);
   }
   if (type === "boolean") {
-    return compileBooleanField(context, schema, options);
+    const rawDefault = ownValue(schema, "default");
+    const defaultValue = typeof rawDefault === "boolean" ? rawDefault : undefined;
+    if (rawDefault !== undefined && rawDefault !== null && defaultValue === undefined) {
+      return "has a non-boolean default.";
+    }
+    const [positive, negative] = options.booleanLabels ?? ["Yes", "No"];
+    const choices = [
+      { label: positive, value: "true" },
+      { label: negative, value: "false" },
+    ];
+    return buildField(context, schema, {
+      constraints: [],
+      options: choices,
+      isOther: false,
+      defaultValue,
+      decode: (values) => {
+        const selected = findChoice(choices, values[0], context.explicitDefaults);
+        return selected
+          ? { kind: "present", value: selected.value === "true" }
+          : invalid(context, `must be ${positive} or ${negative}.`);
+      },
+    });
   }
   if (type === "number" || type === "integer") {
-    return compileNumberField(context, schema, type);
+    const minimum = ownFiniteNumber(schema, "minimum");
+    const maximum = ownFiniteNumber(schema, "maximum");
+    if (
+      minimum === null ||
+      maximum === null ||
+      (minimum !== undefined && maximum !== undefined && minimum > maximum)
+    ) {
+      return "has invalid numeric constraints.";
+    }
+    const rawDefault = ownValue(schema, "default");
+    const defaultValue = typeof rawDefault === "number" ? rawDefault : undefined;
+    if (rawDefault !== undefined && rawDefault !== null && defaultValue === undefined) {
+      return "has a non-numeric default.";
+    }
+    const validate = (value: number): string | undefined => {
+      if (!Number.isFinite(value)) {
+        return "must be a finite number.";
+      }
+      if (type === "integer" && !Number.isInteger(value)) {
+        return "must be an integer.";
+      }
+      if (minimum !== undefined && value < minimum) {
+        return `must be at least ${minimum}.`;
+      }
+      if (maximum !== undefined && value > maximum) {
+        return `must be at most ${maximum}.`;
+      }
+      return undefined;
+    };
+    if (defaultValue !== undefined && validate(defaultValue)) {
+      return "has a default outside its numeric constraints.";
+    }
+    return buildField(context, schema, {
+      constraints: [
+        type === "integer" ? "whole number" : "number",
+        minimum !== undefined ? `minimum ${minimum}` : undefined,
+        maximum !== undefined ? `maximum ${maximum}` : undefined,
+      ],
+      options: null,
+      isOther: true,
+      defaultValue,
+      decode: (values) => {
+        const raw = values[0]?.trim() ?? "";
+        if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/u.test(raw)) {
+          return invalid(context, type === "integer" ? "must be an integer." : "must be a number.");
+        }
+        const value = Number(raw);
+        const error = validate(value);
+        return error ? invalid(context, error) : { kind: "present", value };
+      },
+    });
   }
   if (type === "array") {
-    return compileMultiSelectField(context, schema, options);
+    const items = ownRecord(schema, "items");
+    if (!items) {
+      return "has no string choice schema for its array items.";
+    }
+    if (
+      options.allowRichForms &&
+      ownString(items, "type") === "string" &&
+      ownValue(items, "enum") === undefined &&
+      ownValue(items, "oneOf") === undefined &&
+      ownValue(items, "anyOf") === undefined
+    ) {
+      const minItems = ownInteger(schema, "minItems", 0);
+      const maximum = ownInteger(schema, "maxItems", 0);
+      const maxItems = maximum === undefined ? 16 : maximum;
+      const unique = ownValue(schema, "uniqueItems");
+      if (
+        minItems === null ||
+        maxItems === null ||
+        maxItems > 16 ||
+        (minItems ?? 0) > maxItems ||
+        (unique !== undefined && typeof unique !== "boolean")
+      ) {
+        return "has invalid array constraints.";
+      }
+      const item = compileStringField({ ...context, required: true }, items, options);
+      if (typeof item === "string") {
+        return item;
+      }
+      const suggestions = readSuggestions(items, options);
+      if (typeof suggestions === "string") {
+        return suggestions;
+      }
+      const decode = (values: readonly string[]): DecodeValue => {
+        if (values.length < (minItems ?? 0) || values.length > maxItems) {
+          return invalid(context, `requires between ${minItems ?? 0} and ${maxItems} entries.`);
+        }
+        const decoded: string[] = [];
+        for (const value of values) {
+          const result = item.decode([value]);
+          if (result.kind === "invalid") {
+            return result;
+          }
+          const answer = result.kind === "present" ? result.entries[0]?.[1] : undefined;
+          if (typeof answer !== "string") {
+            return invalid(context, "contains an invalid string entry.");
+          }
+          decoded.push(answer);
+        }
+        if (unique === true && new Set(decoded).size !== decoded.length) {
+          return invalid(context, "requires unique entries.");
+        }
+        return { kind: "present", value: decoded };
+      };
+      const rawDefault = ownValue(schema, "default");
+      const defaultValue = isStringArray(rawDefault) ? rawDefault : undefined;
+      if (rawDefault !== undefined && (!defaultValue || decode(defaultValue).kind !== "present")) {
+        return "has an invalid string array default.";
+      }
+      return buildField(context, schema, {
+        constraints: [
+          "Enter each custom value on a separate line.",
+          item.question.question,
+          `between ${minItems ?? 0} and ${maxItems} entries`,
+        ],
+        options: suggestions ?? null,
+        isOther: true,
+        multiSelect: true,
+        answerFormat: "lines",
+        allowEmpty: (minItems ?? 0) === 0,
+        defaultValue,
+        decode,
+      });
+    }
+    const choices = readArrayChoices(items, options);
+    if (typeof choices === "string") {
+      return choices;
+    }
+    const minChoices = ownInteger(schema, "minItems", 0);
+    const maxChoices = ownInteger(schema, "maxItems", 0);
+    if (
+      minChoices === null ||
+      maxChoices === null ||
+      (minChoices !== undefined && maxChoices !== undefined && minChoices > maxChoices) ||
+      (minChoices !== undefined && minChoices > choices.length) ||
+      (!options.allowRichForms && maxChoices !== undefined && maxChoices > choices.length)
+    ) {
+      return "has invalid multi-select limits.";
+    }
+    const rawChoiceDefault = ownValue(schema, "default");
+    const defaultEntries =
+      rawChoiceDefault === null ? undefined : ownArray(schema, "default", choices.length);
+    const defaultChoices = defaultEntries?.filter(
+      (value): value is string => typeof value === "string",
+    );
+    if (
+      rawChoiceDefault !== undefined &&
+      rawChoiceDefault !== null &&
+      (!defaultEntries ||
+        defaultChoices?.length !== defaultEntries.length ||
+        defaultChoices.some((value) => !choices.some((choice) => choice.value === value)) ||
+        new Set(defaultChoices).size !== defaultChoices.length ||
+        (minChoices !== undefined && defaultChoices.length < minChoices) ||
+        (maxChoices !== undefined && defaultChoices.length > maxChoices))
+    ) {
+      return "has an invalid multi-select default.";
+    }
+    return buildField(context, schema, {
+      constraints: [
+        minChoices !== undefined ? `choose at least ${minChoices}` : undefined,
+        maxChoices !== undefined ? `choose at most ${maxChoices}` : undefined,
+      ],
+      options: choices,
+      isOther: false,
+      multiSelect: true,
+      allowEmpty: options.allowRichForms === true && (minChoices ?? 0) === 0,
+      defaultValue: defaultChoices,
+      decode: (values) => {
+        const decoded = values.flatMap((value) => {
+          const choice = findChoice(choices, value, context.explicitDefaults);
+          return choice ? [choice.value] : [];
+        });
+        if (decoded.length !== values.length || new Set(decoded).size !== decoded.length) {
+          return invalid(context, "contains an invalid or duplicate choice.");
+        }
+        if (minChoices !== undefined && decoded.length < minChoices) {
+          return invalid(context, `requires at least ${minChoices} choices.`);
+        }
+        if (maxChoices !== undefined && decoded.length > maxChoices) {
+          return invalid(context, `allows at most ${maxChoices} choices.`);
+        }
+        return { kind: "present", value: decoded };
+      },
+    });
   }
   if (type !== "string") {
     return `uses unsupported type ${quote(type)}.`;
   }
-  const choices = readChoices(schema, options);
-  if (typeof choices === "string") {
-    return choices;
+  const stringChoices = readChoices(schema, options);
+  if (typeof stringChoices === "string") {
+    return stringChoices;
   }
-  return choices
-    ? compileChoiceField(context, schema, choices)
-    : compileStringField(context, schema);
-}
-
-function compileStringField(
-  context: FieldContext,
-  schema: StructuredInputRecord,
-): StructuredInputField | string {
-  const minLength = ownInteger(schema, "minLength", 0);
-  const maxLength = ownInteger(schema, "maxLength", 0);
-  if (
-    minLength === null ||
-    maxLength === null ||
-    (minLength !== undefined && minLength > MAX_INPUT_TEXT) ||
-    (maxLength !== undefined && maxLength > MAX_INPUT_TEXT) ||
-    (minLength !== undefined && maxLength !== undefined && minLength > maxLength)
-  ) {
-    return "has invalid string length constraints.";
-  }
-  const pattern = ownValue(schema, "pattern");
-  if (pattern !== undefined && pattern !== null) {
-    return "uses an unsupported pattern constraint.";
-  }
-  const format = ownString(schema, "format");
-  if (format && !["email", "uri", "date", "date-time"].includes(format)) {
-    return `uses unsupported string format ${quote(format)}.`;
-  }
-  const defaultValue = ownValue(schema, "default");
-  if (defaultValue !== undefined && defaultValue !== null && typeof defaultValue !== "string") {
-    return "has a non-string default.";
-  }
-  const defaultText = typeof defaultValue === "string" ? defaultValue : undefined;
-  const validate = (value: string): string | undefined => {
-    if (value.length > MAX_INPUT_TEXT) {
-      return `must contain at most ${MAX_INPUT_TEXT} characters.`;
-    }
-    if (minLength !== undefined && value.length < minLength) {
-      return `must contain at least ${minLength} characters.`;
-    }
-    if (maxLength !== undefined && value.length > maxLength) {
-      return `must contain at most ${maxLength} characters.`;
-    }
-    if (format && !matchesStringFormat(value, format)) {
-      return `is not a valid ${format} value.`;
-    }
-    return undefined;
-  };
-  if (defaultText !== undefined) {
-    const error = validate(defaultText);
-    if (error) {
-      return `has a default that ${error}`;
-    }
-  }
-  return buildField(context, schema, {
-    constraints: [
-      minLength !== undefined ? `minimum ${minLength} characters` : undefined,
-      `maximum ${maxLength ?? MAX_INPUT_TEXT} characters`,
-      format ? `format: ${format}` : undefined,
-    ],
-    options: null,
-    isOther: true,
-    defaultValue: defaultText,
-    decode: (values) => {
-      const missing = decodeMissing(context, values, defaultText);
-      if (missing) {
-        return missing;
-      }
-      const value = values[0] ?? "";
-      const error = validate(value);
-      return error ? invalid(context, error) : { kind: "present", value };
-    },
-  });
-}
-
-function compileNumberField(
-  context: FieldContext,
-  schema: StructuredInputRecord,
-  type: "number" | "integer",
-): StructuredInputField | string {
-  const minimum = ownFiniteNumber(schema, "minimum");
-  const maximum = ownFiniteNumber(schema, "maximum");
-  if (
-    minimum === null ||
-    maximum === null ||
-    (minimum !== undefined && maximum !== undefined && minimum > maximum)
-  ) {
-    return "has invalid numeric constraints.";
-  }
-  const rawDefault = ownValue(schema, "default");
-  const defaultValue = typeof rawDefault === "number" ? rawDefault : undefined;
-  if (rawDefault !== undefined && rawDefault !== null && defaultValue === undefined) {
-    return "has a non-numeric default.";
-  }
-  const validate = (value: number): string | undefined => {
-    if (!Number.isFinite(value)) {
-      return "must be a finite number.";
-    }
-    if (type === "integer" && !Number.isInteger(value)) {
-      return "must be an integer.";
-    }
-    if (minimum !== undefined && value < minimum) {
-      return `must be at least ${minimum}.`;
-    }
-    if (maximum !== undefined && value > maximum) {
-      return `must be at most ${maximum}.`;
-    }
-    return undefined;
-  };
-  if (defaultValue !== undefined && validate(defaultValue)) {
-    return "has a default outside its numeric constraints.";
-  }
-  return buildField(context, schema, {
-    constraints: [
-      type === "integer" ? "whole number" : "number",
-      minimum !== undefined ? `minimum ${minimum}` : undefined,
-      maximum !== undefined ? `maximum ${maximum}` : undefined,
-    ],
-    options: null,
-    isOther: true,
-    defaultValue,
-    decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
-      const raw = values[0]?.trim() ?? "";
-      if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/u.test(raw)) {
-        return invalid(context, type === "integer" ? "must be an integer." : "must be a number.");
-      }
-      const value = Number(raw);
-      const error = validate(value);
-      return error ? invalid(context, error) : { kind: "present", value };
-    },
-  });
-}
-
-function compileBooleanField(
-  context: FieldContext,
-  schema: StructuredInputRecord,
-  options: StructuredInputCompilerOptions,
-): StructuredInputField | string {
-  const rawDefault = ownValue(schema, "default");
-  const defaultValue = typeof rawDefault === "boolean" ? rawDefault : undefined;
-  if (rawDefault !== undefined && rawDefault !== null && defaultValue === undefined) {
-    return "has a non-boolean default.";
-  }
-  const [positive, negative] = options.booleanLabels ?? ["Yes", "No"];
-  const choices = [
-    { label: positive, value: "true" },
-    { label: negative, value: "false" },
-  ];
-  return buildField(context, schema, {
-    constraints: [],
-    options: choices,
-    isOther: false,
-    defaultValue,
-    decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
-      const selected = findChoice(choices, values[0]);
-      return selected
-        ? { kind: "present", value: selected.value === "true" }
-        : invalid(context, `must be ${positive} or ${negative}.`);
-    },
-  });
+  return stringChoices
+    ? compileChoiceField(context, schema, stringChoices)
+    : compileStringField(context, schema, options);
 }
 
 function compileChoiceField(
@@ -262,11 +359,7 @@ function compileChoiceField(
     isOther: context.otherFieldId !== undefined,
     defaultValue,
     decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
-      const selected = findChoice(choices, values[0]);
+      const selected = findChoice(choices, values[0], context.explicitDefaults);
       if (selected) {
         return { kind: "present", value: selected.value };
       }
@@ -275,170 +368,6 @@ function compileChoiceField(
         : invalid(context, "contains an undeclared choice.");
     },
   });
-}
-
-function compileMultiSelectField(
-  context: FieldContext,
-  schema: StructuredInputRecord,
-  options: StructuredInputCompilerOptions,
-): StructuredInputField | string {
-  const items = ownRecord(schema, "items");
-  if (!items) {
-    return "has no string choice schema for its array items.";
-  }
-  const choices = readArrayChoices(items, options);
-  if (typeof choices === "string") {
-    return choices;
-  }
-  const minItems = ownInteger(schema, "minItems", 0);
-  const maxItems = ownInteger(schema, "maxItems", 0);
-  if (
-    minItems === null ||
-    maxItems === null ||
-    (minItems !== undefined && maxItems !== undefined && minItems > maxItems) ||
-    (maxItems !== undefined && maxItems > choices.length)
-  ) {
-    return "has invalid multi-select limits.";
-  }
-  const rawDefault = ownValue(schema, "default");
-  const defaultEntries =
-    rawDefault === null ? undefined : ownArray(schema, "default", choices.length);
-  const defaultValue = defaultEntries?.filter(
-    (value): value is string => typeof value === "string",
-  );
-  if (
-    rawDefault !== undefined &&
-    rawDefault !== null &&
-    (!defaultEntries ||
-      defaultValue?.length !== defaultEntries.length ||
-      defaultValue.some((value) => !choices.some((choice) => choice.value === value)) ||
-      (minItems !== undefined && defaultValue.length < minItems) ||
-      (maxItems !== undefined && defaultValue.length > maxItems))
-  ) {
-    return "has an invalid multi-select default.";
-  }
-  return buildField(context, schema, {
-    constraints: [
-      minItems !== undefined ? `choose at least ${minItems}` : undefined,
-      maxItems !== undefined ? `choose at most ${maxItems}` : undefined,
-    ],
-    options: choices,
-    isOther: false,
-    multiSelect: true,
-    defaultValue,
-    decode: (values) => {
-      const missing = decodeMissing(context, values, defaultValue);
-      if (missing) {
-        return missing;
-      }
-      const decoded = values.flatMap((value) => {
-        const choice = findChoice(choices, value);
-        return choice ? [choice.value] : [];
-      });
-      if (decoded.length !== values.length || new Set(decoded).size !== decoded.length) {
-        return invalid(context, "contains an invalid or duplicate choice.");
-      }
-      if (minItems !== undefined && decoded.length < minItems) {
-        return invalid(context, `requires at least ${minItems} choices.`);
-      }
-      if (maxItems !== undefined && decoded.length > maxItems) {
-        return invalid(context, `allows at most ${maxItems} choices.`);
-      }
-      return { kind: "present", value: decoded };
-    },
-  });
-}
-
-function compileImagePickerField(
-  context: FieldContext,
-  schema: StructuredInputRecord,
-): StructuredInputField | string {
-  const items = ownArray(schema, "items", MAX_CHOICE_COUNT);
-  if (!items || items.length === 0) {
-    return `must contain 1 to ${MAX_CHOICE_COUNT} image choices.`;
-  }
-  const choices: Choice[] = [];
-  for (const item of items) {
-    if (!isStructuredInputRecord(item)) {
-      return "has an invalid image choice.";
-    }
-    const id = ownString(item, "id");
-    const title = ownString(item, "title");
-    if (
-      !id ||
-      !title ||
-      id.length > MAX_IMAGE_PICKER_ID ||
-      title.length > MAX_CHOICE_LABEL ||
-      hasUnsafeVisibleCharacters(id) ||
-      hasUnsafeVisibleCharacters(title)
-    ) {
-      return "has an image choice with an invalid or over-limit id/title.";
-    }
-    choices.push({ value: id, label: title });
-  }
-  const error = validateChoices(choices);
-  return error ?? compileChoiceField(context, schema, choices);
-}
-
-function buildField(
-  context: FieldContext,
-  schema: StructuredInputRecord,
-  params: {
-    constraints: Array<string | undefined>;
-    options: Choice[] | null;
-    isOther: boolean;
-    multiSelect?: boolean;
-    defaultValue?: StructuredInputAnswerValue;
-    decode: (values: readonly string[]) => DecodeValue;
-  },
-): StructuredInputField {
-  const title =
-    readStructuredInputText(ownString(schema, "title") ?? context.fieldId, MAX_FIELD_TEXT) ??
-    "Field";
-  const description =
-    readStructuredInputText(ownString(schema, "description") ?? "", MAX_FIELD_TEXT) ?? "";
-  const details = [
-    description,
-    context.required ? "Required." : "Optional.",
-    params.defaultValue !== undefined ? `Default: ${displayDefault(params.defaultValue)}.` : "",
-    params.constraints.filter(Boolean).join("; "),
-  ].filter(Boolean);
-  return {
-    question: {
-      id: context.questionId,
-      header: boundText(title, 12),
-      question: boundText(
-        details.length > 0 ? `${title}\n${details.join(" ")}` : title,
-        MAX_FIELD_TEXT,
-      ),
-      ...(params.multiSelect ? { multiSelect: true } : {}),
-      isOther: params.isOther,
-      isSecret: context.secret,
-      options:
-        params.options?.map((choice): AgentHarnessUserInputOption => ({
-          label: choice.label,
-          ...(choice.description ? { description: choice.description } : {}),
-        })) ?? null,
-    },
-    decode: (values) => {
-      const decoded = params.decode(values);
-      if (decoded.kind !== "present") {
-        return decoded;
-      }
-      const selectedDeclaredChoice = params.options?.some(
-        (choice) => choice.label.toLowerCase() === values[0]?.trim().toLowerCase(),
-      );
-      const selectedOther =
-        context.otherFieldId &&
-        params.options &&
-        values.some((value) => value !== "") &&
-        !selectedDeclaredChoice;
-      return {
-        kind: "present",
-        entries: [[selectedOther ? context.otherFieldId! : context.fieldId, decoded.value]],
-      };
-    },
-  };
 }
 
 function readChoices(
@@ -455,6 +384,7 @@ function readChoices(
   ) {
     return "declares both enum and oneOf choices.";
   }
+  let choices: Parameters<typeof normalizeChoices>[0];
   if (enumValue !== undefined && enumValue !== null) {
     if (!Array.isArray(enumValue)) {
       return "has an invalid enum.";
@@ -466,28 +396,23 @@ function readChoices(
     ) {
       return "has invalid enumNames.";
     }
-    return normalizeChoices(
-      enumValue.map((value, index) => ({
-        value,
-        label: Array.isArray(enumNames) ? enumNames[index] : value,
-      })),
-      options.minimumChoiceCount ?? 1,
-    );
-  }
-  if (oneOfValue !== undefined && oneOfValue !== null) {
+    choices = enumValue.map((value, index) => ({
+      value,
+      label: Array.isArray(enumNames) ? enumNames[index] : value,
+    }));
+  } else if (oneOfValue !== undefined && oneOfValue !== null) {
     if (!Array.isArray(oneOfValue)) {
       return "has an invalid oneOf.";
     }
-    return normalizeChoices(
-      oneOfValue.map((entry) => ({
-        value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
-        label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
-        description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
-      })),
-      options.minimumChoiceCount ?? 1,
-    );
+    choices = oneOfValue.map((entry) => readStructuredInputChoice(entry, options));
+  } else {
+    return undefined;
   }
-  return undefined;
+  return normalizeChoices(
+    choices,
+    options.minimumChoiceCount ?? 1,
+    options.allowRichForms ? 64 : MAX_CHOICE_COUNT,
+  );
 }
 
 function readArrayChoices(
@@ -502,114 +427,198 @@ function readArrayChoices(
     return "must declare string enum, anyOf, or oneOf array choices.";
   }
   return normalizeChoices(
-    entries.map((entry) => ({
-      value: isStructuredInputRecord(entry) ? ownValue(entry, "const") : undefined,
-      label: isStructuredInputRecord(entry) ? ownValue(entry, "title") : undefined,
-      description: isStructuredInputRecord(entry) ? ownValue(entry, "description") : undefined,
-    })),
+    entries.map((entry) => readStructuredInputChoice(entry, options)),
     options.minimumChoiceCount ?? 1,
+    options.allowRichForms ? 64 : MAX_CHOICE_COUNT,
   );
 }
 
-function normalizeChoices(
-  raw: Array<{ value: unknown; label: unknown; description?: unknown }>,
-  minimum: number,
-): Choice[] | string {
-  if (raw.length < minimum || raw.length > MAX_CHOICE_COUNT) {
-    return `must declare between ${minimum} and ${MAX_CHOICE_COUNT} choices; choices are never truncated.`;
+function compileResourceField(
+  context: FieldContext,
+  schema: StructuredInputRecord,
+  options: StructuredInputCompilerOptions,
+): StructuredInputField | string {
+  const input = ownRecord(schema, "x-openai-input");
+  const type = ownString(schema, "type");
+  if (
+    !input ||
+    !["resource", "file"].includes(ownString(input, "type") ?? "") ||
+    (type !== "string" && type !== "array")
+  ) {
+    return "uses an unsupported resource input.";
+  }
+  const selection = ownValue(input, "selection") ?? "explicit";
+  if (
+    (type === "string" && ownValue(input, "selection") !== undefined) ||
+    (selection !== "explicit" && selection !== "implicit")
+  ) {
+    return "has an invalid resource selection mode.";
+  }
+  const source = options.resourceContext;
+  const rawUserOptions = ownValue(input, "userOptions");
+  const userOptions =
+    rawUserOptions === undefined && selection === "implicit" ? {} : rawUserOptions;
+  let upload: { kind: "file" | "directory"; accept?: string[] } | undefined;
+  if (userOptions !== undefined) {
+    if (!isStructuredInputRecord(userOptions)) {
+      return "has invalid user resource options.";
+    }
+    const kind = ownValue(userOptions, "kind") ?? "file";
+    const accept = ownValue(userOptions, "accept");
+    if (
+      (kind !== "file" && kind !== "directory") ||
+      (accept !== undefined &&
+        (!Array.isArray(accept) ||
+          accept.length > 32 ||
+          !accept.every(
+            (entry): entry is string =>
+              typeof entry === "string" &&
+              entry.length <= 128 &&
+              /^(?:\.[a-z0-9.+_-]+|[a-z0-9!#$&^_.+-]+\/(?:[a-z0-9!#$&^_.+-]+|\*))$/iu.test(entry),
+          )))
+    ) {
+      return "has invalid resource upload restrictions.";
+    }
+    if (!source?.uploads) {
+      return "requires resource uploads unavailable on this input surface.";
+    }
+    upload = {
+      kind,
+      ...(accept ? { accept: [...accept] } : {}),
+    };
+  }
+  const resources = ownArray(input, "options", 64);
+  const itemSchema = type === "array" ? ownRecord(schema, "items") : schema;
+  if (
+    !resources ||
+    !itemSchema ||
+    ownString(itemSchema, "format") !== "uri" ||
+    ownString(itemSchema, "type") !== "string"
+  ) {
+    return "has an invalid resource schema.";
+  }
+  const { "x-openai-input": _input, default: _default, ...stringSchema } = itemSchema;
+  const validator = compileStringField({ ...context, required: true }, stringSchema, options);
+  if (typeof validator === "string") {
+    return validator;
   }
   const choices: Choice[] = [];
-  for (const entry of raw) {
-    const description =
-      entry.description === undefined || entry.description === null
-        ? undefined
-        : readStructuredInputText(entry.description, MAX_FIELD_TEXT);
-    if (
-      typeof entry.value !== "string" ||
-      typeof entry.label !== "string" ||
-      !entry.value ||
-      !entry.label ||
-      entry.value.length > MAX_CHOICE_VALUE ||
-      entry.label.length > MAX_CHOICE_LABEL ||
-      hasUnsafeVisibleCharacters(entry.value) ||
-      hasUnsafeVisibleCharacters(entry.label) ||
-      (entry.description !== undefined && entry.description !== null && !description)
-    ) {
-      return "contains an invalid or over-limit choice.";
+  for (const resource of resources) {
+    if (!isStructuredInputRecord(resource)) {
+      return "contains an invalid resource.";
     }
-    choices.push({
-      value: entry.value,
-      label: entry.label,
-      ...(description ? { description } : {}),
-    });
-  }
-  return validateChoices(choices) ?? choices;
-}
-
-function validateChoices(choices: readonly Choice[]): string | undefined {
-  const values = new Set<string>();
-  const labels = new Set<string>();
-  for (const choice of choices) {
-    const value = choice.value.toLowerCase();
-    const label = choice.label.trim().toLowerCase();
-    if (values.has(value) || labels.has(label) || values.has(label) || labels.has(value)) {
-      return "contains duplicate choice values or titles.";
+    const uri = ownString(resource, "uri");
+    const name = ownString(resource, "name");
+    if (!uri || uri.length > 2048 || !name || validator.decode([uri]).kind !== "present") {
+      return "contains a resource outside its URI constraints.";
     }
-    values.add(value);
-    labels.add(label);
-  }
-  return undefined;
-}
-
-function decodeMissing(
-  context: FieldContext,
-  values: readonly string[],
-  defaultValue: StructuredInputAnswerValue | undefined,
-): DecodeValue | undefined {
-  if (values.some((value) => value !== "")) {
-    return undefined;
-  }
-  if (defaultValue !== undefined) {
-    return { kind: "present", value: defaultValue };
-  }
-  return context.required ? invalid(context, "is required.") : { kind: "absent" };
-}
-
-function invalid(context: FieldContext, message: string): DecodeValue {
-  return {
-    kind: "invalid",
-    message: boundText(`Field ${quote(context.fieldId)} ${message}`, 400),
-  };
-}
-
-function matchesStringFormat(value: string, format: string): boolean {
-  if (format === "email") {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
-  }
-  if (format === "uri") {
-    try {
-      return Boolean(new URL(value).protocol);
-    } catch {
-      return false;
+    const meta = ownRecord(resource, "_meta");
+    const previewMetadata = meta ? ownValue(meta, "openai/preview") : undefined;
+    const preview = isStructuredInputRecord(previewMetadata)
+      ? readQuestionResourcePreview(ownValue(previewMetadata, "target"))
+      : undefined;
+    if (previewMetadata !== undefined && (!preview || !source?.previews)) {
+      return "requires a resource preview unavailable on this input surface.";
     }
-  }
-  if (format === "date") {
-    if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
-      return false;
+    const normalized = normalizeChoices(
+      [
+        {
+          value: uri,
+          label: ownString(resource, "title") ?? name,
+          description: ownValue(resource, "description"),
+          thumbnail: meta ? ownValue(meta, "openai/thumbnail") : undefined,
+        },
+      ],
+      1,
+      64,
+      2048,
+    );
+    if (typeof normalized === "string") {
+      return normalized;
     }
-    const date = new Date(`${value}T00:00:00.000Z`);
-    return !Number.isNaN(date.valueOf()) && date.toISOString().startsWith(value);
+    choices.push({ ...normalized[0]!, resourceUri: uri, ...(preview ? { preview } : {}) });
   }
-  return /^\d{4}-\d{2}-\d{2}T/u.test(value) && !Number.isNaN(Date.parse(value));
-}
-
-function findChoice(choices: readonly Choice[], raw: string | undefined): Choice | undefined {
-  const value = raw?.trim().toLowerCase();
-  return choices.find(
-    (choice) => choice.label.toLowerCase() === value || choice.value.toLowerCase() === value,
-  );
-}
-
-function displayDefault(value: StructuredInputAnswerValue): string {
-  return boundText(Array.isArray(value) ? value.join(", ") : String(value), 80);
+  const choiceError = validateChoices(choices);
+  if (choiceError) {
+    return choiceError;
+  }
+  const minimum = type === "array" ? ownInteger(schema, "minItems", 0) : undefined;
+  const maximum = type === "array" ? ownInteger(schema, "maxItems", 0) : 1;
+  if (
+    minimum === null ||
+    maximum === null ||
+    (minimum ?? 0) > (maximum ?? 64) ||
+    (maximum ?? 64) > 64
+  ) {
+    return "has invalid resource selection limits.";
+  }
+  if (
+    choices.length === 0 &&
+    !upload &&
+    context.required &&
+    (type === "string" || (minimum ?? 0) > 0)
+  ) {
+    return "has no selectable or uploadable resources for a required selection.";
+  }
+  const rawDefault = ownValue(schema, "default");
+  if (selection === "implicit" && rawDefault !== undefined) {
+    return "declares a default for implicit selection.";
+  }
+  const defaults =
+    typeof rawDefault === "string" && type === "string"
+      ? [rawDefault]
+      : type === "array" && isStringArray(rawDefault)
+        ? rawDefault
+        : undefined;
+  if (
+    rawDefault !== undefined &&
+    (!defaults ||
+      defaults.some((value) => !choices.some((choice) => choice.value === value)) ||
+      new Set(defaults).size !== defaults.length ||
+      defaults.length < (minimum ?? 0) ||
+      defaults.length > (maximum ?? 64))
+  ) {
+    return "has an invalid resource default.";
+  }
+  const defaultValue =
+    selection === "implicit"
+      ? choices.map((choice) => choice.value)
+      : type === "string"
+        ? defaults?.[0]
+        : defaults;
+  return buildField(context, schema, {
+    constraints: [
+      selection === "implicit"
+        ? "Remove resources to exclude them; all remaining resources will be submitted."
+        : undefined,
+    ],
+    options: choices,
+    isOther: Boolean(upload),
+    multiSelect: type === "array",
+    allowEmpty: type === "array" && (minimum ?? 0) === 0,
+    defaultValue,
+    resource: {
+      ...(source ? { viewId: source.viewId } : {}),
+      selection,
+      ...(upload ? { userOptions: upload } : {}),
+    },
+    decode: (values) => {
+      if (values.length < (minimum ?? 0) || values.length > (maximum ?? 64)) {
+        return invalid(context, "has an invalid number of resources.");
+      }
+      for (const value of values) {
+        const supplied = findChoice(choices, value, true);
+        if (
+          (!supplied && (!upload || !source?.isUploadedResource(context.questionId, value))) ||
+          validator.decode([value]).kind !== "present"
+        ) {
+          return invalid(context, "contains a resource not admitted for this field.");
+        }
+      }
+      if (new Set(values).size !== values.length) {
+        return invalid(context, "contains duplicate resources.");
+      }
+      return { kind: "present", value: type === "array" ? [...values] : (values[0] ?? "") };
+    },
+  });
 }

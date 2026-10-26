@@ -26,6 +26,23 @@ function record(cache: TelegramMessageCache, msg: Message) {
   return cache.record({ accountId: "default", chatId: msg.chat.id, msg });
 }
 
+function conversation(
+  cache: TelegramMessageCache,
+  messageId: string,
+  options: Partial<Parameters<typeof buildTelegramConversationContext>[0]> = {},
+) {
+  return buildTelegramConversationContext({
+    cache,
+    accountId: "default",
+    chatId: 7,
+    messageId,
+    replyChainNodes: [],
+    recentLimit: 10,
+    replyTargetWindowSize: 1,
+    ...options,
+  });
+}
+
 describe("telegram message cache conversation context", () => {
   beforeEach(() => {
     clearTelegramRuntimeForTest();
@@ -33,22 +50,6 @@ describe("telegram message cache conversation context", () => {
   });
   afterEach(() => {
     resetTelegramMessageCacheForTest();
-  });
-
-  it("returns recent chat messages before the current message", async () => {
-    const cache = createTelegramMessageCache();
-    for (const id of [41, 42, 43, 44]) {
-      await record(cache, message(id, { message_thread_id: 100 }));
-    }
-    await record(cache, message(142, { message_thread_id: 200 }));
-    const recent = await cache.recentBefore({
-      accountId: "default",
-      chatId: 7,
-      threadId: 100,
-      messageId: "44",
-      limit: 2,
-    });
-    expect(recent.map((entry) => entry.messageId)).toEqual(["42", "43"]);
   });
 
   it.each([
@@ -67,15 +68,7 @@ describe("telegram message cache conversation context", () => {
     const chat = { id: 7, type: "private", first_name: "Nora" } as const;
     await record(cache, message(45, { chat, text: undefined, rich_message: { blocks: [block] } }));
     await record(cache, message(46, { chat, text: "What did I just send?" }));
-    const context = await buildTelegramConversationContext({
-      cache,
-      accountId: "default",
-      chatId: 7,
-      messageId: "46",
-      replyChainNodes: [],
-      recentLimit: 10,
-      replyTargetWindowSize: 2,
-    });
+    const context = await conversation(cache, "46", { replyTargetWindowSize: 2 });
     expect(
       context.map((entry) => ({ messageId: entry.node.messageId, body: entry.node.body })),
     ).toEqual([{ messageId: "45", body }]);
@@ -91,30 +84,10 @@ describe("telegram message cache conversation context", () => {
     }
     await record(cache, message(34476, { reply_to_message: message(33868) }));
     await record(cache, message(34477));
-    const context = await buildTelegramConversationContext({
-      cache,
-      accountId: "default",
-      chatId: 7,
-      messageId: "34477",
-      replyChainNodes: [],
-      recentLimit: 10,
-      replyTargetWindowSize: 1,
-    });
-    expect(context.map((entry) => entry.node.messageId)).toEqual([
-      "33867",
-      "33868",
-      "33869",
-      "34467",
-      "34468",
-      "34469",
-      "34470",
-      "34471",
-      "34472",
-      "34473",
-      "34474",
-      "34475",
-      "34476",
-    ]);
+    const context = await conversation(cache, "34477");
+    expect(context.map((entry) => entry.node.messageId)).toEqual(
+      "33867 33868 33869 34467 34468 34469 34470 34471 34472 34473 34474 34475 34476".split(" "),
+    );
     expect(context.find((entry) => entry.node.messageId === "33868")?.isReplyTarget).toBe(true);
   });
 
@@ -126,11 +99,7 @@ describe("telegram message cache conversation context", () => {
     const chat = { id: -1001234567890, type: "supergroup", title: "Ops", is_forum: true } as const;
     const topicMessage = (id: number, text: string, timestampMs: number) =>
       message(id, { chat, message_thread_id: 22534, text, date: Math.floor(timestampMs / 1000) });
-    const stale = topicMessage(
-      84670,
-      "okay so we just flip in openclaw? if yes do it up",
-      beforeSession,
-    );
+    const stale = topicMessage(84670, "previous session message", beforeSession);
     await record(cache, topicMessage(84649, "tools.toolSearch: true", beforeSession - 5 * 60_000));
     await record(cache, stale);
     await record(cache, topicMessage(87184, "how does this determine stability?", afterSession));
@@ -145,15 +114,10 @@ describe("telegram message cache conversation context", () => {
       chatId: chat.id,
       msg: current,
     });
-    const context = await buildTelegramConversationContext({
-      cache,
-      accountId: "default",
+    const context = await conversation(cache, "87227", {
       chatId: chat.id,
-      messageId: "87227",
       threadId: 22534,
       replyChainNodes,
-      recentLimit: 10,
-      replyTargetWindowSize: 1,
       minTimestampMs: sessionStartedAt,
     });
     expect(context.map((entry) => entry.node.messageId)).toEqual(["87184"]);

@@ -32,10 +32,10 @@ export const enqueueSystemEventFromSdk = (
     sessionKey: resolveSystemEventSessionKey(options.sessionKey, agentId),
   });
 
-export const enqueueSystemEventEntryFromSdk: typeof events.enqueueSystemEventEntry = (
-  text,
-  options,
-) =>
+export const enqueueSystemEventEntryFromSdk = (
+  text: string,
+  options: Parameters<typeof events.enqueueSystemEventEntry>[1],
+): ReturnType<typeof events.enqueueSystemEventEntry> =>
   events.enqueueSystemEventEntry(text, {
     ...options,
     sessionKey: resolveSystemEventSessionKey(options.sessionKey),
@@ -57,8 +57,8 @@ export function enqueueRoutedSystemEvent(
 }
 
 export const consumeSelectedSystemEventEntriesFromSdk: typeof events.consumeSelectedSystemEventEntries =
-  (key, entries) =>
-    events.consumeSelectedSystemEventEntries(resolveSystemEventSessionKey(key), entries);
+  (key, entries, options) =>
+    events.consumeSelectedSystemEventEntries(resolveSystemEventSessionKey(key), entries, options);
 export const drainSystemEventEntriesFromSdk: typeof events.drainSystemEventEntries = (key) =>
   events.drainSystemEventEntries(resolveSystemEventSessionKey(key));
 export const drainSystemEventsFromSdk: typeof events.drainSystemEvents = (key) =>

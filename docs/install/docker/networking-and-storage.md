@@ -87,13 +87,13 @@ docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
   openclaw-cli models list --provider anthropic
 ```
 
-Then use the bundled `claude-cli` backend:
+The login keeps `anthropic/*` model refs and runs them through the bundled `claude-cli` backend:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
   openclaw-cli agent \
   --agent main \
-  --model claude-cli/claude-sonnet-4-6 \
+  --model anthropic/claude-sonnet-4-6 \
   --message "Say hello from Docker Claude CLI"
 ```
 
@@ -112,6 +112,21 @@ Use the published Gateway URL, Tailscale, or wide-area DNS-SD for Docker hosts o
 ## Storage and persistence
 
 Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw`, `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, and `OPENCLAW_AUTH_PROFILE_SECRET_DIR` to `/home/node/.config/openclaw`, so those paths survive container replacement. When a variable is unset, `docker-compose.yml` falls back under `${HOME}`, or `/tmp` if `HOME` itself is missing, so `docker compose up` never emits an empty-source volume spec on bare environments.
+
+Keep SQLite state on a persistent local filesystem on the Docker host, including
+any custom database paths. Use a local bind mount or a Docker volume backed by
+local storage; a named volume can still use a network-backed driver. Avoid NAS
+mounts over NFS, SMB, or CIFS: they do not provide the shared-memory coordination
+SQLite WAL requires, which can cause corruption.
+
+OpenClaw automatically uses rollback journaling (`journal_mode=DELETE`) on
+detected NFS/SMB/CIFS mounts. This protection does not make network storage the
+recommended deployment or remove its locking requirements. [Doctor](/gateway/doctor/checks)
+warns about confirmed network-backed SQLite paths without blocking updates. To
+relocate, stop the Gateway, back up the state, and move the whole state directory
+and any custom database paths to local storage before restarting. Keep one
+Gateway replica per state volume and follow the
+[stop-first upgrade sequence](/install/docker#upgrading-container-images).
 
 That mounted config directory holds:
 

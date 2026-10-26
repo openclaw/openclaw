@@ -1,4 +1,6 @@
+import type { SessionApprovalEvent } from "../../../packages/gateway-protocol/src/index.js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { DevicePairSetupAccess, DevicePairSetupLifecycle } from "../lib/device-pair-setup.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "./exec-approval.ts";
@@ -23,8 +25,9 @@ export type ApplicationUpdateOverlaySnapshot = {
   updateCampaignStatusHydrated: boolean;
   updateReconciliationPending: boolean;
   updateStatusBanner: ApplicationStatusBanner | null;
-  updateStatusCheckBanner: ApplicationStatusBanner | null;
+  updateStatusCheckBanner: (ApplicationStatusBanner & { mode: "manual" | "completion" }) | null;
   recordedUpdateAttempt: RecordedUpdateAttempt | null;
+  diagnosableUpdateFailureId: string | null;
   reportableUpdateFailureId: string | null;
   updateFailureReportBusy: boolean;
   updateFailureReportNotice: UpdateFailureReportNotice | null;
@@ -38,6 +41,7 @@ export type ApplicationOverlaySnapshot = ApplicationUpdateOverlaySnapshot & {
   approvalBusy: boolean;
   approvalCanGrant: boolean;
   approvalErrors: ReadonlyMap<string, string>;
+  approvalNodeNames?: ReadonlyMap<string, string>;
   devicePairSetupOpen: boolean;
   devicePairSetupLifecycle: DevicePairSetupLifecycle;
   devicePairPendingCount: number;
@@ -48,9 +52,15 @@ export type ApplicationOverlays = {
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
   refreshUpdateStatus: ReturnType<typeof createUpdateStatusRefresher>;
   acknowledgeUpdateRun: () => void;
-  runUpdate: (options?: { sessionKey?: string }) => Promise<void>;
+  captureUpdateTarget: () => () => boolean;
+  runUpdate: () => Promise<void>;
   holdUpdate: () => Promise<boolean>;
+  diagnoseUpdateFailure: (attemptId: string) => void;
   reportUpdateFailure: (attemptId: string) => Promise<void>;
+  reconcileApprovalTerminals: (
+    client: GatewayBrowserClient,
+    events: readonly Extract<SessionApprovalEvent, { phase: "terminal" }>[],
+  ) => void;
   decideApproval: (
     decision: ExecApprovalDecision,
     approvalId?: string,

@@ -6,39 +6,21 @@
  * / `--human` override.
  */
 
+import { isUtf8 } from "node:buffer";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
-import {
-  MAX_JSONC_INPUT_BYTES,
-  OcEmitSentinelError,
-  OcPathError,
-  REDACTED_SENTINEL,
-  emitJsonc,
-  emitJsonl,
-  emitMd,
-  emitYaml,
-  findOcPaths,
-  formatOcPath,
-  inferKind,
-  parseJsonc,
-  parseJsonl,
-  parseMd,
-  parseOcPath,
-  parseYaml,
-  resolveOcPath,
-  setOcPath,
-  type OcAst,
-  type OcMatch,
-  type OcPath,
-} from "./oc-path/index.js";
-
-type OutputRuntimeEnv = {
-  writeStdout(value: string): void;
-  error(value: string): void;
-  exit(code: number): void;
-};
+import { inferKind } from "./oc-path/dispatch.js";
+import { OcPathEditError } from "./oc-path/edit-error.js";
+import { findOcPaths } from "./oc-path/find.js";
+import { MAX_JSONC_INPUT_BYTES, parseJsonc } from "./oc-path/jsonc/parse.js";
+import { parseJsonl } from "./oc-path/jsonl/parse.js";
+import { OcPathError, formatOcPath, parseOcPath, type OcPath } from "./oc-path/oc-path.js";
+import { parseMd } from "./oc-path/parse.js";
+import { OcEmitSentinelError, REDACTED_SENTINEL } from "./oc-path/sentinel.js";
+import { resolveOcPath, setOcPath, type OcAst, type OcMatch } from "./oc-path/universal.js";
+import { parseYaml } from "./oc-path/yaml/parse.js";
 
 interface PathCommandOptions {
   readonly json?: boolean;
@@ -56,32 +38,12 @@ type OutputMode = "human" | "json";
 // cannot allocate an unbounded input before format-specific validation runs.
 const MAX_OC_PATH_INPUT_BYTES = MAX_JSONC_INPUT_BYTES;
 
-type LoadedOcPathFile = {
-  readonly ast: OcAst;
-  readonly raw: string;
-};
-
 const SCRUB_PLACEHOLDER = "[REDACTED]";
-
-const defaultRuntime: OutputRuntimeEnv = {
-  writeStdout(value) {
-    process.stdout.write(value);
-  },
-  error(value) {
-    process.stderr.write(`${value}\n`);
-  },
-  exit(code) {
-    process.exitCode = code;
-  },
-};
 
 // Defense-in-depth: replace the redaction sentinel with `[REDACTED]`
 // before writing, even if upstream emits it.
 function scrubSentinel(s: string): string {
-  if (!s.includes(REDACTED_SENTINEL)) {
-    return s;
-  }
-  return s.split(REDACTED_SENTINEL).join(SCRUB_PLACEHOLDER);
+  return s.replaceAll(REDACTED_SENTINEL, SCRUB_PLACEHOLDER);
 }
 
 function detectMode(options: PathCommandOptions): OutputMode {
@@ -94,77 +56,32 @@ function detectMode(options: PathCommandOptions): OutputMode {
   return process.stdout.isTTY ? "human" : "json";
 }
 
-function emit(
-  runtime: OutputRuntimeEnv,
-  mode: OutputMode,
-  value: unknown,
-  humanFallback: () => string,
-): void {
+function emit(mode: OutputMode, value: unknown, humanFallback: () => string): void {
   if (mode === "json") {
-    runtime.writeStdout(scrubSentinel(JSON.stringify(value, null, 2)));
+    process.stdout.write(scrubSentinel(JSON.stringify(value, null, 2)));
     return;
   }
-  runtime.writeStdout(scrubSentinel(humanFallback()));
+  process.stdout.write(scrubSentinel(humanFallback()));
 }
 
-function emitError(
-  runtime: OutputRuntimeEnv,
-  mode: OutputMode,
-  message: string,
-  code = "ERR",
-): void {
+function emitError(mode: OutputMode, message: string, code = "ERR"): void {
   const scrubbed = scrubSentinel(message);
   if (mode === "json") {
-    runtime.error(JSON.stringify({ error: { code, message: scrubbed } }));
+    process.stdout.write(
+      `${JSON.stringify({ ok: false, error: { type: "cli_error", code, message: scrubbed } })}\n`,
+    );
     return;
   }
-  runtime.error(`${code}: ${scrubbed}`);
+  process.stderr.write(`${code}: ${scrubbed}\n`);
 }
 
-/** Bail with usage error if a required arg is missing. */
-function requireArg<T>(
-  value: T | undefined,
-  usage: string,
-  runtime: OutputRuntimeEnv,
-  mode: OutputMode,
-): value is T extends undefined ? never : T {
-  if (value === undefined) {
-    emitError(runtime, mode, usage);
-    runtime.exit(2);
-    return false;
-  }
-  return true;
-}
-
-/** Parse an oc-path string; emit structured error and return null on failure. */
-function tryParse(pathStr: string, runtime: OutputRuntimeEnv, mode: OutputMode): OcPath | null {
+function tryParse(pathStr: string, mode: OutputMode): OcPath | null {
   try {
     return parseOcPath(pathStr);
   } catch (err) {
     if (err instanceof OcPathError) {
-      emitError(runtime, mode, `parse failed: ${err.message}`, err.code);
-      runtime.exit(2);
-      return null;
-    }
-    throw err;
-  }
-}
-
-// Catch OcEmitSentinelError so it goes through the structured error
-// path; otherwise commander prints `String(err)` raw and bypasses the
-// `--json` scrubbed-error boundary.
-function catchSentinel<T>(
-  label: string,
-  runtime: OutputRuntimeEnv,
-  mode: OutputMode,
-  fn: () => T,
-): T | null {
-  try {
-    return fn();
-  } catch (err) {
-    if (err instanceof OcEmitSentinelError) {
-      emitError(runtime, mode, `${label} refused: ${err.message}`, "OC_EMIT_SENTINEL");
-      runtime.exit(1);
+      emitError(mode, `parse failed: ${err.message}`, err.code);
+      process.exitCode = 2;
       return null;
     }
     throw err;
@@ -174,9 +91,9 @@ function catchSentinel<T>(
 async function loadOcPathFile(
   absPath: string,
   fileName: string,
-  runtime: OutputRuntimeEnv,
   mode: OutputMode,
-): Promise<LoadedOcPathFile | null> {
+  params: { requireUtf8?: boolean } = {},
+): Promise<OcAst | null> {
   const kind = inferKind(fileName);
   // A blocking open can hang on a FIFO before stat can reject it. O_NONBLOCK
   // preserves regular-file and symlink reads while making that check reachable.
@@ -185,8 +102,8 @@ async function loadOcPathFile(
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) {
-      emitError(runtime, mode, `not a regular file: ${absPath}`, "OC_PATH_FILE_NOT_REGULAR");
-      runtime.exit(2);
+      emitError(mode, `not a regular file: ${absPath}`, "OC_PATH_FILE_NOT_REGULAR");
+      process.exitCode = 2;
       return null;
     }
     // `end` is inclusive, so a raced growth can return at most the cap plus one byte.
@@ -200,12 +117,24 @@ async function loadOcPathFile(
           );
     if (bytes === null || bytes.length > MAX_OC_PATH_INPUT_BYTES) {
       emitError(
-        runtime,
         mode,
         `input exceeds ${MAX_OC_PATH_INPUT_BYTES} bytes${stat.size > MAX_OC_PATH_INPUT_BYTES ? `; got ${stat.size}` : ""}`,
         kind === "jsonc" ? "OC_JSONC_INPUT_TOO_LARGE" : "OC_PATH_INPUT_TOO_LARGE",
       );
-      runtime.exit(2);
+      process.exitCode = 2;
+      return null;
+    }
+    // Only the editing verb re-emits the whole file, so only it asks for strict
+    // admission: replacement decoding there would rewrite bytes the edit never
+    // touched. The read-only verbs keep their existing decode contract.
+    if (params.requireUtf8 === true && !isUtf8(bytes)) {
+      emitError(
+        mode,
+        `input is not valid UTF-8; the file was left unchanged: ${absPath}. ` +
+          `Convert or repair a backed-up copy as UTF-8, then retry.`,
+        "OC_PATH_INPUT_NOT_UTF8",
+      );
+      process.exitCode = 2;
       return null;
     }
     raw = bytes.toString("utf8");
@@ -214,39 +143,24 @@ async function loadOcPathFile(
   }
   if (kind === "jsonc") {
     const result = parseJsonc(raw);
-    const sizeDiagnostic = result.diagnostics.find(
-      (diagnostic) => diagnostic.code === "OC_JSONC_INPUT_TOO_LARGE",
-    );
-    if (sizeDiagnostic) {
-      emitError(runtime, mode, sizeDiagnostic.message, sizeDiagnostic.code);
-      runtime.exit(2);
+    if (result.oversizedInputBytes !== undefined) {
+      emitError(
+        mode,
+        `input exceeds MAX_JSONC_INPUT_BYTES (${MAX_JSONC_INPUT_BYTES} bytes; got ${result.oversizedInputBytes})`,
+        "OC_JSONC_INPUT_TOO_LARGE",
+      );
+      process.exitCode = 2;
       return null;
     }
-    return { ast: result.ast, raw };
+    return result;
   }
   if (kind === "jsonl") {
-    return { ast: parseJsonl(raw).ast, raw };
+    return parseJsonl(raw);
   }
   if (kind === "yaml") {
-    return { ast: parseYaml(raw).ast, raw };
+    return parseYaml(raw);
   }
-  return { ast: parseMd(raw).ast, raw };
-}
-
-function emitForKind(ast: OcAst, fileName?: string): string {
-  // Plumb fileName so sentinel errors carry file context.
-  const opts = fileName !== undefined ? { fileNameForGuard: fileName } : {};
-  switch (ast.kind) {
-    case "jsonc":
-      return emitJsonc(ast, opts);
-    case "jsonl":
-      return emitJsonl(ast, opts);
-    case "md":
-      return emitMd(ast, opts);
-    case "yaml":
-      return emitYaml(ast, opts);
-  }
-  return "";
+  return parseMd(raw);
 }
 
 function resolveFsPath(path: OcPath, options: PathCommandOptions): string {
@@ -310,270 +224,6 @@ function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): 
   return formatPatch(patch, FILE_HEADERS_ONLY);
 }
 
-// ---------- Commands -----------------------------------------------------
-
-async function pathResolveCommand(
-  pathStr: string | undefined,
-  options: PathCommandOptions,
-  runtime: OutputRuntimeEnv,
-): Promise<void> {
-  const mode = detectMode(options);
-  if (!requireArg(pathStr, "resolve: missing <oc-path> argument", runtime, mode)) {
-    return;
-  }
-  const ocPath = tryParse(pathStr, runtime, mode);
-  if (ocPath === null) {
-    return;
-  }
-  const loaded = await loadOcPathFile(resolveFsPath(ocPath, options), ocPath.file, runtime, mode);
-  if (loaded === null) {
-    return;
-  }
-  let match: OcMatch | null;
-  try {
-    match = resolveOcPath(loaded.ast, ocPath);
-  } catch (err) {
-    if (err instanceof OcPathError) {
-      // resolveOcPath throws on wildcard patterns — point at find.
-      emitError(runtime, mode, `resolve refused: ${err.message}`, err.code);
-      runtime.exit(2);
-      return;
-    }
-    throw err;
-  }
-  if (match === null) {
-    emit(runtime, mode, { resolved: false, ocPath: pathStr }, () => `not found: ${pathStr}`);
-    runtime.exit(1);
-    return;
-  }
-  emit(runtime, mode, { resolved: true, ocPath: pathStr, match }, () => formatMatchHuman(match));
-}
-
-async function pathSetCommand(
-  pathStr: string | undefined,
-  value: string | undefined,
-  options: PathCommandOptions,
-  runtime: OutputRuntimeEnv,
-): Promise<void> {
-  const mode = detectMode(options);
-  if (!requireArg(pathStr, "set: requires <oc-path> <value>", runtime, mode)) {
-    return;
-  }
-  if (!requireArg(value, "set: requires <oc-path> <value>", runtime, mode)) {
-    return;
-  }
-  if (options.diff === true && options.dryRun !== true) {
-    emit(
-      runtime,
-      mode,
-      { ok: false, reason: "--diff requires --dry-run" },
-      () => "set failed: --diff requires --dry-run",
-    );
-    runtime.exit(1);
-    return;
-  }
-  const ocPath = tryParse(pathStr, runtime, mode);
-  if (ocPath === null) {
-    return;
-  }
-  const fsPath = resolveFsPath(ocPath, options);
-  const loaded = await loadOcPathFile(fsPath, ocPath.file, runtime, mode);
-  if (loaded === null) {
-    return;
-  }
-
-  const result = catchSentinel("set", runtime, mode, () =>
-    setOcPath(loaded.ast, ocPath, value, { valueJson: options.valueJson === true }),
-  );
-  if (result === null) {
-    return;
-  }
-  if (!result.ok) {
-    const detail = "detail" in result ? result.detail : undefined;
-    emit(
-      runtime,
-      mode,
-      { ok: false, reason: result.reason, detail },
-      () => `set failed: ${result.reason}${detail !== undefined ? ` — ${detail}` : ""}`,
-    );
-    runtime.exit(1);
-    return;
-  }
-  // Per-kind emit can still refuse the sentinel even after set succeeds.
-  const newBytes = catchSentinel("emit", runtime, mode, () => emitForKind(result.ast, ocPath.file));
-  if (newBytes === null) {
-    return;
-  }
-
-  const byteLength = Buffer.byteLength(newBytes, "utf8");
-
-  if (options.dryRun === true) {
-    const diff =
-      options.diff === true ? formatUnifiedDiff(loaded.raw, newBytes, fsPath) : undefined;
-    emit(
-      runtime,
-      mode,
-      { ok: true, dryRun: true, bytes: newBytes, ...(diff !== undefined ? { diff } : {}) },
-      () =>
-        diff !== undefined
-          ? diff || `--dry-run: no byte changes for ${fsPath}`
-          : `--dry-run: would write ${byteLength} bytes to ${fsPath}\n${newBytes}`,
-    );
-    return;
-  }
-  await fs.writeFile(fsPath, newBytes, "utf-8");
-  emit(
-    runtime,
-    mode,
-    { ok: true, dryRun: false, bytesWritten: byteLength, fsPath },
-    () => `wrote ${byteLength} bytes to ${fsPath}`,
-  );
-}
-
-async function pathFindCommand(
-  patternStr: string | undefined,
-  options: PathCommandOptions,
-  runtime: OutputRuntimeEnv,
-): Promise<void> {
-  const mode = detectMode(options);
-  if (!requireArg(patternStr, "find: missing <pattern> argument", runtime, mode)) {
-    return;
-  }
-  const pattern = tryParse(patternStr, runtime, mode);
-  if (pattern === null) {
-    return;
-  }
-  // File-slot wildcards would silently ENOENT during readFile; reject.
-  if (/[*?]/.test(pattern.file)) {
-    emitError(
-      runtime,
-      mode,
-      `find: file-slot wildcards are not supported (got "${pattern.file}"). ` +
-        `Pass a concrete file path; multi-file globbing is a follow-up feature.`,
-      "OC_PATH_FILE_WILDCARD_UNSUPPORTED",
-    );
-    runtime.exit(2);
-    return;
-  }
-  const loaded = await loadOcPathFile(resolveFsPath(pattern, options), pattern.file, runtime, mode);
-  if (loaded === null) {
-    return;
-  }
-  const matches = findOcPaths(loaded.ast, pattern);
-  emit(
-    runtime,
-    mode,
-    {
-      pattern: patternStr,
-      count: matches.length,
-      matches: matches.map((m) => ({ path: formatOcPath(m.path), match: m.match })),
-    },
-    () => {
-      if (matches.length === 0) {
-        return `0 matches for ${patternStr}`;
-      }
-      const plural = matches.length === 1 ? "" : "es";
-      const lines = [`${matches.length} match${plural} for ${patternStr}:`];
-      for (const m of matches) {
-        lines.push(`  ${formatOcPath(m.path)}  →  ${formatMatchHuman(m.match)}`);
-      }
-      return lines.join("\n");
-    },
-  );
-  if (matches.length === 0) {
-    runtime.exit(1);
-  }
-}
-
-function pathValidateCommand(
-  pathStr: string | undefined,
-  options: PathCommandOptions,
-  runtime: OutputRuntimeEnv,
-): void {
-  const mode = detectMode(options);
-  if (!requireArg(pathStr, "validate: missing <oc-path> argument", runtime, mode)) {
-    return;
-  }
-  try {
-    const ocPath = parseOcPath(pathStr);
-    emit(
-      runtime,
-      mode,
-      {
-        valid: true,
-        ocPath: pathStr,
-        formatted: formatOcPath(ocPath),
-        structure: {
-          file: ocPath.file,
-          section: ocPath.section,
-          item: ocPath.item,
-          field: ocPath.field,
-          session: ocPath.session,
-        },
-      },
-      () => {
-        const lines = [`valid: ${pathStr}`, `  file:    ${ocPath.file}`];
-        if (ocPath.section !== undefined) {
-          lines.push(`  section: ${ocPath.section}`);
-        }
-        if (ocPath.item !== undefined) {
-          lines.push(`  item:    ${ocPath.item}`);
-        }
-        if (ocPath.field !== undefined) {
-          lines.push(`  field:   ${ocPath.field}`);
-        }
-        if (ocPath.session !== undefined) {
-          lines.push(`  session: ${ocPath.session}`);
-        }
-        return lines.join("\n");
-      },
-    );
-  } catch (err) {
-    if (err instanceof OcPathError) {
-      emit(
-        runtime,
-        mode,
-        { valid: false, code: err.code, message: err.message },
-        () => `INVALID: ${err.code}: ${err.message}`,
-      );
-      runtime.exit(1);
-      return;
-    }
-    throw err;
-  }
-}
-
-async function pathEmitCommand(
-  fileArg: string | undefined,
-  options: PathCommandOptions,
-  runtime: OutputRuntimeEnv,
-): Promise<void> {
-  const mode = detectMode(options);
-  if (!requireArg(fileArg, "emit: missing <file> argument", runtime, mode)) {
-    return;
-  }
-  const fsPath =
-    options.file !== undefined
-      ? resolvePath(options.file)
-      : resolvePath(options.cwd ?? process.cwd(), fileArg);
-  const fileName = fsPath.split(/[\\/]/).pop() ?? fileArg;
-  const loaded = await loadOcPathFile(fsPath, fileName, runtime, mode);
-  if (loaded === null) {
-    return;
-  }
-  const bytes = catchSentinel("emit", runtime, mode, () => emitForKind(loaded.ast, fileName));
-  if (bytes === null) {
-    return;
-  }
-  if (mode === "json") {
-    runtime.writeStdout(scrubSentinel(JSON.stringify({ ok: true, kind: loaded.ast.kind, bytes })));
-    return;
-  }
-  runtime.writeStdout(bytes);
-}
-
-// ---------- Commander wiring ---------------------------------------------
-
 function withCommonOpts(cmd: Command): Command {
   return cmd
     .option("--json", "Force JSON output")
@@ -593,8 +243,34 @@ export function registerPathCli(program: Command): void {
       .command("resolve")
       .description("Print the match at an oc:// path")
       .argument("<oc-path>", "oc:// path to resolve"),
-  ).action(async (pathStr: string, opts: PathCommandOptions) => {
-    await pathResolveCommand(pathStr, opts, defaultRuntime);
+  ).action(async (pathStr: string, options: PathCommandOptions) => {
+    const mode = detectMode(options);
+    const ocPath = tryParse(pathStr, mode);
+    if (ocPath === null) {
+      return;
+    }
+    const ast = await loadOcPathFile(resolveFsPath(ocPath, options), ocPath.file, mode);
+    if (ast === null) {
+      return;
+    }
+    let match: OcMatch | null;
+    try {
+      match = resolveOcPath(ast, ocPath);
+    } catch (err) {
+      if (err instanceof OcPathError) {
+        // resolveOcPath throws on wildcard patterns — point at find.
+        emitError(mode, `resolve refused: ${err.message}`, err.code);
+        process.exitCode = 2;
+        return;
+      }
+      throw err;
+    }
+    if (match === null) {
+      emit(mode, { resolved: false, ocPath: pathStr }, () => `not found: ${pathStr}`);
+      process.exitCode = 1;
+      return;
+    }
+    emit(mode, { resolved: true, ocPath: pathStr, match }, () => formatMatchHuman(match));
   });
 
   withCommonOpts(
@@ -602,8 +278,50 @@ export function registerPathCli(program: Command): void {
       .command("find")
       .description("Enumerate matches for a wildcard / predicate oc:// pattern")
       .argument("<pattern>", "oc:// pattern"),
-  ).action(async (patternStr: string, opts: PathCommandOptions) => {
-    await pathFindCommand(patternStr, opts, defaultRuntime);
+  ).action(async (patternStr: string, options: PathCommandOptions) => {
+    const mode = detectMode(options);
+    const pattern = tryParse(patternStr, mode);
+    if (pattern === null) {
+      return;
+    }
+    // File-slot wildcards would silently ENOENT during readFile; reject.
+    if (/[*?]/.test(pattern.file)) {
+      emitError(
+        mode,
+        `find: file-slot wildcards are not supported (got "${pattern.file}"). ` +
+          `Pass a concrete file path; multi-file globbing is a follow-up feature.`,
+        "OC_PATH_FILE_WILDCARD_UNSUPPORTED",
+      );
+      process.exitCode = 2;
+      return;
+    }
+    const ast = await loadOcPathFile(resolveFsPath(pattern, options), pattern.file, mode);
+    if (ast === null) {
+      return;
+    }
+    const matches = findOcPaths(ast, pattern);
+    emit(
+      mode,
+      {
+        pattern: patternStr,
+        count: matches.length,
+        matches: matches.map((m) => ({ path: formatOcPath(m.path), match: m.match })),
+      },
+      () => {
+        if (matches.length === 0) {
+          return `0 matches for ${patternStr}`;
+        }
+        const plural = matches.length === 1 ? "" : "es";
+        const lines = [`${matches.length} match${plural} for ${patternStr}:`];
+        for (const m of matches) {
+          lines.push(`  ${formatOcPath(m.path)}  →  ${formatMatchHuman(m.match)}`);
+        }
+        return lines.join("\n");
+      },
+    );
+    if (matches.length === 0) {
+      process.exitCode = 1;
+    }
   });
 
   withCommonOpts(
@@ -615,8 +333,71 @@ export function registerPathCli(program: Command): void {
       .option("--value-json", "Parse <value> as JSON for JSON/JSONC/JSONL leaf replacement")
       .option("--dry-run", "Print bytes without writing")
       .option("--diff", "With --dry-run, print a unified diff instead of full bytes"),
-  ).action(async (pathStr: string, value: string, opts: PathCommandOptions) => {
-    await pathSetCommand(pathStr, value, opts, defaultRuntime);
+  ).action(async (pathStr: string, value: string, options: PathCommandOptions) => {
+    const mode = detectMode(options);
+    if (options.diff === true && options.dryRun !== true) {
+      emit(
+        mode,
+        { ok: false, reason: "--diff requires --dry-run" },
+        () => "set failed: --diff requires --dry-run",
+      );
+      process.exitCode = 1;
+      return;
+    }
+    const ocPath = tryParse(pathStr, mode);
+    if (ocPath === null) {
+      return;
+    }
+    const fsPath = resolveFsPath(ocPath, options);
+    const ast = await loadOcPathFile(fsPath, ocPath.file, mode, { requireUtf8: true });
+    if (ast === null) {
+      return;
+    }
+
+    let updated: OcAst;
+    try {
+      updated = setOcPath(ast, ocPath, value, { valueJson: options.valueJson === true });
+    } catch (err) {
+      if (err instanceof OcPathEditError) {
+        const detail = err.detail;
+        emit(
+          mode,
+          { ok: false, reason: err.reason, detail },
+          () => `set failed: ${err.reason}${detail !== undefined ? ` — ${detail}` : ""}`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      // Keep sentinel errors inside the scrubbed --json error boundary.
+      if (err instanceof OcEmitSentinelError) {
+        emitError(mode, `set refused: ${err.message}`, "OC_EMIT_SENTINEL");
+        process.exitCode = 1;
+        return;
+      }
+      throw err;
+    }
+    // Setters guard edits and publish the rebuilt bytes; round-trip emission reads them verbatim.
+    const newBytes = updated.raw;
+    const byteLength = Buffer.byteLength(newBytes, "utf8");
+
+    if (options.dryRun === true) {
+      const diff = options.diff === true ? formatUnifiedDiff(ast.raw, newBytes, fsPath) : undefined;
+      emit(
+        mode,
+        { ok: true, dryRun: true, bytes: newBytes, ...(diff !== undefined ? { diff } : {}) },
+        () =>
+          diff !== undefined
+            ? diff || `--dry-run: no byte changes for ${fsPath}`
+            : `--dry-run: would write ${byteLength} bytes to ${fsPath}\n${newBytes}`,
+      );
+      return;
+    }
+    await fs.writeFile(fsPath, newBytes, "utf-8");
+    emit(
+      mode,
+      { ok: true, dryRun: false, bytesWritten: byteLength, fsPath },
+      () => `wrote ${byteLength} bytes to ${fsPath}`,
+    );
   });
 
   path
@@ -625,8 +406,47 @@ export function registerPathCli(program: Command): void {
     .argument("<oc-path>", "oc:// path to validate")
     .option("--json", "Force JSON output")
     .option("--human", "Force human output")
-    .action((pathStr: string, opts: PathCommandOptions) => {
-      pathValidateCommand(pathStr, opts, defaultRuntime);
+    .action((pathStr: string, options: PathCommandOptions) => {
+      const mode = detectMode(options);
+      try {
+        const ocPath = parseOcPath(pathStr);
+        emit(
+          mode,
+          {
+            valid: true,
+            ocPath: pathStr,
+            formatted: formatOcPath(ocPath),
+            structure: ocPath,
+          },
+          () => {
+            const lines = [`valid: ${pathStr}`, `  file:    ${ocPath.file}`];
+            if (ocPath.section !== undefined) {
+              lines.push(`  section: ${ocPath.section}`);
+            }
+            if (ocPath.item !== undefined) {
+              lines.push(`  item:    ${ocPath.item}`);
+            }
+            if (ocPath.field !== undefined) {
+              lines.push(`  field:   ${ocPath.field}`);
+            }
+            if (ocPath.session !== undefined) {
+              lines.push(`  session: ${ocPath.session}`);
+            }
+            return lines.join("\n");
+          },
+        );
+      } catch (err) {
+        if (err instanceof OcPathError) {
+          emit(
+            mode,
+            { valid: false, code: err.code, message: err.message },
+            () => `INVALID: ${err.code}: ${err.message}`,
+          );
+          process.exitCode = 1;
+          return;
+        }
+        throw err;
+      }
     });
 
   withCommonOpts(
@@ -634,8 +454,23 @@ export function registerPathCli(program: Command): void {
       .command("emit")
       .description("Round-trip a file through parse + emit")
       .argument("<file>", "Path to a workspace file"),
-  ).action(async (fileArg: string, opts: PathCommandOptions) => {
-    await pathEmitCommand(fileArg, opts, defaultRuntime);
+  ).action(async (fileArg: string, options: PathCommandOptions) => {
+    const mode = detectMode(options);
+    const fsPath =
+      options.file !== undefined
+        ? resolvePath(options.file)
+        : resolvePath(options.cwd ?? process.cwd(), fileArg);
+    const fileName = fsPath.split(/[\\/]/).pop() ?? fileArg;
+    const ast = await loadOcPathFile(fsPath, fileName, mode);
+    if (ast === null) {
+      return;
+    }
+    const bytes = ast.raw;
+    if (mode === "json") {
+      process.stdout.write(scrubSentinel(JSON.stringify({ ok: true, kind: ast.kind, bytes })));
+      return;
+    }
+    process.stdout.write(bytes);
   });
 
   // Bare `openclaw path` prints help and exits 0 (matches the core

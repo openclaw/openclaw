@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { createGitCommandError, requireGitCommandOutput } from "../../infra/git-exec.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { rawPathStat } from "./git-path-inventory.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
 import {
   requireGit,
@@ -11,6 +14,8 @@ import {
   runGitBuffered,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
+
+const log = createSubsystemLogger("agents/worktrees");
 
 async function missingCommitObjects(repoRoot: string, commit: string): Promise<string[]> {
   const objects = (
@@ -65,11 +70,14 @@ async function hydrateCommitObjects(repoRoot: string, commit: string): Promise<v
     }
     // Hydrate once under the checkout budget; objectsize must never fetch one blob at a time.
     // Shared commits do not prove that their promised blobs are present.
+    // --refetch hints auto-maintenance to repack (gc.autoPackLimit=1); that repack must
+    // never run inside the allocation lease.
     await requireGit(
       repoRoot,
       [
         "fetch",
         "--refetch",
+        "--no-auto-maintenance",
         remote,
         "--no-tags",
         "--no-write-fetch-head",
@@ -77,7 +85,12 @@ async function hydrateCommitObjects(repoRoot: string, commit: string): Promise<v
         "--stdin",
       ],
       { input: Buffer.from(`${missing.join("\n")}\n`), timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS },
-    );
+    ).catch((error: unknown) => {
+      log.warn(
+        `worktree prefetch failed: ${missing.length} missing objects for ${commit}; check the promisor remote.`,
+      );
+      throw error;
+    });
   }
 }
 
@@ -92,14 +105,16 @@ function allocatedBlobBytes(size: string): number {
 }
 
 // This projection belongs to the Git worker and disappears when that worker
-// idles out or the Gateway closes it. Never retain missing-object checks here.
-const checkoutSizeFacts = new Map<string, number>();
+// idles out or the Gateway closes it. Default bases reuse hydration by immutable commit;
+// explicit refs without a preparation key still recheck object availability.
+const checkoutSizeFacts = new Map<string, { bytes: number; preparationKey?: string }>();
 const MAX_CHECKOUT_SIZE_FACTS = 32;
 
 async function commitObjectBytes(
   repoRoot: string,
   commit: string,
   replacementRefBase: string | undefined,
+  preparationKey?: string,
 ): Promise<number> {
   const replacements =
     replacementRefBase === undefined
@@ -111,14 +126,21 @@ async function commitObjectBytes(
           replacementRefBase,
         ]);
   let cacheKey: string | undefined;
+  let cached: { bytes: number; preparationKey?: string } | undefined;
   if (replacements === "") {
     const canonicalRoot = await fs.realpath(repoRoot);
     const identity = await fs.stat(canonicalRoot);
     cacheKey = JSON.stringify([canonicalRoot, identity.dev, identity.ino, commit]);
-    const cached = checkoutSizeFacts.get(cacheKey);
-    if (cached !== undefined) {
-      return cached;
+    cached = checkoutSizeFacts.get(cacheKey);
+    if (cached && preparationKey && cached.preparationKey === preparationKey) {
+      return cached.bytes;
     }
+  }
+
+  await hydrateCommitObjects(repoRoot, commit);
+  if (cached && cacheKey) {
+    checkoutSizeFacts.set(cacheKey, { bytes: cached.bytes, preparationKey });
+    return cached.bytes;
   }
 
   try {
@@ -135,10 +157,8 @@ async function commitObjectBytes(
       bytes += allocatedBlobBytes(size);
     }
     if (cacheKey) {
-      checkoutSizeFacts.set(cacheKey, bytes);
-      while (checkoutSizeFacts.size > MAX_CHECKOUT_SIZE_FACTS) {
-        checkoutSizeFacts.delete(checkoutSizeFacts.keys().next().value!);
-      }
+      checkoutSizeFacts.set(cacheKey, { bytes, preparationKey });
+      pruneMapToMaxSize(checkoutSizeFacts, MAX_CHECKOUT_SIZE_FACTS);
     }
     return bytes;
   } catch (error) {
@@ -154,10 +174,10 @@ export async function estimateCheckoutObjectBytes(
   repoRoot: string,
   ref: string,
   replacementRefBase?: string,
+  preparationKey?: string,
 ): Promise<number> {
   const commit = await resolveCommit(repoRoot, ref);
-  await hydrateCommitObjects(repoRoot, commit);
-  return await commitObjectBytes(repoRoot, commit, replacementRefBase);
+  return await commitObjectBytes(repoRoot, commit, replacementRefBase, preparationKey);
 }
 
 export async function estimateCheckoutTransitionBytes(
@@ -170,9 +190,8 @@ export async function estimateCheckoutTransitionBytes(
   const target = await resolveCommit(repoRoot, targetRef);
   // Template validation can need blobs that the target deletes. Hydrate both
   // histories, while sharing identical commits within this admitted operation.
-  await hydrateCommitObjects(repoRoot, base);
   if (target !== base) {
-    await hydrateCommitObjects(repoRoot, target);
+    await hydrateCommitObjects(repoRoot, base);
   }
   const targetBytes = await commitObjectBytes(repoRoot, target, replacementRefBase);
   if (target === base) {
@@ -260,7 +279,7 @@ export async function estimateCheckoutTransitionBytes(
 }
 
 /** Measure without following links; unreadable trees must never be counted as empty. */
-export async function measureDirectoryTreeBytes(root: string, excludeGit = false): Promise<number> {
+export async function measureDirectoryTreeBytes(root: string): Promise<number> {
   let entries: Dirent[];
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
@@ -272,20 +291,14 @@ export async function measureDirectoryTreeBytes(root: string, excludeGit = false
   }
   let total = 0;
   for (const entry of entries) {
-    if (excludeGit && entry.name === ".git") {
+    if (entry.name === ".git") {
       continue;
     }
     const child = path.join(root, entry.name);
-    if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      total += await measureDirectoryTreeBytes(child, excludeGit);
+    if (entry.isDirectory()) {
+      total += await measureDirectoryTreeBytes(child);
     } else {
-      try {
-        total += (await fs.lstat(child)).size;
-      } catch (error) {
-        if (!isMissingPathError(error)) {
-          throw error;
-        }
-      }
+      total += (await rawPathStat(child))?.size ?? 0;
     }
   }
   return total;

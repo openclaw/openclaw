@@ -1,15 +1,25 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { USER_PREFS_PROFILE_KEY_LIMIT } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import {
+  normalizeBackgroundPreference,
+  USER_BACKGROUND_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/background-preferences.js";
+import {
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  USER_PREFS_PROFILE_KEY_LIMIT,
+} from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
-import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema.js";
+import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema-ensure.js";
+import { isOwnedBackgroundPreference } from "./user-background.store.js";
+import { publishUserPreferencesChange } from "./user-preferences-publication.js";
 import type {
   PreparedUserPreferenceUpdate,
   UserPreferenceError,
 } from "./user-preferences.types.js";
+import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 
 type UserPreferencesDatabase = Pick<OpenClawStateKyselyDatabase, "user_preferences">;
 
@@ -18,7 +28,18 @@ export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
   operationLabel: "users.preferences.schema.ensure",
 });
 
-export function deleteUserPreference(database: DatabaseSync, profileId: string, key: string): void {
+export function updatesGitCoauthorPreference(update: PreparedUserPreferenceUpdate): boolean {
+  return (
+    update.serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
+    update.deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY)
+  );
+}
+
+export function deleteUserPreference(
+  database: EngineConnection,
+  profileId: string,
+  key: string,
+): void {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
   if (!tableExists(database, "user_preferences")) {
     return;
@@ -30,10 +51,11 @@ export function deleteUserPreference(database: DatabaseSync, profileId: string, 
       .where("profile_id", "=", profileId)
       .where("pref_key", "=", key),
   );
+  publishUserPreferencesChange(database);
 }
 
 export function selectUserPreferenceValues(
-  database: DatabaseSync,
+  database: EngineConnection,
   profileIds: readonly string[],
   key: string,
 ): Map<string, unknown> {
@@ -53,7 +75,7 @@ export function selectUserPreferenceValues(
   );
 }
 
-function readPreferenceKeys(database: DatabaseSync, profileId: string): Set<string> {
+function readPreferenceKeys(database: EngineConnection, profileId: string): Set<string> {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
   return new Set(
     executeSqliteQuerySync(
@@ -65,7 +87,7 @@ function readPreferenceKeys(database: DatabaseSync, profileId: string): Set<stri
 
 /** Moves one retired profile's preferences without overwriting the merge target's choices. */
 export function mergeUserPreferences(
-  database: DatabaseSync,
+  database: EngineConnection,
   sourceProfileId: string,
   targetProfileId: string,
 ): void {
@@ -89,11 +111,20 @@ export function mergeUserPreferences(
     if (targetKeys.size >= USER_PREFS_PROFILE_KEY_LIMIT) {
       break;
     }
+    // A discarded source upload must not leave its custom selection dangling on the target.
+    const background =
+      row.pref_key === USER_BACKGROUND_PREFERENCE_KEY
+        ? normalizeBackgroundPreference(JSON.parse(row.value_json))
+        : undefined;
+    const valueJson =
+      background && !isOwnedBackgroundPreference(database, targetProfileId, background)
+        ? JSON.stringify({ ...background, source: { kind: "none" } })
+        : row.value_json;
     executeSqliteQuerySync(
       database,
       db
         .insertInto("user_preferences")
-        .values({ ...row, profile_id: targetProfileId })
+        .values({ ...row, value_json: valueJson, profile_id: targetProfileId })
         .onConflict((conflict) => conflict.columns(["profile_id", "pref_key"]).doNothing()),
     );
     targetKeys.add(row.pref_key);
@@ -102,10 +133,11 @@ export function mergeUserPreferences(
     database,
     db.deleteFrom("user_preferences").where("profile_id", "=", sourceProfileId),
   );
+  publishUserPreferencesChange(database);
 }
 
 export function readUserPreferences(
-  sqlite: DatabaseSync,
+  sqlite: EngineConnection,
   profileId: string,
   keys?: readonly string[],
 ): Record<string, unknown> {
@@ -130,10 +162,23 @@ export function readUserPreferences(
 }
 
 export function writeUserPreferences(
-  sqlite: DatabaseSync,
+  sqlite: EngineConnection,
   profileId: string,
-  { serialized, deletionKeys, expected }: PreparedUserPreferenceUpdate,
+  update: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {
+  const { serialized, deletionKeys, expected } = update;
+  const background = serialized.find((entry) => entry.prefKey === USER_BACKGROUND_PREFERENCE_KEY);
+  if (background || deletionKeys.includes(USER_BACKGROUND_PREFERENCE_KEY)) {
+    if (!expected.some((entry) => entry.prefKey === USER_BACKGROUND_PREFERENCE_KEY)) {
+      return err({ code: "conflict" });
+    }
+    if (
+      background &&
+      !isOwnedBackgroundPreference(sqlite, profileId, JSON.parse(background.valueJson))
+    ) {
+      return err({ code: "invalid-value", key: USER_BACKGROUND_PREFERENCE_KEY });
+    }
+  }
   if (expected.length > 0) {
     const current = readUserPreferences(
       sqlite,
@@ -152,16 +197,18 @@ export function writeUserPreferences(
     }
   }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(sqlite);
-  const currentKeys = readPreferenceKeys(sqlite, profileId);
-  const nextKeys = new Set(currentKeys);
-  deletionKeys.forEach((key) => nextKeys.delete(key));
-  serialized.forEach((entry) => nextKeys.add(entry.prefKey));
-  if (serialized.length > 0 && nextKeys.size > USER_PREFS_PROFILE_KEY_LIMIT) {
-    return err({
-      code: "profile-key-limit",
-      limit: USER_PREFS_PROFILE_KEY_LIMIT,
-      currentCount: currentKeys.size,
-    });
+  if (serialized.length > 0) {
+    const currentKeys = readPreferenceKeys(sqlite, profileId);
+    const nextKeys = new Set(currentKeys);
+    deletionKeys.forEach((key) => nextKeys.delete(key));
+    serialized.forEach((entry) => nextKeys.add(entry.prefKey));
+    if (nextKeys.size > USER_PREFS_PROFILE_KEY_LIMIT) {
+      return err({
+        code: "profile-key-limit",
+        limit: USER_PREFS_PROFILE_KEY_LIMIT,
+        currentCount: currentKeys.size,
+      });
+    }
   }
   if (deletionKeys.length > 0) {
     executeSqliteQuerySync(
@@ -194,5 +241,9 @@ export function writeUserPreferences(
         ),
     );
   }
+  if (updatesGitCoauthorPreference(update)) {
+    publishUserProfileAuthorityChange(sqlite, profileId);
+  }
+  publishUserPreferencesChange(sqlite);
   return ok(undefined);
 }

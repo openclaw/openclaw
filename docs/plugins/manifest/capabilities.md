@@ -14,6 +14,18 @@ Manifest fields that declare what a plugin owns and when the activation planner 
 
 Use `contracts` only for static capability ownership metadata that OpenClaw can read without importing the plugin runtime.
 
+`contracts.codeModeExecutors` declares the supported executor supplied by a plugin's
+`code-mode-executor-api` public artifact. Plugins currently implement `quickjs`;
+the other selectable executor, `node`, is owned by core. The plugin's installation
+ID is separate from this executor ID. Selecting QuickJS loads only its
+admitted owner. Selected bundled executors remain available when plugins are
+globally disabled or an allowlist names other plugins, preserving their former
+core runtime availability. An explicit owner deny or disabled entry still blocks
+selection; external executors follow the full plugin policy.
+The artifact exports `codeModeExecutor` using the
+`openclaw/plugin-sdk/code-mode-executor-runtime` contract. It does not register
+model tools or replace host tool authorization. See [Code Mode executors](/tools/code-mode/executors).
+
 ```json
 {
   "contracts": {
@@ -34,19 +46,20 @@ Use `contracts` only for static capability ownership metadata that OpenClaw can 
     "webFetchProviders": ["firecrawl"],
     "webSearchProviders": ["gemini"],
     "workerProviders": ["example-worker"],
+    "storageProviders": ["example-storage"],
     "usageProviders": ["acme-ai"],
     "migrationProviders": ["hermes"],
     "gatewayMethodDispatch": ["authenticated-request"],
+    "commandRuntimeCapabilities": ["subagents"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
   }
 }
 ```
 
-Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list the canonical provider ID first, followed by any aliases scoped to that capability:
+Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list the primary provider ID first, followed by any aliases scoped to that capability:
 
 | Field                            | Type       | What it means                                                                                                                        |
 | -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids. `codex-app-server` is the only accepted id.                                                  |
 | `agentToolResultMiddleware`      | `string[]` | Runtime ids this plugin may register tool-result middleware for.                                                                     |
 | `trustedToolPolicies`            | `string[]` | Plugin-local trusted pre-tool policy ids an installed plugin may register. Bundled plugins may register policies without this field. |
 | `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                                                      |
@@ -65,14 +78,38 @@ Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list 
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                                                             |
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                                                            |
 | `workerProviders`                | `string[]` | Cloud-worker provider ids this plugin owns for provisioning and profile-backed lease lifecycle.                                      |
+| `workerProfileSuggestions`       | `string[]` | Worker provider ids with a lightweight [profile suggestion artifact](/plugins/manifest#cloud-worker-profile-suggestions).            |
+| `storageProviders`               | `string[]` | Storage transport ids registered with `api.registerStorageProvider`; selected by named storage locations.                            |
 | `usageProviders`                 | `string[]` | Provider ids whose usage-auth and usage-snapshot hooks this plugin owns.                                                             |
 | `migrationProviders`             | `string[]` | Import provider ids this plugin owns for [`openclaw migrate`](/cli/migrate).                                                         |
 | `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
+| `commandRuntimeCapabilities`     | `string[]` | Command runtime capabilities a command may request: `subagents` and `scheduledTurns`.                                                |
+| `sessionScheduledTurns`          | `string[]` | Scheduled command turns the plugin may request; currently `requester-command`.                                                       |
+| `subagentProfiles`               | `string[]` | Plugin-local native subagent profile IDs registered through `api.agent.registerSubagentProfile`.                                     |
 | `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
 
-`contracts.embeddedExtensionFactories` is retained for bundled Codex app-server-only extension factories. Bundled tool-result transforms should declare `contracts.agentToolResultMiddleware` and register with `api.registerAgentToolResultMiddleware(...)` instead. Installed plugins may use the same middleware seam only when explicitly enabled and only for runtimes they declare in `contracts.agentToolResultMiddleware`.
+Document extractors may return optional completeness metadata with their text and images. `pages.processed` is a bounded list of 1-based pages actually processed; `pages.total` is the document page count; `pages.selection` distinguishes automatic limits from an explicit request; and `pages.truncated`, `textTruncated`, and `imagesTruncated` report known omissions. `maxPages` is a count cap; automatic page choice remains extractor-owned, while `pageNumbers` restricts an explicit selection. Omit `metadata` when the extractor cannot establish these facts; do not infer completeness downstream.
+
+The legacy `contracts.embeddedExtensionFactories` family has been removed. Tool-result transforms declare `contracts.agentToolResultMiddleware` and register with `api.registerAgentToolResultMiddleware(...)`. Installed plugins may use the same middleware interface only when explicitly enabled and only for runtimes they declare in `contracts.agentToolResultMiddleware`.
 
 Installed plugins that need the host-trusted pre-tool policy tier must declare each registered local id in `contracts.trustedToolPolicies` and be explicitly enabled. Bundled plugins keep the existing trusted-policy path, but installed plugins with undeclared policy ids are rejected before registration. Policy ids are scoped to the registering plugin, so two plugins may both declare and register `workflow-budget`; a single plugin may not register the same local id twice.
+
+Commands requesting `runtimeCapabilities: ["subagents"]` must also declare
+`contracts.commandRuntimeCapabilities: ["subagents"]` and set `requireAuth: true`.
+This declaration is install-review metadata, not tool or operator authority.
+The host grants the optional facade only for an eligible current invocation;
+see [command-scoped native children](/plugins/sdk-runtime/background-work#command-scoped-native-children).
+
+Commands requesting `runtimeCapabilities: ["subagents", "scheduledTurns"]` also
+declare `scheduledTurns` in `contracts.commandRuntimeCapabilities` and
+`contracts.sessionScheduledTurns: ["requester-command"]`. Probe
+`api.runtime.capabilities` for `command-scheduled-turns-v1` before registering
+such a command: hosts without it reject the registration. Hosts that also
+advertise `command-scheduled-turns-restart-v1` keep accepted schedules across a
+Gateway restart when the same plugin code loads again, including core-bundled
+plugins on the same OpenClaw build; each accepted schedule reports this as
+`survivesRestart`. See
+[requester-admitted scheduled commands](/plugins/sdk-runtime/background-work#requester-admitted-scheduled-commands).
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`. Tool discovery uses this list to load only the plugin runtimes that can own the requested tools.
 
@@ -82,7 +119,13 @@ Provider plugins that implement both `resolveUsageAuth` and `fetchUsageSnapshot`
 
 Embedding providers must declare `contracts.embeddingProviders` for each adapter registered with `api.registerEmbeddingProvider(...)`. The same generic contract serves reusable vector generation and memory search. The retired `contracts.memoryEmbeddingProviders` key is no longer accepted.
 
-Worker providers must declare each `api.registerWorkerProvider(...)` id in `contracts.workerProviders`. Registration requires `resolveAllocation`, `provision`, `inspect`, and `destroy`. The allocation resolver returns the exact operation cleanup handle and an explicit shared-host fact without creating or preparing a machine; see the [worker provider contract](/plugins/sdk-overview/capabilities#worker-providers). Core persists durable intent before calling `provision`; providers validate their settings and optional per-dispatch `machineClass` and `executionMode` before external allocation, and repeated calls with the same operation id must adopt the same lease without changing the selected mode. Providers may implement asynchronous `listMachineOptions(profile)` to expose process-stable picker metadata; omit it when machine selection is not meaningful. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare a closed, unique, canonically ordered `supportedExecutionModes` tuple: `["worker-turn"]`, `["remote-exec"]`, or `["worker-turn", "remote-exec"]`. Empty lists, duplicates, unknown values, and noncanonical ordering are rejected. `worker-turn` requires a node lease; `remote-exec` accepts a node lease or an SSH lease. Omission advertises no session-placement modes while leaving direct lifecycle operations available. A direct environment create supplies no session execution mode; providers use their documented default, which is `worker-turn` for Crabbox. Providers whose bounded provisioning exceeds core's five-minute default may implement `resolveProvisionTimeoutMs(profile)` and include acquisition, provider-owned setup, and cleanup in the returned positive millisecond budget. The optional `resolveDestroyTimeoutMs(profile)` supplies the equivalent budget for requested teardown and bootstrap-failure cleanup, including snapshot capture before confirmed release. Both hooks must return positive safe integers within the platform timer limit; an explicit service timeout override takes precedence. Core also persists that validated settings snapshot and passes it with `leaseId` to `inspect({ leaseId, profile })` and `destroy({ leaseId, profile })`, including after the named profile is changed or removed. Destruction is idempotent, inspection returns the closed `active` / `dormant` / `destroyed` / `unknown` status union, and SSH private-key material is referenced only through `SecretRef`. Provisioned SSH endpoints must also include a public `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment, so core can pin the host before connecting. They may include up to 10 ordered, unique `fallbackPorts`, excluding the primary `port`; core persists those candidates and rotates among them only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. Optional desktop metadata may advertise up to eight unique closed apps: `browser` with an absolute `executablePath` and a CDP port from 1 through 65535, or `terminal` with an absolute `executablePath`. Core rejects unknown app ids and fields and persists the validated metadata with the existing desktop record. Providers that mint dynamic identity refs may implement authoritative `resolveSshIdentity({ leaseId, profile, keyRef })`; providers without it use core's generic secret resolver. An authoritative `unknown` fences the environment and enters canonical teardown; it does not bypass the exact worker-stop acknowledgment required on shared or unknown hosts.
+Storage providers must declare each `api.registerStorageProvider(...)` id in
+`contracts.storageProviders`. Core reserves `filesystem`. Config references in
+`storage.locations` auto-enable bundled owners through this declaration; explicit
+disablement and deny rules still apply. External providers require explicit plugin
+enablement. See the [storage provider contract](/plugins/sdk-overview/capabilities#storage-providers).
+
+Worker providers must declare each `api.registerWorkerProvider(...)` id in `contracts.workerProviders`. Registration requires `resolveAllocation`, `provision`, `inspect`, and `destroy`. The allocation resolver returns the exact operation cleanup handle and an explicit shared-host fact without creating or preparing a machine; see the [worker provider contract](/plugins/sdk-overview/capabilities#worker-providers). Core persists durable intent before calling `provision`; providers validate their settings and optional per-dispatch `machineClass` and `executionMode` before external allocation, and repeated calls with the same operation id must adopt the same lease without changing the selected mode. Providers may implement asynchronous `listMachineOptions(profile)` to expose process-stable picker metadata; omit it when machine selection is not meaningful. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare a closed, unique, fixed-order `supportedExecutionModes` tuple: `["worker-turn"]`, `["remote-exec"]`, or `["worker-turn", "remote-exec"]`. Empty lists, duplicates, unknown values, and unrecognized orders are rejected. `worker-turn` requires a node lease; `remote-exec` accepts a node lease or an SSH lease. Omission advertises no session-placement modes while leaving direct lifecycle operations available. A direct environment create supplies no session execution mode; providers use their documented default, which is `worker-turn` for Crabbox. Providers whose bounded provisioning exceeds core's five-minute default may implement `resolveProvisionTimeoutMs(profile)` and include acquisition, provider-owned setup, and cleanup in the returned positive millisecond budget. The optional `resolveDestroyTimeoutMs(profile)` supplies the equivalent budget for requested teardown and bootstrap-failure cleanup, including snapshot capture before confirmed release. Both hooks must return positive safe integers within the platform timer limit; an explicit service timeout override takes precedence. Core also persists that validated settings snapshot and passes it with `leaseId` to `inspect({ leaseId, profile })` and `destroy({ leaseId, profile })`, including after the named profile is changed or removed. Destruction is safe to repeat, inspection returns the closed `active` / `dormant` / `destroyed` / `unknown` status union, and SSH private-key material is referenced only through `SecretRef`. Provisioned SSH endpoints must also include a public `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment, so core can pin the host before connecting. They may include up to 10 ordered, unique `fallbackPorts`, excluding the primary `port`; core persists those candidates and rotates among them only for checks safe to repeat, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands are rejected and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. Optional desktop metadata may advertise up to eight unique closed apps: `browser` with an absolute `executablePath` and a CDP port from 1 through 65535, or `terminal` with an absolute `executablePath`. Core rejects unknown app ids and fields and persists the validated metadata with the existing desktop record. Providers that mint dynamic identity refs may implement authoritative `resolveSshIdentity({ leaseId, profile, keyRef })`; providers without it use core's generic secret resolver. An authoritative `unknown` fences the environment and enters the normal teardown; it does not bypass the exact worker-stop acknowledgment required on shared or unknown hosts.
 
 `contracts.gatewayMethodDispatch` accepts a single value, `"authenticated-request"`. It is an API hygiene gate for authenticated native plugin HTTP routes and registered RPC handlers that intentionally dispatch Gateway methods in-process, not a sandbox against malicious native plugins. Dispatch retains the original authenticated client and profile, applies the target method’s scopes, and never creates a synthetic caller. Use it only for tightly reviewed surfaces. RPC handlers still pass ordinary Gateway admission; this contract adds no suspension bypass. An entitled route remains reachable while Gateway root-work admission is closed only when it also declares `auth: "gateway"` and the route-specific `gatewayRuntimeScopeSurface: "trusted-operator"`; ordinary sibling routes from the same plugin remain behind the admission boundary. This keeps suspension status and resume reachable without granting the whole plugin an admission bypass. Keep parsing and response shaping bounded outside dispatch; substantive or mutating work must go through Gateway method dispatch, which owns admission and scope enforcement.
 
@@ -98,13 +141,55 @@ loading the provider runtime or resolving credentials.
 ```json
 {
   "contracts": { "decisionProviders": ["example-decisions"] },
-  "decisionModels": [{ "provider": "example-decisions", "id": "fast", "name": "Fast decisions" }]
+  "decisionModels": [
+    {
+      "provider": "example-decisions",
+      "id": "fast",
+      "name": "Fast decisions",
+      "capabilities": {
+        "questionTypes": ["boolean", "choice", "score"],
+        "maxQuestions": 32,
+        "maxChoiceAlternatives": 64,
+        "maxScoreLevels": 16,
+        "maxInputTokens": 8192,
+        "inputTokenScope": "encoded-question",
+        "requiresBooleanCriteria": true,
+        "confidence": "provider-specific"
+      }
+    }
+  ]
 }
 ```
 
 Each entry requires a provider ID, model ID, and display name. The selector uses
 `example-decisions/fast`. Disabled plugins are excluded from the decision picker;
 saved unavailable selections remain visible for the operator to repair.
+
+`capabilities` is optional static metadata. It describes provider support for
+discovery and guidance; it does not prove that credentials or the runtime are
+ready, and its limits do not raise OpenClaw's host admission bounds.
+
+| Field                     | Required | Accepted value                                                             | Omission semantics                                                                                        |
+| ------------------------- | -------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `questionTypes`           | Yes      | Non-empty array containing up to three of `boolean`, `choice`, and `score` | The entire `capabilities` object is omitted when this field is absent or invalid; duplicates are removed. |
+| `maxQuestions`            | No       | Positive safe integer                                                      | No provider-specific question limit is advertised.                                                        |
+| `maxChoiceAlternatives`   | No       | Positive safe integer                                                      | No provider-specific Choice-alternative limit is advertised.                                              |
+| `maxScoreLevels`          | No       | Positive safe integer                                                      | No provider-specific Score-level limit is advertised.                                                     |
+| `maxInputTokens`          | No       | Positive safe integer                                                      | No provider-specific input-token limit is advertised.                                                     |
+| `inputTokenScope`         | No       | `encoded-question` or `state-plus-each-criterion`                          | The provider does not declare how `maxInputTokens` is accounted.                                          |
+| `requiresBooleanCriteria` | No       | Boolean                                                                    | No extra Boolean-criteria requirement is advertised.                                                      |
+| `confidence`              | No       | `provider-specific` or `none`                                              | No confidence-result semantic is advertised.                                                              |
+
+`encoded-question` means the provider counts its encoded request, including
+provider-added rubric overhead. `state-plus-each-criterion` means the shared
+state is counted with each criterion evaluation. `provider-specific` confidence
+is a provider metric, not a calibrated probability that an answer is correct;
+`none` declares that the provider does not return confidence.
+
+Malformed optional fields and unknown fields are ignored individually. A
+malformed `questionTypes` value removes the whole capability descriptor but does
+not remove the model entry. Duplicate `provider/id` entries keep the first valid
+model descriptor.
 
 ## Tool metadata reference
 
@@ -162,7 +247,7 @@ This block is planner metadata, not a lifecycle API. It does not register runtim
 
 Prefer the narrowest metadata that already describes ownership. Use `providers`, `channels`, `commandAliases`, setup descriptors, or `contracts` when those fields express the relationship. Use `activation` for extra planner hints that cannot be represented by those ownership fields. Use top-level `cliBackends` for CLI runtime aliases such as `claude-cli`, `my-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for embedded agent harness ids that do not already have an ownership field.
 
-Every plugin should set `activation.onStartup` intentionally. Set it to `true` only when the plugin must run during Gateway startup. Set it to `false` when the plugin is inert at startup and should load only from narrower triggers. Omitting `onStartup` no longer startup-loads the plugin implicitly; use explicit activation metadata for startup, channel, config, agent-harness, memory, or other narrower activation triggers.
+Every plugin should set `activation.onStartup` intentionally. Set it to `true` only when the plugin must run during Gateway startup. Set it to `false` when the plugin is inert at startup and should load only from narrower triggers. Omitting `onStartup` no longer startup-loads the plugin implicitly; use explicit activation metadata for startup, channel, config, agent-harness, memory, or other narrower activation triggers. Manifestless standalone files listed in `plugins.load.paths` have no manifest to declare this and start like `onStartup: true` once enabled.
 
 ```json
 {

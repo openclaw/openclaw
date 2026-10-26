@@ -7,7 +7,6 @@ import {
   resolveDiscordMessageSnapshots,
   resolveDiscordMessageStickers,
   resolveDiscordReferencedForwardMessage,
-  resolveDiscordSnapshotStickers,
   type DiscordSnapshotMessage,
 } from "./message-forwarded.js";
 import { formatDiscordMediaText } from "./message-media.js";
@@ -26,27 +25,18 @@ function resolveDiscordEmbedText(
 
 export function resolveDiscordMessageText(
   message: Message,
-  options?: { fallbackText?: string; includeForwarded?: boolean },
+  options?: { includeForwarded?: boolean },
 ): string {
   const rawText =
     resolveDiscordMessageMentionDocuments(message)
-      .map((text) => normalizeOptionalString(text))
-      .filter(Boolean)
-      .join("\n") ||
-    normalizeOptionalString(options?.fallbackText) ||
-    "";
+      .map((text) => text.trim())
+      .join("\n") || "";
   const baseText = resolveDiscordMentions(rawText, message);
   if (!options?.includeForwarded) {
     return baseText;
   }
   const forwardedText = resolveDiscordForwardedMessagesText(message);
-  if (!forwardedText) {
-    return baseText;
-  }
-  if (!baseText) {
-    return forwardedText;
-  }
-  return `${baseText}\n${forwardedText}`;
+  return [baseText, forwardedText].filter(Boolean).join("\n");
 }
 
 export function resolveDiscordMessageMentionDocuments(message: Message): string[] {
@@ -63,7 +53,7 @@ export function resolveDiscordMessageMentionDocuments(message: Message): string[
     return embedDocuments;
   }
   const componentDocuments: string[] = [];
-  collectDiscordTextDisplayDocuments(resolveDiscordMessageComponents(message), componentDocuments);
+  collectDiscordTextDisplayDocuments(message.components, componentDocuments);
   return componentDocuments;
 }
 
@@ -79,18 +69,6 @@ export function resolveDiscordMessageBatch(last: Message, preceding: readonly Me
     ...Object.getOwnPropertyDescriptors(last),
     content: { value: content, enumerable: true, configurable: true },
     attachments: { value: [], enumerable: true, configurable: true },
-    message_snapshots: {
-      // SAFETY: This optional transport field stays opaque until snapshot normalization.
-      value: (last as { message_snapshots?: unknown }).message_snapshots,
-      enumerable: true,
-      configurable: true,
-    },
-    messageSnapshots: {
-      // SAFETY: This optional wrapper field stays opaque until snapshot normalization.
-      value: (last as { messageSnapshots?: unknown }).messageSnapshots,
-      enumerable: true,
-      configurable: true,
-    },
     rawData: {
       value: { ...last.rawData },
       enumerable: true,
@@ -102,11 +80,11 @@ export function resolveDiscordMessageBatch(last: Message, preceding: readonly Me
 /** Adds native media text only for history surfaces that cannot carry structured facts. */
 export function resolveDiscordMessageHistoryText(
   message: Message,
-  options?: { fallbackText?: string; includeForwarded?: boolean },
+  options?: { includeForwarded?: boolean },
 ): string {
   const text = resolveDiscordMessageText(message, options);
   const mediaText = formatDiscordMediaText({
-    attachments: message.attachments ?? undefined,
+    attachments: message.attachments,
     stickers: resolveDiscordMessageStickers(message),
   });
   return [text, mediaText].filter(Boolean).join("\n");
@@ -137,34 +115,16 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
   if (!referencedForward) {
     return "";
   }
-  const referencedText = resolveDiscordMessageHistoryText(referencedForward);
-  if (!referencedText) {
-    return "";
-  }
-  const authorLabel = formatDiscordSnapshotAuthor(referencedForward.author);
-  const heading = authorLabel ? `[Forwarded message from ${authorLabel}]` : "[Forwarded message]";
-  return `${heading}\n${referencedText}`;
-}
-
-function resolveDiscordMessageComponents(message: Message): unknown {
-  const components = (message as { components?: unknown }).components;
-  if (components !== undefined) {
-    return components;
-  }
-  try {
-    return (message as { rawData?: { components?: unknown } }).rawData?.components;
-  } catch {
-    return undefined;
-  }
+  return formatDiscordForwardedMessageBlock(
+    resolveDiscordMessageHistoryText(referencedForward),
+    referencedForward.author,
+  );
 }
 
 function extractDiscordComponentsV2Text(components: unknown): string {
   const parts: string[] = [];
   collectDiscordTextDisplayDocuments(components, parts);
-  return parts
-    .map((part) => normalizeOptionalString(part))
-    .filter((part): part is string => Boolean(part))
-    .join("\n");
+  return parts.map((part) => part.trim()).join("\n");
 }
 
 function collectDiscordTextDisplayDocuments(value: unknown, parts: string[]): void {
@@ -194,27 +154,27 @@ function collectDiscordTextDisplayDocuments(value: unknown, parts: string[]): vo
   collectDiscordTextDisplayDocuments(component.component, parts);
 }
 
-function resolveDiscordForwardedMessagesTextFromSnapshots(snapshots: unknown): string {
-  const forwardedBlocks = normalizeDiscordMessageSnapshots(snapshots)
-    .map((snapshot) => buildDiscordForwardedMessageBlock(snapshot.message))
-    .filter((entry): entry is string => Boolean(entry));
-  if (forwardedBlocks.length === 0) {
-    return "";
-  }
-  return forwardedBlocks.join("\n\n");
+function resolveDiscordForwardedMessagesTextFromSnapshots(
+  snapshots: ReturnType<typeof normalizeDiscordMessageSnapshots>,
+): string {
+  return snapshots
+    .map(({ message }) =>
+      message
+        ? formatDiscordForwardedMessageBlock(resolveDiscordRawMessageText(message), message.author)
+        : "",
+    )
+    .filter(Boolean)
+    .join("\n\n");
 }
 
-function buildDiscordForwardedMessageBlock(
-  snapshotMessage: DiscordSnapshotMessage | null | undefined,
-): string | null {
-  if (!snapshotMessage) {
-    return null;
-  }
-  const text = resolveDiscordRawMessageText(snapshotMessage);
+function formatDiscordForwardedMessageBlock(
+  text: string,
+  author: DiscordSnapshotMessage["author"],
+): string {
   if (!text) {
-    return null;
+    return "";
   }
-  const authorLabel = formatDiscordSnapshotAuthor(snapshotMessage.author);
+  const authorLabel = formatDiscordSnapshotAuthor(author);
   const heading = authorLabel ? `[Forwarded message from ${authorLabel}]` : "[Forwarded message]";
   return `${heading}\n${text}`;
 }
@@ -226,12 +186,14 @@ export function resolveDiscordRawMessageText(
   const content = normalizeOptionalString(message.content) ?? "";
   const mediaText = formatDiscordMediaText({
     attachments: message.attachments ?? undefined,
-    stickers: resolveDiscordSnapshotStickers(message),
+    stickers: resolveDiscordMessageStickers(message),
   });
   const text =
     content ||
     resolveDiscordEmbedText(message.embeds) ||
     extractDiscordComponentsV2Text(message.components) ||
-    resolveDiscordForwardedMessagesTextFromSnapshots(message.message_snapshots);
+    resolveDiscordForwardedMessagesTextFromSnapshots(
+      normalizeDiscordMessageSnapshots(message.message_snapshots),
+    );
   return [text, mediaText].filter(Boolean).join("\n");
 }

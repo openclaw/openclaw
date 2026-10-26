@@ -1,3 +1,4 @@
+import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
@@ -8,6 +9,7 @@ import {
   expectedMobileScrollGeometry,
   readMobileScrollGeometry,
 } from "./workboard-scroll.e2e.test-support.ts";
+import { configSnapshot, makeBoard } from "./workboard.e2e.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Workboard mobile scroll E2E",
@@ -17,18 +19,6 @@ const suite = createControlUiE2eSuite({
 
 const baseTime = Date.parse("2026-06-01T18:00:00.000Z");
 
-function workboardConfigSnapshot() {
-  const config = { plugins: { entries: { workboard: { enabled: true } } } };
-  return {
-    config,
-    hash: "workboard-mobile-scroll-e2e-config",
-    path: "/tmp/openclaw-e2e/openclaw.json",
-    raw: JSON.stringify(config),
-    resolved: config,
-    sourceConfig: config,
-  };
-}
-
 suite.define(() => {
   it("scrolls every mobile column card into view while keeping the toolbar available", async () => {
     await suite.withPage({}, async ({ page }) => {
@@ -36,38 +26,13 @@ suite.define(() => {
       await page.setViewportSize({ height: 700, width: 390 });
       await installMockGateway(page, {
         ...workboardUi,
+        sessions: [],
         methodResponses: {
-          "config.get": workboardConfigSnapshot(),
-          "sessions.list": {
-            count: 0,
-            defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-            path: "",
-            sessions: [],
-            ts: baseTime,
-          },
-          "tasks.list": { nextCursor: null, tasks: [] },
+          "config.get": configSnapshot("workboard-mobile-scroll-e2e-config"),
           "workboard.cards.list": {
-            boards: [
-              {
-                id: "default",
-                total: cards.length,
-                active: cards.length,
-                archived: 0,
-                byStatus: {},
-              },
-            ],
+            boards: [makeBoard("default", { total: cards.length, active: cards.length })],
             cards,
-            statuses: [
-              "triage",
-              "backlog",
-              "todo",
-              "scheduled",
-              "ready",
-              "running",
-              "review",
-              "blocked",
-              "done",
-            ],
+            statuses: WORKBOARD_STATUSES,
           },
         },
       });

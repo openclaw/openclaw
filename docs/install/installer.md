@@ -10,19 +10,39 @@ title: "Installer internals"
 
 OpenClaw ships three installer scripts, served from `openclaw.ai`.
 
+Node remains the default runtime. `install.sh --runtime bun` is an explicit
+Bun-only alternative on macOS and glibc Linux, on x64 and arm64. It installs the
+OpenClaw release's pinned Bun fork without requiring Node. See
+[Bun-only global install](/install/bun#bun-only-global-install).
+
+The shell entrypoints in a source checkout share `scripts/install-policy.sh`.
+Run `node scripts/build-installers.mjs` to assemble standalone copies in
+`dist/installers/` before copying, piping, or publishing them. Website sync and
+native builds use these assembled scripts. The npm package keeps both source
+files together for installed updater compatibility. Installing from the website
+never downloads a separate policy helper.
+
+Git installs retry transient remote-ref lookup failures up to three times. Failed
+lookups print Git's diagnostic with URLs, authorization headers, and GitHub tokens
+redacted. Missing refs and authentication failures stop without retrying.
+Release-tag fetches stay depth-limited when the existing checkout is shallow;
+full-history checkouts retain their history.
+
 | Script                             | Platform                      | What it does                                                                                                                   |
 | ---------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | [`install.sh`](#installsh)         | macOS / Linux / WSL           | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.                                       |
 | [`install-cli.sh`](#install-clish) | macOS / Linux / WSL / FreeBSD | Installs Node + OpenClaw into a local prefix (`~/.openclaw`) via npm (FreeBSD) or npm/git (macOS/Linux/WSL). No root required. |
 | [`install.ps1`](#installps1)       | Windows (PowerShell)          | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.                                       |
 
-All three support Node **24.16+ or 26.1+** with a WAL-reset-safe linked SQLite library. When Node is missing and nvm is not detected, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.19.0 on macOS and glibc Linux. FreeBSD uses an installed system runtime. Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
+All three support Node **24.22.1+ or 26.12.1+** with a WAL-reset-safe linked SQLite library. When Node is missing and nvm is not detected, `install.sh` provisions Node 26 through Homebrew on macOS and the supported Node 24 LTS line through NodeSource on Linux. When a supported RPM-owned Node links unsafe SQLite, `install.sh` preserves the distro package and provisions a user-space Node runtime through `install-cli.sh`. The rootless `install-cli.sh` downloads Node 24.22.1 on macOS and glibc Linux. FreeBSD uses an installed system runtime. Linux ARMv7 is unsupported. On Windows, winget/Chocolatey/Scoop install the supported Node LTS line, and the portable fallback downloads Node 26.
 
-Before changing packages, every installer probes the exact npm executable it will use. npm 11.15 and earlier installs normally; npm 11.16 and later, including npm 12, receives `--allow-scripts` for only the npm-resolved OpenClaw candidate identity. An unreadable npm version stops before package mutation. A remaining `.openclaw-lifecycle-pending` marker or legacy `dist/openclaw-install-guard` makes the install fail instead of reporting a lifecycle-skipped package as successful.
+Before changing packages, every installer checks the exact npm executable it will use. npm 11.15 and earlier installs normally; npm 11.16 and later, including npm 12, receives `--allow-scripts` for only the npm-resolved OpenClaw candidate identity. An unreadable npm version stops before package mutation. A remaining `.openclaw-lifecycle-pending` marker or legacy `dist/openclaw-install-guard` makes the install fail instead of reporting a lifecycle-skipped package as successful.
 
 On npm 12, local `.tgz` and `.tar.gz` installs and updates need a comma-free archive filename and parent path. npm uses commas to separate lifecycle approvals, so move the archive to a comma-free path before retrying. Relative tarball arguments are still supported; the installer resolves their full path for approval.
 
 Install-method switches verify the replacement before retiring the current owner. Source wrappers use a same-directory atomic replacement; when an npm shim shares that path, the installer moves only an identity-matched source wrapper aside and restores it if npm installation, lifecycle checks, or candidate verification fails. On upgrades, `install.sh` and `install.ps1` run `openclaw doctor --fix`; repair or final verification failure exits nonzero, and the success banner appears only after those steps complete.
+
+Installer help includes [official OpenClaw support](https://community.openclaw.ai/) alongside the self-service FAQ. Handled installation failures also show the support link in human-readable output; `install-cli.sh --json` keeps its existing error and completion events without human support text. Review diagnostics for credentials and personal data before sharing them.
 
 ## Private Node recovery
 
@@ -53,7 +73,7 @@ then runs them from the checkout so Corepack reads that target's package-manager
 pin. The same directory leads `PATH` for nested install and build commands;
 workspace and lockfile environment overrides are bound to the target checkout
 for those children only. An older ambient `pnpm --version` is not a safe
-selection probe: its version-switching path can modify the target lockfile.
+selection check: its version-switching path can modify the target lockfile.
 
 If Corepack is missing or cannot provision the pinned version, the installers
 use their selected npm executable to install that exact pnpm version into a
@@ -126,11 +146,14 @@ checks also default to five minutes.
   <Step title="Detect OS">
     Supports macOS and Linux (including WSL).
   </Step>
-  <Step title="Ensure a supported Node.js runtime">
-    Checks the Node version and linked SQLite library, then installs Node if needed (Node 26 through Homebrew `node` on macOS; Node 24 LTS through NodeSource setup scripts on Linux apt/dnf/yum). On RPM-based Linux, a supported distro Node that links unsafe SQLite remains installed while OpenClaw receives a user-space Node runtime. On macOS, Homebrew is installed only when the installer needs it for Node or Git. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
-    On Alpine/musl Linux, the installer uses apk packages instead of NodeSource and verifies the actual linked SQLite version. Current stable Alpine package streams can provide a new-enough Node with vulnerable system SQLite; when that happens, use an official `node:26-alpine` container or a glibc-based host instead.
+  <Step title="Install a supported Node.js runtime">
+    <a id="ensure-a-supported-nodejs-runtime" />
+    <a id="ensure-a-supported-node-js-runtime" />
+    Checks the Node version and linked SQLite library, then installs Node if needed (Node 26 through Homebrew `node` on macOS; Node 24 LTS through NodeSource setup scripts on Linux apt/dnf/yum). On RPM-based Linux, a supported distro Node that links unsafe SQLite remains installed while OpenClaw receives a user-space Node runtime. On macOS, Homebrew is installed only when the installer needs it for Node or Git. Node 24.22.1+ and Node 26.12.1+ are supported; Node 22, 23, and 25 are unsupported.
+    On Alpine/musl Linux, the installer uses apk packages instead of NodeSource and verifies the actual linked SQLite version. Current stable Alpine package streams can provide a new-enough Node with vulnerable system SQLite; when that happens, use an official `node:26.12.1-alpine` container or a glibc-based host instead.
   </Step>
-  <Step title="Ensure Git">
+  <Step title="Install Git if missing">
+    <a id="ensure-git" />
     Installs Git if missing using the detected package manager, including Homebrew on macOS and apk on Alpine.
   </Step>
   <Step title="Install OpenClaw">
@@ -140,13 +163,61 @@ checks also default to five minutes.
   </Step>
   <Step title="Post-install tasks">
     - Resolves the just-installed `openclaw` binary for follow-up commands
-    - npm-prefix and daemon-status probes use a default five-second timeout; completed probes return without waiting for that deadline.
-    - For an unconfigured install, starts onboarding before doctor or gateway probes. With `--no-onboard` or no TTY, it prints the command to finish setup later.
+    - npm-prefix and daemon-status checks use a default five-second timeout; completed checks return without waiting for that deadline.
+    - For an unconfigured install, starts onboarding before doctor or gateway checks. With `--no-onboard` or no TTY, it prints the command to finish setup later.
     - For a configured install, refreshes and restarts a loaded gateway service best-effort and runs repair Doctor. Upgrade repair failures are fatal; plugin update failures remain warnings.
     - When `--verify` runs, it checks the installed version and checks gateway health only after configuration exists.
 
   </Step>
 </Steps>
+
+### Bun runtime
+
+```sh
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --runtime bun
+```
+
+The Bun path resolves dist-tags from npm’s small tag document without Node
+(exact versions skip that lookup), reads that
+release's Bun pin, verifies archive and executable SHA-256 hashes and the fork
+revision, then stages the runtime at
+`~/.openclaw/tools/bun-<tag>/bun` (`OPENCLAW_HOME` replaces the home directory).
+It installs with `bun add -g --trust`, verifies the package's matching pin and
+Bun launcher, and gives Bun's global bin directory priority in the shell PATH.
+A mismatched packaged pin fails verification. Published releases that omit
+that file, including `2026.10.1`, use the verified pin from their exact release
+tag and must report the requested version through the generated launcher.
+Custom package specs still require a bundled pin. Re-running with a newer release stages its new pin and re-pins an
+existing Gateway service without resetting configuration.
+These service re-pins leave state and configuration untouched; run Doctor
+separately when you need repairs or migrations.
+If a shell profile cannot be safely updated, installation continues and prints
+manual PATH setup commands; existing Gateway services are still re-pinned.
+Service setup receives the caller's original temporary-directory environment,
+so the service never retains the installer's disposable scratch directory.
+
+On macOS, the installer uses `OPENCLAW_SQLITE_LIBRARY` when set; otherwise it
+ensures Homebrew SQLite is installed and exports `HOMEBREW_PREFIX`. It validates
+SQLite before installing OpenClaw. Fresh interactive onboarding receives
+`--install-daemon --daemon-runtime bun`, followed by a Gateway install with the
+exact Bun runtime path. `--no-onboard` leaves a fresh installation without a
+service; existing installed services are still re-pinned.
+
+`--bun-path` accepts an absolute, executable OpenClaw fork path whose filename is
+`bun` or `bun.exe` (case-insensitive), matching the Gateway runtime-pin contract.
+Other filenames are refused before package installation or shell-profile changes. For published
+versions it must match the pin, including its executable hash. A custom package
+spec requires this option; its installed pin is checked before invoking the CLI.
+Git-checkout builds require Node/pnpm and cannot use `--runtime bun`. Windows,
+musl/Alpine, and platforms without a pin artifact are refused.
+
+`--dry-run` fetches registry and pin metadata and prints the version, pin tag,
+asset, and target path without downloading a runtime or installing packages.
+For fixture mirrors, `OPENCLAW_INSTALL_NPM_REGISTRY` replaces
+`https://registry.npmjs.org`, `OPENCLAW_INSTALL_BUN_PIN_URL` sets a pin URL (an
+optional `{version}` is replaced with the resolved version), and
+`OPENCLAW_INSTALL_BUN_RELEASE_BASE_URL` replaces
+`https://github.com/openclaw/bun/releases/download`.
 
 ### Existing nvm installations
 
@@ -186,6 +257,15 @@ If run inside an OpenClaw checkout (`package.json` + `pnpm-workspace.yaml`), the
 If no TTY is available and no install method is set, it defaults to `npm` and warns.
 
 The script exits with code `2` for invalid method selection or invalid `--install-method` values.
+
+Existing checkout roots may use a `.git` directory or a `.git` file, including
+linked Git worktrees. All three installers validate the checkout's own commit before
+updating it and refuse incomplete checkouts or nonempty non-repository paths.
+When another worktree owns a requested branch, `install.sh` and `install-cli.sh`
+check out its selected commit detached. For `main`, they begin at the local branch
+and rebase onto `origin/main` only when Git updates are enabled; other branch
+selectors use the fetched `origin` branch.
+These remain moving-branch installs even when `HEAD` is detached.
 
 With `--install-method git`, `install.sh` and `install-cli.sh` accept a full
 40-character commit SHA through `--version`. The installer uses the existing
@@ -236,6 +316,8 @@ object is unavailable or cannot resolve to a commit.
 | Flag                                    | Description                                                             |
 | --------------------------------------- | ----------------------------------------------------------------------- |
 | `--install-method \| --method npm\|git` | Choose install method (default: `npm`)                                  |
+| `--runtime node\|bun`                   | Select runtime (default: `node`); Bun requires a published fork pin     |
+| `--bun-path <absolute path>`            | Use an existing, verified OpenClaw Bun fork                             |
 | `--npm`                                 | Shortcut for npm method                                                 |
 | `--git \| --github`                     | Shortcut for git method                                                 |
 | `--version <version\|dist-tag\|spec>`   | npm version, dist-tag, or package spec (default: `latest`)              |
@@ -258,6 +340,8 @@ object is unavailable or cannot resolve to a commit.
 | ------------------------------------------------- | ------------------------------------------------------------------ |
 | `OPENCLAW_INSTALL_METHOD=git\|npm`                | Install method                                                     |
 | `OPENCLAW_VERSION=latest\|next\|<semver>\|<spec>` | npm version, dist-tag, or package spec                             |
+| `OPENCLAW_RUNTIME=node\|bun`                      | Runtime (default: `node`)                                          |
+| `OPENCLAW_BUN_PATH=<absolute path>`               | Existing OpenClaw Bun fork executable                              |
 | `OPENCLAW_BETA=0\|1`                              | Use beta if available                                              |
 | `OPENCLAW_HOME=<path>`                            | Base directory for OpenClaw state and default git/onboarding paths |
 | `OPENCLAW_GIT_DIR=<path>`                         | Checkout directory                                                 |
@@ -289,11 +373,12 @@ system Node packages.
 
 <Steps>
   <Step title="Install local Node runtime">
-    Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently, default `24.19.0`) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
+    Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently, default `24.22.1`) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
     Linux ARMv7 stops before installation because official Node 24+ ARMv7 binaries are unavailable. Use a 64-bit OS on compatible hardware or another supported host.
-    On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk`, then verifies both Node and the actual linked SQLite library. Current stable Alpine package streams may still link vulnerable SQLite even with a new-enough Node; use an official `node:26-alpine` container or a glibc-based host when the safety check rejects the package.
+    On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk`, then verifies both Node and the actual linked SQLite library. Current stable Alpine package streams may still link vulnerable SQLite even with a new-enough Node; use an official `node:26.12.1-alpine` container or a glibc-based host when the safety check rejects the package.
   </Step>
-  <Step title="Ensure Git">
+  <Step title="Install Git if missing">
+    <a id="ensure-git-1" />
     If Git is missing, attempts install via apt/dnf/yum/apk on Linux or Homebrew on macOS.
     On FreeBSD, install Git with `pkg install git` before retrying.
   </Step>
@@ -309,7 +394,7 @@ system Node packages.
   <Step title="Refresh loaded gateway service">
     If a gateway service is already loaded from that same prefix, the script runs
     `openclaw gateway install --force`, which activates the replacement service,
-    and then probes gateway health best-effort.
+    and then checks gateway health best-effort.
   </Step>
 </Steps>
 
@@ -325,7 +410,27 @@ The installer requires supported Node and npm commands on `PATH`, and verifies t
 It links that runtime into the local prefix without changing system packages.
 An explicit `--node-version` sets the minimum accepted system version on FreeBSD.
 
+The upstream Codex CLI does not provide a FreeBSD binary target.
+A successful installation or `openclaw doctor --fix` does not verify native Codex execution.
+For OpenAI API models, configure an API-key auth profile.
+Explicitly select `agentRuntime.id: "openclaw"` for the models you use.
+API-key access uses OpenAI Platform billing, separate from a ChatGPT/Codex subscription.
+See [OpenAI setup](/providers/openai/setup) and [runtime selection](/providers/openai/runtimes#implicit-agent-runtime).
+
+The installer creates a new prefix with mode `0700`, including under `umask 0002`.
+On Linux, Gateway service installation also tightens an existing owned state
+directory to `0700` if it is group- or world-writable. Service status checks do
+not change permissions. Foreign-owned directories and unsafe service directories
+still require operator repair before service installation.
+
 With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix>/tools/node-v<version>` and updating the `<prefix>/tools/node` alias. It skips Git, OpenClaw installation, onboarding, and Gateway service work. This mode refuses musl Linux and FreeBSD. Update their system Node packages manually.
+
+With `--runtime-only`, the script installs Node and the CLI but skips Gateway
+service discovery, refresh, and onboarding, even if `--onboard` is also supplied.
+The npm path also skips system Git provisioning. Desktop browser setup uses
+this with `--npm`, an exact app version, and a separate app-owned prefix; it does
+not replace an independently managed Gateway runtime. Normal installation keeps
+its existing service-refresh behavior.
 
 ### Examples (install-cli.sh)
 
@@ -375,8 +480,9 @@ With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix
 | `--no-git-update`                       | Skip `git pull` for an existing git checkout                                      |
 | `--version <ver>`                       | OpenClaw version or dist-tag (default: `latest`)                                  |
 | `--compatible-with <ver>`               | Refuse a CLI that cannot modify config written by `<ver>`                         |
-| `--node-version <ver>`                  | Node version (default: `24.19.0`)                                                 |
+| `--node-version <ver>`                  | Node version (default: `24.22.1`)                                                 |
 | `--node-only`                           | Install only the private Node runtime under `--prefix`; no system package changes |
+| `--runtime-only`                        | Install Node and CLI without Gateway checks, service refresh, or onboarding       |
 | `--json`                                | Emit NDJSON events                                                                |
 | `--onboard`                             | Run `openclaw onboard` after install                                              |
 | `--no-onboard`                          | Skip onboarding (default)                                                         |
@@ -415,11 +521,15 @@ With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix
 ### Flow (install.ps1)
 
 <Steps>
-  <Step title="Ensure PowerShell + Windows environment">
+  <Step title="Check PowerShell and Windows">
+    <a id="ensure-powershell-windows-environment" />
+    <a id="ensure-powershell-%2B-windows-environment" />
     Requires PowerShell 5+.
   </Step>
-  <Step title="Ensure a supported Node.js runtime">
-    If missing, attempts install via winget, then Chocolatey, then Scoop. If those methods are unavailable, fail, or leave an unsupported runtime, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
+  <Step title="Install a supported Node.js runtime">
+    <a id="ensure-a-supported-nodejs-runtime-1" />
+    <a id="ensure-a-supported-node-js-runtime-1" />
+    If missing, attempts install via winget, then Chocolatey, then Scoop. If those methods are unavailable, fail, or leave an unsupported runtime, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.22.1+ and Node 26.12.1+ are supported; Node 22, 23, and 25 are unsupported.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using the selected `-Tag`, launched from a writable installer temp directory so shells opened in protected folders such as `C:\` still work

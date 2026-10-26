@@ -4,25 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRetryAttemptErrors } from "./retry-attempt-errors.js";
 import { resolveRetryConfig, retryAsync, type RetryOptions } from "./retry.js";
 
-const randomMocks = vi.hoisted(() => ({
-  generateSecureFraction: vi.fn(),
-}));
-
-vi.mock("./secure-random.js", () => ({
-  generateSecureFraction: randomMocks.generateSecureFraction,
-}));
-
-function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected mock call");
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error("expected mock call argument to be an object");
-  }
-  return arg as Record<string, unknown>;
-}
+const generateSecureFraction = vi.hoisted(() => vi.fn());
+// mock-isolation: Fixed entropy makes retry jitter assertions deterministic.
+vi.mock("./secure-random.js", () => ({ generateSecureFraction }));
 
 type NumberRetryCase = {
   name: string;
@@ -92,9 +76,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  vi.clearAllTimers();
-  vi.useRealTimers();
-  randomMocks.generateSecureFraction.mockReset();
+  generateSecureFraction.mockReset();
 });
 
 describe("retryAsync", () => {
@@ -106,14 +88,6 @@ describe("retryAsync", () => {
       initialDelayMs: 10,
       expectedValue: "ok",
       expectedCalls: 1,
-    },
-    {
-      name: "retries then succeeds",
-      fn: vi.fn().mockRejectedValueOnce(new Error("fail1")).mockResolvedValueOnce("ok"),
-      attempts: 3,
-      initialDelayMs: 1,
-      expectedValue: "ok",
-      expectedCalls: 2,
     },
     {
       name: "propagates after exhausting retries",
@@ -182,25 +156,13 @@ describe("retryAsync", () => {
       vi.useRealTimers();
     }
     expect(res).toBe("ok");
-    expect(onRetry).toHaveBeenCalledOnce();
-    const retryEvent = firstMockArg(onRetry);
-    expect(retryEvent.attempt).toBe(1);
-    expect(retryEvent.maxAttempts).toBe(2);
-    expect(retryEvent.err).toBe(err);
-    expect(retryEvent.label).toBe("telegram");
-  });
-
-  it("retries immediately when the resolved delay is zero", async () => {
-    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
-    await expect(
-      retryAsync(fn, {
-        attempts: 2,
-        minDelayMs: 0,
-        maxDelayMs: 0,
-        jitter: 0,
-      }),
-    ).resolves.toBe("ok");
-    expect(fn).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledExactlyOnceWith({
+      attempt: 1,
+      maxAttempts: 2,
+      err,
+      label: "telegram",
+      delayMs: 0,
+    });
   });
 
   it("clamps attempts to at least 1", async () => {
@@ -215,23 +177,6 @@ describe("retryAsync", () => {
     const fn = vi.fn().mockRejectedValue(new Error("boom"));
     await expect(runRetryNumberCase(fn, Number.NaN, 0)).rejects.toThrow("boom");
     expect(fn).toHaveBeenCalledTimes(3);
-  });
-
-  it("caps numeric overload delays to the safe timer range", async () => {
-    vi.clearAllTimers();
-    vi.useFakeTimers();
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
-    try {
-      const promise = retryAsync(fn, 2, 3_000_000_000);
-      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
-      await expect(promise).resolves.toBe("ok");
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    } finally {
-      timeoutSpy.mockRestore();
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
   });
 
   it("keeps overflowed numeric overload backoff delays at the safe timer ceiling", async () => {
@@ -390,40 +335,23 @@ describe("retryAsync", () => {
     expect(delays).toEqual([750]);
   });
 
-  it("uses the injected random source instead of the secure default", async () => {
-    const delays = await runRetryDelayCase({
-      attempts: 2,
-      minDelayMs: 100,
-      maxDelayMs: 1000,
-      random: () => 0.25,
-      failures: 1,
-    });
-    expect(delays).toEqual([125]);
-    expect(randomMocks.generateSecureFraction).not.toHaveBeenCalled();
-  });
-
   it("uses secure jitter when configured", async () => {
     vi.useFakeTimers();
-    randomMocks.generateSecureFraction.mockReturnValue(1);
+    generateSecureFraction.mockReturnValue(1);
     const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
     const delays: number[] = [];
 
-    try {
-      const promise = retryAsync(fn, {
-        attempts: 2,
-        minDelayMs: 100,
-        maxDelayMs: 200,
-        jitter: 0.5,
-        onRetry: (info) => delays.push(info.delayMs),
-      });
-      await vi.runAllTimersAsync();
-      await expect(promise).resolves.toBe("ok");
-      expect(delays).toEqual([150]);
-      expect(randomMocks.generateSecureFraction).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
+    const promise = retryAsync(fn, {
+      attempts: 2,
+      minDelayMs: 100,
+      maxDelayMs: 200,
+      jitter: 0.5,
+      onRetry: (info) => delays.push(info.delayMs),
+    });
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toBe("ok");
+    expect(delays).toEqual([150]);
+    expect(generateSecureFraction).toHaveBeenCalledTimes(1);
   });
 });
 

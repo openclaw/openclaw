@@ -1,8 +1,7 @@
-// Application-owned browser push subscription lifecycle.
 import { isIosBrowserPlatform } from "../lib/browser-platform.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
 import type {
   WebPushCapabilityAction,
   WebPushCapabilityPatch,
@@ -11,26 +10,23 @@ import type {
   WebPushSubscriptionState,
 } from "./web-push.runtime.ts";
 
-export type WebPushSnapshot = {
+export type WebPushSnapshot = WebPushAccess & {
   supported: boolean;
   permission: NotificationPermission | "install-required" | "unsupported";
   subscription: WebPushSubscriptionState;
   loading: boolean;
+  read?: Promise<unknown>;
+  command?: Promise<void>;
   error?: string | null;
   preferences?: WebPushPreferencesResult | null;
 };
 
-export type WebPushCapability = {
-  readonly snapshot: WebPushSnapshot;
-  subscribe: (listener: () => void) => () => void;
-  run: (action: WebPushCapabilityAction) => Promise<void>;
-  dispose: () => void;
-};
+export type WebPushCapability = ReturnType<typeof createWebPushCapability>;
 
 export function createWebPushCapability(
   gateway: ApplicationGateway,
   options: { connectionBootstrap?: ConnectionBootstrapCoordinator } = {},
-): WebPushCapability {
+) {
   const nav = globalThis.navigator;
   const ios = isIosBrowserPlatform();
   // SAFETY: iOS Safari's non-standard standalone flag is optional and read-only.
@@ -40,54 +36,69 @@ export function createWebPushCapability(
     "serviceWorker" in nav &&
     "PushManager" in globalThis &&
     "Notification" in globalThis;
+  let owner: WebPushCapabilityRuntime | undefined;
   const snapshot: WebPushSnapshot = {
     supported,
+    ...readWebPushAccess(gateway.snapshot),
     permission: installed
       ? supported
         ? Notification.permission
         : "unsupported"
       : "install-required",
     subscription: "unknown",
-    loading: false,
+    get loading() {
+      return owner?.pending ?? false;
+    },
   };
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
 
   const publish = (patch: WebPushCapabilityPatch) => {
     Object.assign(snapshot, patch);
-    for (const listener of listeners) {
-      listener();
-    }
+    render?.();
   };
-  const runtime: Promise<WebPushCapabilityRuntime | null> | null = snapshot.supported
-    ? import("./web-push.runtime.ts")
-        .then(({ createWebPushCapabilityRuntime }) =>
-          createWebPushCapabilityRuntime({
+  const stopGateway = gateway.subscribe((next) => {
+    const access = readWebPushAccess(next);
+    if (
+      access.canManage !== snapshot.canManage ||
+      access.canReadPreferences !== snapshot.canReadPreferences
+    ) {
+      publish(access);
+    }
+  });
+  const initialization = supported
+    ? import("./web-push.runtime.ts").then(
+        ({ createWebPushCapabilityRuntime }) =>
+          (owner = createWebPushCapabilityRuntime({
             gateway,
             publish,
             connectionBootstrap: options.connectionBootstrap,
-          }),
-        )
-        .catch((error: unknown) => {
-          publish({
-            supported: false,
-            permission: "unsupported",
-            subscription: "unknown",
-            preferences: null,
-            error: formatUiError(error),
-          });
-          return null;
-        })
-    : null;
+          })),
+      )
+    : undefined;
+  const runtime = initialization?.catch(() => {
+    publish({
+      supported: false,
+      permission: "unsupported",
+      subscription: "unknown",
+      preferences: null,
+      read: initialization,
+    });
+    return null;
+  });
   return {
     snapshot,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+    subscribe(listener: () => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
     },
-    run: (action) => (runtime ? runtime.then((owner) => owner?.run(action)) : Promise.resolve()),
-    dispose() {
-      void runtime?.then((owner) => owner?.dispose());
-      listeners.clear();
+    run: (action: WebPushCapabilityAction) =>
+      runtime ? runtime.then((runtimeOwner) => runtimeOwner?.run(action)) : Promise.resolve(),
+    dispose(this: void) {
+      stopGateway();
+      void runtime?.then((runtimeOwner) => runtimeOwner?.dispose());
+      render = undefined;
     },
   };
 }

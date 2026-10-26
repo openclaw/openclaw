@@ -1,6 +1,4 @@
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -36,7 +34,6 @@ const currentSchedule = {
 } as const;
 suite.define(() => {
   it("retires stale update prompts after a completed checkout refresh", async () => {
-    const proofDir = createControlUiE2eArtifactDir("update-stale-git-refresh");
     await suite.withPage(
       {
         locale: "en-US",
@@ -46,11 +43,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "update.status": {
-              sentinel: null,
-              schedule: staleSchedule,
-              updateAvailable,
-            },
+            "update.status": { sentinel: null, schedule: staleSchedule, updateAvailable },
           },
           operatorScopes: ["operator.read", "operator.admin"],
           updateAvailable,
@@ -63,42 +56,21 @@ suite.define(() => {
         });
         await gateway.deferNext("update.status");
         await page.locator('a[href="/settings/updates"]').click();
-        await waitForControlUiRoute(page, {
-          pathname: "/settings/updates",
-          routeId: "updates",
-        });
+        await waitForControlUiRoute(page, { pathname: "/settings/updates", routeId: "updates" });
         await gateway.waitForRequest("update.status");
         const staleStatus = page.locator(".settings-status", { hasText: "12 commits behind" });
         await page.locator(".settings-status", { hasText: "Checking for updates…" }).waitFor();
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(proofDir, "01-checking-update-status.png"),
-        });
-        const refreshRequest = (await gateway.getRequests("update.status")).at(-1);
-        const refreshCheckoutRequested =
-          typeof refreshRequest?.params === "object" &&
-          refreshRequest.params !== null &&
-          "refreshCheckout" in refreshRequest.params &&
-          refreshRequest.params.refreshCheckout === true;
-        expect(refreshCheckoutRequested).toBe(true);
-        await gateway.resolveDeferred("update.status", {
-          sentinel: null,
-          schedule: currentSchedule,
-          updateAvailable,
-        });
+        expect(
+          await gateway.getRequests("update.status", { refreshCheckout: true }),
+        ).not.toHaveLength(0);
+        const refreshedStatus = { sentinel: null, schedule: currentSchedule, updateAvailable };
+        await gateway.setMethodResponse("update.status", refreshedStatus);
+        await gateway.resolveDeferred("update.status", refreshedStatus);
         await page.getByText("Up to date", { exact: true }).waitFor();
+        await page
+          .locator(".settings-status", { hasText: "Checking for updates…" })
+          .waitFor({ state: "hidden" });
         expect(await staleStatus.count()).toBe(0);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(proofDir, "02-current-after-refresh.png"),
-        });
-
-        console.info("stale Git update refresh proof", {
-          refreshCheckoutRequested,
-          refreshedStatus: currentSchedule.install.git.status,
-          staleTargetRetainedByGateway: currentSchedule.target.commitsBehind === 12,
-          staleAvailabilityTextCount: await staleStatus.count(),
-        });
       },
     );
   });

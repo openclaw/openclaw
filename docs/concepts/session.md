@@ -11,12 +11,31 @@ OpenClaw routes every inbound message to a **session** based on where it came
 from: DMs, group chats, cron jobs, etc. All session state is owned by the
 **gateway**; UI clients query the gateway for session data.
 
+Session lists reconcile invalidated metadata before returning rows. If a native
+session changes ownership during a list read, that row uses the
+configured model metadata while other sessions remain available. Native metadata
+is refreshed when that row is next invalidated; an unchanged list read does not
+retry it.
+
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
+
+For turn ownership, queueing, stopping, and lifecycle mutation rules, see
+[Session controller](/concepts/session-controller).
 
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
+
+Delivered command exchanges from the shared dispatcher are conversation history
+too. OpenClaw appends the user's command and delivered reply as ordinary
+user/assistant messages. Native menus and command acknowledgements on Discord
+and Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
+Later turns and chat history can read these exchanges.
+Login, pairing, and sensitive `/config set` or `/debug set` values are redacted before storage.
+`/new` and `/reset` put their confirmation exchange in the new session; they do not
+rewrite the old session. `/btw` and `/side` stay ephemeral, and message edits or
+deletions do not rewrite earlier transcript rows.
 
 ## How messages are routed
 
@@ -28,12 +47,66 @@ DM channels, with group activity and background work flowing into it — see
 | Cron jobs       | Fresh session per run         |
 | Webhooks        | Isolated per hook             |
 
+Native catalog source IDs, Matrix room and thread IDs, and Signal group IDs are
+case-sensitive: IDs that differ only by case identify different conversations.
+
 With `session.scope: "global"`, the selected agent still owns its session.
 The shared key `global` does not merge different agents' conversations:
 commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
 Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
+Renaming, pinning, or editing session metadata retains the existing message
+preview without rereading the transcript. New messages, transcript replacements,
+completed transcript repairs, and cold-storage restoration refresh previews; changes to model selection
+or fallback state refresh the relevant model facts.
+When `sessions.list` requests `includeLastMessage`, rows can also include
+`lastAssistantMessage` with the latest visible assistant text and its timestamp.
+This field uses the same bounded recent transcript window as other previews;
+it is absent when no timestamped assistant text is available in that window.
+The general `lastMessagePreview` can still contain a user message.
+Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
+the selected conversation. Another agent's active turn and queued messages are
+preserved even when the agents use the same session key.
+
+## Creators and assigned owners
+
+New delegated sessions and automations retain the verified human who initiated
+the work as their creator. This is normal behavior; no Labs switch is required.
+The assigned owner remains separate: reassignment alone does not transfer
+creator rights for sharing, public-link management, archive, or restore. Existing
+creator/admin authorization rules still apply. Existing records are not
+retroactively reassigned.
+
+A selected tool user supplies execution authority, not evidence that they
+initiated the task. Autonomous work without a retained human stays
+agent/system-created. Creator attribution affects discovery, creator controls,
+and the personal-profile fallback when no human owner is assigned; it does not
+change the executing agent, model/tool permissions, or required sandbox identity.
+
+Public links still require explicit publication. Attribution does not publish
+sessions automatically, change their anonymous read-only view, or expose private
+isolation metadata. Content exclusions, revocation, and future-message behavior
+are unchanged.
+
+Attribution is stored alongside the original actor inside the existing creation
+record. Original actor fields and database schema versions are unchanged. A
+compatible older runtime ignores the additional attribution and uses its original
+creator rules; it retains the record when writing sessions, so returning to this
+runtime restores the attributed creator without changing sandbox identity.
+Retain the ordinary [rollback safeguards](/install/updating/rollback-and-recovery):
+this feature does not make unrelated database-format changes readable by older
+binaries. An incompatible binary remains blocked rather than silently restoring
+an old backup and losing later writes.
+
+## Automatic session names
+
+Interactive chat sessions without an explicit name generate a topic title in the
+background when the Gateway dispatches their message. Naming starts alongside
+worktree and reply preparation; it does not wait for the agent’s first progress
+event and does not block the turn. The name appears when the title model finishes.
+If the title request fails while overlapping a turn, it retries once after that
+turn settles. Explicit names and manual renames are preserved.
 
 ## DM isolation
 
@@ -70,7 +143,7 @@ those conversations stay isolated even under `main`. See
 
 <Tip>
 If the same person contacts you from multiple channels, use
-`session.identityLinks` to map their identities to one canonical peer id so
+`session.identityLinks` to map their identities to one shared peer id so
 they share a session.
 </Tip>
 
@@ -122,13 +195,19 @@ context, and replies to the source room remain unchanged.
 
 ## Incognito sessions
 
-Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread disappears when the Gateway restarts, does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
+Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Finishing a turn does not close the thread, and activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
+
+<Warning>
+On the Codex runtime, the Codex app-server still writes each message you submit to its own diagnostic log database (`logs_2.sqlite` in that agent's Codex home), including messages in incognito threads. Codex currently offers no setting that turns this log off, so OpenClaw cannot prevent it. For conversations that must not reach disk, use an agent on the OpenClaw runtime.
+</Warning>
+
+Delegated work uses its native execution and completion owners. Live subagent activity and completion delivery remain available.
 
 The `incognito-` segment is reserved for dashboard, subagent, and hidden internal session keys; `openclaw doctor --fix` renames any colliding legacy durable keys.
 
-Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send, diagnostic logging remains unchanged, and OpenClaw still records content-free audit metadata such as HMAC references.
+Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send. Incognito content is excluded from ordinary Gateway output, delivery and response diagnostics, WebSocket event previews, raw-stream, cache-trace, and Anthropic payload logs. Live replies remain available, and OpenClaw still records operational diagnostics and content-free audit metadata such as HMAC references.
 
-On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This protects them from storage and other gateway-mediated users, not from the gateway owner or process operator, who can always observe live sessions.
+On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This limits persisted session history and access through other gateway-mediated sessions; it does not make all tool, upload, approval, or configured diagnostic data ephemeral. The gateway owner or process operator can still observe live sessions.
 
 ## Remember across conversations
 
@@ -153,6 +232,10 @@ and runtime details.
 
 ## Session lifecycle
 
+Independent sessions can initialize their first turns concurrently. Requests for
+the same session remain ordered; parent forks and resets retain their shared-state
+coordination.
+
 Sessions are reused until you reset them manually or opt into an automatic reset policy:
 
 - **No automatic reset** (default `mode: "none"`) - sessions keep the same
@@ -163,12 +246,13 @@ Sessions are reused until you reset them manually or opt into an automatic reset
   metadata writes.
 - **Idle reset** (`mode: "idle"`) - opt into a new session after `session.reset.idleMinutes`
   of inactivity. Idle freshness is based on the last real user/channel
-  interaction, so heartbeat, cron, and exec system events do not keep the
-  session alive.
+  interaction, including browser Talk consults. Heartbeat, cron, and exec system
+  events do not keep the session alive.
 - **Manual reset** - type `/new` or `/reset` in chat. `/new <model>` also
   switches the model.
 
 When both daily and idle resets are configured, whichever expires first wins.
+The message that triggers an automatic reset continues in the new conversation.
 Heartbeat, cron, exec, and other system-event turns may write session metadata,
 but those writes do not extend daily or idle reset freshness. When a reset
 rolls the session, queued system-event notices for the old session are
@@ -200,32 +284,180 @@ Opt into automatic resets globally, then override them per chat type or channel:
 
 ## Gateway restart recovery
 
-When a Gateway restart interrupts an active turn, OpenClaw tries to continue
-the existing session automatically. Three attempts that fail to start a backend
-turn exhaust the recovery budget. Once a real backend turn starts,
+An incoming message does not trigger a delivery-uncertainty notice while the
+previous reply is still being sent or its delivery result is being recorded.
+If a send settles with an unknown outcome, or restart recovery finds an
+unconfirmed final reply, OpenClaw retains the warning for the next turn on the
+same route.
+
+When a Gateway restart interrupts an admitted turn, including one still waiting
+in the queue or preparing to execute, OpenClaw tries to continue the existing
+session automatically. Shutdown records recovery before canceling queued work.
+If restart cancellation finishes a collected run before that record commits,
+shutdown retains its recovery custody unless the session or run owner changes.
+Backend-owned restart aborts retain the same custody even when the caller's
+abort signal stays open and lifecycle persistence finishes after reply cleanup.
+Recovery follows the interrupted turn, including later turns in a child whose
+original subagent task has finished. Channel, group, cross-agent, and nested
+parents do not exclude those turns. Active subagent tasks retain their registry
+recovery owner; independent child turns use the ordinary session recovery cycle
+and can be resumed with `sessions.recover`.
+Delegated recovery rechecks the recorded parent identity and current cross-agent
+spawn policy. If that authority cannot be restored, the child records why it
+stopped, and its unchanged parent receives a local transcript notice. A deleted,
+archived, or replaced parent cannot receive that notice. A fresh authenticated
+message to the child from the TUI, Control UI, or a channel carries its own authority.
+Startup discovery excludes archived sessions, recovery tombstones, and rows without
+recovery obligations before preparing targets. Completed sessions with pending
+recovery obligations still settle. Other skipped candidates are logged with a
+reason, including when other sessions recover.
+The final pass over exhausted recovery targets prepares one session at a time,
+so a restart cannot flood database queues with background preparation. A failure
+for one target is logged without abandoning the remaining targets.
+Three attempts that fail to start a backend turn exhaust the recovery budget.
+Once a real backend turn starts,
 the budget refreshes, so a later Gateway restart does not consume the old allowance.
 Accepting, queueing, or preparing a resume request alone does not refresh it.
 CLI backends that do not report turn acceptance refresh the budget only after
 observed assistant output or tool activity; silent startup does not refresh it.
 
+For a freshly created session's eligible local, idle, restart-safe initial turn,
+`sessions.create` commits the session first, then commits the input transcript and
+restart claim together before acknowledging a started run. Failure or a crash
+between those commits can leave the created session with no retained input bytes.
+After the input commits, restart recovery retains that turn even if the client
+never receives the acknowledgment. Queued input, hook-dependent input, worker
+placement, idle `chat.send`, and retries of existing durable input retain their
+existing admission and recovery behavior. A restart
+during managed worktree preparation resumes the accepted turn and prepares or
+reuses its local worktree before starting the agent. Recovery does not inherit
+the original caller's permission to run worktree setup scripts.
+
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
+Explicit nonfinal message-tool progress (`final: false`) recorded by the same run
+does not close that turn; recovery preserves the visible update without sending it
+back to the model as an answer.
+A restart-aborted embedded response retains its already-streamed text as an
+interrupted assistant message when the transcript writer is still available.
+Unfinished tool calls in that response are discarded before persistence.
 A completed reply or a later user message closes that turn to replay.
+
+For authenticated operator turns, recovery revalidates the original caller's
+recorded permissions against current profile, role, access-grant, and device
+policy. A Control UI administrator can therefore continue authorized automation
+work after a restart without losing `operator.admin`. Recovery cannot gain scopes
+the original caller lacked, and revocation still stops the recovered run.
+Callers with `operator.sessions.write` can resume their own interrupted turns
+without needing the broader `operator.write` scope. If the original grant has
+been revoked, recovery records an interruption and a notice in the session
+instead of repeatedly retrying the same input. Send a new authenticated message
+after access is restored to continue.
+If the recorded source no longer matches the session or interrupted input,
+recovery also retires that stale input with one local interruption notice.
+The incoming message can then continue normally without resetting the session.
+Pending replies, harness completions, and independent runs retain their existing
+recovery protection.
+Older interrupted turns without a recorded authorization source remain restricted;
+send a fresh authenticated message to continue privileged work. Session ownership
+or a saved display name never grants recovery permissions.
+
+The reserved device-less backend helper connection is a local control-plane path,
+not a durable operator identity. Use an identified operator client, such as the
+TUI or Control UI, for user-owned work that must resume automatically. Paired
+clients must retain the original device-token generation: reissuing that token
+under a different authentication path can prevent recovery even for the same user.
+
+This also covers public parent turns started by subagent completion or pause notices.
+An interrupted public parent turn continues independently of later child completions, and a
+retry of the same notice joins that recovery instead of starting the turn again.
+Parents still waiting after yielding to children remain owned by their child batch.
+Once a parent turn has its own recorded operator source, recovery revalidates that
+source against current policy using the parent's exact session claim. Changes to
+the original child batch, including settlement or cleanup, do not cancel that
+admitted parent input. Older requester inputs without a recorded operator source
+still reconcile their original completion cohort. If that source cannot be
+restored, recovery records one terminal interruption in the transcript and settles
+the old input. Later startup passes and restarts skip it. The session remains
+available for a fresh authenticated message; recovery never substitutes system
+authority. Temporary startup, binding, or access-policy availability failures keep
+their recovery claims and retry.
+
+Private completion turns retain their original accepted input with the child batch
+that owns its processing receipt. After a restart, that owner replays the same input
+once and records its result; ordinary recovery does not start a second copy.
+While automatic recovery owns that input, `sessions.recover` reports that it is
+already queued. Restoring the private turn still requires current sender and parent
+authority. An unavailable source produces a recorded interruption instead.
+
+If a delegated turn's sender authority cannot be reconstructed and no pending
+reply, harness completion, or independent run remains owed, recovery ends only that
+turn. One local interruption notice and terminal source receipt prevent replay;
+the same session and transcript remain available for a fresh authenticated message.
+Recovery does not send the notice to an external channel. Saved delegation alone
+does not authorize replay after restart.
+
+Turns with remaining custody retain the existing recovery block. **Resume** in
+WebChat supplies current operator authority to continue the saved task in the same
+session after its outstanding delivery settles.
+
+If a child finishes before its restart-tombstoned parent can accept the result, it stays
+pending with the child owner. The parent receives one local notice that the result
+is waiting for **Resume**. The pending completion does not reserve the parent's
+message queue or grant permission to restart it. After an authorized in-place
+Resume, the same completion can continue once. Resetting or replacing the parent
+does not deliver the old child's result into the replacement session.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
 recovery starts, they follow the session's normal message queue policy. You do
 not need to resend a message just because recovery is waiting for capacity.
-Stopping or replacing the session still cancels pending work.
+Stopping or replacing the session still cancels pending work. A recovery resend
+stopped during preparation stays canceled and is not replayed on the next startup.
 
-If automatic recovery is exhausted, the transcript remains available. Use
-**Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
-to start a replacement session.
+If subagent recovery changes session-protection facts while an incoming turn is
+being prepared, reply initialization refreshes those facts and retries within its
+existing bounded retry budget. Exhaustion reports an error asking you to retry
+the message. A saved user message that has not reached the model remains user
+input when a subagent announcement continues the session; it is not demoted to
+background context.
+
+If automatic recovery is exhausted, the unfinished task and transcript remain
+available. Use **Resume** in WebChat to continue with the same session identity,
+workspace, participants, and child sessions. Resume saves the new operator input
+and clears the restart tombstone together before starting work. It rechecks your
+current permissions; previous approvals and delegated authority are not restored.
+Completed tool results stay in the transcript, and uncertain effects must be
+inspected before being repeated. Existing restart-safe tool restrictions still
+apply to the continuation.
+
+A session already recovered into a replacement opens that replacement instead;
+resuming both could duplicate the task. If a CLI runtime cannot enforce the
+required restart-safe tools, WebChat offers **Resume in new session** instead.
+For SQLite-backed sessions, this copies the complete transcript, including large
+histories, without loading the entire conversation into memory. The replacement
+and its recovery link are saved together; a failed copy leaves the original
+session available for retry.
+An unresolved final-delivery record must
+settle before an in-place continuation, and missing transcripts require repair.
+In other channels, `/new` or `/reset` still starts a replacement session.
+
+A canonical Main session archived specifically by restart recovery can also be
+reset. Reset retains its physical session identity and transcript while starting a
+fresh model context; it does not replay the interrupted task. Other archived
+sessions must be restored before reset.
 
 ## Where state lives
 
 - **Runtime session rows and transcripts:** `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` by default
 - **Archived transcript files:** `~/.openclaw/agents/<agentId>/sessions/`
 - **Legacy row migration source:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
+
+Archive discovery uses the selected store, recorded transcript paths, and agent
+directories. The pre-agent `~/.openclaw/sessions/` directory is no longer an
+implicit fallback; explicitly configured paths still work.
+
+State directories reached through symlinks are supported on SQLite and PostgreSQL,
+including session deletion, transcript archiving, and retained cron history reads.
 
 The session rows in the per-agent SQLite database keep separate lifecycle
 timestamps:
@@ -273,10 +505,37 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
-Ordinary entry writes also arm background maintenance at the next age boundary,
+Ordinary entry writes and reply initialization arm background maintenance at the next age boundary,
 with a periodic recheck every 30 minutes while the store remains open. This lets
-eligible sessions age out without further traffic. Writes that cannot change
-age or count maintenance outcomes skip candidate scans.
+eligible sessions age out without further traffic. Reply preparation does not wait
+for unrelated retention cleanup. Writes that cannot change
+age or count maintenance outcomes skip candidate scans. Automatic planning reads
+only retention and protection metadata before entering the foreground write queue;
+age candidates must reach their enabled retention phase's cutoff, and maintenance
+looks up only active-session ancestry unless runtime identities need the full
+session-key inventory. Cap selection retains only the required oldest eligible entries.
+Automatic capacity cleanup yields the writer between batches of up to 64 entries;
+explicit cleanup remains exhaustive. The writer rechecks the selected rows and their protection before applying
+changes, so concurrent updates are reconsidered instead of overwritten. Activity
+on unrelated sessions and protection that has ended do not invalidate the plan.
+When an over-cap pass finds only durably protected entries, ordinary activity does not
+repeat that futile plan. New eligible entries, restored identities, lost entry
+protection, and changed policy reconsider it. Delivery cleanup resumes idle maintenance
+when it releases the session's remaining recovery protection. Temporary protection from active
+sessions, runtime providers, or recent activity does not suppress planning on
+ordinary writes; age deadlines and the periodic recheck still resume idle cleanup.
+While entry pressure still requires cleanup, capacity maintenance revisits entries
+once temporary write protection ends, without requiring another entry write.
+Releasing acquired session work also wakes idle capacity maintenance; overlapping
+work keeps the session protected until its final admission releases.
+If writes invalidate an automatic maintenance plan, its replacement waits for
+the scheduled retry delay (one second, then two seconds). Further writes coalesce
+into that retry without postponing it indefinitely. Three
+consecutive invalidations pause automatic retries and log the cause; a new
+entry write can schedule another attempt. `warn` mode skips automatic reclamation.
+Certified transcript backfill and usage-cache writes retain a protected-only no-op result
+while entry-change publications and scoped write receipts remain current. Unknown writes
+still invalidate that result and wait for the existing quiet window before replanning.
 
 `maxEntries` defaults to 5000 unarchived session rows. Archived rows do not consume
 the cap. Existing explicit limits remain unchanged.
@@ -290,12 +549,12 @@ therefore remain above the cap when protected rows alone exceed it.
 Root sessions and sessions auto-parented to the agent's Home root can be pinned;
 genuine child sessions and subagent runs reject pin requests. Persistent child
 sessions retain their sidebar nesting; subagent runs appear in transcript activity
-and Tasks views. Existing child pins disappear and no longer protect the session
+and session transcripts. Existing child pins disappear and no longer protect the session
 from maintenance.
 
-Gateway model-run probe sessions are short-lived by default. Rows matching
+Gateway model-run check sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
-pressure-gated: it only removes stale probe rows when session-entry
+pressure-gated: it only removes stale check rows when session-entry
 maintenance/cap pressure is reached, and runs before the broader stale-entry
 age cutoff and entry cap. Normal direct, group, thread, cron, hook, heartbeat,
 ACP, and sub-agent sessions do not inherit this 24h retention.
@@ -330,13 +589,56 @@ rechecks physical usage before considering another deletion. A measurement
 failure stops the sweep.
 
 Background disk-budget checks run at most every 30 minutes on entry writes.
+Unchanged entry patches do not schedule a check.
 Delete and reset operations can request a check sooner, but repeated requests
 coalesce to at most one forced check per minute per store. If cleanup exhausts
 eligible history and the store remains over budget, automatic checks back off
 for 30 minutes and log one warning until the pressure clears or the budget changes.
+Per-agent legacy store locators and their canonical SQLite paths share this queue
+and backoff. Custom aggregate store locators retain their own maintenance scope.
+After a pass reclaims nothing, the next automatic check first inspects eligible
+data without reserving the foreground writer; protected-only pressure does not
+repeat archive pruning or checkpoints. Manual cleanup still runs immediately.
 The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
 and deleting unneeded sessions. Checks resume on subsequent activity;
 `openclaw sessions cleanup --enforce` remains available immediately.
+
+Cleanup first tries to truncate the WAL without waiting for readers. If readers
+prevent truncation, a complete PASSIVE checkpoint is sufficient: frames relevant
+to cleanup must have reached the main database, even if the WAL file remains allocated.
+Retained WAL bytes still count toward the physical budget. Successful cleanup
+logs one outcome with the before/after bytes and removal counts.
+Archive pruning measures physical usage outside the foreground writer queue.
+Each deletion and page-reclamation unit retains its own admission, with a yield
+between reclamation units. Archive retention also selects candidates outside the
+writer queue, then rechecks and removes at most 16 rows per admission, yielding
+between batches while retaining the same 256-row selection limit per pass.
+Concurrent shrinkage can prune one additional oldest derived archive before the
+next measurement ends the sweep; canonical retention and deletion eligibility
+checks are unchanged.
+
+An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
+archives and history instead of deleting more data behind the blocked checkpoint.
+The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before and
+after, and the checkpoint outcome. Manual cleanup and subsequent throttled
+automatic checks retry the checkpoint: an earlier blocked observation cannot
+suspend cleanup indefinitely when another connection completes a checkpoint
+without publishing its result. Cleanup still requires the checkpoint owner to
+record completion after the pending cleanup work. Newer frames from concurrent
+writes do not erase that completion. Each SQLite cleanup
+deletion or vacuum commit requires a new completion before further pruning, so a
+reader pinning those changes still defers cleanup. Ordering uses monotonic time;
+elapsed time, a budget change, or a system clock correction cannot release the gate.
+Normal periodic checkpointing continues. A published completion allows the next
+activity to retry immediately; otherwise the normal check interval applies.
+
+Look for `session history disk budget deferred until a completed WAL checkpoint is observed`
+in the Gateway log. Its checkpoint fields include bounded operation names for
+explicitly tracked readers, connection and thread IDs, and open-transaction flags.
+Collecting these facts does not keep connections open or change worker retirement.
+They do not prove which connection holds the blocking SQLite read mark. Raw native
+statements outside explicit reader tracking, other workers, and other processes
+can remain unidentified. No transcript contents, SQL text, or bound values are included.
 
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with
@@ -369,5 +671,4 @@ Preview any maintenance run with `openclaw sessions cleanup --dry-run`.
 - [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) - per-agent sandbox and tool restrictions, including session visibility
 - [Transcript hygiene](/reference/transcript-hygiene) - in-memory, provider-specific transcript sanitization applied before a run
 - [Command queue](/concepts/queue)
-- [Background Tasks](/automation/tasks) - how detached work creates task records with session references
 - [Channel routing](/channels/channel-routing) - how inbound messages are routed to sessions

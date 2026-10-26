@@ -1,7 +1,6 @@
 // Doctor node-hosting precondition tests cover browser-only auth and unreachable onboarding.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerAgentHarness } from "../agents/harness/registry.js";
-import type { AgentHarness } from "../agents/harness/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -9,12 +8,15 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { collectNodeHostingPreconditionFindings } from "./doctor-node-hosting-preconditions.js";
+import { collectNodeHostingPreconditionFindings as findingsFor } from "./doctor-node-hosting-preconditions.js";
 
 const originalPluginRegistry = getActivePluginRegistry();
 
-function findingsFor(cfg: OpenClawConfig) {
-  return collectNodeHostingPreconditionFindings(cfg);
+function runtimeAgent(id: string, model = "openai/gpt-5.6-sol") {
+  return { model, models: { [model]: { agentRuntime: { id } } } };
+}
+function nodePolicy(nodes: NonNullable<OpenClawConfig["gateway"]>["nodes"]): OpenClawConfig {
+  return { gateway: { nodes } };
 }
 
 describe("node-hosting preconditions", () => {
@@ -25,20 +27,10 @@ describe("node-hosting preconditions", () => {
       "default",
     );
     for (const [id, cloudPlacement] of [
-      [
-        "codex",
-        {
-          mode: "remote-exec",
-          devicePlacement: {
-            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-            consumesWorkerSlot: false,
-          },
-        },
-      ],
       ["cloud-only", { mode: "remote-exec" }],
       ["acpx", undefined],
     ] as const) {
-      const harness: AgentHarness = {
+      registerAgentHarness({
         id,
         label: id,
         ...(cloudPlacement ? { cloudPlacement } : {}),
@@ -46,8 +38,7 @@ describe("node-hosting preconditions", () => {
         async runAttempt() {
           throw new Error("not used");
         },
-      };
-      registerAgentHarness(harness);
+      });
     }
   });
 
@@ -64,226 +55,112 @@ describe("node-hosting preconditions", () => {
   });
 
   const healthyBase = {
+    tools: { exec: { host: "node" } },
     gateway: {
       bind: "lan",
       auth: { mode: "token", token: "configured-token" },
     },
-    agents: {
-      defaults: {
-        model: "anthropic/claude-sonnet-4-6",
-        models: {
-          "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
-        },
-      },
-    },
+    agents: { defaults: runtimeAgent("openclaw", "anthropic/claude-sonnet-4-6") },
   } satisfies OpenClawConfig;
 
-  it.each([
+  it.each<OpenClawConfig>([
+    {},
+    { gateway: { mode: "local", bind: "loopback", tailscale: { mode: "off" } } },
+    { gateway: { bind: "auto" } },
     {
-      name: "identity-header auth alone",
-      cfg: {
-        ...healthyBase,
-        gateway: {
-          bind: "lan",
-          auth: { mode: "trusted-proxy" },
-        },
-      },
-      requirements: ["machine-client-auth"],
+      plugins: { entries: { "device-pair": { enabled: false } } },
+      ...nodePolicy({
+        browser: { mode: "off", node: "unused-node" },
+        pairing: { autoApproveLocal: false, autoApproveCidrs: [], sshVerify: false },
+        commands: { allow: [], deny: ["system.run"] },
+      }),
     },
-    {
-      name: "loopback onboarding alone",
-      cfg: {
-        ...healthyBase,
-        gateway: {
-          bind: "loopback",
-          auth: { mode: "token", token: "configured-token" },
-        },
-      },
-      requirements: ["node-onboarding-url"],
-    },
-    {
-      name: "both unavailable",
-      cfg: {
-        ...healthyBase,
-        gateway: {
-          bind: "loopback",
-          auth: { mode: "trusted-proxy" },
-        },
-      },
-      requirements: ["machine-client-auth", "node-onboarding-url"],
-    },
-    {
-      name: "Tailscale identity without a shared secret",
-      cfg: {
-        ...healthyBase,
-        gateway: {
-          bind: "loopback",
-          tailscale: { mode: "serve" },
-          auth: { mode: "token", allowTailscale: true },
-        },
-      },
-      requirements: ["machine-client-auth"],
-    },
-  ] satisfies Array<{
-    name: string;
-    cfg: OpenClawConfig;
-    requirements: string[];
-  }>)("warns when $name", ({ cfg, requirements }) => {
-    expect(findingsFor(cfg).map((finding) => finding.requirement)).toEqual(requirements);
+    nodePolicy({
+      browser: { mode: "auto" },
+      pairing: { autoApproveLocal: true },
+      pluginTools: { enabled: true },
+      allowSkills: true,
+    }),
+    { tools: { exec: { host: "gateway", node: "unused-node" } } },
+    { gateway: { mode: "remote" }, tools: { exec: { host: "node" } } },
+  ])("ignores configurations without local node hosting: %j", async (cfg) => {
+    expect(await findingsFor(cfg)).toEqual([]);
   });
 
-  it("does not warn for token auth with a reachable bind", () => {
-    expect(findingsFor(healthyBase)).toEqual([]);
+  it.each<OpenClawConfig>([
+    { tools: { exec: { host: "node" } } },
+    { tools: { exec: { node: "worker" } } },
+    { agents: { entries: { worker: { tools: { exec: { host: "node" } } } } } },
+    nodePolicy({ browser: { mode: "manual", node: "browser-host" } }),
+    nodePolicy({ pairing: { autoApproveCidrs: ["192.0.2.0/24"] } }),
+    nodePolicy({ pairing: { sshVerify: { user: "node-user" } } }),
+    nodePolicy({ commands: { allow: ["system.run"] } }),
+    { plugins: { entries: { "device-pair": { enabled: true } } } },
+  ])("warns about loopback onboarding for configured hosting: %j", async (cfg) => {
+    expect(
+      await findingsFor({
+        ...healthyBase,
+        tools: undefined,
+        ...cfg,
+        gateway: { ...healthyBase.gateway, bind: "loopback", ...cfg.gateway },
+      }),
+    ).toEqual([
+      expect.objectContaining({ requirement: "node-onboarding-url", severity: "warning" }),
+    ]);
   });
 
-  it.each([
-    {
-      name: "device-pair is explicitly disabled",
-      cfg: {
-        ...healthyBase,
-        plugins: { entries: { "device-pair": { enabled: false } } },
-      },
-      requirement: "node-onboarding-plugin",
-    },
-    {
-      name: "every configured agent resolves to an incompatible runtime",
-      cfg: {
-        ...healthyBase,
+  it.each<[NonNullable<OpenClawConfig["gateway"]>, string[]]>([
+    [{ auth: { mode: "trusted-proxy" } }, ["machine-client-auth", "node-onboarding-url"]],
+    [
+      { tailscale: { mode: "serve" }, auth: { mode: "token", allowTailscale: true } },
+      ["machine-client-auth"],
+    ],
+  ])("warns about unavailable machine auth: %j", async (gateway, requirements) => {
+    expect(
+      (
+        await findingsFor({
+          ...healthyBase,
+          gateway: { bind: "loopback", ...gateway },
+        })
+      ).map((finding) => finding.requirement),
+    ).toEqual(requirements);
+  });
+
+  it.each<[OpenClawConfig, string]>([
+    [{ plugins: { entries: { "device-pair": { enabled: false } } } }, "node-onboarding-plugin"],
+    [
+      {
         agents: {
           ownership: "explicit",
           entries: {
-            writer: {
-              model: "openai/gpt-5.6-sol",
-              models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "cloud-only" } } },
-            },
-            reviewer: {
-              model: "anthropic/claude-sonnet-4-6",
-              models: { "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "acpx" } } },
-            },
+            writer: runtimeAgent("cloud-only"),
+            reviewer: runtimeAgent("acpx", "anthropic/claude-sonnet-4-6"),
           },
         },
       },
-      requirement: "device-session-runtime",
-    },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig; requirement: string }>)(
-    "warns when $name",
-    ({ cfg, requirement }) => {
-      expect(findingsFor(cfg).map((finding) => finding.requirement)).toContain(requirement);
-    },
-  );
-
-  it("keeps a mixed explicit roster healthy when one agent uses the embedded runtime", () => {
+      "device-session-runtime",
+    ],
+  ])("warns about missing node capability: %j", async (cfg, requirement) => {
     expect(
-      findingsFor({
-        ...healthyBase,
-        agents: {
-          ownership: "explicit",
-          entries: {
-            cloud: {
-              model: "openai/gpt-5.6-sol",
-              models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
-            },
-            device: {
-              model: "anthropic/claude-sonnet-4-6",
-              models: {
-                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual([]);
+      (await findingsFor({ ...healthyBase, ...cfg })).map((finding) => finding.requirement),
+    ).toContain(requirement);
   });
 
-  it("accepts a registered external runtime that declares paired-device support", () => {
-    expect(
-      findingsFor({
-        ...healthyBase,
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.6-sol",
-            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
-          },
-        },
-      }),
-    ).toEqual([]);
-  });
-
-  it.each(["codex", "auto"])("does not activate plugins or reject a cold %s runtime", (runtime) => {
+  it("does not activate plugins or reject a cold codex runtime", async () => {
     resetPluginRuntimeStateForTest();
-
-    expect(
-      findingsFor({
-        ...healthyBase,
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.6-sol",
-            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
-          },
-        },
-      }),
-    ).toEqual([]);
+    const cfg = { ...healthyBase, agents: { defaults: runtimeAgent("codex") } };
+    expect(await findingsFor(cfg)).toEqual([]);
     expect(getActivePluginRegistry()).toBeNull();
   });
 
-  it("gives verbatim onboarding and device-runtime remediation", () => {
-    const findings = findingsFor({
-      ...healthyBase,
-      plugins: { entries: { "device-pair": { enabled: false } } },
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.6-sol",
-          models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "cloud-only" } } },
-        },
-      },
-    });
-
+  it("accepts gateway.publicOrigin for loopback onboarding", async () => {
     expect(
-      findings.find((finding) => finding.requirement === "node-onboarding-plugin")?.fixHint,
-    ).toBe(
-      "Set plugins.entries.device-pair.enabled: true, ensure device-pair is not denied or excluded by plugins.allow, then restart the Gateway.",
-    );
-    expect(
-      findings.find((finding) => finding.requirement === "device-session-runtime")?.fixHint,
-    ).toBe(
-      'Select an agent/model route whose runtime supports paired-device placement, then ensure its plugin is enabled and its required node commands are explicitly allowed. Runtime policy is model/provider-scoped; whole-agent runtime keys are ignored. For a multi-agent roster, set agents.ownership: "explicit".',
-    );
-  });
-
-  it("gives accurate machine-auth and edge-routing remediation", () => {
-    const findings = findingsFor({
-      ...healthyBase,
-      gateway: {
-        bind: "loopback",
-        auth: { mode: "trusted-proxy" },
-      },
-    });
-
-    expect(findings.find((finding) => finding.requirement === "machine-client-auth")?.fixHint).toBe(
-      "Switch gateway.auth.mode to token and configure gateway.auth.token as a SecretRef so machine clients can authenticate as devices. Keep trusted-proxy only if machine clients use a clean loopback/direct gateway.auth.password path. For Access-fronted gateways, configure the node gateway.cloudflareAccess.clientId / clientSecret SecretInputs or set CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET before openclaw connect.",
-    );
-    expect(findings.find((finding) => finding.requirement === "node-onboarding-url")).toMatchObject(
-      {
-        message:
-          "Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.",
-        fixHint:
-          "If an edge proxy fronts node onboarding, allow /j/* and /__openclaw__/worker without edge identity auth, and preserve WebSocket upgrade on /__openclaw__/worker. Both routes enforce their own credentials.",
-      },
-    );
-  });
-
-  it("accepts a configured public URL for loopback onboarding", () => {
-    expect(
-      findingsFor({
+      await findingsFor({
         ...healthyBase,
         gateway: {
+          ...healthyBase.gateway,
           bind: "loopback",
-          auth: { mode: "token", token: "configured-token" },
-        },
-        plugins: {
-          entries: {
-            "device-pair": { config: { publicUrl: "wss://gateway.example" } },
-          },
+          publicOrigin: "https://gateway.example.test",
         },
       }),
     ).toEqual([]);

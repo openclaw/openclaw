@@ -1,9 +1,11 @@
+import type { AppliedConfigRefresh } from "./applied-refresh.ts";
 import { resetConfigPendingChanges } from "./config-draft-model.ts";
 import { loadConfig, type ConfigWriteCoordinator } from "./config-gateway-operations.ts";
 import type { RuntimeConfigState } from "./config-state-model.ts";
 
 export function createConfigDraftDiscard(context: {
   state: RuntimeConfigState;
+  currentDraftRevision: () => number;
   invalidateFieldDiscards: () => void;
   hasInFlightWrite: () => boolean;
   holdAutoSave: () => (resume: boolean) => void;
@@ -12,39 +14,44 @@ export function createConfigDraftDiscard(context: {
   run: <T>(task: () => Promise<T>, loadKey?: "config" | "schema") => Promise<T>;
   mutate: (task: () => void) => void;
   clearDraftConnection: () => void;
-  cancelAppliedRefresh: () => void;
-  reconcileAppliedRefresh: () => void;
+  appliedRefresh: AppliedConfigRefresh;
 }): ConfigWriteCoordinator["discardDraft"] {
   const { state } = context;
-  const drainWrites = async () => {
+  const drainWrites = async (isCurrent: () => boolean) => {
     const release = context.holdAutoSave();
     try {
       if (context.hasInFlightWrite()) {
         await context.drainPendingWrites();
       }
     } finally {
-      release(false);
+      release(!isCurrent());
     }
-    context.clearPatches();
   };
   return async (options) => {
+    const revision = context.currentDraftRevision();
+    const isCurrent = () => context.currentDraftRevision() === revision;
     context.invalidateFieldDiscards();
     // Settle pending writes first (with trailing saves suppressed — the
     // draft is being thrown away, not re-written) so a late ack cannot
     // re-dirty or trail-write over the discard.
-    await drainWrites();
+    await drainWrites(isCurrent);
+    // Discard owns the intent present at the click, not edits accepted while it waits.
+    if (!isCurrent()) {
+      return;
+    }
+    context.clearPatches();
     if (state.connected && state.client) {
-      context.cancelAppliedRefresh();
+      context.appliedRefresh.cancel();
       try {
         const loaded = await context.run(
-          () => loadConfig(state, { discardPendingChanges: true }),
+          () => loadConfig(state, { discardPendingChanges: true }, isCurrent),
           "config",
         );
         if (loaded) {
           context.clearDraftConnection();
         }
       } finally {
-        context.reconcileAppliedRefresh();
+        context.appliedRefresh.reconcile();
       }
       return;
     }

@@ -1,102 +1,113 @@
 /* @vitest-environment jsdom */
-import type { ReactiveControllerHost } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  registerControlUiReloadGuard as registerGuard,
+  canReloadControlUiDocument,
+} from "../../app/document-reload-guard.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import { ChatStateController } from "./chat-state-controller.ts";
+import { OFFLINE_QUEUE_STORAGE_ERROR as storageError } from "./chat-send-support.ts";
+import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import {
-  beginQueuedMessageEdit,
-  QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
-} from "./queued-message-edit.ts";
+import { QUEUED_MESSAGE_EDIT_CONFLICT_ERROR as conflict } from "./queued-message-edit.ts";
+
+const recovery = vi.hoisted(() => ({
+  review: vi.fn<() => Promise<boolean>>(),
+  toast: vi.fn<(options: { onAction?: () => void; message: string }) => boolean>(() => true),
+}));
+const historyError = "History could not be refreshed";
+const noop = () => {};
+vi.mock("./components/private-composer-recovery-dialog.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./components/private-composer-recovery-dialog.tsx")>()),
+  reviewPrivateComposerDraft: recovery.review,
+}));
+vi.mock("../../lib/toast.ts", () => ({ showToast: recovery.toast }));
 
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
+  recovery.review.mockReset();
+  recovery.toast.mockClear();
 });
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+afterEach(() => vi.unstubAllGlobals());
 
-function createControllerHost(): ReactiveControllerHost {
-  return {
-    addController: () => undefined,
-    removeController: () => undefined,
-    requestUpdate: () => undefined,
-    updateComplete: Promise.resolve(true),
-  };
+function createControllerFixture(withClient = false) {
+  const controller = createChatState<ChatPageHost>({ awaitDomCommit: async () => true });
+  onTestFinished(controller.dispose);
+  const state = createPageState(createInitializationContext(), controller.createRenderLifecycle(), {
+    dispatchEvent: () => true,
+  });
+  if (withClient) {
+    state.client = createTestGatewayClient(async () => ({}));
+  }
+  controller.attach(state);
+  return { state, dispose: controller.dispose };
 }
 
-describe("queued edit page callbacks", () => {
-  it.each([
-    [QUEUED_MESSAGE_EDIT_CONFLICT_ERROR, QUEUED_MESSAGE_EDIT_CONFLICT_ERROR, null, null],
-    [
-      QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
-      OFFLINE_QUEUE_STORAGE_ERROR,
-      null,
-      OFFLINE_QUEUE_STORAGE_ERROR,
-    ],
-    [
-      "History could not be refreshed",
-      OFFLINE_QUEUE_STORAGE_ERROR,
-      "History could not be refreshed",
-      OFFLINE_QUEUE_STORAGE_ERROR,
-    ],
-  ] as const)(
-    "clears only resolved edit feedback when opening a queued editor (%s, %s)",
-    (lastError, chatError, expectedLastError, expectedChatError) => {
-      const controller = new ChatStateController<ChatPageHost>(createControllerHost());
-      controller.hostConnected();
-      const state = createPageState(
-        createInitializationContext(),
-        controller.createRenderLifecycle(),
-        {
-          dispatchEvent: () => true,
-          querySelector: () => null,
-        },
-      );
-      controller.attach(state);
-      try {
-        const queued = enqueueChatMessage(state, "queued original")!;
-        state.chatMessage = "separate composer draft";
-        state.lastError = lastError;
-        state.chatError = chatError;
+it.each([
+  [conflict, conflict, null, null],
+  [conflict, storageError, null, storageError],
+  [historyError, storageError, historyError, storageError],
+] as const)(
+  "clears only edit feedback (%s, %s)",
+  (lastError, chatError, expectedLastError, expectedChatError) => {
+    const { state, dispose } = createControllerFixture(true);
+    const queued = enqueueChatMessage(state, "queued")!;
+    Object.assign(state, { chatMessage: "draft", lastError, chatError });
 
-        state.editQueuedChatMessage(queued.id);
+    state.editQueuedChatMessage(queued.id);
 
-        expect(state.chatQueuedEdit?.draftText).toBe("queued original");
-        expect(state.chatMessage).toBe("separate composer draft");
-        expect(state.lastError).toBe(expectedLastError);
-        expect(state.chatError).toBe(expectedChatError);
-      } finally {
-        controller.hostDisconnected();
-      }
-    },
-  );
-
-  it("releases a queued correction reload hold when its pane is disposed", () => {
-    const controller = new ChatStateController<ChatPageHost>(createControllerHost());
-    controller.hostConnected();
-    const state = createPageState(
-      createInitializationContext(),
-      controller.createRenderLifecycle(),
-      {
-        dispatchEvent: () => true,
-        querySelector: () => null,
-      },
-    );
-    controller.attach(state);
-    try {
-      const queued = enqueueChatMessage(state, "queued original")!;
-      expect(beginQueuedMessageEdit(state, queued.id)).toBe("started");
-      expect(canReloadControlUiDocument()).toBe(false);
-    } finally {
-      controller.hostDisconnected();
-    }
+    expect(state).toMatchObject({ chatQueuedEdit: { draftText: "queued" }, chatMessage: "draft" });
+    state.chatMessage = "";
+    expect(canReloadControlUiDocument()).toBe(false);
+    expect(state).toMatchObject({ lastError: expectedLastError, chatError: expectedChatError });
+    dispose();
     expect(canReloadControlUiDocument()).toBe(true);
-  });
-});
+  },
+);
+
+it.each(["edit", "guard", "discard", "fallback"] as const)(
+  "keeps private-draft discard scoped during %s",
+  async (scenario) => {
+    const { state, dispose } = createControllerFixture();
+    const sessionKey = "agent:main:dashboard:incognito-private-review";
+    state.sessionKey = sessionKey;
+    state.chatMessage = "captured private text";
+    if (scenario === "fallback") {
+      const fallback = { message: "fallback", attachments: [] };
+      storeChatComposerMemoryFallback(state, { sessionKey }, fallback);
+      state.chatMessage = "";
+    }
+    const pending = createDeferred<boolean>();
+    recovery.review.mockReturnValue(pending.promise);
+    const reload = vi.fn(async () => canReloadControlUiDocument());
+    state.captureComposerRecoveryReload = () => reload;
+    const releaseOther = scenario === "guard" ? registerGuard(() => false, noop) : noop;
+    onTestFinished(releaseOther);
+    expect(canReloadControlUiDocument(true)).toBe(false);
+    recovery.toast.mock.lastCall?.[0].onAction?.();
+    expect(recovery.review).toHaveBeenCalledOnce();
+    if (scenario === "edit") {
+      state.handleChatDraftChange("newer private edit", []);
+    }
+    pending.resolve(true);
+    await pending.promise;
+    expect(state.chatMessage).toBe(scenario === "edit" ? "newer private edit" : "");
+    if (scenario === "fallback") {
+      expect(state.chatComposerFallbackByScope).toEqual({});
+    }
+    const outcomes = await Promise.all(reload.mock.results.map(({ value }) => value));
+    expect(outcomes).toEqual(scenario === "edit" ? [] : [scenario !== "guard"]);
+    if (scenario === "edit") {
+      expect(recovery.toast.mock.lastCall?.[0].message).toContain("draft changed");
+    }
+    releaseOther();
+    dispose();
+    expect(canReloadControlUiDocument()).toBe(true);
+  },
+);

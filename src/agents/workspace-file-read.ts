@@ -1,12 +1,11 @@
-/** Boundary-safe workspace reads and the source identity of the bytes returned. */
-import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import path from "node:path";
+import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { retryAsync } from "../infra/retry.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
+import type { WorkspaceBootstrapFile } from "./workspace-bootstrap-policy.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
@@ -17,53 +16,62 @@ const TRANSIENT_WORKSPACE_READ_CODES = new Set(["EAGAIN", "EWOULDBLOCK", "EINTR"
 const TRANSIENT_WORKSPACE_READ_ERRNOS = new Set([-11, -4]);
 const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
 
+export function retryWorkspaceRead<T>(operation: () => Promise<T>): Promise<T> {
+  return retryAsync(operation, {
+    attempts: 3,
+    minDelayMs: 50,
+    maxDelayMs: 50,
+    shouldRetry: (error) => isTransientWorkspaceReadError(error),
+  });
+}
+
 type WorkspaceFileSourceIdentity = readonly [
   canonicalPath: string,
   stat: FileIdentityStat | undefined,
-  exactIdentity: string,
   workspaceRelativePath?: string,
 ];
 // Loader-owned records retain the pinned-open identity through final session filtering.
 const workspaceFileSourceIdentities = new WeakMap<object, WorkspaceFileSourceIdentity>();
 
-/**
- * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime/ctime identity.
- */
 type WorkspaceGuardedReadResult =
   | { ok: true; content: string; sourceIdentity: WorkspaceFileSourceIdentity }
   | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
 
-function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): string {
+function workspaceFileIdentity(
+  stat: syncFs.Stats,
+  identity: FileIdentityStat,
+  canonicalPath: string,
+): string {
   // ctimeMs catches in-place edits that restore mtime (sync/restore/editor tooling);
   // matches the freshness pattern in assistant-avatar-cache.ts and plugin-registry-snapshot.ts.
-  return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  return `${canonicalPath}|${identity.dev}:${identity.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
-export function setWorkspaceFileSourceIdentity(
-  file: object,
-  sourceIdentity: WorkspaceFileSourceIdentity,
-): void {
-  workspaceFileSourceIdentities.set(file, sourceIdentity);
-}
-
-function getWorkspaceFileSourceIdentity(file: object): WorkspaceFileSourceIdentity | undefined {
-  return workspaceFileSourceIdentities.get(file);
+export function createLoadedWorkspaceBootstrapFile(
+  name: WorkspaceBootstrapFile["name"],
+  filePath: string,
+  loaded: Extract<WorkspaceGuardedReadResult, { ok: true }>,
+  personalUser?: true,
+): WorkspaceBootstrapFile {
+  const file: WorkspaceBootstrapFile = {
+    name,
+    path: filePath,
+    content: loaded.content,
+    missing: false,
+    ...(personalUser ? { personalUser } : {}),
+  };
+  workspaceFileSourceIdentities.set(file, loaded.sourceIdentity);
+  return file;
 }
 
 /** Remote source recorded by the successful read, unavailable on hook-created copies. */
 export function getWorkspaceFileSourceRelativePath(file: object): string | undefined {
-  return getWorkspaceFileSourceIdentity(file)?.[3];
-}
-
-export function workspaceFileSourceIdentitiesMatch(left: object, right: object): boolean {
-  const leftIdentity = getWorkspaceFileSourceIdentity(left);
-  const rightIdentity = getWorkspaceFileSourceIdentity(right);
-  return leftIdentity?.[2] === rightIdentity?.[2];
+  return workspaceFileSourceIdentities.get(file)?.[2];
 }
 
 export function workspaceFilesShareSourceIdentity(left: object, right: object): boolean {
-  const leftIdentity = getWorkspaceFileSourceIdentity(left);
-  const rightIdentity = getWorkspaceFileSourceIdentity(right);
+  const leftIdentity = workspaceFileSourceIdentities.get(left);
+  const rightIdentity = workspaceFileSourceIdentities.get(right);
   if (!leftIdentity || !rightIdentity) {
     return false;
   }
@@ -79,6 +87,8 @@ export async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
   useCache?: boolean;
+  /** Identity-scoped files must not alias another profile through parent symlinks. */
+  rejectAliases?: boolean;
 }): Promise<WorkspaceGuardedReadResult> {
   const access = getAgentWorkspaceAccess(params.workspaceDir);
   if (access) {
@@ -99,18 +109,16 @@ export async function readWorkspaceFileWithGuards(params: {
         },
       );
       assertCurrent();
+      if (params.rejectAliases && workspaceRelativePath !== filePath.replaceAll(path.sep, "/")) {
+        return { ok: false, reason: "validation" };
+      }
       if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
         throw new RangeError(`Workspace bootstrap file exceeds its read bound: ${filePath}`);
       }
       return {
         ok: true,
         content: data.toString("utf-8"),
-        sourceIdentity: [
-          canonicalPath,
-          undefined,
-          `${canonicalPath}:${createHash("sha256").update(data).digest("hex")}:${JSON.stringify(workspaceRelativePath)}`,
-          workspaceRelativePath,
-        ],
+        sourceIdentity: [canonicalPath, undefined, workspaceRelativePath],
       };
     } catch (error) {
       assertCurrent();
@@ -127,57 +135,44 @@ export async function readWorkspaceFileWithGuards(params: {
     // each attempt uses a fresh fd (retrying readFileSync on the same fd could
     // return truncated content after a partial read); the inode-identity guard
     // in openRootFile still protects against a swapped file between attempts.
-    return await retryAsync(
-      async () => {
-        const opened = await openRootFile({
-          absolutePath: params.filePath,
-          rootPath: params.workspaceDir,
-          boundaryLabel: "workspace root",
-          symlinks: "follow-parents-within-root",
-        });
-        if (!opened.ok) {
-          // Boundary resolution can report transient IO as "validation", while
-          // pinned open failures use "io". Classify the underlying error so
-          // deterministic path and validation failures still return unchanged.
-          if (isTransientWorkspaceReadError(opened.error)) {
-            throw opened.error;
-          }
-          return opened;
+    return await retryWorkspaceRead(async () => {
+      const opened = await openRootFile({
+        absolutePath: params.filePath,
+        rootPath: params.workspaceDir,
+        boundaryLabel: "workspace root",
+        symlinks: params.rejectAliases ? "reject" : "follow-parents-within-root",
+      });
+      if (!opened.ok) {
+        // Boundary resolution can report transient IO as "validation", while
+        // pinned open failures use "io". Classify the underlying error so
+        // deterministic path and validation failures still return unchanged.
+        if (isTransientWorkspaceReadError(opened.error)) {
+          throw opened.error;
         }
+        return opened;
+      }
 
-        const identity = workspaceFileIdentity(opened.stat, opened.path);
-        const sourceIdentity = [opened.path, opened.stat, identity] as const;
-        const cached =
-          params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
-        if (cached !== undefined) {
-          syncFs.closeSync(opened.fd);
-          return { ok: true, content: cached, sourceIdentity };
+      const identity = workspaceFileIdentity(opened.stat, opened.exactIdentity, opened.path);
+      const sourceIdentity = [opened.path, opened.exactIdentity] as const;
+      const cached =
+        params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
+      try {
+        const content = cached ?? (await readWorkspaceBootstrapFile(opened.fd));
+        if (cached === undefined && params.useCache !== false) {
+          writeWorkspaceFileCache({ filePath: opened.path, content, identity });
         }
-
-        try {
-          const content = await readWorkspaceBootstrapFile(opened.fd);
-          if (params.useCache !== false) {
-            writeWorkspaceFileCache({ filePath: opened.path, content, identity });
-          }
-          return { ok: true, content, sourceIdentity };
-        } finally {
-          syncFs.closeSync(opened.fd);
-        }
-      },
-      {
-        attempts: 3,
-        minDelayMs: 50,
-        maxDelayMs: 50,
-        shouldRetry: (err) => isTransientWorkspaceReadError(err),
-      },
-    );
+        return { ok: true, content, sourceIdentity };
+      } finally {
+        syncFs.closeSync(opened.fd);
+      }
+    });
   } catch (error) {
     // Non-transient read failure, or transient retries exhausted.
     return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
   }
 }
 
-export function isTransientWorkspaceReadError(error: unknown): boolean {
+function isTransientWorkspaceReadError(error: unknown): boolean {
   if (error && typeof error === "object") {
     if (
       "code" in error &&

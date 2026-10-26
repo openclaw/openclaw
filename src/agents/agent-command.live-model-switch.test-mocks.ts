@@ -1,4 +1,30 @@
 import { vi } from "vitest";
+import type { SessionEntry } from "../config/sessions/types.js";
+
+export function createTestSessionResolver(state: {
+  sessionEntryMock: SessionEntry | undefined;
+  resolvedSessionKeyMock: string | undefined;
+  storePathMock: string | undefined;
+}) {
+  return () => {
+    const sessionEntry: SessionEntry = state.sessionEntryMock ?? {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    return {
+      sessionId: "session-1",
+      sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
+      sessionEntry,
+      sessionAgentId: "default",
+      storePath: state.storePathMock,
+      isNewSession: false,
+      persistedThinking:
+        typeof sessionEntry.thinkingLevel === "string" ? sessionEntry.thinkingLevel : undefined,
+      persistedVerbose: undefined,
+    };
+  };
+}
 
 export function createTestThinkingPolicy(state: {
   isThinkingLevelSupportedMock: (args: unknown) => boolean;
@@ -51,7 +77,7 @@ export function createTestAgentScope(
       params.resolveAutoFallbackPrimaryProbeMock(args),
     resolveAgentConfig: () => undefined,
     resolveAgentDir: () => "/tmp/agent",
-    resolveAgentEffectiveModelPrimary: (cfg: unknown) => {
+    resolveNativeModelPrimary: (cfg: unknown) => {
       const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
         ?.agents?.defaults?.model;
       return typeof raw === "string" ? raw : raw?.primary;

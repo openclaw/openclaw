@@ -1,8 +1,21 @@
 import { z } from "zod";
+import {
+  NODE_PERMISSION_STATES,
+  type NodePermissionRequest,
+} from "../../../packages/gateway-protocol/src/node-permissions.js";
+import { registerListener } from "../../../src/shared/listeners.js";
+import { listen } from "../lib/reactive/listener.ts";
+import {
+  nativeChromeExtensionSetupActionSchema,
+  nativeChromeExtensionSetupResultSchema,
+  type NativeChromeExtensionSetupAction,
+  type NativeChromeExtensionSetupResult,
+} from "./native-chrome-setup.ts";
 
 const permissionIdSchema = z.enum([
   "notifications",
   "accessibility",
+  "eventPosting",
   "screenRecording",
   "microphone",
   "camera",
@@ -14,6 +27,11 @@ const permissionIdSchema = z.enum([
   "photos",
 ]);
 type PermissionId = z.infer<typeof permissionIdSchema>;
+const permissionEntrySchema = z.object({
+  id: permissionIdSchema,
+  status: z.enum(["granted", "denied", "notDetermined", "unavailable", "limited"]),
+  state: z.enum(NODE_PERMISSION_STATES).optional(),
+});
 
 const namedDevicesSchema = z.array(z.object({ id: z.string(), name: z.string() }));
 const nativeDeviceSettingsSnapshotSchema = z.object({
@@ -26,6 +44,7 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
     appVersion: z.string(), // CFBundleShortVersionString
     appBuild: z.string(), // CFBundleVersion
     profileName: z.string().nullable(), // OPENCLAW_PROFILE name when active, else null
+    nodeId: z.string().optional(),
   }),
   app: z
     .object({
@@ -38,6 +57,8 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
       iconAnimationsEnabled: z.boolean().optional(),
       launchAtLogin: z.boolean().optional(),
       launchAtLoginAvailable: z.boolean().optional(), // false for named profiles or unbundled apps
+      keepGatewayRunning: z.boolean().optional(),
+      keepGatewayRunningAvailable: z.boolean().optional(), // local Gateway is managed by the app
       quickChatEnabled: z.boolean().optional(),
       quickChatShortcut: z.string().nullable().optional(), // human display string; null when unset
       debugPaneEnabled: z.boolean().optional(),
@@ -48,6 +69,7 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
       canvasEnabled: z.boolean().optional(),
       cameraEnabled: z.boolean().optional(),
       keepAwakeEnabled: z.boolean().optional(),
+      aiSetupAvailable: z.boolean().optional(),
       healthSummaryAvailable: z.boolean().optional(),
       healthSummaryEnabled: z.boolean().optional(),
       computerControlEnabled: z.boolean().optional(),
@@ -68,40 +90,49 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
     .optional(),
   browser: z
     .object({
-      importAvailable: z.boolean(), // local mode with Chrome-family cookies available
-      cookieSync: z.object({
-        available: z.boolean(), // remote mode with an external CLI
-        enabled: z.boolean(),
-        domains: z.array(z.string()),
-        targetProfile: z.string(),
-        state: z.enum(["off", "idle", "running", "error"]),
-        detail: z.string().nullable(), // human status line
-      }),
+      chromeSetupActions: z.array(nativeChromeExtensionSetupActionSchema).optional(),
+      importAvailable: z.boolean().optional(), // local import action; discovery waits for user intent
+      cookieSync: z
+        .object({
+          available: z.boolean(), // remote mode with an external CLI
+          enabled: z.boolean(),
+          domains: z.array(z.string()),
+          targetProfile: z.string(),
+          state: z.enum(["off", "idle", "running", "error"]),
+          detail: z.string().nullable(), // human status line
+        })
+        .optional(),
     })
     .optional(),
-  permissions: z.object({
-    // Native hosts publish unique ids in display order; never sort or deduplicate them.
-    entries: z
-      .array(
-        z.object({
+  permissions: z
+    .object({
+      entries: z.array(
+        permissionEntrySchema.extend({
           // v2026.9.5 native apps publish this retired entry. Accept only on input
           // until the minimum supported app omits it; never expose a command or row.
-          id: permissionIdSchema.or(z.literal("automation")),
-          status: z.enum(["granted", "denied", "notDetermined", "unavailable", "limited"]),
+          id: permissionIdSchema.exclude(["eventPosting"]).or(z.literal("automation")),
         }),
-      )
-      .refine((entries) => new Set(entries.map((entry) => entry.id)).size === entries.length)
-      .transform((entries) =>
-        entries.flatMap(({ id, status }) => (id === "automation" ? [] : [{ id, status }])),
       ),
-    location: z
-      .object({
-        mode: z.enum(["off", "whileUsing", "always"]),
-        precise: z.boolean(),
-        preciseEditable: z.boolean().optional(),
-      })
-      .optional(),
-  }),
+      additionalEntries: z.array(permissionEntrySchema).optional(),
+      location: z
+        .object({
+          mode: z.enum(["off", "whileUsing", "always"]),
+          precise: z.boolean(),
+          preciseEditable: z.boolean().optional(),
+        })
+        .optional(),
+    })
+    .refine(({ entries, additionalEntries = [] }) => {
+      const allEntries = [...entries, ...additionalEntries];
+      return new Set(allEntries.map((entry) => entry.id)).size === allEntries.length;
+    })
+    .transform(({ entries, additionalEntries = [], ...permissions }) => ({
+      ...permissions,
+      // Preserve native display order while keeping the released closed entry vocabulary on the wire.
+      entries: [...entries, ...additionalEntries].flatMap(({ id, status, state }) =>
+        id === "automation" ? [] : [{ id, status, ...(state ? { state } : {}) }],
+      ),
+    })),
   voice: z.object({
     supported: z.boolean(), // voice wake runtime available on this device
     wakeEnabled: z.boolean(), // AppState.swabbleEnabled
@@ -149,6 +180,7 @@ export type SettingKey =
   | "app.iconStyle"
   | "app.iconAnimationsEnabled"
   | "app.launchAtLogin"
+  | "app.keepGatewayRunning"
   | "app.quickChatEnabled"
   | "app.debugPaneEnabled"
   | "capabilities.canvasEnabled"
@@ -184,6 +216,7 @@ export type SettingKey =
   | "updates.automatic";
 
 type NativePanel =
+  | "ai-setup"
   | "quick-chat-shortcut"
   | "microphone-test"
   | "browser-import"
@@ -200,12 +233,14 @@ type NativeDeviceSettingsMessage =
   | { type: "set"; key: SettingKey; value: boolean | string | string[] | null }
   | { type: "request-permission"; id: PermissionId }
   | { type: "open-system-settings"; id: PermissionId }
+  | { type: "resolve-permission"; request: NodePermissionRequest }
   | { type: "open"; panel: NativePanel }
   | { type: "check-for-updates" }
+  | { type: "chrome-extension-setup"; action: NativeChromeExtensionSetupAction }
   | { type: "chrome-extension-status" }
   | { type: "install-chrome-extension" };
 
-const nativeChromeExtensionSetupResultSchema = z.object({
+const legacyChromeInstallResultSchema = z.object({
   nativeHostRegistered: z.boolean(),
   installRequested: z.boolean(),
   // v2026.9.5 Mac apps can load newer Gateway UIs but omit this in setup replies.
@@ -213,23 +248,33 @@ const nativeChromeExtensionSetupResultSchema = z.object({
   installedProfiles: z.number().int().nonnegative().optional(),
   discoveredProfiles: z.number().int().nonnegative(),
 });
-const nativeChromeExtensionStatusResultSchema = nativeChromeExtensionSetupResultSchema.required({
+export type LegacyChromeInstallResult = z.infer<typeof legacyChromeInstallResultSchema>;
+const legacyChromeStatusResultSchema = legacyChromeInstallResultSchema.required({
   installedProfiles: true,
 });
-export type NativeChromeExtensionSetupResult = z.infer<
-  typeof nativeChromeExtensionSetupResultSchema
->;
 
 export type NativeDeviceSettingsCapability = {
   readonly snapshot: NativeDeviceSettingsSnapshot | null;
+  /** First accepted snapshot, or null when this capability retires before one arrives. */
+  readonly initialSnapshot: Promise<NativeDeviceSettingsSnapshot | null>;
   subscribe(listener: (snapshot: NativeDeviceSettingsSnapshot) => void): () => void;
-  set(key: SettingKey, value: boolean | string | string[] | null, onSettled?: () => void): void;
+  /** Settles after reply publication or retirement; edit failures use the callback. */
+  set(
+    key: SettingKey,
+    value: boolean | string | string[] | null,
+    onSettled?: (error?: Error) => void,
+  ): Promise<void>;
   requestPermission(id: PermissionId): void;
   openSystemSettings(id: PermissionId): void;
+  resolvePermission?: (this: void, request: NodePermissionRequest) => Promise<void>;
   openPanel(panel: NativePanel): void;
   checkForUpdates(): void;
-  chromeExtensionStatus(): Promise<NativeChromeExtensionSetupResult>;
-  installChromeExtension(): Promise<NativeChromeExtensionSetupResult>;
+  setupChromeExtension(
+    action: NativeChromeExtensionSetupAction,
+  ): Promise<NativeChromeExtensionSetupResult>;
+  /** Released native contract-1 installation projection; not a second installer. */
+  installChromeExtension?(): Promise<LegacyChromeInstallResult>;
+  chromeExtensionStatus?(): Promise<LegacyChromeInstallResult>;
   refresh(): void;
   dispose(): void;
 };
@@ -239,7 +284,7 @@ type NativeDeviceSettingsWindow = Window & {
   webkit?: {
     messageHandlers?: {
       openclawDeviceSettings?: {
-        postMessage(message: NativeDeviceSettingsMessage): Promise<unknown>;
+        postMessage: (message: NativeDeviceSettingsMessage) => Promise<unknown>;
       };
     };
   };
@@ -257,21 +302,34 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   if (typeof handler?.postMessage !== "function") {
     return null;
   }
-  const post = handler.postMessage.bind(handler);
+  const postMessage = handler.postMessage;
+  const post = postMessage.bind(handler);
   const initial = nativeDeviceSettingsSnapshotSchema.safeParse(
     nativeWindow["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"],
   );
   let snapshot = initial.success ? initial.data : null;
+  const initialSnapshot = Promise.withResolvers<NativeDeviceSettingsSnapshot | null>();
+  if (snapshot) {
+    initialSnapshot.resolve(snapshot);
+  }
   let disposed = false;
+  // Retiring the host releases awaiting presenters without publishing another snapshot.
+  const pendingRequests = new Set<() => void>();
+  const isCurrent = () =>
+    !disposed &&
+    nativeWindow.webkit?.messageHandlers?.openclawDeviceSettings === handler &&
+    handler.postMessage === postMessage;
   const listeners = new Set<(snapshot: NativeDeviceSettingsSnapshot) => void>();
   const acceptSnapshot = (next: NativeDeviceSettingsSnapshot) => {
     if (
-      snapshot?.revision !== undefined &&
-      (next.revision === undefined || next.revision <= snapshot.revision)
+      disposed ||
+      (snapshot?.revision !== undefined &&
+        (next.revision === undefined || next.revision <= snapshot.revision))
     ) {
       return false;
     }
     snapshot = next;
+    initialSnapshot.resolve(next);
     return true;
   };
   const onChange = (event: Event) => {
@@ -284,9 +342,18 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     }
     listeners.forEach((listener) => listener(next.data));
   };
-  const send = async (message: NativeDeviceSettingsMessage, onSettled?: () => void) => {
+  const send = async (
+    message: NativeDeviceSettingsMessage,
+    onSettled?: (error?: Error) => void,
+  ) => {
+    if (disposed) {
+      return;
+    }
+    let failure: Error | undefined;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    pendingRequests.add(resolve);
     try {
-      const reply = await post(message);
+      const reply = await Promise.race([post(message), promise]);
       if (disposed) {
         return;
       }
@@ -298,11 +365,14 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
         acceptSnapshot(result.data);
       }
     } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
       console.warn("Native device settings request failed", error);
+    } finally {
+      pendingRequests.delete(resolve);
     }
     if (!disposed && message.type === "set") {
       // Clear the originating draft before notifying whichever page is now mounted.
-      onSettled?.();
+      onSettled?.(failure);
       const current = snapshot;
       if (current) {
         listeners.forEach((listener) => listener(current));
@@ -311,46 +381,90 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   };
   // System Settings can change permissions while the app is backgrounded.
   const refresh = () => void send({ type: "status" });
-  window.addEventListener(CHANGE_EVENT, onChange);
-  window.addEventListener("focus", refresh);
+  const stops = [listen(window, CHANGE_EVENT, onChange), listen(window, "focus", refresh)];
   refresh();
-  const chromeExtensionRequest = async (
+  const legacyChromeRequest = async (
     type: "chrome-extension-status" | "install-chrome-extension",
   ) => {
-    if (disposed) {
+    if (!isCurrent() || snapshot?.device.platform !== "macos") {
       throw new Error("Native device settings is unavailable");
     }
     const reply = await post({ type });
     const schema =
       type === "chrome-extension-status"
-        ? nativeChromeExtensionStatusResultSchema
-        : nativeChromeExtensionSetupResultSchema;
+        ? legacyChromeStatusResultSchema
+        : legacyChromeInstallResultSchema;
     const result = schema.safeParse(reply);
-    if (disposed || !result.success) {
+    if (!isCurrent() || snapshot?.device.platform !== "macos" || !result.success) {
       throw new Error("Native Chrome setup returned an invalid result");
     }
     return result.data;
   };
+  const resolvePermission = async (request: NodePermissionRequest) => {
+    if (!isCurrent() || snapshot?.device.nodeId !== request.nodeId) {
+      throw new Error("This permission belongs to another device");
+    }
+    // Native revalidates the node identity immediately before requesting access.
+    try {
+      await post({ type: "resolve-permission", request });
+    } finally {
+      if (isCurrent()) {
+        refresh();
+      }
+    }
+  };
   return {
+    initialSnapshot: initialSnapshot.promise,
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    set: (key, value, onSettled) => void send({ type: "set", key, value }, onSettled),
+    subscribe: (listener) => registerListener(listeners, listener),
+    set: (key, value, onSettled) => send({ type: "set", key, value }, onSettled),
     requestPermission: (id) => void send({ type: "request-permission", id }),
     openSystemSettings: (id) => void send({ type: "open-system-settings", id }),
+    get resolvePermission() {
+      return snapshot?.device.nodeId ? resolvePermission : undefined;
+    },
     openPanel: (panel) => void send({ type: "open", panel }),
     checkForUpdates: () => void send({ type: "check-for-updates" }),
-    chromeExtensionStatus: () => chromeExtensionRequest("chrome-extension-status"),
-    installChromeExtension: () => chromeExtensionRequest("install-chrome-extension"),
+    async setupChromeExtension(action) {
+      if (!isCurrent()) {
+        throw new Error("Native device settings is unavailable");
+      }
+      if (!snapshot?.browser?.chromeSetupActions?.includes(action)) {
+        throw new Error("This native host does not advertise that Chrome setup action");
+      }
+      const platform = snapshot.device.platform;
+      const targetPlatform = { macos: "darwin", linux: "linux", windows: "win32", ios: null }[
+        platform
+      ];
+      if (!targetPlatform) {
+        throw new Error("Native Chrome setup is unavailable on this device");
+      }
+      const validatedAction = nativeChromeExtensionSetupActionSchema.parse(action);
+      const reply = await post({ type: "chrome-extension-setup", action: validatedAction });
+      const result = nativeChromeExtensionSetupResultSchema.safeParse(reply);
+      if (
+        !isCurrent() ||
+        !snapshot?.browser?.chromeSetupActions?.includes(action) ||
+        !result.success ||
+        result.data.action !== action ||
+        snapshot.device.platform !== platform ||
+        result.data.target.platform !== targetPlatform
+      ) {
+        throw new Error("Native Chrome setup returned an invalid result");
+      }
+      return result.data;
+    },
+    installChromeExtension: () => legacyChromeRequest("install-chrome-extension"),
+    chromeExtensionStatus: () => legacyChromeRequest("chrome-extension-status"),
     refresh,
     dispose() {
       disposed = true;
-      window.removeEventListener(CHANGE_EVENT, onChange);
-      window.removeEventListener("focus", refresh);
+      initialSnapshot.resolve(null);
+      pendingRequests.forEach((stop) => stop());
+      pendingRequests.clear();
+      stops.forEach((stop) => stop());
       listeners.clear();
     },
   };

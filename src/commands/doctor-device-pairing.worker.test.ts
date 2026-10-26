@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { withClientCredentialStore } from "../infra/client-credential-store.test-support.js";
 import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
 import { seedDeviceAuthToken } from "../infra/device-auth-store.test-support.js";
 import {
@@ -9,10 +10,8 @@ import {
 } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectDevicePairingHealthFindings } from "./doctor-device-pairing.js";
 
@@ -20,27 +19,19 @@ afterEach(() => vi.restoreAllMocks());
 
 it("creates and reads the token inventory off the host, preserving role order and valid rows", async () => {
   await withOpenClawTestState({ label: "doctor-token-inventory" }, async (state) => {
-    const observeSql = () => [
-      ...(["prepare", "exec", "close"] as const).map((method) =>
-        vi.spyOn(DatabaseSync.prototype, method),
-      ),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
-    const coldSql = observeSql();
+    const coldSql = observeMainThreadSql({ includeClose: true });
     try {
       expect(await loadDeviceAuthTokens({ deviceId: "synthetic-device", env: state.env })).toEqual(
         [],
       );
-      for (const spy of coldSql) {
-        expect(spy).not.toHaveBeenCalled();
-      }
+      coldSql.expectIdle();
     } finally {
-      coldSql.forEach((spy) => spy.mockRestore());
+      coldSql.restore();
       await closeOpenClawStateDatabaseAsync();
     }
-    expect((await fs.stat(state.statePath("state", "openclaw.sqlite"))).isFile()).toBe(true);
+    await expect(fs.stat(state.statePath("client", "credentials.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     const operator = seedDeviceAuthToken({
       deviceId: "synthetic-device",
       role: " operator ",
@@ -62,13 +53,15 @@ it("creates and reads the token inventory off the host, preserving role order an
       token: "synthetic-other-token",
       env: state.env,
     });
-    openOpenClawStateDatabase({ env: state.env })
-      .db.prepare(
-        "INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms) VALUES (?, ?, ?, ?, ?)",
-      )
-      .run("synthetic-device", "malformed", "synthetic-malformed-token", "not-json", 1);
+    withClientCredentialStore(state.env, false, (db) =>
+      db
+        .prepare(
+          "INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run("synthetic-device", "malformed", "synthetic-malformed-token", "not-json", 1),
+    );
     await closeOpenClawStateDatabaseAsync();
-    const reopenedSql = observeSql();
+    const reopenedSql = observeMainThreadSql({ includeClose: true });
     try {
       const input = { deviceId: "synthetic-device", env: { ...state.env } };
       const inventory = loadDeviceAuthTokens(input);
@@ -76,12 +69,10 @@ it("creates and reads the token inventory off the host, preserving role order an
       input.env.OPENCLAW_STATE_DIR = state.path("changed-target");
       expect(await inventory).toEqual([node, operator]);
       await closeOpenClawStateDatabaseAsync();
-      for (const spy of reopenedSql) {
-        expect(spy).not.toHaveBeenCalled();
-      }
+      reopenedSql.expectIdle();
       await expect(fs.stat(state.path("changed-target"))).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
-      reopenedSql.forEach((spy) => spy.mockRestore());
+      reopenedSql.restore();
     }
   });
 });

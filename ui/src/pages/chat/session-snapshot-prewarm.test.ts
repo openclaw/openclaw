@@ -4,13 +4,16 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import * as database from "./session-snapshot-database.ts";
-import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
+import {
+  publishSnapshotInvalidation,
+  subscribeSnapshotInvalidation,
+} from "./session-snapshot-invalidation-events.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.runtime.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import * as snapshots from "./session-snapshot-store.ts";
 
-const key = "agent:main:routed";
-const otherKey = "agent:main:other";
+const key = 'scope:["wss://cache.example","account-a"]\u0000agent:main:routed';
+const otherKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:other';
 const stored: ChatSessionSnapshot = {
   messages: [{ role: "assistant", content: "Stored conversation" }],
   sessionId: "session-1",
@@ -37,17 +40,23 @@ afterEach(async () => {
 });
 
 describe("routed transcript prewarm", () => {
-  it("reads normally when no prewarm exists", async () => {
-    await seed();
-    const open = vi.spyOn(indexedDB, "open");
-    expect(await new snapshots.SessionSnapshotStore().read(key)).toEqual(stored);
-    expect(open).toHaveBeenCalledOnce();
+  it("publishes scoped invalidation before database cleanup settles", async () => {
+    const scopePrefix = key.slice(0, key.indexOf("\u0000") + 1);
+    const listener = vi.fn();
+    const unsubscribe = subscribeSnapshotInvalidation(listener);
+    try {
+      const cleanup = clearStoredChatSnapshots(scopePrefix);
+      expect(listener).toHaveBeenCalledWith({ scopePrefix });
+      await cleanup;
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("starts before consumption and reuses the matching read only once", async () => {
     await seed();
     const open = vi.spyOn(indexedDB, "open");
-    prewarmChatSnapshot(key);
+    void prewarmChatSnapshot(key);
     await vi.dynamicImportSettled();
     expect(open).toHaveBeenCalledOnce();
     const reader = new snapshots.SessionSnapshotStore();
@@ -60,6 +69,7 @@ describe("routed transcript prewarm", () => {
   it("reads raw records without validation and rejects malformed prewarm when consumed", async () => {
     await seed();
     const invalid = {
+      projectionVersion: 3,
       savedAt: Date.now(),
       sessionKey: key,
       sessionId: stored.sessionId,
@@ -82,7 +92,7 @@ describe("routed transcript prewarm", () => {
       db.close();
     }
     expect(await database.readStoredChatSnapshotRecord(key)).toEqual(invalid);
-    prewarmChatSnapshot(key);
+    void prewarmChatSnapshot(key);
     const reader = new snapshots.SessionSnapshotStore();
     expect(await reader.read(key)).toBeNull();
     expect(await reader.read(otherKey)).toBeNull();
@@ -91,7 +101,7 @@ describe("routed transcript prewarm", () => {
   it("leaves the prewarm available when another session reads normally", async () => {
     await seed();
     const open = vi.spyOn(indexedDB, "open");
-    prewarmChatSnapshot(key);
+    void prewarmChatSnapshot(key);
     const reader = new snapshots.SessionSnapshotStore();
     expect(await reader.read(otherKey)).toEqual({ ...stored, sessionId: "other-session" });
     expect(await reader.read(key)).toEqual(stored);
@@ -103,7 +113,7 @@ describe("routed transcript prewarm", () => {
     async (scope) => {
       await seed();
       const open = vi.spyOn(indexedDB, "open");
-      prewarmChatSnapshot(key);
+      void prewarmChatSnapshot(key);
       await vi.dynamicImportSettled();
       await (scope === "clear"
         ? clearStoredChatSnapshots()
@@ -119,7 +129,7 @@ describe("routed transcript prewarm", () => {
   it("keeps the routed prewarm when another session is invalidated", async () => {
     await seed();
     const open = vi.spyOn(indexedDB, "open");
-    prewarmChatSnapshot(key);
+    void prewarmChatSnapshot(key);
     await publishSnapshotInvalidation({ sessionKey: otherKey });
     expect(await new snapshots.SessionSnapshotStore().read(key)).toEqual(stored);
     expect(open).toHaveBeenCalledOnce();
@@ -139,7 +149,7 @@ describe("routed transcript prewarm", () => {
         },
       );
       const open = vi.spyOn(indexedDB, "open");
-      prewarmChatSnapshot(key);
+      void prewarmChatSnapshot(key);
       await settled.promise;
       const latest = { ...stored, deltaCursor: "latest-cursor" };
       if (change === "write") {
@@ -161,7 +171,7 @@ describe("routed transcript prewarm", () => {
       const read = database.readStoredChatSnapshotRecord;
       const readingRecord = createDeferred<unknown>();
       vi.spyOn(database, "readStoredChatSnapshotRecord").mockReturnValueOnce(readingRecord.promise);
-      prewarmChatSnapshot(key);
+      void prewarmChatSnapshot(key);
       const reader = new snapshots.SessionSnapshotStore();
       reader.connect();
       try {

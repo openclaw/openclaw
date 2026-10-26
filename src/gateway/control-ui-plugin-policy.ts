@@ -2,7 +2,7 @@ import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { PluginRecord } from "../plugins/registry.js";
 
 export const CUSTOM_PLUGIN_UI_DISABLED_MESSAGE =
-  "Custom plugin UI is disabled. Enable Custom plugin UI in Settings > Labs, restart the Gateway, and reload this page.";
+  "Custom plugin UI is disabled. Enable Custom plugin UI in Settings > Labs.";
 
 export function isControlUiPluginAllowed(plugin: Pick<PluginRecord, "origin">): boolean {
   // Bundled provenance comes from the loader, never the plugin manifest. Read

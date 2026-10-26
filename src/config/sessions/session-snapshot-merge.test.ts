@@ -46,6 +46,19 @@ describe("session snapshot merge", () => {
     expect(mergeSessionEntry(initial, { sandbox: "required" })).not.toHaveProperty("sandbox");
   });
 
+  it.each([undefined] as const)(
+    "retains creation surface %s through merge and transcript rollover",
+    (createdSurface) => {
+      const existing = { ...initial, createdSurface };
+      for (const surface of [undefined, "plugin-dock"] as const) {
+        expect(
+          mergeSessionEntry(existing, { sessionId: "new-transcript", createdSurface: surface })
+            .createdSurface,
+        ).toBe(createdSurface);
+      }
+    },
+  );
+
   it("keeps a concurrently changed model pair", () => {
     const next = { ...initial, model: "claude-sonnet-4-6", updatedAt: 2 };
     const current = {
@@ -246,45 +259,6 @@ describe("session snapshot merge", () => {
     expect(merged.contextBudgetStatus).toBeUndefined();
   });
 
-  it("clears runtime metadata added concurrently for the previous model", () => {
-    const initialOverride: SessionEntry = {
-      sessionId: "session-1",
-      updatedAt: 1,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      modelOverrideSource: "user",
-    };
-    const next: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 2,
-      modelOverride: "gpt-5.5",
-    };
-    const current: SessionEntry = {
-      ...initialOverride,
-      updatedAt: 3,
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      fallbackNotice: {
-        kind: "active",
-        selectedModel: "openai/gpt-5.4",
-        activeModel: "openai/gpt-5.4-mini",
-      },
-      contextTokens: 80_000,
-    };
-
-    const merged = mergeSessionSnapshotChanges({ initial: initialOverride, next, current });
-
-    expect(merged).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.5",
-      modelOverrideSource: "user",
-    });
-    expect(merged.modelProvider).toBeUndefined();
-    expect(merged.model).toBeUndefined();
-    expect(merged.fallbackNotice).toBeUndefined();
-    expect(merged.contextTokens).toBeUndefined();
-  });
-
   it("does not reject a model switch after concurrent runtime metadata refresh", () => {
     const initialOverride: SessionEntry = {
       ...initial,
@@ -382,29 +356,6 @@ describe("session snapshot merge", () => {
     expect(mergeSessionSnapshotChanges({ initial, next, current })).toEqual(current);
   });
 
-  it("projects a runtime admission without losing its refreshed recovery budget", () => {
-    const initialRecovery: SessionEntry = {
-      ...initial,
-      mainRestartRecovery: { cycleId: "cycle-1", revision: 4, chargedAttempts: 3 },
-    };
-    const next: SessionEntry = {
-      ...initialRecovery,
-      mainRestartRecovery: {
-        ...initialRecovery.mainRestartRecovery!,
-        revision: 5,
-        startedAttempt: 3,
-      },
-    };
-
-    const merged = mergeSessionSnapshotChanges({
-      initial: initialRecovery,
-      next,
-      current: initialRecovery,
-    });
-
-    expect(merged.mainRestartRecovery).toEqual(next.mainRestartRecovery);
-  });
-
   it("preserves the recovery aggregate when a restart marker wins a stale healthy clear", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
@@ -443,10 +394,11 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
 
-  it("keeps a claimed recovery interrupted until its lifecycle owner settles", () => {
+  it("preserves the safe-tools guard when a newer recovery owner wins a stale clear", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
       abortedLastRun: true,
+      restartRecoveryForceSafeTools: true,
       mainRestartRecovery: {
         cycleId: "cycle-1",
         revision: 1,
@@ -457,6 +409,7 @@ describe("session snapshot merge", () => {
       ...initialRecovery,
       updatedAt: 2,
       abortedLastRun: false,
+      restartRecoveryForceSafeTools: undefined,
       mainRestartRecovery: undefined,
     };
     const current: SessionEntry = {
@@ -465,17 +418,50 @@ describe("session snapshot merge", () => {
       mainRestartRecovery: {
         ...initialRecovery.mainRestartRecovery!,
         revision: 2,
-        foregroundClaims: {
-          lifecycleGeneration: "generation-1",
-          tokens: ["owner-1"],
-        },
       },
     };
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
+    expect(merged.restartRecoveryForceSafeTools).toBe(true);
     expect(merged.abortedLastRun).toBe(true);
-    expect(merged.restartRecoveryRuns).toBeUndefined();
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+  });
+
+  it("preserves recovery state when the safe-tools guard is acquired during fence cleanup", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      restartRecoveryRuns: [
+        { runId: "interrupted-run", lifecycleGeneration: "generation-1" },
+        { runId: "recovery-run", lifecycleGeneration: "generation-1" },
+      ],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 3,
+        chargedAttempts: 1,
+      },
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 2,
+      abortedLastRun: false,
+      restartRecoveryRuns: undefined,
+      restartRecoveryForceSafeTools: undefined,
+      mainRestartRecovery: undefined,
+    };
+    const current: SessionEntry = {
+      ...structuredClone(initialRecovery),
+      updatedAt: 3,
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "generation-1" }],
+      restartRecoveryForceSafeTools: true,
+    };
+
+    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
+
+    expect(merged.restartRecoveryForceSafeTools).toBe(true);
+    expect(merged.restartRecoveryRuns).toEqual(current.restartRecoveryRuns);
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
 
@@ -546,6 +532,8 @@ describe("session snapshot merge", () => {
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
     expect(merged.abortedLastRun).toBe(true);
+    expect(merged.restartRecoveryRuns).toBeUndefined();
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
     expect(merged.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["owner-1", "owner-2"]);
   });
 

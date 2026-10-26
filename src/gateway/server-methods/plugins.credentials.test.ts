@@ -12,10 +12,13 @@ vi.mock("../../plugins/credential-descriptors.js", () => ({
 }));
 const path = ["plugins", "entries", "example", "config", "key"];
 const ref = { source: "file", provider: "vault", id: "/private/key" };
+const inspectParams = { pluginId: "example", path, baseHash: "public:revision" };
+const revealParams = { ...inspectParams, reveal: true };
+const invalidRequest = expect.objectContaining({ code: "INVALID_REQUEST" });
 
 function request(overrides: Partial<GatewayRequestHandlerOptions> = {}) {
   return {
-    params: { pluginId: "example", path, baseHash: "public:revision" },
+    params: inspectParams,
     client: { connect: { scopes: ["operator.admin"] } },
     context: {
       getRuntimeConfig: () => ({}),
@@ -29,60 +32,60 @@ async function invoke(options: GatewayRequestHandlerOptions) {
   await pluginCredentialHandlers["plugins.credentials.inspect"]!(options);
   return options.respond;
 }
+function snapshot(key: unknown, other: string) {
+  return {
+    hash: "revision",
+    sourceConfig: { plugins: { entries: { example: { config: { key, other } } } } },
+  };
+}
+async function expectCredential(credential: unknown, reveal = false) {
+  expect(
+    await invoke(request({ params: reveal ? revealParams : inspectParams })),
+  ).toHaveBeenCalledWith(true, { baseHash: "public:revision", credential }, undefined);
+}
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.snapshot.mockResolvedValue({
-    hash: "revision",
-    sourceConfig: {
-      plugins: { entries: { example: { config: { key: ref, other: "never-return-this" } } } },
-    },
-  });
+  mocks.snapshot.mockResolvedValue(snapshot(ref, "never-return-this"));
   mocks.metadata.mockReturnValue({ byPluginId: new Map([["example", { id: "example" }]]) });
   mocks.descriptors.mockReturnValue([{ path, label: "Key", envVars: [] }]);
 });
 describe("plugin credential inspection authorization", () => {
   it("returns only the advertised reference and a public revision", async () => {
-    expect(await invoke(request())).toHaveBeenCalledWith(
-      true,
-      { baseHash: "public:revision", credential: { kind: "reference", ref, unresolved: false } },
-      undefined,
-    );
+    await expectCredential({ kind: "reference", ref, unresolved: false });
   });
-  it("rejects read-only access before reading unredacted config", async () => {
-    const options = request();
+  it("returns only the requested authored literal after an explicit reveal", async () => {
+    mocks.snapshot.mockResolvedValue(snapshot("synthetic-private", "other-private"));
+    await expectCredential({ kind: "literal" });
+    await expectCredential({ kind: "literal", value: "synthetic-private" }, true);
+  });
+  it("rejects read-only reveal access before reading config", async () => {
+    const options = request({ params: revealParams });
     options.client!.connect.scopes = ["operator.read"];
-    expect(await invoke(options)).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expect(await invoke(options)).toHaveBeenCalledWith(false, undefined, invalidRequest);
     expect(mocks.snapshot).not.toHaveBeenCalled();
   });
   it("rejects a connection retired while the snapshot read is pending", async () => {
-    const options = request();
+    const options = request({ params: revealParams });
     mocks.snapshot.mockImplementation(async () => {
       options.client!.invalidated = true;
       return { hash: "revision" };
     });
-    expect(await invoke(options)).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expect(await invoke(options)).toHaveBeenCalledWith(false, undefined, invalidRequest);
     expect(mocks.metadata).not.toHaveBeenCalled();
   });
   it.each([
-    { pluginId: "example", path, baseHash: "old" },
-    { pluginId: "other", path, baseHash: "public:revision" },
-    { pluginId: "example", path: [...path.slice(0, -1), "other"], baseHash: "public:revision" },
-    { pluginId: "example", path, baseHash: "public:revision", resolve: true },
+    { ...revealParams, baseHash: "old" },
+    { pluginId: "example", path, reveal: true },
+    { ...revealParams, pluginId: "other" },
+    { ...revealParams, path: [...path.slice(0, -1), "other"] },
+    { ...inspectParams, resolve: true },
   ])(
     "rejects stale revisions, cross-plugin or arbitrary paths, and extra parameters",
     async (params) => {
       expect(await invoke(request({ params }))).toHaveBeenCalledWith(
         false,
         undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
+        invalidRequest,
       );
     },
   );

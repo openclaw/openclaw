@@ -455,13 +455,36 @@ def checkout_selected_ref():
                   depth=2, blobless=True, retry_failures=True)
         except (FetchTimeout, GitFailure):
             raise GitFailure(1)
-    run_git(workspace, "checkout", "--detach", "refs/remotes/origin/checkout")
+    # Materialize the full planner input tree with bounded checkout parallelism.
+    checkout_options = ("-c", "checkout.workers=2") if kind == "preflight" else ()
+    run_git(workspace, *checkout_options, "checkout", "--detach", "refs/remotes/origin/checkout")
 
 
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
-    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
-    upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
+    node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
+    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/ios-test-results.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs")
+    platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py", "scripts/swift-build-cache-metadata.py")
+    upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
+    # Preflight imports these siblings by file-relative paths.
+    preflight_scripts = (
+        "scripts/ci-build-manifest.mjs",
+        "scripts/lib/ci-ios-smoke-plan.mjs",
+        "scripts/lib/release-context.mjs",
+        "scripts/lib/release-version.mjs",
+    )
+    npm_lock_scripts = (
+        "scripts/ci-npm-lock-admission.mjs",
+        "scripts/generate-npm-package-lock.mjs",
+        "scripts/generate-npm-package-lock.mts",
+        "scripts/changed-lanes.mts",
+        "scripts/lib/merge-head-diff-base.mjs",
+    )
+    linux_node_scripts = (
+        *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",
+        "scripts/stage-openclaw-bun.sh", "scripts/lib/openclaw-bun.json",
+        "scripts/ui-browser-runtime-artifact.mjs",
+    )
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)
     harness = os.path.join(workspace, ".ci-harness")
@@ -477,23 +500,27 @@ def checkout_harness(sha):
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
         # retained harness files without updating the index or trusting later edits.
-        pathspecs = [".github/actions"]
+        pathspecs = [".github/actions", *node_setup_scripts]
         if kind in ("platform", "linux-node"):
             pathspecs += evidence_scripts
         elif kind == "preflight":
-            pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+            pathspecs += preflight_scripts
+        if kind == "platform":
+            pathspecs += platform_scripts
         if kind == "linux-node":
-            pathspecs += upgrade_scripts
+            pathspecs += linux_node_scripts
         paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
         run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
     else:
         run_git(harness, "init", harness)
         run_git(harness, "remote", "add", "origin", remote)
-        sparse_paths = ["/.github/actions/"]
+        sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
         if kind in ("platform", "linux-node"):
             sparse_paths += [f"/{path}" for path in evidence_scripts]
+        if kind == "platform":
+            sparse_paths += [f"/{path}" for path in platform_scripts]
         if kind == "linux-node":
-            sparse_paths += [f"/{path}" for path in upgrade_scripts]
+            sparse_paths += [f"/{path}" for path in linux_node_scripts]
         # Rooted non-cone patterns keep the kind-owned workflow files exact.
         # Sparse first, then blob-less avoids downloading a second repository snapshot.
         run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)
@@ -609,7 +636,7 @@ def main():
                 check_cancelled()
                 if not reset:
                     raise SystemExit(124 if isinstance(error, FetchTimeout) else error.code)
-                print(f"{label} attempt {attempt}/5 failed", flush=True)
+                print(f"::warning::{label} attempt {attempt}/5 failed", flush=True)
                 backoff(attempt * 5)
         print(f"{label} failed after 5 attempts", file=sys.stderr)
         raise SystemExit(1)

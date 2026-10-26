@@ -289,34 +289,32 @@ describe("bounded HTTP rejection transport", () => {
     },
   );
 
-  it.each([32, 2048])(
-    "drains a finite pipeline of %i ordinary requests in order",
-    async (count) => {
-      const dispatched: string[] = [];
-      await withServer(
-        async (req, res) => {
-          dispatched.push(req.url!);
-          res.end(req.url);
-        },
-        async (port) => {
-          const paths = Array.from({ length: count }, (_, i) => `/request-${i}`);
-          const result = await rawRequest(
-            port,
-            paths
-              .map(
-                (path, i) =>
-                  `GET ${path} HTTP/1.1\r\nHost: localhost\r\n${i === count - 1 ? "Connection: close\r\n" : ""}\r\n`,
-              )
-              .join(""),
-          );
-          expect(result.errors).toEqual([]);
-          expect(dispatched).toEqual(paths);
-          expect(result.wire.match(/HTTP\/1\.1 200 /g)).toHaveLength(count);
-          expect(result.wire.split(/HTTP\/1\.1 200 [^]*?\r\n\r\n/).slice(1)).toEqual(paths);
-        },
-      );
-    },
-  );
+  it("drains a finite pipeline of 2048 ordinary requests in order", async () => {
+    const count = 2048;
+    const dispatched: string[] = [];
+    await withServer(
+      async (req, res) => {
+        dispatched.push(req.url!);
+        res.end(req.url);
+      },
+      async (port) => {
+        const paths = Array.from({ length: count }, (_, i) => `/request-${i}`);
+        const result = await rawRequest(
+          port,
+          paths
+            .map(
+              (path, i) =>
+                `GET ${path} HTTP/1.1\r\nHost: localhost\r\n${i === count - 1 ? "Connection: close\r\n" : ""}\r\n`,
+            )
+            .join(""),
+        );
+        expect(result.errors).toEqual([]);
+        expect(dispatched).toEqual(paths);
+        expect(result.wire.match(/HTTP\/1\.1 200 /g)).toHaveLength(count);
+        expect(result.wire.split(/HTTP\/1\.1 200 [^]*?\r\n\r\n/).slice(1)).toEqual(paths);
+      },
+    );
+  });
 
   it("bounds a rejection stuck behind an earlier response", async () => {
     const dispatched: string[] = [];

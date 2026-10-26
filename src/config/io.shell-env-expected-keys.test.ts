@@ -25,62 +25,64 @@ describe("config io shell env expected keys", () => {
     loadShellEnvFallback.mockClear();
   });
 
-  it.each(["loadConfig", "readBestEffortConfig"] as const)(
-    "%s includes env keys from a configured plugin without executing its runtime",
-    async (read) => {
-      const home = createGeneratedPluginTempRoot("openclaw-shell-env-metadata-");
-      const pluginDir = path.join(home, "configured-plugin");
-      const configPath = path.join(home, "state", "openclaw.json");
-      writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
-        id: "shell-fixture",
-        providers: ["shell-fixture"],
-        channels: ["shell-fixture"],
-        channelConfigs: { "shell-fixture": { schema: { type: "object" } } },
-        setup: {
-          requiresRuntime: false,
-          providers: [{ id: "shell-fixture", envVars: ["SHELL_FIXTURE_PROVIDER_KEY"] }],
-        },
-        configSchema: { type: "object", properties: {} },
-      });
-      writeJson(path.join(pluginDir, "package.json"), {
-        name: "shell-fixture",
-        version: "1.0.0",
-        openclaw: {
-          extensions: ["./index.js"],
-          channel: {
-            id: "shell-fixture",
-            configuredState: {
-              env: {
-                allOf: ["SHELL_FIXTURE_CHANNEL_KEY"],
-                anyOf: ["SHELL_FIXTURE_PROVIDER_KEY"],
-              },
+  it("includes env keys from a configured plugin without executing its runtime", async () => {
+    const home = createGeneratedPluginTempRoot("openclaw-shell-env-metadata-");
+    const pluginDir = path.join(home, "configured-plugin");
+    const configPath = path.join(home, "state", "openclaw.json");
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "shell-fixture",
+      providers: ["shell-fixture"],
+      channels: ["shell-fixture"],
+      channelConfigs: { "shell-fixture": { schema: { type: "object" } } },
+      setup: {
+        requiresRuntime: false,
+        providers: [{ id: "shell-fixture", envVars: ["SHELL_FIXTURE_PROVIDER_KEY"] }],
+      },
+      configSchema: { type: "object", properties: {} },
+    });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "shell-fixture",
+      version: "1.0.0",
+      openclaw: {
+        extensions: ["./index.js"],
+        channel: {
+          id: "shell-fixture",
+          configuredState: {
+            env: {
+              allOf: ["SHELL_FIXTURE_CHANNEL_KEY"],
+              anyOf: ["SHELL_FIXTURE_PROVIDER_KEY"],
             },
           },
         },
-      });
-      fs.writeFileSync(path.join(pluginDir, "index.js"), 'throw new Error("metadata only");\n');
-      writeJson(configPath, {
-        env: { shellEnv: { enabled: true } },
-        plugins: { allow: ["shell-fixture"], load: { paths: [pluginDir] } },
-      });
-      const env = {
-        HOME: home,
-        OPENCLAW_STATE_DIR: path.dirname(configPath),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(home, "empty-bundled"),
-      };
-      fs.mkdirSync(env.OPENCLAW_BUNDLED_PLUGINS_DIR);
+      },
+    });
+    fs.writeFileSync(path.join(pluginDir, "index.js"), 'throw new Error("metadata only");\n');
+    writeJson(configPath, {
+      env: { shellEnv: { enabled: true } },
+      plugins: { allow: ["shell-fixture"], load: { paths: [pluginDir] } },
+    });
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: path.dirname(configPath),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(home, "empty-bundled"),
+    };
+    fs.mkdirSync(env.OPENCLAW_BUNDLED_PLUGINS_DIR);
 
-      await createConfigIO({ configPath, env, homedir: () => home, observe: false })[read]();
+    await createConfigIO({
+      configPath,
+      env,
+      homedir: () => home,
+      observe: false,
+    }).readBestEffortConfig();
 
-      expect(loadShellEnvFallback).toHaveBeenCalledOnce();
-      const { expectedKeys } = loadShellEnvFallback.mock.calls[0]![0];
-      expect(expectedKeys.filter((key) => key.startsWith("SHELL_FIXTURE_"))).toEqual([
-        "SHELL_FIXTURE_PROVIDER_KEY",
-        "SHELL_FIXTURE_CHANNEL_KEY",
-      ]);
-      expect(expectedKeys).toEqual(
-        expect.arrayContaining(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]),
-      );
-    },
-  );
+    expect(loadShellEnvFallback).toHaveBeenCalledOnce();
+    const { expectedKeys } = loadShellEnvFallback.mock.calls[0]![0];
+    expect(expectedKeys.filter((key) => key.startsWith("SHELL_FIXTURE_"))).toEqual([
+      "SHELL_FIXTURE_PROVIDER_KEY",
+      "SHELL_FIXTURE_CHANNEL_KEY",
+    ]);
+    expect(expectedKeys).toEqual(
+      expect.arrayContaining(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]),
+    );
+  });
 });

@@ -91,6 +91,7 @@ function readStoredCodexCatalogRow(value: unknown): CodexCatalogIndexRow | undef
       ...(fingerprint ? { fingerprint } : {}),
     };
   } catch {
+    // Invalid persisted cache rows are discarded and rebuilt from native state.
     return undefined;
   }
 }
@@ -120,7 +121,11 @@ async function readCodexCatalogSnapshot(state: CodexCatalogState | undefined) {
   };
   let complete = false;
   let overflow = false;
+  let processed = 0;
   for (const entry of entries) {
+    if (++processed % 128 === 0) {
+      await nextTurn();
+    }
     if (Buffer.byteLength(entry.key) > CODEX_CATALOG_MAX_STATE_KEY_BYTES) {
       valid = false;
       discard(entry.key);
@@ -150,6 +155,9 @@ async function readCodexCatalogSnapshot(state: CodexCatalogState | undefined) {
   if (!complete) {
     rows.clear();
     for (const entry of entries) {
+      if (++processed % 128 === 0) {
+        await nextTurn();
+      }
       discard(entry.key);
     }
     if (entries.length) {
@@ -193,9 +201,6 @@ export class CodexCatalogPersistence {
   }
 
   put(row: CodexCatalogIndexRow): void {
-    if (!this.state || this.retired) {
-      return;
-    }
     this.queue(this.key(row.threadId), { version: 1, kind: "row", row });
   }
 
@@ -204,9 +209,14 @@ export class CodexCatalogPersistence {
   }
 
   async pruneObsolete(
-    keys: Iterable<string>,
+    keys: ReadonlySet<string>,
     currentRows: Iterable<CodexCatalogIndexRow>,
   ): Promise<void> {
+    if (!keys.size) {
+      return;
+    }
+    // Keep membership capture and deletion admission in one turn: a yield could
+    // let a fresh row's write be overwritten by this obsolete-key cleanup.
     const currentKeys = new Set(Array.from(currentRows, (row) => this.key(row.threadId)));
     for (const key of keys) {
       if (!currentKeys.has(key)) {

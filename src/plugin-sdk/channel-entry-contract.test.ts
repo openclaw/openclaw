@@ -1,44 +1,42 @@
-// Channel entry contract tests cover SDK channel entrypoint exports and package boundaries.
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginModuleLoaderFactory } from "../plugins/plugin-module-loader-cache.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type { OpenClawPluginApi, PluginRegistrationMode } from "../plugins/types.js";
+import type { OpenClawPluginApi } from "../plugins/types.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   defineBundledChannelEntry,
   defineBundledChannelSetupEntry,
   loadBundledEntryExportSync,
 } from "./channel-entry-contract.js";
+import {
+  createChannelEntryApi as createApi,
+  expectLazyChannelSchema,
+  registerChannelEntryTestTool,
+} from "./channel-entry.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
   "openclaw.pluginModuleLoaderJitiFactoryOverride",
 );
+const loaderGlobals = globalThis as typeof globalThis & {
+  [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
+};
 
 afterEach(() => {
   vi.resetModules();
   vi.doUnmock("jiti");
   vi.doUnmock("../plugins/native-module-require.js");
   vi.unstubAllEnvs();
-  delete (
-    globalThis as typeof globalThis & {
-      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
-    }
-  )[pluginModuleLoaderJitiFactoryOverrideKey];
+  delete loaderGlobals[pluginModuleLoaderJitiFactoryOverrideKey];
 });
 
 function stubPluginModuleLoaderJitiFactory(createJiti: PluginModuleLoaderFactory): void {
-  (
-    globalThis as typeof globalThis & {
-      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
-    }
-  )[pluginModuleLoaderJitiFactoryOverrideKey] = createJiti;
+  loaderGlobals[pluginModuleLoaderJitiFactoryOverrideKey] = createJiti;
 }
 
 function writeJson(targetPath: string, value: unknown): void {
@@ -46,245 +44,128 @@ function writeJson(targetPath: string, value: unknown): void {
   fs.writeFileSync(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function createApi(registrationMode: PluginRegistrationMode): OpenClawPluginApi {
-  return {
-    registrationMode,
-    runtime: { registrationMode } as unknown as PluginRuntime,
-    registerChannel: vi.fn(),
-    registerTool: vi.fn(),
-  } as unknown as OpenClawPluginApi;
+function writeFile(root: string, name: string, contents: string) {
+  fs.writeFileSync(path.join(root, name), contents, "utf8");
 }
 
-function writeBundledChannelFixture(params: {
-  pluginRoot: string;
-  pluginId: string;
-  runtimeMarker: string;
-}) {
-  fs.mkdirSync(params.pluginRoot, { recursive: true });
-  const importerPath = path.join(params.pluginRoot, "index.js");
+const freshContract = (scope: string) =>
+  importFreshModule<typeof import("./channel-entry-contract.js")>(
+    import.meta.url,
+    `./channel-entry-contract.js?scope=${scope}`,
+  );
+
+function createSidecarRoot(artifactRoot = "dist", pluginId = "fixture", importer = "index.js") {
+  const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
+  const pluginRoot = path.join(tempRoot, artifactRoot, "extensions", pluginId);
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  const importerPath = path.join(pluginRoot, importer);
   fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+  return { tempRoot, pluginRoot, importerPath };
+}
+
+function createBundledFixture() {
+  const { tempRoot, pluginRoot, importerPath } = createSidecarRoot();
+  const runtimeMarker = path.join(tempRoot, "runtime-loaded");
+  const pluginId = "fixture";
   fs.writeFileSync(
-    path.join(params.pluginRoot, "plugin.cjs"),
+    path.join(pluginRoot, "plugin.cjs"),
     `module.exports = {
   channelPlugin: {
-    id: ${JSON.stringify(params.pluginId)},
-    meta: {
-      id: ${JSON.stringify(params.pluginId)},
-      label: ${JSON.stringify(params.pluginId)},
-      selectionLabel: ${JSON.stringify(params.pluginId)},
-      docsPath: ${JSON.stringify(`/channels/${params.pluginId}`)},
-      blurb: "bundled channel",
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => [],
-      resolveAccount: () => null,
-    },
-    outbound: { deliveryMode: "direct" },
+    id: ${JSON.stringify(pluginId)},
   },
 };
 `,
     "utf8",
   );
   fs.writeFileSync(
-    path.join(params.pluginRoot, "runtime.cjs"),
+    path.join(pluginRoot, "runtime.cjs"),
     `module.exports = {
   setRuntime: () => {
-    require("node:fs").writeFileSync(${JSON.stringify(params.runtimeMarker)}, "loaded", "utf8");
+    require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded", "utf8");
   },
 };
 `,
     "utf8",
   );
-  return { importerPath };
+  return { importerPath, pluginId, runtimeMarker };
 }
 
-function createBundledChannelEntry(params: {
-  importerPath: string;
-  pluginId: string;
-  registerCliMetadata?: (api: OpenClawPluginApi) => void;
-  registerFull?: (api: OpenClawPluginApi) => void;
-  registerCapabilities?: (api: OpenClawPluginApi) => void;
-}) {
-  return defineBundledChannelEntry({
-    id: params.pluginId,
-    name: params.pluginId,
+function createBundledChannelEntry() {
+  const fixture = createBundledFixture();
+  const hooks = {
+    registerCliMetadata: vi.fn<(api: OpenClawPluginApi) => void>(),
+    registerFull: vi.fn<(api: OpenClawPluginApi) => void>(),
+    registerCapabilities: vi.fn<(api: OpenClawPluginApi) => void>(),
+  };
+  const entry = defineBundledChannelEntry({
+    id: fixture.pluginId,
+    name: fixture.pluginId,
     description: "bundled channel entry test",
-    importMetaUrl: pathToFileURL(params.importerPath).href,
+    importMetaUrl: pathToFileURL(fixture.importerPath).href,
     plugin: { specifier: "./plugin.cjs", exportName: "channelPlugin" },
     runtime: { specifier: "./runtime.cjs", exportName: "setRuntime" },
-    registerCliMetadata: params.registerCliMetadata,
-    registerFull: params.registerFull,
-    registerCapabilities: params.registerCapabilities,
+    ...hooks,
   });
+  return { entry, ...fixture, ...hooks };
 }
 
 describe("defineBundledChannelEntry", () => {
   it("defers and memoizes config schema factories", () => {
-    const configSchema = {
-      schema: { type: "object" as const, additionalProperties: false },
-    };
-    const createConfigSchema = vi.fn(() => configSchema);
-    const entry = defineBundledChannelEntry({
-      id: "lazy-config-schema",
-      name: "Lazy Config Schema",
-      description: "lazy config schema test",
-      importMetaUrl: import.meta.url,
-      plugin: { specifier: "./unused.js" },
-      configSchema: createConfigSchema,
-    });
-
-    expect(createConfigSchema).not.toHaveBeenCalled();
-    expect(entry.configSchema).toBe(configSchema);
-    expect(entry.configSchema).toBe(configSchema);
-    expect(createConfigSchema).toHaveBeenCalledTimes(1);
+    expectLazyChannelSchema((configSchema) =>
+      defineBundledChannelEntry({
+        id: "lazy-config-schema",
+        name: "Lazy Config Schema",
+        description: "lazy config schema test",
+        importMetaUrl: import.meta.url,
+        plugin: { specifier: "./unused.js" },
+        configSchema,
+      }),
+    );
   });
 
-  it("runs tool registrations without channel sidecar hydration during tool discovery", () => {
-    const tempRoot = tempDirs.make("openclaw-bundled-entry-tools-");
-    const runtimeMarker = path.join(tempRoot, "runtime-loaded");
-    const pluginId = "bundled-tool-discovery";
-    const { importerPath } = writeBundledChannelFixture({
-      pluginRoot: path.join(tempRoot, "dist", "extensions", pluginId),
-      pluginId,
-      runtimeMarker,
-    });
-    const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerFull = vi.fn<(api: OpenClawPluginApi) => void>((api) => {
-      api.registerTool(
-        {
-          name: "channel_tool",
-          label: "Channel Tool",
-          description: "channel tool",
-          parameters: {},
-          execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
-        },
-        { name: "channel_tool" },
-      );
-    });
-    const entry = createBundledChannelEntry({
-      importerPath,
-      pluginId,
-      registerCliMetadata,
-      registerFull,
-      registerCapabilities,
-    });
+  it.each([
+    ["cli-metadata", 0, 1, 0, 0],
+    ["tool-discovery", 0, 0, 1, 1],
+    ["discovery", 1, 1, 0, 1],
+    ["setup-only", 1, 0, 0, 0],
+    ["setup-runtime", 1, 0, 0, 0],
+    ["full", 1, 1, 1, 1],
+  ] as const)(
+    "hydrates sidecars and registers only %s hooks",
+    (mode, runtime, cli, full, capabilities) => {
+      const { entry, runtimeMarker, registerCliMetadata, registerCapabilities, registerFull } =
+        createBundledChannelEntry();
+      registerFull.mockImplementation(registerChannelEntryTestTool);
 
-    const api = createApi("tool-discovery");
-    entry.register(api);
-
-    expect(api.registerChannel).not.toHaveBeenCalled();
-    expect(registerCliMetadata).not.toHaveBeenCalled();
-    expect(registerFull).toHaveBeenCalledWith(api);
-    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
-    expect(api.registerTool).toHaveBeenCalledTimes(1);
-    expect(fs.existsSync(runtimeMarker)).toBe(false);
-  });
-
-  it("loads runtime sidecars during discovery registration", () => {
-    const tempRoot = tempDirs.make("openclaw-bundled-entry-runtime-");
-    const runtimeMarker = path.join(tempRoot, "runtime-loaded");
-    const pluginId = "bundled-discovery";
-    const { importerPath } = writeBundledChannelFixture({
-      pluginRoot: path.join(tempRoot, "dist", "extensions", pluginId),
-      pluginId,
-      runtimeMarker,
-    });
-    const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
-    const entry = createBundledChannelEntry({
-      importerPath,
-      pluginId,
-      registerCliMetadata,
-      registerFull,
-      registerCapabilities,
-    });
-
-    const api = createApi("discovery");
-    entry.register(api);
-
-    expect(api.registerChannel).toHaveBeenCalledTimes(1);
-    expect(registerCliMetadata).toHaveBeenCalledWith(api);
-    expect(registerFull).not.toHaveBeenCalled();
-    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
-    expect(fs.existsSync(runtimeMarker)).toBe(true);
-  });
-
-  it("keeps setup-runtime and full registration wired to runtime sidecars", () => {
-    const tempRoot = tempDirs.make("openclaw-bundled-entry-runtime-");
-    const runtimeMarker = path.join(tempRoot, "runtime-loaded");
-    const pluginId = "bundled-runtime";
-    const { importerPath } = writeBundledChannelFixture({
-      pluginRoot: path.join(tempRoot, "dist", "extensions", pluginId),
-      pluginId,
-      runtimeMarker,
-    });
-    const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
-    const entry = createBundledChannelEntry({
-      importerPath,
-      pluginId,
-      registerCliMetadata,
-      registerFull,
-      registerCapabilities,
-    });
-
-    const cliApi = createApi("cli-metadata");
-    entry.register(cliApi);
-    expect(registerCliMetadata).toHaveBeenCalledWith(cliApi);
-    expect(registerCapabilities).not.toHaveBeenCalled();
-    expect(fs.existsSync(runtimeMarker)).toBe(false);
-    registerCliMetadata.mockClear();
-
-    entry.register(createApi("setup-only"));
-    expect(registerCapabilities).not.toHaveBeenCalled();
-    fs.rmSync(runtimeMarker, { force: true });
-
-    entry.register(createApi("setup-runtime"));
-    expect(fs.existsSync(runtimeMarker)).toBe(true);
-    expect(registerCliMetadata).not.toHaveBeenCalled();
-    expect(registerFull).not.toHaveBeenCalled();
-    expect(registerCapabilities).not.toHaveBeenCalled();
-
-    fs.rmSync(runtimeMarker, { force: true });
-    const fullApi = createApi("full");
-    entry.register(fullApi);
-    expect(fs.existsSync(runtimeMarker)).toBe(true);
-    expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
-    expect(registerFull).toHaveBeenCalledWith(fullApi);
-    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(fullApi);
-  });
+      const api = createApi(mode);
+      entry.register(api);
+      expect(api.registerChannel).toHaveBeenCalledTimes(runtime);
+      expect(registerCliMetadata.mock.calls).toEqual(cli ? [[api]] : []);
+      expect(registerFull.mock.calls).toEqual(full ? [[api]] : []);
+      expect(registerCapabilities.mock.calls).toEqual(capabilities ? [[api]] : []);
+      expect(api.registerTool).toHaveBeenCalledTimes(full);
+      expect(fs.existsSync(runtimeMarker)).toBe(Boolean(runtime));
+    },
+  );
 });
 
-describe("defineBundledChannelSetupEntry", () => {
-  it("exposes setup-runtime registrations without loading the full channel entry", () => {
-    const tempRoot = tempDirs.make("openclaw-bundled-setup-entry-");
-    const runtimeMarker = path.join(tempRoot, "runtime-loaded");
-    const setupRuntimeRegister = vi.fn<(api: OpenClawPluginApi) => void>();
-    const pluginId = "bundled-setup-runtime";
-    const { importerPath } = writeBundledChannelFixture({
-      pluginRoot: path.join(tempRoot, "dist", "extensions", pluginId),
-      pluginId,
-      runtimeMarker,
-    });
-    const entry = defineBundledChannelSetupEntry({
-      importMetaUrl: pathToFileURL(importerPath).href,
-      plugin: { specifier: "./plugin.cjs", exportName: "channelPlugin" },
-      runtime: { specifier: "./runtime.cjs", exportName: "setRuntime" },
-      registerSetupRuntime: setupRuntimeRegister,
-    });
-
-    const api = createApi("setup-runtime");
-    expect(entry.loadSetupPlugin().id).toBe(pluginId);
-    entry.setChannelRuntime?.(api.runtime);
-    entry.registerSetupRuntime?.(api);
-
-    expect(fs.existsSync(runtimeMarker)).toBe(true);
-    expect(setupRuntimeRegister).toHaveBeenCalledWith(api);
+it("defineBundledChannelSetupEntry exposes setup-runtime without the full channel entry", () => {
+  const setupRuntimeRegister = vi.fn<(api: OpenClawPluginApi) => void>();
+  const { importerPath, pluginId, runtimeMarker } = createBundledFixture();
+  const entry = defineBundledChannelSetupEntry({
+    importMetaUrl: pathToFileURL(importerPath).href,
+    plugin: { specifier: "./plugin.cjs", exportName: "channelPlugin" },
+    runtime: { specifier: "./runtime.cjs", exportName: "setRuntime" },
+    registerSetupRuntime: setupRuntimeRegister,
   });
+
+  const api = createApi("setup-runtime");
+  expect(entry.loadSetupPlugin().id).toBe(pluginId);
+  entry.setChannelRuntime?.(api.runtime);
+  entry.registerSetupRuntime?.(api);
+
+  expect(fs.existsSync(runtimeMarker)).toBe(true);
+  expect(setupRuntimeRegister).toHaveBeenCalledWith(api);
 });
 
 async function expectBuiltArtifactNodeRequireFastPath(
@@ -295,18 +176,10 @@ async function expectBuiltArtifactNodeRequireFastPath(
   const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
   try {
-    const channelEntryContract = await importFreshModule<
-      typeof import("./channel-entry-contract.js")
-    >(import.meta.url, `./channel-entry-contract.js?scope=${scope}`);
+    const channelEntryContract = await freshContract(scope);
 
-    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
-
-    const pluginRoot = path.join(tempRoot, artifactRoot, "extensions", "telegram");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-
-    const importerPath = path.join(pluginRoot, "index.js");
+    const { pluginRoot, importerPath } = createSidecarRoot(artifactRoot);
     const sidecarPath = path.join(pluginRoot, "fast-path-sidecar.cjs");
-    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
     // CommonJS so `nodeRequire` succeeds without falling back to the source loader, even
     // inside built plugin artifacts with a `type: "module"` package boundary.
     fs.writeFileSync(sidecarPath, "module.exports = { sentinel: 7 };\n", "utf8");
@@ -348,28 +221,29 @@ function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
       "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",
     },
   });
-  fs.writeFileSync(path.join(tempRoot, "openclaw.mjs"), "#!/usr/bin/env node\n", "utf8");
+  writeFile(tempRoot, "openclaw.mjs", "#!/usr/bin/env node\n");
   fs.mkdirSync(path.join(tempRoot, "src"));
   fs.mkdirSync(path.join(tempRoot, "extensions"));
   fs.mkdirSync(path.join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
-  fs.writeFileSync(
-    path.join(tempRoot, "dist", "plugin-sdk", "channel-outbound.js"),
+  writeFile(
+    tempRoot,
+    "dist/plugin-sdk/channel-outbound.js",
     'export const defineChannelMessageAdapter = () => "adapter";\n',
-    "utf8",
   );
 
   const pluginRoot = path.join(tempRoot, "dist", "extensions", "slack");
   fs.mkdirSync(pluginRoot, { recursive: true });
   const importerPath = path.join(pluginRoot, "index.js");
   fs.writeFileSync(importerPath, "export default {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(pluginRoot, "sidecar.js"),
+  writeFile(
+    pluginRoot,
+    "sidecar.js",
     'import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";\nexport const sentinel = defineChannelMessageAdapter();\n',
-    "utf8",
   );
 
-  fs.writeFileSync(
-    probePath,
+  writeFile(
+    tempRoot,
+    "probe.mjs",
     [
       `import { loadBundledEntryExportSync } from ${JSON.stringify(channelEntryContractModuleUrl)};`,
       `const value = loadBundledEntryExportSync(${JSON.stringify(pathToFileURL(importerPath).href)}, {`,
@@ -379,7 +253,6 @@ function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
       "console.log(value);",
       "",
     ].join("\n"),
-    "utf8",
   );
 
   return spawnSync(process.execPath, ["--import", "tsx", probePath], {
@@ -394,20 +267,8 @@ function runCompiledEsmSidecarFastPathProbe(): SpawnSyncReturns<string> {
 }
 
 describe("loadBundledEntryExportSync", () => {
-  let compiledEsmSidecarFastPathResult: SpawnSyncReturns<string>;
-
-  beforeAll(() => {
-    compiledEsmSidecarFastPathResult = runCompiledEsmSidecarFastPathProbe();
-  });
-
   it("includes importer and resolved path context when a bundled sidecar is missing", () => {
-    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
-
-    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-
-    const importerPath = path.join(pluginRoot, "index.js");
-    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+    const { pluginRoot, importerPath } = createSidecarRoot();
 
     let thrown: unknown;
     try {
@@ -426,34 +287,6 @@ describe("loadBundledEntryExportSync", () => {
     expect(message).toContain(`plugin root "${pluginRoot}"`);
     expect(message).toContain('reason "path"');
     expect(message).toContain("ENOENT");
-  });
-
-  it("keeps Windows dist sidecar loads off source-transform loading", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ load: 0 })));
-    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
-
-    await withMockedWindowsPlatform(async () => {
-      const channelEntryContract = await importFreshModule<
-        typeof import("./channel-entry-contract.js")
-      >(import.meta.url, "./channel-entry-contract.js?scope=windows-dist-jiti");
-      const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
-
-      const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
-      fs.mkdirSync(pluginRoot, { recursive: true });
-
-      const importerPath = path.join(pluginRoot, "index.js");
-      const helperPath = path.join(pluginRoot, "helper.cjs");
-      fs.writeFileSync(importerPath, "export default {};\n", "utf8");
-      fs.writeFileSync(helperPath, "module.exports = { load: 42 };\n", "utf8");
-
-      expect(
-        channelEntryContract.loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
-          specifier: "./helper.cjs",
-          exportName: "load",
-        }),
-      ).toBe(42);
-      expect(createJiti).not.toHaveBeenCalled();
-    });
   });
 
   it("normalizes Windows absolute sidecar paths before module loads them", async () => {
@@ -489,9 +322,7 @@ describe("loadBundledEntryExportSync", () => {
 
     await withMockedWindowsPlatform(async () => {
       try {
-        const channelEntryContract = await importFreshModule<
-          typeof import("./channel-entry-contract.js")
-        >(import.meta.url, "./channel-entry-contract.js?scope=windows-safe-jiti-path");
+        const channelEntryContract = await freshContract("windows-safe-jiti-path");
 
         expect(
           channelEntryContract.loadBundledEntryExportSync<number>(
@@ -513,15 +344,11 @@ describe("loadBundledEntryExportSync", () => {
     });
   });
 
-  it("transforms OpenClaw SDK dependencies after a native built sidecar load declines", async () => {
+  it("keeps the host SDK native when a built sidecar needs plugin transformation", async () => {
     const sourceLoad = vi.fn(() => ({ sentinel: 42 }));
     const createJiti = vi.fn((_filename: string, _options?: Record<string, unknown>) => sourceLoad);
-    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
-    const pluginRoot = path.join(tempRoot, "dist", "extensions", "whatsapp");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    const importerPath = path.join(pluginRoot, "setup-entry.js");
+    const { pluginRoot, importerPath } = createSidecarRoot();
     const sidecarPath = path.join(pluginRoot, "setup-plugin-api.js");
-    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
     fs.writeFileSync(sidecarPath, "export const sentinel = 42;\n", "utf8");
     vi.doMock("../plugins/native-module-require.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("../plugins/native-module-require.js")>();
@@ -535,9 +362,7 @@ describe("loadBundledEntryExportSync", () => {
             : actual.tryNativeRequireJavaScriptModule(...args),
       };
     });
-    const channelEntryContract = await importFreshModule<
-      typeof import("./channel-entry-contract.js")
-    >(import.meta.url, "./channel-entry-contract.js?scope=native-esm-race-fallback");
+    const channelEntryContract = await freshContract("native-esm-race-fallback");
 
     expect(
       channelEntryContract.loadBundledEntryExportSync<number>(
@@ -549,69 +374,37 @@ describe("loadBundledEntryExportSync", () => {
         { createLoaderForTest: createJiti as never },
       ),
     ).toBe(42);
-    const jitiOptions = createJiti.mock.calls[0]?.[1] as
-      | { nativeModules?: string[]; tryNative?: boolean }
-      | undefined;
-    expect(jitiOptions?.tryNative).toBe(false);
-    expect(jitiOptions?.nativeModules).toEqual([]);
+    expect(createJiti.mock.calls[0]?.[1]).toMatchObject({
+      tryNative: false,
+      nativeModules: ["openclaw"],
+    });
     expect(sourceLoad).toHaveBeenCalledWith(sidecarPath);
   });
 
-  it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
-    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
-
-    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
+  it("does not replay a failed native sidecar through the plugin transformer", () => {
+    const root = tempDirs.make("openclaw-channel-entry-failure-");
+    const pluginRoot = path.join(root, "dist", "extensions", "fixture");
     fs.mkdirSync(pluginRoot, { recursive: true });
-
-    const importerPath = path.join(pluginRoot, "setup-entry.js");
-    const setupApiPath = path.join(pluginRoot, "setup-plugin-api.js");
-    const secretsApiPath = path.join(pluginRoot, "secret-contract-api.js");
-
-    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+    const importerPath = path.join(pluginRoot, "setup-entry.cjs");
+    const evaluations = path.join(root, "evaluations.txt");
+    fs.writeFileSync(importerPath, "module.exports = {};\n");
     fs.writeFileSync(
-      setupApiPath,
-      'export const telegramSetupPlugin = { id: "telegram" };\n',
-      "utf8",
-    );
-    fs.writeFileSync(
-      secretsApiPath,
-      [
-        "export const collectRuntimeConfigAssignments = () => [];",
-        "export const secretTargetRegistryEntries = [];",
-        'export const channelSecrets = { TELEGRAM_TOKEN: { env: "TELEGRAM_TOKEN" } };',
-        "",
-      ].join("\n"),
-      "utf8",
+      path.join(pluginRoot, "sidecar.cjs"),
+      `require("node:fs").appendFileSync(${JSON.stringify(evaluations)}, "evaluation\\n");
+       throw new Error("sidecar initialization failed");`,
     );
 
-    expect(
-      loadBundledEntryExportSync<{ id: string }>(pathToFileURL(importerPath).href, {
-        specifier: "./setup-plugin-api.js",
-        exportName: "telegramSetupPlugin",
+    expect(() =>
+      loadBundledEntryExportSync(pathToFileURL(importerPath).href, {
+        specifier: "./sidecar.cjs",
       }),
-    ).toEqual({ id: "telegram" });
-
-    expect(
-      loadBundledEntryExportSync<Record<string, unknown>>(pathToFileURL(importerPath).href, {
-        specifier: "./secret-contract-api.js",
-        exportName: "channelSecrets",
-      }),
-    ).toEqual({
-      TELEGRAM_TOKEN: {
-        env: "TELEGRAM_TOKEN",
-      },
-    });
+    ).toThrow("sidecar initialization failed");
+    expect(fs.readFileSync(evaluations, "utf8")).toBe("evaluation\n");
   });
 
   it("reuses resolved bundled sidecar paths before cached module exports", async () => {
-    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
-
-    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-
-    const importerPath = path.join(pluginRoot, "index.js");
+    const { pluginRoot, importerPath } = createSidecarRoot();
     const helperPath = path.join(pluginRoot, "helper.cjs");
-    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
     fs.writeFileSync(helperPath, "module.exports = { sentinel: 42 };\n", "utf8");
 
     const openRootFileSync =
@@ -623,41 +416,23 @@ describe("loadBundledEntryExportSync", () => {
     });
 
     try {
-      const channelEntryContract = await importFreshModule<
-        typeof import("./channel-entry-contract.js")
-      >(import.meta.url, "./channel-entry-contract.js?scope=resolved-sidecar-cache");
+      const channelEntryContract = await freshContract("resolved-sidecar-cache");
 
-      const ref = {
-        specifier: "./helper.cjs",
-        exportName: "sentinel",
-      };
-      expect(
-        channelEntryContract.loadBundledEntryExportSync<number>(
-          pathToFileURL(importerPath).href,
-          ref,
-        ),
-      ).toBe(42);
+      const loadHelper = () =>
+        channelEntryContract.loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
+          specifier: "./helper.cjs",
+          exportName: "sentinel",
+        });
+      expect(loadHelper()).toBe(42);
       expect(
         openRootFileSync.mock.calls.filter(([params]) => params.absolutePath === helperPath),
       ).toHaveLength(1);
       openRootFileSync.mockClear();
-      expect(
-        channelEntryContract.loadBundledEntryExportSync<number>(
-          pathToFileURL(importerPath).href,
-          ref,
-        ),
-      ).toBe(42);
+      expect(loadHelper()).toBe(42);
       expect(openRootFileSync).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock("../infra/boundary-file-read.js");
     }
-  });
-
-  it("emits non-negative source-loader sub-step timings on the built-artifact load path", async () => {
-    // Built artifacts prefer `nodeRequire`, but Node can still reject a sidecar
-    // and fall back through jiti. The profile line must never report negative
-    // or missing source-loader sub-step timings either way.
-    await expectBuiltArtifactNodeRequireFastPath("built-artifact-profile-fast-path");
   });
 
   it("keeps dist-runtime built sidecar loads on the nodeRequire fast-path", async () => {
@@ -665,7 +440,7 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("keeps compiled ESM sidecars with SDK imports on the nodeRequire fast-path", async () => {
-    const result = compiledEsmSidecarFastPathResult;
+    const result = runCompiledEsmSidecarFastPathProbe();
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("adapter");
@@ -677,21 +452,11 @@ describe("loadBundledEntryExportSync", () => {
     stubPluginModuleLoaderJitiFactory(
       vi.fn(() => vi.fn(() => ({ sentinel: 42 }))) as unknown as PluginModuleLoaderFactory,
     );
-    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
-
-    fs.writeFileSync(path.join(tempRoot, "package.json"), '{"name":"openclaw"}\n', "utf8");
-    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
-    const sourceRoot = path.join(tempRoot, "extensions", "telegram", "src");
-    fs.mkdirSync(pluginRoot, { recursive: true });
+    const { tempRoot, pluginRoot, importerPath } = createSidecarRoot();
+    writeJson(path.join(tempRoot, "package.json"), { name: "openclaw" });
+    const sourceRoot = path.join(tempRoot, "extensions", "fixture", "src");
     fs.mkdirSync(sourceRoot, { recursive: true });
-
-    const importerPath = path.join(pluginRoot, "index.js");
-    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
-    fs.writeFileSync(
-      path.join(sourceRoot, "secret-contract.ts"),
-      "export const sentinel = 42;\n",
-      "utf8",
-    );
+    writeFile(sourceRoot, "secret-contract.ts", "export const sentinel = 42;\n");
 
     const loadSecretContract = () =>
       loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {

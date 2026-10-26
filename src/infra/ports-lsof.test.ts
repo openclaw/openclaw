@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveLsofCommand, resolveLsofCommandSync } from "./ports-lsof.js";
 
 const LSOF_CANDIDATES =
@@ -44,6 +45,24 @@ describe("lsof command resolution", () => {
       throw new Error("missing");
     });
     await expect(resolveLsofCommand()).resolves.toBe("lsof");
+  });
+
+  it("does not inspect another executable after a canceled filesystem read", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const controller = new AbortController();
+    const access = vi.spyOn(fsPromises, "access").mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      throw new Error("missing");
+    });
+    const result = resolveLsofCommand(controller.signal).catch((error: unknown) => error);
+    await entered.promise;
+    const reason = new Error("settle deadline expired");
+    controller.abort(reason);
+    release.resolve();
+    expect(await result).toBe(reason);
+    expect(access).toHaveBeenCalledOnce();
   });
 
   it("mirrors candidate resolution for the sync helper", () => {

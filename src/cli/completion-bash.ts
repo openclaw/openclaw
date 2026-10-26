@@ -1,15 +1,60 @@
 // Bash completion owns shell-word normalization and Readline insertion spans.
-import type {
-  ShellCompletionCommandTree,
-  ShellCompletionContext,
-} from "./completion-command-tree.js";
+import type { ShellCompletionCommandTree } from "./completion-command-tree.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
 export function generateBashCompletion(tree: ShellCompletionCommandTree): string {
   const { root, descendants: contexts } = tree;
   const rootCmd = root.command.name();
-  const commandPathUpdate = generateBashCommandPathUpdate(contexts);
-  const choiceCompletion = generateBashOptionChoiceCompletion([root, ...contexts]);
+  const commandPathCases = contexts.map((context) => {
+    const patterns = context.pathVariants
+      .map((commandPath) => `"${commandPath.join(" ")}"`)
+      .join("|");
+    return `          ${patterns})
+            command_path="\${candidate_path}"
+            opts="${context.completions.join(" ")}"
+            value_options="${context.valueOptions.join(" ")}"
+            required_value_options="${context.requiredValueOptions.join(" ")}"
+            ;;`;
+  });
+  const commandPathUpdate = commandPathCases.length
+    ? `        case "\${candidate_path}" in\n${commandPathCases.join("\n")}\n        esac`
+    : "";
+  const choiceCases = [root, ...contexts]
+    .filter(({ valueChoices }) => valueChoices.length > 0)
+    .map(({ pathVariants, valueChoices }) => {
+      const commandPaths = pathVariants.map((segments) => `"${segments.join(" ")}"`).join("|");
+      const optionCases = valueChoices
+        .map(({ flags, choices, requiresValue }) => {
+          const optionFlags = flags.map((flag) => `"${flag}"`).join("|");
+          const escapedChoices = choices.map(quoteCliArg).join(" ");
+          const shouldReturn = requiresValue
+            ? "true"
+            : `[[ \${#COMPREPLY[@]} -gt 0 || -n "\${choice_completion_prefix}" || "\${choice_prefix}" != -* ]]`;
+          return `            ${optionFlags})
+                local -a choice_values=(${escapedChoices})
+                local choice completion
+                for choice in "\${choice_values[@]}"; do
+                    if [[ "\${choice}" == "\${choice_prefix}"* ]]; then
+                        completion="\${choice_completion_prefix}\${choice}"
+                        COMPREPLY+=("\${completion#"\${word_prefix}"}")
+                    fi
+                done
+                if ${shouldReturn}; then
+                    return
+                fi
+                ;;`;
+        })
+        .join("\n");
+      return `        ${commandPaths})
+            case "\${choice_flag}" in
+${optionCases}
+            esac
+            ;;`;
+    })
+    .join("\n");
+  const choiceCompletion = choiceCases
+    ? `    case "\${command_path}" in\n${choiceCases}\n    esac\n`
+    : "";
   return `
 _${rootCmd}_completion() {
     local cur opts command_path candidate_path value_options word flag i j cword remaining_line word_prefix
@@ -144,58 +189,4 @@ ${choiceCompletion}
 
 complete -F _${rootCmd}_completion ${rootCmd}
 `;
-}
-
-function generateBashOptionChoiceCompletion(contexts: ShellCompletionContext[]): string {
-  const cases = contexts
-    .filter(({ valueChoices }) => valueChoices.length > 0)
-    .map(({ pathVariants, valueChoices }) => {
-      const commandPaths = pathVariants.map((segments) => `"${segments.join(" ")}"`).join("|");
-      const optionCases = valueChoices
-        .map(({ flags, choices, requiresValue }) => {
-          const optionFlags = flags.map((flag) => `"${flag}"`).join("|");
-          const escapedChoices = choices.map(quoteCliArg).join(" ");
-          const shouldReturn = requiresValue
-            ? "true"
-            : `[[ \${#COMPREPLY[@]} -gt 0 || -n "\${choice_completion_prefix}" || "\${choice_prefix}" != -* ]]`;
-          return `            ${optionFlags})
-                local -a choice_values=(${escapedChoices})
-                local choice completion
-                for choice in "\${choice_values[@]}"; do
-                    if [[ "\${choice}" == "\${choice_prefix}"* ]]; then
-                        completion="\${choice_completion_prefix}\${choice}"
-                        COMPREPLY+=("\${completion#"\${word_prefix}"}")
-                    fi
-                done
-                if ${shouldReturn}; then
-                    return
-                fi
-                ;;`;
-        })
-        .join("\n");
-      return `        ${commandPaths})
-            case "\${choice_flag}" in
-${optionCases}
-            esac
-            ;;`;
-    })
-    .join("\n");
-  return cases ? `    case "\${command_path}" in\n${cases}\n    esac\n` : "";
-}
-
-function generateBashCommandPathUpdate(contexts: ShellCompletionContext[]): string {
-  const cases = contexts.map((context) => {
-    const patterns = context.pathVariants
-      .map((commandPath) => `"${commandPath.join(" ")}"`)
-      .join("|");
-    return `          ${patterns})
-            command_path="\${candidate_path}"
-            opts="${context.completions.join(" ")}"
-            value_options="${context.valueOptions.join(" ")}"
-            required_value_options="${context.requiredValueOptions.join(" ")}"
-            ;;`;
-  });
-  return cases.length
-    ? `        case "\${candidate_path}" in\n${cases.join("\n")}\n        esac`
-    : "";
 }

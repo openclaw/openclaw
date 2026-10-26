@@ -101,17 +101,25 @@ describe("captured plugin registration", () => {
     await Promise.resolve();
   });
 
-  it("rejects runtime access while capturing CLI metadata without activating the real runtime", () => {
+  it.each([
+    { mode: "cli-metadata", property: "state" },
+    { mode: "cli-metadata", property: "capabilities" },
+    { mode: "setup-only", property: "capabilities" },
+  ] as const)("rejects runtime $property during $mode capture", ({ mode, property }) => {
     expect(() =>
       capturePluginRegistration({
         id: "captured-cli-plugin",
-        registrationMode: "cli-metadata",
+        registrationMode: mode,
         register(api) {
-          api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
+          if (property === "state") {
+            api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
+          } else {
+            void api.runtime.capabilities;
+          }
         },
       }),
     ).toThrow(
-      'Plugin "captured-cli-plugin" runtime is intentionally unavailable during "cli-metadata" registration.',
+      `Plugin "captured-cli-plugin" runtime is intentionally unavailable during "${mode}" registration.`,
     );
   });
 
@@ -175,6 +183,13 @@ describe("captured plugin registration", () => {
           inspect: async () => ({ status: "active" }),
           destroy: async () => {},
         });
+        api.registerStorageProvider({
+          id: "captured-storage",
+          label: "Captured storage",
+          open: async () => {
+            throw new Error("capture must not open storage");
+          },
+        });
         api.registerModelCatalogProvider({
           provider: "captured-provider",
           kinds: ["text"],
@@ -217,10 +232,6 @@ describe("captured plugin registration", () => {
             tracks: [],
           }),
         });
-        api.registerTextTransforms({
-          input: [{ from: /red basket/g, to: "blue basket" }],
-          output: [{ from: /blue basket/g, to: "red basket" }],
-        });
         api.registerChannel({
           plugin: {
             id: "captured-channel",
@@ -254,6 +265,7 @@ describe("captured plugin registration", () => {
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
     expect(captured.workerProviders.map((provider) => provider.id)).toEqual(["captured-worker"]);
+    expect(captured.storageProviders.map((provider) => provider.id)).toEqual(["captured-storage"]);
     expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([
       "captured-provider",
     ]);
@@ -264,8 +276,6 @@ describe("captured plugin registration", () => {
     expect(captured.musicGenerationProviders.map((provider) => provider.id)).toEqual([
       "captured-music",
     ]);
-    expect(captured.textTransforms).toHaveLength(1);
-    expect(captured.textTransforms[0]?.input).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
     expect(captured.api.runtime.version).toEqual(expect.any(String));
@@ -300,7 +310,9 @@ describe("captured plugin registration", () => {
   });
 
   it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {
-    let scheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] | undefined;
+    let scheduleSessionTurn:
+      | OpenClawPluginApi["session"]["workflow"]["scheduleSessionTurn"]
+      | undefined;
     let registerSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] | undefined;
     const captured = capturePluginRegistration({
       id: "captured-custom-plugin",

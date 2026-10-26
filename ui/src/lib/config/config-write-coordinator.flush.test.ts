@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   createConfigServerMock,
   createDeferredSetServerMock,
@@ -35,7 +36,7 @@ describe("config form commit flush", () => {
     runtimeConfig.dispose();
   });
 
-  it("does not flush a retained draft into a reconnected Gateway", async () => {
+  it("does not flush a retained draft into a replacement Gateway client", async () => {
     vi.useFakeTimers();
     const server = createConfigServerMock();
     const { runtimeConfig, publish } = createConfigCapabilityHarness(
@@ -44,7 +45,7 @@ describe("config form commit flush", () => {
     await runtimeConfig.ensureLoaded();
     runtimeConfig.patchForm(["count"], 2);
     publish(false);
-    publish(true);
+    publish(true, createTestGatewayClient(server.request as GatewayBrowserClient["request"]));
     await vi.advanceTimersByTimeAsync(0);
     await expect(runtimeConfig.flushFormChanges()).resolves.toBe(false);
     expect(server.submissions).toHaveLength(0);

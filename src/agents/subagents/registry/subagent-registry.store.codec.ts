@@ -1,18 +1,20 @@
 import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Selectable } from "kysely";
-import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
+import { decodeGatewayOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.codec.js";
+import type { SessionStateNotice } from "../../../sessions/session-state-events.kernel.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import type { BoundSubagentRunRecord } from "./subagent-registry.store.kernel.js";
+import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
+import type {
+  SubagentRegistryWrite,
+  SubagentRegistryWriteReceipt,
+} from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
-export type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
 type CanonicalSubagentRunRecord = SubagentRunRecord &
   Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
 const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
-export const DELIVERY_STATUSES = new Set(
+const DELIVERY_STATUSES = new Set(
   "not_required pending in_progress delivered failed suspended discarded".split(" "),
 );
 
@@ -23,7 +25,7 @@ function hasStateStatus(
   return isRecord(value) && typeof value.status === "string" && statuses.has(value.status);
 }
 
-function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
+export function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
   return (
     isRecord(value) &&
     hasStateStatus(value.execution, EXECUTION_STATUSES) &&
@@ -38,13 +40,9 @@ function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagen
   );
 }
 
-function parseJson(raw: string | null): unknown {
-  return raw ? safeParseJson(raw) : undefined;
-}
-
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */
 export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | null {
-  const stored = parseJson(row.payload_json);
+  const stored = row.payload_json ? safeParseJson(row.payload_json) : undefined;
   const payload =
     isRecord(stored) &&
     isRecord(stored.parentCompletion) &&
@@ -61,6 +59,16 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
   payload.requesterSessionKey = row.requester_session_key;
   payload.requesterStorePath = row.requester_store_path ?? undefined;
   payload.controllerStorePath = row.controller_store_path ?? undefined;
+  if (payload.operatorRecoverySource !== undefined) {
+    try {
+      payload.operatorRecoverySource = decodeGatewayOperatorRecoverySource(
+        payload.operatorRecoverySource,
+      );
+    } catch {
+      // Preserve the interrupted result; unavailable evidence cannot authorize a continuation.
+      delete payload.operatorRecoverySource;
+    }
+  }
   const controllerSessionKey = row.controller_session_key?.trim();
   if (controllerSessionKey) {
     payload.controllerSessionKey = controllerSessionKey;
@@ -74,15 +82,19 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
     payload.delivery.status = "not_required";
   }
   const record = normalizeSubagentRunState(payload);
-  return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
+  if (!record.runId || !record.childSessionKey || !record.requesterSessionKey) {
+    return null;
+  }
+  return record;
 }
 
 /** Canonically serializes a run before an outer transaction acquires the write lock. */
-export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRunRecord {
-  const normalized = normalizeSubagentRunState(structuredClone(entry));
-  if (!isCanonicalSubagentRunRecord(normalized)) {
+export function bindSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
+  if (!isCanonicalSubagentRunRecord(entry)) {
     throw new Error("subagent run is missing canonical nested state");
   }
+  // Normalization writes only these containers; the live postimage stays separate.
+  const normalized = normalizeSubagentRunState({ ...entry, completion: { ...entry.completion } });
   return {
     run_id: normalized.runId,
     child_session_key: normalized.childSessionKey,
@@ -98,4 +110,36 @@ export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRu
       normalized.completionTarget === "parent" ? { parentCompletion: normalized } : normalized,
     ),
   };
+}
+
+export function parseSubagentRegistryWriteReceipt(
+  value: unknown,
+  write: SubagentRegistryWrite,
+): SubagentRegistryWriteReceipt {
+  if (!isRecord(value) || value.writeId !== write.writeId) {
+    throw new Error("Registry acknowledgement identifies another write");
+  }
+  if (!Array.isArray(value.notices)) {
+    throw new Error("Registry acknowledgement is missing commit facts");
+  }
+  const notices = value.notices.map((notice): SessionStateNotice => {
+    if (
+      !isRecord(notice) ||
+      typeof notice.watcherSessionKey !== "string" ||
+      (notice.watcherStorePath !== null && typeof notice.watcherStorePath !== "string") ||
+      typeof notice.targetSessionKey !== "string" ||
+      typeof notice.lastSeenSequence !== "number" ||
+      typeof notice.queueOnly !== "boolean"
+    ) {
+      throw new Error("Registry acknowledgement has an invalid terminal notice");
+    }
+    return {
+      watcherSessionKey: notice.watcherSessionKey,
+      watcherStorePath: notice.watcherStorePath,
+      targetSessionKey: notice.targetSessionKey,
+      lastSeenSequence: notice.lastSeenSequence,
+      queueOnly: notice.queueOnly,
+    };
+  });
+  return { writeId: write.writeId, notices };
 }

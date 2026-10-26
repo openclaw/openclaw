@@ -11,7 +11,12 @@ import {
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import {
+  chatThreadDistanceFromBottom,
+  waitForChatScrollIdle,
+  chatMessage,
+} from "./chat-flow.test-support.ts";
+import { board } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
@@ -590,12 +595,7 @@ suite.define(() => {
       sessionKey,
       featureMethods: ["board.get", "chat.history", "chat.metadata", "chat.startup"],
       methodResponses: {
-        "board.get": {
-          sessionKey,
-          revision: 1,
-          tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-          widgets: [],
-        },
+        "board.get": board(sessionKey),
       },
       historyMessages: [
         ...transcriptPrefix,
@@ -644,16 +644,11 @@ suite.define(() => {
           content: [{ type: "text", text: "export function renderToolCard() {}" }],
           timestamp: 102,
         },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "The transcript implementation is sound and all focused tests pass.",
-            },
-          ],
-          timestamp: 103,
-        },
+        chatMessage(
+          "assistant",
+          "The transcript implementation is sound and all focused tests pass.",
+          { timestamp: 103 },
+        ),
         ...Array.from({ length: 3 }, (_, index) => [
           {
             role: "user",
@@ -702,15 +697,28 @@ suite.define(() => {
 
     await showSplitDashboard(page, sessionKey);
     const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
-    await expect.poll(() => workSummaries.count()).toBe(2);
-    const middleWorkSummary = workSummaries.first();
     const endWorkSummary = workSummaries.last();
+    await endWorkSummary.waitFor({ state: "visible" });
+    const endRowKey = await endWorkSummary.evaluate(
+      (button) => button.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
+    );
+    expect(endRowKey).toBeTypeOf("string");
     await waitForChatScrollIdle(page);
     expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
     const traces: Record<string, DisclosureFrame[]> = {};
     traces.workEndExpand = await toggleDisclosureWithFrameTrace(page, endWorkSummary);
     traces.workEndCollapse = await toggleDisclosureWithFrameTrace(page, endWorkSummary);
 
+    const transcript = page.locator(".chat-pane-cache__pane--active .chat-thread");
+    await transcript.hover();
+    await page.mouse.wheel(0, -(await transcript.evaluate((element) => element.clientHeight)));
+    await waitForChatScrollIdle(page);
+    const middleWorkSummary = workSummaries.first();
+    expect(
+      await middleWorkSummary.evaluate(
+        (button) => button.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
+      ),
+    ).not.toBe(endRowKey);
     await middleWorkSummary.evaluate((button) => {
       const row = button.closest<HTMLElement>(".chat-virtual-row");
       const thread = button.closest<HTMLElement>(".chat-thread");
@@ -931,6 +939,10 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
+    await waitForChatScrollIdle(page);
+    const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+    await thread.focus();
+    await thread.press("PageUp");
     await waitForChatScrollIdle(page);
     const userToggle = page
       .locator(".chat-message-disclosure")

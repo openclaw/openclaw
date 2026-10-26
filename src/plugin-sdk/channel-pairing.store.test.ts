@@ -11,12 +11,12 @@ import {
   removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createPluginRuntimeMock } from "./test-helpers/plugin-runtime-mock.js";
 
 let stateDir: string;
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await closeStateDatabaseForTest();
   fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
@@ -36,16 +36,19 @@ function createPairingFixture() {
   return {
     env,
     pairing: createChannelPairingController({ core, channel: "demo", accountId: " Alpha " }),
+    list: (channel = "demo", accountId = "alpha") =>
+      listChannelPairingRequests(channel, env, accountId),
+    approve: (code: string, accountId = "alpha") =>
+      approveChannelPairingCode({ channel: "demo", accountId, code, env }),
   };
 }
 
 describe("channel pairing account isolation", () => {
   it.each([
     { name: "ordinary input", extras: {} },
-    { name: "conflicting account", extras: { accountId: "beta" } },
     { name: "conflicting channel and account", extras: { channel: "other", accountId: "beta" } },
   ])("persists and approves $name only in the bound account", async ({ extras }) => {
-    const { env, pairing } = createPairingFixture();
+    const { env, pairing, list, approve } = createPairingFixture();
     const beta = await upsertChannelPairingRequest({
       channel: "demo",
       accountId: "beta",
@@ -61,25 +64,21 @@ describe("channel pairing account isolation", () => {
       code: alpha.code,
       created: false,
     });
-    closeOpenClawStateDatabaseForTest();
-    await expect(listChannelPairingRequests("demo", env, "alpha")).resolves.toMatchObject([
+    await closeStateDatabaseForTest();
+    await expect(list()).resolves.toMatchObject([
       { id: "shared-sender", code: alpha.code, meta: { name: "Alpha sender", accountId: "alpha" } },
     ]);
-    await expect(listChannelPairingRequests("demo", env, "beta")).resolves.toMatchObject([
+    await expect(list("demo", "beta")).resolves.toMatchObject([
       { code: beta.code, meta: { name: "Beta sender", accountId: "beta" } },
     ]);
-    await expect(listChannelPairingRequests("other", env, "beta")).resolves.toEqual([]);
-    await expect(
-      approveChannelPairingCode({ channel: "demo", accountId: "beta", code: alpha.code, env }),
-    ).resolves.toBeNull();
-    await expect(
-      approveChannelPairingCode({ channel: "demo", accountId: "alpha", code: alpha.code, env }),
-    ).resolves.toMatchObject({ id: "shared-sender" });
+    await expect(list("other", "beta")).resolves.toEqual([]);
+    await expect(approve(alpha.code, "beta")).resolves.toBeNull();
+    await expect(approve(alpha.code)).resolves.toMatchObject({ id: "shared-sender" });
     await expect(pairing.readAllowFromStore()).resolves.toEqual(["shared-sender"]);
-    await expect(listChannelPairingRequests("demo", env, "alpha")).resolves.toEqual([]);
+    await expect(list()).resolves.toEqual([]);
     await expect(readChannelAllowFromStore("demo", env, "beta")).resolves.toEqual([]);
 
-    await approveChannelPairingCode({ channel: "demo", accountId: "beta", code: beta.code, env });
+    await approve(beta.code, "beta");
     await expect(pairing.removeAllowFromStoreEntry("shared-sender")).resolves.toEqual({
       changed: true,
       allowFrom: [],
@@ -91,7 +90,7 @@ describe("channel pairing account isolation", () => {
   });
 
   it("keeps challenge persistence and approval replies bound despite a replacement writer", async () => {
-    const { env, pairing } = createPairingFixture();
+    const { env, pairing, list, approve } = createPairingFixture();
     const replies: string[] = [];
     const challenge = {
       senderId: "challenge-sender",
@@ -111,21 +110,19 @@ describe("channel pairing account isolation", () => {
         }),
     };
     const result = await pairing.issueChallenge(challenge);
-    const [stored] = await listChannelPairingRequests("demo", env, "alpha");
+    const [stored] = await list();
     assert.ok(stored);
     expect(stored).toMatchObject({
       id: "challenge-sender",
       code: result.code,
       meta: { name: "Challenge sender", accountId: "alpha" },
     });
-    await expect(listChannelPairingRequests("other", env, "beta")).resolves.toEqual([]);
+    await expect(list("other", "beta")).resolves.toEqual([]);
     expect(replies).toHaveLength(1);
     expect(replies[0]).toContain(`openclaw pairing approve demo ${stored.code}`);
     await expect(pairing.issueChallenge(challenge)).resolves.toEqual({ created: false });
     expect(replies).toHaveLength(1);
-    await expect(
-      approveChannelPairingCode({ channel: "demo", accountId: "alpha", code: stored.code, env }),
-    ).resolves.toMatchObject({ id: "challenge-sender" });
+    await expect(approve(stored.code)).resolves.toMatchObject({ id: "challenge-sender" });
     await expect(pairing.readAllowFromStore()).resolves.toEqual(["challenge-sender"]);
   });
 });

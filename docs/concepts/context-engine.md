@@ -100,6 +100,26 @@ their caller-owned lifetime.
 
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
+### Provider compaction ownership
+
+On direct OpenAI API-key routes using `openai-responses`, when the active context
+engine declares `info.ownsCompaction: true`, OpenClaw disables native compaction
+and stored Responses checkpoint replay by default. Set
+`params.responsesServerCompaction` explicitly to `true` to opt in. Engines that
+do not own compaction, including `legacy`, retain the existing default-on behavior
+on eligible routes. Native ChatGPT sign-in (`openai-chatgpt-responses`), the Codex
+app-server harness, and other providers are unchanged.
+
+Preexisting Responses checkpoints are bypassed while this ownership guard is
+active; their stored data is not deleted. Explicit opt-in allows a matching
+Responses checkpoint to take precedence over the selected engine's assembled
+context. Choose it only when you want provider-managed context to override engine
+assembly for those requests.
+
+On these direct API-key routes, memory-extraction (memory flush) turns always
+disable native compaction and checkpoint replay, even with explicit opt-in, so
+extraction can use the unsummarized history.
+
 ### Subagent lifecycle (optional)
 
 OpenClaw calls two optional subagent lifecycle hooks:
@@ -161,7 +181,7 @@ export default function register(api) {
       },
     },
 
-    async ingest({ sessionId, message, isHeartbeat }) {
+    async ingest({ sessionId, message }) {
       // Store the message in your data store
       return { ingested: true };
     },
@@ -240,30 +260,52 @@ Required members:
 
 Set `info.acceptedHostParams` to restrict the host-added lifecycle fields the
 engine receives. Current keys are `sessionKey`, `prompt`, `runtimeSettings`,
-`sessionTarget`, `runtimeContext`, and `abortSignal`. OpenClaw intersects the
-declaration with the fields available for each lifecycle method, so undeclared
-or unknown keys are never injected. `abortSignal` governs optional cooperative
-cancellation for `maintain()`; the existing compact-operation abort signal is
-always preserved. Engines without this declaration receive every current host
-field; declare an explicit list, including `[]`, when the engine validates a
-narrower input shape.
+`sessionTarget`, `runtimeContext`, `abortSignal`, and `onProgress`. OpenClaw
+intersects the declaration with the fields available for each lifecycle method,
+so undeclared or unknown keys are never injected. `abortSignal` governs optional
+cooperative cancellation for `maintain()`; the existing compact-operation abort
+signal is always preserved. Engines without this declaration receive every
+current host field except `onProgress`; declare an explicit list, including `[]`,
+when the engine validates a narrower input shape.
+
+Compaction progress is opt-in: explicitly include `"onProgress"` to receive the
+optional `compact()` callback. Report useful progress to refresh the existing
+no-progress window, under the same finite overall ceiling. Engines that omit the
+declaration or exclude `"onProgress"` keep the one-window contract for their own
+compaction work. See [Compaction progress](/plugins/architecture-internals/context-engines#compaction-progress).
 
 For durable admitted turns, declare both transcript semantics:
 
 - `currentTurnFence: "before-current-turn-entry-v1"`
 - `turnAdvancementIdempotency: "atomic-idempotent-v1"`
 
-and implement `commitTurn(...)` as one atomic, idempotent write keyed by
-`advancementKey`. Return `{ status: "committed" }` for the first write and
+and implement `commitTurn(...)` as one atomic write keyed by
+`advancementKey` that has no additional effect when repeated. Return `{ status: "committed" }` for the first write and
 `{ status: "duplicate" }` when a host retry presents an already-committed key.
 The `messages` payload contains only the inclusive range from the admitted user
 entry through the accepted terminal entry. Engines that need the earlier
 transcript during bootstrap or rebuild should read it through the transcript
-cursor API, `readSessionTranscriptVisibleMessageDelta(...)`.
+cursor API, `readSessionTranscriptVisibleMessageDelta(...)` from
+`openclaw/plugin-sdk/context-engine-transcript-runtime`. Pass
+`start: "reset-window"` so a fresh drain begins at the latest same-session reset
+instead of importing pre-reset history; see
+[Context engine transcript cursor](/plugins/sdk-runtime/agent#context-engine-transcript-cursor).
 Pre-turn transcript reads during bootstrap, maintenance, assembly, and retries
 then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted
 turns do not advance context-engine state.
+
+Confirming which running turn consumed a steered message preserves that turn's
+admission. Only its private steering correlation changes: live transcript updates
+publish the correction, but delta cursors do not replay it. Content, provenance,
+branch changes, and transcript replacement still invalidate old admissions.
+
+The logical-turn owner removes unaccepted admissions when the run ends, including
+when it exits before reporting a terminal transcript boundary. Recovery after a
+Gateway interruption also removes admissions without host acceptance and logs
+the skipped advancement; it never infers success from later transcript entries.
+Accepted work remains queued until the engine acknowledges it. No migration or
+configuration change is required for existing outbox rows.
 
 After accepted-turn finalization acknowledges `committed` or `duplicate`, the host
 also offers `maintain()` through the same maintenance scheduler. Engines declaring
@@ -299,23 +341,19 @@ already crossed by a transcript cursor.
   The ordered messages to send to the model.
 </ParamField>
 <ParamField path="estimatedTokens" type="number" required>
-  The engine's estimate of total tokens in the assembled context. OpenClaw uses this for compaction threshold decisions and diagnostic reporting.
+  The engine's estimate of total tokens in the assembled context. OpenClaw uses this for compaction threshold decisions and diagnostic reporting, but not to decide whether to send a provider request.
 </ParamField>
 <ParamField path="systemPromptAddition" type="string">
   Prepended to the system prompt.
 </ParamField>
 <ParamField path="promptAuthority" type='"assembled" | "preassembly_may_overflow"'>
-  Controls which token estimate the runner uses for preemptive overflow
-  prechecks. Defaults to `"assembled"`, which means only the assembled
-  prompt's estimate is checked for engines that do not own compaction.
-  Engines that set `ownsCompaction: true` manage their own prompt admission,
-  so OpenClaw skips the generic pre-prompt precheck by default. Set
-  `"preassembly_may_overflow"` only when your assembled view can hide overflow
-  risk in the underlying transcript; the runner then keeps the generic
-  precheck active and takes the maximum of the assembled estimate and the
-  pre-assembly (unwindowed) session-history estimate when deciding whether to
-  preemptively compact. Either way, the messages you return are still what the
-  model sees - `promptAuthority` only affects the precheck.
+  Controls the history included in host token-pressure diagnostics. Defaults to
+  `"assembled"`. Set `"preassembly_may_overflow"` when the assembled view can hide
+  pressure in the underlying transcript; diagnostics then report the maximum of
+  the host's assembled and pre-assembly (unwindowed) history estimates. That
+  diagnostic maximum does not block a fitting outgoing request. The returned
+  messages remain the model context, and this field does not disable host
+  request admission checks for engines that own compaction.
 </ParamField>
 <ParamField path="contextProjection" type="ContextEngineProjection">
   Optional projection lifecycle for hosts with persistent backend threads (for example Codex app-server). `mode: "thread_bootstrap"` with a stable `epoch` asks the host to inject the assembled context once per epoch and reuse the backend thread until the epoch changes, instead of re-projecting every turn. Omit this field for normal per-turn projection.
@@ -378,7 +416,7 @@ host parameters and accept `runtimeSettings` must include it in
 ### Host requirements
 
 Context engines can declare host capability requirements on `info.hostRequirements`.
-OpenClaw checks these requirements before starting the operation and fails closed
+OpenClaw checks these requirements before starting the operation and stops
 with a descriptive error when the selected runtime cannot satisfy them.
 
 For agent runs, declare `assemble-before-prompt` when the engine must control the
@@ -419,7 +457,7 @@ cleanup owns an independent async lifetime, so a closed caller scope does not
 prevent its factory from running.
 
 Host requirement failures are different: when an engine declares that a runtime
-lacks a required capability, OpenClaw fails closed before starting the run. That
+lacks a required capability, OpenClaw refuses to start the run. That
 protects engines that would corrupt state if they ran in an unsupported host.
 
 ### ownsCompaction
@@ -428,7 +466,16 @@ protects engines that would corrupt state if they ran in an unsupported host.
 
 <AccordionGroup>
   <Accordion title="ownsCompaction: true">
-    The engine owns compaction behavior. OpenClaw disables OpenClaw runtime's built-in auto-compaction and generic pre-prompt overflow precheck for that run, and the engine's `compact()` implementation is responsible for `/compact`, provider overflow recovery compaction, and any proactive compaction it wants to do in `afterTurn()`. OpenClaw still runs the pre-prompt overflow safeguard when the engine returns `promptAuthority: "preassembly_may_overflow"` from `assemble()`.
+    The engine owns compaction behavior. OpenClaw disables the runtime's built-in auto-compaction, and the engine's `compact()` implementation is responsible for `/compact`, overflow recovery compaction, and any proactive compaction it wants to do in `afterTurn()`.
+
+    The embedded runtime still checks every outgoing provider request, including
+    the first, before sending it. When a request extends a matching measured
+    prefix from the current run, the host anchors its estimate to that provider
+    usage and counts the appended content. Otherwise, it estimates the actual system
+    prompt, messages, and tools afresh. Requests that exceed the host's prompt
+    budget enter recovery before reaching the provider. The engine's
+    `estimatedTokens` does not control this decision.
+
   </Accordion>
   <Accordion title="ownsCompaction: false or unset">
     OpenClaw runtime's built-in auto-compaction may still run during prompt execution, but the active engine's `compact()` method is still called for `/compact` and overflow recovery.
@@ -454,12 +501,62 @@ A no-op `compact()` is unsafe for an active non-owning engine because it disable
 
 ## Configuration reference
 
+### Plugin and engine IDs
+
+The slot selects the ID passed to `api.registerContextEngine()`, not necessarily
+the plugin's manifest ID. A plugin with different IDs declares its engines in
+`openclaw.plugin.json` so OpenClaw can identify the owner before executing it:
+
+```json
+{
+  "id": "vendor-plugin",
+  "kind": "context-engine",
+  "contextEngineIds": ["canonical-engine"],
+  "configSchema": { "type": "object", "additionalProperties": false }
+}
+```
+
+Enable `plugins.entries.vendor-plugin`, and select
+`plugins.slots.contextEngine: "canonical-engine"`. Engine IDs are case-sensitive.
+Registration must use one of the declared IDs. Two plugins declaring the same
+engine do not establish an unambiguous startup owner.
+
+Installation automatically selects a single declared engine when the slot is
+unset, `legacy`, or still contains that plugin's old ID. It preserves an explicit
+custom engine or `none`. With multiple declared engines, installation leaves the
+selection unchanged and asks you to choose an ID explicitly; declaration order
+does not select a default. Existing plugins that omit `contextEngineIds` retain
+the equal-plugin-ID/engine-ID convention. Declare IDs before relying on divergent
+IDs for automatic activation.
+
+Earlier releases stored the plugin ID as the selector when installing such a
+plugin, so its engine never loaded and every turn used `legacy`. Run
+`openclaw doctor --fix` (updates run it for you) to replace that selector with
+the plugin's single declared engine. Doctor changes it only when that owner is
+independently enabled and no other eligible plugin declares the same engine;
+otherwise it keeps the selector and tells you which engine ID to set.
+
+The install record retains declared ownership, allowing uninstall to reset the
+selected engine even if the plugin files are missing or cannot load. Updating a
+plugin refreshes these declarations. If an update removes your explicitly selected
+engine, select another supported ID. A differently named owner must be independently
+enabled or allowlisted; its declaration alone does not authorize loading. Explicit
+disablement and denylists still win, and a nonempty allowlist must include that
+owner. An undeclared equal-ID plugin retains slot-based activation when no
+manifest declares the selected engine ID. If matching declarations exist but none
+of their owners is eligible, legacy fallback requires independent enablement via
+`plugins.entries.<pluginId>.enabled: true` or inclusion in `plugins.allow`; the
+slot alone does not authorize a same-named plugin.
+
+For linked installations, a missing `plugins.load.paths` target still fails CLI
+config validation before uninstall can run; restore or correct that path first.
+
 ```json5
 {
   plugins: {
     slots: {
       // Select the active context engine. Default: "legacy".
-      // Set to a plugin id to use a plugin engine.
+      // Set to a registered engine ID to use a plugin engine.
       contextEngine: "legacy",
     },
   },

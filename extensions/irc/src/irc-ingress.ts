@@ -1,4 +1,3 @@
-// IRC plugin module owns raw PRIVMSG durable admission and replay draining.
 import { randomUUID } from "node:crypto";
 import {
   createChannelIngressError,
@@ -30,7 +29,7 @@ type IrcIngressBody = Omit<IrcIngressPayload, "version">;
 
 export type IrcIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
-export type IrcIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
+type IrcIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type IrcIngressDispatch = (
   message: IrcInboundMessage,
@@ -137,27 +136,14 @@ function resolveIrcIngressNonRetryableFailure(error: unknown) {
     : null;
 }
 
-type IrcIngressConnection = {
-  connectionEpoch: string;
-  accept: (rawLine: string, connectedNick: string) => Promise<void>;
-};
-
-export type IrcIngressMonitor = {
-  openConnection: (connectionEpoch?: string) => IrcIngressConnection;
-  start: () => void;
-  pause: () => Promise<void>;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
+export type IrcIngressMonitor = ReturnType<typeof createIrcIngressMonitor>;
 
 export function createIrcIngressMonitor(options: {
   accountId: string;
   queue?: ChannelIngressQueue<IrcIngressPayload>;
   dispatch: IrcIngressDispatch;
   runtime: Pick<RuntimeEnv, "error" | "log">;
-  pollIntervalMs?: number;
-  adoptionStallTimeoutMs?: number;
-}): IrcIngressMonitor {
+}) {
   const monitor = createChannelIngressMonitor<IrcIngressRaw, IrcIngressBody, IrcIngressPayload>({
     queue:
       options.queue ??
@@ -189,16 +175,13 @@ export function createIrcIngressMonitor(options: {
         connectionEpoch: raw.body.connectionEpoch.trim(),
       });
     },
-    pollIntervalMs: options.pollIntervalMs ?? IRC_INGRESS_POLL_INTERVAL_MS,
+    pollIntervalMs: IRC_INGRESS_POLL_INTERVAL_MS,
     retention: {
       completedMaxEntries: 1_000,
       failedMaxEntries: 1_000,
     },
     drain: {
       resolveNonRetryableFailure: resolveIrcIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
       onLog: (message) => options.runtime.log?.(`irc ${message}`),
     },
     createStoppedError: () => new Error("IRC ingress is stopped."),
@@ -206,7 +189,7 @@ export function createIrcIngressMonitor(options: {
   });
 
   return {
-    openConnection: (connectionEpoch = randomUUID()) => {
+    openConnection: (connectionEpoch: string = randomUUID()) => {
       const epoch = connectionEpoch.trim();
       if (!epoch) {
         throw new Error("IRC ingress connection epoch is required.");
@@ -214,7 +197,7 @@ export function createIrcIngressMonitor(options: {
       let sequence = 0;
       return {
         connectionEpoch: epoch,
-        accept: (rawLine, connectedNick) => {
+        accept: (rawLine: string, connectedNick: string) => {
           if (monitor.isStopped()) {
             return Promise.reject(new Error("IRC ingress is stopped."));
           }

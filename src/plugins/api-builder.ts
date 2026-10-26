@@ -1,23 +1,14 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./api-facades.js";
+import { createPluginInlineViewResult } from "./inline-view.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import type { OpenClawPluginApi, PluginLogger } from "./types.js";
+import type { OpenClawPluginApi } from "./types.js";
 
-type BuildPluginApiParams = {
-  id: string;
-  name: string;
-  version?: string;
-  description?: string;
-  source: string;
+type BuildPluginApiParams = Omit<
+  OpenClawPluginApiWithoutFacades,
+  keyof typeof noops | "registerNodeCliFeature" | "runtimeSource" | "inlineView"
+> & {
   runtimeSource?: string;
-  rootDir?: string;
-  registrationMode: OpenClawPluginApi["registrationMode"];
-  config: OpenClawConfig;
-  pluginConfig?: Record<string, unknown>;
-  runtime: PluginRuntime;
-  logger: PluginLogger;
-  resolvePath: (input: string) => string;
-  handlers?: Partial<Pick<OpenClawPluginApi, keyof typeof noops>>;
+  handlers?: Partial<Pick<OpenClawPluginApiWithoutFacades, keyof typeof noops>>;
 };
 
 const noops = {
@@ -25,11 +16,11 @@ const noops = {
   registerTool: () => {},
   registerHook: () => {},
   registerHttpRoute: () => {},
-  registerHostedMediaResolver: () => {},
   registerWidgetPresenter: () => {},
   registerMcpServerConnectionResolver: () => {},
   registerChannel: () => {},
   registerGatewayMethod: () => {},
+  registerGatewayAccessPolicy: () => {},
   registerSessionCatalog: () => {},
   registerReload: () => {},
   registerNodeHostCommand: () => {},
@@ -38,12 +29,12 @@ const noops = {
   registerService: () => {},
   registerGatewayDiscoveryService: () => {},
   registerCliBackend: () => {},
-  registerTextTransforms: () => {},
   registerConfigMigration: () => {},
   registerMigrationProvider: () => {},
   registerAutoEnableProbe: () => {},
   registerProvider: () => {},
   registerWorkerProvider: () => {},
+  registerStorageProvider: () => {},
   registerModelCatalogProvider: () => {},
   registerEmbeddingProvider: () => {},
   registerSpeechProvider: () => {},
@@ -63,7 +54,6 @@ const noops = {
   registerCompactionProvider: () => {},
   registerDecisionProvider: () => {},
   registerAgentHarness: () => {},
-  registerCodexAppServerExtensionFactory: () => {},
   registerAgentToolResultMiddleware: () => {},
   registerSessionExtension: () => {},
   enqueueNextTurnInjection: async (injection) => ({
@@ -71,10 +61,10 @@ const noops = {
     id: "",
     sessionKey: injection.sessionKey,
   }),
+  steerActiveRun: async () => ({ steered: false, reason: "not wired" }),
   registerTrustedToolPolicy: () => {},
   registerToolMetadata: () => {},
   registerControlUiDescriptor: () => {},
-  registerBoardWidgetContentKind: () => {},
   registerRuntimeLifecycle: () => {},
   registerAgentEventSubscription: () => {},
   emitAgentEvent: () => ({
@@ -92,13 +82,12 @@ const noops = {
   }),
   scheduleSessionTurn: async () => undefined,
   unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
-  registerDetachedTaskRuntime: () => {},
   registerMemoryCapability: () => {},
   registerMemoryPromptSupplement: () => {},
   registerMemoryPromptPreparation: () => {},
   registerMemoryCorpusSupplement: () => {},
   on: () => {},
-} satisfies Partial<OpenClawPluginApi>;
+} satisfies Partial<OpenClawPluginApiWithoutFacades>;
 const noopEntries = Object.entries(noops);
 
 export function createUnavailableRuntime(
@@ -134,9 +123,11 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers[key as keyof typeof noops] ?? fallback,
     ]),
     // SAFETY: Every declared method receives its typed handler or matching default.
-  ) as Pick<OpenClawPluginApi, keyof typeof noops>;
+  ) as Pick<OpenClawPluginApiWithoutFacades, keyof typeof noops>;
   const api: OpenClawPluginApiWithoutFacades = {
     id: params.id,
+    inlineView: (viewId, payload, options) =>
+      createPluginInlineViewResult(params.id, viewId, payload, options),
     name: params.name,
     version: params.version,
     description: params.description,
@@ -149,6 +140,9 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     runtime: params.runtime,
     logger: params.logger,
     ...registrations,
+    ...(params.registerSubagentProfile
+      ? { registerSubagentProfile: params.registerSubagentProfile }
+      : {}),
     registerNodeCliFeature: (registrar, opts) =>
       registrations.registerCli(registrar, { ...opts, parentPath: ["nodes"] }),
     resolvePath: params.resolvePath,

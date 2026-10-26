@@ -1,20 +1,20 @@
 import type { CliDeps } from "../cli/deps.types.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
-import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayConfigReloaderHandle } from "./server-runtime-handles.js";
 import type { GatewayChannelManager } from "./server-runtime-services.js";
 import type {
   SharedGatewayAuthClient,
   SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+import type { ActivateRuntimeSecrets } from "./server-startup-config.types.js";
 import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 
 export type RuntimeSecretsPreflightParams = Omit<
@@ -30,7 +30,6 @@ export type CurrentRuntimeSecretsPreparation = {
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof import("./hooks.js").resolveHooksConfig>;
   hookClientIpConfig: HookClientIpConfig;
-  heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
 };
 
@@ -38,11 +37,6 @@ type GatewayReloadLog = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
   error?: (msg: string) => void;
-};
-
-export type GatewayGmailRestartAbortController = {
-  abort: () => void;
-  signal: AbortSignal;
 };
 
 export type GatewayHotReloadPublication = {
@@ -63,19 +57,7 @@ export type GatewayRestartTransactionResult = {
 };
 
 export type GatewayRestartRequestOptions = {
-  retainDebtAcrossConfigChanges?: boolean;
   prepareRuntimeConfig?: () => Promise<OpenClawConfig>;
-  debtConfig?: OpenClawConfig;
-};
-
-export type AcceptedRestartTarget = {
-  runtimeConfig: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-  prepareRuntimeConfig: () => Promise<OpenClawConfig>;
-};
-
-export type AcceptedRestartTargetOwnership = {
-  reject: () => void;
 };
 
 class GatewayHotReloadCancelledError extends Error {
@@ -113,6 +95,12 @@ export class GatewayConfigReloadSupersededError extends Error {
   }
 }
 
+export function assertConfigReloadWriteSnapshot(snapshot: ConfigFileSnapshot): void {
+  if (!snapshot.exists || !snapshot.valid) {
+    throw new Error("Config write snapshot is missing or invalid; runtime application refused.");
+  }
+}
+
 export function createReloadCancellationError(superseded: boolean) {
   return superseded
     ? new GatewayConfigReloadSupersededError()
@@ -141,6 +129,7 @@ export type GatewayRuntimePublication = {
 };
 
 export type GatewayReloadHandlerParams = {
+  scheduler: GatewayScheduler;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   /** Kept across cron rebuilds so a hot reload does not drop scheduler gateway context. */
@@ -164,11 +153,11 @@ export type GatewayReloadHandlerParams = {
     changedPaths: readonly string[];
     reloadPluginIds?: ReadonlySet<string>;
     pluginLifecycle?: GatewayReloadPlan["pluginLifecycle"];
-    /** Fence config consumers before drain; return their publication after successful rollback. */
+    /** Fence execution before drain; retire active facts only when replacement can begin. */
     prepareConfigEffects: (replacement: {
       pluginIds: ReadonlySet<string>;
       channels: ReadonlySet<ChannelKind>;
-    }) => () => Promise<void>;
+    }) => { retire: () => void; rollback: () => Promise<void> };
     commitRuntime: (publication?: GatewayRuntimePublication) => Promise<void>;
     env: NodeJS.ProcessEnv;
     isAborted?: () => boolean;
@@ -184,8 +173,8 @@ export type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   cronReconciliation: GatewayCronReconciliation;
-  createGmailRestartAbortController?: () => GatewayGmailRestartAbortController;
-  clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
+  createGmailRestartAbortController?: () => AbortController;
+  clearGmailRestartAbortController?: (controller: AbortController) => void;
   onCronRestart?: () => void;
   requestRecoveryRestart?: GatewayRestartEmitter;
   restartRecoveryAvailable?: boolean;

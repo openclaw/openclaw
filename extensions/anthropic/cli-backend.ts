@@ -1,25 +1,29 @@
-/**
- * Claude CLI backend descriptor. It configures Claude Code process arguments,
- * MCP bundling, session handling, and credential transport.
- */
 import { createHmac, randomBytes } from "node:crypto";
 import type {
   CliBackendExecuteContext,
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
-import { parseClaudeCliJsonlEvent, parseClaudeCliJsonlLifecycleEvent } from "./cli-output.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
   CLAUDE_CLI_CLEAR_ENV,
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
+} from "./cli-constants.js";
+import {
+  classifyClaudeCliErrorCode,
+  parseClaudeCliJsonlEvent,
+  parseClaudeCliJsonlLifecycleEvent,
+} from "./cli-output.js";
+import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
   resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
+import { appendClaudeCliToolNamingGuidance } from "./cli-tool-naming.js";
 
 type ClaudeCliAuthCredential =
   | { type: "oauth"; access: string; expires: number }
@@ -61,6 +65,7 @@ const CLAUDE_NATIVE_TOOL_CAPABILITIES: Readonly<Record<string, string>> = {
   bash: "exec",
   webfetch: "web_fetch",
   websearch: "web_search",
+  askuserquestion: "ask_user",
 };
 
 function projectClaudeNativeToolAuthority(nativeTools: readonly string[]): readonly string[] {
@@ -73,6 +78,28 @@ function projectClaudeNativeToolAuthority(nativeTools: readonly string[]): reado
         .map(([, capability]) => capability),
     ),
   ];
+}
+
+// Orchestration tools whose descendants inherit the parent's tool list, so they confer
+// no capability of their own. Order is canonical: equivalent selections launch one argv.
+const CLAUDE_MANAGED_NATIVE_TOOLS = ["Agent", "Workflow"] as const;
+
+/** Operator selection under `plugins.entries.anthropic.config.managedNativeTools`. */
+function resolveClaudeManagedNativeTools(
+  ctx: Parameters<NonNullable<CliBackendPlugin["resolveManagedNativeTools"]>>[0],
+): readonly string[] {
+  const pluginConfig = ctx.config?.plugins?.entries?.anthropic?.config;
+  const selection = isRecord(pluginConfig) ? pluginConfig.managedNativeTools : undefined;
+  if (!isRecord(selection)) {
+    return [];
+  }
+  const agents = isRecord(selection.agents) ? selection.agents : undefined;
+  const selected = Object.hasOwn(agents ?? {}, ctx.agentId)
+    ? agents?.[ctx.agentId]
+    : selection.default;
+  return Array.isArray(selected)
+    ? CLAUDE_MANAGED_NATIVE_TOOLS.filter((name) => selected.includes(name))
+    : [];
 }
 
 function createClaudeCliAuthInput(params: {
@@ -148,7 +175,6 @@ function resolveClaudeCliAuthInput(
   return undefined;
 }
 
-/** Build the Claude CLI backend plugin descriptor. */
 export function buildAnthropicCliBackend(
   options: {
     ensureDynamicSystemPromptSectionsSupport?: () => Promise<void>;
@@ -178,9 +204,12 @@ export function buildAnthropicCliBackend(
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
+    hostOwnedTools: ["exec", "process"],
     toolAvailabilityEnforcement: "execution-args",
-    isolatesInstructionsWithExactTools: true,
+    transformSystemPrompt: ({ systemPrompt, openClawMcpToolNames }) =>
+      appendClaudeCliToolNamingGuidance(systemPrompt, openClawMcpToolNames),
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,
+    resolveManagedNativeTools: resolveClaudeManagedNativeTools,
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     manualCompaction: {
@@ -297,6 +326,7 @@ export function buildAnthropicCliBackend(
       return supportProbe ? supportProbe.then(prepare) : prepare();
     },
     parseJsonlEvent: parseClaudeCliJsonlEvent,
+    classifyErrorCode: classifyClaudeCliErrorCode,
     parseJsonlLifecycleEvent: parseClaudeCliJsonlLifecycleEvent,
     resolveExecutionArgs: (context) =>
       resolveClaudeCliExecutionArgs(context, {

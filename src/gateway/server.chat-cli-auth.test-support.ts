@@ -1,3 +1,59 @@
+import path from "node:path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+
+export function createClaudeCliGatewayEnv() {
+  return {
+    PATH: undefined,
+    OPENCLAW_PATH_BOOTSTRAPPED: "1",
+    CLAUDE_CONFIG_DIR: undefined,
+    ANTHROPIC_API_KEY: undefined,
+    ANTHROPIC_OAUTH_TOKEN: undefined,
+    CLAUDE_CODE_OAUTH_TOKEN: undefined,
+    CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: undefined,
+    CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: undefined,
+    OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "dist/extensions"),
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    OPENCLAW_SKIP_CHANNELS: "1",
+    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+    OPENCLAW_SKIP_CRON: "1",
+    OPENCLAW_SKIP_CANVAS_HOST: "1",
+    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+    OPENCLAW_SKIP_PROVIDERS: "1",
+    OPENCLAW_GATEWAY_TOKEN: undefined,
+    OPENCLAW_GATEWAY_PASSWORD: undefined,
+  };
+}
+
+export function createClaudeCliGatewayConfig(
+  workspaceDir: string,
+  modelRef: string,
+  token: string,
+) {
+  return {
+    agents: {
+      defaults: {
+        workspace: workspaceDir,
+        skipBootstrap: true,
+        utilityModel: "",
+        model: { primary: modelRef },
+        models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
+      },
+    },
+    plugins: {
+      enabled: true,
+      allow: ["anthropic"],
+      entries: {
+        anthropic: { enabled: true, config: { sessionCatalog: { enabled: false } } },
+      },
+      slots: { memory: "none" },
+    },
+    tools: { profile: "minimal" },
+    gateway: { auth: { mode: "token", token } },
+  } satisfies OpenClawConfig;
+}
+
 // Synthetic Claude executable for the Gateway account-continuity scenarios.
 export const createClaudeAuthFixture = (workspaceDir: string, projectDir: string) => String.raw`
 const assert = require("node:assert/strict");
@@ -13,6 +69,7 @@ if (process.argv.includes("--version")) {
   process.exit(0);
 }
 if (process.argv.includes("auth")) {
+  appendFileSync(join(nativeRoot, "auth-status.log"), "probe\n");
   send({ loggedIn: nativeLogin });
   process.exit(0);
 }

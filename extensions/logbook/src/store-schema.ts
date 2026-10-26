@@ -8,7 +8,7 @@ import type {
   LogbookFrame,
 } from "./types.js";
 
-export const LOGBOOK_SCHEMA_VERSION = 1;
+export const LOGBOOK_SCHEMA_VERSION = 3;
 
 export type LogbookDatabase = {
   frames: {
@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS batches (
   created_ms INTEGER NOT NULL,
   updated_ms INTEGER NOT NULL
 ) STRICT;
-CREATE INDEX IF NOT EXISTS idx_logbook_batches_day ON batches (day, start_ms);
+CREATE INDEX IF NOT EXISTS idx_logbook_batches_pending ON batches (start_ms, id) WHERE status = 'pending';
+DROP INDEX IF EXISTS idx_logbook_batches_day;
 CREATE TABLE IF NOT EXISTS frames (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   captured_at_ms INTEGER NOT NULL,
@@ -158,23 +159,19 @@ export function toBatch(row: BatchRow): LogbookBatch {
 }
 
 function parseDistractions(raw: string): LogbookDistraction[] {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.filter((entry: unknown): entry is LogbookDistraction => {
-      const record = asOptionalObjectRecord(entry);
-      return (
-        record !== undefined &&
-        typeof record.title === "string" &&
-        typeof record.startMs === "number" &&
-        typeof record.endMs === "number"
-      );
-    });
-  } catch {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) {
     return [];
   }
+  return parsed.filter((entry: unknown): entry is LogbookDistraction => {
+    const record = asOptionalObjectRecord(entry);
+    return (
+      record !== undefined &&
+      typeof record.title === "string" &&
+      typeof record.startMs === "number" &&
+      typeof record.endMs === "number"
+    );
+  });
 }
 
 export function toCard(row: Selectable<LogbookDatabase["cards"]>): LogbookCard {

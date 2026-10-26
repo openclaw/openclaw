@@ -2,6 +2,7 @@ import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { registerSignalExitBarrier } from "../cli/signal-exit-barrier.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
+import type { DoctorUpdateBudget } from "../flows/doctor-update-budget.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -13,14 +14,14 @@ import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { drainProcessOutput } from "../process/output-drain.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
-import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
+import type { DoctorLintCliOptions, DoctorLintWorkerInput } from "./doctor-lint-options.js";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 
 /** The copied rehearsal may stop its private inspector after its checks have reported. */
 export async function runUpdateDoctorLintProcess(
   opts: DoctorLintCliOptions,
-  disposalDeadlineMs?: number,
+  budget?: Pick<DoctorUpdateBudget, "disposalDeadlineMs" | "commandStartedAtMs">,
 ): Promise<number> {
   if (!resolveUpdateRehearsalRoot(process.env) || opts.json !== true) {
     throw new Error("Doctor lint worker requires an isolated update rehearsal in JSON mode.");
@@ -50,11 +51,21 @@ export async function runUpdateDoctorLintProcess(
     outputError ??= error;
     controller.abort();
   };
+  const callerRefusalReasons = () =>
+    [
+      callerAborted && "signal-barrier",
+      callerSignal?.aborted && "caller-signal",
+      outputError && "output-error",
+    ].filter(Boolean);
   process.stdout.on("error", onOutputError);
   process.stderr.on("error", onOutputError);
   try {
+    const input: DoctorLintWorkerInput = {
+      options: opts,
+      commandStartedAtMs: budget?.commandStartedAtMs,
+    };
     worker = runUtf8CommandWithTimeout([process.execPath, ...resolveRuntimeWorkerArgv(workerUrl)], {
-      input: JSON.stringify(opts),
+      input: JSON.stringify(input),
       baseEnv: process.env,
       ...(/\.[cm]?ts$/.test(fileURLToPath(workerUrl))
         ? { env: { TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", workerUrl)) } }
@@ -93,7 +104,7 @@ export async function runUpdateDoctorLintProcess(
         process.stdout.write(`${line}\n`);
         const allowance = Math.max(5_000, reportedAt - started);
         cancelDisposalDeadline = scheduleAbsoluteDeadline(
-          Math.min(reportedAt + allowance, disposalDeadlineMs ?? Infinity),
+          Math.min(reportedAt + allowance, budget?.disposalDeadlineMs ?? Infinity),
           () => {
             disposalTerminationRequested = true;
             controller.abort();
@@ -102,16 +113,21 @@ export async function runUpdateDoctorLintProcess(
       },
     });
     const result = await worker;
-    if (
-      callerAborted ||
-      callerSignal?.aborted ||
-      outputError ||
-      result.outputErrorStream ||
-      result.outputLimitExceeded ||
-      result.cleanup === "uncertain"
-    ) {
+    // Fixed labels keep every observed refusal inside the update fact's 200-character cap.
+    const reasons = [
+      ...callerRefusalReasons(),
+      result.outputErrorStream && "worker-output",
+      result.outputLimitExceeded && "output-limit",
+      result.cleanup === "uncertain" && "cleanup-uncertain",
+    ].filter(Boolean);
+    if (reasons.length > 0) {
+      const context = [
+        disposalTerminationRequested && "disposal-requested",
+        result.killIssuedByAbort && "kill-issued-by-abort",
+        `termination=${result.termination}`,
+      ].filter(Boolean);
       throw new Error(
-        "Doctor lint worker did not complete with confirmed output and process cleanup.",
+        `Doctor lint settlement refused: ${reasons.join(",")}; ${context.join(",")}.`,
       );
     }
     if (!report || reportedAt === undefined) {
@@ -133,8 +149,9 @@ export async function runUpdateDoctorLintProcess(
       await new Promise<void>((resolve) => {
         drainProcessOutput(resolve);
       });
-      if (outputError || callerAborted || callerSignal?.aborted) {
-        throw new Error("Doctor lint output delivery or its caller failed after checks completed.");
+      const drainReasons = callerRefusalReasons();
+      if (drainReasons.length > 0) {
+        throw new Error(`Doctor lint output-drain refused: ${drainReasons.join(",")}.`);
       }
       return exitCode;
     }
@@ -146,7 +163,7 @@ export async function runUpdateDoctorLintProcess(
       throw error;
     }
     // The readiness envelope has already been published; failures must not append another JSON.
-    process.stderr.write(`Doctor lint worker failed: ${scrubDoctorErrorMessage(error)}\n`);
+    process.stderr.write(`[openclaw] Reason: ${scrubDoctorErrorMessage(error)}\n`);
     return 2;
   } finally {
     cancelDisposalDeadline?.();

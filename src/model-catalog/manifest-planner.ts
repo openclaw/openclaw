@@ -1,4 +1,3 @@
-// Manifest model-catalog planner turns plugin catalog declarations into normalized rows and suppressions.
 import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import {
   buildModelCatalogMergeKey,
@@ -6,14 +5,14 @@ import {
 } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
   ModelCatalog,
-  ModelCatalogAlias,
   ModelCatalogDiscovery,
   ModelCatalogModel,
   ModelCatalogProvider,
   NormalizedModelCatalogRow,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
+import { modelTransportRoutesMatch } from "../agents/model-compat-catalog.js";
 
 type ManifestModelCatalogPlugin = {
   providerEndpoints?: readonly import("../plugins/manifest-types.js").PluginManifestProviderEndpoint[];
@@ -30,19 +29,14 @@ type ManifestModelCatalogRegistry = {
 };
 
 type ManifestModelCatalogPlanEntry = {
-  pluginId: string;
   provider: string;
   discovery?: ModelCatalogDiscovery;
   rows: readonly NormalizedModelCatalogRow[];
 };
 
 type ManifestModelCatalogConflict = {
-  mergeKey: string;
-  ref: string;
   provider: string;
   modelId: string;
-  firstPluginId: string;
-  secondPluginId: string;
 };
 
 type ManifestModelCatalogPlan = {
@@ -50,8 +44,6 @@ type ManifestModelCatalogPlan = {
   entries: readonly ManifestModelCatalogPlanEntry[];
   conflicts: readonly ManifestModelCatalogConflict[];
 };
-
-export type ManifestModelCatalogRowSelection = "static" | "supplemental";
 
 export type ManifestModelCatalogSuppressionEntry = {
   pluginId: string;
@@ -67,17 +59,55 @@ type ManifestModelCatalogSuppressionPlan = {
   suppressions: readonly ManifestModelCatalogSuppressionEntry[];
 };
 
+function inferenceForRoute(
+  source: Pick<ModelCatalogModel, "inference" | "api" | "baseUrl">,
+  target: Pick<ModelCatalogModel, "api" | "baseUrl">,
+): ModelCatalogModel["inference"] {
+  // Losing a route declaration must not make a decision-only row look like legacy chat.
+  return source.inference && !modelTransportRoutesMatch(source, target)
+    ? { chat: false }
+    : source.inference;
+}
+
 function mergeRemoteModelWithTrustedTransport(
   remoteModel: ModelCatalogModel,
   trustedModel: ModelCatalogModel | undefined,
+  trustedProvider: ModelCatalogProvider,
+  remoteProvider: ModelCatalogProvider,
+  effectiveProvider: ModelCatalogProvider,
 ): ModelCatalogModel {
   // Spread keeps an untrusted own `__proto__` key as data instead of invoking
   // Object.prototype's setter while trusted transport fields win explicitly.
-  return {
+  // The hosted schema carries no family; the bundled row keeps the exact id's family.
+  const merged = {
     ...remoteModel,
     ...(trustedModel?.baseUrl ? { baseUrl: trustedModel.baseUrl } : {}),
     ...(trustedModel?.headers ? { headers: trustedModel.headers } : {}),
+    ...(trustedModel?.family ? { family: trustedModel.family } : {}),
   };
+  const target = {
+    api: merged.api ?? effectiveProvider.api,
+    baseUrl: merged.baseUrl ?? effectiveProvider.baseUrl,
+  };
+  const inference = remoteModel.inference
+    ? inferenceForRoute(
+        {
+          inference: remoteModel.inference,
+          api: remoteModel.api ?? remoteProvider.api ?? trustedProvider.api,
+          baseUrl: remoteModel.baseUrl ?? remoteProvider.baseUrl ?? trustedProvider.baseUrl,
+        },
+        target,
+      )
+    : trustedModel &&
+      inferenceForRoute(
+        {
+          inference: trustedModel.inference,
+          api: trustedModel.api ?? trustedProvider.api,
+          baseUrl: trustedModel.baseUrl ?? trustedProvider.baseUrl,
+        },
+        target,
+      );
+  return { ...merged, ...(inference ? { inference } : {}) };
 }
 
 export function planManifestModelCatalogRows(params: {
@@ -85,41 +115,143 @@ export function planManifestModelCatalogRows(params: {
   providerFilter?: string;
   providerFilters?: readonly string[];
   mergeKeyFilter?: ReadonlySet<string>;
-  remoteOverlay?: Readonly<Record<string, ModelCatalogProvider>>;
   resolveRemoteProvider?: (provider: string) => ModelCatalogProvider | undefined;
   includeProvider?: (provider: string, plugin: ManifestModelCatalogPlugin) => boolean;
-  selection?: ManifestModelCatalogRowSelection;
+  selection?: "static";
 }): ManifestModelCatalogPlan {
   const hasProviderFilter = Boolean(params.providerFilter) || params.providerFilters !== undefined;
   const providerFilters = hasProviderFilter
     ? new Set(
-        normalizeUniqueStringEntries(
-          [
-            ...(params.providerFilter !== undefined ? [params.providerFilter] : []),
-            ...(params.providerFilters ?? []),
-          ].map(normalizeModelCatalogProviderId),
-        ),
+        [
+          ...(params.providerFilter !== undefined ? [params.providerFilter] : []),
+          ...(params.providerFilters ?? []),
+        ]
+          .map(normalizeModelCatalogProviderId)
+          .filter(Boolean),
       )
     : undefined;
   const entries: ManifestModelCatalogPlanEntry[] = [];
 
   for (const plugin of params.registry.plugins) {
-    for (const entry of planManifestModelCatalogPluginEntries({
-      plugin,
-      includeProvider: params.includeProvider,
-      providerFilters,
-      mergeKeyFilter: params.mergeKeyFilter,
-      remoteOverlay: params.remoteOverlay,
-      resolveRemoteProvider: params.resolveRemoteProvider,
-    })) {
-      entries.push(entry);
+    const providers = plugin.modelCatalog?.providers;
+    if (!providers) {
+      continue;
+    }
+    const aliasesByTargetProvider = buildModelCatalogProviderAliasTargets(plugin);
+
+    for (const [provider, providerCatalog] of Object.entries(providers)) {
+      const normalizedProvider = normalizeModelCatalogProviderId(provider);
+      if (!normalizedProvider) {
+        continue;
+      }
+      const providerAliases = aliasesByTargetProvider.get(normalizedProvider) ?? [];
+      const plannedProviders = providerFilters
+        ? uniqueStrings([normalizedProvider, ...providerAliases]).filter((candidateProvider) =>
+            providerFilters.has(candidateProvider),
+          )
+        : [normalizedProvider];
+      if (plannedProviders.length === 0) {
+        continue;
+      }
+      const remoteProvider = params.resolveRemoteProvider?.(normalizedProvider);
+      for (const plannedProvider of plannedProviders) {
+        if (params.includeProvider?.(plannedProvider, plugin) === false) {
+          continue;
+        }
+        const mergeKeyFilter = params.mergeKeyFilter;
+        const selectModels = (models: ModelCatalogModel[]) =>
+          mergeKeyFilter
+            ? models.filter((model) =>
+                mergeKeyFilter.has(buildModelCatalogMergeKey(plannedProvider, model.id)),
+              )
+            : models;
+        const manifestModels = selectModels(providerCatalog.models);
+        const remoteModels = remoteProvider ? selectModels(remoteProvider.models) : [];
+        const remoteModelIds = remoteModels.length
+          ? new Set(remoteModels.map((model) => model.id))
+          : undefined;
+        const providerDefaults = remoteProvider
+          ? {
+              ...providerCatalog,
+              ...remoteProvider,
+              ...(providerCatalog.baseUrl ? { baseUrl: providerCatalog.baseUrl } : {}),
+              ...(providerCatalog.headers ? { headers: providerCatalog.headers } : {}),
+            }
+          : providerCatalog;
+        let rows = normalizeModelCatalogProviderRows({
+          provider: plannedProvider,
+          providerCatalog: {
+            ...providerDefaults,
+            models: manifestModels
+              .filter((model) => !remoteModelIds?.has(model.id))
+              .map((model) => {
+                const inference = inferenceForRoute(
+                  {
+                    inference: model.inference,
+                    api: model.api ?? providerCatalog.api,
+                    baseUrl: model.baseUrl ?? providerCatalog.baseUrl,
+                  },
+                  {
+                    api: model.api ?? providerDefaults.api,
+                    baseUrl: model.baseUrl ?? providerDefaults.baseUrl,
+                  },
+                );
+                return inference === model.inference
+                  ? model
+                  : Object.assign({}, model, { inference });
+              }),
+          },
+          source: "manifest",
+        });
+        if (remoteProvider && remoteModels.length > 0) {
+          const manifestModelsById = new Map(manifestModels.map((model) => [model.id, model]));
+          rows = rows.concat(
+            normalizeModelCatalogProviderRows({
+              provider: plannedProvider,
+              providerCatalog: {
+                ...providerDefaults,
+                models: remoteModels.map((model) =>
+                  mergeRemoteModelWithTrustedTransport(
+                    model,
+                    manifestModelsById.get(model.id),
+                    providerCatalog,
+                    remoteProvider,
+                    providerDefaults,
+                  ),
+                ),
+              },
+              source: "runtime-refresh",
+            }),
+          );
+          // Both normalizers return owned sorted arrays; only a real overlay needs merging.
+          rows.sort((left, right) => left.id.localeCompare(right.id));
+        }
+        if (rows.length === 0) {
+          continue;
+        }
+        const alias = plugin.modelCatalog?.aliases?.[plannedProvider];
+        entries.push({
+          provider: plannedProvider,
+          discovery: plugin.modelCatalog?.discovery?.[normalizedProvider],
+          rows: alias
+            ? rows.map((row) => {
+                const routed = {
+                  ...row,
+                  ...(alias.api ? { api: alias.api } : {}),
+                  ...(alias.baseUrl ? { baseUrl: alias.baseUrl } : {}),
+                };
+                const inference = inferenceForRoute(row, routed);
+                return { ...routed, ...(inference ? { inference } : {}) };
+              })
+            : rows,
+        });
+      }
     }
   }
 
   const seenRows = new Map<
     string,
     {
-      pluginId: string;
       row: NormalizedModelCatalogRow;
       discovery: ModelCatalogDiscovery | undefined;
     }
@@ -133,18 +265,13 @@ export function planManifestModelCatalogRows(params: {
         // plugin silently wins another plugin's model ref in the merged catalog.
         if (!conflicts.has(row.mergeKey)) {
           conflicts.set(row.mergeKey, {
-            mergeKey: row.mergeKey,
-            ref: seen.row.ref,
             provider: seen.row.provider,
             modelId: seen.row.id,
-            firstPluginId: seen.pluginId,
-            secondPluginId: entry.pluginId,
           });
         }
         continue;
       }
       seenRows.set(row.mergeKey, {
-        pluginId: entry.pluginId,
         row,
         discovery: entry.discovery,
       });
@@ -153,138 +280,24 @@ export function planManifestModelCatalogRows(params: {
 
   const rows: NormalizedModelCatalogRow[] = [];
   for (const { row, discovery } of seenRows.values()) {
-    if (
-      conflicts.has(row.mergeKey) ||
-      (params.selection === "static"
-        ? discovery !== "static"
-        : params.selection === "supplemental" &&
-          discovery === "runtime" &&
-          row.source !== "runtime-refresh")
-    ) {
+    if (conflicts.has(row.mergeKey) || (params.selection === "static" && discovery !== "static")) {
       continue;
     }
     rows.push(row);
   }
 
+  rows.sort(
+    (left, right) => left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
+  );
   return {
     entries,
     conflicts: [...conflicts.values()],
-    // oxlint-disable-next-line unicorn/no-array-sort -- Selection owns this array until publication.
-    rows: rows.sort(
-      (left, right) =>
-        left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
-    ),
+    rows,
   };
 }
 
-function planManifestModelCatalogPluginEntries(params: {
-  plugin: ManifestModelCatalogPlugin;
-  includeProvider: ((provider: string, plugin: ManifestModelCatalogPlugin) => boolean) | undefined;
-  providerFilters: ReadonlySet<string> | undefined;
-  mergeKeyFilter: ReadonlySet<string> | undefined;
-  remoteOverlay: Readonly<Record<string, ModelCatalogProvider>> | undefined;
-  resolveRemoteProvider: ((provider: string) => ModelCatalogProvider | undefined) | undefined;
-}): ManifestModelCatalogPlanEntry[] {
-  const providers = params.plugin.modelCatalog?.providers;
-  if (!providers) {
-    return [];
-  }
-
-  const aliasesByTargetProvider = buildModelCatalogProviderAliasTargets(params.plugin);
-
-  return Object.entries(providers).flatMap(([provider, providerCatalog]) => {
-    const normalizedProvider = normalizeModelCatalogProviderId(provider);
-    if (!normalizedProvider) {
-      return [];
-    }
-    const providerAliases = aliasesByTargetProvider.get(normalizedProvider) ?? [];
-    const plannedProviders = params.providerFilters
-      ? normalizeUniqueStringEntries([normalizedProvider, ...providerAliases]).filter(
-          (candidateProvider) => params.providerFilters?.has(candidateProvider),
-        )
-      : [normalizedProvider];
-    if (plannedProviders.length === 0) {
-      return [];
-    }
-    const remoteProvider = params.resolveRemoteProvider
-      ? params.resolveRemoteProvider(normalizedProvider)
-      : params.remoteOverlay?.[normalizedProvider];
-    return plannedProviders.flatMap((plannedProvider) => {
-      if (params.includeProvider?.(plannedProvider, params.plugin) === false) {
-        return [];
-      }
-      const mergeKeyFilter = params.mergeKeyFilter;
-      const selectModels = (models: ModelCatalogModel[]) =>
-        mergeKeyFilter
-          ? models.filter((model) =>
-              mergeKeyFilter.has(buildModelCatalogMergeKey(plannedProvider, model.id)),
-            )
-          : models;
-      const manifestModels = selectModels(providerCatalog.models);
-      const remoteModels = remoteProvider ? selectModels(remoteProvider.models) : [];
-      const remoteModelIds = remoteModels.length
-        ? new Set(remoteModels.map((model) => model.id))
-        : undefined;
-      const providerDefaults = remoteProvider
-        ? {
-            ...providerCatalog,
-            ...remoteProvider,
-            ...(providerCatalog.baseUrl ? { baseUrl: providerCatalog.baseUrl } : {}),
-            ...(providerCatalog.headers ? { headers: providerCatalog.headers } : {}),
-          }
-        : providerCatalog;
-      let rows = normalizeModelCatalogProviderRows({
-        provider: plannedProvider,
-        providerCatalog: {
-          ...providerDefaults,
-          models: remoteModelIds
-            ? manifestModels.filter((model) => !remoteModelIds.has(model.id))
-            : manifestModels,
-        },
-        source: "manifest",
-      });
-      if (remoteModels.length > 0) {
-        const manifestModelsById = new Map(manifestModels.map((model) => [model.id, model]));
-        rows = rows.concat(
-          normalizeModelCatalogProviderRows({
-            provider: plannedProvider,
-            providerCatalog: {
-              ...providerDefaults,
-              models: remoteModels.map((model) =>
-                mergeRemoteModelWithTrustedTransport(model, manifestModelsById.get(model.id)),
-              ),
-            },
-            source: "runtime-refresh",
-          }),
-        );
-        // Both normalizers return owned sorted arrays; only a real overlay needs merging.
-        rows.sort(
-          (left, right) =>
-            left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
-        );
-      }
-      if (rows.length === 0) {
-        return [];
-      }
-      return [
-        {
-          pluginId: params.plugin.id,
-          provider: plannedProvider,
-          discovery: params.plugin.modelCatalog?.discovery?.[normalizedProvider],
-          rows: applyModelCatalogAliasOverrides({
-            rows,
-            alias: params.plugin.modelCatalog?.aliases?.[plannedProvider],
-          }),
-        },
-      ];
-    });
-  });
-}
-
 function buildOwnedProviderSet(plugin: ManifestModelCatalogPlugin): ReadonlySet<string> {
-  return new Set(
-    normalizeUniqueStringEntries((plugin.providers ?? []).map(normalizeModelCatalogProviderId)),
-  );
+  return new Set((plugin.providers ?? []).map(normalizeModelCatalogProviderId).filter(Boolean));
 }
 
 export function buildModelCatalogProviderAliasTargets(
@@ -314,21 +327,6 @@ function buildModelCatalogProviderRefs(plugin: ManifestModelCatalogPlugin): Read
     }
   }
   return refs;
-}
-
-function applyModelCatalogAliasOverrides(params: {
-  rows: readonly NormalizedModelCatalogRow[];
-  alias?: ModelCatalogAlias;
-}): readonly NormalizedModelCatalogRow[] {
-  const alias = params.alias;
-  if (!alias) {
-    return params.rows;
-  }
-  return params.rows.map((row) => ({
-    ...row,
-    ...(alias.api ? { api: alias.api } : {}),
-    ...(alias.baseUrl ? { baseUrl: alias.baseUrl } : {}),
-  }));
 }
 
 export function planManifestModelCatalogSuppressions(params: {
@@ -374,13 +372,11 @@ export function planManifestModelCatalogSuppressions(params: {
       });
     }
   }
-  return {
-    // oxlint-disable-next-line unicorn/no-array-sort -- This plan owns the newly collected array.
-    suppressions: suppressions.sort(
-      (left, right) =>
-        left.provider.localeCompare(right.provider) ||
-        left.model.localeCompare(right.model) ||
-        left.pluginId.localeCompare(right.pluginId),
-    ),
-  };
+  suppressions.sort(
+    (left, right) =>
+      left.provider.localeCompare(right.provider) ||
+      left.model.localeCompare(right.model) ||
+      left.pluginId.localeCompare(right.pluginId),
+  );
+  return { suppressions };
 }

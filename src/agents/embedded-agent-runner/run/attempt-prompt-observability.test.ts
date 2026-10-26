@@ -2,29 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
 
 const hoisted = vi.hoisted(() => ({
-  buildAgentHookContextChannelFields: vi.fn(() => ({ channel: "discord" })),
-  buildAgentHookContextIdentityFields: vi.fn(() => ({ senderId: "sender-1" })),
   emitTrustedDiagnosticEvent: vi.fn(),
   hasHooks: vi.fn(() => true),
-  log: {
-    debug: vi.fn(),
-    info: vi.fn(),
-    isEnabled: vi.fn(() => false),
-    warn: vi.fn(),
-  },
+  log: { debug: vi.fn(), info: vi.fn(), isEnabled: vi.fn(() => false), warn: vi.fn() },
   onExecutionPhase: vi.fn(),
   recordStage: vi.fn(),
   recordTrajectoryEvent: vi.fn(),
-  runLlmInput: vi.fn(
-    async (
-      _event: {
-        historyMessages?: unknown[];
-        imagesCount?: number;
-        prompt?: string;
-        tools?: unknown[];
-      },
-      _context: Record<string, unknown>,
-    ) => undefined,
+  runLlmInput: vi.fn<NonNullable<PromptObservabilityInput["hookRunner"]>["runLlmInput"]>(
+    async () => {},
   ),
   toTrajectoryToolDefinitions: vi.fn((tools: ReadonlyArray<{ name?: string }>) =>
     tools.map((tool) => ({ name: tool.name })),
@@ -33,10 +18,6 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock("../../../infra/diagnostic-events.js", () => ({
   emitTrustedDiagnosticEvent: hoisted.emitTrustedDiagnosticEvent,
-}));
-vi.mock("../../../plugins/hook-agent-context.js", () => ({
-  buildAgentHookContextChannelFields: hoisted.buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields: hoisted.buildAgentHookContextIdentityFields,
 }));
 vi.mock("../../../trajectory/runtime.js", () => ({
   toTrajectoryToolDefinitions: hoisted.toTrajectoryToolDefinitions,
@@ -47,15 +28,11 @@ import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-support.js";
 
 type PromptObservabilityInput = Parameters<typeof observeEmbeddedAttemptPrompt>[0];
 
-function createInput(overrides: Partial<PromptObservabilityInput> = {}): PromptObservabilityInput {
+function observe(overrides: Partial<PromptObservabilityInput> = {}, skipped = false) {
   const sessionMessages: AgentMessage[] = [
-    {
-      role: "user",
-      content: [{ type: "text", text: "history" }],
-      timestamp: 1,
-    },
+    { role: "user", content: [{ type: "text", text: "history" }], timestamp: 1 },
   ];
-  return {
+  const input: PromptObservabilityInput = {
     attempt: {
       messageChannel: "discord",
       modelId: "model-1",
@@ -71,28 +48,18 @@ function createInput(overrides: Partial<PromptObservabilityInput> = {}): PromptO
     },
     cacheTrace: { recordStage: hoisted.recordStage },
     contextTokenBudget: 32_000,
-    diagnosticTrace: {
-      traceId: "1".repeat(32),
-      spanId: "2".repeat(16),
-    },
+    diagnosticTrace: { traceId: "1".repeat(32), spanId: "2".repeat(16) },
     effectivePrompt: "effective prompt",
     effectiveTools: [{ name: "visible-tool" }],
     hookAgentId: "main",
     hookMessagesForCurrentPrompt: sessionMessages,
-    hookRunner: {
-      hasHooks: hoisted.hasHooks,
-      runLlmInput: hoisted.runLlmInput,
-    },
+    hookRunner: { hasHooks: hoisted.hasHooks, runLlmInput: hoisted.runLlmInput },
     imageCount: 2,
     isRawModelRun: false,
     llmBoundaryPromptForPrecheck: "[boundary] model prompt",
     promptForModel: "model prompt",
-    promptSubmissionRuntimeOnly: false,
     reserveTokens: 4_096,
-    runTrace: {
-      traceId: "1".repeat(32),
-      spanId: "3".repeat(16),
-    },
+    runTrace: { traceId: "1".repeat(32), spanId: "3".repeat(16) },
     sessionMessages,
     skipPromptSubmission: false,
     streamStrategy: "provider-stream",
@@ -105,30 +72,29 @@ function createInput(overrides: Partial<PromptObservabilityInput> = {}): PromptO
     transport: "sse",
     uncompactedEffectiveTools: [{ name: "visible-tool" }, { name: "deferred-tool" }],
     ...overrides,
-  } as PromptObservabilityInput;
+  };
+  expect(observeEmbeddedAttemptPrompt(input)).toEqual({ skipPromptSubmission: skipped });
+  return input;
+}
+
+function expectDispatch(stages: number, trajectory: number, hooks: number) {
+  expect(hoisted.recordStage).toHaveBeenCalledTimes(stages);
+  expect(hoisted.recordTrajectoryEvent).toHaveBeenCalledTimes(trajectory);
+  expect(hoisted.runLlmInput).toHaveBeenCalledTimes(hooks);
+  expect(hoisted.emitTrustedDiagnosticEvent).toHaveBeenCalledOnce();
+  expect(hoisted.onExecutionPhase).toHaveBeenCalledOnce();
 }
 
 describe("observeEmbeddedAttemptPrompt", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    hoisted.hasHooks.mockReturnValue(true);
-    hoisted.log.isEnabled.mockReturnValue(false);
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   it("records the assembled prompt boundary and dispatches a cloned llm_input snapshot", () => {
-    const input = createInput();
-
-    expect(observeEmbeddedAttemptPrompt(input)).toEqual({ skipPromptSubmission: false });
-
-    expect(hoisted.recordStage).toHaveBeenNthCalledWith(1, "prompt:before", {
-      prompt: "model prompt",
-      messages: input.sessionMessages,
-    });
-    expect(hoisted.recordStage).toHaveBeenNthCalledWith(2, "prompt:images", {
-      prompt: "model prompt",
-      messages: input.sessionMessages,
-      note: "images: prompt=2",
-    });
+    const input = observe();
+    const stage = { prompt: "model prompt", messages: input.sessionMessages };
+    expect(hoisted.recordStage.mock.calls.slice(0, 2)).toEqual([
+      ["prompt:before", stage],
+      ["prompt:images", { ...stage, note: "images: prompt=2" }],
+    ]);
     expect(hoisted.recordTrajectoryEvent).toHaveBeenCalledWith(
       "context.compiled",
       expect.objectContaining({
@@ -162,22 +128,11 @@ describe("observeEmbeddedAttemptPrompt", () => {
     });
     expect(event?.historyMessages).toEqual(input.hookMessagesForCurrentPrompt);
     expect(event?.historyMessages).not.toBe(input.hookMessagesForCurrentPrompt);
-    expect(context).toMatchObject({
-      agentId: "main",
-      channel: "discord",
-      senderId: "sender-1",
-    });
+    expect(context).toMatchObject({ agentId: "main", channel: "discord", senderId: "sender-1" });
   });
 
   it("marks a blank current prompt as skipped while preserving its compiled trace", () => {
-    const input = createInput({
-      imageCount: 0,
-      llmBoundaryPromptForPrecheck: "   ",
-      promptForModel: "   ",
-    });
-
-    expect(observeEmbeddedAttemptPrompt(input)).toEqual({ skipPromptSubmission: true });
-
+    const input = observe({ imageCount: 0, promptForModel: "   " }, true);
     expect(hoisted.recordTrajectoryEvent).toHaveBeenNthCalledWith(
       1,
       "context.compiled",
@@ -192,41 +147,26 @@ describe("observeEmbeddedAttemptPrompt", () => {
     expect(hoisted.log.warn).toHaveBeenCalledWith(
       expect.stringContaining("embedded run prompt skipped: blank user prompt"),
     );
-    expect(hoisted.runLlmInput).not.toHaveBeenCalled();
+    expectDispatch(2, 2, 0);
   });
 
   it("keeps an already-blocked prompt out of cache, trajectory, and hook dispatch", () => {
-    const input = createInput({ skipPromptSubmission: true });
-
-    expect(observeEmbeddedAttemptPrompt(input)).toEqual({ skipPromptSubmission: true });
-
-    expect(hoisted.recordStage).not.toHaveBeenCalled();
-    expect(hoisted.recordTrajectoryEvent).not.toHaveBeenCalled();
-    expect(hoisted.runLlmInput).not.toHaveBeenCalled();
-    expect(hoisted.emitTrustedDiagnosticEvent).toHaveBeenCalledOnce();
+    observe({ skipPromptSubmission: true }, true);
+    expectDispatch(0, 0, 0);
   });
 
-  it.each([false, true])(
-    "does not read unused trajectory tool metadata (compacted=%s)",
-    (toolSearchCompacted) => {
-      const tool = {
-        get name(): string {
-          throw new Error("unrecorded tool metadata must not be read");
-        },
-      };
-      const input = createInput({
-        effectiveTools: [tool],
-        uncompactedEffectiveTools: [tool],
-        toolSearchCompacted,
-        trajectoryRecorder: null,
-      });
+  it("ignores unrecorded tool metadata", () => {
+    const tool = {
+      get name(): string {
+        throw new Error("unrecorded tool metadata must not be read");
+      },
+    };
+    observe({
+      effectiveTools: [tool],
+      uncompactedEffectiveTools: [tool],
+      trajectoryRecorder: null,
+    });
 
-      expect(observeEmbeddedAttemptPrompt(input)).toEqual({ skipPromptSubmission: false });
-      expect(hoisted.recordStage).toHaveBeenCalledTimes(2);
-      expect(hoisted.recordTrajectoryEvent).not.toHaveBeenCalled();
-      expect(hoisted.emitTrustedDiagnosticEvent).toHaveBeenCalledOnce();
-      expect(hoisted.onExecutionPhase).toHaveBeenCalledOnce();
-      expect(hoisted.runLlmInput).toHaveBeenCalledOnce();
-    },
-  );
+    expectDispatch(2, 0, 1);
+  });
 });

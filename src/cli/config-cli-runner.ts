@@ -5,12 +5,13 @@ import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
+import { isConfigValidationFailedError } from "../config/io.write-errors.js";
+import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
-import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigSchemaResponse } from "../config/schema.js";
 import { visitConfigValueTree } from "../config/value-tree.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
@@ -19,15 +20,15 @@ import { danger, info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ExitError, writeRuntimeJson } from "../runtime.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { toDotPath } from "../shared/dot-path.js";
-import {
-  formatPluginInstallConfigSetError,
-  type ConfigMutationOptions,
-  type ConfigSetOperation,
-} from "./config-cli-input.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import { formatCliCommand } from "./command-format.js";
+import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-input.js";
 import {
   normalizeConfigMutationExplicitSetPath,
   normalizeConfigMutationModelRefs,
+  shouldNormalizeConfigMutationProviderCatalogs,
 } from "./config-cli-model-normalization.js";
 import {
   assertNonDestructiveReplacement,
@@ -52,6 +53,7 @@ import {
   type ConfigSetDryRunResult,
 } from "./config-set-dryrun.js";
 import type { ConfigSetCurrentExpectation } from "./config-set-input.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
@@ -67,109 +69,25 @@ function pathEquals(path: readonly PathSegment[], expected: readonly PathSegment
   );
 }
 
-function valueHasAutoManagedChild(value: unknown, childPath: readonly PathSegment[]): boolean {
-  let cursor: unknown = value;
-  for (const segment of childPath) {
-    if (!isRecord(cursor)) {
-      return false;
+function remapSuppliedPathsAfterDelete(
+  paths: PathSegment[][],
+  deletedPath: PathSegment[],
+  arrayIndex: number | undefined,
+): PathSegment[][] {
+  const parent = deletedPath.slice(0, -1);
+  return paths.flatMap((path) => {
+    if (pathStartsWith(path, deletedPath)) {
+      return [];
     }
-    if (!Object.hasOwn(cursor, segment)) {
-      return false;
+    if (arrayIndex === undefined || path.length <= parent.length || !pathStartsWith(path, parent)) {
+      return [path];
     }
-    cursor = cursor[segment];
-  }
-  return cursor !== undefined;
-}
-
-function operationClobbersAncestorChild(
-  operation: ConfigSetOperation,
-  managedPath: readonly PathSegment[],
-  merge?: boolean,
-): boolean {
-  if (operation.mutation === "delete") {
-    return true;
-  }
-  const childPath = managedPath.slice(operation.requestedPath.length);
-  const isMerge = operation.mutation === "merge" || (merge && operation.mutation !== "replace");
-  return isMerge ? valueHasAutoManagedChild(operation.value, childPath) : true;
-}
-
-function findAutoManagedMetaTargets(
-  operations: readonly ConfigSetOperation[],
-  merge?: boolean,
-): readonly PathSegment[][] {
-  const matches: PathSegment[][] = [];
-  const seen = new Set<string>();
-  const record = (path: readonly PathSegment[]) => {
-    const key = toDotPath(path);
-    if (!seen.has(key)) {
-      seen.add(key);
-      matches.push([...path]);
-    }
-  };
-  for (const operation of operations) {
-    const direct = AUTO_MANAGED_CONFIG_META_PATHS.some((path) =>
-      pathStartsWith(operation.requestedPath, path),
-    );
-    if (direct) {
-      record(operation.requestedPath);
-      continue;
-    }
-    for (const managedPath of AUTO_MANAGED_CONFIG_META_PATHS) {
-      if (
-        operation.requestedPath.length < managedPath.length &&
-        pathStartsWith(managedPath, operation.requestedPath) &&
-        operationClobbersAncestorChild(operation, managedPath, merge)
-      ) {
-        record(managedPath);
-      }
-    }
-  }
-  return matches;
-}
-
-function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
-  const targets = paths.map(toDotPath);
-  const subject = targets.length === 1 ? targets[0] : targets.join(", ");
-  return [
-    `${subject} is auto-managed by OpenClaw and cannot be edited; the value would be overwritten on the next config write.`,
-    "",
-    "These fields are stamped on every config write to record the OpenClaw version and timestamp that produced the file.",
-  ].join("\n");
-}
-
-function pruneInactiveGatewayAuthCredentials(params: {
-  root: Record<string, unknown>;
-  operations: ConfigSetOperation[];
-}): string[] {
-  const touchedMode = params.operations.some(({ requestedPath }) =>
-    pathEquals(requestedPath, GATEWAY_AUTH_MODE_PATH),
-  );
-  const gateway = params.root.gateway;
-  if (!touchedMode || !isRecord(gateway)) {
-    return [];
-  }
-  const auth = gateway.auth;
-  if (!isRecord(auth)) {
-    return [];
-  }
-  const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
-  const removedPaths: string[] = [];
-  const remove = (key: "token" | "password") => {
-    if (Object.hasOwn(auth, key)) {
-      delete auth[key];
-      removedPaths.push(`gateway.auth.${key}`);
-    }
-  };
-  if (mode === "token") {
-    remove("password");
-  } else if (mode === "password") {
-    remove("token");
-  } else if (mode === "trusted-proxy") {
-    remove("token");
-    remove("password");
-  }
-  return removedPaths;
+    const segment = path[parent.length];
+    const index = segment === undefined ? undefined : parseConfigPathArrayIndex(segment);
+    return index !== undefined && index > arrayIndex
+      ? [[...parent, String(index - 1), ...path.slice(parent.length + 1)]]
+      : [path];
+  });
 }
 
 function collectChangedLeafPaths(value: unknown, prefix: string): string[] {
@@ -184,96 +102,6 @@ function collectChangedLeafPaths(value: unknown, prefix: string): string[] {
       );
 }
 
-function expandActualChangedPaths(
-  actualPaths: string[],
-  requestedPaths: string[],
-  before: OpenClawConfig,
-  after: OpenClawConfig,
-): string[] {
-  const expanded = new Set<string>();
-  for (const actualPath of actualPaths) {
-    const descendants = requestedPaths.filter(
-      (requested) => requested !== actualPath && requested.startsWith(`${actualPath}.`),
-    );
-    if (descendants.length > 0) {
-      descendants.forEach((path) => expanded.add(path));
-      continue;
-    }
-    const path = actualPath === "<root>" ? [] : actualPath.split(".");
-    const beforeValue = getAtPath(before, path);
-    const afterValue = getAtPath(after, path);
-    const changedValue = beforeValue.found && !afterValue.found ? beforeValue : afterValue;
-    const paths =
-      beforeValue.found !== afterValue.found
-        ? collectChangedLeafPaths(changedValue.value, actualPath)
-        : [actualPath];
-    paths.forEach((entry) => expanded.add(entry));
-  }
-  return [...expanded];
-}
-
-function configApplyHintForOperations(
-  operations: readonly ConfigSetOperation[],
-  beforeConfig: OpenClawConfig,
-  afterConfig: OpenClawConfig,
-): string {
-  const requestedPaths = operations.map(({ requestedPath }) => toDotPath(requestedPath));
-  const paths = expandActualChangedPaths(
-    diffConfigPaths(beforeConfig, afterConfig),
-    requestedPaths,
-    beforeConfig,
-    afterConfig,
-  );
-  if (paths.length === 0) {
-    return "No gateway restart needed.";
-  }
-  const plan = buildGatewayReloadPlan(paths, { candidateConfig: afterConfig });
-  if (
-    plan.restartGateway ||
-    (plan.hotReasons.length > 0 && resolveGatewayReloadSettings(afterConfig).mode === "off")
-  ) {
-    return "Restart the gateway to apply.";
-  }
-  return plan.hotReasons.length > 0
-    ? "Change will apply without restarting the gateway."
-    : "No gateway restart needed.";
-}
-
-async function loadMutationSchema() {
-  try {
-    return await readBestEffortRuntimeConfigSchema();
-  } catch {
-    return undefined;
-  }
-}
-
-function assertConfigSetCurrentExpectation(params: {
-  authoredConfig: OpenClawConfig;
-  operation: ConfigSetOperation;
-  expectation: ConfigSetCurrentExpectation;
-}): void {
-  const current = getAtPath(params.authoredConfig, params.operation.setPath);
-  const matches =
-    params.expectation.kind === "absent"
-      ? !current.found
-      : current.found && isDeepStrictEqual(current.value, params.expectation.value);
-  if (!matches) {
-    throw new ConfigMutationConflictError(
-      "conditional config set expectation did not match the authored config",
-      { retryable: false },
-    );
-  }
-}
-
-function assertConfigSetCurrentExpectationPath(params: {
-  operation: ConfigSetOperation;
-  writePath: readonly PathSegment[];
-}): void {
-  if (!pathEquals(params.operation.requestedPath, params.writePath)) {
-    throw new Error("conditional config set requires a direct, non-redirected config path");
-  }
-}
-
 export async function runConfigOperations(params: {
   runtime: RuntimeEnv;
   operations: ConfigSetOperation[];
@@ -281,6 +109,7 @@ export async function runConfigOperations(params: {
   successMode: "set" | "patch";
   currentExpectation?: ConfigSetCurrentExpectation;
   beforePersistentApply?: () => void;
+  databaseOnly?: true;
 }) {
   const { runtime, operations, options } = params;
   if (
@@ -288,13 +117,56 @@ export async function runConfigOperations(params: {
       pathStartsWith(requestedPath, PLUGIN_INSTALL_RECORD_PATH_PREFIX),
     )
   ) {
-    throw new Error(formatPluginInstallConfigSetError());
+    throw new Error(
+      [
+        "plugins.installs is managed by the plugin index and cannot be edited with config set.",
+        "",
+        "Use plugin commands instead:",
+        `  ${formatCliCommand("openclaw plugins install <spec>")}`,
+        `  ${formatCliCommand("openclaw plugins update <plugin-id>")}`,
+        `  ${formatCliCommand("openclaw plugins uninstall <plugin-id>")}`,
+      ].join("\n"),
+    );
   }
-  const autoManagedTargets = findAutoManagedMetaTargets(operations, options.merge);
+  const autoManagedMerge = options.merge;
+  const autoManagedMatches: PathSegment[][] = [];
+  for (const operation of operations) {
+    const direct = AUTO_MANAGED_CONFIG_META_PATHS.some((path) =>
+      pathStartsWith(operation.requestedPath, path),
+    );
+    if (direct) {
+      autoManagedMatches.push(operation.requestedPath);
+      continue;
+    }
+    const mergesValue =
+      operation.mutation !== "delete" &&
+      (operation.mutation === "merge" || (autoManagedMerge && operation.mutation !== "replace"));
+    for (const managedPath of AUTO_MANAGED_CONFIG_META_PATHS) {
+      const childPath = managedPath.slice(operation.requestedPath.length);
+      if (
+        operation.requestedPath.length < managedPath.length &&
+        pathStartsWith(managedPath, operation.requestedPath) &&
+        (!mergesValue || getAtPath(operation.value, childPath).value !== undefined)
+      ) {
+        autoManagedMatches.push([...managedPath]);
+      }
+    }
+  }
+  const autoManagedTargets = dedupeByKey(autoManagedMatches, toDotPath);
   if (autoManagedTargets.length > 0) {
-    throw new Error(formatAutoManagedMetaError(autoManagedTargets));
+    const subject = autoManagedTargets.map(toDotPath).join(", ");
+    throw new Error(
+      [
+        `${subject} is auto-managed by OpenClaw and cannot be edited; the value would be overwritten on the next config write.`,
+        "",
+        "These fields are stamped on every config write to record the OpenClaw version and timestamp that produced the file.",
+      ].join("\n"),
+    );
   }
-  const mutationStart = await loadValidConfigForWrite(runtime);
+  const mutationStart = await loadValidConfigForWrite(
+    runtime,
+    params.databaseOnly ? { databaseOnly: true } : undefined,
+  );
   const { snapshot } = mutationStart;
   const currentExpectation = params.currentExpectation;
   let assertCurrentExpectation: (() => void) | undefined;
@@ -304,20 +176,45 @@ export async function runConfigOperations(params: {
       throw new Error("conditional config set requires one resolved operation");
     }
     assertCurrentExpectation = () => {
-      assertConfigSetCurrentExpectation({
-        authoredConfig: snapshot.resolved,
-        operation: expectationOperation,
-        expectation: currentExpectation,
-      });
+      const current = getAtPath(snapshot.resolved, expectationOperation.setPath);
+      const matches =
+        currentExpectation.kind === "absent"
+          ? !current.found
+          : current.found && isDeepStrictEqual(current.value, currentExpectation.value);
+      if (!matches) {
+        throw new ConfigMutationConflictError(
+          "conditional config set expectation did not match the authored config",
+          { retryable: false },
+        );
+      }
     };
   }
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
-  const currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved);
-  const mutationSchema = await loadMutationSchema();
+  const modelNormalizationOptions = {
+    pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+    env: mutationStart.writeOptions.envSnapshotForRestore,
+  };
+  let currentConfig = params.databaseOnly
+    ? snapshot.resolved
+    : await normalizeConfigMutationModelRefs(snapshot.resolved, {
+        ...modelNormalizationOptions,
+        normalizeProviderCatalogs: false,
+      });
+  let mutationSchema: Promise<ConfigSchemaResponse | undefined> | undefined;
+  const getMutationSchema = () =>
+    (mutationSchema ??= import("../config/runtime-schema.js")
+      .then(({ readBestEffortRuntimeConfigSchema }) =>
+        readBestEffortRuntimeConfigSchema({
+          snapshot,
+          pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+        }),
+      )
+      .catch(() => undefined));
   const roster = new ConfigMutationAgentRoster(next, snapshot.sourceConfigBeforeMigrations);
   let unsetPaths: PathSegment[][] = [];
-  const explicitSetPaths: PathSegment[][] = [];
+  let explicitSetPaths: PathSegment[][] = [];
+  let suppliedValuePaths: PathSegment[][] = [];
   const appliedOperations: ConfigSetOperation[] = [];
   const recordOperation = (operation: ConfigSetOperation): PathSegment[] => {
     const writePath = roster.writePath(operation.setPath);
@@ -338,14 +235,21 @@ export async function runConfigOperations(params: {
     const merge =
       operation.mutation === "merge" || (options.merge && operation.mutation !== "replace");
     roster.prepare(operation, Boolean(merge));
-    if (currentExpectation) {
-      assertConfigSetCurrentExpectationPath({
-        operation,
-        writePath: roster.writePath(operation.setPath),
-      });
+    if (
+      currentExpectation &&
+      !pathEquals(operation.requestedPath, roster.writePath(operation.setPath))
+    ) {
+      throw new Error("conditional config set requires a direct, non-redirected config path");
     }
     if (operation.mutation === "delete") {
       const writePath = recordOperation(operation);
+      // Capture identity before the splice changes legacy roster positions.
+      const deletesCanonicalAgent =
+        operation.setPath.length === 3 &&
+        operation.setPath[0] === "agents" &&
+        operation.setPath[1] === "list" &&
+        writePath[1] === "entries";
+      const deletedSegment = operation.setPath.at(-1);
       const unsetResult = unsetAtPath(next, operation.setPath);
       if (!unsetResult.removed && operation.inputMode === "unset") {
         const requestedPath = formatConfigSetPath(operation.requestedPath, operation.pathTokens);
@@ -375,6 +279,7 @@ export async function runConfigOperations(params: {
             currentConfig,
             mutationStart.writeOptions.basePluginMetadataSnapshot,
             getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
+            params.databaseOnly,
           );
         }
         throw new Error(message);
@@ -382,32 +287,100 @@ export async function runConfigOperations(params: {
       if (!unsetResult.removed || unsetResult.leafContainer !== "array") {
         unsetPaths.push(writePath);
       }
+      if (unsetResult.removed) {
+        // Canonical agent IDs (even numeric IDs) are keys, not list indices.
+        const arrayIndex =
+          unsetResult.leafContainer === "array" &&
+          !deletesCanonicalAgent &&
+          deletedSegment !== undefined
+            ? parseConfigPathArrayIndex(deletedSegment)
+            : undefined;
+        suppliedValuePaths = remapSuppliedPathsAfterDelete(
+          suppliedValuePaths,
+          writePath,
+          arrayIndex,
+        );
+        explicitSetPaths = remapSuppliedPathsAfterDelete(explicitSetPaths, writePath, arrayIndex);
+        // Validation follows surviving values after a splice, too. Keep removed
+        // operations in history for deletion policy and preview counts.
+        for (const applied of appliedOperations) {
+          const [survivingPath] = remapSuppliedPathsAfterDelete(
+            [applied.setPath],
+            writePath,
+            arrayIndex,
+          );
+          if (survivingPath) {
+            applied.setPath = survivingPath;
+          }
+        }
+      }
       continue;
     }
+    // Only ambiguous numeric segments need schema to distinguish missing maps from arrays.
+    const needsMutationSchema =
+      !params.databaseOnly &&
+      params.successMode !== "patch" &&
+      operation.setPath.some(
+        (segment, index) =>
+          index > 0 &&
+          parseConfigPathArrayIndex(segment) !== undefined &&
+          typeof operation.pathTokens?.[index] !== "number" &&
+          !operation.quotedNumericSegments?.has(index),
+      );
+    const schema = needsMutationSchema ? (await getMutationSchema())?.schema : undefined;
     const pathOptions = {
       numericObjectKeys: params.successMode === "patch",
       pathTokens: operation.pathTokens,
       quotedNumericSegments: operation.quotedNumericSegments,
-      schema: mutationSchema?.schema as JsonSchemaRecord | undefined,
+      schema: schema as JsonSchemaRecord | undefined,
+      command: params.successMode,
     };
+    let suppliedPaths: PathSegment[][];
     if (merge) {
-      mergeAtPath(next, operation.setPath, operation.value, pathOptions);
+      suppliedPaths = mergeAtPath(next, operation.setPath, operation.value, pathOptions);
     } else {
       assertNonDestructiveReplacement({
         root: next,
         path: operation.setPath,
         value: operation.value,
         allowReplace: options.replace || operation.mutation === "replace",
+        command: params.successMode,
       });
       setAtPath(next, operation.setPath, operation.value, pathOptions);
+      suppliedPaths = [operation.setPath];
     }
+    suppliedValuePaths.push(...suppliedPaths.map((path) => roster.writePath(path)));
     explicitSetPaths.push(recordOperation(operation));
   }
   roster.finish();
   // A later operation can recreate a deleted path, including through a roster alias.
   // Only final deletions may be replayed by the persistence owner.
   unsetPaths = unsetPaths.filter((path) => !getAtPath(next, path).found);
-  const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({ root: next, operations });
+  const removedGatewayAuthPaths: string[] = [];
+  const touchedMode = operations.some(({ requestedPath }) =>
+    pathEquals(requestedPath, GATEWAY_AUTH_MODE_PATH),
+  );
+  const gateway = next.gateway;
+  if (touchedMode && isRecord(gateway)) {
+    const auth = gateway.auth;
+    if (isRecord(auth)) {
+      const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
+      const remove = (key: "token" | "password") => {
+        if (Object.hasOwn(auth, key)) {
+          delete auth[key];
+          removedGatewayAuthPaths.push(`gateway.auth.${key}`);
+        }
+      };
+      if (mode === "token") {
+        remove("password");
+      } else if (mode === "password") {
+        remove("token");
+      } else if (mode === "trusted-proxy") {
+        remove("token");
+        remove("password");
+      }
+    }
+  }
   let hasRedactedValues = false;
   visitConfigValueTree(next, (candidate) => {
     hasRedactedValues ||= candidate === REDACTED_SENTINEL;
@@ -415,33 +388,89 @@ export async function runConfigOperations(params: {
   });
   let nextConfig = coerceConfig(next);
   if (hasRedactedValues) {
-    const restored = restoreRedactedValues(next, snapshot.resolved, mutationSchema?.uiHints);
+    const restored = restoreRedactedValues(
+      next,
+      snapshot.resolved,
+      (await getMutationSchema())?.uiHints,
+    );
     if (!restored.ok) {
       throw new Error(restored.humanReadableMessage ?? "Cannot restore redacted config values.");
     }
     nextConfig = coerceConfig(restored.result);
   }
-  nextConfig = normalizeConfigMutationModelRefs(nextConfig);
+  const normalizeProviderCatalogs =
+    !params.databaseOnly &&
+    shouldNormalizeConfigMutationProviderCatalogs({
+      before: snapshot.resolved,
+      after: nextConfig,
+      touchedPaths: appliedOperations.map(({ setPath }) => setPath),
+      env: modelNormalizationOptions.env,
+    });
+  if (normalizeProviderCatalogs) {
+    currentConfig = await normalizeConfigMutationModelRefs(
+      snapshot.resolved,
+      modelNormalizationOptions,
+    );
+  }
+  if (!params.databaseOnly) {
+    nextConfig = await normalizeConfigMutationModelRefs(nextConfig, {
+      ...modelNormalizationOptions,
+      normalizeProviderCatalogs,
+    });
+  }
   const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
+  // Parent merge paths own policy, but inherited children are not caller-authored values.
+  const resolutionEnv = mutationStart.writeOptions.envSnapshotForRestore ?? process.env;
+  const preparedValues = prepareConfigWriteValues({
+    snapshot,
+    nextConfig,
+    explicitSetPaths: suppliedValuePaths.map(normalizeConfigMutationExplicitSetPath),
+    env: resolutionEnv,
+  });
+  const authoredNextConfig = preparedValues.authoredConfig;
+  const preparedPreviousValues = prepareConfigWriteValues({
+    snapshot,
+    nextConfig: currentConfig,
+    env: resolutionEnv,
+  });
+  const authoredPreviousConfig = preparedPreviousValues.authoredConfig;
+  let modelValidation = {
+    config: authoredNextConfig,
+    previousConfig: authoredPreviousConfig,
+    env: preparedValues.resolutionEnv,
+    previousEnv: preparedPreviousValues.resolutionEnv,
+  };
   if (options.dryRun) {
-    nextConfig = prepareConfigWriteTopology({
+    const topology = await prepareConfigWriteTopology({
       snapshot,
       pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
-      nextConfig,
+      nextConfig: authoredNextConfig,
       options: { explicitSetPaths: normalizedExplicitSetPaths },
       unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
-      env: process.env,
-    }).nextConfig;
+      env: resolutionEnv,
+    });
+    nextConfig = topology.nextConfig;
+    modelValidation = {
+      config: topology.authoredConfig,
+      previousConfig: authoredPreviousConfig,
+      env: topology.resolutionEnv,
+      previousEnv: preparedPreviousValues.resolutionEnv,
+    };
   }
   const validation = await validateConfigMutation({
     config: nextConfig,
+    modelValidation,
     previousConfig: currentConfig,
     operations: appliedOperations,
     options,
     configPath: snapshot.path,
-    unchanged: params.successMode === "set" && isDeepStrictEqual(currentConfig, nextConfig),
+    unchanged:
+      params.successMode === "set" &&
+      isDeepStrictEqual(currentConfig, nextConfig) &&
+      isDeepStrictEqual(authoredPreviousConfig, authoredNextConfig),
     pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
     deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
+    databaseOnly: params.databaseOnly,
   });
   if (validation.kind === "dry-run") {
     printConfigDryRunResult(validation.result, runtime, options.json);
@@ -454,7 +483,7 @@ export async function runConfigOperations(params: {
   }
 
   await replaceConfigFile({
-    sourceConfig: nextConfig,
+    sourceConfig: authoredNextConfig,
     snapshot,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     writeOptions: {
@@ -482,7 +511,40 @@ export async function runConfigOperations(params: {
       ),
     );
   }
-  const hint = configApplyHintForOperations(operations, currentConfig, nextConfig);
+  const requestedPaths = operations.map(({ requestedPath }) => toDotPath(requestedPath));
+  const actualPaths = diffConfigPaths(currentConfig, nextConfig);
+  const expanded = new Set<string>();
+  for (const actualPath of actualPaths) {
+    const descendants = requestedPaths.filter(
+      (requested) => requested !== actualPath && requested.startsWith(`${actualPath}.`),
+    );
+    if (descendants.length > 0) {
+      descendants.forEach((path) => expanded.add(path));
+      continue;
+    }
+    const path = actualPath === "<root>" ? [] : actualPath.split(".");
+    const beforeValue = getAtPath(currentConfig, path);
+    const afterValue = getAtPath(nextConfig, path);
+    const changedValue = beforeValue.found && !afterValue.found ? beforeValue : afterValue;
+    const paths =
+      beforeValue.found !== afterValue.found
+        ? collectChangedLeafPaths(changedValue.value, actualPath)
+        : [actualPath];
+    paths.forEach((entry) => expanded.add(entry));
+  }
+  const paths = [...expanded];
+  let hint = "No gateway restart needed.";
+  if (paths.length > 0) {
+    const plan = buildGatewayReloadPlan(paths, { candidateConfig: nextConfig });
+    if (
+      plan.restartGateway ||
+      (plan.hotReasons.length > 0 && resolveGatewayReloadSettings(nextConfig).mode === "off")
+    ) {
+      hint = "Restart the gateway to apply.";
+    } else if (plan.hotReasons.length > 0) {
+      hint = "Change will apply without restarting the gateway.";
+    }
+  }
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";
@@ -503,15 +565,19 @@ export function handleConfigMutationError(params: {
   err: unknown;
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
+  jsonOutput: boolean;
 }) {
   if (params.err instanceof ExitError) {
     throw params.err;
   }
-  const isConflict = params.err instanceof ConfigMutationConflictError;
+  const conflict = params.err instanceof ConfigMutationConflictError ? params.err : undefined;
   const detail = formatErrorMessage(params.err);
-  const message = isConflict
-    ? `The config file changed while this command was writing (${detail}), so nothing was changed. Re-run the same command to pick up the new file and try again.`
-    : detail;
+  let message = detail;
+  if (conflict) {
+    message = conflict.retryable
+      ? `The config file changed while this command was writing (${detail}), so nothing was changed. Re-run the same command to pick up the new file and try again.`
+      : `Config change declined (${detail}). No settings were saved. Review the current config and any conditional expectations before retrying.`;
+  }
   if (params.options.dryRun && params.options.json) {
     if (params.err instanceof ConfigSetDryRunValidationError) {
       writeRuntimeJson(params.runtime, params.err.result);
@@ -525,12 +591,23 @@ export function handleConfigMutationError(params: {
       checks: { schema: false, resolvability: false, resolvabilityComplete: false },
       refsChecked: 0,
       skippedExecRefs: 0,
-      errors: [{ kind: isConflict ? "conflict" : "schema", message }],
+      errors: [{ kind: conflict ? "conflict" : "schema", message }],
     };
     writeRuntimeJson(params.runtime, result);
     params.runtime.error(danger(message));
     exitCliAfterOutput(params.runtime, 1);
   }
-  params.runtime.error(danger(message));
+  if (params.jsonOutput) {
+    writeRuntimeJson(params.runtime, formatCliJsonFailure(message));
+  }
+  if (isConfigValidationFailedError(params.err)) {
+    params.runtime.error("Config change declined. No settings were saved.");
+    params.runtime.error(message);
+    params.runtime.error(
+      `Correct the setting above and retry. Run ${formatCliCommand("openclaw config schema")} to inspect supported settings and values.`,
+    );
+  } else {
+    params.runtime.error(danger(message));
+  }
   exitCliAfterOutput(params.runtime, 1);
 }

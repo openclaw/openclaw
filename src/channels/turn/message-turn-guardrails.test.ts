@@ -1,7 +1,7 @@
-// Message turn guardrail tests cover channel turn safety checks and fixture boundaries.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
@@ -24,7 +24,7 @@ const migratedMessageTurnFiles = [
   "extensions/telegram/src/bot-message-context.session.ts",
   "extensions/telegram/src/bot-message-dispatch-context.ts",
   "extensions/telegram/src/bot-message-dispatch.ts",
-  "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
+  "extensions/whatsapp/src/auto-reply/monitor/on-message.ts",
   "extensions/zalouser/src/monitor.ts",
 ];
 
@@ -42,79 +42,36 @@ const legacyReplyHistoryCompatibilityFiles = new Set([
   "extensions/mattermost/src/mattermost/runtime-api.ts",
 ]);
 
-const skippedExtensionScanDirs = new Set([
-  ".cache",
-  ".turbo",
-  "build",
-  "coverage",
-  "dist",
-  "node_modules",
-  "tmp",
-]);
+const skippedExtensionScanDirs = /^(?:\.cache|\.turbo|build|coverage|dist|node_modules|tmp)$/;
 
 function readRepoFile(relativePath: string): string {
   return fs.readFileSync(path.join(repoRoot, ...relativePath.split("/")), "utf8");
 }
 
 function isScannableTsFile(relativePath: string): boolean {
-  const parts = relativePath.split("/");
   return (
-    !parts.some((part) => skippedExtensionScanDirs.has(part)) &&
+    !relativePath.split("/").some((part) => skippedExtensionScanDirs.test(part)) &&
     relativePath.endsWith(".ts") &&
     !relativePath.endsWith(".d.ts")
   );
 }
 
-function listGitTsFiles(relativeDir: string): string[] | null {
-  return (
-    listGitTrackedFiles({ repoRoot, pathspecs: relativeDir })?.filter(isScannableTsFile) ?? null
-  );
-}
-
 function listTsFiles(relativeDir: string): string[] {
-  const gitFiles = listGitTsFiles(relativeDir);
-  if (gitFiles) {
-    return gitFiles;
-  }
-
-  const dir = path.join(repoRoot, ...relativeDir.split("/"));
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const relativePath = path.posix.join(relativeDir, entry.name);
-    if (entry.isDirectory()) {
-      if (skippedExtensionScanDirs.has(entry.name)) {
-        return [];
-      }
-      return listTsFiles(relativePath);
-    }
-    if (!entry.isFile() || !isScannableTsFile(relativePath)) {
-      return [];
-    }
-    return [relativePath];
-  });
+  return expectDefined(
+    listGitTrackedFiles({ repoRoot, pathspecs: relativeDir }),
+    "migration guardrails require a Git checkout",
+  ).filter(isScannableTsFile);
 }
 
-function collectReplyHistoryBindings(source: string): Set<string> {
-  const bindings = new Set<string>();
-  const importOrExportPattern =
-    /\b(?:import|export)\s*\{([\s\S]*?)\}\s*from\s*["']openclaw\/plugin-sdk\/reply-history["']/g;
-  for (const match of source.matchAll(importOrExportPattern)) {
-    const block = match[1] ?? "";
-    for (const nameMatch of block.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
-      bindings.add(nameMatch[0]);
-    }
-  }
-  return bindings;
-}
+const importOrExportPattern =
+  /\b(?:import|export)\s*\{([\s\S]*?)\}\s*from\s*["']openclaw\/plugin-sdk\/reply-history["']/g;
 
 describe("message turn migration guardrails", () => {
   it("drops when ingest returns null", async () => {
     const result = await runChannelTurn({
       channel: "test",
       raw: {},
-      adapter: {
-        ingest: () => null,
-        resolveTurn: vi.fn(),
-      },
+      adapter: { ingest: () => null, resolveTurn: vi.fn() },
     });
 
     expect(result).toEqual({
@@ -137,28 +94,27 @@ describe("message turn migration guardrails", () => {
     for (const file of migratedMessageTurnFiles) {
       const source = readRepoFile(file);
       for (const helper of lowLevelHistoryHelpers) {
-        expect(source, `${file} should use the channel history window, not ${helper}`).not.toMatch(
-          new RegExp(`\\b${helper}\\b`),
-        );
+        expect(source, `${file}: forbidden ${helper}`).not.toMatch(new RegExp(`\\b${helper}\\b`));
       }
     }
   });
 
   it("keeps plugin runtime files off deprecated reply-history map helpers", () => {
     for (const file of listTsFiles("extensions")) {
-      if (file.includes(".test.") || file.endsWith(".test.ts")) {
-        continue;
-      }
-      if (legacyReplyHistoryCompatibilityFiles.has(file)) {
+      if (
+        file.includes(".test.") ||
+        file.endsWith(".test.ts") ||
+        legacyReplyHistoryCompatibilityFiles.has(file)
+      ) {
         continue;
       }
       const source = readRepoFile(file);
-      const replyHistoryBindings = collectReplyHistoryBindings(source);
+      const bindings = Array.from(
+        source.matchAll(importOrExportPattern),
+        ([, names]) => names,
+      ).join(" ");
       for (const helper of lowLevelHistoryHelpers) {
-        expect(
-          replyHistoryBindings.has(helper),
-          `${file} should use createChannelHistoryWindow instead of ${helper}`,
-        ).toBe(false);
+        expect(bindings, `${file}: forbidden ${helper}`).not.toMatch(new RegExp(`\\b${helper}\\b`));
       }
     }
   });

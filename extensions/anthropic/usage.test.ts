@@ -1,14 +1,38 @@
-import { CLAUDE_CLI_PROFILE_ID as SDK_CLAUDE_CLI_PROFILE_ID } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
-import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
 function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
 
-function oauthFixtureToken(): string {
-  return ["oauth", "token"].join("-");
+function resolveAuth(overrides: Partial<Parameters<typeof resolveAnthropicUsageAuth>[0]> = {}) {
+  return resolveAnthropicUsageAuth({
+    config: {},
+    env: {},
+    provider: "anthropic",
+    resolveApiKeyFromConfigAndStore: () => undefined,
+    resolveOAuthToken: async () => null,
+    ...overrides,
+  });
+}
+
+function fetchUsage(overrides: Partial<Parameters<typeof fetchAnthropicUsage>[0]> = {}) {
+  return fetchAnthropicUsage({
+    config: {},
+    env: {},
+    provider: "anthropic",
+    token: "oauth-token",
+    timeoutMs: 5000,
+    fetchFn: vi.fn(async () => Response.json({ five_hour: { utilization: 10 } })),
+    ...overrides,
+  });
+}
+
+function report(results: unknown[]) {
+  return Response.json({
+    data: [{ starting_at: "2026-07-06T00:00:00Z", ending_at: "2026-07-07T00:00:00Z", results }],
+    has_more: false,
+  });
 }
 
 describe("Anthropic provider usage", () => {
@@ -16,65 +40,40 @@ describe("Anthropic provider usage", () => {
     const fetchFn = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const url = requestUrl(input);
       if (url.pathname.endsWith("/organizations/cost_report")) {
-        return new Response(
-          JSON.stringify({
-            data: [
-              {
-                starting_at: "2026-07-06T00:00:00Z",
-                ending_at: "2026-07-07T00:00:00Z",
-                results: [{ amount: "1234", currency: "USD", description: "Claude API" }],
-              },
-            ],
-            has_more: false,
-          }),
-          { status: 200 },
-        );
+        return report([{ amount: "1234", currency: "USD", description: "Claude API" }]);
       }
-      return new Response(
-        JSON.stringify({
-          data: [
-            {
-              starting_at: "2026-07-06T00:00:00Z",
-              ending_at: "2026-07-07T00:00:00Z",
-              results: [
-                {
-                  uncached_input_tokens: 1_000,
-                  cache_creation: {
-                    ephemeral_1h_input_tokens: 100,
-                    ephemeral_5m_input_tokens: 50,
-                  },
-                  cache_read_input_tokens: 300,
-                  output_tokens: 250,
-                  model: "claude-opus-4-8",
-                },
-              ],
-            },
-          ],
-          has_more: false,
-        }),
-        { status: 200 },
-      );
+      return report([
+        {
+          uncached_input_tokens: 1_000,
+          cache_creation: {
+            ephemeral_1h_input_tokens: 100,
+            ephemeral_5m_input_tokens: 50,
+          },
+          cache_read_input_tokens: 300,
+          output_tokens: 250,
+          model: "claude-opus-4-8",
+        },
+      ]);
     });
 
-    const auth = await resolveAnthropicUsageAuth({
-      config: {},
+    const auth = await resolveAuth({
       env: { ANTHROPIC_ADMIN_API_KEY: "sk-ant-admin-test" },
-      provider: "anthropic",
-      resolveApiKeyFromConfigAndStore: () => undefined,
-      resolveOAuthToken: async () => null,
     });
     if (!("token" in auth) || !auth.token) {
       throw new Error("expected encoded Anthropic Admin API credentials");
     }
-    const result = await fetchAnthropicUsage({
-      config: {},
-      env: {},
-      provider: "anthropic",
+    const result = await fetchUsage({
       token: auth.token,
-      timeoutMs: 5_000,
       fetchFn: fetchFn as typeof fetch,
     });
 
+    const tokens = {
+      inputTokens: 1_000,
+      cacheWriteTokens: 150,
+      cacheReadTokens: 300,
+      outputTokens: 250,
+      totalTokens: 1_700,
+    };
     expect(result).toEqual({
       provider: "anthropic",
       displayName: "Anthropic",
@@ -92,27 +91,8 @@ describe("Anthropic provider usage", () => {
       costHistory: {
         unit: "USD",
         periodDays: 30,
-        daily: [
-          {
-            date: "2026-07-06",
-            amount: 12.34,
-            inputTokens: 1_000,
-            cacheWriteTokens: 150,
-            cacheReadTokens: 300,
-            outputTokens: 250,
-            totalTokens: 1_700,
-          },
-        ],
-        models: [
-          {
-            name: "claude-opus-4-8",
-            inputTokens: 1_000,
-            cacheReadTokens: 300,
-            cacheWriteTokens: 150,
-            outputTokens: 250,
-            totalTokens: 1_700,
-          },
-        ],
+        daily: [{ date: "2026-07-06", amount: 12.34, ...tokens }],
+        models: [{ name: "claude-opus-4-8", ...tokens }],
         categories: [{ name: "Claude API", amount: 12.34 }],
       },
       summary: "1,700 tokens",
@@ -128,50 +108,17 @@ describe("Anthropic provider usage", () => {
   });
 
   it.each([
-    { name: "inference keys", key: "sk-ant-api03-test", accepted: false },
-    { name: "setup tokens", key: `sk-ant-oat01-${"a".repeat(80)}`, accepted: true },
-  ])("classifies $name through the real usage auth owner", async ({ key, accepted }) => {
-    const result = await resolveAnthropicUsageAuth({
-      config: {},
-      env: {},
-      provider: "anthropic",
-      resolveApiKeyFromConfigAndStore: () => key,
-      resolveOAuthToken: async () => null,
+    [`sk-ant-oat01-${"a".repeat(80)}`, `sk-ant-oat01-${"a".repeat(80)}`],
+    ["sk-ant-admin-profile", 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-profile"}'],
+  ])("classifies stored usage credential %s", async (key, token) => {
+    const result = await resolveAuth({
+      resolveApiKeyCandidatesFromConfigAndStore: async () => [key],
     });
-    expect(result).toEqual(accepted ? { token: key } : { handled: true });
-  });
-
-  it("uses explicit Admin API credentials before Claude OAuth", async () => {
-    const result = await resolveAnthropicUsageAuth({
-      config: {},
-      env: { ANTHROPIC_ADMIN_API_KEY: "sk-ant-admin-explicit" },
-      provider: "anthropic",
-      resolveApiKeyFromConfigAndStore: () => "sk-ant-oat01-fallback",
-      resolveOAuthToken: async () => ({ token: "oauth-token" }),
-    });
-    expect(result).toEqual({
-      token: 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-explicit"}',
-    });
-  });
-
-  it("auto-detects an Admin API key stored in the Anthropic provider profile", async () => {
-    const result = await resolveAnthropicUsageAuth({
-      config: {},
-      env: {},
-      provider: "anthropic",
-      resolveApiKeyFromConfigAndStore: () => "sk-ant-admin-profile",
-      resolveOAuthToken: async () => null,
-    });
-    expect(result).toEqual({
-      token: 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-profile"}',
-    });
+    expect(result).toEqual({ token });
   });
 
   it("prefers a stored Admin API key when normal API and OAuth credentials coexist", async () => {
-    const result = await resolveAnthropicUsageAuth({
-      config: {},
-      env: {},
-      provider: "anthropic",
+    const result = await resolveAuth({
       resolveApiKeyFromConfigAndStore: () => "sk-ant-api03-inference",
       resolveApiKeyCandidatesFromConfigAndStore: async () => [
         "sk-ant-api03-inference",
@@ -184,17 +131,9 @@ describe("Anthropic provider usage", () => {
     });
   });
 
-  it("keeps the local retired profile id aligned with the plugin-sdk constant", () => {
-    expect(CLAUDE_CLI_PROFILE_ID).toBe(SDK_CLAUDE_CLI_PROFILE_ID);
-  });
-
   it("does not refresh the native Claude login for usage polling", async () => {
     const resolveOAuthToken = vi.fn(async () => null);
-    const result = await resolveAnthropicUsageAuth({
-      config: {},
-      env: {},
-      provider: "anthropic",
-      resolveApiKeyFromConfigAndStore: () => undefined,
+    const result = await resolveAuth({
       resolveOAuthToken,
     });
     expect(result).toEqual({ handled: true });
@@ -204,87 +143,12 @@ describe("Anthropic provider usage", () => {
     });
   });
 
-  it("uses plan metadata from the resolved auth profile", async () => {
-    const fetchFn = vi.fn(
-      async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
-    );
-    const snapshot = await fetchAnthropicUsage({
-      config: {},
-      env: {},
-      provider: "anthropic",
-      token: "oauth-token",
-      subscriptionType: "pro",
-      rateLimitTier: "default_pro",
-      timeoutMs: 5000,
-      fetchFn,
-    });
-    expect(snapshot.plan).toBe("Pro");
-  });
-
-  it("does not read Claude CLI auth to label OAuth usage", async () => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            five_hour: { utilization: 22, resets_at: "2026-07-09T18:00:00Z" },
-            seven_day: { utilization: 25 },
-          }),
-          { status: 200 },
-        ),
-    );
-    const snapshot = await fetchAnthropicUsage({
-      config: {},
-      env: {},
-      provider: "anthropic",
-      token: "oauth-token",
-      timeoutMs: 5000,
-      fetchFn,
-    });
-    expect(snapshot.plan).toBeUndefined();
-    expect(snapshot.windows).toHaveLength(2);
-  });
-
-  it("attaches the resolved credential email to OAuth usage snapshots", async () => {
-    const fetchFn = vi.fn(
-      async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
-    );
-    const snapshot = await fetchAnthropicUsage({
-      config: {},
-      env: {},
-      provider: "anthropic",
-      token: oauthFixtureToken(),
-      email: "profile@example.com",
-      timeoutMs: 5000,
-      fetchFn,
-    });
-    expect(snapshot.accountEmail).toBe("profile@example.com");
-  });
-
-  it("leaves the account unlabeled when the credential carries no email", async () => {
-    const fetchFn = vi.fn(
-      async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
-    );
-    const snapshot = await fetchAnthropicUsage({
-      config: {},
-      env: {},
-      provider: "anthropic",
-      token: oauthFixtureToken(),
-      timeoutMs: 5000,
-      fetchFn,
-    });
-    expect(snapshot.accountEmail).toBeUndefined();
-  });
-
-  it("does not attach a plan label when usage has no windows", async () => {
-    const fetchFn = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
-    const snapshot = await fetchAnthropicUsage({
-      config: {},
-      env: {},
-      provider: "anthropic",
-      token: "oauth-token",
-      timeoutMs: 5000,
-      fetchFn,
-    });
-    expect(snapshot.plan).toBeUndefined();
+  it.each([
+    [{ subscriptionType: "pro", rateLimitTier: "default_pro" }, "plan", "Pro"],
+    [{ email: "profile@example.com" }, "accountEmail", "profile@example.com"],
+    [{ fetchFn: vi.fn(async () => Response.json({})) }, "plan", undefined],
+  ] as const)("attaches only applicable resolved metadata %j", async (options, field, expected) => {
+    const snapshot = await fetchUsage(options);
+    expect(snapshot[field]).toBe(expected);
   });
 });

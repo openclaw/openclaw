@@ -1,4 +1,3 @@
-// Control UI controller manages agent files gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -9,18 +8,31 @@ import type {
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
+type AgentFileVersion = { hash: string } | { missing: true };
+
+export type AgentFileOutcome =
+  | { result: boolean; error?: never }
+  | { error: string; result?: never };
+
+type AgentFileEditor = {
+  workspace?: string;
+  baseWorkspace?: string;
+  content?: string;
+  draft?: string;
+  baseVersion?: AgentFileVersion;
+  version?: AgentFileVersion;
+};
+
 export type AgentFilesState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   requestGeneration: number;
-  agents: Pick<AgentCapability, "recordFile">;
+  agents: Pick<AgentCapability, "recordFile" | "files" | "ensureFiles" | "refreshFiles">;
   agentFilesLoading: boolean;
-  agentFilesError: string | null;
-  agentFileContents: Record<string, string>;
-  agentFileBaseHashes: Record<string, string>;
-  agentFileHashes: Record<string, string>;
+  agentFileRead: Promise<AgentFileOutcome> | null;
+  agentFileOutcome: Promise<AgentFileOutcome> | null;
+  agentFileEditors: Record<string, AgentFileEditor>;
   agentFileConflict: string | null;
-  agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
   agentFileWriteRevisions: Map<string, number>;
 };
@@ -28,9 +40,9 @@ export type AgentFilesState = {
 export type AgentFilesViewState = Pick<
   AgentFilesState,
   | "agentFilesLoading"
-  | "agentFilesError"
-  | "agentFileContents"
-  | "agentFileDrafts"
+  | "agentFileRead"
+  | "agentFileOutcome"
+  | "agentFileEditors"
   | "agentFileSaving"
   | "agentFileConflict"
 > & {
@@ -38,9 +50,24 @@ export type AgentFilesViewState = Pick<
   agentFileActive: string | null;
 };
 
+export function hasAgentFileContent(
+  state: Pick<AgentFilesState, "agentFileEditors">,
+  name: string,
+): boolean {
+  const file = state.agentFileEditors[name];
+  return Boolean(file && (Object.hasOwn(file, "content") || Object.hasOwn(file, "draft")));
+}
+
+export function isAgentFileDirty(file: AgentFileEditor | undefined): boolean {
+  return Boolean(
+    file &&
+    Object.hasOwn(file, "draft") &&
+    (file.draft !== file.content || file.workspace !== file.baseWorkspace),
+  );
+}
+
 export type RetainedAgentFileDrafts = {
-  drafts: Record<string, string>;
-  hashes: Record<string, string>;
+  editors: Record<string, Pick<AgentFileEditor, "draft" | "version" | "workspace">>;
   active: string | null;
   conflict: string | null;
 };
@@ -48,36 +75,19 @@ export type RetainedAgentFileDrafts = {
 export function retainAgentFileDrafts(
   state: AgentFilesState & { agentFileActive: string | null },
 ): RetainedAgentFileDrafts | null {
-  const entries = Object.entries(state.agentFileDrafts).filter(
-    ([name, draft]) => draft !== state.agentFileContents[name] || state.agentFileConflict === name,
+  const entries = Object.entries(state.agentFileEditors).filter(
+    ([name, file]) => isAgentFileDirty(file) || state.agentFileConflict === name,
   );
   if (entries.length === 0) {
     return null;
   }
   return {
-    drafts: Object.fromEntries(entries),
-    hashes: Object.fromEntries(
-      entries.flatMap(([name]) =>
-        state.agentFileHashes[name] === undefined ? [] : [[name, state.agentFileHashes[name]]],
-      ),
+    editors: Object.fromEntries(
+      entries.map(([name, { draft, version, workspace }]) => [name, { draft, version, workspace }]),
     ),
     active: state.agentFileActive,
     conflict: state.agentFileConflict,
   };
-}
-
-function withFileHash(
-  hashes: Record<string, string>,
-  name: string,
-  hash: string | undefined,
-): Record<string, string> {
-  const next = { ...hashes };
-  if (hash === undefined) {
-    delete next[name];
-  } else {
-    next[name] = hash;
-  }
-  return next;
 }
 
 async function requestAgentFile(
@@ -92,13 +102,13 @@ async function requestAgentFile(
   const busy = saving ? "agentFileSaving" : "agentFilesLoading";
   const client = state.client;
   const agents = state.agents;
-  if (!client || !state.connected || state[busy]) {
+  if (!client || !state.connected || state[busy] || (saving && !hasAgentFileContent(state, name))) {
     return false;
   }
   if (
     operation.kind === "read" &&
     !operation.force &&
-    Object.hasOwn(state.agentFileContents, name)
+    Object.hasOwn(state.agentFileEditors[name] ?? {}, "content")
   ) {
     return true;
   }
@@ -119,10 +129,14 @@ async function requestAgentFile(
   const revision = state.agentFileWriteRevisions.get(name);
   const isCurrent = () =>
     isConnected() && (saving || state.agentFileWriteRevisions.get(name) === revision);
-  const expectedHash = state.agentFileHashes[name];
+  const { version, workspace } = state.agentFileEditors[name] ?? {};
   const resolution = operation.kind === "read" ? operation.resolution : undefined;
+  const completion = Promise.withResolvers<AgentFileOutcome>();
+  state.agentFileOutcome = completion.promise;
+  if (!saving) {
+    state.agentFileRead = completion.promise;
+  }
   state[busy] = true;
-  state.agentFilesError = null;
   try {
     const res = await client.request<AgentsFilesGetResult | AgentsFilesSetResult | null>(
       saving ? "agents.files.set" : "agents.files.get",
@@ -130,45 +144,65 @@ async function requestAgentFile(
         agentId,
         name,
         ...(operation.kind === "write"
-          ? { content: operation.content, ...(expectedHash ? { expectedHash } : {}) }
+          ? {
+              content: operation.content,
+              ...(workspace ? { expectedWorkspace: workspace } : {}),
+              ...(version &&
+                ("hash" in version ? { expectedHash: version.hash } : { expectedMissing: true })),
+            }
           : {}),
       },
     );
     if (res?.file && isCurrent()) {
       const content = operation.kind === "write" ? operation.content : (res.file.content ?? "");
-      const previousBase = state.agentFileContents[name];
-      const currentDraft = state.agentFileDrafts[name];
-      state.agentFileContents = { ...state.agentFileContents, [name]: content };
-      // Refresh may advance the workspace base while a dirty draft keeps its ancestry.
-      state.agentFileBaseHashes = withFileHash(state.agentFileBaseHashes, name, res.file.hash);
+      const file = state.agentFileEditors[name] ?? {};
+      const nextVersion: AgentFileVersion | undefined = res.file.missing
+        ? { missing: true }
+        : res.file.hash
+          ? { hash: res.file.hash }
+          : undefined;
       // Reads rebase clean drafts; writes preserve edits made after submission.
       const rebasesDraft =
         resolution === "draft" ||
-        !Object.hasOwn(state.agentFileDrafts, name) ||
-        currentDraft === content ||
-        (!saving && currentDraft === previousBase);
-      if (rebasesDraft) {
-        state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
+        !Object.hasOwn(file, "draft") ||
+        (file.workspace === res.workspace && file.draft === content) ||
+        (!saving && !isAgentFileDirty(file));
+      const rebasesVersion = saving || resolution !== undefined || rebasesDraft;
+      // Refresh advances the workspace base while dirty drafts retain their ancestry.
+      state.agentFileEditors = {
+        ...state.agentFileEditors,
+        [name]: {
+          content,
+          baseWorkspace: res.workspace,
+          workspace: rebasesVersion ? res.workspace : file.workspace,
+          draft: rebasesDraft ? content : file.draft,
+          baseVersion: nextVersion,
+          version: rebasesVersion ? nextVersion : file.version,
+        },
+      };
+      if (rebasesVersion && state.agentFileConflict === name) {
+        state.agentFileConflict = null;
       }
-      if (saving || resolution !== undefined || rebasesDraft) {
-        state.agentFileHashes = withFileHash(state.agentFileHashes, name, res.file.hash);
-        if (state.agentFileConflict === name) {
-          state.agentFileConflict = null;
-        }
-      }
-      state.agentFilesError = null;
+      state.agentFileOutcome = completion.promise;
       agents.recordFile(res);
+      completion.resolve({ result: true });
       return true;
     }
   } catch (err) {
     if (isCurrent()) {
-      state.agentFilesError = formatUiError(err);
-      if (isAgentFileConflict(err)) {
+      state.agentFileOutcome = completion.promise;
+      completion.resolve({ error: formatUiError(err) });
+      if (
+        err instanceof GatewayRequestError &&
+        isRecord(err.details) &&
+        err.details.type === "agent_file_conflict"
+      ) {
         state.agentFileConflict = name;
       }
     }
     return false;
   } finally {
+    completion.resolve({ result: false });
     if (isConnected()) {
       if (saving) {
         advanceWriteRevision();
@@ -179,15 +213,7 @@ async function requestAgentFile(
   return false;
 }
 
-function isAgentFileConflict(err: unknown): boolean {
-  return (
-    err instanceof GatewayRequestError &&
-    isRecord(err.details) &&
-    err.details.type === "agent_file_conflict"
-  );
-}
-
-export function loadAgentFileContent(
+function loadAgentFileContent(
   state: AgentFilesState,
   agentId: string,
   name: string,
@@ -196,44 +222,27 @@ export function loadAgentFileContent(
   return requestAgentFile(state, agentId, name, { kind: "read", force: opts?.force });
 }
 
-export function saveAgentFile(
-  state: AgentFilesState,
-  agentId: string,
-  name: string,
-  content: string,
-): Promise<boolean> {
-  return requestAgentFile(state, agentId, name, { kind: "write", content });
-}
-
-export function resetAgentFile(state: AgentFilesState, name: string): void {
-  state.agentFileDrafts = {
-    ...state.agentFileDrafts,
-    [name]: state.agentFileContents[name] ?? "",
+function resetAgentFile(state: AgentFilesState, name: string): void {
+  const file = state.agentFileEditors[name];
+  if (!file || !Object.hasOwn(file, "content")) {
+    return;
+  }
+  state.agentFileEditors = {
+    ...state.agentFileEditors,
+    [name]: {
+      ...file,
+      draft: file.content ?? "",
+      version: file.baseVersion,
+      workspace: file.baseWorkspace,
+    },
   };
-  state.agentFileHashes = withFileHash(
-    state.agentFileHashes,
-    name,
-    state.agentFileBaseHashes[name],
-  );
   if (state.agentFileConflict === name) {
     state.agentFileConflict = null;
-    state.agentFilesError = null;
+    state.agentFileOutcome = null;
   }
 }
 
-export function reloadAgentFile(
-  state: AgentFilesState,
-  agentId: string,
-  name: string,
-): Promise<boolean> {
-  return requestAgentFile(state, agentId, name, {
-    kind: "read",
-    force: true,
-    resolution: "draft",
-  });
-}
-
-export async function overwriteAgentFile(
+async function overwriteAgentFile(
   state: AgentFilesState,
   agentId: string,
   name: string,
@@ -258,4 +267,130 @@ export async function overwriteAgentFile(
     return false;
   }
   return await requestAgentFile(state, agentId, name, { kind: "write", content });
+}
+
+/** Owns the selected file editor; the agent capability remains the inventory authority. */
+export function createAgentFilePanel(
+  state: AgentFilesState &
+    AgentFilesViewState & {
+      agentsSelectedId: string | null;
+      agentsPanel: string;
+    },
+  options: {
+    canWrite: () => boolean;
+    isCurrent: (client: GatewayBrowserClient, generation: number, agentId: string) => boolean;
+  },
+) {
+  async function selectDefault(agentId: string, force = false) {
+    const files = state.agentFilesList?.files ?? [];
+    if (!state.agentFileActive || !files.some((file) => file.name === state.agentFileActive)) {
+      state.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
+    }
+    if (state.agentFileActive && !state.agents.files(agentId).loading) {
+      await loadAgentFileContent(state, agentId, state.agentFileActive, { force });
+    }
+  }
+
+  function sync(agents = state.agents) {
+    const agentId = state.agentsSelectedId;
+    if (!agentId || state.agentsPanel !== "files") {
+      return;
+    }
+    const status = agents.files(agentId);
+    if (status.list) {
+      state.agentFilesList = status.list;
+      void selectDefault(agentId);
+    }
+  }
+
+  async function load(agentId: string, force = false) {
+    const { client, agents } = state;
+    const cached = agents.files(agentId);
+    if (!client || !state.connected || state.agentFilesLoading || cached.loading) {
+      return;
+    }
+    if (cached.list && !force) {
+      sync(agents);
+      return;
+    }
+    // Keep an initial failure visible until explicit retry or owner retirement.
+    if (cached.read && !force) {
+      return;
+    }
+    const generation = state.requestGeneration;
+    state.agentFileOutcome = null;
+    const list = force ? await agents.refreshFiles(agentId) : await agents.ensureFiles(agentId);
+    if (state.agents !== agents || !options.isCurrent(client, generation, agentId)) {
+      return;
+    }
+    state.agentFilesList = list ?? agents.files(agentId).list;
+    if (list) {
+      await selectDefault(agentId, force);
+    }
+  }
+
+  function invalidate() {
+    state.agentFilesLoading = false;
+    state.agentFileRead = null;
+    state.agentFileOutcome = null;
+    state.agentFileSaving = false;
+  }
+
+  return {
+    sync,
+    load,
+    invalidate,
+    reset() {
+      invalidate();
+      state.agentFilesList = null;
+      state.agentFileActive = null;
+      state.agentFileEditors = {};
+      state.agentFileConflict = null;
+      state.agentFileWriteRevisions.clear();
+    },
+    forAgent(selectedAgentId: string | null) {
+      function save(name: string, overwrite = false) {
+        if (!selectedAgentId || selectedAgentId !== state.agentsSelectedId || !options.canWrite()) {
+          return undefined;
+        }
+        const content =
+          state.agentFileEditors[name]?.draft ?? state.agentFileEditors[name]?.content ?? "";
+        return overwrite
+          ? overwriteAgentFile(state, selectedAgentId, name, content)
+          : requestAgentFile(state, selectedAgentId, name, { kind: "write", content });
+      }
+      return {
+        listRead: state.agents.files(selectedAgentId).read,
+        onLoadFiles: (agentId: string) => void load(agentId, true),
+        onSelectFile(this: void, name: string) {
+          state.agentFileActive = name;
+          return selectedAgentId ? loadAgentFileContent(state, selectedAgentId, name) : undefined;
+        },
+        onFileDraftChange(name: string, content: string) {
+          if (selectedAgentId !== state.agentsSelectedId) {
+            return;
+          }
+          state.agentFileEditors = {
+            ...state.agentFileEditors,
+            [name]: { ...state.agentFileEditors[name], draft: content },
+          };
+        },
+        onFileReset(name: string) {
+          if (selectedAgentId === state.agentsSelectedId) {
+            resetAgentFile(state, name);
+          }
+        },
+        onFileSave: (name: string) => save(name),
+        onFileReload: (name: string) =>
+          selectedAgentId
+            ? requestAgentFile(state, selectedAgentId, name, {
+                kind: "read",
+                force: true,
+                resolution: "draft",
+              })
+            : undefined,
+        onFileOverwrite: (name: string) => save(name, true),
+      };
+    },
+  };
 }

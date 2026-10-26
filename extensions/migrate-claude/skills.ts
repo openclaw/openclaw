@@ -1,4 +1,3 @@
-// Migrate Claude plugin module implements skills behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
@@ -10,11 +9,13 @@ import {
   MIGRATION_REASON_TARGET_EXISTS,
 } from "openclaw/plugin-sdk/migration";
 import { backupMigrationItemTarget } from "openclaw/plugin-sdk/migration-runtime";
+import type { PlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
+import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { exists, sanitizeName } from "./helpers.js";
 import type { ClaudeSource } from "./source.js";
-import type { PlannedTargets } from "./targets.js";
 
 type PlannedSkill = {
   name: string;
@@ -27,13 +28,13 @@ type PlannedSkill = {
 async function collectSkillDirs(
   planned: PlannedSkill[],
   dir: string | undefined,
-  targets: PlannedTargets,
+  targets: PlannedMigrationTargets,
   scope: string,
 ): Promise<void> {
   if (!dir) {
     return;
   }
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory()) {
       continue;
@@ -59,7 +60,7 @@ async function collectSkillDirs(
 async function collectCommandFiles(
   planned: PlannedSkill[],
   dir: string | undefined,
-  targets: PlannedTargets,
+  targets: PlannedMigrationTargets,
   scope: string,
 ): Promise<void> {
   if (!dir) {
@@ -90,7 +91,7 @@ async function collectCommandFiles(
 
 export async function buildSkillItems(params: {
   source: ClaudeSource;
-  targets: PlannedTargets;
+  targets: PlannedMigrationTargets;
   overwrite?: boolean;
 }): Promise<MigrationItem[]> {
   const planned: PlannedSkill[] = [];
@@ -128,35 +129,6 @@ export async function buildSkillItems(params: {
   return items;
 }
 
-function firstParagraph(content: string): string | undefined {
-  return content
-    .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, "")
-    .split(/\r?\n\r?\n/u)
-    .map((part) => part.replaceAll(/\s+/g, " ").trim())
-    .find(Boolean);
-}
-
-function generatedCommandSkillContent(params: {
-  skillName: string;
-  sourceLabel: string;
-  commandContent: string;
-}): string {
-  const description =
-    firstParagraph(params.commandContent) ?? `Imported Claude command ${params.skillName}`;
-  return [
-    "---",
-    `name: ${params.skillName}`,
-    `description: ${JSON.stringify(truncateUtf16Safe(description, 180))}`,
-    "disable-model-invocation: true",
-    "---",
-    "",
-    `<!-- Imported from Claude: ${params.sourceLabel} -->`,
-    "",
-    params.commandContent.trimEnd(),
-    "",
-  ].join("\n");
-}
-
 export async function applyGeneratedSkillItem(
   item: MigrationItem,
   reportDir: string,
@@ -177,11 +149,29 @@ export async function applyGeneratedSkillItem(
         : path.basename(item.source);
     const skillName =
       typeof item.details?.skillName === "string" ? item.details.skillName : sanitizeName(item.id);
-    const content = generatedCommandSkillContent({
-      skillName,
-      sourceLabel,
-      commandContent: await fs.readFile(item.source, "utf8"),
-    });
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(item.source) });
+    const commandContent = decodeUtf8Input(
+      buffer,
+      `Claude command file ${item.source} (re-save or re-encode it as UTF-8, then rerun the migration)`,
+    );
+    const description =
+      commandContent
+        .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, "")
+        .split(/\r?\n\r?\n/u)
+        .map((part) => part.replaceAll(/\s+/g, " ").trim())
+        .find(Boolean) ?? `Imported Claude command ${skillName}`;
+    const content = [
+      "---",
+      `name: ${skillName}`,
+      `description: ${JSON.stringify(truncateUtf16Safe(description, 180))}`,
+      "disable-model-invocation: true",
+      "---",
+      "",
+      `<!-- Imported from Claude: ${sourceLabel} -->`,
+      "",
+      commandContent.trimEnd(),
+      "",
+    ].join("\n");
     const backupPath = targetExists
       ? await backupMigrationItemTarget(item.target, reportDir, { dereference: true })
       : undefined;

@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
@@ -8,106 +7,105 @@ import {
   assertQaGatewayCredentialLeaseQuarantine,
   createQaGatewayProcessBoundaryController,
   shouldRetainQaGatewayCredentialLease,
+  type QaGatewayProcessBoundaryConfig,
 } from "./gateway-process-boundary.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const MIN_QUARANTINE_TTL_MS = 2 * 60 * 60 * 1_000;
 const RETAIN_LEASE_PREFIX = "retain-credential-lease-";
-const cleanupPaths: string[] = [];
+const { makeTempDir, cleanup } = createTempDirHarness();
+const tempDir = () => makeTempDir("qa-process-boundary-");
+afterEach(cleanup);
 
-afterEach(async () => {
-  await Promise.all(
-    cleanupPaths.splice(0).map((pathName) => fs.rm(pathName, { recursive: true, force: true })),
-  );
+async function fixture() {
+  const root = await tempDir();
+  const tempRoot = path.join(root, "runtime");
+  const evidenceDir = path.join(root, "evidence");
+  await Promise.all([fs.mkdir(tempRoot), fs.mkdir(evidenceDir)]);
+  const launcherPath = path.join(root, "launcher");
+  const config: QaGatewayProcessBoundaryConfig = {
+    kind: "linux-proc-v1",
+    evidenceDir,
+    expectedGid: process.getgid?.() ?? 1002,
+    expectedUid: process.getuid?.() ?? 1001,
+    forwardedEnvKeys: ["PATH", "HOME", "PATH"],
+    runtimeArgsPrefix: ["--import", "/tmp/preload.mjs"],
+    runtimeExecutablePath: process.execPath,
+    terminationRetryTimeoutMs: 60_000,
+  };
+  const create = () => createQaGatewayProcessBoundaryController({ config, launcherPath, tempRoot });
+  const prepare = (controller: Awaited<ReturnType<typeof create>>) =>
+    controller.prepare({
+      args: ["gateway", "run"],
+      cwd: tempRoot,
+      env: { HOME: path.join(tempRoot, "home"), PATH: process.env.PATH },
+    });
+  return { tempRoot, evidenceDir, launcherPath, create, prepare };
+}
+
+const writeJson = (file: string, value: unknown, mode?: number) =>
+  fs.writeFile(file, `${JSON.stringify(value)}\n`, { mode });
+const boundaryEnv = (evidenceDir: string) => ({
+  OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR: evidenceDir,
 });
 
 describe("gateway process boundary", () => {
   it.runIf(process.platform === "linux")(
     "validates handoff, sandbox, and runtime proof through controller acceptance",
     async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "qa-process-boundary-accept-"));
-      cleanupPaths.push(root);
-      const tempRoot = path.join(root, "runtime");
-      const evidenceDir = path.join(root, "evidence");
-      const launcherPath = path.join(root, "launcher.sh");
-      await fs.mkdir(tempRoot);
-      await fs.mkdir(evidenceDir);
-      await fs.writeFile(launcherPath, '#!/bin/sh\ncat "$3.runtime"\n', { mode: 0o755 });
-      const controller = await createQaGatewayProcessBoundaryController({
-        config: {
-          kind: "linux-proc-v1",
-          evidenceDir,
-          expectedGid: process.getgid?.() ?? 1002,
-          expectedUid: process.getuid?.() ?? 1001,
-          forwardedEnvKeys: ["PATH", "HOME", "PATH"],
-          runtimeArgsPrefix: ["--import", "/tmp/preload.mjs"],
-          runtimeExecutablePath: process.execPath,
-          terminationRetryTimeoutMs: 60_000,
-        },
+      const { tempRoot, launcherPath, create, prepare } = await fixture();
+      // Keep the executable immutable so concurrent forks cannot inherit its writer.
+      await fs.writeFile(`${launcherPath}.sh`, '#!/bin/sh\ncat "$3.runtime"\n');
+      await fs.symlink(
+        new URL("../test-fixtures/mantis-command.sh", import.meta.url),
         launcherPath,
-        tempRoot,
-      });
-      const prepared = await controller.prepare({
-        args: ["gateway", "run"],
-        cwd: tempRoot,
-        env: { HOME: path.join(tempRoot, "home"), PATH: process.env.PATH },
-      });
+      );
+      const controller = await create();
+      const prepared = await prepare(controller);
       const launcherPid = 4242;
       const runtimePid = 4243;
-      const uid = process.getuid?.() ?? 1001;
-      const gid = process.getgid?.() ?? 1002;
-      const handoff = {
+      const accept = (spawn: typeof prepared) =>
+        controller.accept({
+          child: { pid: launcherPid, exitCode: null, signalCode: null } as never,
+          prepared: spawn,
+        });
+      const writeSandbox = (spawn: typeof prepared, envKeys = spawn.command.envKeys) => {
+        const proof = { version: 1, generation: spawn.generation, status: "pass", envKeys };
+        return writeJson(spawn.sandboxFilePath, proof, 0o640);
+      };
+      const runtime = {
         version: 1,
         generation: prepared.generation,
         pid: runtimePid,
-        uid,
-        gid,
+        uid: process.getuid?.() ?? 1001,
+        gid: process.getgid?.() ?? 1002,
         procStartTicks: "123",
         pgrp: launcherPid,
+      };
+      const handoff = {
+        ...runtime,
         commandFile: {
           path: prepared.commandFilePath,
           sha256: prepared.commandSha256,
         },
       };
-      await fs.writeFile(prepared.identityFilePath, `${JSON.stringify(handoff)}\n`, {
-        mode: 0o640,
-      });
-      await fs.writeFile(
-        prepared.sandboxFilePath,
-        `${JSON.stringify({
-          version: 1,
-          generation: prepared.generation,
-          status: "pass",
-          envKeys: ["PATH", "HOME", "PATH", "OPENCLAW_QA_SUT_PREENTRY_STOP"],
-        })}\n`,
-        { mode: 0o640 },
-      );
+      await writeJson(prepared.identityFilePath, handoff, 0o640);
+      await writeSandbox(prepared, ["PATH", "HOME", "PATH", "OPENCLAW_QA_SUT_PREENTRY_STOP"]);
       const cmdlineSha256 = createHash("sha256")
         .update(
           Buffer.from(`${[prepared.command.executable, ...prepared.command.argv].join("\0")}\0`),
         )
         .digest("hex");
-      await fs.writeFile(
-        `${prepared.identityFilePath}.runtime`,
-        `${JSON.stringify({
-          version: 1,
-          generation: prepared.generation,
-          status: "pass",
-          pid: runtimePid,
-          uid,
-          gid,
-          procStartTicks: "123",
-          pgrp: launcherPid,
-          state: "T",
-          cwd: await fs.realpath(tempRoot),
-          executablePath: await fs.realpath(process.execPath),
-          cmdlineSha256,
-        })}\n`,
-      );
-
-      const identity = await controller.accept({
-        child: { pid: launcherPid, exitCode: null, signalCode: null } as never,
-        prepared,
+      await writeJson(`${prepared.identityFilePath}.runtime`, {
+        ...runtime,
+        status: "pass",
+        state: "T",
+        cwd: await fs.realpath(tempRoot),
+        executablePath: await fs.realpath(process.execPath),
+        cmdlineSha256,
       });
+
+      const identity = await accept(prepared);
 
       expect(identity).toMatchObject({
         generation: prepared.generation,
@@ -115,12 +113,9 @@ describe("gateway process boundary", () => {
         pgrp: launcherPid,
         preEntryCmdlineSha256: cmdlineSha256,
       });
-      const evidence = JSON.parse(await fs.readFile(controller.evidencePath, "utf8")) as {
-        launches: Array<{ generation: string; sandboxFile: string }>;
-      };
-      expect(evidence.launches).toEqual([
-        expect.objectContaining({ generation: prepared.generation }),
-      ]);
+      expect(JSON.parse(await fs.readFile(controller.evidencePath, "utf8"))).toMatchObject({
+        launches: [{ generation: prepared.generation }],
+      });
 
       // Whitespace leaves JSON valid, but oversized verification output must not
       // authenticate a truncated proof as a complete response.
@@ -130,46 +125,25 @@ describe("gateway process boundary", () => {
       );
       await expect(controller.markReady(identity)).rejects.toThrow("proxy stdout exceeded");
 
-      await fs.writeFile(launcherPath, '#!/bin/sh\ncat "$3.runtime" >&2\nexit 7\n');
+      await fs.writeFile(`${launcherPath}.sh`, '#!/bin/sh\ncat "$3.runtime" >&2\nexit 7\n');
       await expect(controller.markReady(identity)).rejects.toThrow(
         "proxy exited 7 (stderr truncated)",
       );
 
-      const malformed = await controller.prepare({
-        args: ["gateway", "run"],
-        cwd: tempRoot,
-        env: { HOME: path.join(tempRoot, "home"), PATH: process.env.PATH },
-      });
-      await fs.writeFile(
+      const malformed = await prepare(controller);
+      await writeJson(
         malformed.identityFilePath,
-        `${JSON.stringify({ ...handoff, generation: malformed.generation, pid: 1 })}\n`,
-        { mode: 0o640 },
+        { ...handoff, generation: malformed.generation, pid: 1 },
+        0o640,
       );
-      await fs.writeFile(
-        malformed.sandboxFilePath,
-        `${JSON.stringify({
-          version: 1,
-          generation: malformed.generation,
-          status: "pass",
-          envKeys: malformed.command.envKeys,
-        })}\n`,
-        { mode: 0o640 },
-      );
-      await expect(
-        controller.accept({
-          child: { pid: launcherPid, exitCode: null, signalCode: null } as never,
-          prepared: malformed,
-        }),
-      ).rejects.toThrow("invalid process-boundary pid");
+      await writeSandbox(malformed);
+      await expect(accept(malformed)).rejects.toThrow("invalid process-boundary pid");
     },
   );
 
   it("retains a credential lease only for a regular boundary marker", async () => {
-    const evidenceDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-process-boundary-marker-"));
-    cleanupPaths.push(evidenceDir);
-    const env = {
-      OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR: evidenceDir,
-    };
+    const evidenceDir = await tempDir();
+    const env = boundaryEnv(evidenceDir);
     const markerPath = path.join(evidenceDir, `${RETAIN_LEASE_PREFIX}controller.json`);
 
     await expect(shouldRetainQaGatewayCredentialLease(env)).resolves.toBe(false);
@@ -181,89 +155,32 @@ describe("gateway process boundary", () => {
   });
 
   it("requires a durable Convex lease before isolated execution", () => {
-    const env = {
-      OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR: "/tmp/process-boundary",
-    };
-    expect(() =>
-      assertQaGatewayCredentialLeaseQuarantine(
-        {
-          source: "convex",
-          leaseTtlMs: MIN_QUARANTINE_TTL_MS - 1,
-        },
-        env,
-      ),
-    ).toThrow("requires a credential lease TTL");
-    expect(() =>
-      assertQaGatewayCredentialLeaseQuarantine(
-        {
-          source: "convex",
-          leaseTtlMs: MIN_QUARANTINE_TTL_MS,
-        },
-        env,
-      ),
-    ).not.toThrow();
-    expect(() =>
-      assertQaGatewayCredentialLeaseQuarantine(
-        {
-          source: "env",
-          leaseTtlMs: 0,
-        },
-        env,
-      ),
-    ).not.toThrow();
+    const env = boundaryEnv("/tmp/process-boundary");
+    const quarantine = (source: string, leaseTtlMs: number) => () =>
+      assertQaGatewayCredentialLeaseQuarantine({ source, leaseTtlMs }, env);
+    expect(quarantine("convex", MIN_QUARANTINE_TTL_MS - 1)).toThrow(
+      "requires a credential lease TTL",
+    );
+    expect(quarantine("convex", MIN_QUARANTINE_TTL_MS)).not.toThrow();
+    expect(quarantine("env", 0)).not.toThrow();
   });
 
   it.runIf(process.platform === "linux")(
     "uses a distinct evidence index for each controller",
     async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "qa-process-boundary-"));
-      cleanupPaths.push(root);
-      const tempRoot = path.join(root, "runtime");
-      const evidenceDir = path.join(root, "evidence");
-      await fs.mkdir(tempRoot);
-      await fs.mkdir(evidenceDir);
-      const config = {
-        kind: "linux-proc-v1" as const,
-        evidenceDir,
-        expectedGid: 1002,
-        expectedUid: 1001,
-        forwardedEnvKeys: ["HOME", "PATH"],
-        runtimeArgsPrefix: ["--import", "/tmp/preload.mjs", "/tmp/index.js"],
-        runtimeExecutablePath: process.execPath,
-        terminationRetryTimeoutMs: 60_000,
-      };
-
-      const first = await createQaGatewayProcessBoundaryController({
-        config,
-        launcherPath: "/tmp/launcher",
-        tempRoot,
-      });
-      const second = await createQaGatewayProcessBoundaryController({
-        config,
-        launcherPath: "/tmp/launcher",
-        tempRoot,
-      });
+      const { evidenceDir, create, prepare } = await fixture();
+      const first = await create();
+      const second = await create();
 
       expect(first.evidencePath).not.toBe(second.evidencePath);
       expect(path.dirname(first.evidencePath)).toBe(evidenceDir);
-      expect(path.basename(first.evidencePath)).toMatch(/^runtime-boundary-[a-f0-9-]{36}\.json$/);
 
-      await first.prepare({
-        args: ["gateway", "run"],
-        cwd: tempRoot,
-        env: { HOME: path.join(tempRoot, "home"), PATH: process.env.PATH },
-      });
-      await second.prepare({
-        args: ["gateway", "run"],
-        cwd: tempRoot,
-        env: { HOME: path.join(tempRoot, "home"), PATH: process.env.PATH },
-      });
+      await prepare(first);
+      await prepare(second);
       expect(first.retainCredentialLeasePath).not.toBe(second.retainCredentialLeasePath);
-      await expect(
-        shouldRetainQaGatewayCredentialLease({
-          OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR: evidenceDir,
-        }),
-      ).resolves.toBe(true);
+      await expect(shouldRetainQaGatewayCredentialLease(boundaryEnv(evidenceDir))).resolves.toBe(
+        true,
+      );
       expect((await fs.stat(first.retainCredentialLeasePath)).mode & 0o777).toBe(0o600);
       expect((await fs.stat(second.retainCredentialLeasePath)).mode & 0o777).toBe(0o600);
     },

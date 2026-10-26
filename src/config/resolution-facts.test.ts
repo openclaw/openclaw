@@ -11,112 +11,27 @@ import {
 } from "./resolution-facts.js";
 
 describe("resolution facts through config rewrites", () => {
-  it.each<{
-    name: string;
-    path: string;
-    source: object;
-    target: object;
-    survives: boolean;
-  }>([
-    {
-      name: "array item",
-      path: "items[0].key",
-      source: { items: [{ key: "value" }] },
-      target: { items: [{ key: "value" }] },
-      survives: true,
-    },
-    {
-      name: "quoted numeric key",
-      path: 'items["0"].key',
-      source: { items: { "0": { key: "value" } } },
-      target: { items: { "0": { key: "value" } } },
-      survives: true,
-    },
-    {
-      name: "array changed to record",
-      path: "items[0].key",
-      source: { items: [{ key: "value" }] },
-      target: { items: { "0": { key: "value" } } },
-      survives: false,
-    },
-    {
-      name: "record changed to array",
-      path: 'items["0"].key',
-      source: { items: { "0": { key: "value" } } },
-      target: { items: [{ key: "value" }] },
-      survives: false,
-    },
-    {
-      name: "overwritten value",
-      path: "key",
-      source: { key: "before" },
-      target: { key: "after" },
-      survives: false,
-    },
-    {
-      name: "moved value",
-      path: "key",
-      source: { key: "value" },
-      target: { relocated: "value" },
-      survives: false,
-    },
-    {
-      name: "two missing paths",
-      path: "missing",
-      source: {},
-      target: {},
-      survives: false,
-    },
-    {
-      name: "undefined own values",
-      path: "key",
-      source: { key: undefined },
-      target: { key: undefined },
-      survives: true,
-    },
-    {
-      name: "removed undefined value",
-      path: "key",
-      source: { key: undefined },
-      target: {},
-      survives: false,
-    },
-    {
-      name: "inherited source",
-      path: "key",
-      source: Object.create({ key: "value" }),
-      target: { key: "value" },
-      survives: false,
-    },
-    {
-      name: "inherited target",
-      path: "key",
-      source: { key: "value" },
-      target: Object.create({ key: "value" }),
-      survives: false,
-    },
-    {
-      name: "sparse arrays",
-      path: "items[0]",
-      source: { items: Array(1) },
-      target: { items: Array(1) },
-      survives: false,
-    },
-    {
-      name: "malformed path",
-      path: "items[0]tail",
-      source: { items: ["value"] },
-      target: { items: ["value"] },
-      survives: false,
-    },
-    {
-      name: "blocked path",
-      path: "constructor.key",
-      source: { constructor: { key: "value" } },
-      target: { constructor: { key: "value" } },
-      survives: false,
-    },
-  ])("handles $name without retaining stale provenance", ({ path, source, target, survives }) => {
+  const array = () => ({ items: [{ key: "value" }] });
+  const record = () => ({ items: { "0": { key: "value" } } });
+  it.each<[string, string, object, object, boolean]>([
+    ["array item", "items[0].key", array(), array(), true],
+    ["array changed to record", "items[0].key", array(), record(), false],
+    ["record changed to array", 'items["0"].key', record(), array(), false],
+    ["two missing paths", "missing", {}, {}, false],
+    ["undefined own values", "key", { key: undefined }, { key: undefined }, true],
+    ["removed undefined value", "key", { key: undefined }, {}, false],
+    ["inherited source", "key", Object.create({ key: "value" }), { key: "value" }, false],
+    ["inherited target", "key", { key: "value" }, Object.create({ key: "value" }), false],
+    ["sparse arrays", "items[0]", { items: Array(1) }, { items: Array(1) }, false],
+    ["malformed path", "items[0]tail", { items: ["value"] }, { items: ["value"] }, false],
+    [
+      "blocked path",
+      "constructor.key",
+      { constructor: { key: "value" } },
+      { constructor: { key: "value" } },
+      false,
+    ],
+  ])("handles %s without retaining stale provenance", (_name, path, source, target, survives) => {
     setConfigResolutionFacts(
       source,
       createConfigResolutionFacts([], new Map(), "default", new Map([[path, "REWRITE_KEY"]])),
@@ -132,17 +47,15 @@ describe("resolution facts through config rewrites", () => {
 
   it("carries pending references and invalidates their unresolved-path facts together", () => {
     const source = { keep: "${PENDING_KEEP}", drop: "${PENDING_DROP}" };
+    const pending = new Map([
+      ["keep", "PENDING_KEEP"],
+      ["drop", "PENDING_DROP"],
+    ]);
     setConfigResolutionFacts(
       source,
       createConfigResolutionFacts(
-        [
-          { configPath: "keep", varName: "PENDING_KEEP" },
-          { configPath: "drop", varName: "PENDING_DROP" },
-        ],
-        new Map([
-          ["keep", "PENDING_KEEP"],
-          ["drop", "PENDING_DROP"],
-        ]),
+        [...pending].map(([configPath, varName]) => ({ configPath, varName })),
+        pending,
       ),
     );
     const target = { keep: source.keep };

@@ -17,6 +17,7 @@ type SessionNavigationHandoffOwner = {
 const SESSION_NAVIGATION_HANDOFF_TTL_MS = 2_000;
 export const SESSION_NAVIGATION_INTENT_EVENT = "openclaw:session-navigation-intent";
 export type SessionNavigationIntent = {
+  agentId?: string;
   commit: () => boolean;
   face: BoardFace;
   sessionKey: string;
@@ -31,15 +32,6 @@ const sessionNavigationHandoffs = new WeakMap<
   SessionNavigationHandoff
 >();
 const sessionNavigationIntents = new WeakMap<SessionNavigationIntentOwner, object>();
-
-function announceSessionNavigationIntent(intent: SessionNavigationIntent): boolean {
-  const event = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-    cancelable: true,
-    detail: intent,
-  });
-  globalThis.dispatchEvent(event);
-  return event.defaultPrevented;
-}
 
 export function runSessionNavigationIntent(
   owner: SessionNavigationIntentOwner,
@@ -64,7 +56,12 @@ export function runSessionNavigationIntent(
       return intent.commit();
     },
   };
-  if (!announceSessionNavigationIntent(guarded)) {
+  const event = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+    cancelable: true,
+    detail: guarded,
+  });
+  globalThis.dispatchEvent(event);
+  if (!event.defaultPrevented) {
     guarded.commit();
   }
 }

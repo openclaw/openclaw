@@ -1,4 +1,3 @@
-// Timer delay helpers clamp delays to runtime-safe timeout values.
 import { resolveSafeTimeoutDelayMs } from "../../packages/gateway-client/src/timeouts.js";
 
 export {
@@ -6,11 +5,6 @@ export {
   resolveSafeTimeoutDelayMs,
 } from "../../packages/gateway-client/src/timeouts.js";
 
-/** Wrapper around setTimeout that clamps unsafe or invalid delays before arming the timer. */
-export function setSafeTimeout(
-  callback: () => void,
-  delayMs: number,
-  opts?: { minMs?: number },
-): NodeJS.Timeout {
-  return setTimeout(callback, resolveSafeTimeoutDelayMs(delayMs, opts));
+export function setSafeTimeout(callback: () => void, delayMs: number): NodeJS.Timeout {
+  return setTimeout(callback, resolveSafeTimeoutDelayMs(delayMs));
 }

@@ -1,4 +1,3 @@
-// Xai plugin module implements responses tool shared behavior.
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
 import { truncateSanitizedExternalContent } from "openclaw/plugin-sdk/security-runtime";
@@ -8,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveXaiCatalogEntry } from "../model-definitions.js";
+import { isXaiGrokReleaseAtLeast } from "../model-id.js";
 import { applyXaiRuntimeModelCompat } from "../runtime-model-compat.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
@@ -19,18 +19,15 @@ function normalizeXaiCitationUrl(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > XAI_CITATION_URL_MAX_CHARS) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    if (
-      (url.protocol !== "http:" && url.protocol !== "https:") ||
-      url.href.length > XAI_CITATION_URL_MAX_CHARS
-    ) {
-      return undefined;
-    }
-    return url.href === `${value}/` ? value : url.href;
-  } catch {
+  const url = URL.parse(value);
+  if (
+    !url ||
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.href.length > XAI_CITATION_URL_MAX_CHARS
+  ) {
     return undefined;
   }
+  return url.href === `${value}/` ? value : url.href;
 }
 
 function collectUrlCitations(annotations: unknown, citations: Set<string>): void {
@@ -64,7 +61,7 @@ export function resolveXaiToolDefaultReasoningEffort(
   preferred: "none" | "low",
 ): "none" | "low" | undefined {
   // Per-model tool defaults must survive changes to the setup default.
-  return model === "grok-4.3" || model === "grok-4.6" ? preferred : undefined;
+  return model === "grok-4.3" || isXaiGrokReleaseAtLeast(model, [4, 6]) ? preferred : undefined;
 }
 
 function buildXaiResponsesToolBody(params: {

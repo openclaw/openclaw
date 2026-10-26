@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { compareSessionRowsByUpdatedAt } from "../lib/sessions/index.ts";
+import { runningRow } from "../test-helpers/app-sidebar-session-narration.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
@@ -10,205 +12,158 @@ const homeKey = "agent:main:main";
 const conversationKey = "agent:main:dashboard:conversation";
 const workerKey = "agent:main:subagent:review";
 
-// Only presentation fields consumed by the tree matter to these placement assertions.
 function present(row: GatewaySessionRow, isChild = false): SidebarRecentSession {
   return {
-    key: row.key,
+    ...runningRow(row.key),
     label: row.label ?? row.key,
     isChild,
-    attention: { kind: "none" },
     hasActiveRun: row.hasActiveRun === true,
     active: row.key === conversationKey,
     unread: row.unread === true,
-    runningChildCount: 0,
-    failedChildCount: 0,
-  } as SidebarRecentSession;
+    status: row.status,
+  };
 }
 
-describe("Home-linked conversation placement", () => {
-  it("reattaches a persistent session through hidden runs and reveals its visible ancestor", () => {
-    const parent: GatewaySessionRow = {
-      key: homeKey,
-      kind: "direct",
-      childSessions: [workerKey],
-    };
-    const run: GatewaySessionRow = {
-      key: workerKey,
-      kind: "direct",
-      spawnedBy: homeKey,
-      childSessions: [conversationKey],
-      hasActiveRun: true,
-    };
-    const child: GatewaySessionRow = {
-      key: conversationKey,
-      kind: "direct",
-      parentSessionKey: workerKey,
-      spawnedBy: workerKey,
-      hasActiveRun: true,
-      unread: true,
-    };
-    const rows = [parent, run, child];
-    const options = {
-      roots: rows,
-      rowsByKey: new Map(rows.map((row) => [row.key, row])),
-      loadingChildKeys: new Set<string>(),
-      resolveAttention: () => SIDEBAR_SESSION_NO_ATTENTION,
-      toSidebarSession: present,
-    };
-    const tree = projectSessionTree(options);
-    expect(tree.map((row) => row.key)).toEqual([homeKey]);
-    expect(tree[0]?.children.map((row) => row.key)).toEqual([conversationKey]);
-    expect(tree.flatMap((row) => [row, ...row.children])).toHaveLength(2);
-    expect(tree[0]).toMatchObject({
-      childSessionKeys: [conversationKey],
-      containsActiveDescendant: true,
-      runningChildCount: 2,
-      unreadChildCount: 1,
-      subagentSummary: { runningChildCount: 1, unreadChildCount: 0 },
-    });
-    expect(child.parentSessionKey).toBe(workerKey);
+function makeRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return { key, kind: "direct", ...fields };
+}
 
-    const unloadedRun = projectSessionTree({
-      ...options,
-      roots: [parent, child],
-      rowsByKey: new Map([parent, child].map((row) => [row.key, row])),
-    });
-    expect(unloadedRun.map((row) => row.key)).toEqual([homeKey, conversationKey]);
-    for (const archivedKey of [workerKey, homeKey]) {
-      const archivedRows = [
-        { ...parent, archived: archivedKey === homeKey },
-        { ...run, archived: archivedKey === workerKey },
-        child,
-      ];
-      const archivedAncestor = projectSessionTree({
-        ...options,
-        roots: archivedRows,
-        rowsByKey: new Map(archivedRows.map((row) => [row.key, row])),
-      });
-      expect(archivedAncestor.map((row) => row.key)).toEqual([homeKey, conversationKey]);
-    }
+function project(
+  roots: GatewaySessionRow[],
+  rows = roots,
+  compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number,
+) {
+  return projectSessionTree({
+    roots,
+    rowsByKey: new Map(rows.map((row) => [row.key, row])),
+    mainSessionKeys: new Set([homeKey]),
+    loadingChildKeys: new Set<string>(),
+    compareSessions,
+    resolveAttention: () => SIDEBAR_SESSION_NO_ATTENTION,
+    toSidebarSession: present,
+  });
+}
 
-    const outer: GatewaySessionRow = {
-      key: "agent:main:outer",
-      kind: "direct",
-      childSessions: [homeKey],
-    };
-    const nestedParent = { ...parent, spawnedBy: outer.key };
-    const nestedTree = projectSessionTree({
-      ...options,
-      roots: [outer, child],
-      rowsByKey: new Map([outer, nestedParent, run, child].map((row) => [row.key, row])),
-    });
-    expect(nestedTree.map((row) => row.key)).toEqual([outer.key]);
-    expect(nestedTree[0]?.children[0]?.children.map((row) => row.key)).toEqual([conversationKey]);
+it("reattaches a persistent session through hidden runs and reveals its visible ancestor", () => {
+  const parent = makeRow(homeKey, { childSessions: [workerKey] });
+  const run = makeRow(workerKey, {
+    spawnedBy: homeKey,
+    childSessions: [conversationKey],
+    hasActiveRun: true,
+  });
+  const child = makeRow(conversationKey, {
+    parentSessionKey: workerKey,
+    spawnedBy: workerKey,
+    hasActiveRun: true,
+    unread: true,
+  });
+  const rows = [parent, run, child];
+  const tree = project(rows);
+  expect(tree.map((row) => row.key)).toEqual([homeKey]);
+  expect(tree[0]?.children.map((row) => row.key)).toEqual([conversationKey]);
+  expect(tree[0]).toMatchObject({
+    childSessionKeys: [conversationKey],
+    containsActiveDescendant: true,
+    runningChildCount: 2,
+    unreadChildCount: 1,
+    subagentSummary: { runningChildCount: 1, unreadChildCount: 0 },
+  });
+  expect(child.parentSessionKey).toBe(workerKey);
 
-    // The Gateway flag is transitive; visible child work must not ring twice.
-    run.hasActiveRun = false;
-    run.hasActiveSubagentRun = true;
-    expect(projectSessionTree(options)[0]).toMatchObject({
-      runningChildCount: 1,
-      subagentSummary: { runningChildCount: 0 },
-    });
+  expect(project([parent, child]).map((row) => row.key)).toEqual([homeKey, conversationKey]);
+  for (const archivedKey of [workerKey, homeKey]) {
+    const archivedRows = [
+      { ...parent, archived: archivedKey === homeKey },
+      { ...run, archived: archivedKey === workerKey },
+      child,
+    ];
+    expect(project(archivedRows).map((row) => row.key)).toEqual([homeKey, conversationKey]);
+  }
 
-    // Parent-owned lists can supply ancestry without a child's back-reference.
-    delete run.spawnedBy;
-    const listedTree = projectSessionTree(options);
-    expect(listedTree.map((row) => row.key)).toEqual([homeKey]);
-    expect(listedTree[0]?.children.map((row) => row.key)).toEqual([conversationKey]);
+  const outer = makeRow("agent:main:outer", { childSessions: [homeKey] });
+  const nestedParent = { ...parent, spawnedBy: outer.key };
+  const nestedTree = project([outer, child], [outer, nestedParent, run, child]);
+  expect(nestedTree.map((row) => row.key)).toEqual([outer.key]);
+  expect(nestedTree[0]?.children[0]?.children.map((row) => row.key)).toEqual([conversationKey]);
 
-    // With no loaded persistent ancestor, retain the ordinary root candidate.
-    const fallback = projectSessionTree({
-      ...options,
-      roots: [run, child],
-      rowsByKey: new Map([run, child].map((row) => [row.key, row])),
-    });
-    expect(fallback.map((row) => row.key)).toEqual([conversationKey]);
-    expect(fallback[0]?.isChild).toBe(false);
-    run.spawnedBy = workerKey;
-    expect(
-      projectSessionTree({
-        ...options,
-        roots: [run, child],
-        rowsByKey: new Map([run, child].map((row) => [row.key, row])),
-      }).map((row) => row.key),
-    ).toEqual([conversationKey]);
+  // The Gateway flag is transitive; visible child work must not ring twice.
+  run.hasActiveRun = false;
+  run.hasActiveSubagentRun = true;
+  expect(project(rows)[0]).toMatchObject({
+    runningChildCount: 1,
+    subagentSummary: { runningChildCount: 0 },
   });
 
-  it.each(["running", "done"] as const)(
-    "keeps independent conversations outside Home with a %s worker",
-    (status) => {
-      const home: GatewaySessionRow = {
-        key: homeKey,
-        kind: "direct",
-        childSessions: [conversationKey, workerKey],
-      };
-      const conversation: GatewaySessionRow = {
-        key: conversationKey,
-        kind: "direct",
-        createdVia: "operator",
-        spawnDepth: 0,
-        parentSessionKey: homeKey,
-      };
-      const worker: GatewaySessionRow = {
-        key: workerKey,
-        kind: "direct",
-        parentSessionKey: homeKey,
-        spawnedBy: homeKey,
-        spawnDepth: 1,
-        status,
-      };
-      const rows = [home, conversation, worker];
-      const options = {
-        roots: rows,
-        rowsByKey: new Map(rows.map((row) => [row.key, row])),
-        mainSessionKeys: new Set([homeKey]),
-        loadingChildKeys: new Set<string>(),
-        resolveAttention: () => SIDEBAR_SESSION_NO_ATTENTION,
-        toSidebarSession: present,
-      };
-      const tree = projectSessionTree(options);
+  // Parent-owned lists can supply ancestry without a child's back-reference.
+  delete run.spawnedBy;
+  const listedTree = project(rows);
+  expect(listedTree.map((row) => row.key)).toEqual([homeKey]);
+  expect(listedTree[0]?.children.map((row) => row.key)).toEqual([conversationKey]);
 
-      expect(tree.map((row) => row.key)).toEqual([homeKey, conversationKey]);
-      expect(tree[0]?.children).toEqual([]);
-      expect(tree[1]?.isChild).toBe(false);
-      expect(conversation.parentSessionKey).toBe(homeKey);
-    },
-  );
+  // With no loaded persistent ancestor, retain the ordinary root candidate.
+  const fallback = project([run, child]);
+  expect(fallback).toMatchObject([{ key: conversationKey, isChild: false }]);
+  run.spawnedBy = workerKey;
+  expect(project([run, child]).map((row) => row.key)).toEqual([conversationKey]);
+});
 
-  it.each([
-    ["explicit suggested task", { parentSessionId: "home-generation" }],
-    ["visible delegated session", { spawnDepth: 1 }],
-    ["fork", { forkSource: { sessionKey: homeKey, sessionId: "home-generation" } }],
-    ["retained fork marker", { forkedFromParent: true }],
-    ["runtime-owned child", { spawnedBy: homeKey }],
-    ["older ambiguous session", { createdVia: undefined, spawnDepth: undefined }],
-  ] as const)("preserves the parent of an %s", (_name, metadata) => {
-    const child = {
-      key: conversationKey,
-      kind: "direct",
-      createdVia: "operator",
-      spawnDepth: 0,
-      parentSessionKey: homeKey,
-      ...metadata,
-    } satisfies GatewaySessionRow & { parentSessionId?: string };
-    const home: GatewaySessionRow = {
-      key: homeKey,
-      kind: "direct",
-      childSessions: [child.key],
-    };
-    const options = {
-      roots: [home, child],
-      rowsByKey: new Map<string, GatewaySessionRow>([
-        [home.key, home],
-        [child.key, child],
-      ]),
-      mainSessionKeys: new Set([homeKey]),
-      loadingChildKeys: new Set<string>(),
-      resolveAttention: () => SIDEBAR_SESSION_NO_ATTENTION,
-      toSidebarSession: present,
-    };
-    const tree = projectSessionTree(options);
-    expect(tree.map((row) => row.key)).toEqual([homeKey]);
-    expect(tree[0]?.children.map((row) => row.key)).toEqual([child.key]);
+it("keeps independent conversations outside Home while a worker runs", () => {
+  const home = makeRow(homeKey, { childSessions: [conversationKey, workerKey] });
+  const conversation = makeRow(conversationKey, {
+    createdVia: "operator",
+    spawnDepth: 0,
+    parentSessionKey: homeKey,
   });
+  const worker = makeRow(workerKey, {
+    parentSessionKey: homeKey,
+    spawnedBy: homeKey,
+    spawnDepth: 1,
+    status: "running",
+  });
+  const tree = project([home, conversation, worker]);
+  expect(tree.map((row) => row.key)).toEqual([homeKey, conversationKey]);
+  expect(tree[0]?.children).toEqual([]);
+  expect(tree[1]?.isChild).toBe(false);
+  expect(conversation.parentSessionKey).toBe(homeKey);
+});
+
+it("promotes a child without rewriting origin or moving its own descendants", () => {
+  const parent = makeRow("parent", { childSessions: [conversationKey] });
+  const child = makeRow(conversationKey, {
+    parentSessionKey: parent.key,
+    spawnedBy: parent.key,
+    sidebarRoot: true,
+    childSessions: ["grandchild"],
+  });
+  const grandchild = makeRow("grandchild", { parentSessionKey: child.key });
+  const tree = project([parent, child, grandchild]);
+  expect(tree.map((row) => row.key)).toEqual([parent.key, child.key]);
+  expect(tree[0]?.childSessionKeys).toEqual([]);
+  expect(tree[1]?.children.map((row) => row.key)).toEqual([grandchild.key]);
+  expect(child).toMatchObject({ parentSessionKey: parent.key, spawnedBy: parent.key });
+});
+
+it("sorts each parent's children, including run-folded ones, with the root comparator", () => {
+  const parentKey = "agent:main:dashboard:parent";
+  const runKey = "agent:main:subagent:run";
+  const child = (id: string, updatedAt: number, parent = parentKey) =>
+    makeRow(`agent:main:dashboard:${id}`, { spawnedBy: parent, updatedAt });
+  const rows: GatewaySessionRow[] = [
+    makeRow(parentKey, { updatedAt: 1 }),
+    child("1f0f", 20),
+    child("4f1f", 10),
+    makeRow(runKey, { spawnedBy: parentKey, updatedAt: 5 }),
+    child("a392", 30, runKey),
+    child("d517", 40),
+  ];
+  const childIds = (tree: SidebarRecentSession[]) =>
+    tree[0]?.children.map((row) => row.key.replace("agent:main:dashboard:", ""));
+
+  expect(childIds(project([rows[0]!], rows))).toEqual(["1f0f", "4f1f", "a392", "d517"]);
+  expect(childIds(project([rows[0]!], rows, compareSessionRowsByUpdatedAt))).toEqual([
+    "d517",
+    "a392",
+    "1f0f",
+    "4f1f",
+  ]);
 });

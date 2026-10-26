@@ -16,7 +16,7 @@ import { loadOfficialExternalChannelSecretContractApi } from "./official-externa
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
-type BundledChannelContractApi = {
+type BundledChannelSecretContractApi = {
   collectRuntimeConfigAssignments?: (params: {
     config: OpenClawConfig;
     defaults: SecretDefaults | undefined;
@@ -31,12 +31,6 @@ const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
-type BundledChannelSecretContractApi = Pick<
-  BundledChannelContractApi,
-  "collectRuntimeConfigAssignments" | "secretTargetRegistryEntries"
->;
-
-/** Loads a bundled channel secret contract from its public artifact bundle. */
 function loadBundledChannelSecretContractApi(
   channelId: string,
 ): BundledChannelSecretContractApi | undefined {
@@ -83,13 +77,6 @@ function resolvePluginContractApiPath(rootDir: string): string | null {
   return null;
 }
 
-function loadPluginContractModule(modulePath: string): BundledChannelContractApi {
-  return getCachedPluginModuleLoader({
-    modulePath,
-    importerUrl: import.meta.url,
-  })(modulePath) as BundledChannelContractApi;
-}
-
 function loadExternalChannelSecretContractFromRecord(
   record: PluginManifestRecord,
   env: NodeJS.ProcessEnv = process.env,
@@ -130,19 +117,16 @@ function loadExternalChannelSecretContractFromRecord(
     return undefined;
   }
   try {
-    const mod = loadPluginContractModule(validated.modulePath);
+    const mod = getCachedPluginModuleLoader({
+      modulePath: validated.modulePath,
+      importerUrl: import.meta.url,
+    })(validated.modulePath) as BundledChannelSecretContractApi;
     if (mod.collectRuntimeConfigAssignments || mod.secretTargetRegistryEntries) {
       return mod;
     }
   } catch (error) {
     if (throwOnLoadError) {
       throw error;
-    }
-    if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
-      const detail = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `[channel-contract-api] failed to load ${record.id} contract ${validated.modulePath}: ${detail}`,
-      );
     }
   }
   return undefined;
@@ -157,35 +141,6 @@ function recordOwnsChannel(record: PluginManifestRecord, channelId: string): boo
   );
 }
 
-function listChannelSecretContractRecords(params: {
-  channelId: string;
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
-}): PluginManifestRecord[] {
-  const manifestRegistry = resolveConfigWidePluginManifestRegistry({
-    config: params.config,
-    env: params.env,
-  });
-  return manifestRegistry.plugins
-    .filter((record) => record.origin !== "bundled")
-    .filter((record) => recordOwnsChannel(record, params.channelId))
-    .filter(
-      (record) => !params.loadablePluginOrigins || params.loadablePluginOrigins.has(record.id),
-    )
-    .toSorted((left, right) => {
-      if (left.id === params.channelId && right.id !== params.channelId) {
-        return -1;
-      }
-      if (right.id === params.channelId && left.id !== params.channelId) {
-        return 1;
-      }
-      return left.id.localeCompare(right.id);
-    });
-}
-
-/** Loads the first channel secret contract for a channel, preferring bundled metadata. */
-/** Loads a channel secret contract API for a channel id and current plugin origin policy. */
 export function loadChannelSecretContractApi(params: {
   channelId: string;
   config: OpenClawConfig;
@@ -203,12 +158,23 @@ export function loadChannelSecretContractApi(params: {
   const officialFallback = loadOfficialExternalChannelSecretContractApi(params.channelId);
   let records: PluginManifestRecord[];
   try {
-    records = listChannelSecretContractRecords({
-      channelId: params.channelId,
-      config: params.config,
-      env,
-      loadablePluginOrigins: params.loadablePluginOrigins,
-    });
+    const channelId = params.channelId;
+    const config = params.config;
+    const loadablePluginOrigins = params.loadablePluginOrigins;
+    const manifestRegistry = resolveConfigWidePluginManifestRegistry({ config, env });
+    records = manifestRegistry.plugins
+      .filter((record) => record.origin !== "bundled")
+      .filter((record) => recordOwnsChannel(record, channelId))
+      .filter((record) => !loadablePluginOrigins || loadablePluginOrigins.has(record.id))
+      .toSorted((left, right) => {
+        if (left.id === channelId && right.id !== channelId) {
+          return -1;
+        }
+        if (right.id === channelId && left.id !== channelId) {
+          return 1;
+        }
+        return left.id.localeCompare(right.id);
+      });
   } catch (error) {
     // Catalog contracts are process-stable fallbacks when plugin metadata is unavailable.
     if (officialFallback) {
@@ -225,7 +191,6 @@ export function loadChannelSecretContractApi(params: {
   return officialFallback;
 }
 
-/** Loads a channel secret contract directly from a manifest record. */
 export function loadChannelSecretContractApiForRecord(
   record: PluginManifestRecord,
   options?: { throwOnLoadError?: boolean },

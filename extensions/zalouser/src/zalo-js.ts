@@ -1,14 +1,12 @@
 import { randomUUID } from "node:crypto";
+import type { ChannelMessageSendResult } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-// Zalouser plugin module implements zalo js behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   asDateTimestampMs,
   asFiniteNumberInRange,
-  isFutureDateTimestampMs,
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
-  resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
@@ -19,18 +17,23 @@ import {
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
+import { snapshotApiCredentials, type ZaloCredentialPayload } from "./credential-persistence.js";
+import { buildZaloNameIndex } from "./directory-index.js";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import { sendZaloTextWithApi } from "./send-api.js";
 import { withZaloSendContext } from "./send-context.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import {
-  clearStoredZaloCredentials,
+  getZaloSessionState,
+  invalidateApi,
+  resetQrLogin,
+  type ActiveZaloQrLogin,
+} from "./session-runtime.js";
+import {
+  captureZalouserCredentialsEnv,
   loadStoredZaloCredentials,
-  loadStoredZaloCredentialsAsync,
   normalizeZalouserCredentialProfile as normalizeProfile,
   refreshStoredZaloCredentials,
-  saveStoredZaloCredentials,
-  type StoredZaloCredentials,
 } from "./session-state.js";
 import type {
   ZaloAuthStatus,
@@ -41,13 +44,11 @@ import type {
   ZaloInboundMessage,
   ZaloSendOptions,
   ZaloSendHandoff,
-  ZaloSendResult,
   ZcaFriend,
   ZcaUserInfo,
 } from "./types.js";
 import {
   type API,
-  type Credentials,
   type GroupInfo,
   type LoginQRCallbackEvent,
   type Message,
@@ -61,45 +62,14 @@ const QR_LOGIN_TTL_MS = 3 * 60_000;
 const DEFAULT_QR_START_TIMEOUT_MS = 30_000;
 const DEFAULT_QR_WAIT_TIMEOUT_MS = 120_000;
 const GROUP_INFO_CHUNK_SIZE = 80;
-const GROUP_CONTEXT_CACHE_TTL_MS = 5 * 60_000;
-const GROUP_CONTEXT_CACHE_MAX_ENTRIES = 500;
 const LISTENER_WATCHDOG_INTERVAL_MS = 30_000;
 const LISTENER_WATCHDOG_MAX_GAP_MS = 35_000;
 const LISTENER_HANDSHAKE_TIMEOUT_MS = 30_000;
 const ZALO_TIMESTAMP_MS_THRESHOLD = 1_000_000_000_000;
 const MAX_SAFE_ZALO_TIMESTAMP_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
 
-const apiByProfile = new Map<string, API>();
-const apiInitByProfile = new Map<string, Promise<API>>();
-const credentialSignaturesByProfile = new Map<string, string>();
-const credentialRefreshesByProfile = new Map<string, Promise<void>>();
-
 type CredentialPersistenceMode = "persist" | "read-only";
 type CredentialPersistenceOptions = { credentialPersistence?: CredentialPersistenceMode };
-type ZaloCredentialPayload = Omit<StoredZaloCredentials, "profile" | "createdAt" | "lastUsedAt">;
-
-type ActiveZaloQrLogin = {
-  id: string;
-  profile: string;
-  startedAt: number;
-  beforeCredentialPersistence?: () => Promise<void>;
-  qrDataUrl?: string;
-  connected: boolean;
-  error?: string;
-  abort?: () => void;
-  waitPromise: Promise<void>;
-};
-
-const activeQrLogins = new Map<string, ActiveZaloQrLogin>();
-
-type ActiveZaloListener = {
-  profile: string;
-  accountId: string;
-  stop: () => void;
-};
-
-const activeListeners = new Map<string, ActiveZaloListener>();
-const groupContextCache = new Map<string, { value: ZaloGroupContext; expiresAt: number }>();
 
 type AccountInfoResponse = Awaited<ReturnType<API["fetchAccountInfo"]>>;
 
@@ -134,7 +104,7 @@ function normalizeAccountInfoUser(info: AccountInfoResponse): User | null {
   return info;
 }
 
-function toInteger(value: unknown, fallback = 0): number {
+function toInteger(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
   }
@@ -142,10 +112,7 @@ function toInteger(value: unknown, fallback = 0): number {
     typeof value === "string" ? value : typeof value === "number" ? String(value) : "",
     10,
   );
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.trunc(parsed);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function normalizeMessageContent(content: unknown): string {
@@ -171,7 +138,6 @@ function normalizeMessageContent(content: unknown): string {
 }
 
 function resolveInboundTimestamp(rawTs: unknown): number {
-  const fallbackTimestamp = () => asDateTimestampMs(Date.now()) ?? 0;
   const parsed =
     typeof rawTs === "number"
       ? rawTs
@@ -184,15 +150,15 @@ function resolveInboundTimestamp(rawTs: unknown): number {
     max: Number.MAX_SAFE_INTEGER,
   });
   if (timestamp === undefined) {
-    return fallbackTimestamp();
+    return Date.now();
   }
   if (timestamp > ZALO_TIMESTAMP_MS_THRESHOLD) {
-    return asDateTimestampMs(Math.trunc(timestamp)) ?? fallbackTimestamp();
+    return asDateTimestampMs(Math.trunc(timestamp)) ?? Date.now();
   }
   if (timestamp > MAX_SAFE_ZALO_TIMESTAMP_SECONDS) {
-    return fallbackTimestamp();
+    return Date.now();
   }
-  return asDateTimestampMs(Math.trunc(timestamp * 1000)) ?? fallbackTimestamp();
+  return asDateTimestampMs(Math.trunc(timestamp * 1000)) ?? Date.now();
 }
 
 function extractMentionIds(rawMentions: unknown): string[] {
@@ -224,10 +190,7 @@ function toNonNegativeInteger(value: unknown): number | null {
     return normalized >= 0 ? normalized : null;
   }
   if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = parseStrictNonNegativeInteger(value);
-    if (parsed !== undefined) {
-      return parsed >= 0 ? parsed : null;
-    }
+    return parseStrictNonNegativeInteger(value) ?? null;
   }
   return null;
 }
@@ -344,9 +307,9 @@ function buildEventMessage(data: Record<string, unknown>): ZaloEventMessage | un
     uidFrom,
     idTo,
     msgType: toStringValue(data.msgType) || "webchat",
-    st: toInteger(data.st, 0),
-    at: toInteger(data.at, 0),
-    cmd: toInteger(data.cmd, 0),
+    st: toInteger(data.st),
+    at: toInteger(data.at),
+    cmd: toInteger(data.cmd),
     ts: toStringValue(data.ts) || Date.now(),
   };
 }
@@ -359,7 +322,7 @@ function mapFriend(friend: User): ZcaFriend {
   };
 }
 
-function mapGroup(groupId: string, group: GroupInfo & Record<string, unknown>): ZaloGroup {
+function mapGroup(groupId: string, group: GroupInfo): ZaloGroup {
   const totalMember =
     typeof group.totalMember === "number" && Number.isFinite(group.totalMember)
       ? group.totalMember
@@ -371,170 +334,17 @@ function mapGroup(groupId: string, group: GroupInfo & Record<string, unknown>): 
   };
 }
 
-function readCredentials(profile: string): StoredZaloCredentials | null {
-  try {
-    const credentials = loadStoredZaloCredentials(profile);
-    if (!credentials) {
-      return null;
-    }
-    credentialSignaturesByProfile.set(profile, credentialSignature(credentials));
-    return credentials;
-  } catch {
-    return null;
-  }
-}
-
-function credentialSignature(credentials: ZaloCredentialPayload): string {
-  return JSON.stringify({
-    imei: credentials.imei,
-    cookie: canonicalCredentialCookie(credentials.cookie),
-    userAgent: credentials.userAgent,
-    language: credentials.language,
-  });
-}
-
-function stableCanonicalValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableCanonicalValue);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, stableCanonicalValue(entry)]),
-  );
-}
-
-function stableSignatureValue(value: unknown): string {
-  return JSON.stringify(stableCanonicalValue(value)) ?? "undefined";
-}
-
-function canonicalCookieArray(value: unknown[]): unknown[] {
-  return value
-    .map(stableCanonicalValue)
-    .toSorted((left, right) =>
-      stableSignatureValue(left).localeCompare(stableSignatureValue(right)),
-    );
-}
-
-function canonicalCredentialCookie(cookie: Credentials["cookie"]): unknown {
-  if (Array.isArray(cookie)) {
-    return canonicalCookieArray(cookie);
-  }
-  if (!cookie || typeof cookie !== "object") {
-    return cookie;
-  }
-  return Object.fromEntries(
-    Object.entries(cookie as Record<string, unknown>)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [
-        key,
-        key === "cookies" && Array.isArray(entry)
-          ? canonicalCookieArray(entry)
-          : stableCanonicalValue(entry),
-      ]),
-  );
-}
-
-function writeCredentials(profile: string, credentials: ZaloCredentialPayload): void {
-  const existing = readCredentials(profile);
-  const now = new Date().toISOString();
-  const next: StoredZaloCredentials = {
-    profile,
-    ...credentials,
-    createdAt: existing?.createdAt ?? now,
-    lastUsedAt: now,
-  };
-  const { profile: _profile, ...stored } = next;
-  saveStoredZaloCredentials(profile, stored);
-  credentialSignaturesByProfile.set(profile, credentialSignature(next));
-}
-
-function snapshotApiCredentials(
-  api: API,
-  fallback?: Partial<ZaloCredentialPayload>,
-): ZaloCredentialPayload {
-  const ctx = api.getContext();
-  const cookieJson = api.getCookie().toJSON();
-  const refreshedCookies =
-    Array.isArray(cookieJson?.cookies) && cookieJson.cookies.length > 0
-      ? cookieJson.cookies
-      : fallback?.cookie;
-  const imei = normalizeOptionalString(ctx.imei) ?? normalizeOptionalString(fallback?.imei);
-  const userAgent =
-    normalizeOptionalString(ctx.userAgent) ?? normalizeOptionalString(fallback?.userAgent);
-  if (!imei || !refreshedCookies || !userAgent) {
-    throw new Error("Zalo API session did not expose refreshed credentials");
-  }
-  const language =
-    normalizeOptionalString(ctx.language) ?? normalizeOptionalString(fallback?.language);
-  return {
-    imei,
-    cookie: refreshedCookies as Credentials["cookie"],
-    userAgent,
-    ...(language ? { language } : {}),
-  };
-}
-
-function writeApiCredentials(
-  profile: string,
-  api: API,
-  fallback?: Partial<ZaloCredentialPayload>,
-): void {
-  writeCredentials(profile, snapshotApiCredentials(api, fallback));
-}
-
-async function persistApiCredentialsIfChanged(profile: string, api: API): Promise<void> {
-  const previous = credentialRefreshesByProfile.get(profile) ?? Promise.resolve();
-  const refresh = previous.then(async () => {
-    try {
-      const isCurrent = () => apiByProfile.get(profile) === api;
-      if (!isCurrent()) {
-        return;
-      }
-      const credentials = snapshotApiCredentials(api);
-      const signature = credentialSignature(credentials);
-      if (credentialSignaturesByProfile.get(profile) === signature) {
-        return;
-      }
-      if ((await refreshStoredZaloCredentials(profile, credentials, isCurrent)) && isCurrent()) {
-        credentialSignaturesByProfile.set(profile, signature);
-      }
-    } catch {
-      // Do not fail an already-successful Zalo operation only because the
-      // best-effort session refresh could not be persisted.
-    }
-  });
-  credentialRefreshesByProfile.set(profile, refresh);
-  try {
-    await refresh;
-  } finally {
-    if (credentialRefreshesByProfile.get(profile) === refresh) {
-      credentialRefreshesByProfile.delete(profile);
-    }
-  }
-}
-
-function clearCredentials(profile: string): boolean {
-  try {
-    if (clearStoredZaloCredentials(profile)) {
-      credentialSignaturesByProfile.delete(profile);
-      return true;
-    }
-  } catch {
-    // ignore
-  }
-  return false;
-}
-
 async function ensureApi(
-  profileInput?: string | null,
+  profile: string,
   timeoutMs = API_LOGIN_TIMEOUT_MS,
   credentialPersistence: CredentialPersistenceMode = "persist",
 ): Promise<API> {
-  const profile = normalizeProfile(profileInput);
+  const { apiByProfile, apiInitByProfile, credentials } = getZaloSessionState();
+  const env = captureZalouserCredentialsEnv();
+  const pendingRevocation = credentials.pendingRevocation(profile);
+  if (pendingRevocation) {
+    await pendingRevocation;
+  }
   const cached = apiByProfile.get(profile);
   if (cached) {
     return cached;
@@ -547,14 +357,11 @@ async function ensureApi(
 
   const initPromise: Promise<API> = (async () => {
     const isCurrent = () => apiInitByProfile.get(profile) === initPromise;
-    const stored = await loadStoredZaloCredentialsAsync(profile).catch(() => null);
+    const stored = await loadStoredZaloCredentials(profile, env).catch(() => null);
     if (!stored || !isCurrent()) {
       throw new Error(`No saved Zalo session for profile "${profile}"`);
     }
-    const zalo = await createZalo({
-      logging: false,
-      selfListen: false,
-    });
+    const zalo = await createZalo();
     const api = await withTimeout(
       zalo.login({
         imei: stored.imei,
@@ -571,12 +378,13 @@ async function ensureApi(
             profile,
             snapshotApiCredentials(api, stored),
             isCurrent,
+            env,
           )
         : stored;
     if (!isCurrent() || !persisted) {
       throw new Error(`Zalo session restore was superseded for profile "${profile}"`);
     }
-    credentialSignaturesByProfile.set(profile, credentialSignature(persisted));
+    credentials.rememberCredentials(profile, persisted);
     apiByProfile.set(profile, api);
     return api;
   })();
@@ -584,11 +392,6 @@ async function ensureApi(
   apiInitByProfile.set(profile, initPromise);
   try {
     return await initPromise;
-  } catch (error) {
-    if (apiInitByProfile.get(profile) === initPromise) {
-      apiByProfile.delete(profile);
-    }
-    throw error;
   } finally {
     if (apiInitByProfile.get(profile) === initPromise) {
       apiInitByProfile.delete(profile);
@@ -601,11 +404,11 @@ async function withZaloApi<T>(
   operation: (api: API) => Promise<T>,
   options: {
     timeoutMs?: number;
-    shouldPersist?: (result: T) => boolean;
     credentialPersistence?: CredentialPersistenceMode;
     handoff?: ZaloSendHandoff;
   } = {},
 ): Promise<T> {
+  const { credentials } = getZaloSessionState();
   const profile = normalizeProfile(profileInput);
   const credentialPersistence = options.credentialPersistence ?? "persist";
   options.handoff?.signal?.throwIfAborted();
@@ -615,51 +418,20 @@ async function withZaloApi<T>(
   const result = options.handoff
     ? await withZaloSendContext(options.handoff, () => operation(api))
     : await operation(api);
-  if (credentialPersistence === "persist" && (options.shouldPersist?.(result) ?? true)) {
-    await persistApiCredentialsIfChanged(profile, api);
+  if (credentialPersistence === "persist") {
+    await credentials.persistApiCredentialsIfChanged(profile, api);
   }
   return result;
-}
-
-function invalidateApi(profileInput?: string | null): void {
-  const profile = normalizeProfile(profileInput);
-  const api = apiByProfile.get(profile);
-  if (api) {
-    try {
-      api.listener.stop();
-    } catch {
-      // ignore
-    }
-  }
-  apiByProfile.delete(profile);
-  apiInitByProfile.delete(profile);
 }
 
 function isQrLoginFresh(login: ActiveZaloQrLogin): boolean {
   return Date.now() - login.startedAt < QR_LOGIN_TTL_MS;
 }
 
-function resetQrLogin(profileInput?: string | null): void {
-  const profile = normalizeProfile(profileInput);
-  const active = activeQrLogins.get(profile);
-  if (!active) {
-    return;
-  }
-  try {
-    active.abort?.();
-  } catch {
-    // ignore
-  }
-  activeQrLogins.delete(profile);
-}
-
 async function fetchGroupsByIds(api: API, ids: string[]): Promise<Map<string, GroupInfo>> {
   const result = new Map<string, GroupInfo>();
   for (let index = 0; index < ids.length; index += GROUP_INFO_CHUNK_SIZE) {
     const chunk = ids.slice(index, index + GROUP_INFO_CHUNK_SIZE);
-    if (chunk.length === 0) {
-      continue;
-    }
     const response = await api.getGroupInfo(chunk);
     const map = response.gridInfoMap ?? {};
     for (const [groupId, info] of Object.entries(map)) {
@@ -669,70 +441,7 @@ async function fetchGroupsByIds(api: API, ids: string[]): Promise<Map<string, Gr
   return result;
 }
 
-function makeGroupContextCacheKey(profile: string, groupId: string): string {
-  return `${profile}:${groupId}`;
-}
-
-function readCachedGroupContext(profile: string, groupId: string): ZaloGroupContext | null {
-  const key = makeGroupContextCacheKey(profile, groupId);
-  const cached = groupContextCache.get(key);
-  if (!cached) {
-    return null;
-  }
-  if (!isFutureDateTimestampMs(cached.expiresAt)) {
-    groupContextCache.delete(key);
-    return null;
-  }
-  // Bump recency so hot groups stay in cache when enforcing max entries.
-  groupContextCache.delete(key);
-  groupContextCache.set(key, cached);
-  return cached.value;
-}
-
-function trimGroupContextCache(now: number): void {
-  for (const [key, value] of groupContextCache) {
-    if (isFutureDateTimestampMs(value.expiresAt, { nowMs: now })) {
-      continue;
-    }
-    groupContextCache.delete(key);
-  }
-  while (groupContextCache.size > GROUP_CONTEXT_CACHE_MAX_ENTRIES) {
-    const oldestKey = groupContextCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    groupContextCache.delete(oldestKey);
-  }
-}
-
-function writeCachedGroupContext(profile: string, context: ZaloGroupContext): void {
-  const now = Date.now();
-  const key = makeGroupContextCacheKey(profile, context.groupId);
-  if (groupContextCache.has(key)) {
-    groupContextCache.delete(key);
-  }
-  const expiresAt = resolveExpiresAtMsFromDurationMs(GROUP_CONTEXT_CACHE_TTL_MS, { nowMs: now });
-  if (expiresAt === undefined) {
-    return;
-  }
-  groupContextCache.set(key, {
-    value: context,
-    expiresAt,
-  });
-  trimGroupContextCache(now);
-}
-
-function clearCachedGroupContext(profile: string): void {
-  for (const key of groupContextCache.keys()) {
-    if (key.startsWith(`${profile}:`)) {
-      groupContextCache.delete(key);
-    }
-  }
-}
-
-function extractGroupMembersFromInfo(
-  groupInfo: (GroupInfo & { currentMems?: unknown[]; memVerList?: unknown[] }) | undefined,
-): string[] | undefined {
+function extractGroupMembersFromInfo(groupInfo: GroupInfo | undefined): string[] | undefined {
   if (!groupInfo || !Array.isArray(groupInfo.currentMems)) {
     return undefined;
   }
@@ -767,18 +476,13 @@ export function normalizeZaloInboundMessage(
   const content = normalizeMessageContent(data.content);
   const normalizedOwnUserId = toNumberId(ownUserId);
   const mentionIds = extractMentionIds(data.mentions);
-  const quoteOwnerId =
+  const quote =
     data.quote && typeof data.quote === "object"
-      ? toNumberId((data.quote as { ownerId?: unknown }).ownerId)
-      : "";
-  const quotedGlobalMsgId =
-    data.quote && typeof data.quote === "object"
-      ? toStringValue((data.quote as { globalMsgId?: unknown }).globalMsgId)
-      : "";
-  const quotedBody =
-    data.quote && typeof data.quote === "object"
-      ? toStringValue((data.quote as { msg?: unknown }).msg)
-      : "";
+      ? (data.quote as Record<string, unknown>)
+      : undefined;
+  const quoteOwnerId = toNumberId(quote?.ownerId);
+  const quotedGlobalMsgId = toStringValue(quote?.globalMsgId);
+  const quotedBody = toStringValue(quote?.msg);
   const hasAnyMention = mentionIds.length > 0;
   const canResolveExplicitMention = Boolean(normalizedOwnUserId);
   const wasExplicitlyMentioned = Boolean(
@@ -809,10 +513,8 @@ export function normalizeZaloInboundMessage(
     wasExplicitlyMentioned,
     implicitMention,
     quotedGlobalMsgId: quotedGlobalMsgId || undefined,
-    quotedOwnerId: quoteOwnerId || undefined,
     quotedBody: quotedBody || undefined,
     eventMessage,
-    raw: message,
   };
 }
 
@@ -820,8 +522,9 @@ export async function checkZaloAuthenticated(
   profileInput?: string | null,
   options?: CredentialPersistenceOptions,
 ): Promise<boolean> {
+  const { apiByProfile } = getZaloSessionState();
   const profile = normalizeProfile(profileInput);
-  if (!(await loadStoredZaloCredentialsAsync(profile).catch(() => null))) {
+  if (!(await loadStoredZaloCredentials(profile).catch(() => null))) {
     return false;
   }
   try {
@@ -851,8 +554,7 @@ export async function checkZaloAuthenticated(
 }
 
 export async function getZaloUserInfo(profileInput?: string | null): Promise<ZcaUserInfo | null> {
-  const profile = normalizeProfile(profileInput);
-  return await withZaloApi(profile, async (api) => {
+  return await withZaloApi(profileInput, async (api) => {
     const info = await api.fetchAccountInfo();
     const user = normalizeAccountInfoUser(info);
     if (!user?.userId) {
@@ -870,9 +572,8 @@ export async function listZaloFriends(
   profileInput?: string | null,
   options?: CredentialPersistenceOptions,
 ): Promise<ZcaFriend[]> {
-  const profile = normalizeProfile(profileInput);
   return await withZaloApi(
-    profile,
+    profileInput,
     async (api) => {
       const friends = await api.getAllFriends();
       return friends.map(mapFriend);
@@ -907,9 +608,8 @@ export async function listZaloGroups(
   profileInput?: string | null,
   options?: CredentialPersistenceOptions,
 ): Promise<ZaloGroup[]> {
-  const profile = normalizeProfile(profileInput);
   return await withZaloApi(
-    profile,
+    profileInput,
     async (api) => {
       const allGroups = await api.getAllGroups();
       const ids = Object.keys(allGroups.gridVerMap ?? {});
@@ -917,16 +617,10 @@ export async function listZaloGroups(
         return [];
       }
       const details = await fetchGroupsByIds(api, ids);
-      const rows: ZaloGroup[] = [];
-      for (const id of ids) {
+      return ids.map((id) => {
         const info = details.get(id);
-        if (!info) {
-          rows.push({ groupId: id, name: id });
-          continue;
-        }
-        rows.push(mapGroup(id, info as GroupInfo & Record<string, unknown>));
-      }
-      return rows;
+        return info ? mapGroup(id, info) : { groupId: id, name: id };
+      });
     },
     { credentialPersistence: options?.credentialPersistence ?? "persist" },
   );
@@ -952,12 +646,9 @@ export async function listZaloGroupMembers(
   profileInput: string | null | undefined,
   groupId: string,
 ): Promise<ZaloGroupMember[]> {
-  const profile = normalizeProfile(profileInput);
-  return await withZaloApi(profile, async (api) => {
+  return await withZaloApi(profileInput, async (api) => {
     const infoResponse = await api.getGroupInfo(groupId);
-    const groupInfo = infoResponse.gridInfoMap?.[groupId] as
-      | (GroupInfo & { memVerList?: unknown })
-      | undefined;
+    const groupInfo = infoResponse.gridInfoMap?.[groupId];
     if (!groupInfo) {
       return [];
     }
@@ -990,17 +681,8 @@ export async function listZaloGroupMembers(
     const profileMap = new Map<string, { displayName?: string; avatar?: string }>();
     if (uniqueIds.length > 0) {
       const profiles = await api.getGroupMembersInfo(uniqueIds);
-      const profileEntries = profiles.profiles as Record<
-        string,
-        {
-          id?: string;
-          displayName?: string;
-          zaloName?: string;
-          avatar?: string;
-        }
-      >;
-      for (const [rawId, profileValue] of Object.entries(profileEntries)) {
-        const id = toNumberId(rawId) || toNumberId((profileValue as { id?: unknown })?.id);
+      for (const [rawId, profileValue] of Object.entries(profiles.profiles)) {
+        const id = toNumberId(rawId) || toNumberId(profileValue?.id);
         if (!id || !profileValue) {
           continue;
         }
@@ -1025,51 +707,43 @@ export async function resolveZaloGroupContext(
   profileInput: string | null | undefined,
   groupId: string,
 ): Promise<ZaloGroupContext> {
+  const { groupContextCache } = getZaloSessionState();
   const profile = normalizeProfile(profileInput);
   const normalizedGroupId = toNumberId(groupId) || groupId.trim();
   if (!normalizedGroupId) {
     throw new Error("groupId is required");
   }
-  const cached = readCachedGroupContext(profile, normalizedGroupId);
-  if (cached) {
-    return cached;
-  }
-
-  return await withZaloApi(profile, async (api) => {
-    const response = await api.getGroupInfo(normalizedGroupId);
-    const groupInfo = response.gridInfoMap?.[normalizedGroupId] as
-      | (GroupInfo & { currentMems?: unknown[]; memVerList?: unknown[] })
-      | undefined;
-    const context: ZaloGroupContext = {
-      groupId: normalizedGroupId,
-      name: normalizeOptionalString(groupInfo?.name),
-      members: extractGroupMembersFromInfo(groupInfo),
-    };
-    writeCachedGroupContext(profile, context);
-    return context;
-  });
+  const { value } = await groupContextCache.read(
+    `${profile}:${normalizedGroupId}`,
+    () =>
+      withZaloApi(profile, async (api) => {
+        const response = await api.getGroupInfo(normalizedGroupId);
+        const groupInfo = response.gridInfoMap?.[normalizedGroupId];
+        return {
+          name: normalizeOptionalString(groupInfo?.name),
+          members: extractGroupMembersFromInfo(groupInfo),
+        };
+      }),
+    { allowStale: false },
+  );
+  return value;
 }
 
 export async function sendZaloTextMessage(
   threadId: string,
   text: string,
   options: ZaloSendOptions = {},
-  onDeliveryResult?: (result: ZaloSendResult) => Promise<void> | void,
-): Promise<ZaloSendResult> {
-  const profile = normalizeProfile(options.profile);
+  onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void,
+): Promise<ChannelMessageSendResult> {
   const trimmedThreadId = threadId.trim();
   if (!trimmedThreadId) {
-    return {
-      ok: false,
-      error: "No threadId provided",
-      receipt: createZalouserSendReceipt({ threadId, kind: "unknown" }),
-    };
+    throw new Error("No threadId provided");
   }
 
   return await withZaloApi(
-    profile,
+    options.profile,
     (api) => sendZaloTextWithApi(api, trimmedThreadId, text, options, onDeliveryResult),
-    { shouldPersist: (result) => result.ok, handoff: options },
+    { handoff: options },
   );
 }
 
@@ -1077,42 +751,18 @@ export async function sendZaloTypingEvent(
   threadId: string,
   options: Pick<ZaloSendOptions, "profile" | "isGroup"> = {},
 ): Promise<void> {
-  const profile = normalizeProfile(options.profile);
   const trimmedThreadId = threadId.trim();
   if (!trimmedThreadId) {
     throw new Error("No threadId provided");
   }
-  await withZaloApi(profile, async (api) => {
+  await withZaloApi(options.profile, async (api) => {
     const type = options.isGroup ? ThreadType.Group : ThreadType.User;
     await api.sendTypingEvent(trimmedThreadId, type);
   });
 }
 
-async function resolveOwnUserId(api: API): Promise<string> {
-  try {
-    const info = await api.fetchAccountInfo();
-    const resolved = toNumberId(normalizeAccountInfoUser(info)?.userId);
-    if (resolved) {
-      return resolved;
-    }
-  } catch {
-    // Fall back to getOwnId when account info shape changes.
-  }
-
-  try {
-    const ownId = toNumberId(api.getOwnId());
-    if (ownId) {
-      return ownId;
-    }
-  } catch {
-    // Ignore fallback probe failures and keep mention detection conservative.
-  }
-
-  return "";
-}
-
 export async function resolveZaloOwnUserId(profileInput?: string | null): Promise<string> {
-  return await withZaloApi(profileInput, resolveOwnUserId);
+  return await withZaloApi(profileInput, async (api) => toNumberId(api.getOwnId()));
 }
 
 export async function sendZaloReaction(params: {
@@ -1123,46 +773,34 @@ export async function sendZaloReaction(params: {
   cliMsgId: string;
   emoji: string;
   remove?: boolean;
-}): Promise<{ ok: boolean; error?: string }> {
-  const profile = normalizeProfile(params.profile);
+}): Promise<void> {
   const threadId = params.threadId.trim();
   const msgId = toStringValue(params.msgId);
   const cliMsgId = toStringValue(params.cliMsgId);
   if (!threadId || !msgId || !cliMsgId) {
-    return { ok: false, error: "threadId, msgId, and cliMsgId are required" };
+    throw new Error("threadId, msgId, and cliMsgId are required");
   }
-  try {
-    return await withZaloApi(
-      profile,
-      async (api) => {
-        const type = params.isGroup ? ThreadType.Group : ThreadType.User;
-        const icon = params.remove
-          ? { rType: -1, source: 6, icon: "" }
-          : normalizeZaloReactionIcon(params.emoji);
-        await api.addReaction(icon, {
-          data: { msgId, cliMsgId },
-          threadId,
-          type,
-        });
-        return { ok: true };
-      },
-      { shouldPersist: (result) => result.ok },
-    );
-  } catch (error) {
-    return { ok: false, error: formatErrorMessage(error) };
-  }
+  await withZaloApi(params.profile, async (api) => {
+    const type = params.isGroup ? ThreadType.Group : ThreadType.User;
+    const icon = params.remove
+      ? { rType: -1, source: 6, icon: "" }
+      : normalizeZaloReactionIcon(params.emoji);
+    await api.addReaction(icon, {
+      data: { msgId, cliMsgId },
+      threadId,
+      type,
+    });
+  });
 }
 
 export async function sendZaloDeliveredEvent(params: {
   profile?: string | null;
   isGroup?: boolean;
   message: ZaloEventMessage;
-  isSeen?: boolean;
 }): Promise<void> {
-  const profile = normalizeProfile(params.profile);
-  await withZaloApi(profile, async (api) => {
+  await withZaloApi(params.profile, async (api) => {
     const type = params.isGroup ? ThreadType.Group : ThreadType.User;
-    await api.sendDeliveredEvent(params.isSeen === true, params.message, type);
+    await api.sendDeliveredEvent(true, params.message, type);
   });
 }
 
@@ -1171,8 +809,7 @@ export async function sendZaloSeenEvent(params: {
   isGroup?: boolean;
   message: ZaloEventMessage;
 }): Promise<void> {
-  const profile = normalizeProfile(params.profile);
-  await withZaloApi(profile, async (api) => {
+  await withZaloApi(params.profile, async (api) => {
     const type = params.isGroup ? ThreadType.Group : ThreadType.User;
     await api.sendSeenEvent(params.message, type);
   });
@@ -1182,55 +819,37 @@ export async function sendZaloLink(
   threadId: string,
   url: string,
   options: ZaloSendOptions = {},
-): Promise<ZaloSendResult> {
-  const profile = normalizeProfile(options.profile);
+): Promise<ChannelMessageSendResult> {
   const trimmedThreadId = threadId.trim();
   const trimmedUrl = url.trim();
   if (!trimmedThreadId) {
-    return {
-      ok: false,
-      error: "No threadId provided",
-      receipt: createZalouserSendReceipt({ threadId, kind: "unknown" }),
-    };
+    throw new Error("No threadId provided");
   }
   if (!trimmedUrl) {
-    return {
-      ok: false,
-      error: "No URL provided",
-      receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "card" }),
-    };
+    throw new Error("No URL provided");
   }
 
-  try {
-    return await withZaloApi(
-      profile,
-      async (api) => {
-        const type = options.isGroup ? ThreadType.Group : ThreadType.User;
-        const response = await api.sendLink(
-          { link: trimmedUrl, msg: options.caption },
-          trimmedThreadId,
-          type,
-        );
-        const messageId = String(response.msgId);
-        return {
-          ok: true,
+  return await withZaloApi(
+    options.profile,
+    async (api) => {
+      const type = options.isGroup ? ThreadType.Group : ThreadType.User;
+      const response = await api.sendLink(
+        { link: trimmedUrl, msg: options.caption },
+        trimmedThreadId,
+        type,
+      );
+      const messageId = String(response.msgId);
+      return {
+        messageId,
+        receipt: createZalouserSendReceipt({
           messageId,
-          receipt: createZalouserSendReceipt({
-            messageId,
-            threadId: trimmedThreadId,
-            kind: "card",
-          }),
-        };
-      },
-      { shouldPersist: (result) => result.ok, handoff: options },
-    );
-  } catch (error) {
-    return {
-      ok: false,
-      error: formatErrorMessage(error),
-      receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "card" }),
-    };
-  }
+          threadId: trimmedThreadId,
+          kind: "card",
+        }),
+      };
+    },
+    { handoff: options },
+  );
 }
 
 export async function startZaloQrLogin(params: {
@@ -1238,7 +857,10 @@ export async function startZaloQrLogin(params: {
   force?: boolean;
   timeoutMs?: number;
   beforeCredentialPersistence?: () => Promise<void>;
+  assertCredentialPersistenceCurrent?: () => void;
 }): Promise<{ qrDataUrl?: string; message: string }> {
+  const state = getZaloSessionState();
+  const { activeQrLogins, apiByProfile, credentials } = state;
   const profile = normalizeProfile(params.profile);
 
   if (!params.force && (await checkZaloAuthenticated(profile))) {
@@ -1249,15 +871,18 @@ export async function startZaloQrLogin(params: {
     };
   }
 
+  params.assertCredentialPersistenceCurrent?.();
   if (params.force) {
-    await logoutZaloProfile(profile);
+    await logoutZaloProfile(profile, { assertCurrent: params.assertCredentialPersistenceCurrent });
   }
 
   let existing = activeQrLogins.get(profile);
   if (
     existing &&
-    params.beforeCredentialPersistence &&
-    existing.beforeCredentialPersistence !== params.beforeCredentialPersistence
+    ((params.beforeCredentialPersistence &&
+      existing.beforeCredentialPersistence !== params.beforeCredentialPersistence) ||
+      (params.assertCredentialPersistenceCurrent &&
+        existing.assertCredentialPersistenceCurrent !== params.assertCredentialPersistenceCurrent))
   ) {
     // A QR flow may outlive its setup turn. Never let a new setup owner adopt
     // another owner's pending login and bypass its persistence revalidation.
@@ -1275,13 +900,16 @@ export async function startZaloQrLogin(params: {
     resetQrLogin(profile);
   }
 
-  if (!activeQrLogins.has(profile)) {
+  let active = activeQrLogins.get(profile);
+  if (!active) {
     const login: ActiveZaloQrLogin = {
       id: randomUUID(),
-      profile,
       startedAt: Date.now(),
       ...(params.beforeCredentialPersistence
         ? { beforeCredentialPersistence: params.beforeCredentialPersistence }
+        : {}),
+      ...(params.assertCredentialPersistenceCurrent
+        ? { assertCredentialPersistenceCurrent: params.assertCredentialPersistenceCurrent }
         : {}),
       connected: false,
       waitPromise: Promise.resolve(),
@@ -1290,20 +918,21 @@ export async function startZaloQrLogin(params: {
     login.waitPromise = (async () => {
       let capturedCredentials: ZaloCredentialPayload | null = null;
       try {
-        const zalo = await createZalo({ logging: false, selfListen: false });
+        const zalo = await createZalo();
+        // QR preparation can outlive its caller while the SDK module loads.
+        if (activeQrLogins.get(profile)?.id !== login.id) {
+          return;
+        }
         const api = await zalo.loginQR(undefined, (event: LoginQRCallbackEvent) => {
           const current = activeQrLogins.get(profile);
           if (!current || current.id !== login.id) {
+            event.actions?.abort?.();
             return;
           }
 
           if (event.actions?.abort) {
             current.abort = () => {
-              try {
-                event.actions?.abort?.();
-              } catch {
-                // ignore
-              }
+              event.actions?.abort?.();
             };
           }
 
@@ -1340,11 +969,6 @@ export async function startZaloQrLogin(params: {
           }
         });
 
-        const current = activeQrLogins.get(profile);
-        if (!current || current.id !== login.id) {
-          return;
-        }
-
         if (!capturedCredentials) {
           const ctx = api.getContext();
           const cookieJar = api.getCookie();
@@ -1357,15 +981,20 @@ export async function startZaloQrLogin(params: {
           };
         }
 
+        const assertCurrent = () => {
+          login.assertCredentialPersistenceCurrent?.();
+          if (activeQrLogins.get(profile)?.id !== login.id) {
+            throw new Error("Zalo QR login was superseded before credential persistence");
+          }
+        };
+        assertCurrent();
         await login.beforeCredentialPersistence?.();
-        const owned = activeQrLogins.get(profile);
-        if (!owned || owned.id !== login.id) {
-          return;
-        }
-        writeApiCredentials(profile, api, capturedCredentials ?? undefined);
-        invalidateApi(profile);
+        assertCurrent();
+        await credentials.writeApiCredentials(profile, api, assertCurrent, capturedCredentials);
+        assertCurrent();
+        invalidateApi(profile, state);
         apiByProfile.set(profile, api);
-        current.connected = true;
+        login.connected = true;
       } catch (error) {
         const current = activeQrLogins.get(profile);
         if (current && current.id === login.id) {
@@ -1375,11 +1004,7 @@ export async function startZaloQrLogin(params: {
     })();
 
     activeQrLogins.set(profile, login);
-  }
-
-  const active = activeQrLogins.get(profile);
-  if (!active) {
-    return { message: "Failed to initialize Zalo QR login." };
+    active = login;
   }
 
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_QR_START_TIMEOUT_MS, 3000);
@@ -1416,6 +1041,7 @@ export async function waitForZaloQrLogin(params: {
   profile?: string | null;
   timeoutMs?: number;
 }): Promise<ZaloAuthStatus> {
+  const { activeQrLogins } = getZaloSessionState();
   const profile = normalizeProfile(params.profile);
   const active = activeQrLogins.get(profile);
 
@@ -1463,14 +1089,16 @@ export async function waitForZaloQrLogin(params: {
   };
 }
 
-export async function logoutZaloProfile(profileInput?: string | null): Promise<{
-  cleared: boolean;
-  loggedOut: boolean;
-  message: string;
-}> {
+export async function logoutZaloProfile(
+  profileInput?: string | null,
+  options?: { assertCurrent?: () => void },
+) {
+  const { groupContextCache, activeListeners, credentials } = getZaloSessionState();
   const profile = normalizeProfile(profileInput);
+  options?.assertCurrent?.();
   resetQrLogin(profile);
-  clearCachedGroupContext(profile);
+  // Other profiles simply refresh these optional projections on their next lookup.
+  groupContextCache.clear();
 
   const listener = activeListeners.get(profile);
   if (listener) {
@@ -1483,7 +1111,7 @@ export async function logoutZaloProfile(profileInput?: string | null): Promise<{
   }
 
   invalidateApi(profile);
-  const cleared = clearCredentials(profile);
+  const cleared = await credentials.clearCredentials(profile, options?.assertCurrent);
 
   return {
     cleared,
@@ -1499,6 +1127,8 @@ export async function startZaloListener(params: {
   onMessage: (message: Message) => void | Promise<void>;
   onError: (error: Error) => void;
 }): Promise<{ stop: () => void }> {
+  const state = getZaloSessionState();
+  const { activeListeners } = state;
   const profile = normalizeProfile(params.profile);
   const api = await withZaloApi(profile, async (apiLocal) => apiLocal);
   const existing = activeListeners.get(profile);
@@ -1530,7 +1160,7 @@ export async function startZaloListener(params: {
     activeListeners.delete(profile);
     // zca-js stop() resets before ws closes. Retire the API so a retry cannot
     // reuse that listener while its previous socket is still closing.
-    invalidateApi(profile);
+    invalidateApi(profile, state);
   };
   const failListener = (error: Error) => {
     if (stopped || params.abortSignal.aborted) {
@@ -1577,7 +1207,7 @@ export async function startZaloListener(params: {
   api.listener.on("closed", onClosed);
   api.listener.on("connected", onConnected);
   params.abortSignal.addEventListener("abort", cleanup, { once: true });
-  activeListeners.set(profile, { profile, accountId: params.accountId, stop: cleanup });
+  activeListeners.set(profile, { accountId: params.accountId, stop: cleanup });
   try {
     api.listener.start({ retryOnClose: false });
   } catch (error) {
@@ -1589,59 +1219,12 @@ export async function startZaloListener(params: {
   return { stop: cleanup };
 }
 
-export async function resolveZaloGroupsByEntries(params: {
-  profile?: string | null;
-  entries: string[];
-  credentialPersistence?: CredentialPersistenceMode;
-}): Promise<Array<{ input: string; resolved: boolean; id?: string }>> {
-  const groups = await listZaloGroups(params.profile, {
-    credentialPersistence: params.credentialPersistence ?? "persist",
-  });
-  const byName = new Map<string, ZaloGroup[]>();
-  for (const group of groups) {
-    const key = normalizeOptionalLowercaseString(group.name);
-    if (!key) {
-      continue;
-    }
-    const list = byName.get(key) ?? [];
-    list.push(group);
-    byName.set(key, list);
-  }
-
-  return params.entries.map((input) => {
-    const trimmed = input.trim();
-    if (!trimmed) {
-      return { input, resolved: false };
-    }
-    if (/^\d+$/.test(trimmed)) {
-      return { input, resolved: true, id: trimmed };
-    }
-    const candidates = byName.get(normalizeLowercaseStringOrEmpty(trimmed)) ?? [];
-    const match = candidates[0];
-    return match ? { input, resolved: true, id: match.groupId } : { input, resolved: false };
-  });
-}
-
-export async function resolveZaloAllowFromEntries(params: {
-  profile?: string | null;
-  entries: string[];
-  credentialPersistence?: CredentialPersistenceMode;
-}): Promise<Array<{ input: string; resolved: boolean; id?: string; note?: string }>> {
-  const friends = await listZaloFriends(params.profile, {
-    credentialPersistence: params.credentialPersistence ?? "persist",
-  });
-  const byName = new Map<string, ZcaFriend[]>();
-  for (const friend of friends) {
-    const key = normalizeOptionalLowercaseString(friend.displayName);
-    if (!key) {
-      continue;
-    }
-    const list = byName.get(key) ?? [];
-    list.push(friend);
-    byName.set(key, list);
-  }
-
-  return params.entries.map((input) => {
+function resolveZaloEntries<T>(
+  entries: string[],
+  byName: Map<string, T[]>,
+  resolveMatch: (match: T, matches: T[]) => { id: string; note?: string },
+) {
+  return entries.map((input) => {
     const trimmed = input.trim();
     if (!trimmed) {
       return { input, resolved: false };
@@ -1651,15 +1234,36 @@ export async function resolveZaloAllowFromEntries(params: {
     }
     const matches = byName.get(normalizeLowercaseStringOrEmpty(trimmed)) ?? [];
     const match = matches[0];
-    if (!match) {
-      return { input, resolved: false };
-    }
-    return {
-      input,
-      resolved: true,
-      id: match.userId,
-      note: matches.length > 1 ? "multiple matches; chose first" : undefined,
-    };
+    return match
+      ? { input, resolved: true, ...resolveMatch(match, matches) }
+      : { input, resolved: false };
   });
+}
+
+export async function resolveZaloGroupsByEntries(params: {
+  profile?: string | null;
+  entries: string[];
+}): Promise<Array<{ input: string; resolved: boolean; id?: string }>> {
+  const groups = await listZaloGroups(params.profile, {
+    credentialPersistence: "read-only",
+  });
+  const byName = buildZaloNameIndex(groups, (group) => group.name);
+
+  return resolveZaloEntries(params.entries, byName, (match) => ({ id: match.groupId }));
+}
+
+export async function resolveZaloAllowFromEntries(params: {
+  profile?: string | null;
+  entries: string[];
+}): Promise<Array<{ input: string; resolved: boolean; id?: string; note?: string }>> {
+  const friends = await listZaloFriends(params.profile, {
+    credentialPersistence: "read-only",
+  });
+  const byName = buildZaloNameIndex(friends, (friend) => friend.displayName);
+
+  return resolveZaloEntries(params.entries, byName, (match, matches) => ({
+    id: match.userId,
+    note: matches.length > 1 ? "multiple matches; chose first" : undefined,
+  }));
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

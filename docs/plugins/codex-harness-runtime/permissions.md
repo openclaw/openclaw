@@ -32,6 +32,11 @@ Plugin, account, Computer Use, and MCP approval classification runs before
 ordinary input handling. A denied policy or unmappable approval schema returns
 an explicit decline and never becomes a general-purpose form.
 
+For native app tools, see the
+[approval decision order](/plugins/codex-native-plugins#approval-decision-order)
+for OpenClaw defaults, native per-tool overrides, remembered approvals, and
+how eligible hosted app tools reach consent while disabled tools remain blocked.
+
 OpenClaw supports app-server MCP elicitation modes `form`, `openai/form`, and
 `url`. Standard and extended forms can contain at most 12 fields. OpenClaw
 normalizes field names to Gateway-safe question IDs, retains the original names
@@ -61,6 +66,16 @@ choices. OpenClaw does not fetch or open the URL. URLs are limited to 2,048
 characters, must use HTTP or HTTPS, cannot include credentials, and cannot
 contain control or invisible characters. Invalid URLs produce a visible
 explanation and an explicit decline.
+
+When the current turn can execute OpenClaw's `ask_user`, OpenClaw disables
+Codex's duplicate blocking `request_user_input` by default because its normal
+mode restriction rejects Default-mode questions. A retained tool declaration
+alone does not count as a callable tool. Explicit native opt-ins through
+`tools.experimental_request_user_input.enabled` or
+`features.default_mode_request_user_input` remain honored, including authored
+native configuration. Start, resume, and fork share this policy; changes refresh
+loaded thread configuration. Native async questions and MCP elicitations are
+unaffected.
 
 Codex `request_user_input` and ordinary MCP elicitations share one per-turn
 interactive queue. The Control UI renders each non-secret Gateway question, and

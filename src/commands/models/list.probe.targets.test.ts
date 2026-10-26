@@ -1,4 +1,3 @@
-// Model probe target tests cover selecting provider/model targets for probing.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { createApiKeyCredential } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
@@ -6,14 +5,13 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveConfigForRead } from "../../config/io.read-helpers.js";
 import { setConfigResolutionFacts } from "../../config/resolution-facts.js";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 let mockStore: AuthProfileStore;
 let mockAgentStore: AuthProfileStore | undefined;
-let mockAllowedProfiles: string[];
 const loadModelCatalogMock = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => []);
 
-const resolveAuthProfileOrderMock = vi.fn(() => mockAllowedProfiles);
 const resolveAuthProfileEligibilityMock = vi.fn<
   () => { eligible: boolean; reasonCode: "invalid_expires" | "ok" }
 >(() => ({
@@ -21,15 +19,26 @@ const resolveAuthProfileEligibilityMock = vi.fn<
   reasonCode: "invalid_expires",
 }));
 const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
+type ProviderAuthInput = { cfg: OpenClawConfig; provider: string };
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
-  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: loadModelCatalogMock,
 }));
 vi.mock("../../agents/model-auth.js", () => ({
-  hasSyntheticLocalProviderAuthConfig: () => false,
+  hasSyntheticLocalProviderAuthConfig: ({ cfg, provider }: ProviderAuthInput) => {
+    const configured = cfg.models?.providers?.[provider];
+    return (
+      provider === "ollama" &&
+      configured?.api === "ollama" &&
+      configured.apiKey === undefined &&
+      configured.baseUrl === "http://127.0.0.1:11434"
+    );
+  },
   hasUsableCustomProviderApiKey: (cfg: OpenClawConfig, provider: string) => {
     const raw = cfg.models?.providers?.[provider]?.apiKey;
+    if (provider === "ollama") {
+      return raw === "ollama-local";
+    }
     return typeof raw === "string" && raw.trim().length > 0 && raw !== "ollama-local";
   },
   resolveEnvApiKey: (
@@ -65,11 +74,11 @@ vi.mock("../../agents/model-auth.js", () => ({
     store: AuthProfileStore;
   }) => {
     const raw = params.cfg.models?.providers?.[params.provider]?.apiKey;
+    if (params.provider === "ollama") {
+      return { kind: raw === "ollama-local" ? "marker" : "none" };
+    }
     if (typeof raw !== "string") {
       return { kind: "none" };
-    }
-    if (raw === "ANTHROPIC_API_KEY" || raw === "ollama-local") {
-      return { kind: "marker" };
     }
     const profile = params.store.profiles[raw];
     return profile
@@ -77,23 +86,10 @@ vi.mock("../../agents/model-auth.js", () => ({
       : { kind: "literal", apiKey: raw, source: "models.json" };
   },
   resolveProviderEntryApiKeyBinding: async () => ({ kind: "profile-unresolved" }),
-  resolveUsableCustomProviderApiKey: (params: {
-    cfg: OpenClawConfig;
-    provider: string;
-    env?: NodeJS.ProcessEnv;
-  }) => {
-    const raw = params.cfg.models?.providers?.[params.provider]?.apiKey;
-    if (raw === "ollama-local") {
-      return { apiKey: raw, source: "models.json (local marker)" };
-    }
-    if (raw !== "ANTHROPIC_API_KEY") {
-      return null;
-    }
-    const value = params.env?.ANTHROPIC_API_KEY;
-    return value
-      ? { ...Object.fromEntries([["apiKey", value]]), source: "env: ANTHROPIC_API_KEY" }
-      : null;
-  },
+  resolveUsableCustomProviderApiKey: ({ cfg, provider }: ProviderAuthInput) =>
+    provider === "ollama" && cfg.models?.providers?.[provider]?.apiKey === "ollama-local"
+      ? { apiKey: "ollama-local", source: "models.json (local marker)" }
+      : null,
 }));
 vi.mock("../../agents/provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (provider: string) =>
@@ -126,12 +122,13 @@ vi.mock("./shared.js", () => ({
   formatMs: (ms: number) => `${ms}ms`,
 }));
 
+// mock-isolation: Probe planning uses fixture stores and never discovers operator credentials.
 vi.mock("../../agents/auth-profiles.js", () => ({
   externalCliDiscoveryScoped: (params: Record<string, unknown> = {}) => ({
     mode: "scoped",
     ...params,
   }),
-  ensureAuthProfileStore: (agentDir?: string) =>
+  ensureAuthProfileStoreAsync: async (agentDir?: string) =>
     agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore,
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
     Object.entries(store.profiles)
@@ -141,28 +138,93 @@ vi.mock("../../agents/auth-profiles.js", () => ({
       )
       .map(([profileId]) => profileId),
   resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-  resolveAuthProfileOrder: resolveAuthProfileOrderMock,
   resolveAuthProfileEligibility: resolveAuthProfileEligibilityMock,
 }));
 
 const { buildProbeTargets } = await import("./list.probe.js");
 
-async function buildAnthropicProbePlan(order: string[]) {
+type ProbeParams = Parameters<typeof buildProbeTargets>[0];
+type ProbePlan = Awaited<ReturnType<typeof buildProbeTargets>>;
+type ProbeTarget = ProbePlan["targets"][number];
+function target(
+  provider: string,
+  model: string,
+  source: ProbeTarget["source"] = "models.json",
+  overrides: Partial<ProbeTarget> = {},
+): ProbeTarget {
+  return {
+    provider,
+    model: { provider, model },
+    label: source,
+    source,
+    mode: "api_key",
+    ...overrides,
+  };
+}
+
+function catalogModel(
+  provider: string,
+  id: string,
+  status?: ModelCatalogEntry["status"],
+): ModelCatalogEntry {
+  return { provider, id, name: id, ...(status ? { status } : {}) };
+}
+
+function expectTargets(result: ProbePlan, ...targets: ProbeTarget[]) {
+  expect(result.results).toStrictEqual([]);
+  expect(result.targets).toStrictEqual(targets);
+}
+
+function profileIssue(reasonCode: string, error: string) {
+  const profileId = "anthropic:default";
+  return {
+    ...target("anthropic", "claude-sonnet-4-6", "profile", { profileId, label: profileId }),
+    model: "anthropic/claude-sonnet-4-6",
+    mode: "token",
+    status: "unknown",
+    reasonCode,
+    error,
+  };
+}
+function plan(
+  overrides: Omit<Partial<ProbeParams>, "options"> & {
+    options?: Partial<ProbeParams["options"]>;
+  } = {},
+) {
   return buildProbeTargets({
-    cfg: {
-      auth: {
-        order: {
-          anthropic: order,
-        },
-      },
-    } as OpenClawConfig,
+    cfg: {},
     providers: ["anthropic"],
     modelCandidates: ["anthropic/claude-sonnet-4-6"],
-    options: {
-      timeoutMs: 5_000,
-      concurrency: 1,
-      maxTokens: 16,
-    },
+    ...overrides,
+    options: { timeoutMs: 5_000, concurrency: 1, maxTokens: 16, ...overrides.options },
+  });
+}
+
+function providerConfig(
+  apiKey: ModelProviderConfig["apiKey"],
+  provider = "anthropic",
+  overrides: Partial<ModelProviderConfig> = {},
+): OpenClawConfig {
+  const entry: ModelProviderConfig = {
+    baseUrl: "https://api.anthropic.com/v1",
+    api: "anthropic-messages",
+    models: [],
+    apiKey,
+    ...overrides,
+  };
+  return { models: { providers: { [provider]: entry } } };
+}
+
+function emptyStore() {
+  mockStore = { version: 1, profiles: {}, order: {} };
+}
+
+function ollamaPlan(apiKey?: string) {
+  return plan({
+    cfg: providerConfig(apiKey, "ollama", { baseUrl: "http://127.0.0.1:11434", api: "ollama" }),
+    providers: ["ollama"],
+    modelCandidates: apiKey ? ["ollama/llama3.2:latest"] : [],
+    options: { includeDirectKeys: true, maxTokens: 8 },
   });
 }
 
@@ -170,38 +232,10 @@ function withClearedAnthropicEnv<T>(fn: () => Promise<T>): Promise<T> {
   return withEnvAsync({ ANTHROPIC_API_KEY: undefined, ANTHROPIC_OAUTH_TOKEN: undefined }, fn);
 }
 
-function withClearedZaiEnv<T>(fn: () => Promise<T>): Promise<T> {
-  return withEnvAsync({ ZAI_API_KEY: undefined, Z_AI_API_KEY: undefined }, fn);
-}
-
-async function buildAnthropicPlanFromModelsJsonApiKey(
-  apiKey: string | { source: "env"; provider: string; id: string },
-  includeDirectKeys = false,
-) {
-  const cfg = {
-    models: {
-      providers: {
-        anthropic: {
-          baseUrl: "https://api.anthropic.com/v1",
-          api: "anthropic-messages",
-          apiKey,
-          models: [],
-        },
-      },
-    },
-  } as OpenClawConfig;
+async function configPlan(apiKey: ModelProviderConfig["apiKey"], includeDirectKeys = false) {
+  const cfg = providerConfig(apiKey);
   setConfigResolutionFacts(cfg, new Set());
-  return await buildProbeTargets({
-    cfg,
-    providers: ["anthropic"],
-    modelCandidates: ["anthropic/claude-sonnet-4-6"],
-    options: {
-      ...(includeDirectKeys ? { includeDirectKeys: true } : {}),
-      timeoutMs: 5_000,
-      concurrency: 1,
-      maxTokens: 16,
-    },
-  });
+  return plan({ cfg, options: { includeDirectKeys } });
 }
 
 function expectLegacyMissingCredentialsError(
@@ -213,7 +247,7 @@ function expectLegacyMissingCredentialsError(
   expect(result?.error).toContain(`[${reasonCode}]`);
 }
 
-describe("buildProbeTargets reason codes", () => {
+describe("buildProbeTargets", () => {
   beforeEach(() => {
     mockStore = {
       version: 1,
@@ -225,823 +259,314 @@ describe("buildProbeTargets reason codes", () => {
           expires: 0,
         },
       },
-      order: {
-        anthropic: ["anthropic:default"],
-      },
+      order: { anthropic: ["anthropic:default"] },
     };
     mockAgentStore = undefined;
-    mockAllowedProfiles = [];
-    loadModelCatalogMock.mockReset();
-    loadModelCatalogMock.mockResolvedValue([]);
-    resolveAuthProfileOrderMock.mockClear();
+    loadModelCatalogMock.mockReset().mockResolvedValue([]);
     resolveAuthProfileEligibilityMock.mockClear();
-    resolveSecretRefStringMock.mockReset();
-    resolveSecretRefStringMock.mockResolvedValue("resolved-secret");
+    resolveSecretRefStringMock.mockReset().mockResolvedValue("resolved-secret");
     resolveAuthProfileEligibilityMock.mockReturnValue({
       eligible: false,
       reasonCode: "invalid_expires",
     });
   });
 
-  it("reports invalid_expires with a legacy-compatible first error line", async () => {
-    const plan = await buildAnthropicProbePlan(["anthropic:default"]);
-
-    expect(plan.targets).toStrictEqual([]);
-    expect(plan.results).toStrictEqual([
-      {
-        error:
-          "Auth profile credentials are missing or expired.\n↳ Auth reason [invalid_expires]: token expires must be a positive Unix ms timestamp.",
-        label: "anthropic:default",
-        mode: "token",
-        model: "anthropic/claude-sonnet-4-6",
-        profileId: "anthropic:default",
-        provider: "anthropic",
-        reasonCode: "invalid_expires",
-        source: "profile",
-        status: "unknown",
-      },
+  it("uses runtime auth and the first eligible catalog model for automatic local probes", async () => {
+    emptyStore();
+    loadModelCatalogMock.mockResolvedValueOnce([
+      catalogModel("ollama", "retired", "deprecated"),
+      catalogModel("ollama", "disabled", "disabled"),
+      catalogModel("ollama", "first-live", "preview"),
+      catalogModel("ollama", "second-live", "available"),
+    ]);
+    const result = await ollamaPlan();
+    expect(result.results).toEqual([]);
+    expect(loadModelCatalogMock).toHaveBeenCalledWith(expect.objectContaining({ readOnly: true }));
+    expect(result.targets).toEqual([
+      target("ollama", "first-live", "models.json", { useRuntimeAuth: true }),
     ]);
   });
 
-  it("reports excluded_by_auth_order when profile id is not present in explicit order", async () => {
-    mockStore.order = {
-      anthropic: ["anthropic:work"],
-    };
-    const plan = await buildAnthropicProbePlan(["anthropic:work"]);
-
-    expect(plan.targets).toStrictEqual([]);
-    expect(plan.results).toStrictEqual([
-      {
-        error: "Excluded by auth.order for this provider.",
-        label: "anthropic:default",
-        mode: "token",
-        model: "anthropic/claude-sonnet-4-6",
-        profileId: "anthropic:default",
-        provider: "anthropic",
-        reasonCode: "excluded_by_auth_order",
-        source: "profile",
-        status: "unknown",
-      },
+  it("preserves an explicit retired model and presents its local marker as provider configuration", async () => {
+    emptyStore();
+    loadModelCatalogMock.mockResolvedValueOnce([
+      catalogModel("ollama", "llama3.2:latest", "deprecated"),
+      catalogModel("ollama", "replacement"),
     ]);
-  });
-
-  it.each([
-    ["token", "token", "tokenRef", false],
-    ["api_key", "key", "keyRef", true],
-    ["token", "token", "tokenRef", true],
-  ] as const)(
-    "reports unresolved_ref for %s profiles with retained plaintext: %s %s %s",
-    async (type, valueField, refField, retainedPlaintext) => {
-      const profileId = "anthropic:default";
-      const refId = type === "api_key" ? "MISSING_ANTHROPIC_KEY" : "MISSING_ANTHROPIC_TOKEN";
-      const ref = { source: "env" as const, provider: "default", id: refId };
-      mockStore = {
-        version: 1,
-        profiles: {
-          [profileId]: {
-            type,
-            provider: "anthropic",
-            ...(retainedPlaintext ? { [valueField]: "retained-plaintext" } : {}),
-            [refField]: ref,
-          },
-        },
-        order: { anthropic: [profileId] },
-      } as AuthProfileStore;
-      mockAllowedProfiles = [profileId];
-      resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing secret"));
-
-      const plan = await buildAnthropicProbePlan([profileId]);
-
-      expect(plan.targets).toStrictEqual([]);
-      expect(plan.results).toHaveLength(1);
-      expectLegacyMissingCredentialsError(plan.results[0], "unresolved_ref");
-      expect(plan.results[0]?.error).toContain(`env:default:${refId}`);
-      expect(resolveSecretRefStringMock).toHaveBeenCalledWith(ref, expect.any(Object));
-    },
-  );
-
-  it("skips marker-only models.json credentials when building probe targets", async () => {
-    mockStore = {
-      version: 1,
-      profiles: {},
-      order: {},
-    };
-    await withClearedAnthropicEnv(async () => {
-      const plan = await buildAnthropicPlanFromModelsJsonApiKey("ollama-local");
-      expect(plan.targets).toStrictEqual([]);
-      expect(plan.results).toStrictEqual([]);
-    });
-  });
-
-  it("does not treat arbitrary all-caps models.json apiKey values as markers", async () => {
-    mockStore = {
-      version: 1,
-      profiles: {},
-      order: {},
-    };
-    await withClearedAnthropicEnv(async () => {
-      const plan = await buildAnthropicPlanFromModelsJsonApiKey("ALLCAPS_SAMPLE");
-      expect(plan.results).toStrictEqual([]);
-      expect(plan.targets).toStrictEqual([
-        {
-          label: "models.json",
-          mode: "api_key",
-          model: { provider: "anthropic", model: "claude-sonnet-4-6" },
-          provider: "anthropic",
-          source: "models.json",
-        },
-      ]);
-    });
-  });
-
-  it("adds a forced config-key target alongside stored profiles when requested", async () => {
-    mockAllowedProfiles = ["anthropic:default"];
-    const plan = await buildProbeTargets({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com/v1",
-              api: "anthropic-messages",
-              apiKey: "test",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      providers: ["anthropic"],
-      modelCandidates: ["anthropic/claude-sonnet-4-6"],
-      options: {
-        includeDirectKeys: true,
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
-
-    expect(plan.results).toEqual([
+    const result = await ollamaPlan("ollama-local");
+    expect(result.results).toEqual([]);
+    expect(result.targets).toEqual([
       expect.objectContaining({
-        profileId: "anthropic:default",
-        reasonCode: "invalid_expires",
-        source: "profile",
-      }),
-    ]);
-    expect(plan.targets).toEqual([
-      expect.objectContaining({
-        label: "config",
+        provider: "ollama",
+        model: { provider: "ollama", model: "llama3.2:latest" },
+        label: "provider",
         source: "models.json",
-        boundValue: "test",
-      }),
-    ]);
-  });
-
-  it("emits a no_model result for a resolved config credential with no probe model", async () => {
-    mockStore = { version: 1, profiles: {}, order: {} };
-    const plan = await buildProbeTargets({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com/v1",
-              api: "anthropic-messages",
-              apiKey: "test",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      providers: ["anthropic"],
-      modelCandidates: [],
-      options: {
-        includeDirectKeys: true,
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
-
-    expect(plan.targets).toEqual([]);
-    expect(plan.results).toContainEqual(
-      expect.objectContaining({
-        label: "config",
-        source: "models.json",
-        status: "no_model",
-        reasonCode: "no_model",
-      }),
-    );
-  });
-
-  it.each([
-    ["resolved SecretRef", "ref", true, false, false],
-    ["unresolved SecretRef", "ref", true, true, false],
-    ["normal-mode SecretRef", "ref", false, false, false],
-    ["plaintext", "configured-provider-credential", true, false, true],
-    ["template-shaped literal", "${CONFIGURED_PROVIDER_VALUE}", true, false, true],
-  ] as const)(
-    "preserves configured provider credential ownership for %s",
-    async (_description, input, includeDirectKeys, rejectRef, expectAmbient) => {
-      mockStore = { version: 1, profiles: {}, order: {} };
-      const apiKey =
-        input === "ref"
-          ? { source: "env" as const, provider: "default", id: "CONFIGURED_ANTHROPIC_CREDENTIAL" }
-          : input;
-      if (rejectRef) {
-        resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing configured secret"));
-      }
-      const plan = await withEnvAsync(
-        Object.fromEntries([["ANTHROPIC_API_KEY", "ambient-provider-credential"]]),
-        () => buildAnthropicPlanFromModelsJsonApiKey(apiKey, includeDirectKeys),
-      );
-
-      expect(plan.targets.some((target) => target.source === "env")).toBe(expectAmbient);
-      if (rejectRef) {
-        expect(plan.targets).toStrictEqual([]);
-        expect(plan.results).toEqual([
-          expect.objectContaining({ source: "models.json", reasonCode: "unresolved_ref" }),
-        ]);
-      } else if (includeDirectKeys) {
-        const boundValue = input === "ref" ? "resolved-secret" : apiKey;
-        expect(plan.targets).toContainEqual(
-          expect.objectContaining({ source: "models.json", label: "config", boundValue }),
-        );
-      }
-    },
-  );
-
-  it.each([
-    ["missing bare with authored provider spelling", "$MISSING", undefined, null, "AnThRoPiC"],
-    ["missing braced", "${MISSING}", undefined, null, "anthropic"],
-    ["ordinary substitution", "${SOURCE}", "resolved-secret", "resolved-secret", "anthropic"],
-    ["bare-looking literal", "${SOURCE}", "$OTHER", "$OTHER", "anthropic"],
-    ["braced-looking literal", "${SOURCE}", "${OTHER}", "${OTHER}", "anthropic"],
-    ["escaped template literal", "$${OTHER}", undefined, "${OTHER}", "anthropic"],
-  ] as const)(
-    "preserves authored credential provenance: %s",
-    async (_name, authored, sourceValue, expected, providerKey) => {
-      mockStore = { version: 1, profiles: {}, order: {} };
-      resolveSecretRefStringMock.mockRejectedValue(new Error("missing secret"));
-      const providerConfig = {
-        baseUrl: "https://api.anthropic.com/v1",
-        apiKey: authored,
-        models: [],
-      };
-      const read = resolveConfigForRead(
-        { models: { providers: { [providerKey]: providerConfig } } },
-        sourceValue === undefined ? {} : { SOURCE: sourceValue },
-      );
-      const cfg = read.resolvedConfigRaw as OpenClawConfig;
-      setConfigResolutionFacts(cfg, read.resolutionFacts);
-
-      const plan = await withClearedAnthropicEnv(async () =>
-        buildProbeTargets({
-          cfg,
-          providers: ["anthropic"],
-          modelCandidates: ["anthropic/claude-sonnet-4-6"],
-          options: { includeDirectKeys: true, timeoutMs: 5_000, concurrency: 1, maxTokens: 16 },
-        }),
-      );
-
-      if (expected === null) {
-        expect(plan.targets).toEqual([]);
-        expect(plan.results[0]).toMatchObject({ label: "config", reasonCode: "unresolved_ref" });
-        return;
-      }
-      expect(plan.results).toEqual([]);
-      expect(plan.targets[0]).toMatchObject({ label: "config", boundValue: expected });
-    },
-  );
-
-  it("deduplicates matching config and environment credentials", async () => {
-    mockStore = { version: 1, profiles: {}, order: {} };
-    resolveSecretRefStringMock.mockResolvedValueOnce("same-value");
-    const plan = await withEnvAsync(Object.fromEntries([["ANTHROPIC_API_KEY", "same-value"]]), () =>
-      buildAnthropicPlanFromModelsJsonApiKey(
-        { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
-        true,
-      ),
-    );
-
-    expect(plan.targets).toEqual([
-      expect.objectContaining({
-        label: "config",
-        source: "models.json",
-        boundValue: "same-value",
-      }),
-    ]);
-  });
-
-  it("deduplicates persisted env-marker credentials", async () => {
-    mockStore = { version: 1, profiles: {}, order: {} };
-    const value = ["marker", "test"].join("-");
-    const plan = await withEnvAsync(
-      Object.fromEntries([["ANTHROPIC_API_KEY", value]]),
-      async () =>
-        await buildProbeTargets({
-          cfg: {
-            models: {
-              providers: {
-                anthropic: {
-                  baseUrl: "https://api.anthropic.com/v1",
-                  api: "anthropic-messages",
-                  ...Object.fromEntries([["apiKey", "ANTHROPIC_API_KEY"]]),
-                  models: [],
-                },
-              },
-            },
-          } as OpenClawConfig,
-          providers: ["anthropic"],
-          modelCandidates: ["anthropic/claude-sonnet-4-6"],
-          options: {
-            includeDirectKeys: true,
-            timeoutMs: 5_000,
-            concurrency: 1,
-            maxTokens: 16,
-          },
-        }),
-    );
-
-    expect(plan.targets).toEqual([
-      expect.objectContaining({
-        boundValue: value,
-        label: "config",
-        source: "models.json",
+        boundValue: "ollama-local",
         useRuntimeAuth: true,
       }),
     ]);
   });
 
-  it("adds environment credentials alongside stored profiles", async () => {
-    await withEnvAsync(
-      Object.fromEntries([["ANTHROPIC_API_KEY", ["env", "test"].join("-")]]),
-      async () => {
-        mockAllowedProfiles = ["anthropic:default"];
-        const plan = await buildProbeTargets({
-          cfg: {} as OpenClawConfig,
-          providers: ["anthropic"],
-          modelCandidates: ["anthropic/claude-sonnet-4-6"],
-          options: {
-            includeDirectKeys: true,
-            timeoutMs: 5_000,
-            concurrency: 1,
-            maxTokens: 16,
-          },
-        });
+  it.each(["api_key", "token"] as const)(
+    "reports unresolved_ref for %s profiles despite retained plaintext",
+    async (type) => {
+      const profileId = "anthropic:default";
+      const refId = type === "api_key" ? "MISSING_ANTHROPIC_KEY" : "MISSING_ANTHROPIC_TOKEN";
+      const ref = { source: "env" as const, provider: "default", id: refId };
+      mockStore.profiles[profileId] =
+        type === "api_key"
+          ? { type, provider: "anthropic", key: "retained-plaintext", keyRef: ref }
+          : { type, provider: "anthropic", token: "retained-plaintext", tokenRef: ref };
+      resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing secret"));
+      const result = await plan({ cfg: { auth: { order: { anthropic: [profileId] } } } });
+      expect(result.targets).toStrictEqual([]);
+      expect(result.results).toHaveLength(1);
+      expectLegacyMissingCredentialsError(result.results[0], "unresolved_ref");
+      expect(result.results[0]?.error).toContain(`env:default:${refId}`);
+      expect(resolveSecretRefStringMock).toHaveBeenCalledWith(ref, expect.any(Object));
+    },
+  );
 
-        expect(plan.targets).toContainEqual(
-          expect.objectContaining({
-            boundValue: ["env", "test"].join("-"),
-            label: "env: ANTHROPIC_API_KEY",
-            source: "env",
-          }),
-        );
-      },
+  it("adds direct credentials alongside an ineligible stored profile", async () => {
+    const result = await withEnvAsync({ ANTHROPIC_API_KEY: "env-test" }, () =>
+      plan({ cfg: providerConfig("test"), options: { includeDirectKeys: true } }),
     );
-  });
-
-  it("does not turn a provider-entry profile reference into a direct key target", async () => {
-    const ref = "anthropic:saved";
-    mockStore = {
-      version: 1,
-      profiles: {
-        [ref]: createApiKeyCredential("anthropic", "placeholder"),
-      },
-      order: {},
-    };
-    mockAllowedProfiles = [ref];
-    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
-
-    const plan = await buildProbeTargets({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com/v1",
-              api: "anthropic-messages",
-              ...Object.fromEntries([["apiKey", ref]]),
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      providers: ["anthropic"],
-      modelCandidates: ["anthropic/claude-sonnet-4-6"],
-      options: {
-        includeDirectKeys: true,
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
-
-    expect(plan.results).toStrictEqual([]);
-    expect(plan.targets).toStrictEqual([
-      {
-        provider: "anthropic",
-        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
-        profileId: ref,
-        label: ref,
-        source: "profile",
-        mode: "api_key",
-      },
+    expect(result.results).toStrictEqual([
+      profileIssue(
+        "invalid_expires",
+        "Auth profile credentials are missing or expired.\n↳ Auth reason [invalid_expires]: token expires must be a positive Unix ms timestamp.",
+      ),
     ]);
-  });
-
-  it("probes a config-bound profile even when auth.order excludes it", async () => {
-    const ref = "anthropic:saved";
-    mockStore = {
-      version: 1,
-      profiles: {
-        [ref]: { type: "api_key", provider: "anthropic", key: "placeholder" },
-        "anthropic:other": { type: "api_key", provider: "anthropic", key: "placeholder" },
-      },
-      // Explicit order excludes the config-referenced profile; runtime still
-      // binds it from the provider apiKey, so the probe must not report it
-      // excluded_by_auth_order.
-      order: { anthropic: ["anthropic:other"] },
-    };
-    mockAllowedProfiles = ["anthropic:other"];
-    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
-
-    const plan = await buildProbeTargets({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com/v1",
-              api: "anthropic-messages",
-              ...Object.fromEntries([["apiKey", ref]]),
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      providers: ["anthropic"],
-      modelCandidates: ["anthropic/claude-sonnet-4-6"],
-      options: {
-        includeDirectKeys: true,
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
-
-    expect(plan.results).not.toContainEqual(
-      expect.objectContaining({ profileId: ref, reasonCode: "excluded_by_auth_order" }),
-    );
-    expect(plan.targets).toContainEqual(
-      expect.objectContaining({ profileId: ref, source: "profile" }),
-    );
-  });
-
-  it("probes an environment credential with the configured token auth mode", async () => {
-    await withEnvAsync(
-      Object.fromEntries([["ZAI_API_KEY", ["env", "zai"].join("-")]]),
-      async () => {
-        mockStore = { version: 1, profiles: {}, order: {} };
-        mockAllowedProfiles = [];
-        const plan = await buildProbeTargets({
-          cfg: {
-            models: {
-              providers: {
-                zai: {
-                  baseUrl: "https://api.z.ai/v1",
-                  api: "openai-responses",
-                  auth: "token",
-                  models: [],
-                },
-              },
-            },
-          } as OpenClawConfig,
-          providers: ["zai"],
-          modelCandidates: ["zai/glm-4.7"],
-          options: {
-            includeDirectKeys: true,
-            timeoutMs: 5_000,
-            concurrency: 1,
-            maxTokens: 16,
-          },
-        });
-
-        expect(plan.targets).toContainEqual(
-          expect.objectContaining({ source: "env", label: "env: ZAI_API_KEY", mode: "token" }),
-        );
-      },
-    );
-  });
-
-  it("keeps alias model selection while resolving profiles from the auth provider", async () => {
-    mockStore = {
-      version: 1,
-      profiles: {
-        "byteplus:plan": createApiKeyCredential("byteplus", "byteplus-plan-key"),
-      },
-      order: { byteplus: ["byteplus:plan"] },
-    };
-    mockAllowedProfiles = ["byteplus:plan"];
-    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
-    loadModelCatalogMock.mockResolvedValueOnce([
-      { provider: "byteplus", id: "seed-2-0-mini", name: "BytePlus Standard" },
-      { provider: "byteplus-plan", id: "ark-code-latest", name: "BytePlus Plan" },
-    ]);
-
-    const plan = await buildProbeTargets({
-      cfg: {
-        models: {
-          providers: {
-            "byteplus-plan": {
-              baseUrl: "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-        auth: { order: { byteplus: ["byteplus:plan"] } },
-      } as OpenClawConfig,
-      providers: ["byteplus-plan"],
-      modelCandidates: [],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
-
-    expect(plan.results).toStrictEqual([]);
-    expect(plan.targets).toStrictEqual([
-      {
-        label: "byteplus:plan",
-        mode: "api_key",
-        model: { provider: "byteplus-plan", model: "ark-code-latest" },
-        profileId: "byteplus:plan",
-        provider: "byteplus-plan",
-        source: "profile",
-      },
-    ]);
-  });
-
-  it("keeps profiles stored under the requested provider alias", async () => {
-    mockStore = {
-      version: 1,
-      profiles: {
-        "byteplus-plan:saved": createApiKeyCredential("byteplus-plan", "byteplus-plan-key"),
-      },
-      order: { "byteplus-plan": ["byteplus-plan:saved"] },
-    };
-    mockAllowedProfiles = ["byteplus-plan:saved"];
-    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
-
-    const plan = await buildProbeTargets({
-      cfg: {} as OpenClawConfig,
-      providers: ["byteplus-plan"],
-      modelCandidates: ["byteplus-plan/ark-code-latest"],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
-
-    expect(plan.results).toStrictEqual([]);
-    expect(plan.targets).toContainEqual(
+    expect(result.targets).toEqual([
+      expect.objectContaining({ label: "config", source: "models.json", boundValue: "test" }),
       expect.objectContaining({
-        provider: "byteplus-plan",
-        profileId: "byteplus-plan:saved",
-        source: "profile",
+        label: "env: ANTHROPIC_API_KEY",
+        source: "env",
+        boundValue: "env-test",
       }),
-    );
+    ]);
   });
 
-  it("keeps no_model when a credential has no account-visible catalog model", async () => {
-    mockStore = {
-      version: 1,
-      profiles: {
-        "provider:account": {
-          type: "oauth",
-          provider: "provider",
-          access: "account-token",
-          refresh: "refresh-token",
-          expires: Date.now() + 60_000,
-        },
-      },
-      order: { provider: ["provider:account"] },
-    };
-    mockAllowedProfiles = ["provider:account"];
-    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
-    loadModelCatalogMock.mockResolvedValueOnce([]);
-
-    const plan = await buildProbeTargets({
-      cfg: {} as OpenClawConfig,
-      providers: ["provider"],
+  it("omits credential values from no_model results when all catalog models are retired", async () => {
+    emptyStore();
+    loadModelCatalogMock.mockResolvedValueOnce([
+      catalogModel("anthropic", "deprecated-model", "deprecated"),
+      catalogModel("anthropic", "disabled-model", "disabled"),
+    ]);
+    const result = await plan({
+      cfg: providerConfig("test"),
       modelCandidates: [],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
+      options: { includeDirectKeys: true },
     });
-
-    expect(plan.targets).toStrictEqual([]);
-    expect(plan.results).toContainEqual(
+    expect(result.targets).toEqual([]);
+    expect(result.results).toContainEqual(
       expect.objectContaining({
-        provider: "provider",
-        profileId: "provider:account",
+        label: "config",
+        source: "models.json",
         status: "no_model",
         reasonCode: "no_model",
       }),
     );
+    expect(result.results[0]).not.toHaveProperty("boundValue");
   });
 
-  it("matches canonical providers against alias-valued catalog probe models", async () => {
-    await withClearedZaiEnv(async () => {
-      mockStore = {
-        version: 1,
-        profiles: {},
-        order: {},
+  it.each([
+    ["resolved SecretRef", true, false],
+    ["unresolved SecretRef", true, true],
+    ["normal-mode SecretRef", false, false],
+  ] as const)(
+    "preserves configured provider credential ownership for %s",
+    async (_description, includeDirectKeys, rejectRef) => {
+      emptyStore();
+      const apiKey = {
+        source: "env" as const,
+        provider: "default",
+        id: "CONFIGURED_ANTHROPIC_CREDENTIAL",
       };
-      loadModelCatalogMock.mockResolvedValueOnce([
-        { provider: "z.ai", id: "glm-4.7", name: "GLM-4.7" },
-      ]);
+      if (rejectRef) {
+        resolveSecretRefStringMock.mockRejectedValueOnce(new Error("missing configured secret"));
+      }
+      const result = await withEnvAsync({ ANTHROPIC_API_KEY: "ambient-provider-credential" }, () =>
+        configPlan(apiKey, includeDirectKeys),
+      );
+      expect(result.targets.some((entry) => entry.source === "env")).toBe(false);
+      if (rejectRef) {
+        expect(result.targets).toStrictEqual([]);
+        expect(result.results).toEqual([
+          expect.objectContaining({ source: "models.json", reasonCode: "unresolved_ref" }),
+        ]);
+      } else if (includeDirectKeys) {
+        expect(result.results).toEqual([]);
+        expect(result.targets).toEqual([
+          expect.objectContaining({
+            source: "models.json",
+            label: "config",
+            boundValue: "resolved-secret",
+          }),
+        ]);
+      }
+    },
+  );
 
-      const plan = await buildProbeTargets({
-        cfg: {
-          models: {
-            providers: {
-              zai: {
-                baseUrl: "https://api.z.ai/v1",
-                api: "openai-responses",
-                apiKey: "sk-zai-test", // pragma: allowlist secret
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
-        providers: ["zai"],
-        modelCandidates: [],
-        options: {
-          timeoutMs: 5_000,
-          concurrency: 1,
-          maxTokens: 16,
-        },
-      });
+  it.each([
+    ["missing with authored provider spelling", "$MISSING", undefined, null, "AnThRoPiC"],
+    ["substituted template-looking literal", "${SOURCE}", "${OTHER}", "${OTHER}", "anthropic"],
+  ] as const)(
+    "preserves authored credential provenance: %s",
+    async (_name, authored, sourceValue, expected, providerKey) => {
+      emptyStore();
+      resolveSecretRefStringMock.mockRejectedValue(new Error("missing secret"));
+      const read = resolveConfigForRead(
+        providerConfig(authored, providerKey),
+        sourceValue === undefined ? {} : { SOURCE: sourceValue },
+      );
+      const cfg = read.resolvedConfigRaw as OpenClawConfig;
+      setConfigResolutionFacts(cfg, read.resolutionFacts);
+      const result = await withClearedAnthropicEnv(() =>
+        plan({ cfg, options: { includeDirectKeys: true } }),
+      );
+      if (expected === null) {
+        expect(result.targets).toEqual([]);
+        expect(result.results[0]).toMatchObject({ label: "config", reasonCode: "unresolved_ref" });
+      } else {
+        expect(result.results).toEqual([]);
+        expect(result.targets[0]).toMatchObject({ label: "config", boundValue: expected });
+      }
+    },
+  );
 
-      expect(plan.results).toStrictEqual([]);
-      expect(plan.targets).toStrictEqual([
-        {
-          label: "models.json",
-          mode: "api_key",
-          model: { provider: "zai", model: "glm-4.7" },
-          provider: "zai",
-          source: "models.json",
-        },
-      ]);
-    });
+  it("only exempts the config-bound profile from auth.order exclusions", async () => {
+    const ref = "anthropic:saved";
+    mockStore.profiles[ref] = createApiKeyCredential("anthropic", "placeholder");
+    mockStore.profiles["anthropic:other"] = createApiKeyCredential("anthropic", "placeholder");
+    mockStore.order = { anthropic: ["anthropic:other"] };
+    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
+    const result = await plan({ cfg: providerConfig(ref), options: { includeDirectKeys: true } });
+    expect(result.results).toStrictEqual([
+      profileIssue("excluded_by_auth_order", "Excluded by auth.order for this provider."),
+    ]);
+    expect(result.targets).toStrictEqual(
+      [ref, "anthropic:other"].map((profileId) =>
+        target("anthropic", "claude-sonnet-4-6", "profile", { profileId, label: profileId }),
+      ),
+    );
   });
 
-  it("prefers live Anthropic Haiku 4.5 catalog entries over stale Claude 3 probes", async () => {
-    mockStore = {
-      version: 1,
-      profiles: {},
-      order: {},
-    };
-    loadModelCatalogMock.mockResolvedValueOnce([
-      { provider: "anthropic", id: "claude-3-haiku-20240307", name: "Claude Haiku 3" },
-      {
-        provider: "anthropic",
-        id: "claude-haiku-4-5-20251001",
-        name: "Claude Haiku 4.5",
-      },
-      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-    ]);
-
-    const plan = await withClearedAnthropicEnv(async () =>
-      buildProbeTargets({
-        cfg: {
-          models: {
-            providers: {
-              anthropic: {
-                baseUrl: "https://api.anthropic.com/v1",
-                api: "anthropic-messages",
-                apiKey: "sk-ant-test",
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
-        providers: ["anthropic"],
-        modelCandidates: [],
-        options: {
-          timeoutMs: 5_000,
-          concurrency: 1,
-          maxTokens: 16,
-        },
+  it("probes an environment credential with the configured token auth mode", async () => {
+    emptyStore();
+    const result = await withEnvAsync({ ZAI_API_KEY: "env-zai" }, () =>
+      plan({
+        cfg: providerConfig(undefined, "zai", {
+          baseUrl: "https://api.z.ai/v1",
+          api: "openai-responses",
+          auth: "token",
+        }),
+        providers: ["zai"],
+        modelCandidates: ["zai/glm-4.7"],
+        options: { includeDirectKeys: true },
       }),
     );
+    expect(result.targets).toContainEqual(
+      expect.objectContaining({ source: "env", label: "env: ZAI_API_KEY", mode: "token" }),
+    );
+  });
 
-    expect(plan.results).toStrictEqual([]);
-    expect(plan.targets).toStrictEqual([
-      {
-        label: "models.json",
-        mode: "api_key",
-        model: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
-        provider: "anthropic",
-        source: "models.json",
-      },
+  it.each(["byteplus", "byteplus-plan"])(
+    "keeps alias model selection with profiles stored under %s",
+    async (authProvider) => {
+      const canonicalAuth = authProvider === "byteplus";
+      const profileId = canonicalAuth ? "byteplus:plan" : "byteplus-plan:saved";
+      mockStore = {
+        version: 1,
+        profiles: { [profileId]: createApiKeyCredential(authProvider, "byteplus-plan-key") },
+        order: { [authProvider]: [profileId] },
+      };
+      resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
+      let cfg: OpenClawConfig = {};
+      if (canonicalAuth) {
+        loadModelCatalogMock.mockResolvedValueOnce([
+          catalogModel("byteplus", "seed-2-0-mini"),
+          catalogModel("byteplus-plan", "ark-code-latest"),
+        ]);
+        cfg = providerConfig(undefined, "byteplus-plan", {
+          baseUrl: "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+          api: "openai-completions",
+        });
+        cfg.auth = { order: { byteplus: [profileId] } };
+      }
+      const result = await plan({
+        cfg,
+        providers: ["byteplus-plan"],
+        modelCandidates: canonicalAuth ? [] : ["byteplus-plan/ark-code-latest"],
+      });
+      expectTargets(
+        result,
+        target("byteplus-plan", "ark-code-latest", "profile", {
+          profileId,
+          label: profileId,
+        }),
+      );
+    },
+  );
+
+  it("matches canonical providers against alias-valued catalog probe models", async () => {
+    emptyStore();
+    loadModelCatalogMock.mockResolvedValueOnce([catalogModel("z.ai", "glm-4.7")]);
+    const result = await withEnvAsync({ ZAI_API_KEY: undefined, Z_AI_API_KEY: undefined }, () =>
+      plan({
+        cfg: providerConfig("sk-zai-test", "zai", {
+          baseUrl: "https://api.z.ai/v1",
+          api: "openai-responses",
+        }),
+        providers: ["zai"],
+        modelCandidates: [],
+      }),
+    );
+    expectTargets(result, target("zai", "glm-4.7"));
+  });
+
+  it("prioritizes live Anthropic Haiku catalog entries over retired and slower probes", async () => {
+    emptyStore();
+    loadModelCatalogMock.mockResolvedValueOnce([
+      catalogModel("anthropic", "claude-haiku-4-5-20261001", "deprecated"),
+      catalogModel("anthropic", "claude-3-haiku-20240307"),
+      catalogModel("anthropic", "claude-haiku-4-5"),
+      catalogModel("anthropic", "claude-haiku-4-5-20251001"),
+      catalogModel("anthropic", "claude-sonnet-4-6"),
     ]);
+    const result = await withClearedAnthropicEnv(() =>
+      plan({ cfg: providerConfig("sk-ant-test"), modelCandidates: [] }),
+    );
+    expectTargets(result, target("anthropic", "claude-haiku-4-5-20251001"));
   });
 
   it("uses workspace-scoped auth evidence when building env probe targets", async () => {
-    mockStore = {
-      version: 1,
-      profiles: {},
-      order: {},
-    };
-    loadModelCatalogMock.mockResolvedValue([
-      { provider: "workspace-cloud", id: "workspace-model", name: "Workspace Model" },
-    ]);
-
-    const withoutWorkspace = await buildProbeTargets({
-      cfg: {} as OpenClawConfig,
-      providers: ["workspace-cloud"],
-      modelCandidates: [],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
-    const withWorkspace = await buildProbeTargets({
-      cfg: {} as OpenClawConfig,
-      workspaceDir: "/tmp/workspace",
-      providers: ["workspace-cloud"],
-      modelCandidates: [],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
-
-    expect(withoutWorkspace.targets).toStrictEqual([]);
-    expect(withWorkspace.targets).toStrictEqual([
-      {
-        label: "env",
-        mode: "api_key",
-        model: { provider: "workspace-cloud", model: "workspace-model" },
-        provider: "workspace-cloud",
-        source: "env",
-      },
+    emptyStore();
+    loadModelCatalogMock.mockResolvedValue([catalogModel("workspace-cloud", "workspace-model")]);
+    const input = { providers: ["workspace-cloud"], modelCandidates: [] };
+    expect((await plan(input)).targets).toStrictEqual([]);
+    expect((await plan({ ...input, workspaceDir: "/tmp/workspace" })).targets).toStrictEqual([
+      target("workspace-cloud", "workspace-model", "env"),
     ]);
   });
 
   it("uses the requested agent auth store when building profile probe targets", async () => {
-    mockStore = {
-      version: 1,
-      profiles: {},
-      order: {},
-    };
+    emptyStore();
     mockAgentStore = {
       version: 1,
-      profiles: {
-        "anthropic:coder": createApiKeyCredential("anthropic", "sk-ant-coder-profile"),
-      },
+      profiles: { "anthropic:coder": createApiKeyCredential("anthropic", "sk-ant-coder-profile") },
       order: {},
     };
-
-    const { defaultPlan, agentPlan } = await withClearedAnthropicEnv(async () => ({
-      defaultPlan: await buildProbeTargets({
-        cfg: {} as OpenClawConfig,
-        providers: ["anthropic"],
-        modelCandidates: ["anthropic/claude-sonnet-4-6"],
-        options: {
-          timeoutMs: 5_000,
-          concurrency: 1,
-          maxTokens: 16,
-        },
-      }),
-      agentPlan: await buildProbeTargets({
-        cfg: {} as OpenClawConfig,
-        agentDir: "/tmp/coder-agent",
-        providers: ["anthropic"],
-        modelCandidates: ["anthropic/claude-sonnet-4-6"],
-        options: {
-          timeoutMs: 5_000,
-          concurrency: 1,
-          maxTokens: 16,
-        },
-      }),
-    }));
-
-    expect(defaultPlan.targets).toStrictEqual([]);
-    expect(agentPlan.results).toStrictEqual([]);
-    expect(agentPlan.targets).toStrictEqual([
-      {
-        label: "anthropic:coder",
-        mode: "api_key",
-        model: { provider: "anthropic", model: "claude-sonnet-4-6" },
-        profileId: "anthropic:coder",
-        provider: "anthropic",
-        source: "profile",
-      },
-    ]);
+    await withClearedAnthropicEnv(async () => {
+      expect((await plan()).targets).toStrictEqual([]);
+      const result = await plan({ agentDir: "/tmp/coder-agent" });
+      expectTargets(
+        result,
+        target("anthropic", "claude-sonnet-4-6", "profile", {
+          label: "anthropic:coder",
+          profileId: "anthropic:coder",
+        }),
+      );
+    });
   });
 });

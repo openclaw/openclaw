@@ -5,6 +5,11 @@
  * server types and helpers without paying the full startup dependency graph.
  */
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
+import { installDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
+import { supportsSpawnBrokerCommandTransport } from "../process/spawn-broker/pipe.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
+import { GatewayStartupCleanupError, rethrowGatewayStartupError } from "./server-shutdown.js";
 
 export { truncateCloseReason } from "./server/close-reason.js";
 export type { GatewayServer, GatewayServerOptions } from "./server-public.js";
@@ -19,7 +24,75 @@ async function loadServerStart() {
 /** Starts the gateway server after lazily loading the full server implementation. */
 export async function startGatewayServer(
   port = 18789,
-  opts: import("./server-public.js").GatewayServerOptions = {},
+  opts: GatewayServerOptions = {},
+): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
+  installDatabaseProcessRole("gateway");
+  const { installGatewayDatabaseEngine } = await import("./server-database-engine.js");
+  await installGatewayDatabaseEngine(
+    opts.startupConfigSnapshotRead?.snapshot,
+    opts.startupConfigSnapshotRead?.databaseEngineSelection,
+  );
+  const { initializeSqliteRuntime } = await import("../infra/sqlite-runtime-initialize.js");
+  await initializeSqliteRuntime();
+  const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
+  const ownedLock = opts.gatewayStateOwner
+    ? null
+    : await acquireGatewayLock({ port, listenerMode: "foreground" });
+  const gatewayStateOwner = opts.gatewayStateOwner ?? ownedLock ?? undefined;
+  let close: GatewayServer["close"] | undefined;
+  let detachOwner: (() => void) | undefined;
+  try {
+    const { captureGatewayStateOwner } = await import("../infra/gateway-state-owner.js");
+    const { createSubsystemLogger } = await import("../logging/subsystem.js");
+    const log = createSubsystemLogger("gateway");
+    const databasePath = resolveOpenClawStateSqlitePath();
+    gatewayStateOwner?.assertDatabaseAccess(databasePath);
+    const signal = captureGatewayStateOwner(databasePath)?.signal;
+    const onOwnerLost = () => {
+      const reason = String(signal?.reason);
+      const restart = close ? opts.hotReloadRecovery?.(reason) : undefined;
+      if (close && (!restart || restart.status === "failed")) {
+        void close({ reason }).catch((error: unknown) => {
+          log.error(`Gateway lost ownership cleanup failed: ${String(error)}`);
+        });
+      }
+    };
+    signal?.addEventListener("abort", onOwnerLost, { once: true });
+    detachOwner = () => signal?.removeEventListener("abort", onOwnerLost);
+    signal?.throwIfAborted();
+    const server = await startGatewayServerWithRuntime(port, { ...opts, gatewayStateOwner });
+    let closing: Promise<void> | undefined;
+    const closeServer: GatewayServer["close"] = (closeOptions) => {
+      detachOwner?.();
+      return (closing ??= (async () => {
+        await server.close(closeOptions);
+        // A failed join retains ownership: another starter must not enter over live work.
+        await ownedLock?.release();
+      })());
+    };
+    close = closeServer;
+    if (signal?.aborted) {
+      const reason = signal.reason;
+      return await rethrowGatewayStartupError(reason, () =>
+        closeServer({ reason: String(reason) }),
+      );
+    }
+    return {
+      ...server,
+      close: closeServer,
+    };
+  } catch (error) {
+    detachOwner?.();
+    if (!close && !(error instanceof GatewayStartupCleanupError)) {
+      await ownedLock?.release();
+    }
+    throw error;
+  }
+}
+
+async function startGatewayServerWithRuntime(
+  port: number,
+  opts: GatewayServerOptions,
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
   const startupStartedAt = opts.startupStartedAt ?? Date.now();
   let stopDatabaseAdmission: (() => Promise<void>) | undefined;
@@ -29,13 +102,20 @@ export async function startGatewayServer(
     const { withAgentDatabaseStartupAdmission } =
       await import("../state/agent-database-startup.js");
     try {
-      const server = await readOnlyWorkers.run(() =>
-        withAgentDatabaseStartupAdmission(async (admission) => {
-          stopDatabaseAdmission = () => admission.stop();
-          const mod = await loadServerStart();
-          return mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
-        }),
-      );
+      const { bindAuthProfileFileObservationReaders } =
+        await import("../agents/auth-profiles/file-state.js");
+      const server = await readOnlyWorkers.run(() => {
+        bindAuthProfileFileObservationReaders();
+        return withAgentDatabaseStartupAdmission(
+          async (admission) => {
+            stopDatabaseAdmission = () => admission.stop();
+            const mod = await loadServerStart();
+            opts.gatewayStateOwner?.assertDatabaseAccess(resolveOpenClawStateSqlitePath());
+            return mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
+          },
+          { deferInspections: !opts.updateCanary },
+        );
+      });
       return {
         ...server,
         close: (closeOptions: Parameters<typeof server.close>[0]) =>
@@ -48,12 +128,11 @@ export async function startGatewayServer(
           }),
       };
     } catch (error) {
-      await readOnlyWorkers.close();
-      throw error;
+      return await rethrowGatewayStartupError(error, () => readOnlyWorkers.close());
     }
   };
-  // Transferable stdio sockets are a Node contract; Bun keeps its native transport.
-  if (process.platform !== "linux" || process.versions.bun) {
+  // Gateway brokerage targets Linux's page-table copy cost.
+  if (process.platform !== "linux" || !supportsSpawnBrokerCommandTransport()) {
     return await start();
   }
   const { startGatewaySpawnBroker, runWithSpawnBroker } =
@@ -76,7 +155,14 @@ export async function startGatewayServer(
   const closeBroker = async () => {
     // A failed required core join can stop before the admission sidecar runs.
     await stopDatabaseAdmission?.();
-    await broker.close();
+    try {
+      const { closeSqliteReadOnlyWorkersForBroker } =
+        await import("../infra/sqlite-readonly-worker.js");
+      await closeSqliteReadOnlyWorkersForBroker(broker);
+    } finally {
+      // Readers that did not close remain attached children for broker termination.
+      await broker.close();
+    }
   };
   try {
     const { createSubsystemLogger } = await import("../logging/subsystem.js");
@@ -96,13 +182,6 @@ export async function startGatewayServer(
         }),
     };
   } catch (error) {
-    await closeBroker();
-    throw error;
+    return await rethrowGatewayStartupError(error, closeBroker);
   }
-}
-
-/** Clears prepared model-catalog generations between tests. */
-export async function resetPreparedModelCatalogForTest(): Promise<void> {
-  const mod = await loadServerStart();
-  await mod.resetPreparedModelCatalogForTestCore();
 }

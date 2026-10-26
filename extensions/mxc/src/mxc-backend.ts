@@ -2,71 +2,352 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathInside, resolvePathPrefixSync } from "openclaw/plugin-sdk/file-access-runtime";
+import { isNotFoundPathError as isMissingPathError } from "openclaw/plugin-sdk/path-existence-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
-import type {
-  SandboxBackendHandle,
-  SandboxBackendExecSpec,
-  SandboxBackendCommandParams,
-  SandboxBackendCommandResult,
-  SandboxBackendManager,
+import {
+  resolvePreferredOpenClawTmpDir,
+  type SandboxBackendHandle,
+  type SandboxBackendExecSpec,
+  type SandboxBackendCommandParams,
+  type SandboxBackendCommandResult,
+  type SandboxBackendManager,
+  type SandboxContext,
+  resolveReadOnlyWorkspaceSkillMounts,
 } from "openclaw/plugin-sdk/sandbox";
 import { resolveMxcBinaryPath } from "./binary-resolver.js";
 import type { MxcConfig } from "./config.js";
-import { createMxcFsBridge } from "./fs-bridge.js";
-import {
-  buildMxcContainerConfig,
-  resolveCurrentBaselineContext,
-  resolveMxcRuntimeWorkdir,
-  resolveMxcWorkspaceContext,
-} from "./mxc-container-config.js";
+import { MxcFsBridge } from "./fs-bridge.js";
+import { normalizeMxcPathForComparison } from "./path-comparison.js";
 import { resolveMxcLauncherPath } from "./plugin-root.js";
-import { resolveSandboxTempDir, type BaselineHostEnv } from "./sandbox-baseline.js";
-import { loadSandboxBaselinePolicy } from "./sandbox-policy-loader.js";
-import { createWindowsCommandBridge } from "./windows-command.js";
-import { buildLauncherEnv } from "./windows-env.js";
-import type { MxcWorkspaceAccess } from "./workspace-skill-mounts.js";
+import {
+  resolveSandboxTempDir,
+  type BaselineHostEnv,
+  resolveBaselineReadonlyPaths,
+} from "./sandbox-baseline.js";
+import {
+  loadSandboxBaselinePolicy,
+  type LoadedSandboxBaselinePolicy,
+  type SandboxConfiguredPathEntry,
+} from "./sandbox-policy-loader.js";
+import { createWindowsCommandBridge, buildCommandLine } from "./windows-command.js";
+import { buildLauncherEnv, normalizeWindowsProcessEnvRecord } from "./windows-env.js";
 
-type MxcLauncherOptions = {
-  debug: boolean;
-  executablePath?: string;
-  usePty?: boolean;
+const MXC_SCHEMA_VERSION = "0.7.0-alpha";
+
+type FilesystemPathSpec = {
+  path: string;
+  required: boolean;
+  sources?: readonly string[];
 };
+
+type BaselineApplicationContext = {
+  hostEnv: BaselineHostEnv;
+};
+
+type MxcWorkspaceContext = {
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+  activeWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
+  workdir: string;
+  workspaceAccess: SandboxContext["workspaceAccess"];
+};
+
+function resolveCurrentBaselineContext(): BaselineApplicationContext {
+  return {
+    hostEnv: {
+      SystemRoot: process.env.SystemRoot,
+      WINDIR: process.env.WINDIR,
+      ProgramFiles: process.env.ProgramFiles,
+      ProgramW6432: process.env.ProgramW6432,
+      "ProgramFiles(x86)": process.env["ProgramFiles(x86)"],
+      TEMP: process.env.TEMP,
+      TMP: process.env.TMP,
+    },
+  };
+}
+
+function resolveMxcWorkspaceContext(params: {
+  workdir: string;
+  agentWorkspaceDir?: string;
+  skillsWorkspaceDir?: string;
+  workspaceAccess?: SandboxContext["workspaceAccess"];
+}): MxcWorkspaceContext {
+  const workspaceAccess = params.workspaceAccess ?? "rw";
+  const workspaceDir = path.resolve(params.workdir);
+  const agentWorkspaceDir = path.resolve(params.agentWorkspaceDir ?? params.workdir);
+  return {
+    workspaceDir,
+    agentWorkspaceDir,
+    activeWorkspaceDir: workspaceAccess === "rw" ? agentWorkspaceDir : workspaceDir,
+    ...(params.skillsWorkspaceDir
+      ? { skillsWorkspaceDir: path.resolve(params.skillsWorkspaceDir) }
+      : {}),
+    workdir: workspaceDir,
+    workspaceAccess,
+  };
+}
+
+function resolveMxcRuntimeWorkdir(
+  workspace: MxcWorkspaceContext,
+  requestedWorkdir: string,
+): string {
+  if (workspace.workspaceAccess !== "rw") {
+    return path.resolve(requestedWorkdir);
+  }
+
+  const relativePath = path.relative(workspace.workspaceDir, requestedWorkdir);
+  return relativePath === ""
+    ? workspace.activeWorkspaceDir
+    : path.join(workspace.activeWorkspaceDir, relativePath);
+}
+
+function buildMxcContainerConfig(params: {
+  config: MxcConfig;
+  baseline: LoadedSandboxBaselinePolicy;
+  baselineContext: BaselineApplicationContext;
+  containerId: string;
+  command: string;
+  args?: readonly string[];
+  sandboxTempDir: string;
+  workdir: string;
+  workspace: MxcWorkspaceContext;
+  env: Record<string, string>;
+}): ContainerConfig {
+  const networkAllowed = params.config.network === "default";
+  const readwritePathSpecs: FilesystemPathSpec[] = [];
+  const readonlyPathSpecs: FilesystemPathSpec[] = [];
+  const workspace = params.workspace;
+  const protectedSkillPolicyPaths = resolveMxcProtectedSkillPolicyPaths(workspace);
+  if (workspace.workspaceAccess === "rw") {
+    readwritePathSpecs.push(requiredFilesystemPath(workspace.activeWorkspaceDir));
+  } else {
+    readonlyPathSpecs.push(requiredFilesystemPath(workspace.workspaceDir));
+    if (
+      workspace.workspaceAccess === "ro" &&
+      normalizeMxcPathForComparison(workspace.agentWorkspaceDir) !==
+        normalizeMxcPathForComparison(workspace.workspaceDir)
+    ) {
+      readonlyPathSpecs.push(requiredFilesystemPath(workspace.agentWorkspaceDir));
+    }
+  }
+  readonlyPathSpecs.push(
+    ...resolveBaselineReadonlyPaths(params.baselineContext.hostEnv).map(optionalFilesystemPath),
+    ...params.baseline.configuredPaths.readonlyPaths.map(createConfiguredFilesystemPath),
+    ...protectedSkillPolicyPaths.map(optionalFilesystemPath),
+  );
+
+  readwritePathSpecs.push(requiredFilesystemPath(params.sandboxTempDir));
+  readwritePathSpecs.push(
+    ...params.baseline.configuredPaths.readwritePaths.map(createConfiguredFilesystemPath),
+  );
+
+  const readwritePaths = resolveExistingFilesystemPaths(readwritePathSpecs, "readwrite");
+  // ProcessContainer writable-parent grants override nested read-only grants.
+  // Fail closed instead of claiming protected skill overlays are enforceable.
+  assertNoMxcReadwriteReadonlyOverlap({
+    readwritePaths,
+    readonlyPaths: protectedSkillPolicyPaths,
+  });
+
+  const readonlyPaths = resolveExistingFilesystemPaths(readonlyPathSpecs, "read-only");
+  assertNoMxcReadwriteReadonlyOverlap({ readwritePaths, readonlyPaths });
+
+  const filesystem = {
+    readonlyPaths,
+    deniedPaths: undefined,
+    readwritePaths,
+  };
+  const processEnv = normalizeWindowsProcessEnvRecord({
+    ...params.env,
+    TEMP: params.sandboxTempDir,
+    TMP: params.sandboxTempDir,
+  });
+
+  return {
+    version: MXC_SCHEMA_VERSION,
+    containerId: params.containerId,
+    containment: params.config.containment,
+    // The raw config goes straight to wxc-exec, which only understands the wire
+    // `lifecycle.preservePolicy`; the SDK's `filesystem.clearPolicyOnExit` alias is
+    // mapped only by `createConfigFromPolicy`.
+    lifecycle: { destroyOnExit: true, preservePolicy: false },
+    process: {
+      commandLine: buildCommandLine(params.command, params.args ?? []),
+      cwd: params.workdir,
+      env: processEnv,
+      timeout:
+        (params.config.timeoutSecondsConfigured === true
+          ? Math.min(params.config.timeoutSeconds, params.baseline.process.timeoutSeconds)
+          : params.baseline.process.timeoutSeconds) * 1000,
+    },
+    filesystem,
+    ui: {
+      disable: true,
+      clipboard: "none",
+      injection: false,
+    },
+    network: {
+      defaultPolicy: networkAllowed ? "allow" : "block",
+      enforcementMode: "capabilities",
+    },
+    processContainer: {
+      leastPrivilege: true,
+      capabilities: networkAllowed ? ["internetClient"] : [],
+      ui: {
+        isolation: "container",
+        desktopSystemControl: false,
+        systemSettings: "none",
+        ime: false,
+      },
+    },
+  };
+}
+
+function resolveMxcProtectedSkillPolicyPaths(context: MxcWorkspaceContext): string[] {
+  if (context.workspaceAccess !== "rw") {
+    return [];
+  }
+  const deduped = new Map<string, string>();
+  for (const mount of resolveReadOnlyWorkspaceSkillMounts(context)) {
+    const hostPath = path.resolve(mount.hostPath);
+    deduped.set(normalizeMxcPathForComparison(hostPath), hostPath);
+    const containerPath = path.resolve(mount.containerPath);
+    deduped.set(normalizeMxcPathForComparison(containerPath), containerPath);
+  }
+  return [...deduped.values()];
+}
+
+function resolveExistingFilesystemPaths(
+  pathSpecs: readonly FilesystemPathSpec[],
+  accessLabel: "read-only" | "readwrite",
+): string[] {
+  const deduped = new Map<
+    string,
+    {
+      path: string;
+      required: boolean;
+      sources: Set<string>;
+    }
+  >();
+
+  for (const pathSpec of pathSpecs) {
+    const key = normalizeMxcPathForComparison(pathSpec.path);
+    const existing = deduped.get(key);
+    if (existing) {
+      existing.required ||= pathSpec.required;
+      for (const source of pathSpec.sources ?? []) {
+        existing.sources.add(source);
+      }
+      continue;
+    }
+
+    deduped.set(key, {
+      path: pathSpec.path,
+      required: pathSpec.required,
+      sources: new Set(pathSpec.sources ?? []),
+    });
+  }
+
+  const resolvedPaths: string[] = [];
+  for (const pathSpec of deduped.values()) {
+    if (hostPathExists(pathSpec.path)) {
+      resolvedPaths.push(pathSpec.path);
+      continue;
+    }
+    if (!pathSpec.required) {
+      continue;
+    }
+    throw new Error(
+      buildMissingFilesystemPathMessage(pathSpec.path, accessLabel, pathSpec.sources),
+    );
+  }
+  return resolvedPaths;
+}
+
+function requiredFilesystemPath(pathValue: string): FilesystemPathSpec {
+  return {
+    path: path.resolve(pathValue),
+    required: true,
+  };
+}
+
+function optionalFilesystemPath(pathValue: string): FilesystemPathSpec {
+  return {
+    path: path.resolve(pathValue),
+    required: false,
+  };
+}
+
+function createConfiguredFilesystemPath(pathEntry: SandboxConfiguredPathEntry): FilesystemPathSpec {
+  return {
+    path: path.resolve(pathEntry.path),
+    required: true,
+    sources: pathEntry.sources,
+  };
+}
+
+function buildMissingFilesystemPathMessage(
+  pathValue: string,
+  accessLabel: "read-only" | "readwrite",
+  sources: ReadonlySet<string>,
+): string {
+  const sourceLabel = [...sources].join(", ");
+  if (sourceLabel) {
+    return (
+      `MXC sandbox ${accessLabel} path ${pathValue} configured by ${sourceLabel} ` +
+      `is missing on the host. Recreate the path or update the policy file before launching the sandbox.`
+    );
+  }
+  return `MXC sandbox ${accessLabel} path ${pathValue} does not exist on the host.`;
+}
+
+function assertNoMxcReadwriteReadonlyOverlap(params: {
+  readwritePaths: readonly string[];
+  readonlyPaths: readonly string[];
+}): void {
+  for (const readwritePath of params.readwritePaths) {
+    for (const readonlyPath of params.readonlyPaths) {
+      if (pathsOverlap(readwritePath, readonlyPath)) {
+        throw new Error(
+          `MXC readwrite path ${readwritePath} overlaps read-only path ${readonlyPath}. Windows MXC cannot safely enforce nested read-only overlays under writable paths.`,
+        );
+      }
+    }
+  }
+}
+
+function pathsOverlap(first: string, second: string): boolean {
+  const left = normalizeMxcPathForComparison(first);
+  const right = normalizeMxcPathForComparison(second);
+  return isPathInside(left, right) || isPathInside(right, left);
+}
+
+function hostPathExists(candidatePath: string): boolean {
+  try {
+    statSync(candidatePath);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && "code" in err) {
+      return false;
+    }
+    throw err;
+  }
+}
 
 type MxcExecFinalizeToken = {
   payloadDir: string;
   sandboxTempDir?: string;
 };
 
-// MXC containers are ephemeral (lifecycle.destroyOnExit=true) and named per invocation.
-// Keep the runtimeId as the stable handle identifier (used for logs + SDK tracking) and
-// derive a fresh per-call containerId from it so parallel spawns cannot collide on
-// backend-specific runtime names.
-const CONTAINER_ID_MAX_LEN = 80;
+// MXC uses containerId as the 64-character-limited AppContainer profile name.
+// Keep runtimeId stable for bookkeeping; mint a per-call ID to avoid collisions.
+const CONTAINER_ID_MAX_LEN = 64;
 function uniqueContainerId(runtimeId: string): string {
   const suffix = randomBytes(4).toString("hex");
-  const base =
-    runtimeId.length + suffix.length + 1 > CONTAINER_ID_MAX_LEN
-      ? runtimeId.slice(0, CONTAINER_ID_MAX_LEN - suffix.length - 1)
-      : runtimeId;
+  const base = runtimeId.slice(0, CONTAINER_ID_MAX_LEN - suffix.length - 1);
   return `${base}-${suffix}`;
-}
-
-function createLauncherPayloadFile(
-  payloadJson: string,
-): MxcExecFinalizeToken & { payloadFile: string } {
-  const payloadDir = mkdtempSync(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-mxc-payload-"),
-  );
-  const payloadFile = path.join(payloadDir, "payload.json");
-  try {
-    writeFileSync(payloadFile, payloadJson, { flag: "wx", mode: 0o600 });
-  } catch (err) {
-    rmSync(payloadDir, { force: true, recursive: true });
-    throw err;
-  }
-  return { payloadDir, payloadFile };
 }
 
 function cleanupLauncherPayloadFile(token: unknown): void {
@@ -87,21 +368,17 @@ function createSandboxTempDir(hostEnv: BaselineHostEnv): string {
   return mkdtempSync(path.join(resolveSandboxTempDir(hostEnv), "openclaw-mxc-sandbox-"));
 }
 
-function assertWorkdirInsideWorkspace(workspaceDir: string, workdir: string): string {
-  const workspace = realpathForExistingPath(workspaceDir, "sandbox workspace");
-  const candidate = realpathForPotentialPath(workdir);
-  if (isPathInside(workspace, candidate)) {
-    return candidate;
-  }
-  throw new Error(
-    `MXC sandbox workdir ${workdir} is outside the sandbox workspace ${workspaceDir}. ` +
-      `Use a workdir inside the sandbox workspace.`,
-  );
-}
-
 function resolveWorkdirInsideWorkspace(workspaceDir: string, workdir: string): string {
-  const candidate = assertWorkdirInsideWorkspace(workspaceDir, workdir);
+  const workspace = realpathForExistingPath(workspaceDir, "sandbox workspace");
   try {
+    const { existingPath, unresolvedSegments } = resolvePathPrefixSync(workdir);
+    const candidate = path.join(existingPath, ...unresolvedSegments);
+    if (!isPathInside(workspace, candidate)) {
+      throw new Error(
+        `MXC sandbox workdir ${workdir} is outside the sandbox workspace ${workspaceDir}. ` +
+          `Use a workdir inside the sandbox workspace.`,
+      );
+    }
     if (statSync(candidate).isDirectory()) {
       return candidate;
     }
@@ -125,74 +402,40 @@ function realpathForExistingPath(value: string, label: string): string {
   }
 }
 
-function realpathForPotentialPath(value: string): string {
-  const resolved = path.resolve(value);
-  try {
-    return realpathSync(resolved);
-  } catch (err) {
-    if (!isMissingPathError(err)) {
-      throw err;
-    }
-    const parent = path.dirname(resolved);
-    if (parent === resolved) {
-      throw new Error(`MXC sandbox workdir ${value} does not exist.`, { cause: err });
-    }
-    return path.join(realpathForPotentialPath(parent), path.basename(resolved));
-  }
-}
-
-function isNodeError(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error && "code" in err;
-}
-
-// ENOTDIR means a parent component is a file, so the path can never resolve to a
-// directory. Classifying it alongside ENOENT keeps validateWorkdir's "return null
-// for unusable workdirs" contract intact instead of leaking a raw filesystem error.
-function isMissingPathError(err: unknown): boolean {
-  return isNodeError(err) && (err.code === "ENOENT" || err.code === "ENOTDIR");
-}
-
-function buildMxcLauncherOptions(config: MxcConfig, usePty: boolean): MxcLauncherOptions {
-  const options: MxcLauncherOptions = {
-    debug: config.debug ?? false,
-    executablePath: resolveMxcBinaryPath(config.mxcBinaryPath),
-  };
-  if (!usePty) {
-    options.usePty = false;
-  }
-  return options;
-}
-
 function createMxcLauncherPayload(
   config: MxcConfig,
   payload: ContainerConfig,
   usePty: boolean,
   sandboxTempDir: string,
 ): MxcExecFinalizeToken & { payloadFile: string } {
-  const token = createLauncherPayloadFile(
-    JSON.stringify({
-      config: payload,
-      options: buildMxcLauncherOptions(config, usePty),
-    }),
+  const payloadJson = JSON.stringify({
+    config: payload,
+    options: {
+      debug: config.debug,
+      executablePath: resolveMxcBinaryPath(config.mxcBinaryPath),
+      ...(!usePty ? { usePty: false } : {}),
+    },
+  });
+  const payloadDir = mkdtempSync(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-mxc-payload-"),
   );
-  token.sandboxTempDir = sandboxTempDir;
-  return token;
+  const payloadFile = path.join(payloadDir, "payload.json");
+  try {
+    writeFileSync(payloadFile, payloadJson, { flag: "wx", mode: 0o600 });
+  } catch (err) {
+    rmSync(payloadDir, { force: true, recursive: true });
+    throw err;
+  }
+  return { payloadDir, payloadFile, sandboxTempDir };
 }
 
-function buildMxcLauncherArgv(payloadFile: string): [string, string, string, string] {
-  return [process.execPath, resolveMxcLauncherPath(), "--payload-file", payloadFile];
-}
-
-/**
- * Creates a SandboxBackendHandle for a specific session.
- */
 export function createMxcSandboxBackendHandle(params: {
   config: MxcConfig;
   runtimeId: string;
   workdir: string;
   agentWorkspaceDir?: string;
   skillsWorkspaceDir?: string;
-  workspaceAccess?: MxcWorkspaceAccess;
+  workspaceAccess?: SandboxContext["workspaceAccess"];
 }): SandboxBackendHandle {
   const baseline = loadSandboxBaselinePolicy({ policyPaths: params.config.mxcPolicyPaths });
 
@@ -219,17 +462,15 @@ export function createMxcSandboxBackendHandle(params: {
         params.workdir,
         workdir ?? params.workdir,
       );
-      const workspaceAccess = params.workspaceAccess ?? "rw";
-      const workspace = resolveMxcWorkspaceContext({ ...params, workspaceAccess });
+      const workspace = resolveMxcWorkspaceContext(params);
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
-      const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
+      const baselineContext = resolveCurrentBaselineContext();
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
       try {
         const payload = buildMxcContainerConfig({
           config: params.config,
           baseline,
           baselineContext,
-          runtimeId: params.runtimeId,
           containerId: uniqueContainerId(params.runtimeId),
           command,
           sandboxTempDir,
@@ -253,7 +494,12 @@ export function createMxcSandboxBackendHandle(params: {
         );
 
         return {
-          argv: buildMxcLauncherArgv(payloadFile.payloadFile),
+          argv: [
+            process.execPath,
+            resolveMxcLauncherPath(),
+            "--payload-file",
+            payloadFile.payloadFile,
+          ],
           env: buildLauncherEnv(),
           stdinMode: usePty ? "pipe-open" : "pipe-closed",
           finalizeToken: payloadFile satisfies MxcExecFinalizeToken,
@@ -268,7 +514,7 @@ export function createMxcSandboxBackendHandle(params: {
       cleanupLauncherPayloadFile(token);
     },
 
-    createFsBridge: ({ sandbox }) => createMxcFsBridge({ sandbox }),
+    createFsBridge: ({ sandbox }) => new MxcFsBridge(sandbox),
 
     async runShellCommand(
       cmdParams: SandboxBackendCommandParams,
@@ -281,24 +527,25 @@ export function createMxcSandboxBackendHandle(params: {
         timeoutSecondsConfigured: true,
       };
       const effectiveWorkdir = path.resolve(params.workdir);
-      const workspaceAccess = params.workspaceAccess ?? "rw";
-      const workspace = resolveMxcWorkspaceContext({ ...params, workspaceAccess });
+      const workspace = resolveMxcWorkspaceContext(params);
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
-      const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
+      const baselineContext = resolveCurrentBaselineContext();
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
-      const commandBridge = createWindowsCommandBridge({
-        args: cmdParams.args,
-        script: cmdParams.script,
-        tempDir: sandboxTempDir,
-      });
-      const execInput = cmdParams.stdin === undefined ? Buffer.alloc(0) : toBuffer(cmdParams.stdin);
+      let commandBridge: ReturnType<typeof createWindowsCommandBridge> | undefined;
 
       try {
+        commandBridge = createWindowsCommandBridge({
+          args: cmdParams.args,
+          script: cmdParams.script,
+          tempDir: sandboxTempDir,
+        });
+        const execInput = Buffer.isBuffer(cmdParams.stdin)
+          ? cmdParams.stdin
+          : Buffer.from(cmdParams.stdin ?? "", "utf-8");
         const payload = buildMxcContainerConfig({
           config: restrictiveConfig,
           baseline,
           baselineContext,
-          runtimeId: params.runtimeId,
           containerId: uniqueContainerId(params.runtimeId),
           command: commandBridge.command,
           args: cmdParams.args,
@@ -314,7 +561,12 @@ export function createMxcSandboxBackendHandle(params: {
           false,
           sandboxTempDir,
         );
-        const argv = buildMxcLauncherArgv(payloadFile.payloadFile);
+        const argv = [
+          process.execPath,
+          resolveMxcLauncherPath(),
+          "--payload-file",
+          payloadFile.payloadFile,
+        ];
         try {
           const result = await runCommandBuffered(argv, {
             baseEnv: buildLauncherEnv(),
@@ -349,18 +601,11 @@ export function createMxcSandboxBackendHandle(params: {
           cleanupLauncherPayloadFile(payloadFile);
         }
       } finally {
-        commandBridge.cleanup();
+        commandBridge?.cleanup();
         rmSync(sandboxTempDir, { force: true, recursive: true });
       }
     },
   };
-}
-
-function toBuffer(value: Buffer | string): Buffer {
-  if (Buffer.isBuffer(value)) {
-    return value;
-  }
-  return Buffer.from(value, "utf-8");
 }
 
 /** Manager for `openclaw sandbox list` and `openclaw sandbox remove`. */

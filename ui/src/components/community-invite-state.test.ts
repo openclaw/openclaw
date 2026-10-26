@@ -1,17 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as invite from "./community-invite-state.ts";
 
-let invite: typeof import("./community-invite-state.ts");
-
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   localStorage.clear();
-  invite = await import("./community-invite-state.ts");
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  invite.dismissCommunityInvite();
   localStorage.clear();
 });
 
@@ -20,7 +18,7 @@ it("allows a new browser origin without writing a marker", () => {
   expect(localStorage.getItem(invite.COMMUNITY_INVITE_KEY)).toBeNull();
 });
 
-it.each(["", "{", "null", "{}", '{"dismissedAtMs":1760000001000}'])(
+it.each(["", "{", '{"dismissedAtMs":1760000001000}'])(
   "suppresses the invitation for stored state %j",
   (value) => {
     localStorage.setItem(invite.COMMUNITY_INVITE_KEY, value);

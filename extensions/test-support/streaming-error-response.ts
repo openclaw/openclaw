@@ -1,4 +1,15 @@
 // Test Support plugin module implements streaming response fixtures.
+export function createClosedChunkStream(chunks: readonly Uint8Array[]) {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+      controller.close();
+    },
+  });
+}
+
 export type StreamingResponseFixture = {
   response: Response;
   getReadCount: () => number;
@@ -9,6 +20,7 @@ export function createStreamingResponse(params: {
   status?: number;
   chunkCount: number;
   chunkSize: number;
+  chunk?: Uint8Array;
   byte?: number;
   text?: string;
   headers?: HeadersInit;
@@ -24,9 +36,10 @@ export function createStreamingResponse(params: {
       }
       reads += 1;
       const chunk =
-        params.text !== undefined
+        params.chunk ??
+        (params.text !== undefined
           ? encoder.encode(params.text.repeat(params.chunkSize))
-          : new Uint8Array(params.chunkSize).fill(params.byte ?? 120);
+          : new Uint8Array(params.chunkSize).fill(params.byte ?? 120));
       controller.enqueue(chunk);
     },
     cancel() {
@@ -38,15 +51,6 @@ export function createStreamingResponse(params: {
     getReadCount: () => reads,
     wasCanceled: () => canceled,
   };
-}
-
-export function createStreamingErrorResponse(params: {
-  status: number;
-  chunkCount: number;
-  chunkSize: number;
-  byte: number;
-}): StreamingResponseFixture {
-  return createStreamingResponse(params);
 }
 
 // Keep the body open after its first chunk so cancellation reaches the source.

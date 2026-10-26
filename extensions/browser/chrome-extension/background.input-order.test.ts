@@ -1,133 +1,80 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { cdp, deferredScope, holdNext } from "./background.lifecycle-test-helpers.js";
 import { cleanupBackgroundHarnesses, loadRelayCommandHarness } from "./background.test-harness.js";
 
-beforeEach(() => vi.resetModules());
+let h: Awaited<ReturnType<typeof loadRelayCommandHarness>>;
+const { deferred, releaseAll } = deferredScope();
+const pending: Promise<unknown>[] = [];
+beforeEach(async () => {
+  vi.resetModules();
+  h = await loadRelayCommandHarness("all");
+  expect(await h.command({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
+});
 afterEach(async () => {
+  releaseAll();
+  await Promise.allSettled(pending.splice(0));
   await cleanupBackgroundHarnesses();
   vi.unstubAllGlobals();
-  vi.restoreAllMocks();
 });
 
-describe("relay input ordering", () => {
-  it.each([
-    { method: "Input.dispatchMouseEvent", types: ["mousePressed", "mouseReleased"] },
-    { method: "Input.dispatchKeyEvent", types: ["keyDown", "char", "keyUp"] },
-  ])("preserves $method wire order across asynchronous policy reads", async ({ method, types }) => {
-    const h = await loadRelayCommandHarness("all");
-    for (const tabId of [7, 8]) {
-      expect(await h.command({ type: "attach", tabId })).toMatchObject({ type: "result" });
-    }
-    const gate = createDeferred<void>();
-    const getTab = h.tabsGet.getMockImplementation()!;
-    h.tabsGet.mockImplementationOnce(async (id) => {
-      await gate.promise;
-      return getTab(id);
-    });
-    const inputs = types.map((type) =>
-      h.command({ type: "cdp", tabId: 7, method, params: { type } }),
-    );
-    const observed = () =>
-      h.debuggerSendCommand.mock.calls
-        .filter(([target, name]) => target.tabId === 7 && name === method)
-        .map((call) => call[2]?.type);
-    let whileFirstReadPending: unknown[] = [];
-    try {
-      // An unrelated command and another tab must remain usable during the wait.
-      for (const command of [
-        { tabId: 7, method: "Runtime.evaluate", params: { expression: "1" } },
-        { tabId: 8, method, params: { type: types[0] } },
-      ]) {
-        expect(await h.command({ type: "cdp", ...command })).toMatchObject({ type: "result" });
-      }
-      whileFirstReadPending = observed();
-    } finally {
-      gate.resolve();
-      const results = await Promise.all(inputs);
-      expect(results.every((result) => result.type === "result")).toBe(true);
-    }
-    expect(whileFirstReadPending).toEqual([]);
-    expect(observed()).toEqual(types);
-  });
+const mouse = "Input.dispatchMouseEvent";
+const input = (type: string, method = mouse, tabId = 7) => {
+  const command = h.command({ type: "cdp", tabId, method, params: { type } });
+  pending.push(command);
+  return command;
+};
+function deferPolicyRead() {
+  const gate = deferred(undefined);
+  holdNext(h.tabsGet, gate.promise);
+  return gate;
+}
+const result = expect.objectContaining({ type: "result" });
+const retired = expect.objectContaining({ type: "error", message: "Debugger attachment retired" });
 
-  it("dispatches the next input without waiting for an earlier native result", async () => {
-    const h = await loadRelayCommandHarness("all");
-    expect(await h.command({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
-    const gate = createDeferred<Record<string, unknown>>();
-    h.debuggerSendCommand.mockImplementationOnce(() => gate.promise);
-    const press = h.command({
-      type: "cdp",
-      tabId: 7,
-      method: "Input.dispatchMouseEvent",
-      params: { type: "mousePressed" },
-    });
-    try {
-      await vi.waitFor(() => expect(h.debuggerSendCommand).toHaveBeenCalledOnce());
-      expect(
-        await h.command({
-          type: "cdp",
-          tabId: 7,
-          method: "Input.dispatchMouseEvent",
-          params: { type: "mouseReleased" },
-        }),
-      ).toMatchObject({ type: "result" });
-    } finally {
-      gate.resolve({});
-      expect(await press).toMatchObject({ type: "result" });
-    }
-  });
+it("preserves mixed input wire order across asynchronous policy reads", async () => {
+  expect(await h.command({ type: "attach", tabId: 8 })).toMatchObject({ type: "result" });
+  const gate = deferPolicyRead();
+  const events = ["mousePressed", "keyDown", "char", "keyUp", "mouseReleased"].map(
+    (type): [string, string] => [type.startsWith("mouse") ? mouse : "Input.dispatchKeyEvent", type],
+  );
+  const inputs = events.map(([method, type]) => input(type, method));
+  const observed = () =>
+    h.debuggerSendCommand.mock.calls
+      .filter(([target, name]) => target.tabId === 7 && name.startsWith("Input."))
+      .map(([, method, params]) => [method, params?.type]);
+  expect(await h.command(cdp("Runtime.evaluate", { expression: "1" }, 7))).toEqual(result);
+  expect(await input("mousePressed", mouse, 8)).toEqual(result);
+  expect(observed()).toEqual([]);
+  gate.resolve();
+  expect(await Promise.all(inputs)).toEqual(events.map(() => result));
+  expect(observed()).toEqual(events);
+});
 
-  it("rejects queued input after its original debugger attachment is replaced", async () => {
-    const h = await loadRelayCommandHarness("all");
-    expect(await h.command({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
-    const gate = createDeferred<void>();
-    const getTab = h.tabsGet.getMockImplementation()!;
-    h.tabsGet.mockImplementationOnce(async (id) => {
-      await gate.promise;
-      return getTab(id);
-    });
-    const commands = ["mousePressed", "mouseReleased"].map((type) =>
-      h.command({ type: "cdp", tabId: 7, method: "Input.dispatchMouseEvent", params: { type } }),
-    );
-    try {
-      expect(await h.command({ type: "detach", tabId: 7 })).toMatchObject({ type: "result" });
-      expect(await h.command({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
-    } finally {
-      gate.resolve();
-      const results = await Promise.all(commands);
-      expect(results).toEqual([
-        expect.objectContaining({ type: "error", message: "Debugger attachment retired" }),
-        expect.objectContaining({ type: "error", message: "Debugger attachment retired" }),
-      ]);
-    }
-    expect(h.debuggerSendCommand).not.toHaveBeenCalled();
-    expect(
-      await h.command({
-        type: "cdp",
-        tabId: 7,
-        method: "Input.dispatchMouseEvent",
-        params: { type: "mouseMoved" },
-      }),
-    ).toMatchObject({ type: "result" });
-  });
+it("dispatches the next input without waiting for an earlier native result", async () => {
+  const gate = deferred({});
+  h.debuggerSendCommand.mockImplementationOnce(() => gate.promise);
+  const press = input("mousePressed");
+  await vi.waitFor(() => expect(h.debuggerSendCommand).toHaveBeenCalledOnce());
+  expect(await input("mouseReleased")).toMatchObject({ type: "result" });
+  gate.resolve();
+  expect(await press).toMatchObject({ type: "result" });
+});
 
-  it("allows subsequent input after a policy lookup rejects the preceding command", async () => {
-    const h = await loadRelayCommandHarness("all");
-    expect(await h.command({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
-    h.tabsGet.mockRejectedValueOnce(new Error("Tab lookup failed"));
-    const results = await Promise.all(
-      ["mouseMoved", "mousePressed"].map((type) =>
-        h.command({ type: "cdp", tabId: 7, method: "Input.dispatchMouseEvent", params: { type } }),
-      ),
-    );
-    expect(results).toEqual([
-      expect.objectContaining({ type: "error" }),
-      expect.objectContaining({ type: "result" }),
-    ]);
-    expect(h.debuggerSendCommand).toHaveBeenCalledExactlyOnceWith(
-      { tabId: 7 },
-      "Input.dispatchMouseEvent",
-      { type: "mousePressed" },
-    );
-  });
+it("rejects queued input after its original debugger attachment is replaced", async () => {
+  const gate = deferPolicyRead();
+  const commands = ["mousePressed", "mouseReleased"].map((type) => input(type));
+  expect(await h.command({ type: "detach", tabId: 7 })).toMatchObject({ type: "result" });
+  expect(await h.command({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
+  gate.resolve();
+  expect(await Promise.all(commands)).toEqual([retired, retired]);
+  expect(h.debuggerSendCommand).not.toHaveBeenCalled();
+  expect(await input("mouseMoved")).toMatchObject({ type: "result" });
+});
+
+it("allows subsequent input after a policy lookup rejects the preceding command", async () => {
+  h.tabsGet.mockRejectedValueOnce(new Error("Tab lookup failed"));
+  const results = await Promise.all(["mouseMoved", "mousePressed"].map((type) => input(type)));
+  expect(results).toEqual([expect.objectContaining({ type: "error" }), result]);
+  const native = h.debuggerSendCommand;
+  expect(native).toHaveBeenCalledExactlyOnceWith({ tabId: 7 }, mouse, { type: "mousePressed" });
 });

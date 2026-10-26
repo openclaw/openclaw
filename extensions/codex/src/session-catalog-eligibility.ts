@@ -1,27 +1,21 @@
 import type { CodexManagedThreadStore } from "./app-server/managed-thread-store.js";
-import type {
-  CodexThread,
-  CodexThreadListParams,
-  CodexThreadListResponse,
-} from "./app-server/protocol.js";
+import type { CodexThread } from "./app-server/protocol.js";
 import { withTimeout } from "./app-server/timeout.js";
-import type { CodexCatalogIndex } from "./session-catalog-index.js";
 import {
   CatalogParamsError,
   isInteractiveThreadSource,
   readControlCursor,
 } from "./session-catalog-parsing.js";
 import { readCodexSessionMeta } from "./session-catalog-provenance.js";
+import type { CodexSessionCatalogRequestSnapshot } from "./session-catalog-request-types.js";
 
 /** Exact identity and native membership are independent of resident retention. */
 export async function requireEligibleCodexThread(params: {
   threadId: string;
-  requests: {
-    requestTimeoutMs: number;
-    index(): Promise<CodexCatalogIndex>;
-    readThread(threadId: string, includeTurns: boolean, timeoutMs?: number): Promise<CodexThread>;
-    listThreads(params: CodexThreadListParams, timeoutMs: number): Promise<CodexThreadListResponse>;
-  };
+  requests: Pick<
+    CodexSessionCatalogRequestSnapshot,
+    "requestTimeoutMs" | "index" | "readThread" | "listThreads"
+  >;
   localSessionsRoot?: string;
   sourceHomeId?: string;
   managedThreads?: CodexManagedThreadStore;
@@ -64,7 +58,7 @@ export async function requireEligibleCodexThread(params: {
       // fresh non-archived membership on the captured home.
       const { CODEX_CATALOG_NATIVE_PAGE_LIMIT } =
         await import("./session-catalog-native-projection.js");
-      const { CODEX_CATALOG_MAX_ROWS } = await import("./session-catalog-limits.js");
+      const { rememberCodexCatalogCursor } = await import("./session-catalog-limits.js");
       let cursor: string | undefined;
       const seenCursors = new Set<string>();
       for (;;) {
@@ -92,13 +86,7 @@ export async function requireEligibleCodexThread(params: {
         if (!nextCursor || seenCursors.has(nextCursor)) {
           throw unverified();
         }
-        seenCursors.add(nextCursor);
-        if (seenCursors.size > CODEX_CATALOG_MAX_ROWS) {
-          const oldest = seenCursors.values().next().value;
-          if (oldest !== undefined) {
-            seenCursors.delete(oldest);
-          }
-        }
+        rememberCodexCatalogCursor(seenCursors, nextCursor);
         cursor = nextCursor;
       }
     }

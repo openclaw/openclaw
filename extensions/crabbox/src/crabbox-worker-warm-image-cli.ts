@@ -1,9 +1,11 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  type CrabboxState,
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
-  isCrabboxWarmImageCaptureUncertain,
+} from "./crabbox-worker-warm-image-records.js";
+import {
+  type CrabboxState,
+  crabboxCaptureUnsupportedSentence,
   listCrabboxLegacyWarmLeases,
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
@@ -73,8 +75,13 @@ export function registerCrabboxWarmImageCommands(program: CliProgram, state: Cra
           lines.push(
             `${image.profileKey}: ${image.checkpointId ?? "no checkpoint"} (${image.state})`,
           );
+          if (image.captureUnsupported) {
+            lines.push(
+              `  Capture unsupported: ${crabboxCaptureUnsupportedSentence(image.captureUnsupported.message)} Workers use an existing compatible snapshot when one is available and otherwise provision cold; capture attempts are skipped until warmImages.refreshAfter has elapsed since the refusal. Set settings.warmImage: false on the profile to stop capture attempts.`,
+            );
+          }
           if (image.capture) {
-            const uncertain = isCrabboxWarmImageCaptureUncertain(image.capture);
+            const uncertain = image.capture.phase === "uncertain";
             const label = uncertain
               ? "paused"
               : image.capture.stale
@@ -82,7 +89,9 @@ export function registerCrabboxWarmImageCommands(program: CliProgram, state: Cra
                 : "in progress";
             lines.push(`  Capture ${label}: ${image.capture.selector}`);
             if (uncertain) {
-              lines.push(`  ${crabboxWarmImageRecoveryHint(image.capture.selector)}`);
+              lines.push(
+                `  ${crabboxWarmImageRecoveryHint(image.capture.selector, image.capture.checkpointIds)}`,
+              );
             } else if (image.capture.stale) {
               lines.push(`  ${CRABBOX_WARM_IMAGE_WAIT_HINT}`);
             }

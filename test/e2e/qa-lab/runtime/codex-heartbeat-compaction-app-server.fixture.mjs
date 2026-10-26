@@ -255,26 +255,28 @@ async function installProviderRedirect() {
   const repoRoot = fileURLToPath(new URL("../../../..", import.meta.url));
   const distDir = path.join(repoRoot, "dist");
   if (proofMode === "heartbeat-upgraded-restart") {
-    const marker = "async function persistSessionCompactionCheckpoint(params) {";
-    const checkpointChunks = fs.readdirSync(distDir).filter((name) => {
+    const marker = "async function runPostCompactionSideEffects(params) {";
+    const compactionChunks = fs.readdirSync(distDir).filter((name) => {
       if (!/\.m?js$/u.test(name)) {
         return false;
       }
       const source = fs.readFileSync(path.join(distDir, name), "utf8");
       return source.includes(marker);
     });
-    if (checkpointChunks.length !== 1) {
-      throw new Error(`expected one compaction checkpoint chunk, found ${checkpointChunks.length}`);
+    if (compactionChunks.length !== 1) {
+      throw new Error(
+        `expected one post-compaction side-effect chunk, found ${compactionChunks.length}`,
+      );
     }
-    const checkpointUrl = pathToFileURL(path.join(distDir, checkpointChunks[0])).href;
+    const compactionUrl = pathToFileURL(path.join(distDir, compactionChunks[0])).href;
     const holdKey = "openclaw.qa.codex-heartbeat-host-compaction-commit";
-    globalThis[Symbol.for(holdKey)] = async ({ sessionTarget }) => {
+    globalThis[Symbol.for(holdKey)] = async ({ sessionId, sessionKey }) => {
       const response = await originalFetch(`${providerBaseUrl}/qa/host-compaction-commit`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          sessionId: sessionTarget.sessionId,
-          sessionKey: sessionTarget.sessionKey,
+          sessionId,
+          sessionKey,
         }),
       });
       await response.text();
@@ -282,11 +284,11 @@ async function installProviderRedirect() {
         throw new Error(`host compaction commit checkpoint failed: ${response.status}`);
       }
     };
-    // The host event, count, and latch have committed; checkpoint metadata must remain untouched.
+    // Hold the retained post-commit boundary after the host event, count, and latch settle.
     registerHooks({
       load(url, context, nextLoad) {
         const loaded = nextLoad(url, context);
-        if (url !== checkpointUrl) {
+        if (url !== compactionUrl) {
           return loaded;
         }
         const source =
@@ -294,7 +296,7 @@ async function installProviderRedirect() {
             ? loaded.source
             : Buffer.from(loaded.source).toString("utf8");
         if (source.split(marker).length !== 2) {
-          throw new Error("compaction checkpoint persistence injection target changed");
+          throw new Error("post-compaction side-effect injection target changed");
         }
         return {
           ...loaded,

@@ -3,10 +3,6 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 
-type ProviderReplaySanitizeMode = "full" | "images-only";
-
-type ProviderReplayToolCallIdMode = "strict" | "strict9";
-
 export type ProviderReasoningOutputMode = "native" | "tagged";
 
 /**
@@ -17,14 +13,16 @@ export type ProviderReasoningOutputMode = "native" | "tagged";
  * with its default policy.
  */
 export type ProviderReplayPolicy = {
-  sanitizeMode?: ProviderReplaySanitizeMode;
+  sanitizeMode?: "full" | "images-only";
   sanitizeToolCallIds?: boolean;
-  toolCallIdMode?: ProviderReplayToolCallIdMode;
+  toolCallIdMode?: "strict" | "strict9";
   duplicateToolCallIdStyle?: "openai";
   preserveNativeAnthropicToolUseIds?: boolean;
   preserveSignatures?: boolean;
   /** Keep per-turn runtime context in place to preserve signed thinking prefixes. */
   appendOnlyRuntimeContext?: boolean;
+  /** Append system-authority updates instead of rewriting the stable prompt prefix. */
+  inHistorySystemUpdates?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
@@ -53,6 +51,8 @@ export type ProviderReplayPolicyContext = {
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
+  /** Host-resolved model, endpoint, and authentication eligibility. */
+  inHistorySystemUpdates?: boolean;
 };
 
 export type ProviderReplaySessionEntry = {
@@ -60,9 +60,16 @@ export type ProviderReplaySessionEntry = {
   data?: unknown;
 };
 
+/** @deprecated Use ProviderReplaySessionStateV2; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export type ProviderReplaySessionState = {
   getCustomEntries(): ProviderReplaySessionEntry[];
+  /** @deprecated Use ProviderReplaySessionStateV2.appendCustomEntryAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   appendCustomEntry(customType: string, data: unknown): void;
+};
+
+/** Worker-backed host state. The legacy synchronous adapter remains available for its deprecation window. */
+export type ProviderReplaySessionStateV2 = ProviderReplaySessionState & {
+  appendCustomEntryAsync(customType: string, data: unknown): Promise<string>;
 };
 
 /**
@@ -70,6 +77,7 @@ export type ProviderReplaySessionState = {
  *
  * Runs after core applies generic transcript cleanup so plugins can make
  * provider-specific replay rewrites without owning the whole compaction flow.
+ * @deprecated Use ProviderSanitizeReplayHistoryContextV2; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
  */
 export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext & {
   sessionId: string;
@@ -77,6 +85,12 @@ export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext &
   allowedToolNames?: Iterable<string>;
   sessionState?: ProviderReplaySessionState;
 };
+
+/** Replay input with required worker-backed persistence when session state is present. */
+export type ProviderSanitizeReplayHistoryContextV2 = Omit<
+  ProviderSanitizeReplayHistoryContext,
+  "sessionState"
+> & { sessionState?: ProviderReplaySessionStateV2 };
 
 /**
  * Provider-owned final replay-turn validation input.

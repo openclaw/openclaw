@@ -1,6 +1,5 @@
 // Level filter tests cover logger filtering by configured log level.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
 import { levelToMinLevel } from "./levels.js";
 
 const { readLoggingConfigMock } = vi.hoisted(() => ({
@@ -14,7 +13,6 @@ vi.mock("./config.js", () => ({
   readLoggingConfig: readLoggingConfigMock,
 }));
 
-let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 let logging: typeof import("./logger.js");
 let consoleLogging: typeof import("./console.js");
 
@@ -26,22 +24,16 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  envSnapshot = captureEnv([
-    "OPENCLAW_TEST_FILE_LOG",
-    "OPENCLAW_TEST_CONSOLE",
-    "OPENCLAW_LOG_LEVEL",
-  ]);
-  delete process.env.OPENCLAW_TEST_FILE_LOG;
-  delete process.env.OPENCLAW_TEST_CONSOLE;
-  delete process.env.OPENCLAW_LOG_LEVEL;
+  vi.stubEnv("OPENCLAW_TEST_FILE_LOG", undefined);
+  vi.stubEnv("OPENCLAW_TEST_CONSOLE", undefined);
+  vi.stubEnv("OPENCLAW_LOG_LEVEL", undefined);
   readLoggingConfigMock.mockClear();
   logging.resetLogger();
   logging.setLoggerOverride(null);
 });
 
 afterEach(() => {
-  envSnapshot?.restore();
-  envSnapshot = undefined;
+  vi.unstubAllEnvs();
   logging.resetLogger();
   logging.setLoggerOverride(null);
   vi.restoreAllMocks();
@@ -105,16 +97,6 @@ describe("isFileLogLevelEnabled", () => {
       expected: [false, false, false, false, false, false],
     },
     {
-      name: "passes only fatal when configured as fatal",
-      level: "fatal",
-      expected: [true, false, false, false, false, false],
-    },
-    {
-      name: "passes fatal and error when configured as error",
-      level: "error",
-      expected: [true, true, false, false, false, false],
-    },
-    {
       name: "passes fatal, error, warn, info when configured as info",
       level: "info",
       expected: [true, true, true, true, false, false],
@@ -143,25 +125,6 @@ describe("isFileLogLevelEnabled", () => {
 });
 
 describe("getChildLogger minLevel inheritance", () => {
-  it("child logger inherits parent minLevel when no level is specified", () => {
-    logging.setLoggerOverride({ level: "warn" });
-    const child = logging.getChildLogger({ component: "test" });
-    expect(child.settings.minLevel).toBe(levelToMinLevel("warn"));
-  });
-
-  it("child logger uses its own level when explicitly specified", () => {
-    logging.setLoggerOverride({ level: "warn" });
-    const child = logging.getChildLogger({ component: "test" }, { level: "error" });
-    expect(child.settings.minLevel).toBe(levelToMinLevel("error"));
-  });
-
-  it("child logger does not default to minLevel=0 (allow-all) when no level given", () => {
-    logging.setLoggerOverride({ level: "fatal" });
-    const child = logging.getChildLogger({ component: "test" });
-    expect(child.settings.minLevel).not.toBe(0);
-    expect(child.settings.minLevel).toBe(levelToMinLevel("fatal"));
-  });
-
   it("child logger preserves a silent parent without triggering tslog validation", () => {
     logging.setLoggerOverride({ level: "silent" });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);

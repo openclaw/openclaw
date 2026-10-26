@@ -1,6 +1,5 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES,
   DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
   DEFAULT_LLAMA_CPP_MODEL_ID,
@@ -8,6 +7,7 @@ import {
   DEFAULT_LLAMA_CPP_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
   DEFAULT_LLAMA_CPP_MODEL_URI,
+  buildLlamaCppModel,
 } from "./defaults.js";
 import { formatLlamaCppMemory, type LlamaCppHardware } from "./hardware.js";
 
@@ -47,23 +47,7 @@ function modelRecipe(params: {
 }): LlamaCppModelRecipe {
   const source = params.source ?? `hf:${params.repository}/${params.file}#${params.revision}`;
   return {
-    model: {
-      id: params.id,
-      name: params.name,
-      api: "openai-completions",
-      reasoning: params.reasoning ?? false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
-      contextTokens: DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
-      maxTokens: params.maxTokens ?? 2048,
-      params: { modelPath: source, contextSize: DEFAULT_LLAMA_CPP_CONTEXT_SIZE },
-      compat: {
-        supportsTools: true,
-        supportsUsageInStreaming: true,
-        toolSchemaProfile: "llamacpp",
-      },
-    },
+    model: buildLlamaCppModel({ ...params, source }),
     sizeBytes: params.sizeBytes,
     memoryBytes: params.memoryGiB * GIB,
     minimumSystemMemoryBytes: params.minimumSystemGiB * GIB,
@@ -200,14 +184,12 @@ type LlamaCppRecommendation =
       kind: "recommended";
       recipe: LlamaCppModelRecipe;
       reason: string;
-      memoryBudgetBytes: number;
-      requiredDiskBytes: number;
     };
 
-export function resolveLlamaCppModelCandidates(
+export function resolveLlamaCppMemoryBudget(
   hardware: LlamaCppHardware,
   backend: "cpu" | "metal" | "cuda",
-): { recipes: readonly LlamaCppModelRecipe[]; memoryBudgetBytes: number } {
+): number {
   // Leave host headroom even on an idle machine. Available memory also limits upgrades
   // on busy hosts; unified memory must not be added to system RAM a second time.
   const systemBudget = Math.min(
@@ -228,7 +210,14 @@ export function resolveLlamaCppModelCandidates(
       : 0;
   // Require one device to hold the model; summing cards would assume a topology and
   // tensor-split configuration that setup has not measured or configured.
-  const memoryBudgetBytes = backend === "cuda" ? Math.min(systemBudget, gpuBudget) : systemBudget;
+  return Math.max(0, backend === "cuda" ? Math.min(systemBudget, gpuBudget) : systemBudget);
+}
+
+export function resolveLlamaCppModelCandidates(
+  hardware: LlamaCppHardware,
+  backend: "cpu" | "metal" | "cuda",
+): { recipes: readonly LlamaCppModelRecipe[]; memoryBudgetBytes: number } {
+  const memoryBudgetBytes = resolveLlamaCppMemoryBudget(hardware, backend);
   const candidates = LLAMA_CPP_MODEL_RECIPES.filter(
     (recipe) =>
       (!recipe.requiresAcceleration || backend !== "cpu") &&
@@ -238,11 +227,13 @@ export function resolveLlamaCppModelCandidates(
   return { recipes: candidates, memoryBudgetBytes };
 }
 
-export function recommendLlamaCppModel(
+export function resolveLlamaCppDiskBudget(
   hardware: LlamaCppHardware,
   backend: "cpu" | "metal" | "cuda",
-  cached: { modelIds?: ReadonlySet<string>; embedding?: boolean; runtime?: boolean } = {},
-): LlamaCppRecommendation {
+  runtimeCached = false,
+):
+  | { kind: "available"; modelDiskBudget: number; runtimeDiskBytes: number }
+  | { kind: "unavailable"; reason: string } {
   if (
     hardware.availableDiskBytes === undefined ||
     hardware.availableRuntimeDiskBytes === undefined
@@ -253,13 +244,9 @@ export function recommendLlamaCppModel(
         "Cannot measure free space in the model cache or runtime directory. Check their permissions and retry setup.",
     };
   }
-  const { recipes: candidates, memoryBudgetBytes } = resolveLlamaCppModelCandidates(
-    hardware,
-    backend,
-  );
   // A custom model cache may be on another volume. Charge each destination only
   // for its own artifacts; shared volumes must fit both allocations together.
-  const runtimeDiskBytes = cached.runtime ? 0 : (backend === "cuda" ? 3 : 2) * GIB;
+  const runtimeDiskBytes = runtimeCached ? 0 : (backend === "cuda" ? 3 : 2) * GIB;
   if (!hardware.sharedDisk && hardware.availableRuntimeDiskBytes < runtimeDiskBytes) {
     return {
       kind: "unavailable",
@@ -270,6 +257,23 @@ export function recommendLlamaCppModel(
   const modelDiskBudget = hardware.sharedDisk
     ? Math.min(hardware.availableDiskBytes, hardware.availableRuntimeDiskBytes) - runtimeDiskBytes
     : hardware.availableDiskBytes;
+  return { kind: "available", modelDiskBudget, runtimeDiskBytes };
+}
+
+export function recommendLlamaCppModel(
+  hardware: LlamaCppHardware,
+  backend: "cpu" | "metal" | "cuda",
+  cached: { modelIds?: ReadonlySet<string>; embedding?: boolean; runtime?: boolean } = {},
+): LlamaCppRecommendation {
+  const disk = resolveLlamaCppDiskBudget(hardware, backend, cached.runtime);
+  if (disk.kind === "unavailable") {
+    return disk;
+  }
+  const { modelDiskBudget } = disk;
+  const { recipes: candidates, memoryBudgetBytes } = resolveLlamaCppModelCandidates(
+    hardware,
+    backend,
+  );
   for (const recipe of candidates) {
     // The archive, extracted runtime and interrupted downloads need working space too.
     const modelDiskBytes =
@@ -287,8 +291,6 @@ export function recommendLlamaCppModel(
     return {
       kind: "recommended",
       recipe,
-      memoryBudgetBytes,
-      requiredDiskBytes: modelDiskBytes + runtimeDiskBytes,
       reason: `${recipe.model.name} fits the ${formatLlamaCppMemory(memoryBudgetBytes)} ${placement} budget with a 64K context. Runtime verification checks the actual model before activation.`,
     };
   }
@@ -297,6 +299,6 @@ export function recommendLlamaCppModel(
     reason:
       candidates.length > 0
         ? "There is not enough free disk space for a recommended model, embeddings, and the runtime. Free space in the model cache and retry setup."
-        : `No recommended model fits the current ${formatLlamaCppMemory(Math.max(0, memoryBudgetBytes))} memory budget. Close other applications and retry, or configure an existing GGUF or external server.`,
+        : `No recommended model fits the current ${formatLlamaCppMemory(Math.max(0, memoryBudgetBytes))} memory budget. Close other applications and retry, or configure an existing GGUF or external server. For local memory search without a chat model, an embedding-only local server (about 0.3 GB for the default embedding model) can fit instead. Set memory.search.provider to "local" with openclaw config set memory.search.provider local, then re-run openclaw models auth login --provider llama-cpp --method local using the same profile for both commands.`,
   };
 }

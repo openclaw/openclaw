@@ -3,9 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
-import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { getRuntimeConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   createGatewayConfigPath,
@@ -13,11 +11,7 @@ import {
   resetGatewayTestState,
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
-import {
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-  startGatewayWithClient,
-} from "./test-helpers.e2e.js";
+import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
 it.each(["native", "custom"] as const)(
   "models.list excludes retired authored native models and preserves %s inventory",
@@ -30,10 +24,15 @@ it.each(["native", "custom"] as const)(
         setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
         deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
         const token = randomUUID();
-        const port = await getGatewayE2ePortBlock();
         setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
         const baseUrl = endpoint === "native" ? "https://api.x.ai/v1" : "https://custom.invalid/v1";
-        const cfg: OpenClawConfig = {
+        const personal = {
+          api: "openai-responses",
+          baseUrl,
+          apiKey: "synthetic-personal-key",
+          models: [{ id: "auto", name: "Auto" }],
+        };
+        const cfg = {
           agents: {
             defaults: {
               workspace: home.workspaceDir,
@@ -43,37 +42,18 @@ it.each(["native", "custom"] as const)(
               modelPolicy: { allow: [] },
             },
           },
-          models: {
-            providers: {
-              personal: {
-                api: "openai-responses",
-                baseUrl,
-                apiKey: "synthetic-personal-key",
-                models: [
-                  makeProviderModelFixture<"openai-responses">({
-                    id: "auto",
-                    name: "Authored auto",
-                    provider: "personal",
-                    api: "openai-responses",
-                    baseUrl,
-                    contextWindow: 128000,
-                    maxTokens: 8192,
-                  }),
-                ].map(({ provider: _provider, ...model }) => model),
-              },
-            },
-          },
+          models: { providers: { personal } },
           plugins: { allow: ["xai"], entries: { xai: { enabled: true } } },
-          gateway: { port, auth: { mode: "token", token } },
+          gateway: { auth: { mode: "token", token } },
           hooks: { enabled: false },
         };
         gateway = await startGatewayWithClient({
           cfg,
-          port,
           token,
           configPath: await createGatewayConfigPath(home.tempHome),
         });
         await gateway.server.startupSettled;
+        const { client } = gateway;
         const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
           config: getRuntimeConfig(),
           agentId: "main",
@@ -81,35 +61,25 @@ it.each(["native", "custom"] as const)(
         });
         expect(owner?.metadataSnapshot.plugins.some((plugin) => plugin.id === "xai")).toBe(true);
         type Row = { provider: string; id: string; available?: boolean };
-        const observed: Array<{ view: string; preparedOnly: boolean; model?: Row }> = [];
-        for (const preparedOnly of [true, false]) {
-          for (const view of ["default", "configured"] as const) {
-            const response = await gateway.client.request<{ models: Row[] }>("models.list", {
-              view,
-              preparedOnly,
-            });
-            observed.push({
-              view,
-              preparedOnly,
-              model: response.models.find(
-                (row) => row.provider === "personal" && row.id === "auto",
-              ),
-            });
-          }
-        }
-        const admin = await gateway.client.request<{ models: Row[] }>("models.list", {
-          view: "provider-config",
-          preparedOnly: true,
-        });
-        const adminModel = admin.models.find(
-          (row) => row.provider === "personal" && row.id === "auto",
-        );
-        expect(adminModel?.id).toBe("auto");
-        for (const result of observed) {
-          if (endpoint === "native") {
-            expect(result.model, JSON.stringify(result)).toBeUndefined();
+        for (const [view, preparedOnly] of [
+          ["default", true],
+          ["configured", true],
+          ["default", false],
+          ["configured", false],
+          ["provider-config", true],
+        ] as const) {
+          const { models } = await client.request<{ models: Row[] }>("models.list", {
+            view,
+            preparedOnly,
+          });
+          const model = models.find((row) => row.provider === "personal" && row.id === "auto");
+          const context = JSON.stringify({ view, preparedOnly, model });
+          if (view === "provider-config") {
+            expect(model?.id).toBe("auto");
+          } else if (endpoint === "native") {
+            expect(model, context).toBeUndefined();
           } else {
-            expect(result.model?.available, JSON.stringify(result)).toBe(true);
+            expect(model?.available, context).toBe(true);
           }
         }
       },

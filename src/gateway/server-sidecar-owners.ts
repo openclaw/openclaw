@@ -24,7 +24,7 @@ export function createGatewaySidecarStopOwner() {
       registered.add(sidecar);
     }
     if (phase === "closing") {
-      void stop().catch(() => {});
+      void stop();
     }
     return () => sidecars.forEach(remove);
   };
@@ -50,20 +50,15 @@ export function createGatewaySidecarStopOwner() {
             break;
           }
           sidecars.forEach(remove);
-          let pending = sidecars;
-          let results: PromiseSettledResult<void>[] = [];
-          for (let attempt = 0; attempt < 2; attempt += 1) {
-            results = await Promise.allSettled(
-              pending.map(
-                async (sidecar) =>
-                  await runWithProcessCleanupBudget(cleanupBudget, () => sidecar.stop()),
-              ),
-            );
-            pending = pending.filter((_sidecar, index) => results[index]?.status === "rejected");
-            if (pending.length === 0) {
-              break;
-            }
-          }
+          const results = await Promise.allSettled(
+            sidecars.map(
+              async (sidecar) =>
+                await runWithProcessCleanupBudget(cleanupBudget, () => sidecar.stop()),
+            ),
+          );
+          const pending = sidecars.filter(
+            (_sidecar, index) => results[index]?.status === "rejected",
+          );
           // A late publisher can report a handle already being stopped. Keep its new owners,
           // but remove duplicate ownership of this batch before draining the next batch.
           sidecars.forEach(remove);
@@ -79,7 +74,7 @@ export function createGatewaySidecarStopOwner() {
           }
         }
         if (failure) {
-          // Preserve ownership after the bounded shutdown retry. A later close can try again.
+          // Preserve failed handles so a later close can try again.
           registered = new Set([...failedSidecars, ...registered]);
           throw failure;
         }
@@ -88,6 +83,7 @@ export function createGatewaySidecarStopOwner() {
       }
     });
     activeStop = stopping;
+    // Detached late publications retain their failure for sealAndJoin.
     void stopping.catch(() => {});
     return stopping;
   };
@@ -114,5 +110,13 @@ export function createGatewaySidecarStopOwner() {
     beginClose,
     stop,
     sealAndJoin,
+    async stopAndJoin(this: void) {
+      // Seal late acquisition cleanup before its supervisor transport can retire.
+      try {
+        await stop();
+      } finally {
+        await sealAndJoin();
+      }
+    },
   };
 }

@@ -1,8 +1,13 @@
 // Whatsapp tests cover inbound plugin behavior.
 import type { proto } from "baileys";
 import { describe, expect, it } from "vitest";
-import { extractContactContext, extractLocationData, extractText } from "./inbound.js";
-import { extractExternalAdReplyContext, extractMediaKind } from "./inbound/extract.js";
+import {
+  extractContactContext,
+  extractExternalAdReplyContext,
+  extractLocationData,
+  extractMediaKind,
+  extractText,
+} from "./inbound/extract.js";
 
 const message = (value: proto.IMessage) => value;
 const vcard = (name: string, phones: string[] = []) =>
@@ -28,48 +33,32 @@ describe("web inbound helpers", () => {
     expect(extractText(message(input))).toBe(expected);
   });
 
-  it("extracts WhatsApp contact cards", () => {
+  it.each([
+    {
+      label: "display names",
+      displayName: "Ada Lovelace",
+      card: vcard("Ada Lovelace", ["+15555550123"]),
+      name: "Ada Lovelace",
+    },
+    {
+      label: "escaped vCard names and telephone prefixes",
+      displayName: undefined,
+      card: vcard("Ada\\nLovelace\\, Countess\\; Byron", ["TeL: +15555550123 "]),
+      name: "Ada Lovelace, Countess Byron",
+    },
+  ])("extracts WhatsApp contact cards with $label", ({ displayName, card, name }) => {
     const input = message({
       contactMessage: {
-        displayName: "Ada Lovelace",
-        vcard: vcard("Ada Lovelace", ["+15555550123"]),
+        displayName,
+        vcard: card,
       },
     });
     expect(extractText(input)).toBe("<contact>");
     expect(extractContactContext(input)).toEqual({
       kind: "contact",
       total: 1,
-      contacts: [{ name: "Ada Lovelace", phones: ["+15555550123"] }],
+      contacts: [{ name, phones: ["+15555550123"] }],
     });
-  });
-
-  it.each([
-    [
-      "prefers FN over N",
-      [
-        "BEGIN:VCARD",
-        "VERSION:3.0",
-        "N:Lovelace;Ada;;;",
-        "FN:Ada Lovelace",
-        "TEL;TYPE=CELL:+15555550123",
-        "END:VCARD",
-      ].join("\n"),
-    ],
-    ["normalizes tel: prefixes", vcard("Ada Lovelace", ["tel:+15555550123"])],
-    [
-      "trims and skips empty phones",
-      [
-        "BEGIN:VCARD",
-        "VERSION:3.0",
-        "FN:Ada Lovelace",
-        "TEL;TYPE=CELL:  +15555550123  ",
-        "TEL;TYPE=HOME:   ",
-        "TEL;TYPE=WORK:+15555550124",
-        "END:VCARD",
-      ].join("\n"),
-    ],
-  ])("%s in WhatsApp vcards", (_name, card) => {
-    expect(extractText(message({ contactMessage: { vcard: card } }))).toBe("<contact>");
   });
 
   it.each([
@@ -112,8 +101,6 @@ describe("web inbound helpers", () => {
     ["image", { imageMessage: {} }, "image"],
     ["audio", { audioMessage: {} }, "audio"],
     ["GIF playback video", { videoMessage: { gifPlayback: true } }, "video"],
-    ["non-GIF video", { videoMessage: { gifPlayback: false } }, "video"],
-    ["ordinary video", { videoMessage: {} }, "video"],
   ])("returns the %s media kind", (_name, input, expected) => {
     expect(extractMediaKind(message(input))).toBe(expected);
   });

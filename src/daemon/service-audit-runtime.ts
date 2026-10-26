@@ -1,4 +1,4 @@
-/** Checks the executable recorded in a Gateway service against the runtime contract. */
+import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -6,15 +6,17 @@ import {
   isVersionManagedNodePath,
   resolveBunRuntimeInfo,
   resolveNodeRuntimeInfo,
+  resolveStandaloneRuntimeInfo,
   resolveSystemNodePath,
 } from "./runtime-paths.js";
-import { readDaemonRuntimePin } from "./runtime-pin-state.js";
+import * as runtimePins from "./runtime-pin-state.js";
 import type { GatewayServiceCommand, ServiceConfigIssue } from "./service-audit-types.js";
 import { normalizeServicePathEntry } from "./service-path-policy.js";
 
 export const SERVICE_RUNTIME_AUDIT_CODES = {
   gatewayRuntimeBun: "gateway-runtime-bun",
   gatewayRuntimeNode: "gateway-runtime-node",
+  gatewayRuntimeStandalone: "gateway-runtime-standalone",
   gatewayRuntimeProbeFailed: "gateway-runtime-probe-failed",
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
@@ -32,53 +34,51 @@ export async function auditGatewayRuntime(
     return undefined;
   }
 
-  if (isBunRuntime(execPath)) {
-    const runtime = await resolveBunRuntimeInfo(execPath);
-    if (runtime.status !== "supported") {
-      issues.push({
-        code:
-          runtime.status === "probe-failed"
-            ? SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeProbeFailed
-            : SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeBun,
-        message:
-          runtime.status === "probe-failed"
-            ? "Gateway service Bun runtime probe failed."
-            : "Gateway service uses an unsupported Bun runtime; Bun 1.4+ with WAL-reset-safe node:sqlite is required.",
-        detail:
-          runtime.status === "probe-failed"
-            ? runtime.error.message
-            : runtime.sqliteSelectionError
-              ? `${execPath}: ${runtime.sqliteSelectionError}`
-              : execPath,
-        level: "recommended",
-      });
-    }
+  const bun = isBunRuntime(execPath);
+  const standalone = isStandaloneRuntimeExecutable(execPath);
+  if (!standalone && !bun && !isNodeRuntime(execPath)) {
     return undefined;
   }
-
-  if (!isNodeRuntime(execPath)) {
-    return undefined;
-  }
-
-  const runtime = await resolveNodeRuntimeInfo(execPath, env, timeoutMs);
+  const runtime = standalone
+    ? await resolveStandaloneRuntimeInfo(execPath, env, timeoutMs)
+    : bun
+      ? await resolveBunRuntimeInfo(execPath)
+      : await resolveNodeRuntimeInfo(execPath, env, timeoutMs);
   if (runtime.status !== "supported") {
     issues.push({
       code:
         runtime.status === "probe-failed"
           ? SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeProbeFailed
-          : SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeNode,
+          : standalone
+            ? SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeStandalone
+            : bun
+              ? SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeBun
+              : SERVICE_RUNTIME_AUDIT_CODES.gatewayRuntimeNode,
       message:
         runtime.status === "probe-failed"
-          ? "Gateway service Node runtime probe failed."
-          : (runtime.capabilityError ?? "Gateway service Node failed its capability probe."),
-      detail: runtime.status === "probe-failed" ? runtime.error.message : execPath,
+          ? `Gateway service ${standalone ? "standalone OpenClaw" : bun ? "Bun" : "Node"} runtime check failed.`
+          : standalone
+            ? "Gateway standalone runtime failed its capability check; replace the complete artifact."
+            : bun
+              ? "Gateway service uses an unsupported Bun runtime; Bun 1.4.3+ with WAL-reset-safe node:sqlite is required."
+              : (runtime.capabilityError ?? "Gateway service Node failed its capability check."),
+      detail:
+        runtime.status === "probe-failed"
+          ? runtime.error.message
+          : (bun || standalone) && runtime.sqliteSelectionError
+            ? `${execPath}: ${runtime.sqliteSelectionError}`
+            : execPath,
       level: "recommended",
     });
   }
+  if (bun || standalone) {
+    return undefined;
+  }
 
-  const pinnedPath = command
-    ? readDaemonRuntimePin({ kind: "gateway", env }, command).pin?.path
-    : undefined;
+  if (runtimePins.readDaemonRuntimePinMigrationPending(env)) {
+    return "Runtime pin migration pending; run openclaw doctor.";
+  }
+  const pinnedPath = runtimePins.readDaemonRuntimePin({ kind: "gateway", env }, command).pin?.path;
   const explicitlyPinned =
     pinnedPath &&
     normalizeServicePathEntry(pinnedPath, platform) ===
@@ -101,5 +101,5 @@ export async function auditGatewayRuntime(
       }
     }
   }
-  return runtime.status === "supported" ? runtime.note : undefined;
+  return undefined;
 }

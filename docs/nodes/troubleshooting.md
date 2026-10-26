@@ -87,6 +87,11 @@ restart alone cannot establish that cleanup finished. Other free slots remain
 available. See the [database compatibility contract](/reference/database-schemas/versioning)
 before downgrading a node with active workers.
 
+If automatic idle-worker cleanup fails, the node logs `Idle worker cleanup failed`
+and keeps its slot reserved while retrying every two minutes. Check the node host
+and, for container-isolated workers, its container engine. A completed turn stays
+completed.
+
 If a Windows node host exits before confirming worker cleanup, its unfinished
 claims and slots stay reserved across restarts. Losing or reusing a worker's PID
 does not prove that its descendants stopped. Cleanup confirmed by the original
@@ -165,7 +170,7 @@ SSH-verified and bootstrap enrollment can approve the first surface automaticall
 Trusted-network device approval does not. Later command, capability, or permission
 expansion still needs surface approval.
 
-For approval-backed `host=node` runs, the gateway also binds execution to the prepared canonical `systemRunPlan`. If a later caller mutates the command, cwd, or session metadata before the approved run is forwarded, the gateway rejects the run as an approval mismatch instead of trusting the edited payload.
+For approval-backed `host=node` runs, the gateway also binds execution to the prepared `systemRunPlan`. If a later caller mutates the command, cwd, or session metadata before the approved run is forwarded, the gateway rejects the run as an approval mismatch instead of trusting the edited payload.
 
 ## Common node error codes
 

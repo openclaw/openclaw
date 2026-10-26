@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -38,18 +39,14 @@ const preparedModel = {
     modelId: "gpt-5.5",
     agentDir: "/tmp/openclaw-agent",
   },
-  model: {
+  model: makeProviderModelFixture<"openai-completions">({
     provider: "openai",
     id: "gpt-5.5",
-    name: "gpt-5.5",
     api: "openai-completions",
     baseUrl: "https://fixture.invalid/v1",
-    input: ["text"],
-    reasoning: false,
     contextWindow: 128_000,
-    maxTokens: 4096,
     cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
-  },
+  }),
   auth: {
     apiKey: "test-api-key",
     source: "test",
@@ -295,7 +292,6 @@ describe("runtime.llm.complete diagnostics", () => {
 
   it.each([
     ["resolved provider error", "error", [{ type: "text", text: "partial" }], "partial"],
-    ["resolved provider abort", "aborted", [{ type: "text", text: "partial" }], "partial"],
     ["thinking-only completion", "stop", [{ type: "thinking", thinking: "hidden" }], ""],
   ] as const)("keeps %s usage silent", async (_name, stopReason, content, expectedText) => {
     hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({

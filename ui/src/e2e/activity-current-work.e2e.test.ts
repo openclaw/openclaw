@@ -1,5 +1,12 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  installMockGateway,
+  pauseVirtualClock,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
+import { expectAttribute, expectCount, showText } from "./activity-assertions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -36,23 +43,36 @@ const listing = (sessions: object[]) => ({
   sessions,
   defaults: { model: null, modelProvider: null, contextTokens: null },
 });
+const finished = ({ key, agentId, sessionId }: typeof running) => ({
+  key,
+  agentId,
+  sessionId,
+  updatedAt: at + 1000,
+  status: "done",
+  hasActiveRun: false,
+});
+async function openCurrentWork(page: Page, options: Parameters<typeof installMockGateway>[1]) {
+  const gateway = await installMockGateway(page, options);
+  await page.goto(`${suite.server.baseUrl}activity?view=live`);
+  await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
+  await gateway.waitForRequest("sessions.list", { match: { activeOnly: true } });
+  const current = page.getByRole("region", { name: "Active sessions", exact: true });
+  return { gateway, current, rows: current.locator(".activity-current-work__row") };
+}
 
 suite.define(() => {
   it("loads running and queued sessions before events and refreshes current work on reconnect", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+      const { gateway, current, rows } = await openCurrentWork(page, {
         sessionKey: "main",
         sessions: [running, queued],
         methodResponses: { "sessions.list": listing([running, queued]) },
       });
-      await page.goto(`${suite.server.baseUrl}activity?view=live`);
-      await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
-      await gateway.waitForRequest("sessions.list", { match: { activeOnly: true } });
-      const current = page.getByRole("region", { name: "Active sessions", exact: true });
-      await current.getByText("Review release notes", { exact: true }).waitFor();
-      await current.getByText("Queued", { exact: true }).waitFor();
-      expect(await current.locator(".activity-current-work__row").count()).toBe(2);
-      expect(await page.locator(".activity-entry").count()).toBe(0);
+      const entries = page.locator(".activity-entry");
+      await showText(current, "Review release notes");
+      await showText(current, "Queued");
+      expect(await rows.count()).toBe(2);
+      expect(await entries.count()).toBe(0);
 
       await gateway.emitGatewayEvent("session.tool", {
         stream: "tool",
@@ -65,80 +85,72 @@ suite.define(() => {
           result: { text: "Release notes checked." },
         },
       });
-      await expect.poll(() => page.locator(".activity-entry").count()).toBe(1);
+      await expectCount(entries).toBe(1);
       await page.getByRole("button", { name: "Clear", exact: true }).click();
-      await expect.poll(() => page.locator(".activity-entry").count()).toBe(0);
-      expect(await current.locator(".activity-current-work__row").count()).toBe(2);
+      await expectCount(entries).toBe(0);
+      expect(await rows.count()).toBe(2);
 
       await gateway.setMethodResponse("sessions.list", listing([queued]));
       await gateway.emitGatewayEvent("sessions.changed", {
-        key: running.key,
-        agentId: running.agentId,
-        sessionId: running.sessionId,
-        updatedAt: at + 1000,
-        status: "done",
-        hasActiveRun: false,
+        ...finished(running),
         activeRunIds: [],
       });
-      await expect.poll(() => current.locator(".activity-current-work__row").count()).toBe(1);
+      await expectCount(rows).toBe(1);
       await gateway.setOnline(false);
-      await current
-        .getByText("Connect to the Gateway to load active sessions.", { exact: true })
-        .waitFor();
-      expect(await current.locator(".activity-current-work__row").count()).toBe(0);
+      await waitForControlUiGatewayReconnecting(page);
+      expect(await current.getByText("Check documentation links", { exact: true }).count()).toBe(1);
+      expect(await rows.count()).toBe(1);
+      expect(
+        await current
+          .getByText("Connect to the Gateway to load active sessions.", { exact: true })
+          .count(),
+      ).toBe(0);
       await gateway.setMethodResponse("sessions.list", listing([]));
+      const previousReads = await gateway.deferNext("sessions.list", { activeOnly: true });
       await gateway.setOnline(true);
-      await current.getByText("No active sessions.", { exact: true }).waitFor();
-      expect(await current.locator(".activity-current-work__row").count()).toBe(0);
+      await gateway.waitForRequest("sessions.list", {
+        after: previousReads,
+        match: { activeOnly: true },
+      });
+      expect(await current.getByText("Check documentation links", { exact: true }).count()).toBe(1);
+      await gateway.resolveDeferred("sessions.list", listing([]), { match: { activeOnly: true } });
+      await showText(current, "No active sessions.");
+      expect(await rows.count()).toBe(0);
+      await page.clock.install();
+      await pauseVirtualClock(page);
       await gateway.setMethodResponse("sessions.list", {
         __mockError: { code: "UNAVAILABLE", message: "Snapshot unavailable" },
       });
       await gateway.emitGatewayEvent("sessions.changed", { reason: "update" });
-      await current.getByText("Could not load active sessions.", { exact: true }).waitFor();
+      // Cross the full refresh window and deliver its nested mock response timer.
+      await page.clock.runFor(5_001);
+      await showText(current, "Could not load active sessions.");
+      await page.clock.resume();
       await gateway.setMethodResponse("sessions.list", listing([]));
       await current.getByRole("button", { name: "Retry", exact: true }).click();
-      await current.getByText("No active sessions.", { exact: true }).waitFor();
+      await showText(current, "No active sessions.");
     });
   });
 
   it("reconciles completion during the first snapshot and keeps global navigation owner-specific", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const globalRow = (agentId: string) =>
-        Object.assign({}, running, {
-          key: "global",
-          agentId,
-          kind: "global",
-          label: `${agentId} global work`,
-          sessionId: `global-${agentId}`,
-          activeRunIds: [`run-${agentId}`],
-        });
-      const mainGlobal = globalRow("main");
-      const workGlobal = globalRow("work");
-      const literal = {
+      const sessionRow = (agentId: string, kind = "global", literal = false) => ({
         ...running,
-        key: "agent:work:global",
-        agentId: "work",
-        sessionId: "literal-global",
-        label: "Literal global session",
-      };
-      const unknown = ["main", "work"].map((agentId) =>
-        Object.assign({}, running, {
-          key: "unknown",
-          kind: "unknown",
-          agentId,
-          sessionId: `unknown-${agentId}`,
-          label: `${agentId} unknown work`,
-        }),
-      );
-      const literalUnknown = {
-        ...literal,
-        key: "agent:work:unknown",
-        sessionId: "literal-unknown",
-        label: "Literal unknown session",
-      };
+        key: literal ? `agent:${agentId}:${kind}` : kind,
+        agentId,
+        kind: literal ? running.kind : kind,
+        label: literal ? `Literal ${kind} session` : `${agentId} ${kind} work`,
+        sessionId: literal ? `literal-${kind}` : `${kind}-${agentId}`,
+        activeRunIds: !literal && kind === "global" ? [`run-${agentId}`] : running.activeRunIds,
+      });
+      const mainGlobal = sessionRow("main");
+      const workGlobal = sessionRow("work");
+      const literal = sessionRow("work", "global", true);
+      const unknown = ["main", "work"].map((agentId) => sessionRow(agentId, "unknown"));
+      const literalUnknown = sessionRow("work", "unknown", true);
       const activeRows = [mainGlobal, workGlobal, literal, ...unknown, literalUnknown];
       const remainingRows = activeRows.filter((row) => row !== mainGlobal);
-      const gateway = await installMockGateway(page, {
+      const { gateway, current, rows } = await openCurrentWork(page, {
         sessionScope: "global",
         heldMethods: ["sessions.list"],
         sessions: activeRows,
@@ -159,42 +171,28 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}activity?view=live`);
-      await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
-      await gateway.waitForRequest("sessions.list", { match: { activeOnly: true } });
-      const current = page.getByRole("region", { name: "Active sessions", exact: true });
-      await current.getByText("Loading active sessions…", { exact: true }).waitFor();
+      const row = (key: string, agentId?: string) =>
+        current.locator(
+          `[data-session-key="${key}"]${agentId ? `[data-agent-id="${agentId}"]` : ""}`,
+        );
+      await showText(current, "Loading active sessions…");
       const currentRequests = (await gateway.getRequests("sessions.list", { activeOnly: true }))
         .length;
-      await gateway.deferNext("sessions.list", { activeOnly: true });
-      await gateway.emitGatewayEvent("sessions.changed", {
-        key: "global",
-        agentId: "main",
-        sessionId: "global-main",
-        updatedAt: at + 1000,
-        status: "done",
-        hasActiveRun: false,
-      });
+      await gateway.emitGatewayEvent("sessions.changed", finished(mainGlobal));
       await gateway.resolveDeferred("sessions.list", listing(activeRows));
-      await expect.poll(() => current.locator(".activity-current-work__row").count()).toBe(5);
-      await gateway.waitForRequest("sessions.list", {
-        after: currentRequests,
-        match: { activeOnly: true },
-      });
-      await expect.poll(() => current.getAttribute("aria-busy")).toBe("true");
-      await gateway.resolveDeferred("sessions.list");
-      await expect.poll(() => current.getAttribute("aria-busy")).toBe("false");
-      const work = current.locator('[data-session-key="global"][data-agent-id="work"]');
-      await work.getByText("work global work", { exact: true }).waitFor();
+      await expectCount(rows).toBe(5);
+      // The completion fully reconciles this bounded snapshot; no catch-up RPC is needed.
+      await expectAttribute(current, "aria-busy").toBe("false");
+      expect(await gateway.getRequests("sessions.list", { activeOnly: true })).toHaveLength(
+        currentRequests,
+      );
+      const work = row("global", "work");
+      await showText(work, "work global work");
       expect(await work.getAttribute("href")).toBe("/chat/work");
-      expect(
-        await current.locator('[data-session-key="agent:work:global"]').getAttribute("href"),
-      ).toBe("/chat/work/~key/global");
-      expect(
-        await current.locator('[data-session-key="global"][data-agent-id="main"]').count(),
-      ).toBe(0);
-      expect(await current.locator(".activity-current-work__row").count()).toBe(5);
-      expect(await current.locator('[data-session-key="unknown"]').count()).toBe(2);
+      expect(await row("agent:work:global").getAttribute("href")).toBe("/chat/work/~key/global");
+      expect(await row("global", "main").count()).toBe(0);
+      expect(await rows.count()).toBe(5);
+      expect(await row("unknown").count()).toBe(2);
       expect(await current.locator('a[data-session-key="unknown"]').count()).toBe(0);
       expect(
         await current.locator('a[data-session-key="agent:work:unknown"]').getAttribute("href"),
@@ -202,8 +200,8 @@ suite.define(() => {
       expect(await page.locator(".activity-entry").count()).toBe(0);
       await work.click();
       await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/work" });
-      await gateway.waitForRequest("chat.startup", {
-        match: { sessionKey: "agent:work:main", agentId: "work" },
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { key: "agent:work:main", agentId: "work" },
       });
     });
   });

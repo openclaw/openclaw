@@ -1,34 +1,31 @@
-// Config provider model helpers discover image-capable custom providers for
-// media-understanding auto-registration.
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
-type ConfigProvider = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
->;
-
-type ConfigProviderModel = NonNullable<ConfigProvider["models"]>[number];
-
-function hasImageCapableModel(providerCfg: ConfigProvider): boolean {
-  const models = providerCfg.models ?? [];
-  return models.some(
-    (model: ConfigProviderModel) => Array.isArray(model?.input) && model.input.includes("image"),
-  );
+/** Keeps authored provider IDs so callers can project canonical or execution aliases. */
+export function listImageCapableConfiguredProviders(cfg?: OpenClawConfig): string[] {
+  return Object.entries(cfg?.models?.providers ?? {})
+    .filter(
+      ([id, provider]) =>
+        // Config-write secrets preflight reads source config before model defaults.
+        id.trim() && (provider.models ?? []).some((model) => model.input?.includes("image")),
+    )
+    .map(([id]) => id);
 }
 
-/** Finds configured model providers that can be auto-registered for image understanding. */
-export function resolveImageCapableConfigProviderIds(cfg?: OpenClawConfig): string[] {
-  const configProviders = cfg?.models?.providers;
-  if (!configProviders || typeof configProviders !== "object") {
-    return [];
+/** Project static registrations against the caller's config without changing cached providers. */
+export function resolveConfiguredMediaProviderCapabilities(
+  provider: MediaUnderstandingProvider,
+  cfg?: OpenClawConfig,
+) {
+  if (
+    provider.inheritConfiguredImageCapability &&
+    !provider.capabilities?.includes("image") &&
+    listImageCapableConfiguredProviders(cfg).some(
+      (id) => normalizeMediaProviderId(id) === normalizeMediaProviderId(provider.id),
+    )
+  ) {
+    return [...(provider.capabilities ?? []), "image" as const];
   }
-
-  const providerIds: string[] = [];
-  for (const [providerKey, providerCfg] of Object.entries(configProviders)) {
-    if (!providerKey?.trim() || !hasImageCapableModel(providerCfg)) {
-      continue;
-    }
-    providerIds.push(normalizeMediaProviderId(providerKey));
-  }
-  return providerIds;
+  return provider.capabilities;
 }

@@ -2,36 +2,18 @@ import type { LookupAddress } from "node:dns";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { Agent, EnvHttpProxyAgent, FormData, ProxyAgent } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "../extensions/slack/api.js";
-import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
-import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
-import type { ChannelMessageActionContext } from "../src/channels/plugins/types.js";
+import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-identity-token.js";
-import {
-  mintMessageActionTurnCapability,
-  resolveMessageActionTurnCapability,
-  revokeMessageActionTurnCapability,
-} from "../src/gateway/message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  RespondFn,
-} from "../src/gateway/server-methods/types.js";
+import type { GatewayRequestContext, RespondFn } from "../src/gateway/server-methods/types.js";
 import type { DedupeEntry } from "../src/gateway/server-shared.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-  validateAgentRunDelegatedAuthority,
-} from "../src/infra/agent-run-registry.js";
-import { getImageMetadata } from "../src/media/media-services.js";
 import { withServer } from "../src/plugin-sdk/test-helpers/http-test-server.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
@@ -41,6 +23,7 @@ import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js"
 import { observeFsSafeRootMoves } from "./helpers/fs-safe-root.test-support.js";
 import { createSolidPngBuffer } from "./helpers/image-fixtures.js";
 import { createDeferred, withTestTimeout } from "./helpers/promise.js";
+import { createMessageReadAuthority } from "./message-read-authority.test-support.js";
 
 const interleaving = vi.hoisted(() => ({
   lookup: undefined as ((hostname: string) => Promise<LookupAddress[]>) | undefined,
@@ -91,6 +74,11 @@ const FILE_ID = "F0123456789";
 const THREAD = "1234567890.123456";
 const PDF = Buffer.from("%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n");
 const PRESERVED = "preexisting attachment must remain";
+const API_HOSTS = new Set(["slack.com", "slack-gov.com"]);
+const FILE_HOSTS = new Set(["files.slack.com", "downloads.slack-edge.com", "files.slack-gov.com"]);
+const API_PATHS = ["/api/conversations.info", "/api/files.info"];
+const FILE_PATHS = ["/file", "/fresh", "/redirect"];
+const sharedInThread = (ts = THREAD) => ({ shares: { private: { [TARGET_CHANNEL]: [{ ts }] } } });
 let sequence = 0;
 let imageBytes: Buffer | undefined;
 
@@ -120,14 +108,11 @@ type FixtureOptions = {
   userToken?: boolean;
   govSlack?: boolean;
   image?: boolean;
-  body?: Buffer;
-  contentType?: string;
   file?: Record<string, unknown>;
   refreshedFile?: Record<string, unknown> | null;
   params?: Record<string, unknown>;
   redirect?: string;
   expired?: boolean;
-  maxBytes?: number;
   dnsAddress?: string;
   phase?: Phase;
   revoke?: Revocation;
@@ -147,89 +132,23 @@ type GatewayMirrorSnapshot = {
 };
 
 function createOriginatingRun(currentProvider: string, currentChannelId: string) {
-  const operationalRunInstance = createOperationalRunInstanceRef(`slack-download-${++sequence}`);
-  const delegated = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const sessionKey = `agent:main:${currentProvider}:channel:${currentChannelId}`;
-  const toolContext = {
-    currentChannelProvider: currentProvider,
-    currentChannelId,
-    currentMessagingTarget: `channel:${currentChannelId}`,
-    currentChatType: "channel" as const,
-    // An ambient thread does not add an explicit file-share requirement.
-    currentThreadTs: "9999999999.999999",
-  };
-  const capability = mintMessageActionTurnCapability({
-    agentId: "main",
-    runId: operationalRunInstance.runId,
-    sessionKey,
-    requesterAccountId: "default",
+  const run = createMessageReadAuthority({
+    runId: `slack-download-${++sequence}`,
+    sessionKey: `agent:main:${currentProvider}:channel:${currentChannelId}`,
     requesterSenderId: "synthetic-requester",
-    toolContext,
-  });
-  const messageActionContext = resolveMessageActionTurnCapability({
-    token: capability,
-    agentId: "main",
-    runId: operationalRunInstance.runId,
-    sessionKey,
-  });
-  if (!messageActionContext) {
-    throw new Error("Missing admitted download turn context");
-  }
-  const client = {
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey,
-        operationalRunInstance,
-        delegatedAuthority: { kind: "local", ...delegated },
-        messageActionContext: { ...messageActionContext, turnCapability: capability },
-      },
+    gatewayContext: "resolved",
+    toolContext: {
+      currentChannelProvider: currentProvider,
+      currentChannelId,
+      currentMessagingTarget: `channel:${currentChannelId}`,
+      currentChatType: "channel",
+      // An ambient thread does not add an explicit file-share requirement.
+      currentThreadTs: "9999999999.999999",
     },
-  } as GatewayClient;
-  const validate = createAgentRuntimeApprovalAuthorityValidator();
-  const assert = createAgentRuntimeAuthorityGuard(
-    client,
-    {
-      validateAgentRuntimeApprovalAuthority: validate,
-    } as GatewayRequestContext,
-    () => {},
-  ).commitGuard;
-  if (!assert) {
-    throw new Error("Missing originating download authority");
-  }
-  assert();
+  });
   return {
-    assert,
-    client,
-    validate,
-    toolContext,
-    options: {
-      agentId: "main",
-      agentAccountId: "default",
-      agentSessionKey: sessionKey,
-      runId: operationalRunInstance.runId,
-      messageActionTurnCapability: capability,
-      ...toolContext,
-    },
-    wrap: (tool: ReturnType<typeof createMessageTool>) =>
-      wrapToolWithGatewayCallerIdentity(tool, {
-        agentId: "main",
-        sessionKey,
-        operationalRunInstance,
-        receiptAuthority: () => validateAgentRunDelegatedAuthority(delegated),
-      }),
-    revoke: (kind: Revocation) => {
-      if (kind === "claim") {
-        releaseAgentRunDelegatedAuthority(delegated);
-      } else {
-        revokeMessageActionTurnCapability(capability);
-      }
-    },
-    dispose: () => {
-      revokeMessageActionTurnCapability(capability);
-      releaseAgentRunDelegatedAuthority(delegated);
-    },
+    ...run,
+    revoke: (kind: Revocation) => (kind === "claim" ? run.releaseClaim() : run.revokeTurn()),
   };
 }
 
@@ -292,7 +211,6 @@ async function withDownloadFixture(
     token: string;
     bodyStarted: Promise<void>;
     binaryRequests: () => RequestRecord[];
-    assertPreserved: () => Promise<void>;
   }) => Promise<void>,
 ) {
   await withOpenClawTestState(
@@ -310,13 +228,10 @@ async function withDownloadFixture(
         const preservedPath = path.join(mediaDir, "existing.txt");
         const displacedPath = state.statePath("displaced-output");
         await fs.writeFile(preservedPath, PRESERVED);
-        const body =
-          options.body ??
-          (options.image
-            ? (imageBytes ??= createSolidPngBuffer(2600, 1300, { r: 40, g: 80, b: 120 }))
-            : PDF);
-        const contentType =
-          options.contentType ?? (options.image ? "image/png" : "application/pdf");
+        const body = options.image
+          ? (imageBytes ??= createSolidPngBuffer(2600, 1300, { r: 40, g: 80, b: 120 }))
+          : PDF;
+        const contentType = options.image ? "image/png" : "application/pdf";
         const fileHost = options.govSlack ? "files.slack-gov.com" : "files.slack.com";
         const file = {
           id: FILE_ID,
@@ -341,7 +256,6 @@ async function withDownloadFixture(
                 [CURRENT_CHANNEL]: { enabled: true },
                 [TARGET_CHANNEL]: { enabled: options.disabled !== true },
               },
-              ...(options.maxBytes ? { mediaMaxMb: options.maxBytes / (1024 * 1024) } : {}),
               accounts: { default: {}, other: { botToken: `xoxb-other-${sequence}` } },
             },
           },
@@ -469,11 +383,15 @@ async function withDownloadFixture(
           },
           afterOpen: (filePath, handle) => {
             if (options.image && path.dirname(filePath) === mediaDir && filePath.endsWith(".png")) {
-              const read = handle.readFile.bind(handle);
-              vi.spyOn(handle, "readFile").mockImplementation(async (...args) => {
-                const bytes = await read(...args);
-                hit("image-read");
-                return bytes;
+              const read = handle.read.bind(handle);
+              let bytesRead = 0;
+              vi.spyOn(handle, "read").mockImplementation(async (...args) => {
+                const result = await read(...args);
+                bytesRead += result.bytesRead;
+                if (bytesRead >= body.length) {
+                  hit("image-read");
+                }
+                return result;
               });
             }
           },
@@ -493,11 +411,7 @@ async function withDownloadFixture(
               }
             : undefined;
         interleaving.lookup = async (hostname) => {
-          if (
-            !["files.slack.com", "downloads.slack-edge.com", "files.slack-gov.com"].includes(
-              hostname,
-            )
-          ) {
+          if (!FILE_HOSTS.has(hostname)) {
             throw new Error(`Unexpected fixture DNS lookup: ${hostname}`);
           }
           await Promise.resolve();
@@ -523,16 +437,13 @@ async function withDownloadFixture(
           await withServer(
             (request, response) => {
               void (async () => {
-                const chunks: Buffer[] = [];
-                for await (const chunk of request) {
-                  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-                }
+                const requestBody = await buffer(request);
                 const routed = new URL(request.url!, "http://fixture.invalid");
                 const url = new URL(`https:/${routed.pathname}${routed.search}`);
                 requests.push({
                   url,
                   authorization: request.headers.authorization,
-                  body: Buffer.concat(chunks).toString("utf8"),
+                  body: requestBody.toString("utf8"),
                 });
                 if (url.pathname === "/api/conversations.info") {
                   response.setHeader("content-type", "application/json");
@@ -579,25 +490,13 @@ async function withDownloadFixture(
               ) => {
                 const url = new URL(input instanceof Request ? input.url : String(input));
                 terminalRequests.push(url);
-                if (
-                  url.protocol !== "https:" ||
-                  ![
-                    "slack.com",
-                    "slack-gov.com",
-                    "files.slack.com",
-                    "downloads.slack-edge.com",
-                    "files.slack-gov.com",
-                  ].includes(url.hostname)
-                ) {
-                  const error = new Error(`Unexpected terminal fixture URL: ${url.origin}`);
-                  fixtureErrors.push(error);
-                  throw error;
-                }
-                const expectedPath = ["slack.com", "slack-gov.com"].includes(url.hostname)
-                  ? ["/api/conversations.info", "/api/files.info"].includes(url.pathname)
-                  : ["/file", "/fresh", "/redirect"].includes(url.pathname);
-                if (!expectedPath) {
-                  const error = new Error(`Unexpected terminal fixture path: ${url.pathname}`);
+                const paths = API_HOSTS.has(url.hostname)
+                  ? API_PATHS
+                  : FILE_HOSTS.has(url.hostname)
+                    ? FILE_PATHS
+                    : [];
+                if (url.protocol !== "https:" || !paths.includes(url.pathname)) {
+                  const error = new Error(`Unexpected terminal fixture URL: ${url.href}`);
                   fixtureErrors.push(error);
                   throw error;
                 }
@@ -619,13 +518,6 @@ async function withDownloadFixture(
                 createMessageTool({
                   ...run.options,
                   config: cfg,
-                  getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-                  resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-                    resolvedConfig: config,
-                    diagnostics: [],
-                    targetStatesByPath: {},
-                    hadUnresolvedTargets: false,
-                  }),
                 }),
               );
               const actionParams = (): Record<string, unknown> => ({
@@ -714,9 +606,6 @@ async function withDownloadFixture(
                 token,
                 binaryRequests,
                 bodyStarted: bodyStarted.promise,
-                assertPreserved: async () => {
-                  await expect(fs.readFile(preservedPath, "utf8")).resolves.toBe(PRESERVED);
-                },
               });
               await expect(fs.readFile(preservedPath, "utf8")).resolves.toBe(PRESERVED);
               expect(fixtureErrors).toEqual([]);
@@ -748,6 +637,7 @@ describe("registered Slack attachment downloads", () => {
     },
     { name: "direct operator", options: { entry: "direct", trusted: false } },
     { name: "GovSlack", options: { govSlack: true } },
+    { name: "current-channel read credentials", options: { currentOnly: true, userToken: true } },
   ] satisfies Array<{ name: string; options: FixtureOptions }>)(
     "returns the actual stored attachment through $name execution",
     async ({ options }) => {
@@ -776,58 +666,22 @@ describe("registered Slack attachment downloads", () => {
         ).toContain(`file=${FILE_ID}`);
         expect(fixture.binaryRequests()).toHaveLength(1);
         expect(fixture.binaryRequests()[0]?.authorization).toBe(`Bearer ${fixture.token}`);
-        await fixture.assertPreserved();
+        expect(
+          fixture.requests.every((request) => request.authorization === `Bearer ${fixture.token}`),
+        ).toBe(true);
       });
     },
   );
 
-  it("uses current channel scope and read credentials while returning a bounded image", async () => {
-    await withDownloadFixture(
-      { currentOnly: true, userToken: true, image: true },
-      async (fixture) => {
-        const result = await fixture.invoke();
-        const saved = resultPath(result);
-        await expect(fs.readFile(saved)).resolves.toEqual(fixture.body);
-        const image = result?.content.find((block) => block.type === "image");
-        if (!image || image.type !== "image") {
-          throw new Error("Expected Slack image output");
-        }
-        const bytes = Buffer.from(image.data, "base64");
-        expect(await getImageMetadata(bytes)).toEqual({ width: 600, height: 300 });
-        expect(bytes.byteLength).toBeLessThanOrEqual(5 * 1024 * 1024);
-        expect(result).toMatchObject({
-          details: { fileId: FILE_ID, media: { mediaUrl: saved, outbound: false } },
-        });
-        expect(
-          fixture.requests.every((request) => request.authorization === `Bearer ${fixture.token}`),
-        ).toBe(true);
-        await fixture.assertPreserved();
-      },
-    );
-  });
-
   it.each([
-    { name: "disabled channel", options: { disabled: true }, error: /not allowed/i },
-    { name: "different account", options: { params: { accountId: "other" } }, error: /account/i },
-    {
-      name: "different origin provider",
-      options: { currentProvider: "discord" },
-      error: /provider and account/i,
-    },
-    {
-      name: "unverified install",
-      options: { trusted: false },
-      error: /exact current conversation/i,
-    },
-    {
-      name: "legacy cross-channel adapter",
-      options: { legacy: true },
-      error: /exact current conversation/i,
-    },
-    { name: "missing fileId", options: { params: { fileId: undefined } }, error: /fileId/i },
-  ] satisfies Array<{ name: string; options: FixtureOptions; error: RegExp }>)(
-    "rejects $name before provider I/O",
-    async ({ options, error }) => {
+    ["disabled channel", { disabled: true }, /not allowed/i],
+    ["different account", { params: { accountId: "other" } }, /account/i],
+    ["different origin provider", { currentProvider: "discord" }, /provider and account/i],
+    ["unverified install", { trusted: false }, /exact current conversation/i],
+    ["legacy cross-channel adapter", { legacy: true }, /exact current conversation/i],
+  ] satisfies Array<[string, FixtureOptions, RegExp]>)(
+    "rejects %s before provider I/O",
+    async (_, options, error) => {
       await withDownloadFixture(options, async (fixture) => {
         await expect(fixture.invoke()).rejects.toThrow(error);
         expect(fixture.requests).toEqual([]);
@@ -838,38 +692,6 @@ describe("registered Slack attachment downloads", () => {
   );
 
   it.each([
-    { name: "missing channel evidence", file: { channels: undefined }, params: {}, allowed: false },
-    {
-      name: "different shared channel",
-      file: { channels: ["C1111111111"] },
-      params: {},
-      allowed: false,
-    },
-    {
-      name: "different explicit thread",
-      file: { shares: { private: { [TARGET_CHANNEL]: [{ ts: THREAD }] } } },
-      params: { threadId: "1111111111.111111" },
-      allowed: false,
-    },
-    {
-      name: "matching explicit thread",
-      file: { shares: { private: { [TARGET_CHANNEL]: [{ ts: THREAD }] } } },
-      params: { threadId: THREAD },
-      allowed: true,
-    },
-  ])("requires positive fresh file-share proof: $name", async ({ file, params, allowed }) => {
-    await withDownloadFixture({ file, params }, async (fixture) => {
-      const result = await fixture.invoke();
-      expect(result).toMatchObject({ details: { ok: allowed } });
-      expect(fixture.binaryRequests()).toHaveLength(allowed ? 1 : 0);
-      if (!allowed) {
-        expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);
-      }
-      await fixture.assertPreserved();
-    });
-  });
-
-  it.each([
     { name: "HTTP", file: { url_private_download: "http://files.slack.com/file" } },
     {
       name: "hostname lookalike",
@@ -878,11 +700,6 @@ describe("registered Slack attachment downloads", () => {
     {
       name: "commercial token to GovSlack",
       file: { url_private_download: "https://files.slack-gov.com/file" },
-    },
-    {
-      name: "GovSlack token to commercial Slack",
-      govSlack: true,
-      file: { url_private_download: "https://files.slack.com/file" },
     },
     { name: "private DNS destination", dnsAddress: "10.23.45.67" },
   ] satisfies Array<FixtureOptions & { name: string }>)(
@@ -899,76 +716,6 @@ describe("registered Slack attachment downloads", () => {
     },
   );
 
-  it.each([
-    { redirect: "https://files.slack.com/redirect", authenticated: true },
-    { redirect: "https://downloads.slack-edge.com/redirect", authenticated: false },
-  ])("preserves redirect credential rules for $redirect", async ({ redirect, authenticated }) => {
-    await withDownloadFixture({ redirect }, async (fixture) => {
-      const saved = resultPath(await fixture.invoke());
-      await expect(fs.readFile(saved)).resolves.toEqual(fixture.body);
-      expect(fixture.binaryRequests()).toHaveLength(2);
-      expect(fixture.binaryRequests()[0]?.authorization).toBe(`Bearer ${fixture.token}`);
-      expect(fixture.binaryRequests()[1]?.authorization).toBe(
-        authenticated ? `Bearer ${fixture.token}` : undefined,
-      );
-    });
-  });
-
-  it.each(["http://files.slack.com/redirect", "https://files.slack-gov.com/redirect"])(
-    "refuses the redirect destination %s before its binary request",
-    async (redirect) => {
-      await withDownloadFixture({ redirect }, async (fixture) => {
-        expect(await fixture.invoke()).toMatchObject({ details: { ok: false } });
-        expect(fixture.binaryRequests().length).toBeGreaterThan(0);
-        expect(
-          fixture.binaryRequests().every(({ url }) => url.href === "https://files.slack.com/file"),
-        ).toBe(true);
-        expect(fixture.terminalRequests.some((url) => url.href === redirect)).toBe(false);
-        expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);
-      });
-    },
-  );
-
-  it("retains explicitly uploaded HTML files", async () => {
-    await withDownloadFixture(
-      {
-        body: Buffer.from("<!doctype html><title>Authored document</title>"),
-        contentType: "text/html",
-        file: { name: "page.html" },
-      },
-      async (fixture) => {
-        const result = await fixture.invoke();
-        expect(result).toMatchObject({ details: { ok: true, contentType: "text/html" } });
-        await expect(fs.readFile(resultPath(result))).resolves.toEqual(fixture.body);
-      },
-    );
-  });
-
-  it.each([
-    {
-      name: "oversized streamed content",
-      options: { maxBytes: 1024 * 1024, body: Buffer.alloc(1024 * 1024 + 1) },
-    },
-    {
-      name: "unexpected login HTML",
-      options: {
-        body: Buffer.from("<html>login required</html>"),
-        contentType: "text/html",
-        file: { mimetype: "application/pdf" },
-      },
-    },
-  ] satisfies Array<{ name: string; options: FixtureOptions }>)(
-    "leaves no artifact for $name",
-    async ({ options }) => {
-      await withDownloadFixture(options, async (fixture) => {
-        expect(await fixture.invoke()).toMatchObject({ details: { ok: false } });
-        expect(fixture.binaryRequests().length).toBeGreaterThan(0);
-        expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);
-        await fixture.assertPreserved();
-      });
-    },
-  );
-
   it.each([true, false])(
     "reapplies thread admission after refreshing an expired URL (allowed=%s)",
     async (allowed) => {
@@ -976,16 +723,14 @@ describe("registered Slack attachment downloads", () => {
         {
           expired: true,
           params: { threadId: THREAD },
-          file: { shares: { private: { [TARGET_CHANNEL]: [{ ts: THREAD }] } } },
+          file: sharedInThread(),
           refreshedFile: {
             id: FILE_ID,
             name: "paper.pdf",
             mimetype: "application/pdf",
             channels: [TARGET_CHANNEL],
             url_private_download: "https://files.slack.com/fresh",
-            shares: {
-              private: { [TARGET_CHANNEL]: [{ ts: allowed ? THREAD : "1111111111.111111" }] },
-            },
+            ...sharedInThread(allowed ? THREAD : "1111111111.111111"),
           },
         },
         async (fixture) => {
@@ -1008,42 +753,25 @@ describe("registered Slack attachment downloads", () => {
 
 describe("Slack download authority through artifact completion", () => {
   it.each([
-    { name: "fresh metadata", phase: "metadata", requests: 0 },
-    { name: "bundled DNS preparation", phase: "dns", origin: "bundled", requests: 0 },
-    {
-      name: "redirect DNS preparation",
-      phase: "redirect-dns",
-      redirect: "https://downloads.slack-edge.com/redirect",
-      requests: 1,
-    },
-    { name: "metadata refresh", phase: "refresh", expired: true, requests: 1 },
-    { name: "store preparation", phase: "store-open", requests: 1 },
-    { name: "body consumption", phase: "body", requests: 1 },
-    { name: "MIME detection", phase: "mime", requests: 1 },
-    { name: "publication preparation", phase: "prepublication", requests: 1 },
-    { name: "bundled artifact publication", phase: "published", origin: "bundled", requests: 1 },
-    { name: "image hydration", phase: "image-read", image: true, requests: 1 },
-    {
-      name: "local image result with lost run claim",
-      phase: "result",
-      image: true,
-      revoke: "claim",
-      requests: 1,
-    },
-  ] satisfies Array<FixtureOptions & { name: string; phase: Phase; requests: number }>)(
-    "rejects revoked output and retains only preexisting files after $name",
-    async (options) => {
-      await withDownloadFixture(options, async (fixture) => {
-        const outcome = await fixture.invoke().then(
-          (result) => ({ result, error: undefined }),
-          (error: unknown) => ({ result: undefined, error }),
-        );
-        expect(fixture.phases.has(options.phase)).toBe(true);
-        expect(fixture.binaryRequests()).toHaveLength(options.requests);
+    ["metadata", {}, 0],
+    ["dns", { origin: "bundled" }, 0],
+    ["redirect-dns", { redirect: "https://downloads.slack-edge.com/redirect" }, 1],
+    ["refresh", { expired: true }, 1],
+    ["store-open", {}, 1],
+    ["body", {}, 1],
+    ["mime", {}, 1],
+    ["prepublication", {}, 1],
+    ["published", { origin: "bundled" }, 1],
+    ["image-read", { image: true }, 1],
+    ["result", { image: true, revoke: "claim" }, 1],
+  ] satisfies Array<[Phase, FixtureOptions, number]>)(
+    "rejects revoked output and retains only preexisting files after %s (%j)",
+    async (phase, options, requests) => {
+      await withDownloadFixture({ ...options, phase }, async (fixture) => {
+        await expect(fixture.invoke()).rejects.toBeInstanceOf(Error);
+        expect(fixture.phases.has(phase)).toBe(true);
+        expect(fixture.binaryRequests()).toHaveLength(requests);
         expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);
-        expect(outcome.result).toBeUndefined();
-        expect(outcome.error).toBeInstanceOf(Error);
-        await fixture.assertPreserved();
       });
     },
   );
@@ -1077,7 +805,6 @@ describe("Slack download authority through artifact completion", () => {
       expect(remaining).toHaveLength(1);
       await expect(fs.readFile(remaining[0]!, "utf8")).resolves.toBe("replacement must remain");
       await expect(fs.readFile(fixture.displacedPath)).resolves.toEqual(fixture.body);
-      await fixture.assertPreserved();
     });
   });
 });

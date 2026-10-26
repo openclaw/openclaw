@@ -1,29 +1,29 @@
 import { expect, it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { mcpImportBoundaryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
+
+const cliUrl = resolveRuntimeWorkerUrl(mcpImportBoundaryEntrypoints.cli);
+const catalogUrl = resolveRuntimeWorkerUrl(mcpImportBoundaryEntrypoints.catalog);
+const metadataUrl = resolveRuntimeWorkerUrl(mcpImportBoundaryEntrypoints.metadata);
+const registerCli = String.raw`
+      const program = new (await import("commander")).Command().exitOverride();
+      (await import(${JSON.stringify(cliUrl.href)})).registerMcpCli(program);
+`;
 
 async function runImportBoundaryChild(forbidden: RegExp, workload: string) {
   return withOpenClawTestState(
-    {
-      prefix: "openclaw-mcp-import-boundary-",
-      scenario: "minimal",
-      applyEnv: false,
-    },
+    { prefix: "mcp-import-", scenario: "minimal", applyEnv: false },
     async (state) => {
       // A fresh child keeps Vitest's shared module cache from bypassing the guard.
-      // Register after TSX and before dynamic imports so the guard sees original specifiers.
       const script = String.raw`
         import assert from "node:assert/strict";
         import { registerHooks } from "node:module";
-
         const forbidden = ${forbidden};
-        function assertAllowedImport(url, parentURL) {
-          if (forbidden.test(url)) {
-            throw new Error("MCP import boundary denied " + url +
-              " (importer: " + (parentURL ?? "unknown") + ")");
-          }
-        }
+        const assertAllowedImport = (url, parentURL) => assert(!forbidden.test(url),
+          "MCP import boundary denied " + url + " (importer: " + (parentURL ?? "unknown") + ")");
         registerHooks({
           resolve(specifier, context, nextResolve) {
             const requested = specifier.startsWith(".")
@@ -35,63 +35,44 @@ async function runImportBoundaryChild(forbidden: RegExp, workload: string) {
             return resolved;
           },
         });
-
         ${workload}
         console.log("MCP_IMPORT_BOUNDARY_OK");
       `;
+      const nodeExecutable = resolveTestNodeExecPath();
+      const workerArgs = resolveRuntimeWorkerArgv(cliUrl, nodeExecutable).slice(0, -1);
+      const { PATH, ESBUILD_WORKER_THREADS, TMPDIR, TMP, TEMP } = process.env;
       const result = await runCliProcessChild({
-        nodeExecutable: resolveTestNodeExecPath(),
-        nodeArgs: ["--import", "tsx", "--input-type=module", "--eval", script],
-        // state.env inherits Vitest and operator flags; only fixture paths cross this boundary.
-        env: {
-          PATH: process.env.PATH,
-          ...state.envVars,
-          TMPDIR: state.root,
-          TMP: state.root,
-          TEMP: state.root,
-        },
+        nodeExecutable,
+        nodeArgs: [...workerArgs, "--input-type=module", "--eval", script],
+        // Inherit only runner paths/compiler temp dirs, not Vitest or operator flags.
+        env: { PATH, ESBUILD_WORKER_THREADS, ...state.envVars, TMPDIR, TMP, TEMP },
         timeoutMs: 30_000,
       });
-      const failure = formatCliProcessFailure({
-        reason: "MCP import boundary child failed",
-        ...result,
-      });
+      const failure = formatCliProcessFailure({ reason: "MCP import boundary", ...result });
 
-      expect(result.signal, failure).toBeNull();
-      expect(result.code, failure).toBe(0);
+      expect(result, failure).toMatchObject({ signal: null, code: 0 });
       expect(result.stdout, failure).toContain("MCP_IMPORT_BOUNDARY_OK");
       return result.stdout;
     },
   );
 }
 
-it("keeps MCP client and catalog paths free of plugin tool construction and channel serving", async () => {
-  const stdout = await runImportBoundaryChild(
+it.each<[string, RegExp, string]>([
+  [
+    "client and catalog",
     /\/src\/(?:plugins\/tools|mcp\/channel-server)\.(?:ts|js)(?:[?#].*)?$/u,
     String.raw`
-      const { Command } = await import("commander");
-      const { registerMcpCli } = await import(${JSON.stringify(new URL("./mcp-cli.ts", import.meta.url).href)});
-      const program = new Command();
-      program.exitOverride();
-      registerMcpCli(program);
+      ${registerCli}
       assert.equal(await program.parseAsync(["mcp", "reload"], { from: "user" }), program);
-
-      const { buildBundleMcpToolsFromCatalog } = await import(${JSON.stringify(new URL("../agents/agent-bundle-mcp-materialize.ts", import.meta.url).href)});
+      const { buildBundleMcpToolsFromCatalog } = await import(${JSON.stringify(catalogUrl.href)});
+      const identity = { serverName: "inventory", safeServerName: "inventory" };
       const tools = buildBundleMcpToolsFromCatalog({
         catalog: {
           version: 1,
           generatedAt: 0,
-          servers: {
-            inventory: {
-              serverName: "inventory",
-              safeServerName: "inventory",
-              launchSummary: "inventory fixture",
-              toolCount: 1,
-            },
-          },
+          servers: { inventory: { ...identity, launchSummary: "fixture", toolCount: 1 } },
           tools: [{
-            serverName: "inventory",
-            safeServerName: "inventory",
+            ...identity,
             toolName: "lookup",
             inputSchema: { type: "object", properties: {} },
             fallbackDescription: "Look up an inventory item",
@@ -103,32 +84,28 @@ it("keeps MCP client and catalog paths free of plugin tool construction and chan
         message: "bundle-mcp catalog projection cannot execute tools",
       });
     `,
-  );
-  expect(stdout).toContain("Disposed cached MCP runtimes.");
-});
-
-it("keeps registry reads independent of agent tool materialization", async () => {
-  await runImportBoundaryChild(
+  ],
+  [
+    "registry reads",
     /\/src\/agents\/agent-bundle-mcp-materialize\.(?:ts|js)(?:[?#].*)?$/u,
     String.raw`
-      const { Command } = await import("commander");
-      const { registerMcpCli } = await import(${JSON.stringify(new URL("./mcp-cli.ts", import.meta.url).href)});
-      const program = new Command();
-      program.exitOverride();
-      registerMcpCli(program);
+      ${registerCli}
       for (const command of ["list", "show", "status", "doctor"]) {
         assert.equal(await program.parseAsync(["mcp", command, "--json"], { from: "user" }), program);
       }
     `,
-  );
-});
-
-it("keeps the metadata owner independent of plugin loading and channel serving", async () => {
-  await runImportBoundaryChild(
+  ],
+  [
+    "metadata owner",
     /\/src\/(?:plugins\/(?:tools|loader)|mcp\/channel-server)\.(?:ts|js)(?:[?#].*)?$/u,
     String.raw`
-      const { getPluginToolMeta } = await import(${JSON.stringify(new URL("../plugins/tool-metadata.ts", import.meta.url).href)});
+      const { getPluginToolMeta } = await import(${JSON.stringify(metadataUrl.href)});
       assert.equal(getPluginToolMeta({}), undefined);
     `,
-  );
+  ],
+])("keeps %s imports within their boundary", async (name, forbidden, workload) => {
+  const stdout = await runImportBoundaryChild(forbidden, workload);
+  if (name === "client and catalog") {
+    expect(stdout).toContain("Disposed cached MCP runtimes.");
+  }
 });

@@ -1,9 +1,13 @@
+import { deepStrictEqual, ok } from "node:assert/strict";
 import { once } from "node:events";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { spawnBrokerCommand } from "./execa-client.js";
+import { spawnCommand } from "../exec-spawn.js";
+import { BrokerChild } from "./child.js";
+import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("spawn broker pipe handoff", () => {
   let host: SpawnBrokerHost;
@@ -62,12 +66,13 @@ describe.skipIf(skipBrokerTests)("spawn broker pipe handoff", () => {
       const command =
         transport === "native"
           ? undefined
-          : spawnBrokerCommand(host, [process.execPath, "-e", source], options, options);
+          : runWithSpawnBroker(host, () => spawnCommand([process.execPath, "-e", source], options));
       const child =
         command?.nodeChildProcess ??
         host.spawn(process.execPath, ["-e", source], {
           stdio: [options.stdin, "pipe", "pipe"],
         });
+      ok(child instanceof BrokerChild, "Fixture did not use the broker");
       // The command starts, but the host cannot acknowledge its first pipe yet.
       await Promise.resolve();
       const resumeAt = performance.now() + 200;
@@ -88,8 +93,8 @@ describe.skipIf(skipBrokerTests)("spawn broker pipe handoff", () => {
       await closed;
       await command;
       const expected = Buffer.from(Array.from({ length: size }, (_, index) => index % 251));
-      expect(Buffer.concat(chunks.stdout)).toEqual(expected);
-      expect(Buffer.concat(chunks.stderr)).toEqual(expected);
+      deepStrictEqual(Buffer.concat(chunks.stdout), expected);
+      deepStrictEqual(Buffer.concat(chunks.stderr), expected);
     },
   );
 });

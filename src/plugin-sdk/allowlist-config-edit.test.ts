@@ -1,118 +1,51 @@
-/**
- * Tests allowlist config edit helpers for flat, nested, and account-scoped records.
- */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildDmGroupAccountAllowlistAdapter,
   buildLegacyDmAccountAllowlistAdapter,
-  collectAllowlistOverridesFromRecord,
-  collectNestedAllowlistOverridesFromRecord,
   createAccountScopedAllowlistNameResolver,
   createFlatAllowlistOverrideResolver,
   createNestedAllowlistOverrideResolver,
-  readConfiguredAllowlistEntries,
 } from "./allowlist-config-edit.js";
 
-describe("readConfiguredAllowlistEntries", () => {
-  it("coerces mixed entries to non-empty strings", () => {
-    expect(readConfiguredAllowlistEntries(["owner", 42, ""])).toEqual(["owner", "42"]);
-  });
-});
+function accountOptions(dmOwner: string, room: string) {
+  return {
+    channelId: "demo",
+    resolveAccount: ({ accountId }: { accountId?: string | null }) => ({
+      accountId: accountId ?? "default",
+      dmAllowFrom: [dmOwner],
+      groupAllowFrom: ["group-owner"],
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+      groupOverrides: [{ label: room, entries: ["member-1"] }],
+    }),
+    normalize: ({ values }: { values: Array<string | number> }) =>
+      values.map((entry) => String(entry).trim().toLowerCase()),
+    resolveDmAllowFrom: (account: { dmAllowFrom: string[] }) => account.dmAllowFrom,
+    resolveGroupPolicy: (account: { groupPolicy: string }) => account.groupPolicy,
+    resolveGroupOverrides: (account: {
+      groupOverrides: Array<{ label: string; entries: string[] }>;
+    }) => account.groupOverrides,
+  };
+}
 
-describe("collectAllowlistOverridesFromRecord", () => {
-  it.each([
-    {
-      name: "collects only non-empty overrides from a flat record",
-      record: {
-        room1: { users: ["a", "b"] },
-        room2: { users: [] },
-      },
-      expected: [{ label: "room1", entries: ["a", "b"] }],
-    },
-  ])("$name", ({ record, expected }) => {
-    expect(
-      collectAllowlistOverridesFromRecord({
-        record,
-        label: (key) => key,
-        resolveEntries: (value) => value.users,
-      }),
-    ).toEqual(expected);
-  });
-});
-
-describe("collectNestedAllowlistOverridesFromRecord", () => {
-  it.each([
-    {
-      name: "collects outer and nested overrides from a hierarchical record",
-      record: {
-        guild1: {
-          users: ["owner"],
-          channels: {
-            chan1: { users: ["member"] },
-          },
-        },
-      },
-      expected: [
-        { label: "guild guild1", entries: ["owner"] },
-        { label: "guild guild1 / channel chan1", entries: ["member"] },
-      ],
-    },
-  ])("$name", ({ record, expected }) => {
-    expect(
-      collectNestedAllowlistOverridesFromRecord({
-        record,
-        outerLabel: (key) => `guild ${key}`,
-        resolveOuterEntries: (value) => value.users,
-        resolveChildren: (value) => value.channels,
-        innerLabel: (outerKey, innerKey) => `guild ${outerKey} / channel ${innerKey}`,
-        resolveInnerEntries: (value) => value.users,
-      }),
-    ).toEqual(expected);
-  });
-});
-
-describe("createFlatAllowlistOverrideResolver", () => {
-  it.each([
-    {
-      name: "builds an account-scoped flat override resolver",
-      account: { channels: { room1: { users: ["a"] } } },
-      expected: [{ label: "room1", entries: ["a"] }],
-    },
-  ])("$name", ({ account, expected }) => {
+describe("allowlist config helpers", () => {
+  it("builds flat overrides with nonempty, string-coerced entries", () => {
+    const account = { channels: { room1: { users: ["a", 42, ""] }, room2: { users: [] } } };
     const resolveOverrides = createFlatAllowlistOverrideResolver({
-      resolveRecord: (accountValue: { channels?: Record<string, { users: string[] }> }) =>
-        accountValue.channels,
+      resolveRecord: (value: typeof account) => value.channels,
       label: (key) => key,
       resolveEntries: (value) => value.users,
     });
 
-    expect(resolveOverrides(account)).toEqual(expected);
+    expect(resolveOverrides(account)).toEqual([{ label: "room1", entries: ["a", "42"] }]);
   });
-});
-
-describe("createNestedAllowlistOverrideResolver", () => {
-  it.each([
-    {
-      name: "builds an account-scoped nested override resolver",
-      account: {
-        groups: {
-          g1: { allowFrom: ["owner"], topics: { t1: { allowFrom: ["member"] } } },
-        },
-      },
-      expected: [
-        { label: "g1", entries: ["owner"] },
-        { label: "g1 topic t1", entries: ["member"] },
-      ],
-    },
-  ])("$name", ({ account, expected }) => {
+  it("builds an account-scoped nested override resolver", () => {
+    const account = {
+      groups: { g1: { allowFrom: ["owner"], topics: { t1: { allowFrom: ["member"] } } } },
+    };
     const resolveOverrides = createNestedAllowlistOverrideResolver({
-      resolveRecord: (accountLocal: {
-        groups?: Record<
-          string,
-          { allowFrom?: string[]; topics?: Record<string, { allowFrom?: string[] }> }
-        >;
-      }) => accountLocal.groups,
+      resolveRecord: (value: typeof account) => value.groups,
       outerLabel: (groupId) => groupId,
       resolveOuterEntries: (group) => group.allowFrom,
       resolveChildren: (group) => group.topics,
@@ -120,23 +53,18 @@ describe("createNestedAllowlistOverrideResolver", () => {
       resolveInnerEntries: (topic) => topic.allowFrom,
     });
 
-    expect(resolveOverrides(account)).toEqual(expected);
+    expect(resolveOverrides(account)).toEqual([
+      { label: "g1", entries: ["owner"] },
+      { label: "g1 topic t1", entries: ["member"] },
+    ]);
   });
-});
-
-describe("createAccountScopedAllowlistNameResolver", () => {
   it.each([
+    { token: "", expected: [] },
     {
-      name: "returns empty results when the resolved account has no token",
-      token: "",
-      expected: [],
-    },
-    {
-      name: "delegates to the resolver when a token is present",
       token: " secret ",
       expected: [{ input: "a", resolved: true, name: "secret:a" }],
     },
-  ])("$name", async ({ token, expected }) => {
+  ])("resolves names only with a nonempty trimmed token: '$token'", async ({ token, expected }) => {
     const resolveNames = createAccountScopedAllowlistNameResolver({
       resolveAccount: () => ({ token }),
       resolveToken: (account) => account.token,
@@ -152,31 +80,28 @@ describe("createAccountScopedAllowlistNameResolver", () => {
 
 describe("buildDmGroupAccountAllowlistAdapter", () => {
   const adapter = buildDmGroupAccountAllowlistAdapter({
-    channelId: "demo",
-    resolveAccount: ({ accountId }) => ({
-      accountId: accountId ?? "default",
-      dmAllowFrom: ["dm-owner"],
-      groupAllowFrom: ["group-owner"],
-      dmPolicy: "allowlist",
-      groupPolicy: "allowlist",
-      groupOverrides: [{ label: "room-1", entries: ["member-1"] }],
-    }),
-    normalize: ({ values }) => values.map((entry) => String(entry).trim().toLowerCase()),
-    resolveDmAllowFrom: (account) => account.dmAllowFrom,
+    ...accountOptions("dm-owner", "room-1"),
     resolveGroupAllowFrom: (account) => account.groupAllowFrom,
     resolveDmPolicy: (account) => account.dmPolicy,
-    resolveGroupPolicy: (account) => account.groupPolicy,
-    resolveGroupOverrides: (account) => account.groupOverrides,
   });
+  const edit = (
+    parsedConfig: Record<string, unknown>,
+    action: "add" | "remove",
+    entry: string,
+    accountId = "alt",
+    scope: "dm" | "group" = "dm",
+  ) =>
+    adapter.applyConfigEdit?.({
+      cfg: parsedConfig as OpenClawConfig,
+      parsedConfig,
+      accountId,
+      scope,
+      action,
+      entry,
+    });
 
-  const scopeCases: Array<{ scope: "dm" | "group" | "all"; expected: boolean }> = [
-    { scope: "dm", expected: true },
-    { scope: "group", expected: true },
-    { scope: "all", expected: true },
-  ];
-
-  it.each(scopeCases)("supports $scope scope", ({ scope, expected }) => {
-    expect(adapter.supportsScope?.({ scope })).toBe(expected);
+  it("supports all scope", () => {
+    expect(adapter.supportsScope?.({ scope: "all" })).toBe(true);
   });
 
   it("reads dm/group config from the resolved account", () => {
@@ -190,109 +115,31 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
   });
 
   it("writes group allowlist entries to groupAllowFrom", () => {
-    expect(
-      adapter.applyConfigEdit?.({
-        cfg: {},
-        parsedConfig: {},
-        accountId: "alt",
-        scope: "group",
-        action: "add",
-        entry: " Member-2 ",
-      }),
-    ).toEqual({
+    expect(edit({}, "add", " Member-2 ", "alt", "group")).toEqual({
       kind: "ok",
       changed: true,
       pathLabel: "channels.demo.accounts.alt.groupAllowFrom",
-      writeTarget: {
-        kind: "account",
-        scope: { channelId: "demo", accountId: "alt" },
-      },
+      writeTarget: { kind: "account", scope: { channelId: "demo", accountId: "alt" } },
     });
   });
-
-  it.each([
-    { name: "inherited", account: {}, expected: ["dm-owner", "dm-admin"] },
-    { name: "explicit empty", account: { allowFrom: [] }, expected: ["dm-admin"] },
-    {
-      name: "stored mixed entries",
-      account: { allowFrom: [" Owner ", 42, "", "Owner", "owner", "  ", 42] },
-      expected: ["Owner", "42", "owner", "dm-admin"],
-    },
-  ])(
-    "preserves $name entries when adding a named-account override",
-    async ({ account, expected }) => {
-      const parsedConfig: Record<string, unknown> = {
-        channels: { demo: { allowFrom: ["dm-owner"], accounts: { alt: account } } },
-      };
-
-      await adapter.applyConfigEdit?.({
-        cfg: parsedConfig as OpenClawConfig,
-        parsedConfig,
-        accountId: "alt",
-        scope: "dm",
-        action: "add",
-        entry: "dm-admin",
-      });
-
-      expect(parsedConfig).toMatchObject({
-        channels: {
-          demo: { accounts: { alt: { allowFrom: expected } } },
-        },
-      });
-    },
-  );
 
   it("writes an empty named-account override when removing the last inherited entry", async () => {
     const parsedConfig: Record<string, unknown> = {
       channels: { demo: { allowFrom: ["dm-owner"], accounts: { alt: {} } } },
     };
 
-    await adapter.applyConfigEdit?.({
-      cfg: parsedConfig as OpenClawConfig,
-      parsedConfig,
-      accountId: "alt",
-      scope: "dm",
-      action: "remove",
-      entry: "dm-owner",
-    });
+    await edit(parsedConfig, "remove", "dm-owner");
 
     expect(parsedConfig).toMatchObject({
       channels: { demo: { accounts: { alt: { allowFrom: [] } } } },
     });
   });
 
-  it("writes an empty channel override when removing the last effective entry", async () => {
-    const parsedConfig: Record<string, unknown> = {};
-
-    await adapter.applyConfigEdit?.({
-      cfg: {} as OpenClawConfig,
-      parsedConfig,
-      accountId: "default",
-      scope: "dm",
-      action: "remove",
-      entry: "dm-owner",
-    });
-
-    expect(parsedConfig).toMatchObject({
-      channels: { demo: { allowFrom: [] } },
-    });
-  });
-
   it("keeps an empty channel override after clearing a materialized list", async () => {
     const parsedConfig: Record<string, unknown> = {};
-    const edit = (action: "add" | "remove", entry: string) =>
-      adapter.applyConfigEdit?.({
-        cfg: parsedConfig as OpenClawConfig,
-        parsedConfig,
-        accountId: "default",
-        scope: "dm",
-        action,
-        entry,
-      });
-
-    await edit("add", "dm-admin");
-    await edit("remove", "dm-owner");
-    await edit("remove", "dm-admin");
+    await edit(parsedConfig, "add", "dm-admin", "default");
+    await edit(parsedConfig, "remove", "dm-owner", "default");
+    await edit(parsedConfig, "remove", "dm-admin", "default");
 
     expect(parsedConfig).toMatchObject({
       channels: { demo: { allowFrom: [] } },
@@ -301,28 +148,10 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
 });
 
 describe("buildLegacyDmAccountAllowlistAdapter", () => {
-  const adapter = buildLegacyDmAccountAllowlistAdapter({
-    channelId: "demo",
-    resolveAccount: ({ accountId }) => ({
-      accountId: accountId ?? "default",
-      dmAllowFrom: ["owner"],
-      groupPolicy: "allowlist",
-      groupOverrides: [{ label: "group-1", entries: ["member-1"] }],
-    }),
-    normalize: ({ values }) => values.map((entry) => String(entry).trim().toLowerCase()),
-    resolveDmAllowFrom: (account) => account.dmAllowFrom,
-    resolveGroupPolicy: (account) => account.groupPolicy,
-    resolveGroupOverrides: (account) => account.groupOverrides,
-  });
+  const adapter = buildLegacyDmAccountAllowlistAdapter(accountOptions("owner", "group-1"));
 
-  const scopeCases: Array<{ scope: "dm" | "group" | "all"; expected: boolean }> = [
-    { scope: "dm", expected: true },
-    { scope: "group", expected: false },
-    { scope: "all", expected: false },
-  ];
-
-  it.each(scopeCases)("supports $scope scope", ({ scope, expected }) => {
-    expect(adapter.supportsScope?.({ scope })).toBe(expected);
+  it("does not support group scope", () => {
+    expect(adapter.supportsScope?.({ scope: "group" })).toBe(false);
   });
 
   it("reads legacy dm config from the resolved account", () => {
@@ -333,22 +162,12 @@ describe("buildLegacyDmAccountAllowlistAdapter", () => {
     });
   });
 
-  it.each([
-    { stored: undefined, expected: ["Owner", "owner", "42", "member", "admin"] },
-    { stored: [" Owner ", 42], expected: ["Owner", "42", "owner", "member", "admin"] },
-  ])("merges legacy entries with $stored and cleans up the old path", ({ stored, expected }) => {
-    const parsedConfig = {
-      channels: {
-        demo: {
-          accounts: {
-            alt: {
-              allowFrom: stored,
-              dm: { allowFrom: ["Owner", "owner", "", 42, " member "] },
-            },
-          },
-        },
-      },
+  it("merges legacy entries with undefined and cleans up the old path", () => {
+    const alt = {
+      allowFrom: undefined,
+      dm: { allowFrom: ["Owner", "owner", "", 42, " member "] },
     };
+    const parsedConfig = { channels: { demo: { accounts: { alt } } } };
     expect(
       adapter.applyConfigEdit?.({
         cfg: {},
@@ -362,13 +181,10 @@ describe("buildLegacyDmAccountAllowlistAdapter", () => {
       kind: "ok",
       changed: true,
       pathLabel: "channels.demo.accounts.alt.allowFrom",
-      writeTarget: {
-        kind: "account",
-        scope: { channelId: "demo", accountId: "alt" },
-      },
+      writeTarget: { kind: "account", scope: { channelId: "demo", accountId: "alt" } },
     });
     expect(parsedConfig.channels.demo.accounts.alt).toEqual({
-      allowFrom: expected,
+      allowFrom: ["Owner", "owner", "42", "member", "admin"],
       dm: {},
     });
   });

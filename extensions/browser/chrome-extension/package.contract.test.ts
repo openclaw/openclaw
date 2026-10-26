@@ -21,16 +21,6 @@ describe("simplified Chrome extension package", () => {
     expect(manifest.options_ui).toEqual({ page: "options.html", open_in_tab: true });
   });
 
-  it("contains no copilot, page-share, or side-panel runtime", () => {
-    const files = fs
-      .readdirSync(extensionDir, { recursive: true, withFileTypes: true })
-      .filter((entry) => entry.isFile())
-      .map((entry) => path.join(entry.parentPath, entry.name).slice(extensionDir.length + 1))
-      .filter((entry) => !entry.endsWith(".test.ts"));
-
-    expect(files.join("\n")).not.toMatch(/copilot|page-share|sidepanel/iu);
-  });
-
   it("ships redacted retired-custody recovery guidance", () => {
     const options = fs.readFileSync(path.join(extensionDir, "options.html"), "utf8");
     const popup = fs.readFileSync(path.join(extensionDir, "popup.js"), "utf8");

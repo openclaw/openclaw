@@ -1,47 +1,42 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, expect, test, vi } from "vitest";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
 } from "../config/config.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { installGatewayTestHooks, rpcReq, startConnectedServerWithClient } from "./test-helpers.js";
+import {
+  connectOk,
+  installGatewayTestHooks,
+  rpcReq,
+  startServerWithClient,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-type ConnectedGateway = Awaited<ReturnType<typeof startConnectedServerWithClient>>;
+type ConnectedGateway = Awaited<ReturnType<typeof startServerWithClient>>;
 
-let gateway: ConnectedGateway | undefined;
+let gateway: ConnectedGateway;
 let minimalGatewayEnv: ReturnType<typeof captureEnv> | undefined;
-
-function requireGateway(): ConnectedGateway {
-  if (!gateway) {
-    throw new Error("chat metadata Gateway is not ready");
-  }
-  return gateway;
-}
 
 beforeAll(async () => {
   minimalGatewayEnv = captureEnv(["OPENCLAW_TEST_MINIMAL_GATEWAY"]);
-  // The production lifecycle has no refresh-on-read escape hatch. This must stay non-minimal,
-  // otherwise the old sticky behavior is hidden by the test-only lifecycle configuration.
+  // Minimal mode hides the production lifecycle's sticky-publication regression.
   setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
-  await writeGatewayConfig(CHAT_METADATA_BOUNDARY_CONFIG);
-  gateway = await startConnectedServerWithClient();
+  await writeGatewayConfig(boundaryConfig());
+  gateway = await startServerWithClient();
   await gateway.server.startupSettled;
-}, 60_000);
-
-beforeEach(async () => {
-  setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
-  await writeGatewayConfig(CHAT_METADATA_BOUNDARY_CONFIG);
+  await waitForGatewayStartup(gateway.port);
+  await connectOk(gateway.ws);
   const { refreshPreparedModelRuntimeSnapshots } =
     await import("../agents/prepared-model-runtime.js");
   await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
-  const ready = await rpcReq(requireGateway().ws, "chat.metadata", { agentId: "main" });
-  expect(ready.ok, JSON.stringify(ready)).toBe(true);
-});
+  await expect(metadata()).resolves.toMatchObject({ ok: true });
+}, 60_000);
 
 afterAll(async () => {
   if (gateway) {
@@ -53,39 +48,46 @@ afterAll(async () => {
   minimalGatewayEnv?.restore();
 });
 
-const CHAT_METADATA_BOUNDARY_CONFIG = {
-  agents: {
-    defaults: {
-      model: { primary: "openai/gpt-boundary" },
-      models: { "openai/gpt-boundary": {} },
+const boundaryConfig = (missingOwner = false) =>
+  ({
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        systemAgent: { agentId: "main" },
+        model: { primary: "openai/gpt-boundary" },
+        models: { "openai/gpt-boundary": {} },
+      },
+      entries: { main: {}, healthy: {}, ...(missingOwner ? { missing: {} } : {}) },
     },
-    entries: { main: { default: true }, healthy: {} },
-  },
-  models: {
-    providers: {
-      openai: {
-        baseUrl: "https://openai.example.com/v1",
-        models: [{ id: "gpt-boundary", name: "GPT Boundary" }],
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://openai.example.com/v1",
+          models: [{ id: "gpt-boundary", name: "GPT Boundary" }],
+        },
       },
     },
-  },
-} as const;
+  }) as const;
+const metadata = (agentId = "main") => rpcReq(gateway.ws, "chat.metadata", { agentId });
+const unavailable = (message: string) => ({
+  ok: false,
+  error: { code: "UNAVAILABLE", message: expect.stringContaining(message) },
+});
 
-const CHAT_METADATA_MISSING_OWNER_CONFIG = {
-  ...CHAT_METADATA_BOUNDARY_CONFIG,
-  agents: {
-    ...CHAT_METADATA_BOUNDARY_CONFIG.agents,
-    entries: {
-      ...CHAT_METADATA_BOUNDARY_CONFIG.agents.entries,
-      missing: {},
-    },
-  },
-} as const;
-
-async function writeGatewayConfig(
-  config: Record<string, unknown>,
-  options: { clearRuntimeSnapshot?: boolean } = {},
+async function expectModels(
+  method = "chat.metadata",
+  params: Record<string, unknown> = { agentId: "main" },
 ) {
+  const result = await rpcReq(gateway.ws, method, params);
+  expect(result.ok, JSON.stringify(result)).toBe(true);
+  expect(result.payload).toMatchObject({
+    models: expect.arrayContaining([
+      expect.objectContaining({ id: "gpt-boundary", provider: "openai" }),
+    ]),
+  });
+}
+
+async function writeGatewayConfig(config: Record<string, unknown>, resetRuntime = false) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (!configPath) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
@@ -93,82 +95,94 @@ async function writeGatewayConfig(
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
   clearConfigCache();
-  if (options.clearRuntimeSnapshot) {
+  if (resetRuntime) {
     clearRuntimeConfigSnapshot();
   }
 }
 
-test("chat.metadata isolates projection failures while retaining owner publication failures", async () => {
-  const ws = requireGateway().ws;
+test("metadata RPCs isolate missing owners and preserve deferred admission and publication failures", async () => {
   const publicationEvents = await import("../agents/prepared-model-runtime.publication-events.js");
-  const initial = await rpcReq(ws, "chat.metadata", { agentId: "main" });
-  expect(initial.ok).toBe(true);
-
-  // This is the lifecycle listener's real published catch-up. Config can expose an agent before
-  // its prepared owner exists, reproducing the stale publication announcement that wedged UI.
-  await writeGatewayConfig(CHAT_METADATA_MISSING_OWNER_CONFIG, { clearRuntimeSnapshot: true });
+  // Config can expose an agent before its prepared owner exists; replay real published catch-up.
+  await writeGatewayConfig(boundaryConfig(true), true);
   publicationEvents.notifyPreparedModelRuntimePublication({ phase: "published" });
-  let unavailable: Awaited<ReturnType<typeof rpcReq>> | undefined;
-  await vi.waitFor(
-    async () => {
-      unavailable = await rpcReq(ws, "chat.metadata", { agentId: "main" });
-      expect(unavailable.ok).toBe(false);
-    },
-    { interval: 1, timeout: 2_000 },
-  );
-  expect(unavailable).toMatchObject({
-    ok: false,
-    error: {
-      code: "UNAVAILABLE",
-      message: expect.stringContaining("prepared chat metadata owner is unavailable"),
-    },
-  });
+  for (const method of ["chat.metadata", "models.list"] as const) {
+    await expectModels(method);
+  }
 
-  await writeGatewayConfig(CHAT_METADATA_BOUNDARY_CONFIG, { clearRuntimeSnapshot: true });
-  const recovered = await rpcReq<{
-    models?: Array<{ id?: string; provider?: string }>;
-  }>(ws, "chat.metadata", { agentId: "main" });
-
-  expect(recovered.ok).toBe(true);
-  expect(recovered.payload?.models).toEqual(
-    expect.arrayContaining([expect.objectContaining({ id: "gpt-boundary", provider: "openai" })]),
-  );
+  await writeGatewayConfig(boundaryConfig(), true);
+  await expectModels();
 
   // Reset the published runtime between boundary cases without restarting the Gateway.
   const { refreshPreparedModelRuntimeSnapshots } =
     await import("../agents/prepared-model-runtime.js");
   await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
-  const reset = await rpcReq(ws, "chat.metadata", { agentId: "main" });
-  expect(reset.ok).toBe(true);
+  await expect(metadata()).resolves.toMatchObject({ ok: true });
 
   const modelsListResult = await import("./server-methods/models-list-result.js");
   const prepareModelsListResult = modelsListResult.prepareModelsListResult;
-  const projectionFailure = new Error("configured model catalog unavailable");
   const projectionSpy = vi
     .spyOn(modelsListResult, "prepareModelsListResult")
     .mockImplementation(async (params) => {
       if (params.agentId === "main") {
-        throw projectionFailure;
+        throw new Error("configured model catalog unavailable");
       }
       return prepareModelsListResult(params);
     });
 
   publicationEvents.notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   publicationEvents.notifyPreparedModelRuntimePublication({ phase: "published" });
-  const projectionUnavailable = await rpcReq(ws, "chat.metadata", { agentId: "main" });
-  expect(projectionUnavailable).toMatchObject({
-    ok: false,
-    error: {
-      code: "UNAVAILABLE",
-      message: expect.stringContaining("configured model catalog unavailable"),
-    },
-  });
-  const healthy = await rpcReq(ws, "chat.metadata", { agentId: "healthy" });
-  expect(healthy.ok, JSON.stringify(healthy)).toBe(true);
+  expect(await metadata()).toMatchObject(unavailable("configured model catalog unavailable"));
+  await expect(metadata("healthy")).resolves.toMatchObject({ ok: true });
 
   projectionSpy.mockRestore();
-  const projectionRecovered = await rpcReq(ws, "chat.metadata", { agentId: "main" });
-  expect(projectionRecovered.ok, JSON.stringify(projectionRecovered)).toBe(true);
+  await expect(metadata()).resolves.toMatchObject({ ok: true });
+
+  const {
+    createAgentDatabaseInspectionRefusal,
+    preparePendingAgentDatabase,
+    recordAgentDatabaseAdmissions,
+  } = await import("../state/agent-database-admission.js");
+  const { resolveOpenClawAgentSqlitePath } = await import("../state/openclaw-agent-db.paths.js");
+  const env = { ...process.env };
+  const refusal = createAgentDatabaseInspectionRefusal({
+    agentId: "main",
+    paths: [resolveOpenClawAgentSqlitePath({ agentId: "main", env })],
+    pending: true,
+    reason: "Synthetic deferred startup admission",
+  });
+  const releasePublication = createDeferred();
+  let latePublication: Promise<void> | undefined;
+  recordAgentDatabaseAdmissions([refusal], { env, source: "startup" });
+  try {
+    await preparePendingAgentDatabase(refusal, { env, assertCurrent() {} }, async () => {
+      await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), {
+        agentIds: new Set(["main"]),
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+      });
+      // Catalog completion retains the publisher's borrow after admission has settled.
+      latePublication = releasePublication.promise.then(() => {
+        publicationEvents.notifyPreparedModelRuntimePublication({
+          phase: "catalog-published",
+          modelFactsChanged: false,
+          refreshStatusChanged: true,
+        });
+      });
+    });
+    await expect(metadata()).resolves.toMatchObject({ ok: true });
+    releasePublication.resolve();
+    await latePublication;
+    for (const [method, params] of [
+      ["chat.metadata", { agentId: "main" }],
+      ["models.list", { agentId: "main", view: "configured", preparedOnly: true }],
+    ] as const) {
+      await expectModels(method, params);
+    }
+  } finally {
+    releasePublication.resolve();
+    await latePublication;
+    recordAgentDatabaseAdmissions([], { env, source: "startup" });
+  }
 
   publicationEvents.notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   publicationEvents.notifyPreparedModelRuntimePublication({
@@ -176,12 +190,8 @@ test("chat.metadata isolates projection failures while retaining owner publicati
     error: new Error("prepared model owner publication failed"),
   });
   for (const agentId of ["main", "healthy"]) {
-    expect(await rpcReq(ws, "chat.metadata", { agentId })).toMatchObject({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: expect.stringContaining("prepared model owner publication failed"),
-      },
-    });
+    expect(await metadata(agentId)).toMatchObject(
+      unavailable("prepared model owner publication failed"),
+    );
   }
 });

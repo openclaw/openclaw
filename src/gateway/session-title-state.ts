@@ -1,19 +1,35 @@
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
-type SessionTitleTarget = { storePath: string; sessionKey: string; sessionId: string };
+type SessionTitleTarget = {
+  storePath: string;
+  sessionKey: string;
+  sessionId: string;
+};
 const requestKey = (target: SessionTitleTarget) =>
   `${target.storePath}\0${target.sessionKey}\0${target.sessionId}`;
 
-// One request per session generation; callers share settlement and pending requests
+// One request per session; callers share settlement and pending requests
 // always leave the registry, including model failures and timeouts.
 const pending = new Map<string, Promise<boolean>>();
 export const sessionTitleRequests = {
   get(target: SessionTitleTarget) {
     return pending.get(requestKey(target));
   },
-  run(target: SessionTitleTarget, create: () => Promise<boolean>) {
-    return getOrCreatePromise(pending, requestKey(target), create, { evictOnSettled: true });
+  run(target: SessionTitleTarget, create: () => Promise<boolean>, onStateChanged?: () => void) {
+    const key = requestKey(target);
+    const existing = pending.get(key);
+    if (existing) {
+      return existing;
+    }
+    const request = getOrCreatePromise(pending, key, create, { evictOnSettled: true });
+    // Register after the cache eviction handlers so either outcome publishes the
+    // settled state, not the just-completed request still present in the registry.
+    if (onStateChanged) {
+      void request.then(onStateChanged, onStateChanged);
+      onStateChanged();
+    }
+    return request;
   },
 };
 
@@ -30,4 +46,14 @@ export function resolveExplicitSessionName(entry: SessionEntry | undefined): str
 
 export function hasExplicitSessionName(entry: SessionEntry | undefined): boolean {
   return Boolean(resolveExplicitSessionName(entry));
+}
+
+/** Manual names and other title owners never participate in automatic refinement. */
+export function matchesGeneratedSessionTitle(entry: SessionEntry, name: string): boolean {
+  return (
+    entry.titleRefinement?.sessionId === entry.sessionId &&
+    entry.titleRefinement.generatedName === name &&
+    entry.displayName === name &&
+    ![entry.label, entry.subject, entry.groupChannel, entry.space].some((value) => value?.trim())
+  );
 }

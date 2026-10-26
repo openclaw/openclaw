@@ -11,11 +11,8 @@ function piHome(env: NodeJS.ProcessEnv): string {
   return configured || os.homedir();
 }
 
-function isPiSessionCatalogPathAbsolute(
-  value: string,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  if (platform !== "win32") {
+function isPiSessionCatalogPathAbsolute(value: string): boolean {
+  if (process.platform !== "win32") {
     return path.posix.isAbsolute(value);
   }
   const root = path.win32.parse(value).root;

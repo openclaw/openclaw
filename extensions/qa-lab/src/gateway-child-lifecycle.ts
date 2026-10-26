@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { QaSuiteInfraError } from "./errors.js";
 import {
   cleanupQaGatewayTempRoots,
@@ -24,7 +25,11 @@ export type QaGatewayStopResult = {
   process: "never-spawned" | "confirmed-stopped" | "unconfirmed";
   errors: unknown[];
 };
-export type QaGatewayStopOptions = { keepTemp?: boolean; preserveToDir?: string };
+export type QaGatewayStopOptions = {
+  keepTemp?: boolean;
+  preserveToDir?: string;
+  beforeTempCleanup?: () => Promise<void>;
+};
 
 type OwnedProcess = {
   kind: "gateway" | "cli";
@@ -55,6 +60,8 @@ export class QaGatewayChildLifecycle {
   private operation: Promise<unknown> | null = null;
   private stopping: Promise<QaGatewayStopResult> | null = null;
   private artifactsFinalized = false;
+  private stoppedArtifactsCaptured = false;
+  private tempRootsCleaned = false;
   private readonly keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
 
   repoRoot?: string;
@@ -99,22 +106,12 @@ export class QaGatewayChildLifecycle {
   }
 
   async waitForClose(owned: OwnedProcess) {
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      await Promise.race([
-        owned.closed,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            const label = owned.kind === "cli" ? "CLI" : "child";
-            reject(
-              new Error(`qa gateway ${label} stdio did not close after process-tree shutdown`),
-            );
-          }, QA_GATEWAY_CHILD_DRAIN_TIMEOUT_MS);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
+    await withTimeout(owned.closed, QA_GATEWAY_CHILD_DRAIN_TIMEOUT_MS, {
+      createError: () =>
+        new Error(
+          `qa gateway ${owned.kind === "cli" ? "CLI" : "child"} stdio did not close after process-tree shutdown`,
+        ),
+    });
   }
 
   completeCli(owned: OwnedProcess, operation: Promise<string>) {
@@ -217,13 +214,22 @@ export class QaGatewayChildLifecycle {
     // Close admission before any await: staging/acceptance/replacement cannot
     // spawn or resume a child after a caller has requested stop.
     this.cancellation.abort();
-    this.stopping ??= this.stopOnce(opts).then((result) => {
+    const existingStopping = this.stopping;
+    const stopping = (this.stopping ??= this.stopOnce(opts).then((result) => {
       if (result.errors.length) {
         this.stopping = null;
       }
       return result;
+    }));
+    const keepTemp = opts?.keepTemp ?? this.keepTemp;
+    if (keepTemp || !existingStopping) {
+      return stopping;
+    }
+    return stopping.then(async (stopped) => {
+      const errors = [...stopped.errors];
+      await this.finalizeRetainedArtifacts(stopped, opts, errors);
+      return { process: stopped.process, errors };
     });
-    return this.stopping;
   }
 
   private async stopOnce(opts?: QaGatewayStopOptions): Promise<QaGatewayStopResult> {
@@ -276,9 +282,35 @@ export class QaGatewayChildLifecycle {
       }
     }
     await attempt(async () => this.current?.checkFailure());
+    await this.finalizeRetainedArtifacts(stopped, opts, errors);
+    return { process: stopped.process, errors };
+  }
+
+  private async finalizeRetainedArtifacts(
+    stopped: QaGatewayStopResult,
+    opts: QaGatewayStopOptions | undefined,
+    errors: unknown[],
+  ): Promise<void> {
     const tempRoot = this.tempRoot;
     const keepTemp = opts?.keepTemp ?? this.keepTemp;
     let artifactsPreserved = true;
+    if (
+      stopped.process !== "unconfirmed" &&
+      opts?.beforeTempCleanup &&
+      !this.stoppedArtifactsCaptured
+    ) {
+      try {
+        await opts.beforeTempCleanup();
+        this.stoppedArtifactsCaptured = true;
+      } catch (error) {
+        artifactsPreserved = false;
+        errors.push(
+          new Error("QA stopped-Gateway receipt capture failed; runtime evidence retained.", {
+            cause: error,
+          }),
+        );
+      }
+    }
     if (tempRoot && opts?.preserveToDir && !keepTemp && !this.artifactsFinalized) {
       try {
         await preserveQaGatewayDebugArtifacts({
@@ -298,19 +330,29 @@ export class QaGatewayChildLifecycle {
       }
     }
     if (tempRoot && stopped.process !== "unconfirmed" && artifactsPreserved && !keepTemp) {
-      // Finalize artifact policy before cleanup can delete its log sources.
-      // Unconfirmed stops must keep refreshing their still-writable snapshots.
-      this.artifactsFinalized = true;
-      await attempt(() =>
-        cleanupQaGatewayTempRoots({
-          tempRoot,
-          stagedBundledPluginsRoot: this.stagedBundledPluginsRoot,
-          // The isolation owner created private directories under another UID.
-          // Finalize them only after shutdown and sanitized log preservation.
-          cleanupTempRoot: this.controller?.cleanupTempRoot,
-        }),
-      );
+      await this.cleanupRetainedTempRoots(errors);
     }
-    return { process: stopped.process, errors };
+  }
+
+  private async cleanupRetainedTempRoots(errors: unknown[]): Promise<void> {
+    const tempRoot = this.tempRoot;
+    if (!tempRoot || this.tempRootsCleaned) {
+      return;
+    }
+    // Finalize artifact policy before cleanup can delete its log sources.
+    // Unconfirmed stops must keep refreshing their still-writable snapshots.
+    this.artifactsFinalized = true;
+    try {
+      await cleanupQaGatewayTempRoots({
+        tempRoot,
+        stagedBundledPluginsRoot: this.stagedBundledPluginsRoot,
+        // The isolation owner created private directories under another UID.
+        // Finalize them only after shutdown and sanitized log preservation.
+        cleanupTempRoot: this.controller?.cleanupTempRoot,
+      });
+      this.tempRootsCleaned = true;
+    } catch (error) {
+      errors.push(error);
+    }
   }
 }

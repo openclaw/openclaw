@@ -41,6 +41,8 @@ The install writes a small `# OpenClaw Completion` block into your shell profile
 | zsh        | `$ZDOTDIR/.zshrc` when `ZDOTDIR` is defined; otherwise `~/.zshrc` (an empty `ZDOTDIR` resolves to `/.zshrc`)                                                                               |
 
 Profile changes are staged beside the destination and atomically replace it only after a complete durable write. A failed install leaves an existing profile unchanged.
+Profiles must be regular files; symlinks to regular files are supported. Pipes and
+other special files are rejected before reading, so completion does not wait for a writer.
 
 Installed source lines preserve literal cache paths, including spaces, quotes, dollar signs, and backslashes. Reinstalling replaces OpenClaw's previous source line after the state directory changes.
 
@@ -67,7 +69,7 @@ profile selected in the table above. It has no profile-file destination option.
 - Bash completion supports both `--flag value` and `--flag=value`, including named profiles before nested commands and single-quoted, double-quoted, or backslash-escaped value prefixes.
 - After an option terminator (`--`), Bash completes command names but does not suggest options or option values.
 - PowerShell completes commands and option values at the cursor, including when later arguments are already present.
-- `openclaw update` refreshes the completion cache automatically after a successful update. `openclaw doctor` can repair missing or stale completion setups.
+- `openclaw update` refreshes the core completion cache automatically without loading plugin CLI commands. Run `openclaw completion --write-state` to include plugin commands. `openclaw doctor` can repair missing or stale completion setups.
 
 ## Related
 

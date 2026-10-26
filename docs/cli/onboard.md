@@ -77,7 +77,7 @@ stored recommendations; use `openclaw agents list` to find configured IDs.
 Fresh workspaces defer the recommendation choice to the bootstrap conversation.
 After that conversation handles the user's choices,
 `openclaw onboard recommendations acknowledge` marks the stored offer answered.
-The acknowledgement is idempotent. If a chosen install fails, pass each failed
+Repeating the acknowledgement has no additional effect. If a chosen install fails, pass each failed
 opaque ID with `--retry <id...>`; successful and declined matches are consumed,
 while failed matches remain pending for a later onboarding run. Unknown IDs
 fail without changing the stored offer. After an interrupted ClawHub skill
@@ -100,7 +100,7 @@ not overwrite the existing skill.
   shared-auth ownership still attached to the old `main` installation.
 - `--flow quickstart`: opens the classic wizard with minimal prompts, uses
   a generated Gateway secret by default, without asking you to choose token or
-  password. Existing password-mode configurations are preserved. Explicit local Gateway flags such as
+  password. Existing password and trusted-proxy configurations are preserved. Explicit local Gateway flags such as
   `--gateway-port`, `--gateway-bind`, `--gateway-auth`, and `--tailscale`
   override the corresponding stored or default quickstart values; omitted
   options keep their current values.
@@ -111,7 +111,7 @@ not overwrite the existing skill.
   still requires password mode. The mode selects the configured secret;
   clients can send it in either `auth.token` or `auth.password`.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`) against a fresh setup. After confirmation, onboarding stages config, credentials, workspace files, memory, and skills under private temporary targets; imported inference must pass a live completion before workspace and agent state are promoted and configuration is committed. Failure or cancellation before promotion leaves the live target untouched. External activation steps that cannot be rolled back, such as Codex plugin installation, run afterward and remain retryable from the migration report. Migration import options (`--flow import`, `--import-from`, `--import-source`, and `--import-secrets`) cannot be combined with `--reset`; run the import without `--reset`. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, verified backups, reports, and exact mappings.
-- `--remote-url`, `--remote-token`, and `--remote-password`: prefill the classic remote Gateway step and override stored remote values for this run. Pass either a token or a password, not both. Changing the URL does not reuse stored credentials unless you also provide a new token or password. The interactive step asks for one **Gateway secret**, whether the remote Gateway calls it a token or password, and stores it as `gateway.remote.token`. Credentials stay masked and follow the plaintext or SecretRef storage choice. Leave the secret blank and confirm to keep an existing credential. To connect without a shared secret, leave it blank, decline keeping an existing credential if offered, then explicitly confirm **Continue without a Gateway secret?**. Reference storage offers the same confirmation before asking for the reference.
+- `--remote-url`, `--remote-token`, and `--remote-password`: prefill the classic remote Gateway step and override stored remote values for this run. Pass either a token or a password, not both. Equivalent URL spellings, such as a trailing slash or an explicit default port, preserve saved credentials and transport settings. Changing the host, path, or query selects a different credential target. A newly discovered SSH tunnel also selects a new target, even with the same loopback URL. The interactive step asks for one **Gateway secret**, whether the remote Gateway calls it a token or password, and stores it as `gateway.remote.token`. Credentials stay masked and follow the plaintext or SecretRef storage choice. Leave the secret blank and confirm to keep an existing credential. To connect without a shared secret, leave it blank, decline keeping an existing credential if offered, then explicitly confirm **Continue without a Gateway secret?**. Reference storage offers the same confirmation before asking for the reference.
 - `--modern` is a compatibility alias for the OpenClaw conversational setup
   assistant. It uses the same live-inference gate as `openclaw setup` and
   accepts only `--workspace`, `--agent-name`, `--accept-risk`,
@@ -154,7 +154,13 @@ baseline setup resumes under its existing onboarding owner.
 In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
 OpenClaw setup proposal. Classic and noninteractive onboarding persist their
-workspace through their normal setup flow. On a rerun with an existing agent
+workspace through their normal setup flow. A workspace must be a directory or
+a new path beneath directories; a file, non-directory ancestor, dangling
+symbolic link, or symlink loop is rejected before setup or reset, with the
+failing path named. Other inspection failures, such as permission errors, are
+reported rather than treated as missing directories.
+Symbolic links to existing directories, including new paths beneath them, are
+allowed. On a rerun with an existing agent
 roster, onboarding preserves the configured fleet workspace: the classic
 wizard shows both paths and requires explicit confirmation before moving it,
 while non-interactive setup warns and keeps the current value.
@@ -188,7 +194,9 @@ loopback Gateway, and waits up to five minutes. A successful connection
 continues in the browser; an unreachable Gateway or a timeout falls back to the
 same terminal hatch as before. Pass `--tui` to skip the browser handoff and
 force that terminal hatch.
-If applying setup fails, onboarding falls back to the conversational OpenClaw
+If applying setup fails after inference succeeds, the status identifies workspace,
+Gateway, or general setup failure rather than an AI check failure. The detailed
+error keeps its recovery guidance, and onboarding falls back to the conversational OpenClaw
 chat to finish interactively. Channels, agents,
 plugins, and other optional features remain OpenClaw chat territory: run
 `openclaw` and use `open channel wizard for <channel>` to hand channel
@@ -224,7 +232,7 @@ state:
   `/openclaw` inside the TUI or `openclaw setup`.
 
 Remote setup reuses device pairing for the selected Gateway, including a
-configured remote connection forwarded through loopback. Its readiness probes
+configured remote connection forwarded through loopback. Its readiness checks
 do not create new device pairings. Setup chat keeps a stable authenticated
 caller across replies, including on loopback connections.
 
@@ -259,6 +267,17 @@ acknowledgement, so invoking `--reset` can move state to Trash before you can
 decline that prompt. After reset, the command runs guided, classic, or
 non-interactive onboarding according to the other flags.
 
+Onboarding reset requires readable configuration and SQLite storage. With
+PostgreSQL configured, rerun onboarding without `--reset`, or use
+`openclaw database port --to sqlite` before resetting. Reset keeps database
+state, so discarding PostgreSQL routing would leave that state inaccessible.
+For a file-only reset without starting onboarding, use `openclaw reset --scope config`.
+
+Session reset permanently removes stored history from the configured database and its owned archive
+files through the same cleanup as [`openclaw reset`](/cli/reset). It preserves
+auth profiles and unrelated database state. Stop any running Gateway first;
+onboarding refuses session cleanup while another process owns the state directory.
+
 ## Locale
 
 Interactive onboarding uses the CLI wizard locale for fixed setup copy. It uses the first nonblank value in this order:
@@ -271,6 +290,11 @@ Interactive onboarding uses the CLI wizard locale for fixed setup copy. It uses 
 
 Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use underscore or POSIX suffix forms such as `zh_CN.UTF-8`. Product names, command names, config keys, URLs, provider IDs, model IDs, and plugin/channel labels remain literal.
 
+The Control UI's fixed onboarding welcome and setup choices use the UI language
+reported when it connects to the Gateway. Chinese UI locales use the same
+source-maintained setup translations; command replies such as `yes` and
+`talk to agent` remain unchanged.
+
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard
 OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
@@ -279,6 +303,13 @@ OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 ## Non-interactive setup
 
 `--non-interactive` requires `--accept-risk` (acknowledges that agents are powerful and full system access is risky). `--mode` defaults to `local`.
+
+Replacing an existing provider credential saves it inactive and prints a
+`models auth activate` command; setup does not automatically switch your working
+connection or continue to daemon installation. Temporary credential staging files
+are removed after their databases close. If removal remains blocked, setup warns
+with the leftover directory path without hiding the provider result or activation
+instructions. Remove that directory manually once the lock clears.
 
 ### Required external plugins
 
@@ -320,7 +351,11 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --custom-image-input
 ```
 
-`--custom-api-key` is optional; if omitted, onboarding checks `CUSTOM_API_KEY` in env. OpenClaw marks common vision model IDs (GPT-4o/4.1/5.x, Claude 3/4, Gemini, Qwen-VL, LLaVA, Pixtral, and similar) as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata. Use `--custom-compatibility openai-responses` for OpenAI-compatible endpoints that support `/v1/responses` but not `/v1/chat/completions`; valid values are `openai` (default), `openai-responses`, `anthropic`.
+`--custom-api-key` is optional; if omitted, onboarding checks `CUSTOM_API_KEY` in env. For an endpoint that does not enforce authentication, pass `--custom-no-auth` instead. This persists `auth: "none"` and skips credential lookup, including `CUSTOM_API_KEY`. Do not combine it with `--custom-api-key`. Explicit no-auth requires the effective `openai-completions` adapter; Responses and Azure OpenAI routes are rejected before reset or persistence. OpenClaw marks common vision model IDs (GPT-4o/4.1/5.x, Claude 3/4, Gemini, Qwen-VL, LLaVA, Pixtral, and similar) as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata. Use `--custom-compatibility openai-responses` for OpenAI-compatible endpoints that support `/v1/responses` but not `/v1/chat/completions`; valid values are `openai` (default), `openai-responses`, `anthropic`.
+
+For `openai` and `openai-responses`, omit `--custom-model-id` to discover models from the base URL's `/models` endpoint (for example, `/v1/models`). Onboarding saves all discovered models and uses the first as the default. An explicit `--custom-model-id` skips discovery and configures that model. Discovery sends the supplied API key and times out after five seconds. If the endpoint is unavailable, returns invalid data, or lists no models, rerun with `--custom-model-id`. Anthropic-compatible setup always requires that flag.
+
+When combining discovery with `--reset`, a credential stored only in the configuration being reset cannot be reused. Supply the key for the new setup through `--custom-api-key` or `CUSTOM_API_KEY`, or rerun without `--reset`. Onboarding rejects the request before resetting if the discovered provider would lose its credential.
 
 LM Studio also has a provider-specific key flag:
 
@@ -341,7 +376,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --custom-model-id "qwen3.5:27b"
 ```
 
-`--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.5:cloud` also work here.
+`--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.6:cloud` also work here.
 
 Non-interactive llama.cpp against an existing `llama-server`:
 
@@ -367,6 +402,8 @@ With `--secret-input-mode ref`, onboarding stores new credentials as refs instea
 
 ### Gateway auth (non-interactive)
 
+Existing [trusted-proxy authentication](/gateway/trusted-proxy-auth) and its proxy policy stay intact on rerun unless you explicitly select another auth mode. Selecting Tailscale Funnel while retaining trusted-proxy auth is rejected; switch explicitly with `--gateway-auth password` or keep Tailscale exposure off. Same-host completion uses the configured local password (including SecretRefs) or `OPENCLAW_GATEWAY_PASSWORD`, through the Gateway's loopback listener. Post-setup health checks stay on the configured local Gateway port, ignoring ambient Gateway URL and port overrides.
+
 - Without auth flags or an existing credential, onboarding generates a Gateway secret and stores it as `gateway.auth.token` with `gateway.auth.mode: "token"`. Quickstart keeps its existing plaintext storage default; `--secret-input-mode ref` explicitly requests a reference. Run `openclaw dashboard` to open the Control UI.
 - `--gateway-auth token --gateway-token <token>` stores a supplied plaintext secret.
 - `--gateway-password <value>` selects password mode without an auth-choice prompt; `--gateway-auth password` also explicitly selects password mode. An existing password-mode config stays in password mode on rerun.
@@ -374,9 +411,9 @@ With `--secret-input-mode ref`, onboarding stores new credentials as refs instea
 - `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
 - Remote onboarding uses `--remote-token <token>` or `--remote-password <password>` for `gateway.remote` credentials. `--gateway-token`, `--gateway-token-ref-env`, and `--gateway-password` configure local Gateway auth and are not valid in remote mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use `--remote-token` with `--secret-input-mode ref`.
 - With `--secret-input-mode ref`, non-interactive `--gateway-password` and `--remote-password` require a matching `OPENCLAW_GATEWAY_PASSWORD`, and `--remote-token` requires a matching `OPENCLAW_GATEWAY_TOKEN`; onboarding stores an env SecretRef and rejects missing or mismatched values before changing state. Interactive setup can also select configured file, exec, or store refs.
-- With `--install-daemon`: a SecretRef-managed `gateway.auth.token` is validated but not persisted as resolved plaintext in supervisor service environment metadata; if the ref is unresolved, install fails closed with remediation guidance. If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install blocks until mode is set explicitly.
+- With `--install-daemon`: a SecretRef-managed `gateway.auth.token` is validated but not persisted as resolved plaintext in supervisor service environment metadata; if the ref is unresolved, install stops with remediation guidance. If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install blocks until mode is set explicitly.
 - Local onboarding writes `gateway.mode="local"` into the config. A later config file missing `gateway.mode` indicates config damage or an incomplete manual edit, not a valid local-mode shortcut.
-- Local onboarding ensures the chosen setup path's required plugins are available (for example the Codex or Copilot runtime). Non-interactive setup cannot approve new capabilities; [review and preinstall required external plugins](#required-external-plugins), then rerun onboarding. Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
+- Local onboarding checks that the chosen setup path's required plugins are available (for example the Codex or Copilot runtime). Non-interactive setup cannot approve new capabilities; [review and preinstall required external plugins](#required-external-plugins), then rerun onboarding. Remote onboarding only writes connection info for the remote Gateway - it never installs local plugin packages.
 - `--allow-unconfigured` is a separate `openclaw gateway run` escape hatch; it does not let onboarding skip `gateway.mode`.
 
 ```bash
@@ -394,7 +431,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before exiting successfully.
 - `--install-daemon` starts the managed gateway install path first. With no daemon flag, a local gateway must already be running (for example `openclaw gateway run`).
-- Explicit `--skip-daemon` or `--no-install-daemon` still probes for an existing gateway. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
+- Explicit `--skip-daemon` or `--no-install-daemon` performs one reachability check without waiting for Gateway startup. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
 - `--skip-health` skips the wait if you only want config/workspace/bootstrap writes in automation.
 - `--skip-bootstrap` sets `agents.defaults.skipBootstrap: true` and skips creating `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`.
 - On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.
@@ -455,7 +492,7 @@ Token-based model auth (used with `--auth-choice token`):
 
 Cloudflare AI Gateway: `--cloudflare-ai-gateway-account-id <id>`, `--cloudflare-ai-gateway-gateway-id <id>`.
 
-Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 
 Skills: `--node-manager <npm|pnpm|bun>` (default `npm`), `--skip-skills`.
 
@@ -470,6 +507,9 @@ JSON error; add `--non-interactive --accept-risk` for automation.
 With `--modern`, JSON is a one-shot OpenClaw overview and exits after that
 single result. Use `--non-interactive` for other scripts. Invalid existing
 configuration also returns one JSON failure; repair guidance remains on stderr.
+Non-interactive provider setup failures, including an unreachable local model
+server or missing credentials, return a JSON error on stdout and a nonzero exit
+status. Without `--json`, the same recovery guidance is printed as readable text.
 </Note>
 
 ## Provider prefiltering
@@ -487,7 +527,7 @@ Some web-search providers trigger provider-specific follow-up prompts during onb
 
 - Local onboarding DM scope behavior: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals).
 - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
-- Custom provider: connect any OpenAI- or Anthropic-compatible endpoint, including hosted providers not listed. Use **Unknown** compatibility to auto-detect via a live probe.
+- Custom provider: connect any OpenAI- or Anthropic-compatible endpoint, including hosted providers not listed. Use **Unknown** compatibility to auto-detect via a live check.
 - If Hermes state is detected, onboarding offers a migration flow (see `--flow import` above).
 
 ## Common follow-up commands

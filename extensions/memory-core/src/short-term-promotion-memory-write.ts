@@ -1,11 +1,15 @@
-import { createHash } from "node:crypto";
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
-import { resolvePathPrefixSync } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  resolvePathPrefixSync,
+  writeFileWindowFully,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import type { MemoryWorkspaceFiles } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { sha256Hex as hashMemoryContent } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { getMemoryWorkspaceMaintenance, readWorkspaceText } from "./memory-workspace-files.js";
+import { getMemoryWorkspaceMaintenance, readWorkspaceFile } from "./memory-workspace-files.js";
 
 type MemoryFileCommit = Parameters<
   NonNullable<MemoryWorkspaceFiles["maintenance"]>["commitContent"]
@@ -76,14 +80,23 @@ export async function resolveMemoryWritePath(
 }
 
 export async function readMemoryContent(filePath: string, workspaceDir?: string): Promise<string> {
-  return await (
-    workspaceDir ? readWorkspaceText(workspaceDir, filePath) : fs.readFile(filePath, "utf-8")
+  const bytes = await (
+    workspaceDir ? readWorkspaceFile(workspaceDir, filePath) : fs.readFile(filePath)
   ).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return "";
+    if (extractErrorCode(error) === "ENOENT") {
+      return null;
     }
     throw error;
   });
+  if (bytes === null) {
+    return "";
+  }
+  if (!isUtf8(bytes)) {
+    throw new Error(
+      `Memory file is not valid UTF-8: ${filePath}. The file was left unchanged; convert a copy to UTF-8 before retrying.`,
+    );
+  }
+  return bytes.toString("utf8");
 }
 
 export function isAtomicReplacePermissionError(error: unknown): boolean {
@@ -114,21 +127,7 @@ async function writeExistingMemoryInPlace(params: {
   } catch (error) {
     const original = Buffer.from(params.expectedContent, "utf-8");
     try {
-      let restored = 0;
-      while (restored < original.length) {
-        const { bytesWritten } = await handle.write(
-          original,
-          restored,
-          original.length - restored,
-          restored,
-        );
-        if (bytesWritten <= 0) {
-          throw new Error(`${path.basename(params.filePath)} restore write made no progress`, {
-            cause: error,
-          });
-        }
-        restored += bytesWritten;
-      }
+      await writeFileWindowFully(handle, original, 0);
       await handle.truncate(original.length);
       await handle.sync();
     } catch (restoreError) {
@@ -143,9 +142,7 @@ async function writeExistingMemoryInPlace(params: {
   }
 }
 
-export function hashMemoryContent(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
+export { hashMemoryContent };
 
 export async function commitMemoryContent(
   params: MemoryFileCommit & { workspaceDir?: string },
@@ -210,9 +207,7 @@ export async function commitMemoryContent(
       },
       fileSystem: {
         promises: {
-          mkdir: fs.mkdir,
-          chmod: fs.chmod,
-          writeFile: fs.writeFile,
+          ...fs,
           rename: async (from, to) => {
             publication.state = "uncertain";
             try {
@@ -236,12 +231,6 @@ export async function commitMemoryContent(
             }
             publication.state = "committed";
           },
-          copyFile: fs.copyFile,
-          unlink: fs.unlink,
-          rm: fs.rm,
-          open: fs.open,
-          stat: fs.stat,
-          lstat: fs.lstat,
         },
       },
     });

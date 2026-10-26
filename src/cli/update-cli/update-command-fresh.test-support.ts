@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
-import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import * as updateGlobal from "../../infra/update-global.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as processIdentity from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -20,11 +21,36 @@ import * as commandRun from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
 
 export const targetMetadata = {
-  target: "2026.9.2",
   version: "2026.9.2",
   nodeEngine: null,
   schemaVersions: { state: 16, agent: 19 },
 };
+
+export function writeFreshJson(filename: string, value: unknown) {
+  fs.writeFileSync(filename, JSON.stringify(value));
+  return filename;
+}
+
+export function expectNoFreshCalls(...spies: unknown[]) {
+  for (const spy of spies) {
+    expect(spy).not.toHaveBeenCalled();
+  }
+}
+
+export function expectFreshStatePreserved(fixture: { root: string; databasePath: string }) {
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
+  expectNoFreshCalls(packageUpdate.stagePackageInstallUpdate);
+  expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
+}
+
+export function denyFreshLeaseRelease(message: string) {
+  using db = new DatabaseSync(
+    path.join(tempRoot.resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite"),
+  );
+  db.exec(
+    `CREATE TRIGGER deny_refusal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, '${message}'); END`,
+  );
+}
 
 export function installFreshUpdateFixture() {
   const dirs = createTempDirTracker();
@@ -37,10 +63,10 @@ export function installFreshUpdateFixture() {
     const home = dirs.make("openclaw-update-fresh-preview-");
     fixture.root = path.join(home, "installation");
     fs.mkdirSync(fixture.root);
-    fs.writeFileSync(
-      path.join(fixture.root, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
-    );
+    writeFreshJson(path.join(fixture.root, "package.json"), {
+      name: "openclaw",
+      version: "2026.9.3",
+    });
     vi.stubEnv("HOME", home);
     vi.stubEnv("OPENCLAW_PROFILE", undefined);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "profile"));
@@ -71,7 +97,7 @@ export function installFreshUpdateFixture() {
       discoveredRoot: fixture.root,
       installKind: "package",
       servicePlan: { rootRedirect: null, nodeRunner: fixture.managedServiceNodeRunner },
-      pkgOwnership: createFreeBsdPkgOwnershipInspection(5_000),
+      pkgOwnership: createSystemPackageOwnershipInspection(5_000),
     }));
     vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
     vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation(async () => ({
@@ -81,11 +107,10 @@ export function installFreshUpdateFixture() {
       managedEnv: undefined,
     }));
     vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue("npm");
-    vi.spyOn(shared, "resolveTargetVersion").mockResolvedValue("2026.9.2");
+    vi.spyOn(shared, "resolveTargetVersion").mockResolvedValue({ version: "2026.9.2" });
     vi.spyOn(updateGlobal, "createGlobalInstallEnv").mockResolvedValue({ ...process.env });
     vi.spyOn(packageDestination, "inspectNpmGlobalDestination").mockResolvedValue({
       kind: "empty",
-      prefix: home,
     });
     vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockResolvedValue({
       manager: "npm",

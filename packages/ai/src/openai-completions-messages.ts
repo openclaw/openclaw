@@ -7,15 +7,22 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
+import { isImageWithMediaPayload } from "./media-payload.js";
+import { preparedRequestSuffix } from "./provider-options.js";
 import { transformProviderMessages as transformMessages } from "./provider-transcript-transform.js";
-import type { ProviderMessage } from "./provider-types.js";
+import type { ProviderContext, ProviderMessage, ProviderModel } from "./provider-types.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
-  isImageWithMediaPayload,
 } from "./providers/tool-result-text.js";
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
-import type { Context, Model, ThinkingContent, ToolCall } from "./types.js";
+import {
+  hasRuntimeContextMarker,
+  isRuntimeContextMessage,
+  runtimeContextContentToText,
+  type ThinkingContent,
+  type ToolCall,
+} from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
 import {
   splitSystemPromptRelocatableBoundary,
@@ -23,19 +30,13 @@ import {
   stripSystemPromptRelocatableBoundary,
 } from "./utils/system-prompt-cache-boundary.js";
 
-const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 type ChatCompletionContentPartVideo = {
   type: "video_url";
   video_url: { url: string };
 };
 
-function sanitizeToolResultText(text: string, fallback: string): string {
-  const sanitized = sanitizeSurrogates(text);
-  return sanitized.trim().length > 0 ? sanitized : fallback;
-}
-
 /** Whether replayed messages require a tools marker for proxy compatibility. */
-export function hasToolCallHistory(messages: Context["messages"]): boolean {
+export function hasToolCallHistory(messages: ProviderContext["messages"]): boolean {
   return messages.some(
     (message) =>
       message.role === "toolResult" ||
@@ -47,15 +48,21 @@ export function hasToolCallHistory(messages: Context["messages"]): boolean {
 
 /** Convert a normalized transcript to OpenAI Chat Completions messages. */
 export function convertMessages(
-  model: Model<"openai-completions">,
-  context: Context,
+  model: ProviderModel,
+  context: ProviderContext,
   compat: ResolvedOpenAICompletionsCompat,
   options: {
     cacheOptOutIndexes?: Set<number>;
     preserveSystemPromptCacheBoundary?: boolean;
+    supportsTools?: boolean;
+    declaredToolNames?: ReadonlySet<string>;
   } = {},
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
+  const supportsTools = options.supportsTools !== false;
+  const declaredToolNames =
+    options.declaredToolNames ?? new Set(context.tools?.map((tool) => tool.name));
+  const toolNamesByCallId = new Map<string, string>();
 
   const normalizeToolCallId = (id: string): string => {
     // Responses ids can contain a pipe plus a long provider item id. Chat
@@ -71,8 +78,10 @@ export function convertMessages(
     return id;
   };
 
-  const transformedMessages = transformMessages(context.messages, model, (id) =>
-    normalizeToolCallId(id),
+  const transformedMessages = transformMessages(
+    context.messages,
+    model,
+    normalizeToolCallId,
   ) as ProviderMessage[];
 
   // Local chat templates can place tools after system content. Move only the
@@ -112,17 +121,19 @@ export function convertMessages(
       params.push({ role: "assistant", content: "I have processed the tool results." });
     }
 
-    if (msg.role === "user") {
-      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
+    if (isRuntimeContextMessage(msg)) {
+      params.push({
+        role: compat.supportsDeveloperRole ? "developer" : "user",
+        content: sanitizeSurrogates(runtimeContextContentToText(msg.content)),
+      });
+      options.cacheOptOutIndexes?.add(params.length - 1);
+    } else if (msg.role === "user") {
+      let userParam: ChatCompletionMessageParam;
       if (typeof msg.content === "string") {
-        const userParam: ChatCompletionMessageParam = {
+        userParam = {
           role: "user",
           content: sanitizeSurrogates(msg.content),
         };
-        if (isRuntimeContextCarrier) {
-          options.cacheOptOutIndexes?.add(params.length);
-        }
-        params.push(userParam);
       } else {
         const content: Array<ChatCompletionContentPart | ChatCompletionContentPartVideo> =
           msg.content.map((item) => {
@@ -146,12 +157,12 @@ export function convertMessages(
         if (content.length === 0) {
           continue;
         }
-        const userParam = { role: "user", content } as ChatCompletionMessageParam;
-        if (isRuntimeContextCarrier) {
-          options.cacheOptOutIndexes?.add(params.length);
-        }
-        params.push(userParam);
+        userParam = { role: "user", content } as ChatCompletionMessageParam;
       }
+      if (hasRuntimeContextMarker(msg)) {
+        options.cacheOptOutIndexes?.add(params.length);
+      }
+      params.push(userParam);
     } else if (msg.role === "assistant") {
       const assistantMsg: ChatCompletionAssistantMessageParam = {
         role: "assistant",
@@ -167,7 +178,16 @@ export function convertMessages(
         } else if (block.type === "thinking" && block.thinking.trim().length > 0) {
           nonEmptyThinkingBlocks.push(block);
         } else if (block.type === "toolCall") {
-          toolCalls.push(block);
+          toolNamesByCallId.set(block.id, block.name);
+          if (supportsTools && declaredToolNames.has(block.name)) {
+            toolCalls.push(block);
+          } else {
+            assistantTexts.push(
+              sanitizeSurrogates(
+                `[tool call id=${block.id} name=${block.name}] ${JSON.stringify(block.arguments)}`,
+              ),
+            );
+          }
         }
       });
       if (nonEmptyThinkingBlocks.length > 0 && compat.requiresThinkingAsText) {
@@ -243,6 +263,7 @@ export function convertMessages(
       const imageContentParts: Array<
         ChatCompletionContentPartText | { type: "image_url"; image_url: { url: string } }
       > = [];
+      const textResults: string[] = [];
       let j = i;
 
       while (j < transformedMessages.length) {
@@ -254,19 +275,34 @@ export function convertMessages(
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const images = toolMsg.content.filter(isImageWithMediaPayload);
-        const content = sanitizeToolResultText(
-          textResult,
-          mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
-        );
-        const toolResultMsg: ChatCompletionToolMessageParam = {
-          role: "tool",
-          content,
-          tool_call_id: toolMsg.toolCallId,
-        };
-        if (compat.requiresToolResultName && toolMsg.toolName) {
-          (toolResultMsg as typeof toolResultMsg & { name?: string }).name = toolMsg.toolName;
+        const content = textResult.trim() ? textResult : (mediaPlaceholder ?? "(no output)");
+        const normalizedId = normalizeToolCallId(toolMsg.toolCallId);
+        const pairedToolName =
+          toolNamesByCallId.get(toolMsg.toolCallId) ?? toolNamesByCallId.get(normalizedId);
+        const isNativeResult =
+          pairedToolName !== undefined
+            ? declaredToolNames.has(pairedToolName)
+            : preparedRequestSuffix.hasToolCall(context, toolMsg.toolCallId) ||
+              preparedRequestSuffix.hasToolCall(context, normalizedId);
+        if (supportsTools && isNativeResult) {
+          const toolResultMsg: ChatCompletionToolMessageParam = {
+            role: "tool",
+            content,
+            tool_call_id: preparedRequestSuffix.has(context)
+              ? preparedRequestSuffix.toolCallId(context, toolMsg.toolCallId, normalizedId)
+              : toolMsg.toolCallId,
+          };
+          if (compat.requiresToolResultName && toolMsg.toolName) {
+            (toolResultMsg as typeof toolResultMsg & { name?: string }).name = toolMsg.toolName;
+          }
+          params.push(toolResultMsg);
+        } else {
+          textResults.push(
+            sanitizeSurrogates(
+              `[tool result id=${toolMsg.toolCallId} name=${toolMsg.toolName}] ${content}`,
+            ),
+          );
         }
-        params.push(toolResultMsg);
 
         if (images.length > 0 && model.input.includes("image")) {
           const boundedToolName = sanitizeSurrogates(truncateUtf16Safe(toolMsg.toolName ?? "", 64));
@@ -286,9 +322,26 @@ export function convertMessages(
       }
 
       i = j - 1;
+      if (textResults.length > 0) {
+        // Native results must stay contiguous; collapse text before later cache indexes are recorded.
+        const previous = params.at(-1);
+        const text = textResults.join("\n");
+        if (previous?.role !== "assistant") {
+          params.push({ role: "assistant", content: text });
+        } else if (Array.isArray(previous.content)) {
+          previous.content.push(
+            ...textResults.map((result): ChatCompletionContentPartText => ({
+              type: "text",
+              text: result,
+            })),
+          );
+        } else {
+          previous.content = previous.content ? `${previous.content}\n${text}` : text;
+        }
+      }
 
       if (imageContentParts.length > 0) {
-        if (compat.requiresAssistantAfterToolResult) {
+        if (supportsTools && textResults.length === 0 && compat.requiresAssistantAfterToolResult) {
           params.push({ role: "assistant", content: "I have processed the tool results." });
         }
         params.push({
@@ -297,7 +350,7 @@ export function convertMessages(
         });
         lastRole = "user";
       } else {
-        lastRole = "toolResult";
+        lastRole = supportsTools && textResults.length === 0 ? "toolResult" : "assistant";
       }
       continue;
     }
@@ -306,51 +359,38 @@ export function convertMessages(
   }
 
   if (relocatableSplit !== undefined && systemParamIndex !== undefined) {
-    relocateNonBehavioralRegion({
-      params,
-      systemParamIndex,
-      split: relocatableSplit,
-      cacheOptOutIndexes: options.cacheOptOutIndexes,
-    });
+    const cacheOptOutIndexes = options.cacheOptOutIndexes;
+    // Commit relocation only after finding an emitted carrier.
+    const text = sanitizeSurrogates(stripSystemPromptCacheBoundary(relocatableSplit.relocatable));
+    // A trailing carrier would rewrite the earlier user turn on every follow-up.
+    for (let index = systemParamIndex + 1; index < params.length; index++) {
+      const param = params[index];
+      if (!param || param.role !== "user") {
+        continue;
+      }
+      if (typeof param.content === "string") {
+        param.content = `${param.content}\n\n${text}`;
+      } else if (Array.isArray(param.content)) {
+        param.content = [
+          ...param.content,
+          { type: "text", text } satisfies ChatCompletionContentPartText,
+        ];
+      } else {
+        continue;
+      }
+      // Shrink the system message only once a carrier turn is secured, so a
+      // projected-away user turn leaves the region where it already is.
+      const systemParam = params[systemParamIndex];
+      if (systemParam) {
+        systemParam.content = sanitizeSurrogates(
+          stripSystemPromptCacheBoundary(relocatableSplit.remainingPrompt),
+        );
+      }
+      // The turn now carries volatile text, so it must not anchor a cache breakpoint.
+      cacheOptOutIndexes?.add(index);
+      break;
+    }
   }
 
   return params;
-}
-
-/** Commit relocation only after finding an emitted carrier. */
-function relocateNonBehavioralRegion(args: {
-  params: ChatCompletionMessageParam[];
-  systemParamIndex: number;
-  split: { remainingPrompt: string; relocatable: string };
-  cacheOptOutIndexes?: Set<number>;
-}): void {
-  const text = sanitizeSurrogates(stripSystemPromptCacheBoundary(args.split.relocatable));
-  // A trailing carrier would rewrite the earlier user turn on every follow-up.
-  for (let index = args.systemParamIndex + 1; index < args.params.length; index++) {
-    const param = args.params[index];
-    if (!param || param.role !== "user") {
-      continue;
-    }
-    if (typeof param.content === "string") {
-      param.content = `${param.content}\n\n${text}`;
-    } else if (Array.isArray(param.content)) {
-      param.content = [
-        ...param.content,
-        { type: "text", text } satisfies ChatCompletionContentPartText,
-      ];
-    } else {
-      continue;
-    }
-    // Shrink the system message only once a carrier turn is secured, so a
-    // projected-away user turn leaves the region where it already is.
-    const systemParam = args.params[args.systemParamIndex];
-    if (systemParam) {
-      systemParam.content = sanitizeSurrogates(
-        stripSystemPromptCacheBoundary(args.split.remainingPrompt),
-      );
-    }
-    // The turn now carries volatile text, so it must not anchor a cache breakpoint.
-    args.cacheOptOutIndexes?.add(index);
-    return;
-  }
 }

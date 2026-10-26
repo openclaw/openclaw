@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
@@ -9,10 +14,25 @@ import {
   initialFallbackAttemptOptions,
   requireMockCall,
   setupAgentRunnerExecutionTestState,
+  runFallbackCandidate,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
+
+beforeEach(() => {
+  // WhatsApp has no buildToolContext adapter; preserve its default threading path.
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "whatsapp",
+        plugin: createChannelTestPluginBase({ id: "whatsapp" }),
+        source: "test",
+      },
+    ]),
+  );
+});
+afterEach(resetPluginRuntimeStateForTest);
 
 function resolveMockedCliGrantCapability() {
   const run = requireMockCall(state.runCliAgentMock, 0, "CLI run params")[0] as RunCliAgentParams;
@@ -29,12 +49,9 @@ function resolveMockedCliGrantCapability() {
 describe("executeAgentTurn: CLI delegation grants", () => {
   it("keeps primary CLI completion grants unrestricted", async () => {
     state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params)),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
+    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+      runFallbackCandidate(params, "codex-cli", "gpt-5.4"),
+    );
     state.runCliAgentMock.mockResolvedValue({ payloads: [{ text: "done" }], meta: {} });
     const followupRun = createFollowupRun();
     followupRun.run.provider = "codex-cli";
@@ -63,6 +80,30 @@ describe("executeAgentTurn: CLI delegation grants", () => {
       };
     });
     state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [], meta: {} });
+    state.runCliAgentMock.mockResolvedValue({ payloads: [{ text: "done" }], meta: {} });
+    const followupRun = createFollowupRun();
+    followupRun.run.inputProvenance = {
+      kind: "inter_session",
+      sourceTool: "subagent_announce",
+    };
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(result.kind).toBe("success");
+    expect(resolveMockedCliGrantCapability()).toBe("report_only");
+  });
+
+  it("restricts a sticky rate-limit fallback CLI completion grant that runs first", async () => {
+    state.isCliProviderMock.mockImplementation((provider) => provider === "codex-cli");
+    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+      runFallbackCandidate(
+        params,
+        "codex-cli",
+        "gpt-5.4",
+        fallbackAttemptOptions(params, "rate_limit"),
+      ),
+    );
     state.runCliAgentMock.mockResolvedValue({ payloads: [{ text: "done" }], meta: {} });
     const followupRun = createFollowupRun();
     followupRun.run.inputProvenance = {

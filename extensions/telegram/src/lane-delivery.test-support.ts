@@ -7,21 +7,28 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery-text-deliverer.js";
-import {
-  createTelegramPromptContextProjectionSequence,
-  type TelegramPromptContextProjectionSequence,
-} from "./prompt-context-projection.js";
+import { createTelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
 
 type PromptContextRecord = Parameters<
   typeof createTelegramPromptContextProjectionSequence
 >[0]["record"];
+type DelivererOptions = Parameters<typeof createLaneTextDeliverer>[0];
+
+function lane(stream: DraftLaneState["stream"]): DraftLaneState {
+  return {
+    stream,
+    lastPartialText: "",
+    hasStreamedMessage: false,
+    finalized: false,
+    retainedPromptContextPages: [],
+  };
+}
 
 export function createHarness(params?: {
   answerMessageId?: number;
   answerStream?: DraftLaneState["stream"] | null;
-  resolveFinalPayloadCandidate?: Parameters<
-    typeof createLaneTextDeliverer
-  >[0]["resolveFinalPayloadCandidate"];
+  resolveFinalPayloadCandidate?: DelivererOptions["resolveFinalPayloadCandidate"];
+  resolveFinalPresentationText?: DelivererOptions["resolveFinalPresentationText"];
 }) {
   const answer =
     params?.answerStream === null
@@ -29,49 +36,26 @@ export function createHarness(params?: {
       : (params?.answerStream ?? createTestDraftStream({ messageId: params?.answerMessageId }));
   const reasoning = createTestDraftStream();
   const lanes: Record<LaneName, DraftLaneState> = {
-    answer: {
-      stream: answer,
-      lastPartialText: "",
-      hasStreamedMessage: false,
-      finalized: false,
-      retainedPromptContextPages: [],
-    },
-    reasoning: {
-      stream: reasoning,
-      lastPartialText: "",
-      hasStreamedMessage: false,
-      finalized: false,
-      retainedPromptContextPages: [],
-    },
+    answer: lane(answer),
+    reasoning: lane(reasoning),
   };
-  const sendPayload = vi.fn().mockResolvedValue(true);
-  const flushDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.flush();
-  });
-  const stopDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.stop();
-  });
-  const clearDraftLane = vi.fn().mockImplementation(async (lane: DraftLaneState) => {
-    await lane.stream?.clear();
-  });
+  const sendPayload = vi
+    .fn<DelivererOptions["sendPayload"]>()
+    .mockResolvedValue({ visibleReplySent: true });
   const editStreamMessage = vi.fn().mockResolvedValue(undefined);
   const recordPromptContextPreview = vi.fn<PromptContextRecord>().mockResolvedValue(true);
   const createPromptContextSequence = () =>
     createTelegramPromptContextProjectionSequence({ record: recordPromptContextPreview });
-  const log = vi.fn();
   const markDelivered = vi.fn();
 
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
-    applyTextToPayload: (payload: ReplyPayload, text: string) => ({ ...payload, text }),
     sendPayload,
-    flushDraftLane,
-    stopDraftLane,
-    clearDraftLane,
     editStreamMessage,
     createPromptContextSequence,
     resolveFinalPayloadCandidate: params?.resolveFinalPayloadCandidate,
-    log,
+    resolveFinalPresentationText: params?.resolveFinalPresentationText,
+    log: () => {},
     markDelivered,
   });
 
@@ -81,44 +65,31 @@ export function createHarness(params?: {
     answer,
     reasoning,
     sendPayload,
-    flushDraftLane,
-    stopDraftLane,
-    clearDraftLane,
     editStreamMessage,
     recordPromptContextPreview,
-    log,
     markDelivered,
   };
 }
 
-export async function deliverFinalAnswer(harness: ReturnType<typeof createHarness>, text: string) {
+type Harness = ReturnType<typeof createHarness>;
+type DeliveryOptions = Parameters<Harness["deliverLaneText"]>[0];
+
+export function deliver(harness: Harness, text: string, overrides: Partial<DeliveryOptions> = {}) {
   return harness.deliverLaneText({
     laneName: "answer",
     text,
     payload: { text },
     infoKind: "final",
+    ...overrides,
   });
 }
 
-export function createProjectionSequence(
-  record: PromptContextRecord,
-): TelegramPromptContextProjectionSequence {
-  return createTelegramPromptContextProjectionSequence({
-    source: { transcriptMessageId: "assistant-1" },
-    record,
-  });
-}
-
-export async function deliverProjectedFinalAnswer(
-  harness: ReturnType<typeof createHarness>,
-  text: string,
-) {
-  return harness.deliverLaneText({
-    laneName: "answer",
-    text,
-    payload: { text },
-    infoKind: "final",
-    promptContextSequence: createProjectionSequence(harness.recordPromptContextPreview),
+export async function deliverProjectedFinalAnswer(harness: Harness, text: string) {
+  return deliver(harness, text, {
+    promptContextSequence: createTelegramPromptContextProjectionSequence({
+      source: { transcriptMessageId: "assistant-1" },
+      record: harness.recordPromptContextPreview,
+    }),
   });
 }
 
@@ -148,16 +119,9 @@ export function expectRecordedPreview(
   });
 }
 
-export function expectSentPayload(
-  harness: ReturnType<typeof createHarness>,
-  payload: ReplyPayload,
-  durable: boolean,
-) {
+export function expectSentPayload(harness: Harness, payload: ReplyPayload, durable: boolean) {
   expect(harness.sendPayload).toHaveBeenCalledWith(
     payload,
-    expect.objectContaining({
-      durable,
-      promptContextSequence: expect.any(Object),
-    }),
+    expect.objectContaining({ durable, promptContextSequence: expect.any(Object) }),
   );
 }

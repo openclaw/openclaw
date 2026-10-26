@@ -6,11 +6,10 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { findModelInCatalog, type ModelCatalogEntry } from "../agents/model-catalog.js";
+import { findModelInCatalog } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
 import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
-import { resolveDoctorPrimaryModelRef } from "../commands/doctor/shared/primary-model-ref.js";
 import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -50,31 +49,6 @@ function modelContextFinding(agentId: string, reason: string, deferred = false):
   };
 }
 
-function buildDoctorRuntimeModel(params: {
-  entry?: ModelCatalogEntry;
-  provider: string;
-  modelId: string;
-}): ProviderRuntimeModel {
-  const provider = params.provider || DEFAULT_PROVIDER;
-  const id = params.modelId || DEFAULT_MODEL;
-  const api = params.entry?.api ?? (provider === "openai" ? "openai-responses" : undefined);
-  const baseUrl =
-    params.entry?.baseUrl ??
-    (api === "openai-chatgpt-responses"
-      ? "https://chatgpt.com/backend-api"
-      : provider === "openai"
-        ? "https://api.openai.com/v1"
-        : undefined);
-  return {
-    ...params.entry,
-    provider,
-    id,
-    name: params.entry?.name ?? id,
-    ...(api ? { api } : {}),
-    ...(baseUrl ? { baseUrl } : {}),
-  } as ProviderRuntimeModel; // SAFETY: Inspection omits inference fields; schema-hook failures become findings.
-}
-
 /** Prepare each agent's local facts before acquiring the operation's tool registrations. */
 export async function prepareDoctorToolSchemaFrames(
   cfg: OpenClawConfig,
@@ -93,9 +67,11 @@ export async function prepareDoctorToolSchemaFrames(
     const agentDir = resolveAgentDir(cfg, agentId, env);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId, env);
     const prepare = async () => {
-      const modelRef = standalone
-        ? resolveDoctorPrimaryModelRef(cfg, agent?.model)
-        : resolveDefaultModelForAgent({ cfg, agentId, allowPluginNormalization: true });
+      const modelRef = resolveDefaultModelForAgent({
+        cfg,
+        agentId,
+        allowPluginNormalization: !standalone,
+      });
       let model: ProviderRuntimeModel;
       if (standalone) {
         const { resolveModelAsync } = await import("../agents/embedded-agent-runner/model.js");
@@ -129,11 +105,25 @@ export async function prepareDoctorToolSchemaFrames(
           readOnly: true,
           providerDiscoveryProviderIds: [],
         });
-        model = buildDoctorRuntimeModel({
-          entry: findModelInCatalog(catalog, modelRef.provider, modelRef.model),
-          provider: modelRef.provider,
-          modelId: modelRef.model,
-        });
+        const entry = findModelInCatalog(catalog, modelRef.provider, modelRef.model);
+        const provider = modelRef.provider || DEFAULT_PROVIDER;
+        const id = modelRef.model || DEFAULT_MODEL;
+        const api = entry?.api ?? (provider === "openai" ? "openai-responses" : undefined);
+        const baseUrl =
+          entry?.baseUrl ??
+          (api === "openai-chatgpt-responses"
+            ? "https://chatgpt.com/backend-api"
+            : provider === "openai"
+              ? "https://api.openai.com/v1"
+              : undefined);
+        model = {
+          ...entry,
+          provider,
+          id,
+          name: entry?.name ?? id,
+          ...(api ? { api } : {}),
+          ...(baseUrl ? { baseUrl } : {}),
+        } as ProviderRuntimeModel; // SAFETY: Inspection omits inference fields; schema-hook failures become findings.
       }
       if (!supportsModelTools(model)) {
         return;
@@ -141,12 +131,9 @@ export async function prepareDoctorToolSchemaFrames(
       const capabilityProfile = resolveConversationCapabilityProfile({
         config: cfg,
         agentId,
-        agentDir,
         workspaceDir,
         modelProvider: modelRef.provider,
         modelId: modelRef.model,
-        modelApi: model.api,
-        modelContextWindowTokens: model.contextWindow,
       });
       frames.push({ agentId, agentDir, workspaceDir, modelRef, model, capabilityProfile });
     };

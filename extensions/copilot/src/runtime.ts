@@ -1,13 +1,8 @@
-// Copilot plugin module implements runtime behavior.
-import { normalize, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
+import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toStringifiedError as toCopilotRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { loadCopilotSdk } from "./sdk-loader.js";
-
-// SAFETY: The pool reuses CopilotClient instances per normalized PoolKey and does not
-// serialize concurrent client.createSession() calls. attempt-bridge MUST treat shared
-// CopilotClients as having safe concurrent multi-session semantics that are NOT YET PROVEN;
-// if probe q4 reveals concurrency hazards, attempt-bridge must add per-key serialization.
 
 const DEFAULT_IDLE_TTL_MS = 5 * 60 * 1000;
 const POOL_DISPOSED_MESSAGE = "[copilot-pool] pool disposed";
@@ -20,6 +15,7 @@ export interface PoolKey {
   readonly authProfileVersion?: string;
   /** Distinguishes hardened empty-mode clients from normal Copilot CLI clients. */
   readonly clientMode?: CopilotClientOptions["mode"];
+  readonly runtimeArtifactFingerprint?: string;
 }
 
 export interface ClientCreateOptions extends Omit<
@@ -34,60 +30,37 @@ export interface ClientCreateOptions extends Omit<
 export interface PooledClient {
   readonly key: PoolKey;
   readonly client: CopilotClient;
+  readonly runtimeArtifact?: AgentHarnessRuntimeArtifactBinding;
 }
 
 export interface CopilotClientPoolOptions {
   readonly sdkFactory?: (opts: CopilotClientOptions) => CopilotClient | Promise<CopilotClient>;
   readonly idleTtlMs?: number;
-  readonly now?: () => number;
 }
 
-export interface CopilotClientPool {
-  acquire(key: PoolKey, options: ClientCreateOptions): Promise<PooledClient>;
-  release(handle: PooledClient): Promise<void>;
-  dispose(): Promise<Error[]>;
-  size(): number;
-}
-
-type EntryState =
-  | { kind: "creating"; promise: Promise<CopilotClient> }
-  | { kind: "ready"; client: CopilotClient }
-  | {
-      kind: "idle";
-      client: CopilotClient;
-      idleTimer: ReturnType<typeof setTimeout>;
-      idleSinceMs: number;
-    }
-  | { kind: "stopping"; client: CopilotClient; promise: Promise<Error[]> }
-  | { kind: "stopped" };
+export type CopilotClientPool = ReturnType<typeof createCopilotClientPool>;
 
 interface PoolEntry {
   readonly key: PoolKey;
   readonly cacheKey: string;
+  readonly client: Promise<CopilotClient>;
   refCount: number;
-  stopRan: boolean;
-  state: EntryState;
+  idleTimer?: ReturnType<typeof setTimeout>;
+  stopping?: Promise<Error[]>;
 }
 
-export function createCopilotClientPool(options: CopilotClientPoolOptions = {}): CopilotClientPool {
+export function createCopilotClientPool(options: CopilotClientPoolOptions = {}) {
   const sdkFactory =
     options.sdkFactory ??
     (async (clientOptions: CopilotClientOptions) => {
-      // Lazy-load the SDK so packaged installs without @github/copilot-sdk
-      // (the default; see sdk-loader.ts for rationale) crash with an
-      // actionable install message instead of a generic MODULE_NOT_FOUND
-      // at import time. The loader caches the resolved module after the
-      // first successful load.
+      // The loader reports install guidance when the optional SDK is missing.
       const sdk = await loadCopilotSdk();
       return new sdk.CopilotClient(clientOptions);
     });
   const idleTtlMs = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
-  const now = options.now ?? Date.now;
   const entries = new Map<string, PoolEntry>();
   const releasedHandles = new WeakSet<PooledClient>();
-  let disposed = false;
   let disposePromise: Promise<Error[]> | undefined;
-  let disposeCompleted = false;
 
   const createDisposedError = () => new Error(POOL_DISPOSED_MESSAGE);
 
@@ -97,165 +70,117 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
     }
   };
 
-  const stopReadyOrIdleEntry = (
-    entry: PoolEntry,
-    client: CopilotClient,
-    idleTimer?: ReturnType<typeof setTimeout>,
-  ) => {
-    if (idleTimer) {
-      clearTimeout(idleTimer);
+  const stopEntry = (entry: PoolEntry): Promise<Error[]> => {
+    if (entry.stopping) {
+      return entry.stopping;
     }
-    if (entry.stopRan) {
-      if (entry.state.kind === "stopping") {
-        return entry.state.promise;
-      }
-      if (entry.state.kind === "stopped") {
-        return Promise.resolve([]);
-      }
-    }
-
-    entry.stopRan = true;
-    const stopPromise = (async () => {
+    clearTimeout(entry.idleTimer);
+    entry.stopping = (async () => {
       try {
+        const client = await entry.client;
         return await client.stop();
       } catch (error: unknown) {
         return [toCopilotRuntimeError(error)];
       } finally {
-        entry.state = { kind: "stopped" };
         maybeDeleteEntry(entry);
       }
     })();
-
-    entry.state = { kind: "stopping", client, promise: stopPromise };
-    return stopPromise;
+    return entry.stopping;
   };
 
-  const stopEntry = async (entry: PoolEntry): Promise<Error[]> => {
-    switch (entry.state.kind) {
-      case "creating": {
-        try {
-          await entry.state.promise;
-        } catch (error: unknown) {
-          maybeDeleteEntry(entry);
-          return [toCopilotRuntimeError(error)];
-        }
-        return stopEntry(entry);
-      }
-      case "ready":
-        return stopReadyOrIdleEntry(entry, entry.state.client);
-      case "idle":
-        return stopReadyOrIdleEntry(entry, entry.state.client, entry.state.idleTimer);
-      case "stopping":
-        return entry.state.promise;
-      case "stopped":
-        return [];
-      default: {
-        const exhaustive: never = entry.state;
-        return exhaustive;
-      }
-    }
-  };
-
-  const scheduleIdleStop = (entry: PoolEntry, client: CopilotClient) => {
-    const idleTimer = setTimeout(() => {
-      void stopEntry(entry);
-    }, idleTtlMs);
-    entry.state = {
-      kind: "idle",
-      client,
-      idleTimer,
-      idleSinceMs: now(),
-    };
-  };
-
-  const createEntry = (key: PoolKey, cacheKey: string, clientOptions: CopilotClientOptions) => {
-    const entry: PoolEntry = {
-      key,
-      cacheKey,
-      refCount: 1,
-      stopRan: false,
-      state: {
-        kind: "creating",
-        promise: Promise.resolve(undefined as unknown as CopilotClient),
-      },
-    };
-
-    const createPromise = (async () => {
+  const createEntry = (
+    key: PoolKey,
+    cacheKey: string,
+    clientOptions: CopilotClientOptions,
+    runtimeArtifact?: AgentHarnessRuntimeArtifactBinding,
+  ) => {
+    // Register the entry before invoking a factory that may throw synchronously.
+    const createPromise = Promise.resolve().then(async () => {
       try {
         const client = await sdkFactory(clientOptions);
-        entry.state = { kind: "ready", client };
+        if (runtimeArtifact) {
+          try {
+            await client.start();
+            const { validateCopilotRuntimeArtifact } = await import("./runtime-artifact.js");
+            if (!(await validateCopilotRuntimeArtifact(runtimeArtifact))) {
+              throw new Error("[copilot] runtime changed while starting; retry setup verification");
+            }
+          } catch (error) {
+            await client.stop().catch(() => undefined);
+            throw error;
+          }
+        }
         return client;
       } catch (error: unknown) {
-        entry.state = { kind: "stopped" };
         maybeDeleteEntry(entry);
         throw toCopilotRuntimeError(error);
       }
-    })();
-
-    entry.state = { kind: "creating", promise: createPromise };
+    });
+    const entry: PoolEntry = {
+      key,
+      cacheKey,
+      refCount: 0,
+      client: createPromise,
+    };
     entries.set(cacheKey, entry);
-    return { entry, createPromise };
+    return entry;
   };
 
   const acquire = async (
     inputKey: PoolKey,
     optionsForCreate: ClientCreateOptions,
+    runtimeArtifactRequest?: { expected?: AgentHarnessRuntimeArtifactBinding },
   ): Promise<PooledClient> => {
-    const key = normalizePoolKey(inputKey, optionsForCreate.copilotHome, optionsForCreate.mode);
+    if (runtimeArtifactRequest && optionsForCreate.connection) {
+      throw new Error("[copilot] runtime verification requires the packaged stdio runtime");
+    }
+    const capture = runtimeArtifactRequest
+      ? await (
+          await import("./runtime-artifact.js")
+        ).captureCopilotRuntimeArtifact(optionsForCreate.env)
+      : undefined;
+    const expected = runtimeArtifactRequest?.expected;
+    if (
+      expected &&
+      (capture?.binding.id !== expected.id || capture.binding.fingerprint !== expected.fingerprint)
+    ) {
+      throw new Error("[copilot] verified runtime changed; rerun setup verification");
+    }
+    const runtimeArtifact = capture?.binding;
+    const key = {
+      ...normalizePoolKey(inputKey, optionsForCreate.copilotHome, optionsForCreate.mode),
+      ...(runtimeArtifact ? { runtimeArtifactFingerprint: runtimeArtifact.fingerprint } : {}),
+    };
     const cacheKey = JSON.stringify(key);
     const clientOptions = normalizeClientCreateOptions(optionsForCreate, key.copilotHome);
+    if (capture) {
+      clientOptions.connection = capture.connection;
+    }
+    const toHandle = (client: CopilotClient): PooledClient => ({
+      key,
+      client,
+      ...(runtimeArtifact ? { runtimeArtifact } : {}),
+    });
 
     while (true) {
-      if (disposed) {
+      if (disposePromise) {
         throw createDisposedError();
       }
 
-      const existing = entries.get(cacheKey);
-      if (!existing) {
-        const created = createEntry(key, cacheKey, clientOptions);
-        try {
-          const client = await created.createPromise;
-          if (disposed) {
-            await stopEntry(created.entry);
-            throw createDisposedError();
-          }
-          return { key: created.entry.key, client };
-        } catch (error: unknown) {
-          throw toCopilotRuntimeError(error);
-        }
+      const entry =
+        entries.get(cacheKey) ?? createEntry(key, cacheKey, clientOptions, runtimeArtifact);
+      if (entry.stopping) {
+        await entry.stopping;
+        continue;
       }
-
-      switch (existing.state.kind) {
-        case "creating": {
-          existing.refCount += 1;
-          try {
-            const client = await existing.state.promise;
-            if (disposed) {
-              await stopEntry(existing);
-              throw createDisposedError();
-            }
-            return { key: existing.key, client };
-          } catch (error: unknown) {
-            throw toCopilotRuntimeError(error);
-          }
-        }
-        case "ready":
-          existing.refCount += 1;
-          return { key: existing.key, client: existing.state.client };
-        case "idle": {
-          const client = existing.state.client;
-          clearTimeout(existing.state.idleTimer);
-          existing.refCount += 1;
-          existing.state = { kind: "ready", client };
-          return { key: existing.key, client };
-        }
-        case "stopping":
-          await existing.state.promise;
-          continue;
-        case "stopped":
-          maybeDeleteEntry(existing);
-          continue;
+      clearTimeout(entry.idleTimer);
+      entry.refCount += 1;
+      const client = await entry.client;
+      if (disposePromise) {
+        await stopEntry(entry);
+        throw createDisposedError();
       }
+      return toHandle(client);
     }
   };
 
@@ -266,24 +191,7 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
     releasedHandles.add(handle);
 
     const entry = entries.get(JSON.stringify(handle.key));
-    if (!entry) {
-      return;
-    }
-
-    switch (entry.state.kind) {
-      case "creating":
-      case "stopping":
-      case "stopped":
-        return;
-      case "ready":
-      case "idle":
-        if (entry.state.client !== handle.client) {
-          return;
-        }
-        break;
-    }
-
-    if (entry.refCount <= 0) {
+    if (!entry || entry.stopping || (await entry.client) !== handle.client) {
       return;
     }
 
@@ -292,37 +200,25 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       return;
     }
 
-    if (disposed) {
+    if (disposePromise) {
       await stopEntry(entry);
       return;
     }
 
-    if (entry.state.kind === "ready") {
-      scheduleIdleStop(entry, entry.state.client);
-      return;
-    }
-
-    if (entry.state.kind === "idle") {
-      clearTimeout(entry.state.idleTimer);
-      scheduleIdleStop(entry, entry.state.client);
-    }
+    entry.idleTimer = setTimeout(() => {
+      void stopEntry(entry);
+    }, idleTtlMs);
   };
 
   const dispose = async (): Promise<Error[]> => {
-    if (disposeCompleted) {
-      return [];
-    }
     if (disposePromise) {
       await disposePromise;
       return [];
     }
 
-    disposed = true;
     const snapshot = [...entries.values()];
     for (const entry of snapshot) {
-      if (entry.state.kind === "idle") {
-        clearTimeout(entry.state.idleTimer);
-      }
+      clearTimeout(entry.idleTimer);
     }
 
     disposePromise = (async () => {
@@ -332,15 +228,10 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
         errors.push(...stopErrors);
       }
       entries.clear();
-      disposeCompleted = true;
       return errors;
     })();
 
-    try {
-      return await disposePromise;
-    } finally {
-      disposePromise = undefined;
-    }
+    return await disposePromise;
   };
 
   return {
@@ -381,10 +272,6 @@ function normalizeClientCreateOptions(
 
 function normalizeCopilotHome(copilotHome: string): string {
   let normalizedHome = resolve(copilotHome);
-  normalizedHome = normalize(normalizedHome);
-  if (normalizedHome.endsWith(sep) && normalizedHome.length > 1) {
-    normalizedHome = normalizedHome.slice(0, -1);
-  }
   if (process.platform === "win32") {
     normalizedHome = normalizedHome.toLowerCase();
   }

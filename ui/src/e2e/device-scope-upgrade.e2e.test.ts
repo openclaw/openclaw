@@ -3,6 +3,7 @@ import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
@@ -48,13 +49,8 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function gatewayPhase(page: Page): Promise<string | undefined> {
-  return page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-    };
-    return app.runtime?.context.gateway.snapshot.phase;
-  });
+async function gatewayPhase(page: Page): Promise<string> {
+  return evaluateControlUiContext(page, (application) => application.gateway.snapshot.phase);
 }
 
 async function captureProof(page: Page, name: string, surface: Locator): Promise<void> {
@@ -115,7 +111,7 @@ async function closeInbox(page: Page) {
 async function waitForPendingUpgradeItem(item: Locator) {
   await item
     .locator(".sidebar-issues-panel__body")
-    .getByText(/Approve this browser by running openclaw devices on the Gateway/u)
+    .getByText(/Approve this browser by running openclaw devices approve upgrade-1 on the Gateway/u)
     .waitFor();
   await item.getByRole("button", { name: "Retry", exact: true }).waitFor();
   await item.getByRole("button", { name: "Cancel", exact: true }).waitFor();
@@ -139,7 +135,7 @@ suite.define(() => {
     const desktopItem = await openLimitedAccessItem(desktopPanel);
     await desktopItem.getByRole("button", { name: "Request admin" }).waitFor();
     await captureProof(desktop, "desktop-inbox-limited-access.png", desktopPanel);
-    await desktopPanel.getByRole("button", { name: "Dismiss all shown" }).click();
+    await desktopPanel.getByRole("button", { name: "Dismiss shown" }).click();
     await expect.poll(() => desktopInbox.getAttribute("aria-label")).toBe("0 inbox items");
     await expect.poll(() => desktopItem.count()).toBe(0);
     await desktopPanel.getByRole("tab", { name: "All", exact: true }).waitFor();
@@ -282,20 +278,20 @@ suite.define(() => {
     );
 
     await closeInbox(page);
-    await page.locator(".sidebar-brand__collapse").click();
+    await page.locator('[data-navigation-view][aria-pressed="true"]').click();
     const collapsedItem = await openLimitedAccessItem(await openInbox(page));
     await waitForPendingUpgradeItem(collapsedItem);
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
     expect(await gateway.getRequests("device.scopes.waitUpgrade")).toHaveLength(1);
 
     await closeInbox(page);
-    await page.getByRole("button", { name: "Expand sidebar" }).click();
+    await page.locator('[data-navigation-view="sessions"]').click();
     const sidebar = page.locator("openclaw-app-sidebar");
     const identityCard = sidebar.locator(".sidebar-identity-card");
     await identityCard.waitFor();
     await identityCard.click();
     await sidebar
-      .locator("wa-dropdown.sidebar-identity-menu")
+      .locator(".sidebar-identity-menu")
       .getByRole("menuitem", { exact: true, name: "Settings" })
       .click();
     await waitForControlUiSettingsTakeover(page);

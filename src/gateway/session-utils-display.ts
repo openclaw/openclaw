@@ -1,5 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  SESSION_DASHBOARD_ROW_FIELDS,
+  SESSION_ROW_DETAIL_FIELDS,
+  SESSION_SIDEBAR_ROW_FIELDS,
+} from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
   buildSubagentSessionListReadIndex,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -9,15 +14,17 @@ import {
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   isTerminalSessionStatus,
-  buildGroupDisplayName,
-  buildGroupDisplayTitle,
   resolveSessionGoalDisplayState,
-  type SessionEntry,
+  type InternalSessionEntry as SessionEntry,
 } from "../config/sessions.js";
-import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
+import { buildGroupDisplayName, buildGroupDisplayTitle } from "../config/sessions/group-display.js";
+import {
+  type prepareProjectedAgentRunProgressState,
+  resolveProjectedAgentRunProgressState,
+} from "../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
-import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import type {
   SessionListActiveRunProjector,
   SessionListRowContext,
@@ -38,6 +45,19 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
     return groupTitle;
   }
   const channel = sessionDeliveryChannel(entry) ?? parsed?.channel;
+  const origin = sessionDeliveryOrigin(entry);
+  const privateTelegramTopicTitle =
+    channel === "telegram" &&
+    !isGroupSession &&
+    origin?.provider === "telegram" &&
+    origin.chatType === "direct" &&
+    origin.threadId != null &&
+    normalizeOptionalString(entry?.topicName) !== undefined
+      ? buildGroupDisplayTitle({ topicName: entry?.topicName })
+      : undefined;
+  if (privateTelegramTopicTitle !== undefined) {
+    return privateTelegramTopicTitle;
+  }
   const id = parsed?.id;
   const compactGroupFallback =
     isGroupSession && channel
@@ -66,7 +86,6 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
   if (parseAgentSessionKey(key)?.rest.startsWith("dashboard:")) {
     return undefined;
   }
-  const origin = sessionDeliveryOrigin(entry);
   const originLabel = origin?.label;
   const normalizedOriginFrom = normalizeOptionalString(origin?.from);
   const routeIdentityTail = normalizedOriginFrom?.split(":").at(-1);
@@ -95,6 +114,8 @@ export function resolveGatewaySessionKind(key: string, entry?: SessionEntry) {
 
 export function projectGatewaySessionRunState(params: {
   key: string;
+  projectRunProgress?: ReturnType<typeof prepareProjectedAgentRunProgressState>;
+  parsedKey?: ReturnType<typeof parseAgentSessionKey>;
   entry?: SessionEntry;
   now: number;
   rowContext?: Pick<
@@ -109,29 +130,37 @@ export function projectGatewaySessionRunState(params: {
     normalizeOptionalString(subagentRun?.controllerSessionKey) ||
     normalizeOptionalString(subagentRun?.requesterSessionKey);
   const liveSubagentRunActive = isSubagentRunLive(subagentRun) || isSubagentRunQueued(subagentRun);
-  const hasProjectedRun = (sessionKey: string, sessionId?: string) => {
-    if (!rowContext?.projectedAgentRuns) {
-      return false;
-    }
-    const state = resolveProjectedAgentRunProgressState({
-      sessionKeys: [sessionKey],
-      sessionId,
-      index: rowContext.projectedAgentRuns,
-    });
-    return state !== undefined;
-  };
   // Follow-up turns retain the child session while owning a different run from its original spawn.
   const hasActiveSubagentRun =
     liveSubagentRunActive ||
     subagentRuns.countActiveDescendantRuns(key) > 0 ||
     ((subagentRun !== null || entry?.spawnedBy !== undefined) &&
-      hasProjectedRun(key, entry?.sessionId)) ||
+      rowContext?.projectedAgentRuns !== undefined &&
+      (params.projectRunProgress
+        ? params.projectRunProgress(rowContext.projectedAgentRuns)
+        : resolveProjectedAgentRunProgressState({
+            sessionKeys: [key],
+            sessionId: entry?.sessionId,
+            agentId:
+              (params.parsedKey === undefined ? parseAgentSessionKey(key) : params.parsedKey)
+                ?.agentId ?? "",
+            index: rowContext.projectedAgentRuns,
+          })) !== undefined) ||
     rowContext?.projectedSubagentActivity?.has(key) === true;
   const fields: Pick<
     GatewaySessionRow,
-    "status" | "subagentRunState" | "hasActiveSubagentRun" | "startedAt" | "endedAt" | "runtimeMs"
+    | "status"
+    | "lastRunError"
+    | "suppressErrorNotice"
+    | "subagentRunState"
+    | "hasActiveSubagentRun"
+    | "startedAt"
+    | "endedAt"
+    | "runtimeMs"
   > = {
-    status: entry?.status === "interrupted" ? "failed" : entry?.status,
+    status: entry?.status,
+    lastRunError: entry?.lastRunError,
+    suppressErrorNotice: entry?.suppressErrorNotice,
     subagentRunState: undefined,
     hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
     startedAt: entry?.startedAt,
@@ -140,6 +169,7 @@ export function projectGatewaySessionRunState(params: {
   };
   if (subagentRun) {
     const endedAt = subagentRun.execution.endedAt;
+    const subagentStatus = resolveSubagentSessionStatus(subagentRun);
     fields.subagentRunState = liveSubagentRunActive
       ? "active"
       : typeof endedAt === "number" ||
@@ -148,19 +178,43 @@ export function projectGatewaySessionRunState(params: {
         ? "historical"
         : "interrupted";
     fields.status = liveSubagentRunActive
-      ? resolveSubagentSessionStatus(subagentRun)
-      : fields.status === "running"
+      ? subagentStatus
+      : (fields.status ?? (typeof endedAt === "number" ? subagentStatus : undefined));
+    const ownsInterruptedSession =
+      entry?.lifecycleRunId === subagentRun.runId ||
+      (entry?.lifecycleRunId === undefined && entry?.lastRunId === subagentRun.runId) ||
+      (subagentRun.taskRunId !== undefined &&
+        entry?.subagentRecovery?.lastRunId === subagentRun.runId &&
+        entry.lifecycleRunId ===
+          (entry.subagentRecovery.sessionLifecycleRunId ?? subagentRun.taskRunId));
+    if (
+      fields.status === "interrupted" &&
+      subagentStatus === "failed" &&
+      subagentRun.execution.interruptionReason === "gateway-restart" &&
+      ownsInterruptedSession
+    ) {
+      fields.status = "failed";
+      fields.lastRunError ??=
+        "Restart recovery could not reach the parent. Inspect the child session before continuing.";
+    }
+    // A lifecycle start after the spawn run ended belongs to a follow-up turn; do not refill
+    // its cleared terminal fields from the finished spawn run.
+    const fallbackEndedAt =
+      typeof fields.startedAt === "number" &&
+      typeof endedAt === "number" &&
+      fields.startedAt > endedAt
         ? undefined
-        : (fields.status ??
-          (typeof endedAt === "number" ? resolveSubagentSessionStatus(subagentRun) : undefined));
+        : endedAt;
     fields.startedAt =
       (liveSubagentRunActive ? undefined : fields.startedAt) ??
       getSubagentSessionStartedAt(subagentRun);
-    fields.endedAt = liveSubagentRunActive ? endedAt : (fields.endedAt ?? endedAt);
+    fields.endedAt = liveSubagentRunActive ? endedAt : (fields.endedAt ?? fallbackEndedAt);
     fields.runtimeMs = liveSubagentRunActive
       ? getSubagentSessionRuntimeMs(subagentRun, now)
       : (fields.runtimeMs ??
-        (typeof endedAt === "number" ? getSubagentSessionRuntimeMs(subagentRun, now) : undefined));
+        (typeof fallbackEndedAt === "number"
+          ? getSubagentSessionRuntimeMs(subagentRun, now)
+          : undefined));
   }
   return { subagentRun, subagentOwner, fields };
 }
@@ -188,4 +242,26 @@ export function projectGatewaySessionActiveRun(
     hasActiveRun: active?.active,
     status: active?.active ? (active.status ?? "running") : status,
   };
+}
+
+/** Shape the wire row after recipient-specific fields have been prepared. */
+export function applyGatewaySessionRowMode(
+  row: GatewaySessionRow,
+  rowMode: GatewaySessionRow["rowMode"],
+): void {
+  if (rowMode === "dashboard" || rowMode === "sidebar") {
+    const fields =
+      rowMode === "sidebar" ? SESSION_SIDEBAR_ROW_FIELDS : SESSION_DASHBOARD_ROW_FIELDS;
+    for (const field of Object.keys(row)) {
+      if (!fields.has(field)) {
+        Reflect.deleteProperty(row, field);
+      }
+    }
+    row.rowMode = rowMode;
+  } else if (rowMode === "compact") {
+    for (const field of SESSION_ROW_DETAIL_FIELDS) {
+      delete row[field];
+    }
+    row.rowMode = "compact";
+  }
 }

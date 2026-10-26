@@ -1,6 +1,10 @@
 import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import * as subagentKill from "../agents/subagents/registry/subagent-control-kill.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -11,74 +15,103 @@ import {
   releaseSubagentRun,
   releaseSubagentRunKillClaim,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import * as nativeSpawn from "../agents/subagents/spawn/subagent-spawn.js";
 import {
   activateSwarmRun,
   holdQueuedSwarmRun,
   releaseSwarmRun,
-  removeQueuedSwarmRun,
   reserveSwarmRun,
 } from "../agents/subagents/swarm/swarm-scheduler.js";
-import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
-import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
-import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { handleChatSend } from "./server-methods/chat-send-handler.js";
 import { prepareAndAdmitChatSend } from "./server-methods/chat-send-setup.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
-import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
-import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
+import * as sessionStoreWorker from "./session-utils-store-worker.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 const {
   parentKey,
   launchedRunIds,
+  waitForLaunch,
   requestContext,
   operatorClient,
+  requestOptions,
   listChildren,
   spawnCollectors,
+  spawnCollector,
   createQueuedReservation,
+  expectUnstartedChildHistory,
+  expectChanged,
+  gateRowPreparation,
 } = useQueuedCollectorFixture();
 
-async function expectUnstartedChildHistory(
-  context: GatewayRequestContext,
-  sessionKey: string,
-  activeRunIds: string[],
+async function abortCollector(
+  params: Record<string, unknown>,
+  context = requestContext(),
+  client = operatorClient(),
 ) {
-  const respond = vi.fn();
-  await expectDefined(
-    chatHistoryHandlers["chat.history"],
-    "chat.history handler",
-  )({
-    req: { type: "req", id: "queued-history", method: "chat.history" },
-    params: { sessionKey, agentId: "main", offset: 0, limit: 20 },
-    client: operatorClient(),
-    isWebchatConnect: () => false,
-    respond,
-    context,
-  });
+  const options = requestOptions(context, "sessions.abort", params);
+  options.client = client;
+  await sessionAbortHandlers["sessions.abort"]!(options);
+  return options.respond;
+}
+function expectAborted(respond: ReturnType<typeof vi.fn>, runId: string | undefined) {
   expect(respond).toHaveBeenCalledWith(
     true,
-    expect.objectContaining({
-      messages: [],
-      hasMore: false,
-      totalMessages: 0,
-      sessionInfo: expect.objectContaining({
-        hasActiveRun: activeRunIds.length > 0,
-        activeRunIds,
-        status: activeRunIds.length > 0 ? "queued" : "killed",
-      }),
-    }),
+    { ok: true, status: "aborted", abortedRunId: runId },
+    undefined,
+    undefined,
   );
-  const payload = respond.mock.calls[0]?.[1];
-  expect(payload).not.toHaveProperty("inFlightRun");
-  expect(payload?.sessionInfo.startedAt).toBeUndefined();
-  expect(payload?.sessionInfo.runtimeMs).toBeUndefined();
+}
+
+function expectRejected(
+  respond: ReturnType<typeof vi.fn>,
+  error: Record<string, unknown> = { code: expect.any(String) },
+  soft = false,
+) {
+  (soft ? expect.soft(respond) : expect(respond)).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining(error),
+  );
+}
+
+function reserveAgain(entry: { runId: string; groupId?: string }) {
+  reserveSwarmRun({
+    runId: entry.runId,
+    groupId: entry.groupId!,
+    maxConcurrent: 1,
+    activeRunIds: [],
+  });
+}
+
+function gateRequesterRead(afterRead = false) {
+  const gate = createDeferred();
+  const read = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
+  const spy = vi
+    .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+    .mockImplementationOnce(async (params) => {
+      const target = afterRead ? await read(params) : undefined;
+      await gate.promise;
+      return afterRead ? expectDefined(target, "prepared requester") : read(params);
+    });
+  return { gate, spy };
 }
 
 describe("queued collector session projection", () => {
@@ -86,21 +119,20 @@ describe("queued collector session projection", () => {
     const context = requestContext();
     const broadcast = vi.fn();
     const publications: Promise<void>[] = [];
+    const trackPublication = captureAsyncWorkTracker();
     const publishLifecycle = createLifecycleEventBroadcastHandler({
       broadcastToConnIds: broadcast,
       sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-      chatAbortControllers: context.chatAbortControllers,
       getSessionRowProjection: () => getSessionRowProjection(context),
     });
     const unsubscribe = onSessionLifecycleEvent((event) => {
-      publications.push(publishLifecycle(event));
+      // The observer is joined by this fixture, not the short-lived launch that emits the event.
+      publications.push(trackPublication(() => publishLifecycle(event)));
     });
     try {
       const results = await spawnCollectors();
       const first = expectDefined(results[0], "first collector");
       const second = expectDefined(results[1], "second collector");
-      expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
-      await vi.waitFor(() => expect(launchedRunIds).toEqual([first.runId]));
       try {
         const rows = (await listChildren(context)).sessions;
         expect(rows.map((row) => row.key).toSorted()).toEqual(
@@ -125,45 +157,31 @@ describe("queued collector session projection", () => {
           rows.find((row) => row.key === second.childSessionKey),
           "queued child",
         );
-        expect.soft(queued.startedAt).toBeUndefined();
-        expect.soft(queued.runtimeMs).toBeUndefined();
+        expect.soft([queued.startedAt, queued.runtimeMs]).toEqual([undefined, undefined]);
         expect(queued.activeRunIds).toEqual([second.runId]);
         await expectUnstartedChildHistory(context, queued.key, [second.runId!]);
         await Promise.all(publications);
-        const created = broadcast.mock.calls.find(
-          ([, event]) => event.sessionKey === second.childSessionKey && event.reason === "create",
+        // First observation can publish current facts instead of replaying the create reason.
+        const published = broadcast.mock.calls.find(
+          ([method, event]) =>
+            method === "sessions.changed" &&
+            event.sessionKey === second.childSessionKey &&
+            (event.reason === "create" || event.reason === "updated"),
         )?.[1];
-        expect.soft(created).toMatchObject({
+        expect.soft(published).toMatchObject({
           label: "Collector B",
           swarmGroupId: `swarm:${parentKey}:parent-turn`,
           subagentRunState: "active",
           hasActiveRun: true,
           status: "queued",
         });
-        expect.soft(created?.startedAt).toBeUndefined();
-        expect.soft(created?.runtimeMs).toBeNull();
-        expect
-          .soft(rows.filter((row) => row.swarmGroupId === queued.swarmGroupId && row.hasActiveRun))
-          .toHaveLength(2);
+        expect.soft([published?.startedAt, published?.runtimeMs]).toEqual([undefined, null]);
 
-        const stopResponse = vi.fn();
-        await expectDefined(
-          sessionAbortHandlers["sessions.abort"],
-          "sessions.abort handler",
-        )({
-          req: { type: "req", id: "stop-queued-child", method: "sessions.abort" },
-          params: { key: second.childSessionKey, agentId: "main", clearQueued: true },
-          client: operatorClient(),
-          isWebchatConnect: () => false,
+        const stopResponse = await abortCollector(
+          { key: second.childSessionKey, agentId: "main", clearQueued: true },
           context,
-          respond: stopResponse,
-        });
-        expect(stopResponse).toHaveBeenCalledWith(
-          true,
-          { ok: true, status: "aborted", abortedRunId: second.runId },
-          undefined,
-          undefined,
         );
+        expectAborted(stopResponse, second.runId);
         releaseSwarmRun(first.runId!);
         const stopped = (await listChildren(context)).sessions.find(
           (row) => row.key === second.childSessionKey,
@@ -173,24 +191,23 @@ describe("queued collector session projection", () => {
           status: "killed",
           hasActiveRun: false,
         });
-        expect(stopped?.startedAt).toBeUndefined();
-        expect(stopped?.runtimeMs).toBeUndefined();
+        expect([stopped?.startedAt, stopped?.runtimeMs]).toEqual([undefined, undefined]);
         await expectUnstartedChildHistory(context, queued.key, []);
-        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-          "sessions.changed",
-          expect.objectContaining({
-            sessionKey: queued.key,
-            reason: "abort",
-            status: "killed",
-            hasActiveRun: false,
-            activeRunIds: [],
-          }),
-          new Set(["observer"]),
-          expect.any(Object),
-        );
+        await flushPendingSessionsChangedEvents(context);
+        expectChanged(context, {
+          sessionKey: queued.key,
+          reason: "abort",
+          status: "killed",
+          hasActiveRun: false,
+          activeRunIds: [],
+        });
         expect(launchedRunIds).toEqual([first.runId]);
       } finally {
-        removeQueuedSwarmRun(second.runId!);
+        const hold = holdQueuedSwarmRun(second.runId!);
+        if (hold) {
+          hold.withdraw();
+          void hold.release();
+        }
         releaseSwarmRun(first.runId!);
       }
     } finally {
@@ -201,27 +218,39 @@ describe("queued collector session projection", () => {
 
   it("preserves an operator rename when a queued collector reaches agent dispatch", async () => {
     const context = requestContext();
-    const [first, second] = await spawnCollectors();
+    const secondRead = createDeferred();
+    const readTarget = sessionStoreWorker.resolveGatewaySessionStoreTargetInWorker;
+    let reads = 0;
+    const readGate = vi
+      .spyOn(sessionStoreWorker, "resolveGatewaySessionStoreTargetInWorker")
+      .mockImplementation(async (...args) => {
+        const order = ++reads;
+        const target = await readTarget(...args);
+        // Concurrent requester reads need not finish in invocation order.
+        if (order === 1 && reads > 1) {
+          await secondRead.promise;
+        }
+        if (order === 2) {
+          secondRead.resolve();
+        }
+        return target;
+      });
+    const [first, second] = await spawnCollectors().finally(() => {
+      secondRead.resolve();
+      readGate.mockRestore();
+    });
     const queued = expectDefined(
       (await listChildren(context)).sessions.find((row) => row.key === second!.childSessionKey),
       "queued row",
     );
-    const respond = vi.fn();
-    await expectDefined(
-      sessionMutationHandlers["sessions.patch"],
-      "sessions.patch handler",
-    )({
-      req: { type: "req", id: "rename-queued", method: "sessions.patch" },
-      params: {
-        key: queued.key,
-        expectedSessionId: queued.sessionId,
-        label: "Operator renamed collector",
-      },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context,
+    const options = requestOptions(context, "sessions.patch", {
+      key: queued.key,
+      expectedSessionId: queued.sessionId,
+      label: "Operator renamed collector",
     });
+    options.client = null;
+    await sessionMutationHandlers["sessions.patch"]!(options);
+    const { respond } = options;
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -230,7 +259,8 @@ describe("queued collector session projection", () => {
       undefined,
     );
     releaseSwarmRun(first!.runId!);
-    await vi.waitFor(() => expect(launchedRunIds).toEqual([first!.runId, second!.runId]));
+    await waitForLaunch(second!.runId!);
+    expect(launchedRunIds).toEqual([first!.runId, second!.runId]);
     const running = (await listChildren(context)).sessions.find((row) => row.key === queued.key);
     expect(running).toMatchObject({
       label: "Operator renamed collector",
@@ -241,21 +271,70 @@ describe("queued collector session projection", () => {
 
   it("keeps native spawn's normalized duplicate-label contract", async () => {
     const label = `  ${"Shared collector title ".repeat(4)}  `;
-    await spawnCollectors([label, label]);
-    expect((await listChildren(requestContext())).sessions.map((row) => row.label)).toEqual([
-      label.trim(),
-      label.trim(),
-    ]);
+    const { gate, spy } = gateRequesterRead();
+    const first = spawnCollector(label);
+    try {
+      // Finish the second preparation while the first still owns FIFO admission.
+      const second = await spawnCollector(label);
+      gate.resolve();
+      const results = [await first, second];
+      expect(results.map((result) => result.status)).toEqual(["accepted", "accepted"]);
+      await Promise.race(
+        results.map((result) => waitForLaunch(expectDefined(result.runId, "collector run"))),
+      );
+      expect(launchedRunIds).toEqual([results[0]!.runId]);
+      expect((await listChildren(requestContext())).sessions.map((row) => row.label)).toEqual([
+        label.trim(),
+        label.trim(),
+      ]);
+      releaseSwarmRun(results[0]!.runId!);
+      await waitForLaunch(expectDefined(second.runId, "second collector run"));
+      expect(launchedRunIds).toEqual(results.map((result) => result.runId));
+    } finally {
+      gate.resolve();
+      await first;
+      spy.mockRestore();
+    }
+  });
+
+  it("withdraws FIFO admission after requester acquisition is cancelled", async () => {
+    const { gate, spy } = gateRequesterRead(true);
+    const abort = new AbortController();
+    const effectsStarted = vi.fn();
+    const spawn = (label: string, assertActive?: () => void) =>
+      spawnCollector(label, { onSpawnEffectsStart: effectsStarted, assertActive });
+    const first = spawn("Failed requester", () => abort.signal.throwIfAborted());
+    try {
+      const second = await spawn("Surviving collector");
+      expect(second.status).toBe("accepted");
+      expect(launchedRunIds).toEqual([]);
+      expect(effectsStarted).toHaveBeenCalledTimes(1);
+      abort.abort(new Error("requester read cancelled"));
+      gate.resolve();
+      expect(await first).toEqual({
+        status: "error",
+        error: "sessions_spawn could not read the requester session: requester read cancelled",
+      });
+      expect(effectsStarted).toHaveBeenCalledTimes(2);
+      await waitForLaunch(expectDefined(second.runId, "surviving collector run"));
+      expect(launchedRunIds).toEqual([second.runId]);
+    } finally {
+      gate.resolve();
+      await first;
+      spy.mockRestore();
+    }
   });
 
   it("keeps preactivation and held cancellation reservations pending until withdrawal", async () => {
     const { entry } = await createQueuedReservation();
     const context = requestContext();
+    const loaded = await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey);
     const expectPreparing = async () => {
       expect(isSubagentRunQueued(entry)).toBe(true);
       expect(
         resolveVisibleActiveSessionRunState({
-          context,
+          storePath: loaded.storePath,
+          resolveGatewayContext: context.resolveGatewayContext,
           requestedKey: entry.childSessionKey,
           canonicalKey: entry.childSessionKey,
         }),
@@ -271,7 +350,8 @@ describe("queued collector session projection", () => {
     await expectPreparing();
     expect(
       resolveVisibleActiveSessionRunState({
-        context,
+        storePath: loaded.storePath,
+        resolveGatewayContext: context.resolveGatewayContext,
         requestedKey: entry.childSessionKey,
         canonicalKey: entry.childSessionKey,
         agentId: "other",
@@ -286,12 +366,9 @@ describe("queued collector session projection", () => {
         start,
         onStartFailure: () => true,
       });
-      const session = expectDefined(
-        loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry,
-        "created session",
-      );
+      const session = expectDefined(loaded.entry, "created session");
       const claim = expectDefined(
-        claimSubagentRunKill({
+        await claimSubagentRunKill({
           runId: entry.runId,
           expected: entry,
           sessionId: session.sessionId,
@@ -301,7 +378,7 @@ describe("queued collector session projection", () => {
       );
       await expectPreparing();
       expect(start).not.toHaveBeenCalled();
-      releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim });
+      await releaseSubagentRunKillClaim({ runId: entry.runId, expected: entry, claim });
       expect(hold.withdraw()).toBe(true);
       expect(isSubagentRunQueued(entry)).toBe(false);
       expect((await listChildren(context)).sessions[0]?.hasActiveRun).toBe(false);
@@ -315,11 +392,15 @@ describe("queued collector session projection", () => {
   it("rejects stale copies, replaced owners, and lost reservations without losing compact status", async () => {
     const { entry, registration } = await createQueuedReservation();
     await replaceSessionEntry(
-      { sessionKey: parentKey, storePath: loadGatewaySessionEntryReadOnly(parentKey).storePath },
+      {
+        sessionKey: parentKey,
+        storePath: (await loadGatewaySessionEntryReadOnlyAsync(parentKey)).storePath,
+      },
       { sessionId: "parent-session", updatedAt: Date.now() },
     );
     const afterStaleGrace = Date.now() + 3 * 60 * 60_000;
-    const projection = expectDefined(getSessionRowProjection(requestContext()), "queued row owner");
+    const context = requestContext();
+    const projection = expectDefined(getSessionRowProjection(context), "queued row owner");
     const read = async (key: string) => {
       await projection.ensureMaterialized();
       return projection.snapshot({ key, agentId: "main" }, { now: afterStaleGrace }).row;
@@ -329,7 +410,9 @@ describe("queued collector session projection", () => {
     expect(await exactChild()).toMatchObject({ status: "queued", hasActiveSubagentRun: true });
     expect((await exactParent())?.hasActiveSubagentRun).toBe(true);
     const compact = expectDefined(
-      loadSubagentSessionListRunsFromSqlite().get(entry.runId),
+      loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(
+        entry.runId,
+      ),
       "compact queued record",
     );
     expect(compact.execution).toEqual({ status: "queued" });
@@ -337,314 +420,259 @@ describe("queued collector session projection", () => {
     expect(isSubagentRunQueued(compact)).toBe(false);
     expect(isSubagentRunQueued(structuredClone(entry))).toBe(false);
 
-    registerSubagentRun(registration);
+    await registerSubagentRun(registration);
     const replacement = expectDefined(subagentRuns.get(entry.runId), "replacement record");
     expect(replacement).not.toBe(entry);
     expect(isSubagentRunQueued(entry)).toBe(false);
     expect(isSubagentRunQueued(replacement)).toBe(false);
     expect((await exactChild())?.hasActiveSubagentRun).toBe(false);
     expect((await exactParent())?.hasActiveSubagentRun).not.toBe(true);
-    expect((await listChildren(requestContext())).sessions[0]?.hasActiveRun).toBe(false);
+    expect((await listChildren(context)).sessions[0]?.hasActiveRun).toBe(false);
 
-    removeQueuedSwarmRun(entry.runId);
-    reserveSwarmRun({
-      runId: entry.runId,
-      groupId: entry.groupId!,
-      maxConcurrent: 1,
-      activeRunIds: [],
-    });
-    registerSubagentRun(registration);
-    const current = expectDefined(subagentRuns.get(entry.runId), "new reservation owner");
-    expect(isSubagentRunQueued(current)).toBe(true);
-    expect((await exactChild())?.hasActiveSubagentRun).toBe(true);
-    expect((await exactParent())?.hasActiveSubagentRun).toBe(true);
-    schedulerTesting.reset();
-    expect(isSubagentRunQueued(current)).toBe(false);
-    expect((await exactChild())?.hasActiveSubagentRun).toBe(false);
-    expect((await exactParent())?.hasActiveSubagentRun).not.toBe(true);
-    expect((await listChildren(requestContext())).sessions[0]?.hasActiveRun).toBe(false);
+    const hold = holdQueuedSwarmRun(entry.runId);
+    try {
+      hold?.withdraw();
+      reserveAgain(entry);
+      await registerSubagentRun(registration);
+      const current = expectDefined(subagentRuns.get(entry.runId), "new reservation owner");
+      expect(isSubagentRunQueued(current)).toBe(true);
+      expect((await exactChild())?.hasActiveSubagentRun).toBe(true);
+      expect((await exactParent())?.hasActiveSubagentRun).toBe(true);
+      const currentReservation = expectDefined(
+        holdQueuedSwarmRun(entry.runId),
+        "current reservation",
+      );
+      try {
+        expect(currentReservation.withdraw()).toBe(true);
+      } finally {
+        await currentReservation.release();
+      }
+      expect(isSubagentRunQueued(current)).toBe(false);
+      expect((await exactChild())?.hasActiveSubagentRun).toBe(false);
+      expect((await exactParent())?.hasActiveSubagentRun).not.toBe(true);
+      expect((await listChildren(context)).sessions[0]?.hasActiveRun).toBe(false);
+    } finally {
+      await hold?.release();
+    }
   });
 
-  it.each([false, true])(
-    "allows the exact queued-child requester or administrator (admin=%s)",
-    async (admin) => {
-      const { entry } = await createQueuedReservation();
-      const unrelated = await createQueuedReservation("unrelated");
-      const respond = vi.fn();
-      await expectDefined(
-        sessionAbortHandlers["sessions.abort"],
-        "sessions.abort handler",
-      )({
-        req: { type: "req", id: "exact-queued-stop", method: "sessions.abort" },
-        params: { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
-        client: operatorClient(admin ? "administrator" : "parent-requester", admin),
-        isWebchatConnect: () => false,
-        context: requestContext(),
-        respond,
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        { ok: true, status: "aborted", abortedRunId: entry.runId },
-        undefined,
-        undefined,
-      );
-      expect(entry.collectorCompletion?.status).toBe("killed");
-      expect(entry.execution.startedAt).toBeUndefined();
-      expect(isSubagentRunQueued(unrelated.entry)).toBe(true);
-      expect(launchedRunIds).toEqual([]);
-    },
-  );
+  it("allows an administrator to stop the exact queued child", async () => {
+    const { entry } = await createQueuedReservation();
+    const unrelated = await createQueuedReservation("unrelated");
+    const respond = await abortCollector(
+      { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
+      requestContext(),
+      operatorClient("administrator", true),
+    );
+    expectAborted(respond, entry.runId);
+    expect(subagentRuns.get(entry.runId)?.collectorCompletion?.status).toBe("killed");
+    expect(subagentRuns.get(entry.runId)?.execution.startedAt).toBeUndefined();
+    expect(isSubagentRunQueued(unrelated.entry)).toBe(true);
+    expect(launchedRunIds).toEqual([]);
+  });
 
-  it.each(["replacement", "retirement"])(
-    "publishes queued Stop before the kill result handoff permits %s",
-    async (handoff) => {
-      const { entry, registration } = await createQueuedReservation();
-      const context = requestContext();
-      const order: string[] = [];
-      vi.mocked(context.broadcastToConnIds).mockImplementation(() => {
-        expect(subagentRuns.get(entry.runId)).toBe(entry);
-        order.push("published");
+  it("requires the original parent requester to stop an exact queued child", async () => {
+    const { entry } = await createQueuedReservation();
+    const respond = await abortCollector(
+      { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
+      requestContext(),
+      operatorClient("other-requester"),
+    );
+    expectRejected(respond, { code: "INVALID_REQUEST" });
+    expect(isSubagentRunQueued(entry)).toBe(true);
+    expect(entry.collectorCompletion).toBeUndefined();
+    expect(launchedRunIds).toEqual([]);
+  });
+
+  it("publishes current row truth when a replacement overtakes a queued Stop notice", async () => {
+    const { entry, registration } = await createQueuedReservation();
+    const context = requestContext();
+    let holdNotices = false;
+    const { entered, release, spy } = gateRowPreparation(context, () => holdNotices);
+    onTestFinished(() => spy.mockRestore());
+    const kill = subagentKill.killSubagentRunAdmin;
+    using _ = vi.spyOn(subagentKill, "killSubagentRunAdmin").mockImplementation(async (...args) => {
+      holdNotices = true;
+      const result = await kill(...args);
+      // Real cancellation is complete; an awaited consumer can now observe
+      // another owner before it consumes the predecessor's result.
+      await releaseSubagentRun(entry.runId);
+      // An unactivated reservation is preparation, not a capacity wait.
+      reserveSwarmRun({
+        runId: entry.runId,
+        groupId: entry.groupId!,
+        maxConcurrent: 1,
+        activeRunIds: ["replacement-capacity-blocker"],
       });
-      const kill = subagentKill.killSubagentRunAdmin;
-      const spy = vi
-        .spyOn(subagentKill, "killSubagentRunAdmin")
-        .mockImplementation(async (...args) => {
-          const result = await kill(...args);
-          // Real cancellation is complete; an awaited consumer can now observe
-          // another owner before it consumes the predecessor's result.
-          releaseSubagentRun(entry.runId);
-          if (handoff === "replacement") {
-            reserveSwarmRun({
-              runId: entry.runId,
-              groupId: entry.groupId!,
-              maxConcurrent: 1,
-              activeRunIds: [],
-            });
-            registerSubagentRun(registration);
-          }
-          order.push(handoff);
-          return result;
-        });
-      try {
-        const respond = vi.fn();
-        await expectDefined(
-          sessionAbortHandlers["sessions.abort"],
-          "sessions.abort handler",
-        )({
-          req: { type: "req", id: "publication-queued-stop", method: "sessions.abort" },
-          params: { key: entry.childSessionKey },
-          client: operatorClient(),
-          isWebchatConnect: () => false,
-          context,
-          respond,
-        });
-        expect(order).toEqual(["published", handoff]);
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          { ok: true, status: "aborted", abortedRunId: entry.runId },
-          undefined,
-          undefined,
-        );
-        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-          "sessions.changed",
-          expect.objectContaining({ status: "killed", hasActiveRun: false, activeRunIds: [] }),
-          new Set(["observer"]),
-          expect.any(Object),
-        );
-        if (handoff === "replacement") {
-          const successor = subagentRuns.get(entry.runId);
-          expect(successor).not.toBe(entry);
-          expect(isSubagentRunQueued(successor)).toBe(true);
-          expect(successor?.execution.endedAt).toBeUndefined();
-        }
-      } finally {
-        spy.mockRestore();
-      }
-    },
-  );
+      await registerSubagentRun(registration);
+      activateSwarmRun({
+        runId: entry.runId,
+        groupId: entry.groupId!,
+        start: async () => {
+          launchedRunIds.push(entry.runId);
+        },
+        onStartFailure: () => true,
+      });
+      return result;
+    });
+    try {
+      const respond = await abortCollector({ key: entry.childSessionKey }, context);
+      await entered.promise;
+      expectAborted(respond, entry.runId);
+      const successor = subagentRuns.get(entry.runId);
+      expect(successor).not.toBe(entry);
+      expect(isSubagentRunQueued(successor)).toBe(true);
+      expect(successor?.execution.endedAt).toBeUndefined();
+      expect(successor?.collectorCompletion).toBeUndefined();
+      expect(launchedRunIds).toEqual([]);
+      release.resolve();
+      await flushPendingSessionsChangedEvents(context);
+      expectChanged(context, {
+        sessionKey: entry.childSessionKey,
+        reason: "abort",
+        status: "queued",
+        hasActiveRun: true,
+        activeRunIds: [entry.runId],
+      });
+    } finally {
+      release.resolve();
+      const hold = holdQueuedSwarmRun(entry.runId);
+      hold?.withdraw();
+      await hold?.release();
+      releaseSwarmRun("replacement-capacity-blocker");
+      await flushPendingSessionsChangedEvents(context);
+    }
+  });
 
   it.each([
-    "foreign requester",
-    "parent replaced",
-    "parent closed",
-    "parent settled",
-    "parent lifecycle retired",
-    "session access revoked",
-    "reservation withdrawn",
-    "registry replaced",
-  ])("rejects queued-child Stop when %s", async (failure) => {
+    ["session access revoked", false],
+    ["registry replaced", false],
+    ["session access revoked", true],
+  ] as const)("rejects queued-child Stop when %s (typed=%s)", async (failure, typed) => {
     const { entry, registration } = await createQueuedReservation();
     const unrelated = await createQueuedReservation("unrelated");
     const context = requestContext();
-    const parent = expectDefined(
-      context.chatAbortControllers.get("parent-turn"),
-      "parent admission",
-    );
     let authorizationObserved = false;
     let accessRevoked = false;
+    const authorization = createDeferred();
+    // Preserve the post-authorization microtask race, but join queued registration's durable setup.
+    const mutation = authorization.promise.then(async () => {
+      if (!authorizationObserved) {
+        return;
+      }
+      if (failure === "session access revoked") {
+        accessRevoked = true;
+      }
+      if (failure === "registry replaced") {
+        await registerSubagentRun(registration);
+      }
+    });
     const assertCurrent = () => {
       if (!authorizationObserved) {
         authorizationObserved = true;
-        queueMicrotask(() => {
-          if (failure === "parent replaced") {
-            context.chatAbortControllers.set("parent-turn", { ...parent });
-          }
-          if (failure === "parent closed") {
-            parent.controller.abort();
-          }
-          if (failure === "parent settled") {
-            parent.isAbortable = () => false;
-          }
-          if (failure === "parent lifecycle retired") {
-            parent.lifecycleGeneration = "retired";
-          }
-          if (failure === "session access revoked") {
-            accessRevoked = true;
-          }
-          if (failure === "reservation withdrawn") {
-            removeQueuedSwarmRun(entry.runId);
-          }
-          if (failure === "registry replaced") {
-            registerSubagentRun(registration);
-          }
-        });
+        authorization.resolve();
       }
       if (accessRevoked) {
         throw new Error("Session mutation authorization changed");
       }
     };
-    const respond = vi.fn();
-    await expectDefined(
-      sessionAbortHandlers["sessions.abort"],
-      "sessions.abort handler",
-    )({
-      req: { type: "req", id: "forbidden-queued-stop", method: "sessions.abort" },
-      params: { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
-      client: operatorClient(
-        failure === "foreign requester" ? "other-requester" : "parent-requester",
-      ),
-      isWebchatConnect: () => false,
+    const options = requestOptions(
       context,
-      respond,
-      sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
-    });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: expect.any(String) }),
+      typed ? "chat.send" : "sessions.abort",
+      typed
+        ? { sessionKey: entry.childSessionKey, message: "/stop", idempotencyKey: "typed-stop" }
+        : { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
     );
+    const authorizedOptions = {
+      ...options,
+      sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
+    };
+    const { respond } = options;
+    const abort = typed
+      ? handleChatSend(authorizedOptions)
+      : sessionAbortHandlers["sessions.abort"]!(authorizedOptions);
+    await Promise.all([Promise.resolve(abort).finally(() => authorization.resolve()), mutation]);
+    if (failure === "session access revoked") {
+      expectRejected(respond);
+    } else {
+      expect(respond).toHaveBeenCalledOnce();
+      const [ok, result, error] = respond.mock.calls[0]!;
+      if (ok) {
+        expect(result).toEqual({ ok: true, status: "no-active-run", abortedRunId: null });
+        expect(error).toBeUndefined();
+      } else {
+        expect(result).toBeUndefined();
+        expect(error).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+      const replacement = subagentRuns.get(entry.runId);
+      expect(replacement).not.toBe(entry);
+      expect(replacement?.execution.endedAt).toBeUndefined();
+      expect(replacement?.collectorCompletion).toBeUndefined();
+    }
     expect(entry.execution.endedAt).toBeUndefined();
     expect(entry.collectorCompletion).toBeUndefined();
+    if (typed) {
+      expect(isSubagentRunQueued(entry)).toBe(true);
+    }
     expect(isSubagentRunQueued(unrelated.entry)).toBe(true);
     expect(launchedRunIds).toEqual([]);
   });
 
-  it.each(["parent requester", "foreign requester", "session access revoked", "parent replaced"])(
-    "applies full-session typed Stop to the queued child: %s",
-    async (scenario) => {
-      const { entry } = await createQueuedReservation();
-      const unrelated = await createQueuedReservation("unrelated");
-      const context = requestContext();
-      let checked = false;
-      let revoked = false;
-      const assertCurrent = () => {
-        if (!checked) {
-          checked = true;
-          queueMicrotask(() => {
-            if (scenario === "session access revoked") {
-              revoked = true;
-            }
-            if (scenario === "parent replaced") {
-              const parent = context.chatAbortControllers.get("parent-turn")!;
-              context.chatAbortControllers.set("parent-turn", { ...parent });
-            }
-          });
-        }
-        if (revoked) {
-          throw new Error("Session access changed");
-        }
-      };
-      const respond = vi.fn();
-      await handleChatSend({
-        req: { type: "req", id: "typed-queued-stop", method: "chat.send" },
-        params: {
-          sessionKey: entry.childSessionKey,
-          message: "/stop",
-          idempotencyKey: "typed-stop",
-        },
-        client: operatorClient(
-          scenario === "foreign requester" ? "other-requester" : "parent-requester",
-        ),
-        context,
-        respond,
-        isWebchatConnect: () => false,
-        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
-      });
-      if (scenario === "parent requester") {
-        expect(respond).toHaveBeenCalledWith(true, {
-          ok: true,
-          aborted: true,
-          runIds: [entry.runId],
-        });
-        expect(entry.collectorCompletion?.status).toBe("killed");
-      } else {
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: expect.any(String) }),
-        );
-        expect(entry.execution.endedAt).toBeUndefined();
-        expect(isSubagentRunQueued(entry)).toBe(true);
-      }
-      expect(isSubagentRunQueued(unrelated.entry)).toBe(true);
-      expect(launchedRunIds).toEqual([]);
-    },
-  );
-
   it("keeps the controlling parent authoritative when native completion routing differs", async () => {
     const completionOwner = "agent:main:dashboard:completion-recipient";
+    replaceSessionEntrySync(
+      { sessionKey: completionOwner, agentId: "main" },
+      { sessionId: "original-completion-owner", updatedAt: Date.now() },
+    );
     const context = requestContext();
-    const [, second] = await spawnCollectors(undefined, completionOwner);
+    const spawn = nativeSpawn.spawnSubagentDirect;
+    const spawning = vi
+      .spyOn(nativeSpawn, "spawnSubagentDirect")
+      .mockImplementation((params, ctx) =>
+        spawn(params, {
+          ...ctx,
+          onSpawnEffectsStart: () =>
+            replaceSessionEntrySync(
+              { sessionKey: completionOwner, agentId: "main" },
+              { sessionId: "replacement-completion-owner", updatedAt: Date.now() },
+            ),
+        }),
+      );
+    const [first, second] = await spawnCollectors(undefined, completionOwner).finally(() =>
+      spawning.mockRestore(),
+    );
+    expect(subagentRuns.get(first!.runId!)?.completionRequesterSessionId).toBe(
+      "original-completion-owner",
+    );
     const entry = expectDefined(subagentRuns.get(second!.runId!), "proxied queued collector");
     expect(entry).toMatchObject({
       controllerSessionKey: parentKey,
       requesterSessionKey: completionOwner,
       swarmRequesterSessionKey: parentKey,
     });
-    const respond = vi.fn();
-    await sessionAbortHandlers["sessions.abort"]!({
-      req: { type: "req", id: "proxied-stop", method: "sessions.abort" },
-      params: { key: entry.childSessionKey, runId: entry.runId },
+    const respond = await abortCollector(
+      { key: entry.childSessionKey, runId: entry.runId },
       context,
-      respond,
-      client: operatorClient(),
-      isWebchatConnect: () => false,
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { ok: true, status: "aborted", abortedRunId: entry.runId },
-      undefined,
-      undefined,
     );
-    expect(entry.collectorCompletion?.status).toBe("killed");
+    expectAborted(respond, entry.runId);
+    expect(subagentRuns.get(entry.runId)?.collectorCompletion?.status).toBe("killed");
   });
 
-  it.each(
-    [
-      { method: "sessions.abort", exact: false },
-      { method: "sessions.abort", exact: true },
-      { method: "chat.send", exact: false },
-    ].flatMap((request) =>
-      (["owned", "foreign", "parent-retired", "mixed"] as const)
-        .filter((scenario) => !request.exact || scenario === "owned" || scenario === "foreign")
-        .map((scenario) => ({ method: request.method, exact: request.exact, scenario })),
-    ),
-  )(
+  it.each([
+    { method: "sessions.abort", exact: false, scenario: "owned" },
+    { method: "sessions.abort", exact: false, scenario: "foreign" },
+    { method: "sessions.abort", exact: false, scenario: "parent-retired" },
+    { method: "sessions.abort", exact: false, scenario: "mixed" },
+    { method: "sessions.abort", exact: true, scenario: "owned" },
+    { method: "chat.send", exact: false, scenario: "owned" },
+    { method: "chat.send", exact: false, scenario: "foreign" },
+  ])(
     "coordinates queued Stop with a real coexisting chat admission: $method exact=$exact $scenario",
     async ({ method, exact, scenario }) => {
       const foreign = scenario === "foreign";
       const { entry } = await createQueuedReservation();
       const context = requestContext();
+      const parentSource = expectDefined(rpcSourceTesting.get("parent-turn"), "parent source");
       const extraRunId = "additional-admitted-chat";
       const admitOrdinaryChat = async (runId: string, ownerConnId: string) => {
         const prepared = expectDefined(
@@ -660,7 +688,11 @@ describe("queued collector session projection", () => {
           }),
           "ordinary chat admission while collector is queued",
         );
-        return prepared.admitted.value;
+        onTestFinished(() => {
+          prepared.admission.cleanupAdmittedRun();
+          clearAgentRunContext(runId);
+        });
+        return prepared.admission;
       };
       const admission = await admitOrdinaryChat(
         extraRunId,
@@ -669,45 +701,48 @@ describe("queued collector session projection", () => {
       const foreignRunId = "foreign-admitted-chat";
       const foreignAdmission =
         scenario === "mixed" ? await admitOrdinaryChat(foreignRunId, "other-requester") : undefined;
+      const releaseClaim = await claimRpcSourceForTest(
+        expectDefined(admission.activeRunAbort.entry, "admitted chat source"),
+      );
       admission.activeRunAbort.markExecutionStarted();
       context.chatRunState.getOrCreate(extraRunId).buffer = "Additional run partial";
       const cleanup = () => {
         admission.cleanupAdmittedRun();
         clearAgentRunContext(extraRunId);
       };
-      admission.activeRunAbort.controller.signal.addEventListener(
-        "abort",
-        () =>
-          queueMicrotask(() => {
-            if (scenario === "parent-retired") {
-              context.chatAbortControllers.delete("parent-turn");
-            }
-            cleanup();
-          }),
-        { once: true },
-      );
-      expect(context.chatAbortControllers.get(extraRunId)).toBe(admission.activeRunAbort.entry);
-      expect(isSubagentRunQueued(entry)).toBe(true);
+      const finish = createDeferred();
+      admission.activeRunAbort.controller.signal.addEventListener("abort", () => finish.resolve(), {
+        once: true,
+      });
+      const producer = (async () => {
+        try {
+          await finish.promise;
+        } finally {
+          if (scenario === "parent-retired" && admission.activeRunAbort.controller.signal.aborted) {
+            rpcSourceTesting.deleteExpected("parent-turn", parentSource);
+          }
+          releaseClaim();
+          cleanup();
+        }
+      })();
       try {
-        const respond = vi.fn();
-        const options = {
-          req: { type: "req" as const, id: "coexisting-stop", method },
-          params:
-            method === "sessions.abort"
-              ? {
-                  key: entry.childSessionKey,
-                  ...(exact ? { runId: entry.runId } : { clearQueued: true }),
-                }
-              : {
-                  sessionKey: entry.childSessionKey,
-                  message: "/stop",
-                  idempotencyKey: "typed-stop",
-                },
+        expect(rpcSourceTesting.get(extraRunId)).toBe(admission.activeRunAbort.entry);
+        expect(isSubagentRunQueued(entry)).toBe(true);
+        const options = requestOptions(
           context,
-          respond,
-          client: operatorClient(),
-          isWebchatConnect: () => false,
-        };
+          method,
+          method === "sessions.abort"
+            ? {
+                key: entry.childSessionKey,
+                ...(exact ? { runId: entry.runId } : { clearQueued: true }),
+              }
+            : {
+                sessionKey: entry.childSessionKey,
+                message: "/stop",
+                idempotencyKey: "typed-stop",
+              },
+        );
+        const { respond } = options;
         if (method === "sessions.abort") {
           await sessionAbortHandlers["sessions.abort"]!(options);
         } else {
@@ -718,9 +753,7 @@ describe("queued collector session projection", () => {
         expect.soft(respond.mock.calls[0]?.[0]).toBe(collectorStopped);
         if (foreignAdmission) {
           expect(foreignAdmission.activeRunAbort.controller.signal.aborted).toBe(false);
-          expect(context.chatAbortControllers.get(foreignRunId)).toBe(
-            foreignAdmission.activeRunAbort.entry,
-          );
+          expect(rpcSourceTesting.get(foreignRunId)).toBe(foreignAdmission.activeRunAbort.entry);
           expect
             .soft(respond)
             .toHaveBeenCalledWith(
@@ -732,19 +765,10 @@ describe("queued collector session projection", () => {
         expect.soft(admission.activeRunAbort.controller.signal.aborted).toBe(stopped);
         expect.soft(isSubagentRunQueued(entry)).toBe(!collectorStopped);
         expect.soft(context.chatRunState.hasAbortMarker(extraRunId)).toBe(stopped);
-        if (scenario === "parent-retired") {
-          expect(respond).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({
-              message: expect.stringContaining("Unauthorized queued collector Stop"),
-            }),
-          );
-        }
         expect
-          .soft(admission.activeRunAbort.entry?.abortStopReason)
+          .soft(admission.activeRunAbort.entry?.adapter.abortStopReason)
           .toBe(stopped ? (method === "chat.send" ? "stop" : "rpc") : undefined);
-        const session = loadGatewaySessionEntryReadOnly(entry.childSessionKey);
+        const session = await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey);
         const events = await loadTranscriptEvents({
           agentId: "main",
           storePath: session.storePath,
@@ -765,7 +789,8 @@ describe("queued collector session projection", () => {
         }
         expect(launchedRunIds).toEqual([]);
       } finally {
-        cleanup();
+        finish.resolve();
+        await producer;
         if (foreignAdmission) {
           foreignAdmission.cleanupAdmittedRun();
           clearAgentRunContext(foreignRunId);
@@ -774,40 +799,25 @@ describe("queued collector session projection", () => {
     },
   );
 
-  it.each([undefined, "reserved-collector"])(
-    "keeps ordinary chat.abort (%s) and mismatched exact Stop from consuming a collector",
-    async (runId) => {
-      const { entry } = await createQueuedReservation();
-      const context = requestContext();
-      const chatResponse = vi.fn();
-      await handleChatAbortRequest({
-        req: { type: "req", id: "ordinary-chat-stop", method: "chat.abort" },
-        params: { sessionKey: entry.childSessionKey, ...(runId ? { runId } : {}) },
-        client: operatorClient(),
-        isWebchatConnect: () => false,
-        context,
-        respond: chatResponse,
-      });
-      expect(chatResponse).toHaveBeenCalledWith(true, { ok: true, aborted: false, runIds: [] });
-      const sessionResponse = vi.fn();
-      await expectDefined(
-        sessionAbortHandlers["sessions.abort"],
-        "sessions.abort handler",
-      )({
-        req: { type: "req", id: "wrong-exact-stop", method: "sessions.abort" },
-        params: { key: entry.childSessionKey, runId: "other-run", agentId: "main" },
-        client: operatorClient(),
-        isWebchatConnect: () => false,
-        context,
-        respond: sessionResponse,
-      });
-      expect(sessionResponse).toHaveBeenCalledWith(
-        true,
-        { ok: true, status: "no-active-run", abortedRunId: null },
-        undefined,
-        undefined,
-      );
-      expect(isSubagentRunQueued(entry)).toBe(true);
-    },
-  );
+  it("keeps ordinary chat.abort and mismatched exact Stop from consuming a collector", async () => {
+    const { entry } = await createQueuedReservation();
+    const context = requestContext();
+    const options = requestOptions(context, "chat.abort", {
+      sessionKey: entry.childSessionKey,
+      runId: "reserved-collector",
+    });
+    await handleChatAbortRequest(options);
+    expect(options.respond).toHaveBeenCalledWith(true, { ok: true, aborted: false, runIds: [] });
+    const sessionResponse = await abortCollector(
+      { key: entry.childSessionKey, runId: "other-run", agentId: "main" },
+      context,
+    );
+    expect(sessionResponse).toHaveBeenCalledWith(
+      true,
+      { ok: true, status: "no-active-run", abortedRunId: null },
+      undefined,
+      undefined,
+    );
+    expect(isSubagentRunQueued(entry)).toBe(true);
+  });
 });

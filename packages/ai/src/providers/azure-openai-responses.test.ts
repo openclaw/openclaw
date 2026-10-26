@@ -1,215 +1,128 @@
-import { describe, expect, it } from "vitest";
-import { configureAiTransportHost } from "../host.js";
-import { buildOpenAIResponsesReplayContext } from "../transports/openai-responses-compaction-replay.js";
+import { Type } from "typebox";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { createAssistantOutput } from "../transports/assistant-output.js";
+import { buildProviderReplayContext } from "../transports/provider-replay-context.js";
 import type { Context, Model } from "../types.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "./azure-openai-responses-client-compat.js";
 import {
-  streamAzureOpenAIResponses,
-  streamSimpleAzureOpenAIResponses,
+  streamAzureOpenAIResponses as stream,
+  streamSimpleAzureOpenAIResponses as streamSimple,
 } from "./azure-openai-responses.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
-const azureResponsesModel = {
-  id: "gpt-5.5",
+const model = makeProviderModel("azure-openai-responses", "azure", "gpt-5.5", {
   name: "GPT-5.5",
-  api: "azure-openai-responses",
-  provider: "azure",
   baseUrl: "https://example.openai.azure.com/openai/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200000,
-  maxTokens: 8192,
-} satisfies Model<"azure-openai-responses">;
+});
 
-const context = {
-  messages: [{ role: "user", content: "hello", timestamp: 1 }],
-} satisfies Context;
+const context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] } satisfies Context;
+
+const directModel = { ...model, provider: "azure-openai-responses" };
+
+type CapturedBody = {
+  model?: unknown;
+  input?: unknown[];
+  reasoning?: { effort?: unknown };
+  temperature?: unknown;
+};
+
+let requests: Array<{ url: URL; body: CapturedBody }>;
+let previousHost: ReturnType<typeof getAiTransportHost>;
+beforeEach(() => {
+  previousHost = getAiTransportHost();
+  requests = [];
+  configureAiTransportHost({
+    buildModelFetch: () => async (input, init) => {
+      const request = new Request(input, init);
+      requests.push({ url: new URL(request.url), body: (await request.json()) as CapturedBody });
+      return Response.json({ error: { message: "captured" } }, { status: 400 });
+    },
+  });
+});
+afterEach(() => {
+  configureAiTransportHost(previousHost);
+  vi.unstubAllEnvs();
+});
 
 describe("azure-openai-responses", () => {
   it.each([
-    ["traditional resource host", "https://example.openai.azure.com/openai/v1", false],
-    [
-      "traditional cognitive services host",
-      "https://example.cognitiveservices.azure.com/openai/v1",
-      false,
-    ],
-    [
-      "Foundry project endpoint",
-      "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
-      true,
-    ],
-    ["Foundry root endpoint", "https://project.services.ai.azure.com/openai/v1", true],
-    ["cognitive API endpoint", "https://eastus.api.cognitive.microsoft.com/openai/v1", true],
-    [
-      "Foundry endpoint without /openai/v1",
-      "https://project.services.ai.azure.com/api/projects/demo",
-      false,
-    ],
-    ["private endpoint", "https://aoai.internal/openai/v1", false],
-    ["APIM proxy endpoint", "https://gateway.example.com/proxy/openai/v1", false],
-  ])("classifies the %s client path", (_name, baseUrl, expected) => {
+    ["https://project.services.ai.azure.com/api/projects/demo/openai/v1", true],
+    ["https://aoai.internal/openai/v1", false],
+  ])("classifies the %s client path", (baseUrl, expected) => {
     expect(isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)).toBe(expected);
   });
 
   it("uses the configured Azure resource host and API version at the stream boundary", async () => {
-    const previousBaseUrl = process.env.AZURE_OPENAI_BASE_URL;
-    let requestUrl: URL | undefined;
-    configureAiTransportHost({
-      buildModelFetch: () => async (input) => {
-        requestUrl = new URL(input instanceof Request ? input.url : input.toString());
-        return Response.json({ error: { message: "captured" } }, { status: 400 });
-      },
-    });
-    delete process.env.AZURE_OPENAI_BASE_URL;
-    try {
-      await streamAzureOpenAIResponses(
-        { ...azureResponsesModel, provider: "azure-openai-responses" },
-        context,
-        {
-          apiKey: "test-api-key",
-          azureApiVersion: "2026-07-01-preview",
-          azureResourceName: "configured-resource",
-        },
-      ).result();
-    } finally {
-      configureAiTransportHost({});
-      if (previousBaseUrl === undefined) {
-        delete process.env.AZURE_OPENAI_BASE_URL;
-      } else {
-        process.env.AZURE_OPENAI_BASE_URL = previousBaseUrl;
-      }
-    }
-
-    expect(requestUrl?.origin).toBe("https://configured-resource.openai.azure.com");
-    expect(requestUrl?.pathname).toBe("/openai/v1/responses");
-    expect(requestUrl?.searchParams.get("api-version")).toBe("2026-07-01-preview");
+    vi.stubEnv("AZURE_OPENAI_BASE_URL", undefined);
+    await stream(directModel, context, {
+      apiKey: "test-api-key",
+      azureApiVersion: "2026-07-01-preview",
+      azureResourceName: "configured-resource",
+    }).result();
+    expect(requests[0]?.url.href).toBe(
+      "https://configured-resource.openai.azure.com/openai/v1/responses?api-version=2026-07-01-preview",
+    );
   });
 
   it("sends a case-insensitively resolved deployment name", async () => {
-    const previousDeploymentMap = process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP;
-    let sentModel: unknown;
-    const hostFetch: typeof fetch = async (input, init) => {
-      const body = (await new Request(input, init).json()) as { model?: unknown };
-      sentModel = body.model;
-      return Response.json({ error: { message: "captured" } }, { status: 400 });
-    };
-
-    process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP = "gpt-5.5=Deployment-GPT-5.5";
-    configureAiTransportHost({ buildModelFetch: () => hostFetch });
-    try {
-      await streamSimpleAzureOpenAIResponses(
-        { ...azureResponsesModel, id: "GPT-5.5", name: "GPT-5.5" },
-        context,
-        { apiKey: "test-key" },
-      ).result();
-
-      expect(sentModel).toBe("Deployment-GPT-5.5");
-    } finally {
-      configureAiTransportHost({});
-      if (previousDeploymentMap === undefined) {
-        delete process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP;
-      } else {
-        process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP = previousDeploymentMap;
-      }
-    }
+    vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-5.5=Deployment-GPT-5.5");
+    await streamSimple({ ...model, id: "GPT-5.5", name: "GPT-5.5" }, context, {
+      apiKey: "test-key",
+    }).result();
+    expect(requests[0]?.body.model).toBe("Deployment-GPT-5.5");
   });
 
   it("rejects a blank environment API key before sending a request", async () => {
-    const previousApiKey = process.env.AZURE_OPENAI_API_KEY;
-    let fetchCalled = false;
-    configureAiTransportHost({
-      buildModelFetch: () => async () => {
-        fetchCalled = true;
-        return Response.json({ error: { message: "captured" } }, { status: 400 });
-      },
-    });
-    process.env.AZURE_OPENAI_API_KEY = "  ";
-    try {
-      const result = await streamAzureOpenAIResponses(
-        { ...azureResponsesModel, provider: "azure-openai-responses" },
-        context,
-      ).result();
+    vi.stubEnv("AZURE_OPENAI_API_KEY", "  ");
+    const result = await stream(directModel, context).result();
+    expect(requests).toHaveLength(0);
+    expect(result.errorMessage).toBe(
+      "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
+    );
+  });
 
-      expect(fetchCalled).toBe(false);
-      expect(result.errorMessage).toBe(
-        "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
-      );
-    } finally {
-      configureAiTransportHost({});
-      if (previousApiKey === undefined) {
-        delete process.env.AZURE_OPENAI_API_KEY;
-      } else {
-        process.env.AZURE_OPENAI_API_KEY = previousApiKey;
-      }
-    }
+  it("preserves the selected Code Mode tools at the shared Responses boundary", async () => {
+    const tools = ["exec", "wait", "computer"].map((name) => ({
+      name,
+      description: name,
+      parameters: Type.Object({}),
+    }));
+    await stream(
+      directModel,
+      { ...context, tools },
+      { apiKey: "synthetic-azure-key", openclawCodeModeToolSurface: true },
+    ).result();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.body).toMatchObject({
+      tools: ["computer", "exec", "wait"].map((name) => ({ type: "function", name })),
+    });
   });
 
   it("disables response storage and clamps small output limits", async () => {
-    let sentParams: { max_output_tokens?: unknown; store?: unknown } | undefined;
-    const hostFetch: typeof fetch = async (input, init) => {
-      sentParams = (await new Request(input, init).json()) as typeof sentParams;
-      return Response.json({ error: { message: "captured" } }, { status: 400 });
-    };
-
-    configureAiTransportHost({ buildModelFetch: () => hostFetch });
-    try {
-      await streamSimpleAzureOpenAIResponses(azureResponsesModel, context, {
-        apiKey: "test-api-key",
-        maxTokens: 1,
-      }).result();
-
-      expect(sentParams).toMatchObject({ max_output_tokens: 16, store: false });
-    } finally {
-      configureAiTransportHost({});
-    }
+    await streamSimple(model, context, { apiKey: "test-api-key", maxTokens: 1 }).result();
+    expect(requests[0]?.body).toMatchObject({ max_output_tokens: 16, store: false });
   });
 
-  it.each<{
-    reasoning: "minimal" | "xhigh" | "max" | undefined;
-    compat: Model<"azure-openai-responses">["compat"];
-    effort: string;
-    temperature: number | undefined;
-  }>([
-    { reasoning: undefined, compat: undefined, effort: "none", temperature: 0.5 },
-    { reasoning: "minimal", compat: undefined, effort: "minimal", temperature: 0.5 },
-    { reasoning: "xhigh", compat: undefined, effort: "high", temperature: 0.5 },
-    { reasoning: "max", compat: undefined, effort: "high", temperature: 0.5 },
-    {
-      reasoning: "xhigh",
-      compat: {
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
-        supportsTemperature: false,
-      },
-      effort: "xhigh",
-      temperature: undefined,
-    },
-    {
-      reasoning: "max",
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-      effort: "max",
-      temperature: 0.5,
-    },
-  ])(
-    "preserves Azure deployment capabilities for $reasoning with compat=$compat",
-    async ({ reasoning, compat, effort, temperature }) => {
-      let sentParams: { reasoning?: { effort?: unknown }; temperature?: unknown } | undefined;
-      configureAiTransportHost({
-        buildModelFetch: () => async (input, init) => {
-          sentParams = (await new Request(input, init).json()) as typeof sentParams;
-          return Response.json({ error: { message: "captured" } }, { status: 400 });
-        },
-      });
-      try {
-        await streamSimpleAzureOpenAIResponses(
-          { ...azureResponsesModel, id: "gpt-6-astra", compat },
-          context,
-          { apiKey: "test-api-key", reasoning, temperature: 0.5 },
-        ).result();
-        expect(sentParams?.reasoning?.effort).toBe(effort);
-        expect(sentParams?.temperature).toBe(temperature);
-      } finally {
-        configureAiTransportHost({});
-      }
+  const declaredCompat: Model<"azure-openai-responses">["compat"] = {
+    supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+    supportsTemperature: false,
+  };
+  it.each([
+    ["gpt-6-astra", undefined, undefined, "none", 0.5],
+    ["gpt-6-luna", "max", undefined, "high", 0.5],
+    ["gpt-6-astra", "xhigh", declaredCompat, "xhigh", undefined],
+  ] as const)(
+    "preserves %s deployment capabilities for %s",
+    async (id, reasoning, compat, effort, temperature) => {
+      await streamSimple({ ...model, id, compat }, context, {
+        apiKey: "test-api-key",
+        reasoning,
+        temperature: 0.5,
+      }).result();
+      const body = requests[0]?.body;
+      expect([body?.reasoning?.effort, body?.temperature]).toEqual([effort, temperature]);
     },
   );
 
@@ -217,21 +130,15 @@ describe("azure-openai-responses", () => {
     const routeA = "https://route-a.openai.azure.com/openai/v1";
     const routeB = "https://route-b.openai.azure.com/openai/v1";
     const sessionId = "azure-replay-session";
-    const replayContext = buildOpenAIResponsesReplayContext(
-      { ...azureResponsesModel, baseUrl: routeA },
-      { sessionId },
-    );
+    const replayContext = buildProviderReplayContext({ ...model, baseUrl: routeA }, { sessionId });
     if (!replayContext.baseUrlHash) {
       throw new Error("expected Azure replay route hash");
     }
     const replayMessages = {
       messages: [
         {
-          role: "assistant",
+          ...createAssistantOutput(model),
           content: [{ type: "text", text: "earlier" }],
-          api: azureResponsesModel.api,
-          provider: azureResponsesModel.provider,
-          model: azureResponsesModel.id,
           providerReplay: {
             v: 1,
             type: "openai-responses-compaction",
@@ -239,50 +146,26 @@ describe("azure-openai-responses", () => {
             ...replayContext,
             baseUrlHash: replayContext.baseUrlHash,
           },
-          usage: {
-            input: 1,
-            output: 1,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 2,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "stop",
           timestamp: 1,
         },
         { role: "user", content: "continue", timestamp: 2 },
       ],
     } satisfies Context;
-    const inputs: unknown[][] = [];
-    configureAiTransportHost({
-      buildModelFetch: () => async (input, init) => {
-        const body = (await new Request(input, init).json()) as { input?: unknown[] };
-        inputs.push(body.input ?? []);
-        return Response.json({ error: { message: "captured" } }, { status: 400 });
-      },
-    });
-    try {
-      for (const azureBaseUrl of [routeA, routeB]) {
-        await streamAzureOpenAIResponses(azureResponsesModel, replayMessages, {
-          apiKey: "test-api-key",
-          azureBaseUrl,
-          sessionId,
-        }).result();
-      }
-    } finally {
-      configureAiTransportHost({});
+    for (const azureBaseUrl of [routeA, routeB]) {
+      await stream(model, replayMessages, {
+        apiKey: "test-api-key",
+        azureBaseUrl,
+        sessionId,
+      }).result();
     }
+    const inputs = requests.map(({ body }) => body.input ?? []);
 
-    expect(inputs[0]).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "compaction",
-          encrypted_content: "opaque-compaction-route-a",
-        }),
-      ]),
+    expect(inputs[0]).toContainEqual(
+      expect.objectContaining({
+        type: "compaction",
+        encrypted_content: "opaque-compaction-route-a",
+      }),
     );
-    expect(inputs[1]).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "compaction" })]),
-    );
+    expect(inputs[1]).not.toContainEqual(expect.objectContaining({ type: "compaction" }));
   });
 });

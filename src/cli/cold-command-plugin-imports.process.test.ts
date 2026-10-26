@@ -1,48 +1,47 @@
-// Real CLI processes must keep unrelated plugin runtimes cold on read-only command paths.
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, expect, it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cold-commands-"));
+
+function writeFixture(dir: string, name: string, value: unknown) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, name), typeof value === "string" ? value : JSON.stringify(value));
+}
 
 afterAll(() => {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
-const cases = [
-  { label: "hooks", args: ["hooks", "--json"], needsMemoryOwner: false },
-  {
-    label: "skills-info",
-    args: ["skills", "info", "fixture-skill", "--json"],
-    needsMemoryOwner: false,
-  },
-  {
-    label: "memory-status",
-    args: ["memory", "status", "--agent", "main", "--json"],
-    needsMemoryOwner: true,
-  },
-] as const;
+const commands = {
+  hooks: ["hooks", "--json"],
+  "skills-info": ["skills", "info", "fixture-skill", "--json"],
+  "memory-status": ["memory", "status", "--agent", "main", "--json"],
+};
 
-it.each(cases)(
-  "keeps an unrelated plugin runtime cold for $label",
-  async ({ args, label, needsMemoryOwner }) => {
+it.each(Object.entries(commands))(
+  "keeps an unrelated plugin runtime cold for %s",
+  async (label, args) => {
+    const needsMemoryOwner = label === "memory-status";
     const root = path.join(tempRoot, label);
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     const pluginDir = path.join(root, "cold-plugin");
     const memoryOwnerDir = path.join(root, "memory-owner");
-    fs.mkdirSync(path.join(workspaceDir, "skills", "fixture-skill"), { recursive: true });
     fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(workspaceDir, "skills", "fixture-skill", "SKILL.md"),
+    writeFixture(
+      path.join(workspaceDir, "skills", "fixture-skill"),
+      "SKILL.md",
       "---\nname: fixture-skill\ndescription: Cold path fixture\n---\n",
     );
     const fixture = createColdPluginFixture({
@@ -52,30 +51,22 @@ it.each(cases)(
       manifest: { providers: [], channels: [], providerAuthChoices: [], channelConfigs: {} },
     });
     if (needsMemoryOwner) {
-      // Keep this fixture about the ownership boundary: the selected CLI owner must
-      // execute while the unrelated sentinel stays cold. memory-core behavior has
-      // its own focused CLI suite, including the stale-search result contract.
-      fs.mkdirSync(memoryOwnerDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(memoryOwnerDir, "package.json"),
-        JSON.stringify({
-          name: "@example/openclaw-memory-owner",
-          version: "1.0.0",
-          type: "commonjs",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(memoryOwnerDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "memory-owner",
-          name: "Memory Owner",
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-          commandAliases: [{ name: "fixture-memory", kind: "runtime-slash", cliCommand: "memory" }],
-        }),
-      );
-      fs.writeFileSync(
-        path.join(memoryOwnerDir, "index.cjs"),
+      // The selected owner must execute while the unrelated sentinel stays cold.
+      writeFixture(memoryOwnerDir, "package.json", {
+        name: "@example/openclaw-memory-owner",
+        version: "1.0.0",
+        type: "commonjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      writeFixture(memoryOwnerDir, "openclaw.plugin.json", {
+        id: "memory-owner",
+        name: "Memory Owner",
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+        commandAliases: [{ name: "fixture-memory", kind: "runtime-slash", cliCommand: "memory" }],
+      });
+      writeFixture(
+        memoryOwnerDir,
+        "index.cjs",
         [
           'const fs = require("node:fs");',
           "module.exports = {",
@@ -92,25 +83,21 @@ it.each(cases)(
         ].join("\n"),
       );
     }
-    fs.mkdirSync(stateDir, { recursive: true });
     const configPath = path.join(stateDir, "openclaw.json");
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        agents: { defaults: { workspace: workspaceDir } },
-        plugins: {
-          load: { paths: [pluginDir, ...(needsMemoryOwner ? [memoryOwnerDir] : [])] },
-          entries: {
-            [fixture.pluginId]: { enabled: true },
-            ...(needsMemoryOwner ? { "memory-owner": { enabled: true } } : {}),
-          },
+    writeFixture(stateDir, "openclaw.json", {
+      agents: { defaults: { workspace: workspaceDir } },
+      plugins: {
+        load: { paths: [pluginDir, ...(needsMemoryOwner ? [memoryOwnerDir] : [])] },
+        entries: {
+          [fixture.pluginId]: { enabled: true },
+          ...(needsMemoryOwner ? { "memory-owner": { enabled: true } } : {}),
         },
-      }),
-    );
+      },
+    });
 
     const result = await execFileAsync(
       process.execPath,
-      ["--import", "tsx", "src/entry.ts", ...args],
+      [...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)), ...args],
       {
         cwd: path.resolve("."),
         env: {

@@ -1,31 +1,31 @@
-import type { DatabaseSync } from "node:sqlite";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deleteConfigMachineState,
   updateConfigMachineState,
 } from "./config-machine-state-write.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import {
-  OnboardingRecommendationMatchesSchema,
+  ONBOARDING_RECOMMENDATIONS_STATE_KEY_PREFIX,
   type OnboardingRecommendationsRecord,
   type PreparedOnboardingRecommendationOffer,
   type AcknowledgeOnboardingRecommendationsParams,
   type PreparedOnboardingRecommendationPending,
   type ClearPendingOnboardingRecommendationsParams,
-  type OnboardingRecommendationWriteOperations,
 } from "./onboarding-recommendations.contract.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+  WorkerOperations,
+} from "./worker-operation-registry.js";
 
 export function readOnboardingRecommendationsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   configKey: string,
 ): OnboardingRecommendationsRecord | null {
   const row = readConfigMachineStateRowInDatabase(db, configKey);
-  // SAFETY: The mutation kernels below own this persisted record shape; matches are validated next.
-  const record = row ? (JSON.parse(row.value_json) as OnboardingRecommendationsRecord) : null;
-  return record
-    ? { ...record, matches: OnboardingRecommendationMatchesSchema.parse(record.matches) }
-    : null;
+  // SAFETY: Offer and pending-update admission validate matches before the owning kernels persist them.
+  return row ? (JSON.parse(row.value_json) as OnboardingRecommendationsRecord) : null;
 }
 
 function matchesExpectedOnboardingRecommendations(
@@ -44,7 +44,7 @@ function matchesExpectedOnboardingRecommendations(
 function writeOnboardingRecommendationsOffer(
   configKey: string,
   params: PreparedOnboardingRecommendationOffer,
-  databaseOptions: OpenClawStateDatabaseOptions = {},
+  databaseOptions: OpenClawStateDatabaseOptions,
 ): OnboardingRecommendationsRecord {
   const nowMs = params.nowMs;
   const inventoryHash = params.inventoryHash;
@@ -72,8 +72,8 @@ function writeOnboardingRecommendationsOffer(
 
 function acknowledgeOnboardingRecommendations(
   configKey: string,
-  params: AcknowledgeOnboardingRecommendationsParams = {},
-  databaseOptions: OpenClawStateDatabaseOptions = {},
+  params: AcknowledgeOnboardingRecommendationsParams,
+  databaseOptions: OpenClawStateDatabaseOptions,
 ): OnboardingRecommendationsRecord | null {
   const nowMs = params.nowMs ?? Date.now();
   let acknowledged: OnboardingRecommendationsRecord | null = null;
@@ -100,7 +100,7 @@ function acknowledgeOnboardingRecommendations(
 function updatePendingOnboardingRecommendations(
   configKey: string,
   params: PreparedOnboardingRecommendationPending,
-  databaseOptions: OpenClawStateDatabaseOptions = {},
+  databaseOptions: OpenClawStateDatabaseOptions,
 ): OnboardingRecommendationsRecord | null {
   const nowMs = params.nowMs;
   const matches = params.matches;
@@ -126,7 +126,7 @@ function updatePendingOnboardingRecommendations(
 function clearPendingOnboardingRecommendations(
   configKey: string,
   params: ClearPendingOnboardingRecommendationsParams,
-  databaseOptions: OpenClawStateDatabaseOptions = {},
+  databaseOptions: OpenClawStateDatabaseOptions,
 ): boolean {
   let cleared = false;
   updateConfigMachineState<OnboardingRecommendationsRecord>(
@@ -147,44 +147,42 @@ function clearPendingOnboardingRecommendations(
   return cleared;
 }
 
-function clearOnboardingRecommendations(
-  configKey: string,
-  databaseOptions: OpenClawStateDatabaseOptions = {},
-): boolean {
-  return deleteConfigMachineState(configKey, databaseOptions);
+function recommendationOperation<Params, Result>(
+  operation: (configKey: string, params: Params, options: OpenClawStateDatabaseOptions) => Result,
+) {
+  return (
+    { workspaceKey, params }: { workspaceKey: string; params: Params },
+    { open, stateOptions }: WorkerOperationContext,
+  ) =>
+    operation(`${ONBOARDING_RECOMMENDATIONS_STATE_KEY_PREFIX}${workspaceKey}`, params, {
+      database: open(),
+      ...stateOptions(),
+    });
 }
 
-export function executeOnboardingRecommendationCommand(
-  command: SqliteWorkerCommand<OnboardingRecommendationWriteOperations>,
-  database: OpenClawStateDatabaseOptions,
-): OnboardingRecommendationWriteOperations[keyof OnboardingRecommendationWriteOperations]["output"] {
-  switch (command.type) {
-    case "onboardingRecommendations.writeOffer":
-      return writeOnboardingRecommendationsOffer(
-        command.input.configKey,
-        command.input.params,
-        database,
-      );
-    case "onboardingRecommendations.acknowledge":
-      return acknowledgeOnboardingRecommendations(
-        command.input.configKey,
-        command.input.params,
-        database,
-      );
-    case "onboardingRecommendations.updatePending":
-      return updatePendingOnboardingRecommendations(
-        command.input.configKey,
-        command.input.params,
-        database,
-      );
-    case "onboardingRecommendations.clearPending":
-      return clearPendingOnboardingRecommendations(
-        command.input.configKey,
-        command.input.params,
-        database,
-      );
-    case "onboardingRecommendations.clear":
-      return clearOnboardingRecommendations(command.input.configKey, database);
-  }
-  throw new Error("Unexpected onboarding recommendation write command");
-}
+export const onboardingRecommendationOperations = {
+  "onboardingRecommendations.writeOffer": recommendationOperation(
+    writeOnboardingRecommendationsOffer,
+  ),
+  "onboardingRecommendations.acknowledge": recommendationOperation(
+    acknowledgeOnboardingRecommendations,
+  ),
+  "onboardingRecommendations.updatePending": recommendationOperation(
+    updatePendingOnboardingRecommendations,
+  ),
+  "onboardingRecommendations.clearPending": recommendationOperation(
+    clearPendingOnboardingRecommendations,
+  ),
+  "onboardingRecommendations.clear": (
+    { workspaceKey }: { workspaceKey: string },
+    { open, stateOptions },
+  ) =>
+    deleteConfigMachineState(`${ONBOARDING_RECOMMENDATIONS_STATE_KEY_PREFIX}${workspaceKey}`, {
+      database: open(),
+      ...stateOptions(),
+    }),
+} satisfies WorkerOperationHandlers;
+
+export type OnboardingRecommendationWriteOperations = WorkerOperations<
+  typeof onboardingRecommendationOperations
+>;

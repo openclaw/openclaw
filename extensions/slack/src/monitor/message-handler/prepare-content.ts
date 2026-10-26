@@ -52,22 +52,18 @@ export function formatSlackUnavailableMedia(params: {
 
 function collectUniqueSlackMentionIds(texts: Array<string | undefined>): string[] {
   const seen = new Set<string>();
-  const mentionIds: string[] = [];
   for (const text of texts) {
     if (!text) {
       continue;
     }
-    SLACK_USER_MENTION_RE.lastIndex = 0;
     for (const match of text.matchAll(SLACK_USER_MENTION_RE)) {
       const userId = match[1];
-      if (!userId || seen.has(userId)) {
-        continue;
+      if (userId) {
+        seen.add(userId);
       }
-      seen.add(userId);
-      mentionIds.push(userId);
     }
   }
-  return mentionIds;
+  return [...seen];
 }
 
 function renderSlackUserMentions(
@@ -77,7 +73,6 @@ function renderSlackUserMentions(
   if (!text || renderedMentions.size === 0) {
     return text;
   }
-  SLACK_USER_MENTION_RE.lastIndex = 0;
   return text.replace(SLACK_USER_MENTION_RE, (full, userId: string) => {
     const rendered = renderedMentions.get(userId);
     return rendered ?? full;
@@ -90,19 +85,11 @@ function filterInheritedParentFiles(params: {
   threadStarter: SlackThreadStarter | null;
 }): SlackFile[] | undefined {
   const { files, isThreadReply, threadStarter } = params;
-  if (!isThreadReply || !files?.length) {
-    return files;
-  }
-  if (!threadStarter?.files?.length) {
+  if (!isThreadReply || !files?.length || !threadStarter?.files?.length) {
     return files;
   }
   const starterFileIds = new Set(threadStarter.files.map((file) => file.id));
   const filtered = files.filter((file) => !file.id || !starterFileIds.has(file.id));
-  if (filtered.length < files.length) {
-    logVerbose(
-      `slack: filtered ${files.length - filtered.length} inherited parent file(s) from thread reply`,
-    );
-  }
   return filtered.length > 0 ? filtered : undefined;
 }
 
@@ -115,10 +102,6 @@ export async function resolveSlackMessageContent(params: {
   client?: SlackWebClient;
   mediaMaxBytes: number;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
-  mediaReadIdleTimeoutMs?: number;
-  mediaTotalTimeoutMs?: number;
-  abortSignal?: AbortSignal;
-  assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
@@ -136,10 +119,6 @@ export async function resolveSlackMessageContent(params: {
             client: params.client,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
-            readIdleTimeoutMs: params.mediaReadIdleTimeoutMs,
-            totalTimeoutMs: params.mediaTotalTimeoutMs,
-            abortSignal: params.abortSignal,
-            assertCurrent: params.assertCurrent,
             preloadedMedia: params.preloadedMedia,
           }),
         )
@@ -150,16 +129,15 @@ export async function resolveSlackMessageContent(params: {
 
   let botAttachmentText: string | undefined;
   if (params.isBotMessage && !attachmentContent?.text) {
-    const botAttachmentTextParts: string[] = [];
-    for (const attachment of params.message.attachments ?? []) {
-      const text =
-        normalizeOptionalString(attachment.text) ?? normalizeOptionalString(attachment.fallback);
-      if (text) {
-        botAttachmentTextParts.push(text);
-      }
-    }
     botAttachmentText =
-      botAttachmentTextParts.length > 0 ? botAttachmentTextParts.join("\n") : undefined;
+      (params.message.attachments ?? [])
+        .map(
+          (attachment) =>
+            normalizeOptionalString(attachment.text) ??
+            normalizeOptionalString(attachment.fallback),
+        )
+        .filter(Boolean)
+        .join("\n") || undefined;
   }
 
   const primaryText = resolveSlackMessageText(params.message);
@@ -191,16 +169,15 @@ export async function resolveSlackMessageContent(params: {
     }
   }
 
-  const renderedMessageText = renderSlackUserMentions(textParts[0], renderedMentions);
-  const renderedAttachmentText = renderSlackUserMentions(textParts[1], renderedMentions);
-  const renderedBotAttachmentText = renderSlackUserMentions(textParts[2], renderedMentions);
   const commandSourceText =
     renderSlackUserMentions(normalizeOptionalString(params.message.text), renderedMentions) ?? "";
 
-  const body =
-    [renderedMessageText, renderedAttachmentText, renderedBotAttachmentText, mediaPlaceholder]
-      .filter(Boolean)
-      .join("\n") || "";
+  const body = [
+    ...textParts.map((text) => renderSlackUserMentions(text, renderedMentions)),
+    mediaPlaceholder,
+  ]
+    .filter(Boolean)
+    .join("\n");
   const rawBody = formatSlackUnavailableMedia({
     body,
     files: attachmentContent?.files,

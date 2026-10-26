@@ -3,9 +3,11 @@ export const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS = [".openclaw", "sandbo
 export const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE =
   MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS.join("/");
 
-export function isManagedSandboxSkillsPath(relativePath: string): boolean {
+export const MANAGED_SANDBOX_SKILLS_PATH_JS = `
+const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE = ${JSON.stringify(MATERIALIZED_SANDBOX_SKILLS_WORKSPACE)};
+function isManagedSandboxSkillsPath(relativePath) {
   return (
     relativePath === MATERIALIZED_SANDBOX_SKILLS_WORKSPACE ||
-    relativePath.startsWith(`${MATERIALIZED_SANDBOX_SKILLS_WORKSPACE}/`)
+    relativePath.startsWith(MATERIALIZED_SANDBOX_SKILLS_WORKSPACE + "/")
   );
-}
+}`;

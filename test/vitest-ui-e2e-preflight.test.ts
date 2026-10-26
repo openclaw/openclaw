@@ -1,72 +1,102 @@
-import { createServer } from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { promisify } from "node:util";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { assertUiE2ePreflight } from "./vitest/vitest.ui-e2e-preflight.ts";
 
-async function expectPortReleased(url: Parameters<typeof fetch>[0] | undefined) {
-  if (typeof url !== "string") {
-    throw new Error("Expected the preflight to fetch a string URL");
+type Listener = [ReturnType<typeof createServer>, ReturnType<typeof vi.fn>];
+const listeners = vi.hoisted(() => new Array<Listener>());
+vi.mock("node:http", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:http")>();
+  const trackedServer = vi.fn(actual.createServer);
+  trackedServer.mockImplementation((...args) => {
+    const server = actual.createServer(...args),
+      closed = vi.fn();
+    server.on("close", closed);
+    listeners.push([server, closed]);
+    return server;
+  });
+  return { ...actual, createServer: trackedServer };
+});
+afterAll(() => vi.mocked(createServer).mockRestore());
+
+afterEach(async () => {
+  try {
+    // Keep a failed cleanup assertion from leaking its real listener into later tests.
+    for (const [server] of listeners) {
+      server.closeAllConnections();
+      if (server.listening) {
+        await promisify(server.close.bind(server))();
+      }
+    }
+  } finally {
+    listeners.length = 0;
   }
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(Number(new URL(url).port), "127.0.0.1", resolve);
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+});
+
+async function preflight(fetchImpl: typeof fetch = fetch, timeoutMs?: number) {
+  const request = vi.fn(fetchImpl);
+  try {
+    await assertUiE2ePreflight({ fetchImpl: request, timeoutMs });
+  } finally {
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[1]?.signal).toMatchObject({ aborted: true });
+    expect(listeners).toHaveLength(1);
+    const [server, closed] = listeners[0]!;
+    expect(closed).toHaveBeenCalledOnce();
+    expect([server.listening, server.address()]).toEqual([false, null]);
+  }
 }
 
-describe("UI E2E environment preflight", () => {
-  it("proves the owned HTTP response and releases its listener", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(fetch);
-    await assertUiE2ePreflight({ fetchImpl });
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-    await expectPortReleased(fetchImpl.mock.calls[0]?.[0]);
+it("preserves native HTTP and socket implementations for later shared-worker consumers", () => {
+  const http = process.getBuiltinModule("node:http");
+  const { Socket } = process.getBuiltinModule("node:net");
+  const nativeMethod = expect.toSatisfy((implementation) => !vi.isMockFunction(implementation));
+  expect(http).toMatchObject({
+    Server: nativeMethod,
+    Agent: nativeMethod,
+    IncomingMessage: nativeMethod,
+    OutgoingMessage: nativeMethod,
+    ServerResponse: nativeMethod,
+    ClientRequest: nativeMethod,
+    createServer: nativeMethod,
   });
+  expect(Socket).toEqual(nativeMethod);
+  expect(http.IncomingMessage.prototype).toHaveProperty("read", nativeMethod);
+  expect(http.OutgoingMessage.prototype).toHaveProperty("write", nativeMethod);
+  expect(http.OutgoingMessage.prototype).toHaveProperty("end", nativeMethod);
+  expect(http.globalAgent).toHaveProperty("createConnection", nativeMethod);
+  expect(Socket.prototype).toHaveProperty("write", nativeMethod);
+});
 
-  it("reports proxy HTTP failures without exposing remote content", async () => {
-    const secret = "synthetic-private-proxy-details";
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () => new Response(secret, { status: 502, headers: { "x-private-proxy": secret } }),
-    );
-    const failure = await assertUiE2ePreflight({ fetchImpl }).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    expect(String(failure)).toContain("UI E2E loopback HTTP preflight received HTTP 502");
-    expect(String(failure)).not.toContain(secret);
-    expect(String(failure)).toContain("do not disable its proxy policy");
-    await expectPortReleased(fetchImpl.mock.calls[0]?.[0]);
-  });
+it("proves the owned HTTP response and releases its listener", () => preflight());
 
-  it("rejects a successful status from a different endpoint", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
-    await expect(assertUiE2ePreflight({ fetchImpl })).rejects.toThrow(
-      "instead of the owned response",
-    );
-    await expectPortReleased(fetchImpl.mock.calls[0]?.[0]);
-  });
+it.each([502, 204])("rejects unowned HTTP %i without exposing remote content", async (status) => {
+  const secret = "synthetic-private-proxy-details";
+  const fetchImpl = async () =>
+    new Response(status === 204 ? null : secret, {
+      status,
+      headers: { "x-private-proxy": secret },
+    });
+  const failure = await preflight(fetchImpl).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(String(failure)).toContain(
+    `UI E2E loopback HTTP preflight received HTTP ${status} instead of the owned response`,
+  );
+  expect(String(failure)).not.toContain(secret);
+  expect(String(failure)).toContain("do not disable its proxy policy");
+});
 
-  it("aborts a stalled request and releases its listener before reporting the deadline", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      (_url, init) =>
-        new Promise((_resolve, reject) => {
-          const signal = init?.signal;
-          if (!signal) {
-            throw new Error("Expected owned abort signal");
-          }
-          if (signal.aborted) {
-            reject(new Error("synthetic-private-timeout"));
-            return;
-          }
-          signal.addEventListener("abort", () => reject(new Error("synthetic-private-timeout")), {
-            once: true,
-          });
-        }),
-    );
-    await expect(assertUiE2ePreflight({ fetchImpl, timeoutMs: 50 })).rejects.toThrow(
-      "loopback HTTP preflight timed out",
-    );
-    expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-    await expectPortReleased(fetchImpl.mock.calls[0]?.[0]);
-  });
+it("aborts a stalled request and releases its listener before reporting the deadline", async () => {
+  const fetchImpl: typeof fetch = async (_url, init) => {
+    const signal = init?.signal;
+    if (!signal) {
+      throw new Error("Expected owned abort signal");
+    }
+    if (!signal.aborted) {
+      await once(signal, "abort");
+    }
+    throw new Error("synthetic-private-timeout");
+  };
+  await expect(preflight(fetchImpl, 50)).rejects.toThrow("loopback HTTP preflight timed out");
 });

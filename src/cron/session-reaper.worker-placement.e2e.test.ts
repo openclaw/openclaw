@@ -1,8 +1,14 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { writeCliPluginFixture } from "../cli/cli-fixtures.test-support.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,17 +21,22 @@ import {
 } from "../gateway/gateway.test-support.js";
 import { startGatewayServer } from "../gateway/server.js";
 import type { SessionsListResult } from "../gateway/session-utils.types.js";
-import { getGatewayE2ePortBlock } from "../gateway/test-helpers.e2e.js";
+import {
+  acquireGatewayE2ePortBlock,
+  startClaimedGateway,
+} from "../gateway/test-helpers.listener.js";
+import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronJob } from "./types.js";
 
-const backendSource = `
+const backendSource = (endpoint: string) => `
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+${fixtureReceiptClientSource(endpoint)}
 const control = process.argv[2];
 let prompt = "";
 for await (const chunk of process.stdin) prompt += chunk;
@@ -35,6 +46,7 @@ const mark = (event) => fs.writeFileSync(path.join(control, id + "." + event), "
 process.on("SIGTERM", () => mark("cancelled"));
 process.on("SIGINT", () => mark("cancelled"));
 mark("started");
+sendReceipt(control, id + ".started");
 const deadline = Date.now() + 60000;
 while (!fs.existsSync(path.join(control, id + ".release"))) {
   if (Date.now() >= deadline) throw new Error("CLI fixture release deadline exceeded");
@@ -48,28 +60,23 @@ describe("scheduled cron session retirement through the Gateway", () => {
   let setup: Awaited<ReturnType<typeof setupGatewayTempHome>> | undefined;
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let control: string;
-  let stateDatabasePath: string;
+  let placements: ReturnType<typeof createWorkerSessionPlacementStore>;
   let sessionStorePath: string;
+  let receipts: FixtureReceiptChannel;
 
   const call = <T>(method: string, params?: unknown) =>
     callGateway<T>({ method, params, timeoutMs: 15_000 });
   const entry = (sessionKey: string) =>
     loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })?.entry;
-  const placement = (sessionId: string) => {
-    const database = new DatabaseSync(stateDatabasePath, { readOnly: true });
-    try {
-      return database
-        .prepare(
-          "SELECT session_key, state, turn_claim_id FROM worker_session_placements WHERE session_id = ?",
-        )
-        .get(sessionId);
-    } finally {
-      database.close();
-    }
-  };
-  const history = (id: string) => call<{ entries: CronRunLogEntry[] }>("cron.runs", { id });
+  // Plain-local placements and turn claims live with the in-process Gateway placement owner.
+  const placement = (sessionId: string) => placements.getAsync(sessionId);
+  const history = async (id: string) =>
+    (await call<{ entries: CronRunLogEntry[] }>("cron.runs", { id })).entries;
+  const marker = (id: string, event: string) => path.join(control, `${id}.${event}`);
+  const release = (id: string) => fs.writeFile(marker(id, "release"), "");
 
   beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
     resetGatewayTestState();
     setup = await setupGatewayTempHome({ prefix: "openclaw-scheduled-cron-retirement-" });
     deleteTestEnvValue("OPENCLAW_SKIP_CRON");
@@ -79,29 +86,17 @@ describe("scheduled cron session retirement through the Gateway", () => {
     await fs.mkdir(control);
     await fs.mkdir(plugin);
     const backend = path.join(plugin, "backend.mjs");
-    await fs.writeFile(backend, backendSource);
-    await fs.writeFile(
-      path.join(plugin, "package.json"),
-      JSON.stringify({
-        name: "openclaw-cron-retirement-fixture",
-        version: "1.0.0",
-        type: "module",
-        openclaw: { extensions: ["./index.mjs"] },
-      }),
-    );
-    await fs.writeFile(
-      path.join(plugin, "openclaw.plugin.json"),
-      JSON.stringify({
+    await fs.writeFile(backend, backendSource(receipts.endpoint));
+    // Exercise the documented CLI backend plugin contract with a real child process.
+    await writeCliPluginFixture(
+      plugin,
+      "openclaw-cron-retirement-fixture",
+      {
         id: "cron-fixture-cli",
         name: "Cron retirement fixture",
         cliBackends: ["cron-fixture-cli"],
         activation: { onStartup: true },
-        configSchema: { type: "object", properties: {}, additionalProperties: false },
-      }),
-    );
-    // Exercise the documented CLI backend plugin contract with a real child process.
-    await fs.writeFile(
-      path.join(plugin, "index.mjs"),
+      },
       `export default {
         id: "cron-fixture-cli",
         name: "Cron retirement fixture",
@@ -114,13 +109,13 @@ describe("scheduled cron session retirement through the Gateway", () => {
         },
       };`,
     );
-    const port = await getGatewayE2ePortBlock();
     const token = "synthetic-cron-retirement-token";
     const configPath = await createGatewayConfigPath(setup.tempHome);
+    const claim = await acquireGatewayE2ePortBlock();
     const config: OpenClawConfig = {
       gateway: {
         mode: "local",
-        port,
+        port: claim.port,
         bind: "loopback",
         auth: { mode: "token", token },
         controlUi: { enabled: false },
@@ -141,20 +136,24 @@ describe("scheduled cron session retirement through the Gateway", () => {
       },
       cron: { enabled: true },
     };
-    await fs.writeFile(configPath, JSON.stringify(config));
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
-    setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
-    stateDatabasePath = path.join(setup.tempHome, ".openclaw", "state", "openclaw.sqlite");
-    sessionStorePath = resolveDefaultSessionStorePath("main");
-    server = await startGatewayServer(port, { controlUiEnabled: false });
+    server = await startClaimedGateway(claim, async () => {
+      await fs.writeFile(configPath, JSON.stringify(config));
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+      sessionStorePath = resolveDefaultSessionStorePath("main");
+      return await startGatewayServer(claim.port, { controlUiEnabled: false });
+    });
+    placements = createWorkerSessionPlacementStore();
   }, 120_000);
+
+  afterAll(async () => receipts.close());
 
   afterEach(async () => {
     try {
       if (setup && existsSync(control)) {
         for (const id of ["removed", "one-shot"]) {
-          await fs.writeFile(path.join(control, `${id}.release`), "");
+          await release(id);
         }
       }
       await server?.close({ reason: "scheduled cron retirement tests complete" });
@@ -163,18 +162,16 @@ describe("scheduled cron session retirement through the Gateway", () => {
       closeOpenClawStateDatabaseForTest();
       resetGatewayTestState();
       if (setup) {
-        try {
-          await removeGatewayTempHome(setup.tempHome);
-        } finally {
-          setup.envSnapshot.restore();
-        }
+        const { tempHome, envSnapshot } = setup;
+        await removeGatewayTempHome(tempHome).finally(() => envSnapshot.restore());
       }
     }
   }, 120_000);
 
-  it("retires a removed scheduled job and preserves one-shot cleanup on the same Gateway", async () => {
+  it("retires removed and one-shot scheduled jobs through the same Gateway", async ({ signal }) => {
     // Runtime test setup resets plugin registrations after each test, so both flows share this test.
     const retainedRuns = new Map<string, CronRunLogEntry[]>();
+    const startedRuns = [];
     for (const id of ["removed", "one-shot"] as const) {
       const oneShot = id === "one-shot";
       const job = await call<CronJob>("cron.add", {
@@ -195,19 +192,25 @@ describe("scheduled cron session retirement through the Gateway", () => {
         delivery: { mode: "none" },
       });
       const baseKey = `agent:main:cron:${job.id}`;
-      const release = () => fs.writeFile(path.join(control, `${id}.release`), "");
+      // Keep the first backend blocked so the second scheduled tick must observe its live receipt.
+      await withinTest(receipts.waitFor(control, `${id}.started`), signal);
+      expect(existsSync(marker(id, "started"))).toBe(true);
+      const base = entry(baseKey);
+      expect(base).toBeDefined();
+      const sessionId = base!.sessionId;
+      const runKey = `${baseKey}:run:${sessionId}`;
+      startedRuns.push({ id, job, sessionId, baseKey, runKey });
+    }
+    for (const { id, job, sessionId, baseKey, runKey } of startedRuns) {
+      const oneShot = id === "one-shot";
       try {
-        await expect
-          .poll(() => existsSync(path.join(control, `${id}.started`)), { timeout: 60_000 })
-          .toBe(true);
-        const base = entry(baseKey);
-        expect(base).toBeDefined();
-        const sessionId = base!.sessionId;
-        const runKey = `${baseKey}:run:${sessionId}`;
-        expect(placement(sessionId)).toMatchObject({
-          session_key: runKey,
+        expect(entry(baseKey)).toMatchObject({ sessionId });
+        expect(await history(job.id)).toEqual([]);
+        expect(existsSync(marker(id, "cancelled"))).toBe(false);
+        expect(await placement(sessionId)).toMatchObject({
+          sessionKey: runKey,
           state: "local",
-          turn_claim_id: expect.any(String),
+          turnClaim: { claimId: expect.any(String) },
         });
 
         if (!oneShot) {
@@ -217,17 +220,17 @@ describe("scheduled cron session retirement through the Gateway", () => {
           });
           // Removal must drain the backend still held at the file barrier before deleting its row.
           expect(entry(baseKey)?.sessionId).toBe(sessionId);
-          expect(placement(sessionId)?.turn_claim_id).toEqual(expect.any(String));
+          expect((await placement(sessionId))?.turnClaim?.claimId).toEqual(expect.any(String));
         }
-        await release();
+        await release(id);
 
         await expect
-          .poll(() => ({ base: entry(baseKey), placement: placement(sessionId) }), {
+          .poll(async () => ({ base: entry(baseKey), placement: await placement(sessionId) }), {
             timeout: 60_000,
           })
           .toEqual({ base: undefined, placement: undefined });
         await expect
-          .poll(async () => (await history(job.id)).entries, { timeout: 30_000 })
+          .poll(() => history(job.id), { timeout: 30_000 })
           .toEqual([
             expect.objectContaining({
               jobId: job.id,
@@ -237,7 +240,7 @@ describe("scheduled cron session retirement through the Gateway", () => {
             }),
           ]);
         if (!oneShot) {
-          expect(existsSync(path.join(control, `${id}.cancelled`))).toBe(true);
+          expect(existsSync(marker(id, "cancelled"))).toBe(true);
           // Unpersisted terminal run state remains history, separate from the reusable base.
           expect(entry(runKey)).toMatchObject({
             sessionId,
@@ -250,13 +253,13 @@ describe("scheduled cron session retirement through the Gateway", () => {
         expect(sessions.sessions.map((session) => session.key)).not.toContain(runKey);
         const jobs = await call<{ jobs: CronJob[] }>("cron.list", { includeDisabled: true });
         expect(jobs.jobs.map((listed) => listed.id)).not.toContain(job.id);
-        retainedRuns.set(job.id, (await history(job.id)).entries);
+        retainedRuns.set(job.id, await history(job.id));
       } finally {
-        await release();
+        await release(id);
       }
     }
     for (const [jobId, entries] of retainedRuns) {
-      expect((await history(jobId)).entries).toEqual(entries);
+      expect(await history(jobId)).toEqual(entries);
     }
   }, 240_000);
 });

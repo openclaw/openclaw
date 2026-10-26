@@ -7,19 +7,17 @@ import { migrateDoctorDeliveryQueues } from "../commands/doctor-outbound-deliver
 import { PluginLoadFailureError } from "../plugins/loader-shared.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
-import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
+import { tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 
 const modes = ["success", "callback-failure", "retained-release", "retained-acquire"] as const;
 type Mode = (typeof modes)[number];
 
 async function runMode(stateDir: string, mode: Mode) {
   process.stderr.write(`Doctor custody case: ${mode}\n`);
-  process.env.HOME = stateDir;
-  process.env.USERPROFILE = stateDir;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  for (const key of ["HOME", "USERPROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_HOME"]) {
+    process.env[key] = stateDir;
+  }
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
-  process.env.OPENCLAW_HOME = stateDir;
 
   const pluginId = `doctor-custody-fixture-${mode}`;
   const pluginDir = path.join(stateDir, "plugin");
@@ -83,11 +81,7 @@ async function runMode(stateDir: string, mode: Mode) {
     payloads: [{ text: "synthetic" }],
   };
   seedDeliveryQueueEntry({ queueName: "outbound", entry, stateDir });
-  const coordinator = acquireGatewayLifecycleCoordinator({
-    databasePath: path.join(stateDir, "state/openclaw.sqlite"),
-  });
-  const coordinatorPath = coordinator.path;
-  coordinator.release();
+  const databasePath = path.join(stateDir, "state/openclaw.sqlite");
   const maintenance = await beginDoctorMaintenance({
     options: { repair: true, nonInteractive: true },
     root: null,
@@ -108,8 +102,8 @@ async function runMode(stateDir: string, mode: Mode) {
   if (nativeState.native?.isOpen) {
     nativeState.native.exec("INSERT INTO effects VALUES ('after failed cleanup')");
   }
-  // A fresh native connection bypasses the reentrant coordinator map, like another process.
-  const competitor = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, { busyTimeoutMs: 0 });
+  // A fresh process-owner acquisition cannot borrow retained maintenance authority.
+  const competitor = tryAcquireGatewayStateOwner(databasePath);
   const blocked = competitor === null;
   competitor?.release();
   if (nativeState.native?.isOpen) {
@@ -125,9 +119,7 @@ async function runMode(stateDir: string, mode: Mode) {
     failed: failure !== undefined,
     callbackFailure: errors.includes(nativeState.callbackFailure),
     retainedFailure: errors.includes(nativeState.failure),
-    acquisitionFailure: acquisitionFailure
-      ? { pluginIds: acquisitionFailure.pluginIds, message: acquisitionFailure.message }
-      : null,
+    acquisitionFailure: acquisitionFailure ? { message: acquisitionFailure.message } : null,
   };
 }
 
@@ -139,14 +131,13 @@ if (
 ) {
   throw new Error("Expected isolated state directory and custody case");
 }
-const selectedModes = requestedMode === "all" ? modes : [requestedMode as Mode];
+const all = requestedMode === "all";
+const selectedModes = all ? modes : [requestedMode as Mode];
 const reports = [];
 for (const mode of selectedModes) {
-  reports.push(
-    await runMode(requestedMode === "all" ? path.join(stateRoot, mode) : stateRoot, mode),
-  );
+  reports.push(await runMode(all ? path.join(stateRoot, mode) : stateRoot, mode));
 }
-process.stdout.write(JSON.stringify(requestedMode === "all" ? reports : reports[0]) + "\n", () => {
+process.stdout.write(JSON.stringify(all ? reports : reports[0]) + "\n", () => {
   // A retained inspection has no retryable release handle; ending its owner releases OS custody.
   process.exit(0);
 });

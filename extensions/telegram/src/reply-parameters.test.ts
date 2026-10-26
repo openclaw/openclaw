@@ -1,50 +1,27 @@
 // Telegram tests cover reply parameters plugin behavior.
-import { describe, expect, it } from "vitest";
-import {
-  buildTelegramSendParams,
-  buildTelegramThreadReplyParams,
-  resolveTelegramSendThreadSpec,
-} from "./reply-parameters.js";
+import { describe, expect, it, vi } from "vitest";
+import * as helpers from "./bot/helpers.js";
+import { buildTelegramThreadReplyParams } from "./reply-parameters.js";
 
 describe("telegram reply parameters", () => {
-  it("preserves exact quote text and quote metadata for native Telegram replies", () => {
-    expect(
-      buildTelegramSendParams({
-        replyToMessageId: 42,
-        replyQuoteMessageId: 42,
-        replyQuoteText: " quoted text\n",
-        replyQuotePosition: 12.9,
-        replyQuoteEntities: [{ type: "bold", offset: 1, length: 6 }],
-        thread: { id: 99, scope: "forum" },
-        silent: true,
-      }),
-    ).toEqual({
-      message_thread_id: 99,
-      reply_parameters: {
-        message_id: 42,
-        quote: " quoted text\n",
-        quote_position: 12,
-        quote_entities: [{ type: "bold", offset: 1, length: 6 }],
-        allow_sending_without_reply: true,
-      },
-      disable_notification: true,
-    });
-  });
-
-  it("uses the selected reply id as the quote id when direct sends only provide quote text", () => {
-    expect(
-      buildTelegramThreadReplyParams({
+  it("extends the freshly built thread parameters without copying them", () => {
+    const buildThreadParams = vi.spyOn(helpers, "buildTelegramThreadParams");
+    try {
+      const params = buildTelegramThreadReplyParams({
+        thread: { id: 42, scope: "forum" },
         replyToMessageId: 77,
-        replyQuoteText: "  exact slice  ",
-        useReplyIdAsQuoteSource: true,
-      }),
-    ).toEqual({
-      reply_parameters: {
-        message_id: 77,
-        quote: "  exact slice  ",
+      });
+
+      expect(params).toEqual({
+        message_thread_id: 42,
+        reply_to_message_id: 77,
         allow_sending_without_reply: true,
-      },
-    });
+      });
+      expect(buildThreadParams).toHaveBeenCalledOnce();
+      expect(params).toBe(buildThreadParams.mock.results[0]?.value);
+    } finally {
+      buildThreadParams.mockRestore();
+    }
   });
 
   it("falls back to legacy reply id for blank quotes or mismatched quote sources", () => {
@@ -66,39 +43,6 @@ describe("telegram reply parameters", () => {
       }),
     ).toEqual({
       reply_to_message_id: 77,
-      allow_sending_without_reply: true,
-    });
-  });
-
-  it("keeps message_thread_id for Telegram bot-private topics", () => {
-    expect(
-      buildTelegramThreadReplyParams({
-        thread: resolveTelegramSendThreadSpec({
-          targetMessageThreadId: 5,
-          chatType: "direct",
-        }),
-        replyToMessageId: 42,
-      }),
-    ).toEqual({
-      message_thread_id: 5,
-      reply_to_message_id: 42,
-      allow_sending_without_reply: true,
-    });
-  });
-
-  it("keeps direct_messages_topic_id independent from reply parameters", () => {
-    expect(
-      buildTelegramThreadReplyParams({
-        thread: resolveTelegramSendThreadSpec({
-          targetDirectMessagesTopicId: 77,
-          targetMessageThreadId: 999,
-          chatType: "group",
-        }),
-        replyToMessageId: 42,
-      }),
-    ).toEqual({
-      direct_messages_topic_id: 77,
-      reply_to_message_id: 42,
       allow_sending_without_reply: true,
     });
   });

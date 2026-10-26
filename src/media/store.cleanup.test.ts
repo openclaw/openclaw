@@ -44,7 +44,7 @@ describe("cleanOldMedia managed-subtree retention", () => {
       MANAGED_OUTGOING_ORIGINALS_SUBDIR,
     );
     const attachmentId = "11111111-1111-4111-8111-111111111111";
-    insertManagedImageRecord(
+    await insertManagedImageRecord(
       {
         attachmentId,
         sessionKey: "agent:main:main",
@@ -91,14 +91,15 @@ describe("cleanOldMedia managed-subtree retention", () => {
     expect(await readManagedImageRecord(attachmentId, stateDir)).not.toBeNull();
     await expect(fs.stat(legacyRecordPath)).resolves.toMatchObject({ size: 2 });
 
-    const cleanup = await cleanupManagedOutgoingMediaRecords({
+    await cleanupManagedOutgoingMediaRecords({
       stateDir,
       sessionKey: "agent:other:main",
       nowMs: Date.now(),
       transientMaxAgeMs: 1_000,
     });
 
-    expect(cleanup.deletedFileCount).toBe(0);
+    expect(await readManagedImageRecord(attachmentId, stateDir)).not.toBeNull();
+    await expect(fs.readFile(historyOriginal.path, "utf8")).resolves.toBe("history original");
     await expect(fs.stat(legacyOrphanPath)).resolves.toMatchObject({ size: 15 });
   });
 

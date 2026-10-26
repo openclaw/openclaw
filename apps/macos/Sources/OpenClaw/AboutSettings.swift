@@ -24,6 +24,9 @@ struct AboutSettings: View {
             }
 
             HStack(spacing: 20) {
+                Link(destination: URL(string: "https://community.openclaw.ai/")!) {
+                    Label("Support", systemImage: "questionmark.circle")
+                }
                 Link(destination: URL(string: "https://openclaw.ai")!) {
                     Label("Website", systemImage: "globe")
                 }
@@ -73,5 +76,6 @@ struct AboutSettings: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(24)
+        .environment(\.openURL, AppActivation.shared.openURLAction)
     }
 }

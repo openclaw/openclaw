@@ -1,24 +1,22 @@
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
+import { getCompatibleProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import {
-  preparePersistedInstalledPluginIndexCacheEntry,
   preparePluginMetadataMachineState,
+  preparePluginMetadataMachineStateAsync,
 } from "../plugins/installed-plugin-index-record-state.js";
 import {
   loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import {
-  createPluginCache,
-  getPluginCache,
-  retainPluginCache,
-  withPluginCache,
-} from "../plugins/plugin-cache.js";
+import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   buildPluginMetadataSnapshot,
+  cachePluginMetadataSnapshot,
   projectPluginMetadataSnapshot,
+  readPluginMetadataSnapshotCache,
   resolvePluginMetadataSnapshot,
   resolvePluginMetadataSnapshotInput,
   resolvePluginMetadataSnapshotCacheKey,
@@ -96,6 +94,28 @@ type ResolveConfigWidePluginMetadataParams = {
   installRecords?: Record<string, PluginInstallRecord>;
 };
 
+function resolveReusableGatewayPluginMetadataSnapshot(
+  params: ResolveConfigWidePluginMetadataParams,
+  allowSynchronousPolicyRead = true,
+): PluginMetadataSnapshot | undefined {
+  if (
+    params.allowCurrent === false ||
+    params.stateDir !== undefined ||
+    params.installRecords !== undefined
+  ) {
+    return undefined;
+  }
+  return (
+    getGatewayPluginMetadataSnapshot() ??
+    getCompatibleProcessGatewayPluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+      allowWorkspaceScopedSnapshot: true,
+      allowSynchronousPolicyRead,
+    })
+  );
+}
+
 /** Prepare database facts asynchronously before the existing metadata derivation. */
 export async function resolveConfigWidePluginMetadataSnapshotAsync(
   params: ResolveConfigWidePluginMetadataParams,
@@ -106,43 +126,35 @@ export async function resolveConfigWidePluginMetadataSnapshotAsync(
       resolveConfigWidePluginMetadataSnapshotAsync(captured),
     );
   }
-  if (
-    captured.allowCurrent !== false &&
-    captured.stateDir === undefined &&
-    captured.installRecords === undefined
-  ) {
-    const current = getGatewayPluginMetadataSnapshot();
-    if (current) {
-      return current;
-    }
+  const current = resolveReusableGatewayPluginMetadataSnapshot(captured, false);
+  if (current) {
+    return current;
   }
   const cache = getPluginCache();
-  const release = retainPluginCache(cache);
-  try {
-    return await withPluginCache(cache, async () => {
-      // Policy determines the snapshot cache key before installed-index access.
-      const activateDiscovery = await prepareBundledDiscoveryMode(captured.env);
+  return withPluginCache(cache, async () => {
+    // Policy and inventory share one worker read before synchronous metadata derivation.
+    const activateDiscovery =
+      captured.installRecords === undefined
+        ? await preparePluginMetadataMachineStateAsync({
+            env: captured.env,
+            stateDir: captured.stateDir,
+          })
+        : await prepareBundledDiscoveryMode(captured.env);
+    activateDiscovery();
+    const preparedCurrent = resolveReusableGatewayPluginMetadataSnapshot(captured);
+    if (preparedCurrent) {
+      return preparedCurrent;
+    }
+    const { key } = resolveConfigWideMetadataSelection(captured);
+    const existing = readPluginMetadataSnapshotCache(key);
+    if (existing) {
       activateDiscovery();
-      const { key } = resolveConfigWideMetadataSelection(captured);
-      const existing = cache.metadata.snapshots.get(key);
-      if (existing) {
-        activateDiscovery();
-        return existing;
-      }
-      if (captured.installRecords === undefined) {
-        const installed = await preparePersistedInstalledPluginIndexCacheEntry({
-          env: captured.env,
-          stateDir: captured.stateDir,
-        });
-        installed.assertCurrent();
-      }
-      activateDiscovery();
-      // Parsing, recovery, trust checks and persisted/derived selection retain one owner.
-      return resolveConfigWidePluginMetadataSnapshot(captured);
-    });
-  } finally {
-    release();
-  }
+      return existing;
+    }
+    activateDiscovery();
+    // Parsing, recovery, trust checks and persisted/derived selection retain one owner.
+    return resolveConfigWidePluginMetadataSnapshot(captured);
+  });
 }
 
 function resolveConfigWideMetadataSelection(params: ResolveConfigWidePluginMetadataParams) {
@@ -167,37 +179,26 @@ export function resolveConfigWidePluginMetadataSnapshot(
       resolveConfigWidePluginMetadataSnapshot(params),
     );
   }
-  if (
-    params.allowCurrent !== false &&
-    params.stateDir === undefined &&
-    params.installRecords === undefined
-  ) {
-    const gatewaySnapshot = getGatewayPluginMetadataSnapshot();
-    if (gatewaySnapshot) {
-      return gatewaySnapshot;
+  const gatewaySnapshot = resolveReusableGatewayPluginMetadataSnapshot(params);
+  if (gatewaySnapshot) {
+    return gatewaySnapshot;
+  }
+  return withSynchronousArtifactPreservingStateSnapshot(() => {
+    if (params.installRecords === undefined) {
+      preparePluginMetadataMachineState({
+        env: params.env ?? process.env,
+        stateDir: params.stateDir,
+      });
     }
-  }
-  return withSynchronousArtifactPreservingStateSnapshot(() =>
-    resolveConfigWidePluginMetadataSnapshotInScope(params),
-  );
-}
-
-function resolveConfigWidePluginMetadataSnapshotInScope(
-  params: ResolveConfigWidePluginMetadataParams,
-): PluginMetadataSnapshot {
-  const env = params.env ?? process.env;
-  if (params.installRecords === undefined) {
-    preparePluginMetadataMachineState({ env, stateDir: params.stateDir });
-  }
-  const { key, workspaceDirs } = resolveConfigWideMetadataSelection(params);
-  const cache = getPluginCache();
-  const cached = cache.metadata.snapshots.get(key);
-  if (cached) {
-    return cached;
-  }
-  const snapshot = resolveConfigWidePluginMetadataSnapshotImpl(params, workspaceDirs);
-  cache.metadata.snapshots.set(key, snapshot);
-  return snapshot;
+    const { key, workspaceDirs } = resolveConfigWideMetadataSelection(params);
+    const cached = readPluginMetadataSnapshotCache(key);
+    if (cached) {
+      return cached;
+    }
+    const snapshot = resolveConfigWidePluginMetadataSnapshotImpl(params, workspaceDirs);
+    cachePluginMetadataSnapshot(key, snapshot);
+    return snapshot;
+  });
 }
 
 function resolveConfigWidePluginMetadataSnapshotImpl(

@@ -187,6 +187,40 @@ describe("withExtractedArchiveRoot", () => {
     });
   });
 
+  it("verifies the full extracted tree before selecting a package root or running install work", async () => {
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+      const archivePath = path.join(fixtureRoot, "plugin.zip");
+      const zip = new JSZip();
+      zip.file("package/package.json", '{"name":"example-plugin"}');
+      zip.file("unexpected.txt", "outside the selected package");
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      const failure = { ok: false as const, error: "unexpected archive file", code: "integrity" };
+      const onExtracted = vi.fn(async () => ({ ok: true as const }));
+      let extractionRoot = "";
+      const result = await withExtractedArchiveRoot({
+        archivePath,
+        tempDirPrefix: "openclaw-install-flow-",
+        timeoutMs: 1000,
+        rootMarkers: ["package.json"],
+        verification: {
+          limits: {},
+          onExtractionError: () => failure,
+          verify: async (extractDir) => {
+            extractionRoot = extractDir;
+            expect(await fs.readFile(path.join(extractDir, "unexpected.txt"), "utf8")).toBe(
+              "outside the selected package",
+            );
+            return failure;
+          },
+        },
+        onExtracted,
+      });
+      expect(result).toBe(failure);
+      expect(onExtracted).not.toHaveBeenCalled();
+      await expect(fs.stat(extractionRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("returns root-resolution failure when archive layout is invalid", async () => {
     await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
       const archivePath = path.join(fixtureRoot, "plugin.zip");

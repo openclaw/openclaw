@@ -1,121 +1,102 @@
 ---
-summary: "Temp-directory rules, agent reliability eval gaps, and how to add a regression"
+summary: "Behavioral integration proof, test value and cost, and regression authoring"
 title: "Writing and adding tests"
 read_when:
   - You are writing a new test
   - You are adding a regression for a provider bug
 ---
 
-## Test Temp Directories
+## Prove behavior at the owning boundary
 
-Use the shared helpers in `test/helpers/temp-dir.ts` for test-owned temporary
-directories so ownership is explicit and cleanup stays in the test lifecycle:
+Prove a caller-visible contract through its production owner with fixed external
+I/O fixtures and independent expected values. Prefer focused integration tests
+and independent unit contracts over mocked internal decisions or whole-product
+boots. Name the credible regression and what the test cannot prove.
 
-```ts
-import { afterEach } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+Work in vertical slices: failing behavior, coherent repair, passing proof.
+Regressions must fail on the original defect, not fixture setup; report unavailable
+baseline proof. Refactor under green tests and preserve distinct contracts when
+consolidating coverage. Use synthetic content and keep credentials out of captures.
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-it("uses a temp workspace", () => {
-  const workspace = tempDirs.make("openclaw-example-");
-  // use workspace
-});
-```
-
-`useAutoCleanupTempDirTracker(afterEach)` intentionally exposes no manual
-cleanup method - Vitest owns cleanup after each test. Older lower-level
-helpers (`makeTempDir`, `cleanupTempDirs`, `createTempDirTracker`) still exist
-for tests that have not migrated; avoid new usage of them and avoid new bare
-`fs.mkdtemp*` calls unless a test is explicitly verifying raw temp-dir
-behavior. When a bare temp dir is genuinely needed, add an auditable allow
-comment with a reason:
-
-```ts
-// openclaw-temp-dir: allow verifies raw fs cleanup behavior
-const workspace = fs.mkdtempSync(prefix);
-```
-
-`node scripts/report-test-temp-creations.mjs` reports new bare temp-dir
-creation and new manual shared-helper usage in added diff lines, without
-blocking existing cleanup styles. It follows the same test-path classification
-as `scripts/changed-lanes.mjs` and skips the shared helper implementation
-itself. `check:changed` runs this report for changed test paths as a
-warning-only CI signal (GitHub warning annotations, not failures).
-
-## Agent reliability evals (skills)
-
-We already have a few CI-safe tests that behave like "agent reliability evals":
-
-- Agent admission, run-ID responses, and abort requests through the real Gateway with a mock OpenAI provider (`src/gateway/gateway.test.ts`).
-- End-to-end wizard flows that validate session wiring and config effects (`src/gateway/gateway.test.ts`).
-
-What's still missing for skills (see [Skills](/tools/skills)):
-
-- **Decisioning:** when skills are listed in the prompt, does the agent pick the right skill (or avoid irrelevant ones)?
-- **Compliance:** does the agent read `SKILL.md` before use and follow required steps/args?
-- **Workflow contracts:** multi-turn scenarios that assert tool order, session history carryover, and sandbox boundaries.
-
-Future evals should stay deterministic first:
-
-- A scenario runner using mock providers to assert tool calls + order, skill file reads, and session wiring.
-- A small suite of skill-focused scenarios (use vs avoid, gating, prompt injection).
-- Optional live evals (opt-in, env-gated) only after the CI-safe suite is in place.
+Apply the [test value gate](https://github.com/openclaw/openclaw/blob/main/.agents/skills/test-audit/SKILL.md)
+and [proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
+For requests, paid calls, recovery, defaults, or performance claims, read the
+[scenario contracts](/help/testing/boundary-scenarios#scenario-contracts) before
+changing code or proof. Too many private controls suggest fragmented ownership,
+not a need for test-only exports.
 
 ## Cost budget
 
-Every test file runs on every pull request that touches its area, so its cost is
-paid thousands of times. Budgets, measured with `pnpm test <file> --maxWorkers=1`
-on one worker:
+Measure every new or changed test file with
+`pnpm test <file> --maxWorkers=1`; report wall time and CI seconds once available;
+PRs state both.
 
-- Target under 5 s of test time per file. Above 30 s, the PR body explains which
-  contract needs that time and why no cheaper layer proves it.
-- A file that needs more than the planner's per-job budget (about 120 s) cannot be
-  packed with other files and sets the wall time of its whole job. Split it by
-  owner boundary, or move the long end-to-end composition to the release-only tier
-  (`RELEASE_ONLY_*` sets in `scripts/lib/ci-node-test-plan.mts`) and keep a fast
-  contract check in per-PR CI.
-- Use an injected clock at the owner instead of real timers, sleeps, or polling;
-  claim ports through `src/test-utils/port-claims.ts`; give each file its own
-  state directory; reuse suite-level Gateway and process fixtures instead of
-  booting per test; import the narrow test API of a plugin or module rather than
-  its full barrel. Do not add a serial Vitest config or a worker pin: fix the
-  shared state that would need one.
-- State the measured cost in the PR for every new or materially changed test
-  file, and the CI seconds once the run exists.
+- Seconds-long tests must prove a contract no cheaper layer can. Long end-to-end
+  compositions belong in the release-only tier.
+- Target under 5 seconds of test time per file. Above 30 seconds, explain the
+  contract and why no cheaper layer proves it.
+- Split files exceeding planner job budgets by owner, or consider `RELEASE_ONLY_*`
+  in `scripts/lib/ci-node-test-plan.mts`. Weigh PR risk against release detection;
+  keep coverage without duplicate release tests. Preserve assigned configs and
+  process/timer policies; product E2E/live stays separate. See
+  [maintainer-tooling routing](/ci/scope-and-routing/node-test-lanes).
+- Inject clocks; do not add real timers, sleeps, or polling. Claim ports through
+  `src/test-utils/port-claims.ts`, isolate each file's state, and reuse suite-level
+  Gateway/process fixtures; never boot one per test when a suite-level fixture
+  exists. Import narrow APIs, not broad barrels. Fix shared state; do not add
+  serial configs or worker pins.
+- Async E2E waits: produced state, never action return.
+- For compiled subprocesses and legacy timeout helpers, follow the
+  [collection/preload and timeout migration recipes](/help/testing/fixtures#compiled-subprocesses-and-timeout-helpers).
+
+## Test Temp Directories
+
+Use [temporary directory and executable fixture recipes](/help/testing/fixtures#test-temp-directories)
+for shared cleanup, bare-directory exceptions, and close-on-exec copies.
+
+## Agent reliability evals (skills)
+
+For skill selection, compliance, and multi-turn workflow evals, use the
+[fixture guide](/help/testing/fixtures#agent-reliability-evals-skills).
+
+## Module mocks and export completeness
+
+Follow the [mock recipe](/help/testing/fixtures#module-mocks-and-export-completeness)
+for export preservation, state-isolating mocks, annotations, and the shrinking baseline.
+
+## Raw SQLite state access
+
+Before raw database reads or file snapshots, follow the
+[async close contract](/help/testing/fixtures#raw-sqlite-state-access).
+
+<a id="skills-watchers" />
+
+## Skills discovery
+
+Close the background worker and isolate passive refresh as described in
+[discovery cleanup](/help/testing/fixtures#skills-discovery).
 
 ## Flake triage
 
-A failure without a related change is a defect. Never re-run, re-push, or refresh
-to get green.
-
-1. Reproduce in the failing shard's file order first (the plan's file list is in
-   the job log), then alone. Order-only failures are shared-state leaks from an
-   earlier file.
-2. Classify: fixture (temp state, ports, cwd, env, module singletons), ordering
-   (assertion before the owned completion signal), or product (a real race).
-3. Fix at the owner. Product races get a regression that fails on the original
-   defect; fixture leaks are fixed in the fixture owner, not in the failing test.
-4. Proof bar: 20 clean standalone runs of the file, 3 clean runs of the original
-   shard, and the owner's sibling tests. Record the root cause in the PR.
-5. If the owner is another lane or PR, cite that fix; it is the only reason to
-   proceed on a red job.
+Follow the canonical
+[test failure policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#test-failure-policy).
+Reproduce the original shard order before running alone; order-only failures
+usually mean earlier-file shared-state leaks. Classify fixture state, missing
+completion signals, and product races. Repair the producer. If a removal caused
+the red, read its PR's accepted tradeoffs before restoring it. Choose repeat
+counts for the reproduced failure mode, not a fixed clean-run quota.
 
 ## Adding regressions (guidance)
 
-For inventory-growth and capacity regressions, pass bounded synthetic inventories
-and fixed timing data through the real planner. Put the fixture at the capacity
-boundary and preserve coverage, ownership, and execution-budget assertions. Keep
-real-checkout inventory coverage in its integration tests instead of rebuilding
-the growing repository plan for every synthetic variation.
+Pass bounded synthetic inventories and fixed timing through real planners for
+capacity bugs. Preserve coverage, ownership, and execution-budget assertions;
+keep real-checkout inventory coverage in its existing integration tests.
 
-When you fix a provider/model issue discovered in live:
+For live provider bugs, prefer a CI-safe regression at the smallest production
+composition reaching the defect: real adapters with captured requests, Gateway
+integration for session/history/tool pipelines, or independent parser unit
+contracts. Keep inherently live-only checks narrow and opt-in.
 
-- Add a CI-safe regression if possible (mock/stub provider, or capture the exact request-shape transformation)
-- If it's inherently live-only (rate limits, auth policies), keep the live test narrow and opt-in via env vars
-- Prefer targeting the smallest layer that catches the bug:
-  - provider request conversion/replay bug -> direct models test
-  - gateway session/history/tool pipeline bug -> gateway live smoke or CI-safe gateway mock test
-- SecretRef traversal guardrail:
-  - `src/secrets/exec-secret-ref-id-parity.test.ts` derives one sampled target per SecretRef class from registry metadata (`listSecretTargetRegistryEntries()`), then asserts traversal-segment exec ids are rejected.
-  - If you add a new `includeInPlan` SecretRef target family in `src/secrets/target-registry-data.ts`, update `classifyTargetClass` in that test. The test intentionally fails on unclassified target ids so new classes cannot be skipped silently.
+New `includeInPlan` SecretRef families in `src/secrets/target-registry-data.ts`
+need classification in `src/secrets/exec-secret-ref-id-parity.test.ts` so sampled
+traversal-segment rejection cannot silently skip them.

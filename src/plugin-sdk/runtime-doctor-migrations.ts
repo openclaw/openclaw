@@ -11,10 +11,12 @@ import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
 
+export { decodeUtf8Input, Utf8InputError };
 export { mergeMissing } from "../config/merge-missing.js";
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export { defineChannelAliasMigration } from "../config/channel-alias-migration.js";
@@ -54,7 +56,13 @@ export type {
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 export type {
+  PluginDoctorCronChange,
+  PluginDoctorCronInventory,
+  PluginDoctorCronJob,
   PluginDoctorChannelIngressQueueAccess,
+  PluginDoctorMigrationBackupResource,
+  PluginDoctorMigrationBackupWarning,
+  PluginDoctorProviderRename,
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
@@ -62,8 +70,13 @@ export {
   archiveLegacyStateSource,
   legacyStateFileExists,
 } from "../plugins/doctor-state-migration-fs.js";
+export { backupLegacyStateSource } from "../infra/state-migrations.source-backup.js";
+export { resolveLegacyMigrationSourcePath } from "../infra/state-migrations.source-path.js";
+export type { ChannelIngressLegacyEntry } from "../channels/message/ingress-queue.migration.js";
 export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
 export { definePluginDoctorMigrationFromPlans } from "./doctor-migration-plan-adapter.js";
+export { defineRetiredPluginStateMigration } from "../plugins/doctor-retired-state.js";
+export { createLegacyWebhookListenerDoctorContract } from "./legacy-webhook-listener-migration.js";
 export type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 
 type KeyMoveValue = { value: unknown };
@@ -195,34 +208,25 @@ export function defineKeyMoveMigration(params: {
     changes: string[];
   }) => CompatMutationResult;
 } {
-  const visitScopes = (
-    entry: Record<string, unknown>,
-    scope: readonly string[],
-    visit: (scopeEntry: Record<string, unknown>, scopePath: readonly string[]) => boolean,
-    scopePath: readonly string[] = [],
-  ): boolean => {
+  const visitScopes = (entry: Record<string, unknown>, scope: readonly string[]): boolean => {
     const [segment, ...rest] = scope;
     if (!segment) {
-      return visit(entry, scopePath);
+      const source = readKeyMovePath(entry, params.from, params.sourceOwn);
+      return Boolean(source && (params.match?.(source.value) ?? true));
     }
     if (segment === "*") {
-      return Object.entries(entry).some(([key, value]) => {
+      return Object.values(entry).some((value) => {
         const child = asObjectRecord(value);
-        return child ? visitScopes(child, rest, visit, [...scopePath, key]) : false;
+        return child ? visitScopes(child, rest) : false;
       });
     }
     const child = asObjectRecord(entry[segment]);
-    return child ? visitScopes(child, rest, visit, [...scopePath, segment]) : false;
+    return child ? visitScopes(child, rest) : false;
   };
 
   const hasLegacy = (value: unknown): boolean => {
     const entry = asObjectRecord(value);
-    return entry
-      ? visitScopes(entry, params.scope ?? [], (scopeEntry) => {
-          const source = readKeyMovePath(scopeEntry, params.from, params.sourceOwn);
-          return Boolean(source && (params.match?.(source.value) ?? true));
-        })
-      : false;
+    return entry ? visitScopes(entry, params.scope ?? []) : false;
   };
 
   const normalizeScope = (
@@ -413,14 +417,20 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
   };
   toRows: (source: TSource) => readonly { key: string; value: unknown }[];
 }): PluginDoctorStateMigration {
-  const readSource = async (filePath: string): Promise<TSource | null> => {
+  const readSource = async (
+    filePath: string,
+  ): Promise<{ source: TSource | null; warning?: string }> => {
     try {
-      return params.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
+      const raw = decodeUtf8Input(await fs.readFile(filePath), `Legacy state ${filePath}`);
+      return { source: params.parse(JSON.parse(raw) as unknown) };
     } catch (error) {
+      if (error instanceof Utf8InputError) {
+        return { source: null, warning: `${error.message} Left legacy source in place.` };
+      }
       if (!hasErrnoCode(error, "ENOENT")) {
         throw error;
       }
-      return null;
+      return { source: null };
     }
   };
   const describe = (source: TSource, filePath: string) =>
@@ -431,9 +441,9 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
     label: params.label,
     async detectLegacyState({ stateDir }) {
       const filePath = params.resolvePath(stateDir);
-      const source = await readSource(filePath);
+      const { source, warning } = await readSource(filePath);
       if (!source) {
-        return null;
+        return warning ? { preview: [warning] } : null;
       }
       const rows = params.toRows(source);
       if (rows.length === 0) {
@@ -446,7 +456,10 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
       const changes: string[] = [];
       const warnings: string[] = [];
       const filePath = params.resolvePath(stateDir);
-      const source = await readSource(filePath);
+      const { source, warning } = await readSource(filePath);
+      if (warning) {
+        return { changes, warnings: [warning], warningDisposition: "recoverable" };
+      }
       if (!source) {
         return { changes, warnings };
       }

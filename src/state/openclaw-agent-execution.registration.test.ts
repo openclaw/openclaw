@@ -1,29 +1,40 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { serialize } from "node:v8";
-import { MessageChannel, type MessagePort } from "node:worker_threads";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MessagePort } from "node:worker_threads";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import {
+  failSqliteWorkerSlot,
   receiveSqliteWorkerReply,
-  settleFailedSqliteWorkerJobs,
   settleSqliteWorkerJob,
 } from "../infra/sqlite-worker-broker-reply.js";
-import type { Job } from "../infra/sqlite-worker-broker.types.js";
+import type { Actor, Job } from "../infra/sqlite-worker-broker.types.js";
 import {
+  isSqliteWorkerError,
   SqliteWorkerError,
   type SqliteWorkerReply,
   type SqliteWorkerRequest,
 } from "../infra/sqlite-worker-contract.js";
-import type { acquireSqliteWorkerLifecycle } from "../infra/sqlite-worker-lifecycle-preparation.js";
-import type { SqliteWorkerAdmissionRequest } from "../infra/sqlite-worker-operation-admission.js";
-import { createSqliteWorkerTransferOwner } from "../infra/sqlite-worker-transfer.js";
+import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
-import type { OpenClawAgentDatabaseRegistrationCommit } from "./openclaw-agent-db-contract.js";
+import { AgentDatabaseDeletionRefusedError } from "./agent-deletion-journal.js";
+import type {
+  OpenClawAgentDatabaseRegistrationCommit,
+  OpenClawAgentDatabaseRegistrationObserver,
+} from "./openclaw-agent-db-contract.js";
 import type { AgentDatabaseExecutionOpen } from "./openclaw-agent-execution-contract.js";
+import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
+import { hydrateOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+
+type AdmissionModule = typeof import("../infra/sqlite-worker-operation-admission.js");
+type FailedReply = Extract<SqliteWorkerReply, { ok: false }>;
 
 const edge = vi.hoisted(() => {
   const database = {
     agentId: "main",
     path: "/synthetic/agent.sqlite",
     db: { isOpen: true, isTransaction: false },
+    walMaintenance: { stop: async () => {} },
   };
   return {
     database,
@@ -33,18 +44,17 @@ const edge = vi.hoisted(() => {
       (
         options: unknown,
         lease: unknown,
-        committed?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void,
+        registration?: OpenClawAgentDatabaseRegistrationObserver,
       ) => typeof database
     >(),
-    request: vi.fn<(request: SqliteWorkerAdmissionRequest) => void>(),
+    request: vi.fn<AdmissionModule["requestSqliteWorkerOperationAdmission"]>(),
+    attachment: vi.fn(() => ({ kind: "agent-execution", startupJournal: false })),
     nativeClose: vi.fn(() => {
       database.db.isOpen = false;
       return true;
     }),
     releaseAgent: vi.fn(),
     releaseShared: vi.fn(),
-    acquireLifecycle: vi.fn<typeof acquireSqliteWorkerLifecycle>(),
-    releaseLifecycle: vi.fn(),
     forbidden: vi.fn((): never => {
       throw new Error("Registration transport control crossed a native or process boundary");
     }),
@@ -56,13 +66,12 @@ vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   return {
+    ...actual,
     parentPort: { on: edge.on, postMessage: edge.publishReply },
     isMainThread: false,
+    workerData: null,
     threadId: 1,
-    isMarkedAsUntransferable: actual.isMarkedAsUntransferable,
     Worker: edge.forbidden,
-    MessageChannel: actual.MessageChannel,
-    receiveMessageOnPort: actual.receiveMessageOnPort,
   };
 });
 vi.mock("node:child_process", () => ({
@@ -72,31 +81,50 @@ vi.mock("node:child_process", () => ({
   execFileSync: edge.forbidden,
   fork: edge.forbidden,
 }));
-vi.mock("../infra/node-sqlite.js", () => ({ openNodeSqliteDatabase: edge.forbidden }));
+// mock-isolation: Native database opening must remain forbidden in the worker registration fixture.
+vi.mock("../infra/node-sqlite.js", () => ({
+  openNodeSqliteDatabase: edge.forbidden,
+  captureSqliteNativeRuntimeAdmission: () => undefined,
+}));
 vi.mock("../logging/console.js", () => ({ routeLogsToStderr() {} }));
 vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: (done: () => void) => done() }));
-vi.mock("../infra/sqlite-worker-identity.js", () => ({
+vi.mock("../infra/sqlite-worker-identity.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
+    "../infra/sqlite-worker-identity.js",
+  )),
   assertExistingDatabaseIdentity() {},
   readDatabasePathIdentitySync: () => ({ key: "file:fixture" }),
 }));
 vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../infra/sqlite-worker-operation-admission.js")>();
+  const actual = await importOriginal<AdmissionModule>();
   return {
     ...actual,
-    requestSqliteWorkerOperationAdmission: edge.request,
-    withSqliteWorkerOperationAdmission: edge.forbidden,
+    requestSqliteWorkerOperationAdmission: (...args: Parameters<typeof edge.request>) => {
+      const [request] = args;
+      const facts = request.facts;
+      if (
+        facts &&
+        typeof facts === "object" &&
+        "validationPort" in facts &&
+        facts.validationPort instanceof MessagePort
+      ) {
+        facts.validationPort.postMessage({}, []);
+      }
+      edge.request(...args);
+    },
+    takeSqliteWorkerOperationAdmissionAttachment: edge.attachment,
   };
 });
 vi.mock("../infra/sqlite-worker-broker-admission.js", () => ({
-  releaseSqliteWorkerLifecycle() {},
-}));
-vi.mock("../infra/sqlite-worker-lifecycle-preparation.js", () => ({
-  acquireSqliteWorkerLifecycle: edge.acquireLifecycle,
+  prepareSqliteWorkerActorContext: edge.forbidden,
 }));
 vi.mock("./openclaw-agent-db.js", () => ({
   openOpenClawAgentDatabase: edge.open,
   getOpenClawAgentDatabaseIfOpen: () => edge.database,
+}));
+vi.mock("./openclaw-agent-db-schema-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-agent-db-schema-refresh.js")>()),
+  refreshOpenClawAgentDatabaseSchema: () => undefined,
 }));
 vi.mock("./openclaw-agent-db-identity.js", () => ({
   readOpenClawAgentDatabaseIdentity: () => ({
@@ -108,20 +136,24 @@ vi.mock("./openclaw-agent-db-identity.js", () => ({
 vi.mock("./openclaw-agent-db-lease.js", () => ({
   prepareOpenClawAgentDatabaseWorkerLease: () => ({ receipt: { leaseId: "fixture" } }),
 }));
-vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
-  closeOpenClawAgentDatabaseByPath: edge.nativeClose,
+// mock-isolation: Synthetic admission owns the handle; this fixture observes borrow release only.
+vi.mock("./openclaw-agent-db-borrower.js", () => ({
   retainAgentDatabase: () => edge.releaseAgent,
 }));
-vi.mock("./openclaw-state-db.js", () => ({ openOpenClawStateDatabase: () => ({}) }));
+// mock-isolation: Retirement closes only the synthetic handle; native lifecycle work is forbidden.
+vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
+  closeOpenClawAgentDatabaseByPath: edge.nativeClose,
+}));
+vi.mock("./openclaw-state-db.js", () => ({
+  openOpenClawStateDatabase: () => ({ db: { isOpen: true, isTransaction: false } }),
+}));
 vi.mock("./openclaw-state-db-cache.js", () => ({
   requireOpenClawStateDatabaseIdentity: () => ({ key: "file:state" }),
-  retainOpenClawStateDatabase: () => ({ release: edge.releaseShared }),
+  retainOpenClawStateDatabase: () => ({
+    release: edge.releaseShared,
+    releaseAsync: edge.releaseShared,
+  }),
 }));
-vi.mock("./openclaw-state-worker-error.js", () => ({
-  encodeOpenClawStateWorkerError: () => undefined,
-  retainOpenClawStateWorkerErrorPayload: edge.forbidden,
-}));
-
 const input: AgentDatabaseExecutionOpen = {
   leaseId: "fixture",
   agentId: "main",
@@ -140,8 +172,90 @@ let receive: (request: SqliteWorkerRequest) => void;
 let nextId = 0;
 let actor = 0;
 let nativeOpened = false;
+let actorCloseAttempts = 0;
+
+function opening(
+  overrides: Partial<Extract<SqliteWorkerRequest, { type: "open" }>> = {},
+): SqliteWorkerRequest {
+  return {
+    id: ++nextId,
+    actor,
+    type: "open",
+    moduleUrl: new URL("./openclaw-agent-execution.worker.ts", import.meta.url).href,
+    databasePath: input.databasePath,
+    input: serialize(input),
+    ...overrides,
+  };
+}
+function prepareRequest(
+  overrides: Partial<Extract<SqliteWorkerRequest, { type: "execute" }>> = {},
+): SqliteWorkerRequest {
+  return {
+    id: ++nextId,
+    actor,
+    type: "execute",
+    input: serialize({ type: "database.prepareWrite", input: undefined }),
+    ...overrides,
+  };
+}
+function acceptOpen(register = false) {
+  edge.open.mockImplementation((_options, _lease, registration) => {
+    if (register) {
+      registration?.starting?.();
+      registration?.committed?.(receipt);
+    }
+    nativeOpened = true;
+    return edge.database;
+  });
+}
+function isRegistration(request: Parameters<typeof edge.request>[0]) {
+  return (
+    request.stage === "prepare" &&
+    request.facts &&
+    typeof request.facts === "object" &&
+    "kind" in request.facts &&
+    request.facts.kind === "agent-registration-committed"
+  );
+}
+async function retiredFailure(
+  reply: FailedReply,
+  request: SqliteWorkerRequest,
+  admissionFailure?: unknown,
+  expectedMessage?: string,
+) {
+  const { retired, completion, reject, settleNative } = retireFailedReply(
+    reply,
+    request,
+    admissionFailure,
+  );
+  try {
+    expect(reject).not.toHaveBeenCalled();
+    expect(settleNative).not.toHaveBeenCalled();
+  } finally {
+    retired.resolve();
+  }
+  const failure = await completion.promise;
+  expect(settleNative).toHaveBeenCalledExactlyOnceWith({
+    kind: "unknown",
+    error: expectedMessage ? expect.objectContaining({ message: expectedMessage }) : failure,
+    nativeStopped: true,
+  });
+  return failure;
+}
+
+async function sendFailed(request: SqliteWorkerRequest): Promise<FailedReply> {
+  const reply = await send(request);
+  expect(reply.ok).toBe(false);
+  if (reply.ok) {
+    throw new Error("Worker operation unexpectedly succeeded");
+  }
+  return reply;
+}
 
 function send(request: SqliteWorkerRequest): Promise<SqliteWorkerReply> {
+  if (request.type === "close" && request.actor === actor) {
+    actorCloseAttempts += 1;
+  }
   const response = createDeferredCore<SqliteWorkerReply>();
   replies.set(request.id, response);
   receive(request);
@@ -149,7 +263,7 @@ function send(request: SqliteWorkerRequest): Promise<SqliteWorkerReply> {
 }
 
 function retireFailedReply(
-  reply: Extract<SqliteWorkerReply, { ok: false }>,
+  reply: FailedReply,
   request: SqliteWorkerRequest,
   admissionFailure?: unknown,
 ) {
@@ -157,21 +271,30 @@ function retireFailedReply(
   const completion = createDeferredCore<unknown>();
   const reject = vi.fn((error: unknown) => completion.resolve(error));
   const settleNative = vi.fn();
+  const slotCustody = new SqliteWorkerSlotCustody();
+  const custody = slotCustody.createRequest();
+  custody.activate();
+  custody.accept();
   const job: Job = {
+    custody,
+    observation: { started() {}, completed() {} },
     request,
     bytes: 0,
-    nativeDispatched: true,
+    result: completion.promise,
     operationAdmission: {
       admission: {
         get port(): MessagePort {
           return edge.forbidden();
         },
         failure: admissionFailure,
+        failureSource: admissionFailure === undefined ? undefined : "authority",
         cleanupFailures: [],
         committed: undefined,
         settlement: undefined,
         waitForSettlement: edge.forbidden,
+        observeRequests: edge.forbidden,
         service: edge.forbidden,
+        bindDatabaseAuthority: edge.forbidden,
         finish() {},
       },
       releaseService() {},
@@ -181,25 +304,30 @@ function retireFailedReply(
     reject,
     detach() {},
   };
-  receiveSqliteWorkerReply({ current: job, worker: { postMessage: edge.forbidden } }, reply, {
-    fail(error, currentError, completed, openOutcome) {
-      if (!(error instanceof Error)) {
-        throw error;
-      }
-      settleFailedSqliteWorkerJobs({
-        current: job,
-        queued: [],
-        queuedError: new SqliteWorkerError("retired", "unavailable"),
-        error,
+  const slot: Parameters<typeof receiveSqliteWorkerReply>[0] &
+    Parameters<typeof failSqliteWorkerSlot>[0] = {
+    custody: slotCustody,
+    actors: new Set<Actor>(),
+    current: job,
+    queue: [],
+    worker: { postMessage: edge.forbidden },
+  };
+  receiveSqliteWorkerReply(slot, reply, {
+    fail(error, currentError, openOutcome, completed) {
+      failSqliteWorkerSlot(slot, error, {
         currentError,
-        completed,
         openOutcome,
+        completed,
         retire: () => retired.promise,
         finish: settleSqliteWorkerJob,
       });
     },
-    finish: edge.forbidden,
-    dispatch: edge.forbidden,
+    finish(target, error, _value, settlement) {
+      expect(target).toBe(job);
+      settleNative(settlement);
+      reject(error);
+    },
+    dispatch() {},
   });
   return { retired, completion, reject, settleNative };
 }
@@ -216,6 +344,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   nativeOpened = false;
+  actorCloseAttempts = 0;
   edge.database.db.isOpen = true;
   edge.request.mockImplementation(() => {});
   edge.publishReply.mockImplementation((reply: SqliteWorkerReply) => {
@@ -227,275 +356,267 @@ beforeEach(async () => {
     pending.resolve(reply);
   });
   actor += 1;
-  expect(
-    await send({
-      id: ++nextId,
-      actor,
-      type: "open",
-      moduleUrl: new URL("./openclaw-agent-execution.worker.ts", import.meta.url).href,
-      databasePath: input.databasePath,
-      existingIdentity: "file:fixture",
-      input: serialize(input),
-    }),
-  ).toMatchObject({ ok: true });
+  expect(await send(opening({ existingIdentity: "file:fixture" }))).toMatchObject({ ok: true });
 });
 
 afterEach(async () => {
   expect((await send({ id: ++nextId, actor, type: "close" })).ok).toBe(true);
-  expect(edge.releaseShared).toHaveBeenCalledOnce();
-  expect(edge.nativeClose).toHaveBeenCalledTimes(nativeOpened ? 1 : 0);
-  expect(edge.releaseAgent).toHaveBeenCalledTimes(nativeOpened ? 1 : 0);
+  expect(edge.releaseShared).toHaveBeenCalledTimes(actorCloseAttempts);
+  expect(edge.nativeClose).toHaveBeenCalledTimes(nativeOpened ? actorCloseAttempts : 0);
+  expect(edge.releaseAgent).toHaveBeenCalledTimes(nativeOpened ? actorCloseAttempts : 0);
   expect(replies.size).toBe(0);
   expect(edge.forbidden).not.toHaveBeenCalled();
 });
 
-describe("committed agent registration across failed native opening", () => {
-  it.each(["inline", "framed"] as const)(
-    "retains the shared-state lifecycle location through %s command delivery",
-    async (delivery) => {
-      edge.open.mockImplementation((_options, _lease, committed) => {
-        committed?.(receipt);
-        nativeOpened = true;
-        return edge.database;
-      });
-      edge.acquireLifecycle.mockResolvedValue({
-        coordinator: {
-          path: "/synthetic/coordinator.sqlite",
-          closed: false,
-          release: edge.releaseLifecycle,
-        },
-        admission: undefined,
-      });
-      const { port1, port2 } = new MessageChannel();
-      port1.on("message", (message: { type: "result"; reply: SqliteWorkerReply }) => {
-        edge.publishReply(message.reply);
-      });
-      const transfer = createSqliteWorkerTransferOwner();
-      const command = { type: "database.prepareWrite", input: undefined };
-      const request = {
-        id: ++nextId,
-        actor,
-        stateDatabasePath: input.stateDatabasePath,
-        stateContext: {
-          environment: input.environment,
-          coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: false },
-        },
-        workerStateLifecycle: { deadlineNs: process.hrtime.bigint() + 1_000_000_000n },
-        lifecyclePreparation: port2,
-      };
-      try {
-        let reply: SqliteWorkerReply;
-        if (delivery === "inline") {
-          reply = await send({ ...request, type: "execute", input: serialize(command) });
-        } else {
-          const handle = transfer.start([{ kind: "command", value: command }].values(), {
-            kinds: ["command"],
-          });
-          reply = await send({ ...request, type: "execute-start", transfer: handle });
-          expect(reply).toMatchObject({ ok: true, input: "next" });
-          expect(edge.acquireLifecycle).not.toHaveBeenCalled();
-          for (;;) {
-            const frame = transfer.next(handle.id);
-            reply = await send({
-              id: request.id,
-              actor,
-              type: "execute-frame",
-              input: serialize(frame),
-            });
-            if (frame.done) {
-              transfer.end(handle.id);
-              break;
-            }
-            expect(reply).toMatchObject({ ok: true, input: "next" });
-          }
-        }
-        expect(reply).toMatchObject({ ok: true });
-        expect(edge.acquireLifecycle).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ databasePath: input.stateDatabasePath }),
-        );
-        expect(edge.open).toHaveBeenCalledOnce();
-        expect(edge.releaseLifecycle).toHaveBeenCalledOnce();
-      } finally {
-        transfer.close();
-        port1.close();
-        port2.close();
-      }
-    },
-  );
+it("settles eager native factory creation synchronously", async () => {
+  const { createSqliteWorkerBackend } = await import("./openclaw-agent-execution.worker.js");
+  acceptOpen(true);
+  const backend = createSqliteWorkerBackend(input, { databasePath: input.databasePath });
+  expect(backend).not.toBeInstanceOf(Promise);
+  await backend.close();
+  expect(edge.database.db.isOpen).toBe(false);
+  expect(edge.releaseAgent).toHaveBeenCalledOnce();
+  expect(edge.releaseShared).toHaveBeenCalledOnce();
+});
 
-  it.each([
-    { name: "failed open", openingSucceeds: false, reportRefused: false },
-    { name: "failed open and report", openingSucceeds: false, reportRefused: true },
-    { name: "successful open with refused report", openingSucceeds: true, reportRefused: true },
-  ])(
-    "reports the COMMIT and joins retirement after $name",
-    async ({ openingSucceeds, reportRefused }) => {
-      const openingError = new Error("Validation publication failed after registration COMMIT");
-      const reportingError = new Error("Original caller retired before receipt acknowledgement");
-      edge.open.mockImplementation((_options, _lease, committed) => {
-        committed?.(receipt);
-        if (openingSucceeds) {
-          nativeOpened = true;
-          return edge.database;
-        }
-        throw openingError;
-      });
-      const reported: unknown[] = [];
-      edge.request.mockImplementation((request) => {
-        if (request.stage === "prepare" && request.facts && typeof request.facts === "object") {
-          if ("kind" in request.facts && request.facts.kind === "agent-registration-committed") {
-            reported.push(request.facts);
-            if (reportRefused) {
-              throw reportingError;
-            }
-          }
-        }
-      });
-      const reply = await send({
-        id: ++nextId,
-        actor,
-        type: "execute",
-        input: serialize({ type: "database.prepareWrite", input: undefined }),
-      });
-      expect(reported).toEqual([{ kind: "agent-registration-committed", registration: receipt }]);
-      expect(reply.ok).toBe(false);
-      if (reply.ok) {
-        throw new Error("Failed native opening unexpectedly succeeded");
-      }
-      if (!openingSucceeds) {
-        expect(reply.error.message).toContain(openingError.message);
-      }
-      if (reportRefused) {
-        expect(reply.error.message).toContain(reportingError.message);
-      }
-      expect(reply.retire).toBe(true);
-
-      const { retired, completion, reject, settleNative } = retireFailedReply(
-        reply,
-        { type: "execute", id: reply.id, actor, input: new Uint8Array() },
-        reportRefused ? reportingError : undefined,
-      );
-      expect(reject).not.toHaveBeenCalled();
-      expect(settleNative).not.toHaveBeenCalled();
-      retired.resolve();
-      const failure = await completion.promise;
-      expect(failure).toMatchObject({ code: "outcome-unknown" });
-      if (!openingSucceeds) {
-        expect(String(failure)).toContain(openingError.message);
-      }
-      if (reportRefused) {
-        expect(String(failure)).toContain(reportingError.message);
-      }
-      expect(settleNative).toHaveBeenCalledExactlyOnceWith({
-        kind: "unknown",
-        error: expect.objectContaining({ message: reply.error.message }),
-      });
-    },
-  );
-
-  it("keeps a fully initialized actor available without reporting registration again", async () => {
-    edge.open.mockImplementation((_options, _lease, committed) => {
-      committed?.(receipt);
-      nativeOpened = true;
-      return edge.database;
-    });
-    for (let index = 0; index < 2; index += 1) {
-      expect(
-        await send({
-          id: ++nextId,
-          actor,
-          type: "execute",
-          input: serialize({ type: "database.prepareWrite", input: undefined }),
-        }),
-      ).toMatchObject({ ok: true });
-    }
-    expect(edge.open).toHaveBeenCalledOnce();
-    expect(
-      edge.request.mock.calls.filter(
-        ([request]) =>
-          request.stage === "prepare" &&
-          request.facts &&
-          typeof request.facts === "object" &&
-          "kind" in request.facts &&
-          request.facts.kind === "agent-registration-committed",
-      ),
-    ).toHaveLength(1);
-  });
-
-  it("recognizes a separately evaluated backend's inner open refusal before completed settlement", async () => {
-    edge.open.mockImplementation(() => {
-      nativeOpened = true;
-      return edge.database;
-    });
-    expect(
-      await send({
-        id: ++nextId,
-        actor,
-        type: "execute",
-        input: serialize({ type: "database.prepareWrite", input: undefined }),
-      }),
-    ).toMatchObject({ ok: true });
-    edge.open.mockClear();
-    const initialAdmission = await import("../infra/sqlite-worker-operation-admission.js");
-    vi.resetModules();
-    const duplicateAdmission = await vi.importActual<
-      typeof import("../infra/sqlite-worker-operation-admission.js")
-    >("../infra/sqlite-worker-operation-admission.js");
-    expect(duplicateAdmission.createSqliteWorkerOperationAdmission).not.toBe(
-      initialAdmission.createSqliteWorkerOperationAdmission,
+it.each([
+  "direct refusal",
+  "native and report failure",
+  "late deletion refusal",
+  "cleanup failure",
+  "ordinary closed",
+] as const)(
+  "preserves creating-open refusal provenance through retirement (%s)",
+  async (outcome) => {
+    const actual = await vi.importActual<AdmissionModule>(
+      "../infra/sqlite-worker-operation-admission.js",
     );
-    // Resetting modules alone retains mock factories; install the second actual graph explicitly.
-    vi.doMock("../infra/sqlite-worker-operation-admission.js", () => ({
-      ...duplicateAdmission,
-      requestSqliteWorkerOperationAdmission: edge.request,
-      withSqliteWorkerOperationAdmission: edge.forbidden,
-    }));
-    const refused = new Error("Authority revoked after preflight and before native agent open");
-    edge.request.mockReset();
-    edge.request
-      .mockImplementationOnce(() => {})
-      .mockImplementation(() => {
+    const refused = new Error("Original caller retired after registration COMMIT");
+    const nativeError =
+      outcome === "ordinary closed"
+        ? new SqliteWorkerError("Independent native opening failed", "closed")
+        : outcome === "late deletion refusal"
+          ? new AgentDatabaseDeletionRefusedError("Deletion fence changed after native open")
+          : new SqliteCoordinatorError(
+              "Independent native opening failed",
+              new Error("Native fault"),
+            );
+    const cleanupError = new SqliteCoordinatorError(
+      "Independent native cleanup failed",
+      new Error("Cleanup fault"),
+    );
+    let witnessed = 0;
+    const admission = actual.createSqliteWorkerOperationAdmission((request, grant) => {
+      if (isRegistration(request)) {
+        witnessed += 1;
         throw refused;
-      });
-    const opening: SqliteWorkerRequest = {
-      id: ++nextId,
-      actor: actor + 1_000_000,
-      type: "open",
-      moduleUrl: new URL("./openclaw-agent-execution.worker.ts", import.meta.url).href,
-      databasePath: input.databasePath,
-      existingIdentity: "file:fixture",
-      openAdmission: "input",
-      input: serialize(input),
-    };
-    try {
-      const reply = await send(opening);
-      expect(reply).toMatchObject({
-        ok: false,
-        openOutcome: "refused-before-agent-open",
-        error: { message: refused.message },
-      });
-      if (reply.ok) {
-        throw new Error("Refused backend unexpectedly opened");
       }
-      expect(reply.openNotEntered).toBeUndefined();
-      expect(edge.request.mock.calls).toEqual([
-        [{ stage: "open", facts: input }],
-        [{ stage: "open", facts: input }],
+      grant();
+    });
+    const wait = vi.spyOn(Atomics, "wait").mockImplementation(() => {
+      admission.service();
+      return "ok";
+    });
+    edge.request.mockImplementation(actual.requestSqliteWorkerOperationAdmission);
+    edge.open.mockImplementation((_options, _lease, registration) => {
+      if (outcome === "ordinary closed") {
+        throw nativeError;
+      }
+      registration?.starting?.();
+      registration?.committed?.(receipt);
+      if (outcome === "native and report failure" || outcome === "late deletion refusal") {
+        throw nativeError;
+      }
+      nativeOpened = true;
+      return edge.database;
+    });
+    if (outcome === "cleanup failure") {
+      edge.releaseShared.mockImplementationOnce(() => {
+        throw cleanupError;
+      });
+    }
+    const request = opening({
+      actor: actor + 1_000_000,
+      operationAdmission: admission.port,
+      stateContext: { environment: input.environment },
+    });
+    try {
+      const reply = await sendFailed(request);
+      expect(witnessed).toBe(outcome === "ordinary closed" ? 0 : 1);
+      expect([reply.admissionRefused, reply.openOutcome, reply.openNotEntered]).toEqual([
+        outcome === "direct refusal" ? true : undefined,
+        undefined,
+        undefined,
       ]);
-      expect(edge.open).not.toHaveBeenCalled();
-      const { retired, completion, reject, settleNative } = retireFailedReply(
-        reply,
-        opening,
-        refused,
-      );
-      expect(reject).not.toHaveBeenCalled();
-      expect(settleNative).not.toHaveBeenCalled();
-      retired.resolve();
-      expect(await completion.promise).toBe(refused);
-      expect(settleNative).toHaveBeenCalledExactlyOnceWith({ kind: "completed" });
+      // Even an independently retained refusal must not replace an ordinary native error.
+      const failure = await retiredFailure(reply, request, refused);
+      if (outcome === "direct refusal") {
+        expect(failure).toBe(refused);
+      } else {
+        expect(failure).not.toBe(refused);
+        const decoded = hydrateOpenClawStateWorkerError(failure);
+        if (outcome === "ordinary closed") {
+          expect(decoded).toMatchObject({ message: nativeError.message, code: "closed" });
+        } else {
+          expect(decoded).toMatchObject({
+            errors: expect.arrayContaining([
+              expect.objectContaining({
+                message: outcome === "cleanup failure" ? cleanupError.message : nativeError.message,
+              }),
+              expect.objectContaining({
+                message: "SQLite transaction admission was refused",
+                code: "closed",
+              }),
+            ]),
+          });
+        }
+      }
     } finally {
-      vi.doMock("../infra/sqlite-worker-operation-admission.js", () => initialAdmission);
-      vi.resetModules();
+      wait.mockRestore();
+      admission.finish();
+    }
+  },
+);
+
+it("retains a typed quarantine opening failure after native retirement", async () => {
+  const nativeFailure = new Error("synthetic native cleanup failure");
+  const cleanup = new OpenClawQuarantineReadCleanupError([nativeFailure], {
+    kind: "agent",
+    quarantinedAt: 1,
+    reason: "synthetic quarantine decision",
+  });
+  const openingError = new Error("synthetic quarantine refusal", { cause: cleanup });
+  openingError.name = "SqliteIntegrityError";
+  edge.open.mockImplementation(() => {
+    throw openingError;
+  });
+  const request = prepareRequest({ stateContext: { environment: input.environment } });
+  const reply = await sendFailed(request);
+  expect(reply.retire).toBe(true);
+  expect(reply.error.sharedState?.nodes.every((node) => !("quarantine" in node))).toBe(true);
+
+  const rawFailure = await retiredFailure(reply, request, undefined, openingError.message);
+  const failure = hydrateOpenClawStateWorkerError(rawFailure);
+  expect(isSqliteWorkerError(failure, "outcome-unknown")).toBe(true);
+  expect(failure).toMatchObject({
+    cause: {
+      name: openingError.name,
+      message: openingError.message,
+      cause: {
+        name: "OpenClawQuarantineReadCleanupError",
+        message: cleanup.message,
+        cause: { message: nativeFailure.message },
+        errors: [{ message: nativeFailure.message }],
+      },
+    },
+  });
+});
+
+it.each(["native", "shared"] as const)(
+  "joins retirement after %s cleanup fails without abandoning other owners",
+  async (failureAt) => {
+    acceptOpen();
+    expect(await send(prepareRequest())).toMatchObject({ ok: true });
+    const cleanupFailure = new Error(`Synthetic ${failureAt} cleanup failure`);
+    const failingCleanup = failureAt === "native" ? edge.nativeClose : edge.releaseShared;
+    failingCleanup.mockImplementationOnce(() => {
+      throw cleanupFailure;
+    });
+    const request: SqliteWorkerRequest = {
+      id: ++nextId,
+      actor,
+      type: "close",
+      stateDatabasePath: input.stateDatabasePath,
+      stateContext: { environment: input.environment },
+    };
+    const reply = await sendFailed(request);
+    expect(reply).toMatchObject({
+      ok: false,
+      retire: true,
+      error: { message: cleanupFailure.message },
+    });
+    for (const cleanup of [edge.nativeClose, edge.releaseAgent, edge.releaseShared]) {
+      expect(cleanup).toHaveBeenCalledOnce();
+    }
+    expect(edge.nativeClose).toHaveBeenCalledBefore(edge.releaseAgent);
+    expect(edge.releaseAgent).toHaveBeenCalledBefore(edge.releaseShared);
+
+    const failure = await retiredFailure(reply, request, undefined, cleanupFailure.message);
+    expect(failure).toMatchObject({ message: cleanupFailure.message });
+  },
+);
+
+it("reports the COMMIT and joins retirement after a successful open with refused report", async () => {
+  const reportingError = new Error("Original caller retired before receipt acknowledgement");
+  acceptOpen(true);
+  const reported: unknown[] = [];
+  edge.request.mockImplementation((request) => {
+    if (isRegistration(request)) {
+      reported.push(request.facts);
+      throw reportingError;
     }
   });
+  const reply = await sendFailed(prepareRequest());
+  expect(reported).toEqual([{ kind: "agent-registration-committed", registration: receipt }]);
+  expect(reply.error.message).toContain(reportingError.message);
+  expect(reply.retire).toBe(true);
+
+  const failure = await retiredFailure(
+    reply,
+    { type: "execute", id: reply.id, actor, input: new Uint8Array() },
+    reportingError,
+    reply.error.message,
+  );
+  expect(failure).toMatchObject({ code: "outcome-unknown" });
+  expect(String(failure)).toContain(reportingError.message);
+});
+
+it("recognizes a separately evaluated backend's inner open refusal before completed settlement", async () => {
+  acceptOpen();
+  expect(await send(prepareRequest())).toMatchObject({ ok: true });
+  edge.open.mockClear();
+  const initialAdmission = await import("../infra/sqlite-worker-operation-admission.js");
+  vi.resetModules();
+  const duplicateAdmission = await vi.importActual<AdmissionModule>(
+    "../infra/sqlite-worker-operation-admission.js",
+  );
+  expect(duplicateAdmission.createSqliteWorkerOperationAdmission).not.toBe(
+    initialAdmission.createSqliteWorkerOperationAdmission,
+  );
+  // Resetting modules alone retains mock factories; install the second actual graph explicitly.
+  vi.doMock("../infra/sqlite-worker-operation-admission.js", () => ({
+    ...duplicateAdmission,
+    requestSqliteWorkerOperationAdmission: edge.request,
+    takeSqliteWorkerOperationAdmissionAttachment: edge.attachment,
+    withSqliteWorkerOperationAdmission: edge.forbidden,
+  }));
+  const refused = new Error("Authority revoked after preflight and before native agent open");
+  edge.request.mockReset();
+  edge.request
+    .mockImplementationOnce(() => {})
+    .mockImplementation(() => {
+      throw refused;
+    });
+  const request = opening({
+    actor: actor + 1_000_000,
+    existingIdentity: "file:fixture",
+    openAdmission: "input",
+  });
+  try {
+    const reply = await sendFailed(request);
+    expect(reply).toMatchObject({
+      ok: false,
+      openOutcome: "refused-before-agent-open",
+      error: { message: refused.message },
+    });
+    expect(reply.openNotEntered).toBeUndefined();
+    expect(edge.open).not.toHaveBeenCalled();
+    const { completion, reject, settleNative } = retireFailedReply(reply, request, refused);
+    expect(reject).toHaveBeenCalledExactlyOnceWith(refused);
+    expect(await completion.promise).toBe(refused);
+    expect(settleNative).toHaveBeenCalledExactlyOnceWith({ kind: "completed" });
+  } finally {
+    vi.doMock("../infra/sqlite-worker-operation-admission.js", () => initialAdmission);
+    vi.resetModules();
+  }
 });

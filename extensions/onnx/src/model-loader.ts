@@ -21,6 +21,19 @@ export class ModelCache {
   private readonly models = new Map<string, { session: InferenceSession; adapter: ModelAdapter }>();
   constructor(private readonly config: WorkerConfig) {}
 
+  async close(): Promise<void> {
+    const models = [...this.models.values()];
+    this.models.clear();
+    const results = await Promise.allSettled(models.map(({ session }) => session.release()));
+    const failures = results.filter((result) => result.status === "rejected");
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((result) => result.reason),
+        "ONNX session release failed",
+      );
+    }
+  }
+
   async get(id: string): Promise<ModelAdapter> {
     const existing = this.models.get(id);
     if (existing) {
@@ -31,13 +44,6 @@ export class ModelCache {
     const model = findModel(id);
     if (!model) {
       throw new UnsupportedInputError("Unknown ONNX model.");
-    }
-    if (this.models.size >= this.config.maxLoadedModels) {
-      const first = this.models.entries().next().value;
-      if (first) {
-        this.models.delete(first[0]);
-        await first[1].session.release();
-      }
     }
     const files = await resolveModelFiles(this.config.modelDir, model);
     const buffers = new Map<string, Buffer>();
@@ -54,6 +60,13 @@ export class ModelCache {
       jsonObject(tokenizerBytes),
       tokenizerConfig ? jsonObject(tokenizerConfig) : {},
     );
+    if (this.models.size >= this.config.maxLoadedModels) {
+      const first = this.models.entries().next().value;
+      if (first) {
+        this.models.delete(first[0]);
+        await first[1].session.release();
+      }
+    }
     // An in-memory graph cannot implicitly follow external-data filesystem paths.
     const session = await InferenceSession.create(modelBytes, {
       executionProviders: ["cpu"],

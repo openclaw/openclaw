@@ -1,18 +1,22 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ConversationBindingInspection } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import {
+  getSessionBindingService,
   resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
+  inspectRuntimeConversationBindingRoute,
+  resolveRuntimeConversationBindingRouteAsync,
   type ConfiguredBindingRouteResult,
-} from "openclaw/plugin-sdk/conversation-runtime";
+  type RuntimeConversationBindingRouteResult,
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
   buildAgentSessionKey,
   deriveLastRoutePolicy,
   resolveAgentRoute,
   resolveThreadSessionKeys,
   buildAgentMainSessionKey,
+  normalizeAgentId,
   sanitizeAgentId,
 } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import { buildTelegramParentPeer, shouldUseTelegramDmThreadSession } from "./bot/helpers.js";
@@ -43,6 +47,7 @@ type TelegramConversationRouteResult = {
   route: TelegramResolvedRoute;
   bindingMode: TelegramConversationBindingMode;
   bindingOwnerAvailable: boolean;
+  runtimeBinding?: NonNullable<RuntimeConversationBindingRouteResult["bindingRecord"]>;
 };
 
 type ResolveTelegramConversationRouteParams = {
@@ -55,10 +60,7 @@ type ResolveTelegramConversationRouteParams = {
   topicAgentId?: string | null;
 };
 
-function resolveTelegramConversationRouteWithRuntimePolicy(
-  params: ResolveTelegramConversationRouteParams,
-  touchRuntimeBinding: boolean,
-): TelegramConversationRouteResult {
+function prepareTelegramConversationRoute(params: ResolveTelegramConversationRouteParams) {
   const resolvedThreadId = params.threadSpec.id;
   const conversationId = buildTelegramConversationId({
     chatId: params.chatId,
@@ -116,9 +118,6 @@ function resolveTelegramConversationRouteWithRuntimePolicy(
         mainSessionKey,
       }),
     };
-    logVerbose(
-      `telegram: topic route override: topic=${resolvedThreadId} agent=${topicAgentId} sessionKey=${route.sessionKey}`,
-    );
   }
 
   const configuredRoute = resolveConfiguredBindingRoute({
@@ -135,7 +134,7 @@ function resolveTelegramConversationRouteWithRuntimePolicy(
     },
   });
   route = configuredRoute.route;
-  let bindingMode: TelegramConversationBindingMode = configuredRoute.bindingResolution
+  const bindingMode: TelegramConversationBindingMode = configuredRoute.bindingResolution
     ? {
         kind: "configured",
         binding: configuredRoute.bindingResolution,
@@ -143,55 +142,123 @@ function resolveTelegramConversationRouteWithRuntimePolicy(
       }
     : { kind: "none" };
 
-  const runtimeBindingConversationId = conversationId;
-  const runtimeRoute = resolveRuntimeConversationBindingRoute({
+  return {
     route,
-    touchBinding: touchRuntimeBinding,
+    bindingMode,
     conversation: {
       channel: "telegram",
       accountId: params.accountId,
-      conversationId: runtimeBindingConversationId,
+      conversationId,
     },
-  });
-  route = runtimeRoute.route;
+  };
+}
+
+function applyTelegramRuntimeRoute(
+  prepared: ReturnType<typeof prepareTelegramConversationRoute>,
+  runtimeRoute: RuntimeConversationBindingRouteResult,
+): TelegramConversationRouteResult {
+  const route = runtimeRoute.route;
+  let bindingMode: TelegramConversationBindingMode = prepared.bindingMode;
   if (runtimeRoute.bindingRecord) {
     bindingMode = runtimeRoute.boundSessionKey
       ? { kind: "runtime-bound", sessionKey: runtimeRoute.boundSessionKey }
       : { kind: "plugin-owned-runtime", pluginId: runtimeRoute.pluginId ?? "" };
-    logVerbose(
-      runtimeRoute.boundSessionKey
-        ? `telegram: routed via bound conversation ${runtimeBindingConversationId} -> ${runtimeRoute.boundSessionKey}`
-        : `telegram: plugin-bound conversation ${runtimeBindingConversationId}`,
-    );
   }
 
   return {
     route,
     bindingMode,
     bindingOwnerAvailable: runtimeRoute.bindingOwnerAvailable ?? true,
+    ...(runtimeRoute.bindingRecord
+      ? {
+          runtimeBinding: {
+            ...runtimeRoute.bindingRecord,
+            conversation: { ...runtimeRoute.bindingRecord.conversation },
+          },
+        }
+      : {}),
   };
 }
 
-export function resolveTelegramConversationRoute(
+export async function resolveTelegramConversationRoute(
   params: ResolveTelegramConversationRouteParams,
-): TelegramConversationRouteResult {
-  return resolveTelegramConversationRouteWithRuntimePolicy(params, true);
+): Promise<TelegramConversationRouteResult> {
+  const prepared = prepareTelegramConversationRoute(params);
+  return applyTelegramRuntimeRoute(
+    prepared,
+    await resolveRuntimeConversationBindingRouteAsync(prepared),
+  );
 }
 
-/** Revalidates route ownership without extending runtime-binding liveness. */
-export function inspectTelegramConversationRoute(
+/** Prepare route policy once; the supplied binding facts are checked at the effect. */
+export function prepareTelegramConversationRouteInspection(
   params: ResolveTelegramConversationRouteParams,
-): TelegramConversationRouteResult {
-  return resolveTelegramConversationRouteWithRuntimePolicy(params, false);
+) {
+  const prepared = prepareTelegramConversationRoute(params);
+  return {
+    conversation: prepared.conversation,
+    resolve(inspection: ConversationBindingInspection) {
+      return applyTelegramRuntimeRoute(
+        prepared,
+        inspectRuntimeConversationBindingRoute({ route: prepared.route, inspection }),
+      );
+    },
+  };
 }
 
-export function resolveTelegramConversationBaseSessionKey(
+export async function inspectTelegramConversationRouteAsync(
+  params: ResolveTelegramConversationRouteParams,
+): Promise<TelegramConversationRouteResult> {
+  const prepared = prepareTelegramConversationRoute(params);
+  return applyTelegramRuntimeRoute(
+    prepared,
+    await resolveRuntimeConversationBindingRouteAsync({ ...prepared, touchBinding: false }),
+  );
+}
+
+/** Extend only the inspected binding after native command authorization. */
+export async function touchTelegramConversationRoute(
+  inspected: TelegramConversationRouteResult,
+): Promise<void> {
+  const captured = inspected.runtimeBinding;
+  if (!captured) {
+    return;
+  }
+  const bindings = getSessionBindingService();
+  await bindings.touchAsync(captured.bindingId, undefined, captured.conversation);
+}
+
+function resolveTelegramConversationBaseSessionKey(
   params: Parameters<typeof resolveTelegramNamedAccountBaseSessionKey>[1],
 ): string {
   return resolveTelegramNamedAccountBaseSessionKey(
     resolveDefaultTelegramAccountId(params.cfg),
     params,
   );
+}
+
+/** Outbound DMs reuse inbound binding facts: only an unbound named account is a fallback. */
+export function resolveTelegramOutboundDirectBaseSessionKey(params: {
+  cfg: OpenClawConfig;
+  route: Pick<TelegramResolvedRoute, "agentId" | "accountId" | "sessionKey">;
+  chatId: string;
+}): string {
+  const resolvedRoute = resolveAgentRoute({
+    cfg: params.cfg,
+    channel: "telegram",
+    // Unbound destinations keep the caller's agent instead of requiring a fleet default.
+    defaultAgentId: params.route.agentId,
+    accountId: params.route.accountId,
+    peer: { kind: "direct", id: params.chatId },
+  });
+  const isOwnBinding =
+    normalizeAgentId(resolvedRoute.agentId) === normalizeAgentId(params.route.agentId);
+  return resolveTelegramConversationBaseSessionKey({
+    cfg: params.cfg,
+    route: isOwnBinding ? resolvedRoute : { ...params.route, matchedBy: "default" },
+    chatId: params.chatId,
+    isGroup: false,
+  });
 }
 
 export function resolveTelegramTargetSession(params: {
@@ -204,15 +271,25 @@ export function resolveTelegramTargetSession(params: {
   botHasTopicsEnabled?: boolean;
 }): string {
   const baseSessionKey = resolveTelegramConversationBaseSessionKey(params);
-  const threadKeys =
-    shouldUseTelegramDmThreadSession({
-      dmThreadId: params.dmThreadId,
-      botHasTopicsEnabled: params.botHasTopicsEnabled,
-    }) && params.dmThreadId != null
-      ? resolveThreadSessionKeys({
-          baseSessionKey,
-          threadId: `${params.chatId}:${params.dmThreadId}`,
-        })
-      : null;
-  return threadKeys?.sessionKey ?? baseSessionKey;
+  return shouldUseTelegramDmThreadSession(params) && params.dmThreadId != null
+    ? resolveThreadSessionKeys({
+        baseSessionKey,
+        threadId: `${params.chatId}:${params.dmThreadId}`,
+      }).sessionKey
+    : baseSessionKey;
+}
+
+/** Route inbound DM-topic and named-account traffic to the same session as its messages. */
+export function applyTelegramTargetSession(
+  params: Parameters<typeof resolveTelegramTargetSession>[0],
+): TelegramResolvedRoute {
+  const sessionKey = resolveTelegramTargetSession(params);
+  return {
+    ...params.route,
+    sessionKey,
+    lastRoutePolicy: deriveLastRoutePolicy({
+      sessionKey,
+      mainSessionKey: params.route.mainSessionKey,
+    }),
+  };
 }

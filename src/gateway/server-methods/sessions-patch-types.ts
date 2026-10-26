@@ -1,4 +1,5 @@
 import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { ModelRef } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryCanonicalReplacement } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
@@ -6,7 +7,7 @@ import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import type {
   SessionPatchArchivePreparation,
   SessionPatchArchiveTarget,
-} from "./sessions-patch-archive.js";
+} from "./sessions-patch-archive.types.js";
 import type { createSessionPatchCatalogPreparation } from "./sessions-patch-catalog-preparation.js";
 import type { ActiveSessionPermissionChange } from "./sessions-patch-permissions.runtime.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -28,6 +29,7 @@ export type MutationOutcome =
       applied: boolean;
       accessChanged: boolean;
       entry: SessionEntry;
+      previousModel?: ModelRef;
     }
   | { ok: false; error: ErrorShape };
 
@@ -48,6 +50,7 @@ export type MutationCoreResult =
   | { ok: false; error: ErrorShape }
   | {
       ok: true;
+      archivedSessionsCommitted: boolean;
       cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
       outcomes: MutationOutcome[];
       preparedByIndex: Array<PreparedPatchTarget | undefined>;

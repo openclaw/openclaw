@@ -7,18 +7,9 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { patchScopedAccountConfig } from "openclaw/plugin-sdk/setup";
 import { decodeBuzzPrivateKey, resolveBuzzAccountConfig, resolveBuzzPublicKey } from "./types.js";
 
-type BuzzSetupInput = ChannelSetupInput & {
-  relayUrl?: string;
-  privateKey?: string;
-};
-
 function validRelayUrl(value: string | undefined): boolean {
-  try {
-    const url = new URL(value ?? "");
-    return url.protocol === "ws:" || url.protocol === "wss:";
-  } catch {
-    return false;
-  }
+  const url = URL.parse(value ?? "");
+  return url?.protocol === "ws:" || url?.protocol === "wss:";
 }
 
 export function patchBuzzAccountConfig(params: {
@@ -58,7 +49,12 @@ function isSameBuzzIdentity(currentKey?: string, nextKey?: string): boolean {
   }
 }
 
-const buzzSetupAdapter: ChannelSetupAdapter<BuzzSetupInput> = {
+const buzzSetupAdapter: ChannelSetupAdapter<
+  ChannelSetupInput & {
+    relayUrl?: string;
+    privateKey?: string;
+  }
+> = {
   configPromotion: "preserve-root",
   resolveAccountId: ({ cfg, accountId }) => resolveBuzzAccountConfig({ cfg, accountId }).accountId,
   applyAccountName: ({ cfg, accountId, name }) =>

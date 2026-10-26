@@ -30,17 +30,58 @@ function choice(overrides: Partial<ProviderAuthChoiceMetadata> = {}): ProviderAu
 describe("provider login choices", () => {
   beforeEach(() => declarations.read.mockReturnValue([]));
 
-  it("keeps undeclared credential-only support on setup and filters hidden or media choices", () => {
+  it("offers guided auth without stored credentials and filters hidden, discovery, or media choices", () => {
     const choices = [
       choice(),
-      choice({ choiceId: "setup", credentialOnly: undefined }),
+      choice({
+        pluginId: "meta",
+        providerId: "meta",
+        methodId: "muse-code",
+        groupId: "meta",
+        groupLabel: "Meta",
+        choiceId: "muse-code",
+        choiceLabel: "Muse Code",
+        appGuidedAuth: "device-code",
+        credentialOnly: undefined,
+      }),
+      choice({ choiceId: "discovery", appGuidedDiscovery: true }),
+      choice({
+        choiceId: "secret-setup",
+        credentialOnly: undefined,
+        appGuidedAuth: undefined,
+        appGuidedSecret: true,
+      }),
       choice({ choiceId: "hidden", assistantVisibility: "manual-only" }),
       choice({ choiceId: "undetected", assistantVisibility: "detected-only" }),
       choice({ choiceId: "media", onboardingScopes: ["image-generation"] }),
     ];
-    expect(listProviderLoginOptions(choices).map((option) => option.id)).toEqual([
-      "demo/demo-device",
+    const options = listProviderLoginOptions(choices);
+    expect(options).toMatchObject([
+      { id: "demo/demo-device" },
+      { id: "meta/muse-code", brandId: "meta", kind: "device-code", requiresSetup: true },
     ]);
+    expect(options[0]).not.toHaveProperty("requiresSetup");
+  });
+
+  it("orders login methods without recopying the private selection or mutating declarations", () => {
+    const choices = Object.freeze([
+      choice({
+        choiceId: "codex-device",
+        choiceLabel: "Codex device code",
+        onboardingFeatured: true,
+        assistantPriority: -40,
+      }),
+      choice({ choiceId: "chatgpt", choiceLabel: "Sign in with ChatGPT", assistantPriority: -50 }),
+    ]);
+    const copies = vi.spyOn(Array.prototype, "toSorted");
+    try {
+      const options = listProviderLoginOptions(choices);
+      expect(copies).not.toHaveBeenCalled();
+      expect(options.map((option) => option.id)).toEqual(["demo/chatgpt", "demo/codex-device"]);
+      expect(choices.map((entry) => entry.choiceId)).toEqual(["codex-device", "chatgpt"]);
+    } finally {
+      copies.mockRestore();
+    }
   });
 
   it("keeps a single provider behind an explicit menu selection", () => {

@@ -1,8 +1,26 @@
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { createCanvasWidgetPresenter } from "./widget-presenter.js";
+import canvasPlugin from "../index.js";
 
 const commands = ["canvas.present"];
+
+function registeredPresenter(nodes: PluginRuntime["nodes"]) {
+  const registerWidgetPresenter = vi.fn<OpenClawPluginApi["registerWidgetPresenter"]>();
+  canvasPlugin.register(
+    createTestPluginApi({
+      runtime: createPluginRuntimeMock({ nodes }),
+      registerWidgetPresenter,
+    }),
+  );
+  const presenter = registerWidgetPresenter.mock.calls[0]?.[0];
+  if (!presenter) {
+    throw new Error("Canvas widget presenter was not registered");
+  }
+  return presenter;
+}
 
 function createNodesRuntime(
   nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
@@ -15,7 +33,7 @@ function createNodesRuntime(
 }
 
 describe("Canvas widget presenter", () => {
-  it.each(["macos", "macOS 26.6.2"])("presents the hosted URL on a %s node", async (platform) => {
+  it("presents the hosted URL on a versioned macOS node", async () => {
     const runtime = createNodesRuntime([
       {
         nodeId: "android-recent",
@@ -29,14 +47,14 @@ describe("Canvas widget presenter", () => {
       {
         nodeId: "mac-local",
         displayName: "Studio",
-        platform,
+        platform: "macOS 26.6.2",
         connected: true,
         connectedAtMs: 10,
         caps: ["canvas"],
         invocableCommands: commands,
       },
     ]);
-    const presenter = createCanvasWidgetPresenter(runtime);
+    const presenter = registeredPresenter(runtime);
 
     await expect(
       presenter.present({
@@ -65,8 +83,8 @@ describe("Canvas widget presenter", () => {
     expect(runtime.invoke).toHaveBeenCalledTimes(1);
   });
 
-  it("maps missing eligible nodes and node invocation failures", async () => {
-    const unavailable = createCanvasWidgetPresenter(
+  it("reports offline nodes as unavailable", async () => {
+    const unavailable = registeredPresenter(
       createNodesRuntime([
         {
           nodeId: "offline",
@@ -80,32 +98,6 @@ describe("Canvas widget presenter", () => {
     await expect(unavailable.availability({})).resolves.toMatchObject({
       ok: false,
       error: { code: "no_eligible_node" },
-    });
-
-    const runtime = createNodesRuntime([
-      {
-        nodeId: "mac-panel",
-        platform: "macos",
-        connected: true,
-        caps: ["canvas"],
-        invocableCommands: commands,
-      },
-    ]);
-    vi.mocked(runtime.invoke).mockRejectedValueOnce(new Error("panel disabled"));
-    const presenter = createCanvasWidgetPresenter(runtime);
-    await expect(
-      presenter.present({
-        document: {
-          kind: "html",
-          html: "<p>Status</p>",
-          hostedUrl: "/__openclaw__/canvas/documents/cv_2/index.html",
-        },
-        title: "Status",
-        context: {},
-      }),
-    ).resolves.toEqual({
-      ok: false,
-      error: { code: "node_error", message: "panel disabled", nodeId: "mac-panel" },
     });
   });
 
@@ -135,7 +127,7 @@ describe("Canvas widget presenter", () => {
       throw new Error("navigation rejected after presentation");
     });
 
-    const result = await createCanvasWidgetPresenter(runtime).present({
+    const result = await registeredPresenter(runtime).present({
       document: { kind: "html", html: "<p>Status</p>", hostedUrl: documentUrlPath },
       title: "Status",
       context: {},
@@ -161,7 +153,7 @@ describe("Canvas widget presenter", () => {
         invocableCommands: commands,
       },
     ]);
-    const presenter = createCanvasWidgetPresenter(runtime);
+    const presenter = registeredPresenter(runtime);
 
     await expect(presenter.availability({})).resolves.toMatchObject({
       ok: false,

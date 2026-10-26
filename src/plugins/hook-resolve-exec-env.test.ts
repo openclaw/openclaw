@@ -1,126 +1,72 @@
-// Verifies plugin hook exec environment resolution.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginHookRegistration } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
-import { addStaticTestHooks, addTestHook } from "./hooks.test-fixtures.js";
+import { addTestHook } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import type { PluginHookResolveExecEnvContext } from "./types.js";
 
-const ctx: PluginHookResolveExecEnvContext = {
-  agentId: "agent-1",
-  sessionKey: "agent:agent-1:main",
-  messageProvider: "telegram",
-  channelId: "chat-1",
-};
-
-describe("resolve_exec_env hook", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("returns an empty env when no handlers are registered", async () => {
-    const runner = createHookRunner(createEmptyPluginRegistry());
-
-    await expect(
-      runner.runResolveExecEnv(
+type EnvHandler = PluginHookRegistration<"resolve_exec_env">["handler"];
+function setup(hooks: [string, EnvHandler, number][] = []) {
+  const registry = createEmptyPluginRegistry();
+  const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+  for (const [pluginId, handler, priority] of hooks) {
+    addTestHook({ registry, pluginId, handler, priority, hookName: "resolve_exec_env" });
+  }
+  const ctx = { sessionKey: "agent:agent-1:main" };
+  return {
+    logger,
+    run: () =>
+      createHookRunner(registry, { logger }).runResolveExecEnv(
         { sessionKey: ctx.sessionKey, toolName: "exec", host: "gateway" },
         ctx,
       ),
-    ).resolves.toEqual({});
+  };
+}
+
+describe("resolve_exec_env hook", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("returns an empty env when no handlers are registered", async () => {
+    await expect(setup().run()).resolves.toEqual({});
   });
 
   it("merges env vars from multiple plugins in priority order", async () => {
-    const registry = createEmptyPluginRegistry();
-    addStaticTestHooks<Record<string, string>>(registry, {
-      hookName: "resolve_exec_env",
-      hooks: [
-        {
-          pluginId: "first",
-          priority: 100,
-          result: { SHARED: "first", FIRST_ONLY: "1" },
-        },
-        {
-          pluginId: "second",
-          priority: 50,
-          result: { SHARED: "second", SECOND_ONLY: "2" },
-        },
-      ],
-    });
-    const runner = createHookRunner(registry);
-
-    await expect(
-      runner.runResolveExecEnv(
-        { sessionKey: ctx.sessionKey, toolName: "exec", host: "gateway" },
-        ctx,
-      ),
-    ).resolves.toEqual({
-      FIRST_ONLY: "1",
-      SECOND_ONLY: "2",
-      SHARED: "second",
-    });
+    const { run } = setup([
+      ["first", async () => ({ SHARED: "first", FIRST_ONLY: "1" }), 100],
+      ["second", async () => ({ SHARED: "second", SECOND_ONLY: "2" }), 50],
+    ]);
+    await expect(run()).resolves.toEqual({ FIRST_ONLY: "1", SECOND_ONLY: "2", SHARED: "second" });
   });
 
-  it("isolates handler errors so other plugins can still contribute env", async () => {
-    const registry = createEmptyPluginRegistry();
-    const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
-    addTestHook({
-      registry,
-      pluginId: "crasher",
-      hookName: "resolve_exec_env",
-      handler: async () => {
-        throw new Error("plugin failed");
-      },
-      priority: 100,
-    });
-    addTestHook({
-      registry,
-      pluginId: "healthy",
-      hookName: "resolve_exec_env",
-      handler: async () => ({ HEALTHY_ENV: "ok" }),
-      priority: 50,
-    });
-
-    const runner = createHookRunner(registry, { logger });
-
-    await expect(
-      runner.runResolveExecEnv(
-        { sessionKey: ctx.sessionKey, toolName: "exec", host: "gateway" },
-        ctx,
-      ),
-    ).resolves.toEqual({ HEALTHY_ENV: "ok" });
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("resolve_exec_env handler from crasher failed"),
-    );
-  });
-
-  it("skips handlers that exceed the default timeout", async () => {
-    vi.useFakeTimers();
-    const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
-    const registry = createEmptyPluginRegistry();
-    addTestHook({
-      registry,
-      pluginId: "hanging",
-      hookName: "resolve_exec_env",
-      handler: () => new Promise<never>(() => {}),
-      priority: 100,
-    });
-    addTestHook({
-      registry,
-      pluginId: "healthy",
-      hookName: "resolve_exec_env",
-      handler: async () => ({ HEALTHY_ENV: "ok" }),
-      priority: 50,
-    });
-
-    const runner = createHookRunner(registry, { logger });
-    const resultPromise = runner.runResolveExecEnv(
-      { sessionKey: ctx.sessionKey, toolName: "exec", host: "gateway" },
-      ctx,
-    );
-
-    await vi.advanceTimersByTimeAsync(15_000);
-    await expect(resultPromise).resolves.toEqual({ HEALTHY_ENV: "ok" });
-    expect(logger.error).toHaveBeenCalledWith(
-      "[hooks] resolve_exec_env handler from hanging failed: timed out after 15000ms",
-    );
-  });
+  it.each(["error", "timeout"] as const)(
+    "isolates a handler %s so healthy env survives",
+    async (failure) => {
+      if (failure === "timeout") {
+        vi.useFakeTimers();
+      }
+      const pluginId = failure === "timeout" ? "hanging" : "crasher";
+      const { run, logger } = setup([
+        [
+          pluginId,
+          async () => {
+            if (failure === "error") {
+              throw new Error("plugin failed");
+            }
+            return new Promise<never>(() => {});
+          },
+          100,
+        ],
+        ["healthy", async () => ({ HEALTHY_ENV: "ok" }), 50],
+      ]);
+      const result = run();
+      if (failure === "timeout") {
+        await vi.advanceTimersByTimeAsync(15_000);
+      }
+      await expect(result).resolves.toEqual({ HEALTHY_ENV: "ok" });
+      expect(logger.error).toHaveBeenCalledWith(
+        failure === "timeout"
+          ? "[hooks] resolve_exec_env handler from hanging failed: timed out after 15000ms"
+          : expect.stringContaining("resolve_exec_env handler from crasher failed"),
+      );
+    },
+  );
 });

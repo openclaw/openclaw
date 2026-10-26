@@ -1,12 +1,4 @@
-type MatrixRoomKeyBackupStatusLike = {
-  serverVersion: string | null;
-  activeVersion: string | null;
-  trusted: boolean | null;
-  matchesDecryptionKey: boolean | null;
-  decryptionKeyCached: boolean | null;
-  keyLoadAttempted: boolean;
-  keyLoadError: string | null;
-};
+import type { MatrixRoomKeyBackupStatus } from "./sdk/client-support.js";
 
 type MatrixRoomKeyBackupIssueCode =
   | "missing-server-backup"
@@ -25,7 +17,7 @@ type MatrixRoomKeyBackupIssue = {
 };
 
 export function resolveMatrixRoomKeyBackupIssue(
-  backup: MatrixRoomKeyBackupStatusLike,
+  backup: MatrixRoomKeyBackupStatus,
 ): MatrixRoomKeyBackupIssue {
   if (!backup.serverVersion) {
     return {
@@ -96,7 +88,7 @@ export function resolveMatrixRoomKeyBackupIssue(
 }
 
 export function resolveMatrixRoomKeyBackupReadinessError(
-  backup: MatrixRoomKeyBackupStatusLike,
+  backup: MatrixRoomKeyBackupStatus,
   opts: {
     allowUntrustedMatchingKey?: boolean;
     requireServerBackup: boolean;

@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { MACOS_APP_INSTALL_OWNER_MARKER } from "../../commands/test-runtime-config-helpers.js";
+import { resolvePinnedDaemonRuntimePath } from "../../daemon/runtime-paths.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 
 const service = vi.hoisted(() => ({
@@ -21,6 +23,9 @@ vi.mock("../../daemon/service.js", async (original) => ({
 vi.mock("../../infra/gateway-supervision.js", () => ({
   assertGatewayServiceMutationAllowed: service.admit,
 }));
+vi.mock("../../daemon/runtime-paths.js", () => ({
+  resolvePinnedDaemonRuntimePath: vi.fn(async (value) => value),
+}));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -28,9 +33,10 @@ afterEach(() => {
   service.admit.mockReset();
   service.readCommand.mockReset();
   service.readDefinitionMutationCapability.mockReset();
+  vi.mocked(resolvePinnedDaemonRuntimePath).mockClear();
 });
 
-async function fixture() {
+async function fixture(runtime = "node", definition = "empty", includeEnvironment = true) {
   const root = tempDirs.make("service-root-plan-");
   const serviceRoot = path.join(root, "service");
   const invokingRoot = path.join(root, "invoking");
@@ -40,95 +46,101 @@ async function fixture() {
     path.join(serviceRoot, "package.json"),
     JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
   );
-  const nodeRunner = path.join(root, "bin", "node");
-  service.readCommand.mockResolvedValue({
-    programArguments: [nodeRunner, path.join(serviceRoot, "dist", "index.js"), "gateway"],
-  });
+  const nodeRunner = path.join(root, "bin", runtime);
   service.readDefinitionMutationCapability.mockResolvedValue({ kind: "writable" });
-  return { serviceRoot, invokingRoot, nodeRunner };
+  const entrypoint = path.join(serviceRoot, "dist", "index.js");
+  const environment =
+    runtime === "bun"
+      ? { OPENCLAW_SQLITE_LIBRARY: "/fixture/sqlite.dylib" }
+      : { NODE_OPTIONS: "--max-old-space-size=4096" };
+  const command = {
+    programArguments: [nodeRunner, entrypoint, "gateway"],
+    ...(definition === "plain"
+      ? { sourcePath: path.join(root, "gateway.cmd") }
+      : definition === "empty" && (runtime === "node" || !includeEnvironment)
+        ? {}
+        : { environment }),
+  };
+  service.readCommand.mockResolvedValue({
+    ...command,
+    ...(definition === "managedDefinition" || definition === "empty"
+      ? { managedDefinition: command }
+      : {}),
+    ...(definition === "managedOverrides"
+      ? { managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } } }
+      : {}),
+    ...(definition === "empty" ? { managedOverrides: {} } : {}),
+  });
+  return { serviceRoot, invokingRoot, nodeRunner, entrypoint, environment };
 }
 
-describe("managed service root planning", () => {
-  it("does not inspect or redirect a service when management admission refuses", async () => {
-    const f = await fixture();
-    service.admit.mockImplementation(() => {
-      throw new Error("fixture supervisor owns service");
-    });
-    expect(await resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot })).toEqual({
-      rootRedirect: null,
-      serviceUnitTarget: "not inspected (service management unavailable)",
-    });
-    expect(service.readCommand).not.toHaveBeenCalled();
+it("does not inspect or redirect a service when management admission refuses", async () => {
+  service.admit.mockImplementation(() => {
+    throw new Error("fixture supervisor owns service");
   });
-  it("redirects Windows split-prefix updates before unsupported retained custody admission", async () => {
-    const f = await fixture();
-    vi.stubGlobal("process", { ...process, platform: "win32" });
-    expect(await resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot })).toEqual({
-      rootRedirect: { root: f.serviceRoot, previousRoot: f.invokingRoot },
-      nodeRunner: f.nodeRunner,
-      serviceUnitTarget: path.join(f.serviceRoot, "dist", "index.js"),
-    });
-    expect(service.readCommand).toHaveBeenCalledWith(
-      process.env,
-      expect.objectContaining({
-        requireEffective: true,
-        requireLoaded: true,
-      }),
-    );
-    expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
+  expect(await resolveManagedServicePackageUpdatePlan({ root: "/synthetic/invoking" })).toEqual({
+    rootRedirect: null,
+    serviceUnitTarget: "not inspected (service management unavailable)",
   });
-  it.each(["managedOverrides", "managedDefinition"] as const)(
-    "preserves writable operator definitions through service-root fallback (%s)",
-    async (field) => {
-      const f = await fixture();
-      vi.stubGlobal("process", { ...process, platform: "linux" });
-      const command = {
-        programArguments: [f.nodeRunner, path.join(f.serviceRoot, "dist", "index.js"), "gateway"],
-        environment: { NODE_OPTIONS: "--max-old-space-size=4096" },
-      };
-      service.readCommand.mockResolvedValue({
-        ...command,
-        ...(field === "managedDefinition"
-          ? { managedDefinition: command }
-          : { managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } } }),
-      });
-      expect(await resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot })).toEqual({
-        rootRedirect: { root: f.serviceRoot, previousRoot: f.invokingRoot },
-        nodeRunner: f.nodeRunner,
-        serviceUnitTarget: path.join(f.serviceRoot, "dist", "index.js"),
-      });
-      expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
-    },
-  );
-  it.each(["darwin", "linux"])("keeps writable split-prefix rebinds on %s", async (platform) => {
-    const f = await fixture();
-    vi.stubGlobal("process", { ...process, platform });
-    expect(await resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot })).toEqual({
-      rootRedirect: null,
-      serviceRoot: f.serviceRoot,
-      nodeRunner: f.nodeRunner,
-      serviceUnitTarget: path.join(f.serviceRoot, "dist", "index.js"),
-    });
-    expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
-  });
-  it.each(["win32", "linux"])("keeps same-root updates in place on %s", async (platform) => {
-    const f = await fixture();
-    vi.stubGlobal("process", { ...process, platform });
-    expect(await resolveManagedServicePackageUpdatePlan({ root: f.serviceRoot })).toEqual({
-      rootRedirect: null,
-      nodeRunner: f.nodeRunner,
-      serviceUnitTarget: path.join(f.serviceRoot, "dist", "index.js"),
-    });
-    expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
-  });
-  it("retains the existing protected-definition redirect", async () => {
-    const f = await fixture();
-    vi.stubGlobal("process", { ...process, platform: "linux" });
-    service.readDefinitionMutationCapability.mockResolvedValue({ kind: "sealed" });
-    expect(await resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot })).toEqual({
-      rootRedirect: { root: f.serviceRoot, previousRoot: f.invokingRoot },
-      nodeRunner: f.nodeRunner,
-      serviceUnitTarget: path.join(f.serviceRoot, "dist", "index.js"),
-    });
-  });
+  expect(service.readCommand).not.toHaveBeenCalled();
 });
+it.each([
+  { platform: "win32", definition: "plain", runtime: "node", sameRoot: false },
+  { platform: "win32", definition: "plain", runtime: "node", sameRoot: true },
+  { platform: "linux", definition: "managedOverrides", runtime: "node", sameRoot: false },
+  { platform: "linux", definition: "managedDefinition", runtime: "node", sameRoot: false },
+  { platform: "linux", definition: "empty", runtime: "node", sameRoot: false },
+  { platform: "linux", definition: "empty", runtime: "bun", sameRoot: false },
+] as const)(
+  "plans $platform $runtime service roots with $definition definitions (same=$sameRoot)",
+  async ({ platform, definition, runtime, sameRoot }) => {
+    const f = await fixture(runtime, definition);
+    vi.stubGlobal("process", { ...process, platform });
+    const rebind = platform === "linux" && definition === "empty" && runtime === "node";
+    expect(
+      await resolveManagedServicePackageUpdatePlan({
+        root: sameRoot ? f.serviceRoot : f.invokingRoot,
+      }),
+    ).toEqual({
+      rootRedirect:
+        sameRoot || rebind ? null : { root: f.serviceRoot, previousRoot: f.invokingRoot },
+      ...(rebind ? { serviceRoot: f.serviceRoot } : {}),
+      nodeRunner: f.nodeRunner,
+      serviceUnitTarget: f.entrypoint,
+    });
+    expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
+    if (platform === "win32" && !sameRoot) {
+      expect(service.readCommand).toHaveBeenCalledWith(
+        process.env,
+        expect.objectContaining({ requireEffective: true, requireLoaded: true }),
+      );
+    }
+    if (runtime === "bun") {
+      expect(resolvePinnedDaemonRuntimePath).toHaveBeenCalledWith(
+        f.nodeRunner,
+        "bun",
+        expect.objectContaining(f.environment),
+      );
+    }
+  },
+);
+it.each(["node", "bun"])(
+  "refuses app-owned %s services before split-root redirection or runtime probing",
+  async (runtime) => {
+    const f = await fixture(runtime, "empty", false);
+    vi.stubGlobal("process", { ...process, platform: "linux" });
+    await fs.writeFile(
+      path.join(f.serviceRoot, "openclaw-install-owner.json"),
+      MACOS_APP_INSTALL_OWNER_MARKER,
+    );
+
+    await expect(
+      resolveManagedServicePackageUpdatePlan({ root: f.invokingRoot }),
+    ).rejects.toMatchObject({
+      name: "GatewayServiceUpdateOwnershipError",
+      message: "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+      failureFacts: [expect.objectContaining({ code: "service-mutation-refused" })],
+    });
+    expect(resolvePinnedDaemonRuntimePath).not.toHaveBeenCalled();
+  },
+);

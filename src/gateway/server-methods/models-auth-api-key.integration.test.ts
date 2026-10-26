@@ -26,7 +26,7 @@ it("models.authSetApiKey validates the old wire request before the real credenti
   });
   const token = "api-key-contract-fixture-token";
   const cfg = {
-    agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+    agents: { entries: { main: { workspace: state.workspaceDir } } },
     plugins: { enabled: false },
     gateway: { mode: "local", auth: { mode: "token", token }, reload: { mode: "off" } },
   };
@@ -53,10 +53,13 @@ it("models.authSetApiKey validates the old wire request before the real credenti
         key: request.apiKey,
       });
       for (const invalid of [
+        { ...request, provider: "" },
         { ...request, apiKey: "\n\t" },
         { ...request, provider: 1 },
         { ...request, agentId: "retired" },
         { ...request, provider: "openai", apiKey: "not-an-api-key" },
+        { ...request, expectedOwnerId: "wrong-owner" },
+        { ...request, expectedOwnerId: "" },
       ]) {
         await expect(client.request("models.authSetApiKey", invalid)).rejects.toThrow();
       }

@@ -2,16 +2,29 @@ use serde::de::DeserializeOwned;
 use std::env;
 use std::ffi::OsString;
 use std::fmt;
-use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+pub(crate) type SpawnCommand<'a> = dyn Fn(&mut Command) -> Result<Child, String> + 'a;
+
+const DEFAULT_EXECUTABLE: &str = if cfg!(target_os = "windows") {
+    "openclaw.cmd"
+} else {
+    "openclaw"
+};
 
 #[derive(Clone, Debug)]
 pub struct OpenClawCli {
     executable: PathBuf,
     openclaw_home: PathBuf,
     available: Arc<AtomicBool>,
+    allow_runtime_management: bool,
 }
 
 #[derive(Debug)]
@@ -42,7 +55,7 @@ impl OpenClawCli {
         let cli = Self::locate()?;
         match cli.verify() {
             Ok(()) => Ok(cli),
-            Err(_) if cli.executable == PathBuf::from("openclaw") => Err(CliError::Missing),
+            Err(_) if cli.executable == PathBuf::from(DEFAULT_EXECUTABLE) => Err(CliError::Missing),
             Err(error) => Err(error),
         }
     }
@@ -51,15 +64,17 @@ impl OpenClawCli {
     pub(crate) fn locate() -> Result<Self, CliError> {
         let home = openclaw_home()?;
         if let Some(override_path) = env::var_os("OPENCLAW_DESKTOP_CLI") {
-            return Ok(Self::new(PathBuf::from(override_path), home));
+            let mut cli = Self::new(PathBuf::from(override_path), home);
+            cli.allow_runtime_management = false;
+            return Ok(cli);
         }
 
-        let managed = home.join("bin/openclaw");
+        let managed = managed_launcher(&home);
         if managed.is_file() {
             return Ok(Self::new(managed, home));
         }
 
-        Ok(Self::new(PathBuf::from("openclaw"), home))
+        Ok(Self::new(PathBuf::from(DEFAULT_EXECUTABLE), home))
     }
 
     fn new(executable: PathBuf, openclaw_home: PathBuf) -> Self {
@@ -67,7 +82,24 @@ impl OpenClawCli {
             executable,
             openclaw_home,
             available: Arc::new(AtomicBool::new(true)),
+            allow_runtime_management: true,
         }
+    }
+
+    pub(crate) fn browser_runtime(prefix: PathBuf) -> Result<Self, CliError> {
+        // The install prefix supplies executable/PATH only; the user’s config and state stay unchanged.
+        let cli = Self::new(managed_launcher(&prefix), prefix);
+        cli.verify()?;
+        Ok(cli)
+    }
+
+    pub(crate) fn matches_version(&self, version: &str) -> bool {
+        self.output(["--version"]).is_ok_and(|output| {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let reported = stdout.trim();
+            let reported = reported.strip_prefix("OpenClaw ").unwrap_or(reported);
+            output.status.success() && reported.split_whitespace().next() == Some(version)
+        })
     }
 
     pub fn is_available(&self) -> bool {
@@ -90,10 +122,21 @@ impl OpenClawCli {
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
+        #[cfg(target_os = "windows")]
+        let mut command = crate::runtime_action::managed_command(self)
+            .map_err(CliError::Environment)?
+            .unwrap_or_else(|| Command::new(&self.executable));
+        #[cfg(not(target_os = "windows"))]
         let mut command = Command::new(&self.executable);
         command.args(args);
         command.env("PATH", self.command_path()?);
         command.stdin(Stdio::null());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            // Background Gateway inspection must not flash a console window.
+            command.creation_flags(0x0800_0000);
+        }
         Ok(command)
     }
 
@@ -133,6 +176,85 @@ impl OpenClawCli {
         })
     }
 
+    pub(crate) fn bounded_json<T: DeserializeOwned>(
+        &self,
+        args: &[&str],
+        spawn: &SpawnCommand<'_>,
+    ) -> Result<T, CliError> {
+        let mut command = self.command(args)?;
+        let mut output = ChromeSetupOutput::new().map_err(|error| {
+            CliError::Spawn(format!("Could not prepare Chrome setup output: {error}"))
+        })?;
+        let stdout = output
+            .file
+            .try_clone()
+            .map_err(|error| CliError::Spawn(format!("Could not capture Chrome setup: {error}")))?;
+        command
+            .env("OPENCLAW_NO_RESPAWN", "1")
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::null());
+        let mut child = spawn(&mut command).map_err(CliError::Spawn)?;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let result = loop {
+            if output
+                .file
+                .metadata()
+                .map(|metadata| metadata.len() > 1024 * 1024)
+                .unwrap_or(true)
+            {
+                break Err(CliError::InvalidJson(
+                    "Chrome setup output exceeded its limit.".into(),
+                ));
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Err(error) => {
+                    break Err(CliError::Spawn(format!(
+                        "Could not wait for Chrome setup: {error}"
+                    )))
+                }
+                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+                Ok(None) => {
+                    break Err(CliError::CommandFailed(
+                        "Chrome setup timed out; retry with openclaw browser extension install."
+                            .into(),
+                    ))
+                }
+            }
+        };
+        // Seekable output avoids an orphaned reader when a descendant retains stdout.
+        let _ = child.kill();
+        let _ = child.wait();
+        let status = result?;
+        if !status.success() {
+            return Err(CliError::CommandFailed(
+                "Chrome setup process failed.".into(),
+            ));
+        }
+        let mut bytes = Vec::new();
+        output
+            .file
+            .rewind()
+            .and_then(|_| {
+                (&mut output.file)
+                    .take((1024 * 1024) + 1)
+                    .read_to_end(&mut bytes)
+            })
+            .map_err(|error| CliError::Spawn(format!("Could not read Chrome setup: {error}")))?;
+        if bytes.len() > 1024 * 1024 {
+            return Err(CliError::InvalidJson(
+                "Chrome setup output exceeded its limit.".into(),
+            ));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|_| CliError::InvalidJson("Chrome setup returned no valid result.".into()))
+    }
+
+    pub(crate) fn managed_wrapper(&self) -> Option<PathBuf> {
+        let managed = managed_launcher(&self.openclaw_home);
+        (self.allow_runtime_management && self.executable == managed).then_some(managed)
+    }
+
     fn command_path(&self) -> Result<OsString, CliError> {
         let mut paths = vec![
             self.openclaw_home.join("bin"),
@@ -143,6 +265,41 @@ impl OpenClawCli {
         }
         env::join_paths(paths)
             .map_err(|error| CliError::Environment(format!("Could not construct PATH: {error}")))
+    }
+}
+
+/// Keep discovery, installation, and runtime binding on the same launcher path.
+pub(crate) fn managed_launcher(prefix: &Path) -> PathBuf {
+    prefix.join(if cfg!(target_os = "windows") {
+        "bin/openclaw.cmd"
+    } else {
+        "bin/openclaw"
+    })
+}
+
+struct ChromeSetupOutput {
+    file: File,
+    path: PathBuf,
+}
+
+impl ChromeSetupOutput {
+    fn new() -> std::io::Result<Self> {
+        let path = env::temp_dir().join(format!("openclaw-chrome-{}.log", uuid::Uuid::new_v4()));
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options.open(&path)?;
+        Ok(Self { file, path })
+    }
+}
+
+impl Drop for ChromeSetupOutput {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -194,6 +351,83 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn chrome_setup_preserves_canonical_pending_and_blocked_results() {
+        use crate::chrome_setup::{run, Action};
+        use serde_json::json;
+        use std::fs;
+        use std::os::unix::fs::symlink;
+        use std::process::Command;
+
+        struct Fixture(PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let fixture = Fixture(
+            std::env::temp_dir().join(format!("openclaw-chrome-setup-{}", uuid::Uuid::new_v4())),
+        );
+        fs::create_dir_all(&fixture.0).unwrap();
+        let executable = fixture.0.join("openclaw");
+        // A concurrent test's fork can inherit a script writer and make execve fail with ETXTBSY.
+        symlink(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chrome-setup-cli.sh"),
+            &executable,
+        )
+        .unwrap();
+        let cli = OpenClawCli::new(executable, fixture.0.clone());
+        let spawn = |command: &mut Command| command.spawn().map_err(|error| error.to_string());
+        assert!(cli.matches_version("2026.9.4"));
+        assert!(!cli.matches_version("2026.9.3"));
+        let denied = run(&cli, Action::Install, &|_| {
+            Err("fixture-revoked-authority".into())
+        })
+        .unwrap_err();
+        assert!(!denied.contains("fixture-revoked-authority"));
+        assert!(!fixture.0.join("calls").exists());
+        for (action, name, phase) in [
+            (Action::Inspect, "inspect", "inspection_required"),
+            (Action::Install, "install", "needs_browser_action"),
+            (Action::Verify, "verify", "blocked"),
+        ] {
+            let expected = json!({
+                "action": name,
+                "target": {"kind": "local-host", "platform": "fixture", "hostname": "fixture",
+                    "profile": "work", "relayPort": 18792},
+                "phase": phase, "reason": "fixture",
+                "installation": {"nativeHostRegistered": false, "installRequested": false,
+                    "installedProfiles": 0, "discoveredProfiles": 0, "awaitingApproval": false,
+                    "automaticBootstrapSupported": false},
+                "connection": {"state": "not_checked"}, "nextAction": "install"
+            });
+            fs::write(fixture.0.join("result.json"), expected.to_string()).unwrap();
+            assert_eq!(run(&cli, action, &spawn).unwrap(), expected);
+        }
+        assert_eq!(
+            fs::read_to_string(fixture.0.join("calls")).unwrap(),
+            ["inspect", "install", "verify"]
+                .map(|action| format!(
+                    "browser extension setup --action {action} --json --wait-ms 1000\n"
+                ))
+                .concat()
+        );
+        fs::write(fixture.0.join("fail"), "").unwrap();
+        let error = run(&cli, Action::Install, &spawn).unwrap_err();
+        assert!(error.contains("Chrome setup failed"));
+        assert!(!error.contains("fixture-private-diagnostic"));
+        fs::remove_file(fixture.0.join("fail")).unwrap();
+        fs::write(fixture.0.join("result.json"), "x".repeat(1024 * 1024 + 1)).unwrap();
+        assert!(run(&cli, Action::Inspect, &spawn)
+            .unwrap_err()
+            .contains("invalid Chrome setup result"));
+        fs::write(fixture.0.join("result.json"), "invalid JSON").unwrap();
+        assert!(run(&cli, Action::Inspect, &spawn)
+            .unwrap_err()
+            .contains("invalid Chrome setup result"));
+    }
+
     #[test]
     fn missing_executable_invalidates_the_cached_cli() {
         let cli = OpenClawCli::new(
@@ -206,3 +440,7 @@ mod tests {
         assert!(!cli.is_available());
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+#[path = "cli_windows_tests.rs"]
+mod windows_tests;

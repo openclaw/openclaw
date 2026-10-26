@@ -4,20 +4,6 @@ import { updateMatrixAccountConfig, resolveMatrixConfigPath } from "./matrix/con
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
-export type MatrixProfileUpdateResult = {
-  accountId: string;
-  displayName: string | null;
-  avatarUrl: string | null;
-  profile: {
-    displayNameUpdated: boolean;
-    avatarUpdated: boolean;
-    resolvedAvatarUrl: string | null;
-    uploadedAvatarSource: "http" | "path" | null;
-    convertedAvatarFromHttp: boolean;
-  };
-  configPath: string;
-};
-
 export async function applyMatrixProfileUpdate(params: {
   cfg?: CoreConfig;
   account?: string;
@@ -25,7 +11,7 @@ export async function applyMatrixProfileUpdate(params: {
   avatarUrl?: string;
   avatarPath?: string;
   mediaLocalRoots?: readonly string[];
-}): Promise<MatrixProfileUpdateResult> {
+}) {
   const runtime = getMatrixRuntime();
   const persistedCfg = runtime.config.current() as CoreConfig;
   const accountId = normalizeAccountId(params.account);
@@ -37,7 +23,7 @@ export async function applyMatrixProfileUpdate(params: {
   }
 
   const synced = await updateMatrixOwnProfile({
-    cfg: params.cfg,
+    cfg: params.cfg ?? persistedCfg,
     accountId,
     displayName: displayName ?? undefined,
     avatarUrl: avatarUrl ?? undefined,
@@ -59,13 +45,7 @@ export async function applyMatrixProfileUpdate(params: {
     accountId,
     displayName,
     avatarUrl: persistedAvatarUrl ?? null,
-    profile: {
-      displayNameUpdated: synced.displayNameUpdated,
-      avatarUpdated: synced.avatarUpdated,
-      resolvedAvatarUrl: synced.resolvedAvatarUrl,
-      uploadedAvatarSource: synced.uploadedAvatarSource,
-      convertedAvatarFromHttp: synced.convertedAvatarFromHttp,
-    },
+    profile: synced,
     configPath: resolveMatrixConfigPath(updated, accountId),
   };
 }

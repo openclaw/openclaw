@@ -1,25 +1,16 @@
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
-import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
+import { withRunnerFixture } from "./non-isolated-runner.fixture-support.ts";
 import { sqliteLifecycleFixtureFiles } from "./non-isolated-runner.sqlite-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const require = createRequire(import.meta.url);
-
-async function verifySqliteOwnerRetirement(signal: AbortSignal) {
-  const fixtureRoots = path.join(repoRoot, ".artifacts", "non-isolated-sqlite-lifecycle");
-  await fs.mkdir(fixtureRoots, { recursive: true });
-  // openclaw-temp-dir: allow retains an unjoined or failed child fixture for diagnosis.
-  const root = await fs.mkdtemp(path.join(fixtureRoots, "run-"));
-  try {
-    const vitestDir = path.dirname(require.resolve("vitest/package.json"));
-    await fs.symlink(path.dirname(vitestDir), path.join(root, "node_modules"), "junction");
-    const files = sqliteLifecycleFixtureFiles(repoRoot);
+it("retires settled SQLite owners and attributes retained custody without poisoning the next file", (context) => {
+  const run = withRunnerFixture("non-isolated-sqlite-lifecycle", async ({ root, args, env }) => {
+    const files = sqliteLifecycleFixtureFiles();
     for (const [name, content] of Object.entries(files)) {
       await fs.writeFile(path.join(root, name), content);
     }
@@ -43,80 +34,83 @@ export default defineConfig({
 });
 `,
     );
-    const env = Object.fromEntries(
-      Object.entries(process.env).filter(
-        ([key]) =>
-          !key.startsWith("VITEST") &&
-          !key.startsWith("OPENCLAW_VITEST") &&
-          key !== "GITHUB_ACTIONS" &&
-          key !== "FORCE_COLOR",
-      ),
-    );
     const reportPath = path.join(root, "report.json");
     const result = await runVitestShutdownCommand({
-      bin: resolveTestNodeExecPath(),
+      bin: process.execPath,
       args: [
-        path.join(vitestDir, "vitest.mjs"),
-        "run",
-        "--root",
-        root,
-        "--config",
-        path.join(root, "vitest.config.ts"),
-        "--configLoader",
-        "runner",
-        "--reporter=verbose",
+        ...args,
         "--reporter=json",
         `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
         `--outputFile.json=${reportPath}`,
       ],
       cwd: repoRoot,
-      env: { ...env, NO_COLOR: "1" },
+      env: { ...env, FORCE_COLOR: undefined, NO_COLOR: "1" },
       maxBytes: 4 * 1024 * 1024,
-      signal,
+      signal: context.signal,
     });
-    expect(result.code, result.stdout + result.stderr).toBe(0);
+    expect(result.code, result.stdout + result.stderr).toBe(1);
     const output = result.stdout + result.stderr;
-    for (const file of Object.keys(files)) {
+    for (const file of Object.keys(files).filter((name) => /^1[12]-/u.test(name))) {
       const owner = file.startsWith("12-") ? "stateReadWorkers" : "sharedStateWorkerOwner";
       expect(output).toContain(`[sqlite-test-lifecycle] ${file}: retiring openclaw.${owner}`);
     }
     expect(output).toContain(
       "[sqlite-test-lifecycle] 11-a-sqlite-owner.test.ts: draining agent database custody",
     );
+    expect(output).toContain("Synthetic independent singleton cleanup refused");
+    expect(output.match(/retained-lease-independent-reset: \d+/gu)).toEqual([
+      "retained-lease-independent-reset: 1",
+      "retained-lease-independent-reset: 2",
+    ]);
+    expect(output.match(/retained-lease-failed-reset: \d+/gu)).toEqual([
+      "retained-lease-failed-reset: 1",
+    ]);
+    const identityMatch = output.match(/retained-lease-identity: (.+)/u);
+    expect(identityMatch, output).not.toBeNull();
+    const identity: { leaseId: string; path: string } = JSON.parse(identityMatch![1]!);
+    expect(identity.leaseId).toMatch(/\S/u);
+    expect(identity.path).toContain(path.join(root, "retained-agent-state"));
     const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
     expect(report).toMatchObject({
-      numTotalTests: 5,
-      numPassedTests: 5,
+      numTotalTests: 21,
+      numPassedTests: 20,
       numFailedTests: 0,
-      numPendingTests: 0,
+      numPendingTests: 1,
       numTodoTests: 0,
     });
     expect(report.testResults.map((file) => path.basename(file.name)).toSorted()).toEqual(
       Object.keys(files).toSorted(),
     );
     for (const file of report.testResults) {
-      expect(file.status).toBe("passed");
-      expect(file.assertionResults).toHaveLength(1);
-      expect(file.assertionResults[0]).toMatchObject({ status: "passed", failureMessages: [] });
+      // Scheduled-close fixtures prove ordering, including after a runtime skip.
+      const name = path.basename(file.name);
+      const scheduledCloseStatuses = {
+        "10-a-scheduled-close.test.ts": ["passed", "passed", "skipped", "passed"],
+        "10-b-around-each-close.test.ts": ["passed", "passed"],
+      }[name];
+      const failedTeardown = name === "13-a-retained-lease.test.ts";
+      expect(file, file.name).toMatchObject({
+        status: failedTeardown ? "failed" : "passed",
+        message: failedTeardown
+          ? expect.stringContaining("Synthetic retired lease cleanup refused")
+          : "",
+        assertionResults: scheduledCloseStatuses
+          ? scheduledCloseStatuses.map((status) => ({ status }))
+          : [{ status: "passed", failureMessages: [] }],
+      });
+      if (failedTeardown) {
+        expect(file.message).toContain(`leaseId=${identity.leaseId}`);
+        expect(file.message).toContain(`path=${identity.path}`);
+      }
     }
     const capture: VitestReportCapture = JSON.parse(
       await fs.readFile(`${reportPath}.capture.json`, "utf8"),
     );
     expect(capture).toMatchObject({
       processTimedOut: false,
-      ended: { reason: "passed", unhandledErrors: 0, failedModules: 0, suiteErrors: 0 },
+      ended: { reason: "failed", unhandledErrors: 0, failedModules: 1, suiteErrors: 2 },
     });
-    await fs.rm(root, { recursive: true, force: true });
-  } catch (error) {
-    if (error instanceof Error) {
-      error.message += `; retained fixture ${root}`;
-    }
-    throw error;
-  }
-}
-
-it("retires SQLite owners and their callbacks before the next file installs its transport", (context) => {
-  const run = verifySqliteOwnerRetirement(context.signal);
+  });
   context.onTestFinished(() => run);
   return run;
 });

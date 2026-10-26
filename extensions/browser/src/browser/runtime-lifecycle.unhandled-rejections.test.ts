@@ -1,5 +1,17 @@
-// Browser tests cover runtime lifecycle.unhandled rejections plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { makeBrowserServerState } from "./server-context.test-harness.js";
+
+const relay = vi.hoisted(() => ({
+  artifactsAvailable: true,
+  dispose: vi.fn(),
+}));
+
+vi.mock("./extension-relay/gateway-relay-route.js", () => {
+  if (!relay.artifactsAvailable) {
+    throw new Error("installed Gateway extension relay chunk was removed");
+  }
+  return { disposeGatewayExtensionRelay: relay.dispose };
+});
 
 const { getUnhandledRejectionHandlers, registerUnhandledRejectionHandlerMock, resetHandlers } =
   vi.hoisted(() => {
@@ -18,23 +30,10 @@ const { getUnhandledRejectionHandlers, registerUnhandledRejectionHandlerMock, re
     };
   });
 
-const {
-  startTrackedBrowserTabCleanupTimerMock,
-  stopKnownBrowserProfilesMock,
-  trackedTabCleanupMock,
-} = vi.hoisted(() => {
-  const trackedTabCleanupMockLocal = vi.fn();
-  return {
-    startTrackedBrowserTabCleanupTimerMock: vi.fn(
-      (_params: { getResolvedBrowserConfig?: () => unknown; onWarn: (message: string) => void }) =>
-        trackedTabCleanupMockLocal,
-    ),
-    stopKnownBrowserProfilesMock: vi.fn(async () => {}),
-    trackedTabCleanupMock: trackedTabCleanupMockLocal,
-  };
-});
+const stopKnownBrowserProfilesMock = vi.hoisted(() => vi.fn(async () => {}));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   registerUnhandledRejectionHandler: registerUnhandledRejectionHandlerMock,
 }));
 
@@ -42,158 +41,79 @@ vi.mock("./server-lifecycle.js", () => ({
   stopKnownBrowserProfiles: stopKnownBrowserProfilesMock,
 }));
 
-vi.mock("./session-tab-cleanup.js", () => ({
-  startTrackedBrowserTabCleanupTimer: startTrackedBrowserTabCleanupTimerMock,
-}));
-
 const { createBrowserRuntimeState, stopBrowserRuntime } = await import("./runtime-lifecycle.js");
+const { getGatewayExtensionRelayModule } = await import("./extension-relay.runtime.js");
+const start = () =>
+  createBrowserRuntimeState({ resolved: makeBrowserServerState().resolved, port: 18791 });
+const stop = (current: Awaited<ReturnType<typeof start>>, clearState = vi.fn()) =>
+  stopBrowserRuntime({ current, clearState, onWarn: vi.fn() });
+const dialogRace = () =>
+  new Error("Protocol error (Page.handleJavaScriptDialog): No dialog is showing");
 
 beforeEach(() => {
+  getGatewayExtensionRelayModule.clear();
   resetHandlers();
   registerUnhandledRejectionHandlerMock.mockClear();
-  startTrackedBrowserTabCleanupTimerMock.mockClear();
   stopKnownBrowserProfilesMock.mockClear();
-  trackedTabCleanupMock.mockClear();
+  relay.dispose.mockClear();
 });
 
-describe("browser unhandled rejection lifecycle", () => {
-  it("binds periodic cleanup to the current runtime config", async () => {
-    const firstResolved = { profiles: {}, marker: "first" } as never;
-    const secondResolved = { profiles: {}, marker: "second" } as never;
-    const state = await createBrowserRuntimeState({
-      resolved: firstResolved,
-      port: 18791,
-      onWarn: vi.fn(),
-    });
-    const cleanupParams = startTrackedBrowserTabCleanupTimerMock.mock.calls[0]?.[0];
-    expect(cleanupParams?.getResolvedBrowserConfig?.()).toBe(firstResolved);
-    state.resolved = secondResolved;
-    expect(cleanupParams?.getResolvedBrowserConfig?.()).toBe(secondResolved);
-    await stopBrowserRuntime({
-      current: state,
-      getState: () => state,
-      clearState: vi.fn(),
-      onWarn: vi.fn(),
-    });
-  });
+afterEach(() => {
+  relay.artifactsAvailable = true;
+});
 
-  it("matches direct and nested Playwright dialog-race protocol errors", async () => {
-    const state = await createBrowserRuntimeState({
-      resolved: { profiles: {} } as never,
-      port: 18791,
-      onWarn: vi.fn(),
-    });
-    const handler = getUnhandledRejectionHandlers()[0];
-    const direct = Object.assign(
-      new Error("Protocol error (Page.handleJavaScriptDialog): No dialog is showing"),
-      { method: "Page.handleJavaScriptDialog" },
-    );
-    const nested = new Error("browser action failed", {
-      cause: Object.assign(new Error("No dialog is showing"), {
-        method: "Page.handleJavaScriptDialog",
-      }),
-    });
-    const wrapped = {
-      error: new Error("Protocol error (Dialog.handleJavaScriptDialog): No dialog is showing"),
-    };
+it.each([false, true])(
+  "closes after installation rotation without loading relay code (relay acquired: %s)",
+  async (acquired) => {
+    const state = await start();
+    if (acquired) {
+      await getGatewayExtensionRelayModule();
+    }
+    relay.artifactsAvailable = false;
+    const clearState = vi.fn();
 
-    expect(handler?.(direct)).toBe(true);
-    expect(handler?.(nested)).toBe(true);
-    expect(handler?.(wrapped)).toBe(true);
-    await stopBrowserRuntime({
-      current: state,
-      getState: () => state,
-      clearState: vi.fn(),
-      onWarn: vi.fn(),
-    });
-  });
+    await stop(state, clearState);
 
-  it("keeps non-dialog and non-race Playwright errors unhandled", async () => {
-    const state = await createBrowserRuntimeState({
-      resolved: { profiles: {} } as never,
-      port: 18791,
-      onWarn: vi.fn(),
-    });
-    const handler = getUnhandledRejectionHandlers()[0];
-    expect(
-      handler?.(Object.assign(new Error("No dialog is showing"), { method: "Page.navigate" })),
-    ).toBe(false);
-    expect(
-      handler?.(new Error("Protocol error (Page.handleJavaScriptDialog): Target closed")),
-    ).toBe(false);
-    expect(handler?.(new Error("No dialog is showing"))).toBe(false);
-    await stopBrowserRuntime({
-      current: state,
-      getState: () => state,
-      clearState: vi.fn(),
-      onWarn: vi.fn(),
-    });
-  });
+    expect(clearState).toHaveBeenCalledOnce();
+    expect(relay.dispose).toHaveBeenCalledTimes(acquired ? 1 : 0);
+  },
+);
 
-  it("registers during startup and unregisters during shutdown", async () => {
-    stopKnownBrowserProfilesMock.mockImplementationOnce(async () => {
-      expect(getUnhandledRejectionHandlers()).toHaveLength(1);
-    });
-    const state = await createBrowserRuntimeState({
-      resolved: { profiles: {} } as never,
-      port: 18791,
-      onWarn: vi.fn(),
-    });
+const protocolError = (method: string, message = "No dialog is showing") =>
+  Object.assign(new Error(message), { method });
+it.each([
+  [Object.assign(dialogRace(), { method: "Page.handleJavaScriptDialog" }), true],
+  [
+    new Error("browser action failed", { cause: protocolError("Page.handleJavaScriptDialog") }),
+    true,
+  ],
+  [
+    { error: new Error("Protocol error (Dialog.handleJavaScriptDialog): No dialog is showing") },
+    true,
+  ],
+  [protocolError("Page.navigate"), false],
+  [new Error("Protocol error (Page.handleJavaScriptDialog): Target closed"), false],
+  [new Error("No dialog is showing"), false],
+] as const)("classifies Playwright rejection %#", async (error, handled) => {
+  const state = await start();
+  expect(getUnhandledRejectionHandlers()[0]?.(error)).toBe(handled);
+  await stop(state);
+});
 
-    expect(registerUnhandledRejectionHandlerMock).toHaveBeenCalledTimes(1);
+it("registers during startup and unregisters during shutdown", async () => {
+  stopKnownBrowserProfilesMock.mockImplementationOnce(async () => {
     expect(getUnhandledRejectionHandlers()).toHaveLength(1);
-    expect(
-      getUnhandledRejectionHandlers()[0]?.(
-        new Error("Protocol error (Page.handleJavaScriptDialog): No dialog is showing"),
-      ),
-    ).toBe(true);
-
-    const clearState = vi.fn();
-    await stopBrowserRuntime({
-      current: state,
-      getState: () => state,
-      clearState,
-      onWarn: vi.fn(),
-    });
-
-    expect(trackedTabCleanupMock).toHaveBeenCalledTimes(1);
-    expect(stopKnownBrowserProfilesMock).toHaveBeenCalledTimes(1);
-    expect(clearState).toHaveBeenCalledTimes(1);
-    expect(getUnhandledRejectionHandlers()).toStrictEqual([]);
   });
+  const state = await start();
 
-  it("drains profiles when a custom tab-cleanup disposer throws synchronously", async () => {
-    let releaseProfiles!: () => void;
-    const profileGate = new Promise<void>((resolve) => {
-      releaseProfiles = resolve;
-    });
-    let profilesDrained = false;
-    stopKnownBrowserProfilesMock.mockImplementationOnce(async () => {
-      await profileGate;
-      profilesDrained = true;
-    });
-    const state = {
-      port: 18_791,
-      resolved: { profiles: {} },
-      profiles: new Map(),
-      stopTrackedTabCleanup: () => {
-        throw new Error("tab cleanup failed");
-      },
-    } as never;
-    const clearState = vi.fn();
+  expect(registerUnhandledRejectionHandlerMock).toHaveBeenCalledTimes(1);
+  expect(getUnhandledRejectionHandlers()).toHaveLength(1);
+  expect(getUnhandledRejectionHandlers()[0]?.(dialogRace())).toBe(true);
 
-    const stopping = stopBrowserRuntime({
-      current: state,
-      getState: () => state,
-      clearState,
-      onWarn: vi.fn(),
-    });
-    await Promise.resolve();
-    expect(profilesDrained).toBe(false);
-    releaseProfiles();
+  const clearState = vi.fn();
+  await stop(state, clearState);
 
-    await expect(stopping).rejects.toThrow("tab cleanup failed");
-    expect(profilesDrained).toBe(true);
-    expect(clearState).not.toHaveBeenCalled();
-  });
+  expect(stopKnownBrowserProfilesMock).toHaveBeenCalledTimes(1);
+  expect(clearState).toHaveBeenCalledTimes(1);
+  expect(getUnhandledRejectionHandlers()).toStrictEqual([]);
 });

@@ -41,7 +41,13 @@ export type ServiceWorkerObservation = {
 
 export type ObservedGatewayRequest = {
   documentOrdinal: number;
-  method: "chat.history" | "chat.send" | "chat.startup" | "connect" | "sessions.assignOwner";
+  method:
+    | "chat.history"
+    | "chat.send"
+    | "chat.startup"
+    | "connect"
+    | "sessions.assignOwner"
+    | "sessions.messages.subscribe";
   requestId: string;
 };
 
@@ -224,9 +230,7 @@ export async function startPhoneProofServer(buildId: string) {
   }
 }
 
-export async function observePhoneProofServiceWorker(
-  page: Page,
-): Promise<ServiceWorkerObservation> {
+async function observePhoneProofServiceWorker(page: Page): Promise<ServiceWorkerObservation> {
   return page.evaluate(async () => {
     if (!("serviceWorker" in navigator)) {
       return {
@@ -359,6 +363,7 @@ export async function installPhoneRecoveryRequestObserver(
                 id?: unknown;
                 method?: unknown;
                 type?: unknown;
+                params?: Record<string, unknown>;
               };
               if (
                 frame.type === "req" &&
@@ -367,6 +372,8 @@ export async function installPhoneRecoveryRequestObserver(
                   frame.method === "chat.history" ||
                   frame.method === "chat.send" ||
                   frame.method === "chat.startup" ||
+                  (frame.method === "sessions.messages.subscribe" &&
+                    frame.params?.initialHistory) ||
                   frame.method === "sessions.assignOwner")
               ) {
                 const existing = JSON.parse(
@@ -408,7 +415,7 @@ export async function renderLoginGate(
   page: Page,
   baseUrl: string,
   { lastError = "unauthorized: gateway token required" }: { lastError?: string | null } = {},
-): Promise<void> {
+) {
   const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(baseUrl);
   if (response?.status() !== 200) {
@@ -422,35 +429,21 @@ export async function renderLoginGate(
   });
   await page.locator(".login-gate").waitFor();
   await mountLoginGate(page, lastError);
+  return gateway;
 }
 
 async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+  await page.waitForFunction(() => window.openclawControlUi?.snapshot().booted === true);
   await page.evaluate(async (failureMessage) => {
     await customElements.whenDefined("openclaw-login-gate");
-    const gate = document.createElement("openclaw-login-gate") as HTMLElement & {
-      props: Record<string, unknown>;
-      updateComplete: Promise<unknown>;
-    };
-    document.body.dataset.connectCount = "0";
-    gate.props = {
-      resourceBasePath: "",
-      connected: false,
-      lastError: failureMessage,
-      lastErrorCode: null,
-      hasToken: false,
-      hasPassword: false,
-      gatewayUrl: "ws://127.0.0.1:18789",
-      secret: "",
-      showGatewaySecret: false,
-      onGatewayUrlChange: () => {},
-      onSecretChange: () => {},
-      onToggleGatewaySecret: () => {},
-      onConnect: () => {
-        const current = Number.parseInt(document.body.dataset.connectCount ?? "0", 10);
-        document.body.dataset.connectCount = String(current + 1);
-      },
-    };
-    document.body.replaceChildren(gate);
+    // This remaining Lit component owns its fixture props; keep all real root callbacks.
+    const gate = document.querySelector("openclaw-login-gate") as
+      | (HTMLElement & { props: Record<string, unknown>; updateComplete: Promise<unknown> })
+      | null;
+    if (!gate) {
+      throw new Error("Missing mounted login gate");
+    }
+    gate.props = { ...gate.props, lastError: failureMessage, lastErrorCode: null };
     await gate.updateComplete;
   }, lastError);
 }

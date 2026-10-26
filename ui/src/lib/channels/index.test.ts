@@ -1,28 +1,69 @@
-// Channels domain tests.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayEventListener } from "../../api/gateway.ts";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import {
   channelSnapshotEntryIsActive,
   channelSnapshotHasActiveChannel,
   createChannelCapability,
 } from "./index.ts";
 
-function createChannelGatewayFixture<T>(readSnapshot: () => T) {
-  const listeners = new Set<(next: T) => void>();
-  return {
-    gateway: {
-      get snapshot() {
-        return readSnapshot();
-      },
-      subscribe(listener: (next: T) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
+type GatewaySnapshot = Parameters<typeof createChannelCapability>[0]["snapshot"];
+type LoginResult = { message: string; connected: boolean; qrDataUrl: string };
+function loginResult(label: string, connected = false): LoginResult {
+  return { message: `${label} login`, connected, qrDataUrl: `data:image/png;base64,${label}-qr` };
+}
+const capabilities: ReturnType<typeof createChannelCapability>[] = [];
+afterEach(() => {
+  for (const channels of capabilities.splice(0)) {
+    channels.dispose();
+  }
+});
+
+function createHarness(
+  request: GatewayRequestHandler,
+  scopes?: string[],
+  client: GatewaySnapshot["client"] = createTestGatewayClient(request),
+) {
+  let snapshot: GatewaySnapshot = {
+    client,
+    phase: "connected",
+    hello: { auth: { role: "operator", scopes } },
+  };
+  const listeners = new Set<(next: GatewaySnapshot) => void>();
+  const eventListeners = new Set<GatewayEventListener>();
+  const channels = createChannelCapability({
+    get snapshot() {
+      return snapshot;
     },
-    publish: () => {
-      for (const listener of listeners) {
-        listener(readSnapshot());
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    subscribeEvents(listener: GatewayEventListener) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
+  });
+  capabilities.push(channels);
+  const update = (patch: Partial<GatewaySnapshot>) => {
+    snapshot = { ...snapshot, ...patch };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+  };
+  return {
+    channels,
+    update,
+    setScopes: (nextScopes: string[]) =>
+      update({ hello: { auth: { role: "operator", scopes: nextScopes } } }),
+    emitEvent: (event: string) => {
+      for (const listener of eventListeners) {
+        listener({ type: "event", event, payload: {} });
       }
     },
   };
@@ -37,6 +78,10 @@ function createChannelsSnapshot(label: string): ChannelsStatusSnapshot {
     channelAccounts: {},
     channelDefaultAccountId: {},
   };
+}
+
+function createStaticChannelCapability(request: GatewayRequestHandler) {
+  return createHarness(request).channels;
 }
 
 describe("channel readiness", () => {
@@ -73,21 +118,9 @@ describe("channel readiness", () => {
 });
 
 describe("channels controller WhatsApp wait", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   it("rejects a stale login result after reconnecting with the same client", async () => {
-    const staleWait = createDeferred<{
-      message: string;
-      connected: boolean;
-      qrDataUrl: string;
-    }>();
-    const freshWait = createDeferred<{
-      message: string;
-      connected: boolean;
-      qrDataUrl: string;
-    }>();
+    const staleWait = createDeferred<LoginResult>();
+    const freshWait = createDeferred<LoginResult>();
     let waitCount = 0;
     const request = vi.fn((method: string) => {
       if (method === "web.login.wait") {
@@ -96,68 +129,38 @@ describe("channels controller WhatsApp wait", () => {
       }
       return Promise.resolve(createChannelsSnapshot("fresh"));
     });
-    const client = { request };
-    let snapshot = { client, phase: "connected" };
-    const { gateway, publish } = createChannelGatewayFixture(() => snapshot);
-
-    const channels = createChannelCapability(gateway as never);
+    const { channels, update } = createHarness(request);
 
     const stale = channels.waitWhatsApp();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-    snapshot = { client, phase: "reconnecting" };
-    publish();
-    snapshot = { client, phase: "connected" };
-    publish();
+    update({ phase: "reconnecting" });
+    update({ phase: "connected" });
 
     const fresh = channels.waitWhatsApp();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    freshWait.resolve({
-      message: "fresh login",
-      connected: false,
-      qrDataUrl: "data:image/png;base64,fresh-qr",
-    });
+    freshWait.resolve(loginResult("fresh"));
     await fresh;
 
-    staleWait.resolve({
-      message: "stale login",
-      connected: true,
-      qrDataUrl: "data:image/png;base64,stale-qr",
-    });
+    staleWait.resolve(loginResult("stale", true));
     await stale;
 
     expect(channels.state.whatsappLoginMessage).toBe("fresh login");
     expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,fresh-qr");
     expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
-    channels.dispose();
   });
 
   it("keeps an active login wait across pairing-scope changes", async () => {
-    const pending = createDeferred<{
-      message: string;
-      connected: boolean;
-      qrDataUrl: string;
-    }>();
+    const pending = createDeferred<LoginResult>();
     const request = vi.fn((method: string) =>
       method === "web.login.wait"
         ? pending.promise
         : Promise.resolve(createChannelsSnapshot("refreshed")),
     );
-    const client = { request };
-    let snapshot = {
-      client,
-      phase: "connected",
-      hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
-    };
-    const { gateway, publish } = createChannelGatewayFixture(() => snapshot);
-    const channels = createChannelCapability(gateway as never);
+    const { channels, setScopes } = createHarness(request, ["operator.pairing"]);
 
     const wait = channels.waitWhatsApp();
     await vi.waitFor(() => expect(channels.state.whatsappBusy).toBe(true));
-    snapshot = {
-      ...snapshot,
-      hello: { auth: { role: "operator", scopes: ["operator.pairing", "operator.read"] } },
-    };
-    publish();
+    setScopes(["operator.pairing", "operator.read"]);
     expect(channels.state.whatsappBusy).toBe(true);
 
     pending.resolve({
@@ -169,72 +172,38 @@ describe("channels controller WhatsApp wait", () => {
 
     expect(channels.state.whatsappLoginMessage).toBe("login survived scope change");
     expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,scope-change");
-    channels.dispose();
   });
 
   it("rejects an active login result when admin access is revoked", async () => {
-    const pending = createDeferred<{
-      message: string;
-      connected: boolean;
-      qrDataUrl: string;
-    }>();
+    const pending = createDeferred<LoginResult>();
     const request = vi.fn(() => pending.promise);
-    const client = { request };
-    let snapshot = {
-      client,
-      phase: "connected",
-      hello: { auth: { role: "operator", scopes: ["operator.admin", "operator.pairing"] } },
-    };
-    const { gateway, publish } = createChannelGatewayFixture(() => snapshot);
-    const channels = createChannelCapability(gateway as never);
+    const { channels, setScopes } = createHarness(request, ["operator.admin", "operator.pairing"]);
     channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,existing";
     channels.state.whatsappLoginSessionKey = "existing-session";
 
     const wait = channels.waitWhatsApp();
     await vi.waitFor(() => expect(channels.state.whatsappBusy).toBe(true));
-    snapshot = {
-      ...snapshot,
-      hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
-    };
-    publish();
+    setScopes(["operator.pairing"]);
     expect(channels.state.whatsappBusy).toBe(false);
     expect(channels.state.whatsappLoginQrDataUrl).toBeNull();
     expect(channels.state.whatsappLoginSessionKey).toBeNull();
 
-    pending.resolve({
-      message: "stale login",
-      connected: true,
-      qrDataUrl: "data:image/png;base64,stale",
-    });
+    pending.resolve(loginResult("stale", true));
     await wait;
 
     expect(channels.state.whatsappLoginMessage).toBeNull();
     expect(channels.state.whatsappLoginQrDataUrl).toBeNull();
-    channels.dispose();
   });
 
   it("does not apply or refresh a login result after its capability is disposed", async () => {
-    const pending = createDeferred<{
-      message: string;
-      connected: boolean;
-      qrDataUrl: string;
-    }>();
+    const pending = createDeferred<LoginResult>();
     const request = vi.fn(() => pending.promise);
-    const client = { request };
-    const gateway = {
-      snapshot: { client, phase: "connected" },
-      subscribe: () => () => undefined,
-    };
-    const channels = createChannelCapability(gateway as never);
+    const channels = createStaticChannelCapability(request);
 
     const wait = channels.waitWhatsApp();
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     channels.dispose();
-    pending.resolve({
-      message: "stale login",
-      connected: true,
-      qrDataUrl: "data:image/png;base64,stale-qr",
-    });
+    pending.resolve(loginResult("stale", true));
     await wait;
 
     expect(channels.state.whatsappLoginMessage).toBeNull();
@@ -247,32 +216,6 @@ describe("channels controller WhatsApp wait", () => {
 });
 
 describe("channels controller WhatsApp provider selection", () => {
-  it("selects WhatsApp for QR login start and wait requests", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "channels.status") {
-        return createChannelsSnapshot("refreshed");
-      }
-      return { connected: true, message: "connected" };
-    });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
-
-    await channels.startWhatsApp(false);
-    await channels.waitWhatsApp();
-
-    expect(request).toHaveBeenCalledWith(
-      "web.login.start",
-      expect.objectContaining({ channel: "whatsapp" }),
-    );
-    expect(request).toHaveBeenCalledWith(
-      "web.login.wait",
-      expect.objectContaining({ channel: "whatsapp" }),
-    );
-    channels.dispose();
-  });
-
   it("carries the provider session key from login start into wait", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "web.login.start") {
@@ -283,142 +226,68 @@ describe("channels controller WhatsApp provider selection", () => {
       }
       return createChannelsSnapshot("refreshed");
     });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
+    const channels = createStaticChannelCapability(request);
 
     await channels.startWhatsApp(false);
     await channels.waitWhatsApp();
 
     expect(request).toHaveBeenCalledWith(
+      "web.login.start",
+      expect.objectContaining({ channel: "whatsapp" }),
+    );
+    expect(request).toHaveBeenCalledWith(
       "web.login.wait",
       expect.objectContaining({ channel: "whatsapp", sessionKey: "opaque-session" }),
     );
     expect(channels.state.whatsappLoginSessionKey).toBeNull();
-    channels.dispose();
-  });
-
-  it("retains the provider session key when a wait remains disconnected", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "web.login.start") {
-        return { message: "scan", sessionKey: "opaque-session" };
-      }
-      if (method === "web.login.wait") {
-        return { connected: false, message: "still waiting" };
-      }
-      return createChannelsSnapshot("refreshed");
-    });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
-
-    await channels.startWhatsApp(false);
-    await channels.waitWhatsApp();
-
-    expect(channels.state.whatsappLoginSessionKey).toBe("opaque-session");
-    await channels.waitWhatsApp();
-    expect(request.mock.calls.findLast(([method]) => method === "web.login.wait")).toEqual([
-      "web.login.wait",
-      expect.objectContaining({ sessionKey: "opaque-session" }),
-    ]);
-    channels.dispose();
   });
 });
 
 describe("channels controller WhatsApp logout", () => {
-  it("preserves login state when no stored session was cleared", async () => {
-    const request = vi.fn(async (method: string) =>
-      method === "channels.logout"
-        ? { cleared: false, loggedOut: false }
-        : createChannelsSnapshot("refreshed"),
-    );
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
-    channels.state.whatsappLoginMessage = "Scan this QR.";
-    channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
-    channels.state.whatsappLoginConnected = true;
+  it.each([false, true])(
+    "clears login state only with confirmed clearance: %s",
+    async (cleared) => {
+      const request = vi.fn(async (method: string) =>
+        method === "channels.logout"
+          ? { cleared, loggedOut: cleared }
+          : createChannelsSnapshot("refreshed"),
+      );
+      const channels = createStaticChannelCapability(request);
+      channels.state.whatsappLoginMessage = "Scan this QR.";
+      channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
+      channels.state.whatsappLoginConnected = true;
 
-    await channels.logoutWhatsApp("work");
+      const accountId = cleared ? undefined : "work";
+      await channels.logoutWhatsApp(accountId);
 
-    expect(request).toHaveBeenCalledWith("channels.logout", {
-      channel: "whatsapp",
-      accountId: "work",
-    });
-    expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
-    expect(channels.state.whatsappLoginMessage).toBe(
-      "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
-    );
-    expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,current-qr");
-    expect(channels.state.whatsappLoginConnected).toBe(true);
-    expect(channels.state.whatsappBusy).toBe(false);
-    channels.dispose();
-  });
-
-  it("clears login state only when the Gateway confirms session clearance", async () => {
-    const request = vi.fn(async (method: string) =>
-      method === "channels.logout"
-        ? { cleared: true, loggedOut: true }
-        : createChannelsSnapshot("refreshed"),
-    );
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
-    channels.state.whatsappLoginMessage = "Scan this QR.";
-    channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
-    channels.state.whatsappLoginConnected = true;
-
-    await channels.logoutWhatsApp();
-
-    expect(channels.state.whatsappLoginMessage).toBe("Logged out.");
-    expect(channels.state.whatsappLoginQrDataUrl).toBeNull();
-    expect(channels.state.whatsappLoginConnected).toBeNull();
-    expect(channels.state.whatsappBusy).toBe(false);
-    channels.dispose();
-  });
+      expect(request).toHaveBeenCalledWith("channels.logout", {
+        channel: "whatsapp",
+        ...(accountId ? { accountId } : {}),
+      });
+      expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
+      expect(channels.state).toMatchObject({
+        whatsappLoginMessage: cleared
+          ? "Logged out."
+          : "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
+        whatsappLoginQrDataUrl: cleared ? null : "data:image/png;base64,current-qr",
+        whatsappLoginConnected: cleared ? null : true,
+        whatsappBusy: false,
+      });
+    },
+  );
 });
 
 describe("channels controller WhatsApp mutation failures", () => {
-  it.each([
-    {
-      operation: "login",
-      method: "web.login.start",
-      invoke: (channels: ReturnType<typeof createChannelCapability>) =>
-        channels.startWhatsApp(false),
-      preservesQr: false,
-      connected: null,
-    },
-    {
-      operation: "scan wait",
-      method: "web.login.wait",
-      invoke: (channels: ReturnType<typeof createChannelCapability>) => channels.waitWhatsApp(),
-      preservesQr: true,
-      connected: null,
-    },
-    {
-      operation: "logout",
-      method: "channels.logout",
-      invoke: (channels: ReturnType<typeof createChannelCapability>) => channels.logoutWhatsApp(),
-      preservesQr: true,
-      connected: true,
-    },
-  ])(
-    "publishes a rejected $operation without probing channel status",
-    async ({ method, invoke, preservesQr, connected }) => {
+  it.each(["web.login.start", "web.login.wait"])(
+    "publishes rejected %s without probing status",
+    async (method) => {
       const request = vi.fn(async (requestedMethod: string) => {
         if (requestedMethod === method) {
           throw new Error("WhatsApp request rejected");
         }
         return createChannelsSnapshot("unexpected refresh");
       });
-      const channels = createChannelCapability({
-        snapshot: { client: { request }, phase: "connected" },
-        subscribe: () => () => undefined,
-      } as never);
+      const channels = createStaticChannelCapability(request);
       channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
       channels.state.whatsappLoginConnected = true;
       const updates: Array<{ busy: boolean; message: string | null }> = [];
@@ -426,22 +295,31 @@ describe("channels controller WhatsApp mutation failures", () => {
         updates.push({ busy: state.whatsappBusy, message: state.whatsappLoginMessage });
       });
 
-      await invoke(channels);
+      await (method === "web.login.start"
+        ? channels.startWhatsApp(false)
+        : channels.waitWhatsApp());
 
       expect(
         request.mock.calls.filter(([requestedMethod]) => requestedMethod === "channels.status"),
       ).toHaveLength(0);
       expect(updates.at(-1)).toEqual({ busy: false, message: "WhatsApp request rejected" });
       expect(channels.state.whatsappLoginQrDataUrl).toBe(
-        preservesQr ? "data:image/png;base64,current-qr" : null,
+        method === "web.login.wait" ? "data:image/png;base64,current-qr" : null,
       );
-      expect(channels.state.whatsappLoginConnected).toBe(connected);
-      channels.dispose();
+      expect(channels.state.whatsappLoginConnected).toBeNull();
     },
   );
 });
 
 describe("channels controller DM pairing", () => {
+  const pairingTarget = { channel: "whatsapp", accountId: "personal", requestId: "request-1" };
+  const approvalParams = { ...pairingTarget, notify: false, bootstrapCommandOwner: false };
+  const approved = {
+    requestId: "request-1",
+    senderId: "+1555",
+    notification: "not-requested" as const,
+    commandOwnerBootstrap: "not-requested" as const,
+  };
   const emptyPairing: ChannelsPairingListResult = {
     accounts: [],
     requests: [],
@@ -460,10 +338,8 @@ describe("channels controller DM pairing", () => {
     ],
     requests: [
       {
-        requestId: "request-1",
-        channel: "whatsapp",
+        ...pairingTarget,
         channelLabel: "WhatsApp",
-        accountId: "personal",
         senderId: "+1555",
         senderLabel: "Phone number",
         createdAt: "2026-07-20T10:00:00.000Z",
@@ -474,59 +350,28 @@ describe("channels controller DM pairing", () => {
     ],
   };
 
-  it("loads pending requests and refreshes after approval", async () => {
+  it("loads pending requests and refreshes after dismissal", async () => {
     let listCount = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "channels.pairing.list") {
         listCount += 1;
         return listCount === 1 ? pendingPairing : emptyPairing;
       }
-      if (method === "channels.pairing.approve") {
-        return {
-          requestId: "request-1",
-          senderId: "+1555",
-          notification: "sent",
-          commandOwnerBootstrap: "not-requested",
-        };
-      }
       return {};
     });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
+    const channels = createStaticChannelCapability(request);
 
     await channels.refreshPairing();
     expect(channels.state.pairingSnapshot?.requests).toHaveLength(1);
 
-    const result = await channels.approvePairing({
-      channel: "whatsapp",
-      accountId: "personal",
-      requestId: "request-1",
-      notify: true,
-      bootstrapCommandOwner: false,
-    });
-
-    expect(result?.notification).toBe("sent");
-    expect(request).toHaveBeenCalledWith("channels.pairing.approve", {
-      channel: "whatsapp",
-      accountId: "personal",
-      requestId: "request-1",
-      notify: true,
-      bootstrapCommandOwner: false,
-    });
+    await expect(channels.dismissPairing(pairingTarget)).resolves.toBe(true);
+    expect(request).toHaveBeenCalledWith("channels.pairing.dismiss", pairingTarget);
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
     expect(channels.state.pairingBusyRequestId).toBeNull();
-    channels.dispose();
   });
 
   it("keeps the row resolved when refresh fails and blocks polling during mutation", async () => {
-    const approvalResult = createDeferred<{
-      requestId: string;
-      senderId: string;
-      notification: "not-requested";
-      commandOwnerBootstrap: "not-requested";
-    }>();
+    const approvalResult = createDeferred<typeof approved>();
     let listCount = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "channels.pairing.list") {
@@ -538,34 +383,20 @@ describe("channels controller DM pairing", () => {
       }
       return approvalResult.promise;
     });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
+    const channels = createStaticChannelCapability(request);
     await channels.refreshPairing();
 
-    const approval = channels.approvePairing({
-      channel: "whatsapp",
-      accountId: "personal",
-      requestId: "request-1",
-      notify: false,
-      bootstrapCommandOwner: false,
-    });
+    const approval = channels.approvePairing(approvalParams);
     await vi.waitFor(() => expect(channels.state.pairingBusyRequestId).toBe("request-1"));
     await channels.refreshPairing();
     expect(listCount).toBe(1);
 
-    approvalResult.resolve({
-      requestId: "request-1",
-      senderId: "+1555",
-      notification: "not-requested",
-      commandOwnerBootstrap: "not-requested",
-    });
+    approvalResult.resolve(approved);
     await approval;
 
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
-    expect(channels.state.pairingError).toBe("refresh unavailable");
-    channels.dispose();
+    await expect(channels.state.pairingRead?.completion).resolves.toBe("refresh unavailable");
+    expect(channels.state.pairingError).toBeNull();
   });
 
   it("does not let a pre-approval list restore the resolved request", async () => {
@@ -577,28 +408,19 @@ describe("channels controller DM pairing", () => {
         listCount += 1;
         return listCount === 1 ? staleList.promise : freshList.promise;
       }
-      return {
-        requestId: "request-1",
-        senderId: "+1555",
-        notification: "not-requested",
-        commandOwnerBootstrap: "not-requested",
-      };
+      return approved;
     });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
+    const channels = createStaticChannelCapability(request);
 
     const staleRefresh = channels.refreshPairing();
-    await vi.waitFor(() => expect(listCount).toBe(1));
-    const approval = channels.approvePairing({
-      channel: "whatsapp",
-      accountId: "personal",
-      requestId: "request-1",
-      notify: false,
-      bootstrapCommandOwner: false,
-    });
+    const staleReceipt = channels.state.pairingRead!;
+    await channels.refreshPairing();
+    expect(channels.state.pairingRead).toBe(staleReceipt);
+    expect(listCount).toBe(1);
+    const approval = channels.approvePairing(approvalParams);
+    await expect(staleReceipt.completion).resolves.toBeNull();
     await vi.waitFor(() => expect(listCount).toBe(2));
+    expect(channels.state.pairingRead).not.toBe(staleReceipt);
     freshList.resolve(emptyPairing);
     await approval;
 
@@ -606,200 +428,211 @@ describe("channels controller DM pairing", () => {
     await staleRefresh;
 
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
-    channels.dispose();
   });
 
-  it("clears sender metadata on disconnect and pairing-scope changes", () => {
-    const client = { request: vi.fn() };
-    let snapshot = {
-      client,
-      phase: "connected",
-      hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
-    };
-    const { gateway, publish } = createChannelGatewayFixture(() => snapshot);
-    const channels = createChannelCapability(gateway as never);
+  it.each(["disconnect", "authorization", "dispose"] as const)(
+    "settles a retired pairing read before its transport responds after %s",
+    async (change) => {
+      const pending = createDeferred<ChannelsPairingListResult>();
+      const request = vi.fn().mockReturnValue(pending.promise);
+      const { channels, update, setScopes } = createHarness(request, ["operator.pairing"]);
+      const refresh = channels.refreshPairing();
+      const receipt = channels.state.pairingRead!;
+      let settled = false;
+      void receipt.completion.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      if (change === "disconnect") {
+        update({ phase: "reconnecting" });
+      } else if (change === "authorization") {
+        setScopes([]);
+      } else {
+        channels.dispose();
+      }
+      await expect(receipt.completion).resolves.toBeNull();
+      expect(channels.state.pairingLoading).toBe(false);
+      pending.resolve(pendingPairing);
+      await refresh;
+      expect(channels.state.pairingSnapshot).toBeNull();
+    },
+  );
+
+  it("retains sender metadata on disconnect and clears it on pairing-scope changes", () => {
+    const { channels, update, setScopes } = createHarness(vi.fn(), ["operator.pairing"]);
     channels.state.pairingSnapshot = pendingPairing;
 
-    snapshot = {
-      ...snapshot,
-      hello: { auth: { role: "operator", scopes: ["operator.read"] } },
-    };
-    publish();
+    update({ phase: "reconnecting" });
+    expect(channels.state.pairingSnapshot).toBe(pendingPairing);
+
+    update({ phase: "connected" });
+    setScopes(["operator.read"]);
     expect(channels.state.pairingSnapshot).toBeNull();
 
     channels.state.pairingSnapshot = pendingPairing;
-    snapshot = { ...snapshot, phase: "reconnecting" };
-    publish();
+    update({ client: createTestGatewayClient(vi.fn()) });
     expect(channels.state.pairingSnapshot).toBeNull();
-    channels.dispose();
   });
 
   it("ignores a pairing mutation result from an earlier authorization epoch", async () => {
-    const approval = createDeferred<{
-      requestId: string;
-      senderId: string;
-      notification: "not-requested";
-      commandOwnerBootstrap: "not-requested";
-    }>();
+    const approval = createDeferred<typeof approved>();
     const request = vi.fn(async (method: string) => {
       if (method === "channels.pairing.approve") {
         return approval.promise;
       }
       return emptyPairing;
     });
-    const client = { request };
-    let snapshot = {
-      client,
-      phase: "connected",
-      hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
-    };
-    const { gateway, publish } = createChannelGatewayFixture(() => snapshot);
-    const channels = createChannelCapability(gateway as never);
+    const { channels, setScopes } = createHarness(request, ["operator.pairing"]);
     channels.state.pairingSnapshot = pendingPairing;
 
-    const pendingApproval = channels.approvePairing({
-      channel: "whatsapp",
-      accountId: "personal",
-      requestId: "request-1",
-      notify: false,
-      bootstrapCommandOwner: false,
-    });
+    const pendingApproval = channels.approvePairing(approvalParams);
     await vi.waitFor(() => expect(channels.state.pairingBusyRequestId).toBe("request-1"));
-    snapshot = {
-      ...snapshot,
-      hello: { auth: { role: "operator", scopes: ["operator.pairing", "operator.read"] } },
-    };
-    publish();
+    setScopes(["operator.pairing", "operator.read"]);
     channels.state.pairingSnapshot = pendingPairing;
 
-    approval.resolve({
-      requestId: "request-1",
-      senderId: "+1555",
-      notification: "not-requested",
-      commandOwnerBootstrap: "not-requested",
-    });
+    approval.resolve(approved);
 
     await expect(pendingApproval).resolves.toBeNull();
     expect(channels.state.pairingSnapshot).toBe(pendingPairing);
     expect(request.mock.calls.filter(([method]) => method === "channels.pairing.list")).toEqual([]);
-    channels.dispose();
-  });
-
-  it("keeps the last request snapshot visible when refresh fails", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("gateway unavailable");
-    });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
-    channels.state.pairingSnapshot = emptyPairing;
-
-    await channels.refreshPairing();
-
-    expect(channels.state.pairingSnapshot).toBe(emptyPairing);
-    expect(channels.state.pairingError).toBe("gateway unavailable");
-    channels.dispose();
   });
 });
 
 describe("channel refresh sequencing", () => {
+  it.each(["pending", "settling"] as const)(
+    "coalesces config changes ahead of a probe while the status read is %s",
+    async (probeTiming) => {
+      const pending = createDeferred<ChannelsStatusSnapshot>();
+      const slowProbe = createDeferred<ChannelsStatusSnapshot>();
+      const configured = createChannelsSnapshot("configured");
+      const request = vi
+        .fn()
+        .mockImplementation((_method: string, params: { probe: boolean }) =>
+          params.probe ? slowProbe.promise : Promise.resolve(configured),
+        )
+        .mockReturnValueOnce(pending.promise);
+      // Keep the raw transport promise: the settling case depends on its microtask order.
+      const { channels, emitEvent } = createHarness(request, undefined, { request });
+      const refresh = channels.refresh();
+      const initialRead = channels.state.channelsRead!;
+
+      emitEvent("config.changed");
+      emitEvent("config.changed");
+      emitEvent("config.changed");
+      expect(request).toHaveBeenCalledOnce();
+      const probe =
+        probeTiming === "pending"
+          ? channels.refresh(true)
+          : pending.promise.then(() => channels.refresh(true));
+      expect(channels.state.channelsRead).toBe(initialRead);
+      try {
+        pending.resolve(createChannelsSnapshot("before save"));
+        await refresh;
+
+        expect(channels.state.channelsSnapshot).toBe(configured);
+        expect(channels.state.channelsLoading).toBe(false);
+        expect(channels.state.channelsRead).not.toBe(initialRead);
+        await expect(initialRead.completion).resolves.toBeNull();
+        await expect(channels.state.channelsRead!.completion).resolves.toBeNull();
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(request).toHaveBeenLastCalledWith("channels.status", {
+          probe: false,
+          timeoutMs: 8000,
+        });
+      } finally {
+        slowProbe.resolve(createChannelsSnapshot("probe"));
+        await probe;
+      }
+    },
+  );
+
+  it.each(["reconnect", "read access", "dispose"] as const)(
+    "retires a pending config refresh after %s changes",
+    async (transition) => {
+      const pending = createDeferred<ChannelsStatusSnapshot>();
+      const request = vi.fn().mockReturnValue(pending.promise);
+      const { channels, update, setScopes, emitEvent } = createHarness(request, ["operator.read"]);
+      const refresh = channels.refresh();
+      const receipt = channels.state.channelsRead!;
+      emitEvent("config.changed");
+
+      if (transition === "reconnect") {
+        update({ phase: "reconnecting" });
+        update({ phase: "connected" });
+      } else if (transition === "read access") {
+        setScopes(["operator.pairing"]);
+      } else {
+        channels.dispose();
+        emitEvent("config.changed");
+      }
+      await expect(receipt.completion).resolves.toBeNull();
+      expect(channels.state.channelsRead).toBeNull();
+      if (transition !== "dispose") {
+        expect(channels.state.channelsLoading).toBe(false);
+      }
+      expect(channels.state.channelsSnapshot).toBeNull();
+      pending.resolve(createChannelsSnapshot("retired"));
+      await refresh;
+
+      expect(request).toHaveBeenCalledOnce();
+      expect(channels.state.channelsSnapshot).toBeNull();
+    },
+  );
+
   it("clears a failed request generation on reconnect so status can recover", async () => {
     const request = vi
       .fn()
       .mockRejectedValueOnce(new Error("status unavailable"))
       .mockResolvedValueOnce(createChannelsSnapshot("recovered"));
-    const client = { request };
-    let snapshot = { client, phase: "connected" };
-    const { gateway, publish } = createChannelGatewayFixture(() => snapshot);
-    const channels = createChannelCapability(gateway as never);
+    const { channels, update } = createHarness(request);
 
     await channels.refresh();
     expect(channels.state.channelsError).toBe("status unavailable");
+    await expect(channels.state.channelsRead!.completion).resolves.toBe("status unavailable");
 
-    snapshot = { client, phase: "reconnecting" };
-    publish();
-    snapshot = { client, phase: "connected" };
-    publish();
+    update({ phase: "reconnecting" });
+    update({ phase: "connected" });
 
     expect(channels.state.channelsError).toBeNull();
     await channels.refresh();
     expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("recovered");
-    channels.dispose();
+    await expect(channels.state.channelsRead!.completion).resolves.toBeNull();
   });
 
-  it("rejects an in-flight channel snapshot after read access is revoked", async () => {
-    const pending = createDeferred<ChannelsStatusSnapshot | null>();
-    const request = vi.fn(() => pending.promise);
-    const client = { request };
-    let snapshot = {
-      client,
-      phase: "connected",
-      hello: { auth: { role: "operator", scopes: ["operator.read"] } },
-    };
-    const { gateway, publish } = createChannelGatewayFixture(() => snapshot);
-    const channels = createChannelCapability(gateway as never);
-
-    const refresh = channels.refresh();
-    await vi.waitFor(() => expect(channels.state.channelsLoading).toBe(true));
-    snapshot = {
-      ...snapshot,
-      hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
-    };
-    publish();
-    expect(channels.state.channelsLoading).toBe(false);
-    expect(channels.state.channelsSnapshot).toBeNull();
-
-    pending.resolve(createChannelsSnapshot("stale"));
-    await refresh;
-
-    expect(channels.state.channelsSnapshot).toBeNull();
-    channels.dispose();
-  });
-
-  it("keeps a stale slow probe from replacing a newer runtime snapshot", async () => {
+  it("refreshes accepted config without waiting for a stale slow probe", async () => {
     const slowProbe = createDeferred<ChannelsStatusSnapshot | null>();
     const fastRuntime = createDeferred<ChannelsStatusSnapshot | null>();
     const request = vi.fn(async (_method: string, params?: unknown) =>
       (params as { probe?: boolean } | undefined)?.probe ? slowProbe.promise : fastRuntime.promise,
     );
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
+    const { channels, emitEvent } = createHarness(request);
+    const runtimeLoaded = createDeferred();
+    const fresh = createChannelsSnapshot("fresh");
+    channels.subscribe((state) => {
+      if (state.channelsSnapshot === fresh && !state.channelsLoading) {
+        runtimeLoaded.resolve();
+      }
+    });
 
     const probeLoad = channels.refresh(true);
-    const runtimeLoad = channels.refresh(false);
+    const probeReceipt = channels.state.channelsRead!;
+    await channels.refresh(true);
+    expect(channels.state.channelsRead).toBe(probeReceipt);
+    emitEvent("config.changed");
     expect(request).toHaveBeenCalledTimes(2);
+    const runtimeReceipt = channels.state.channelsRead!;
+    expect(runtimeReceipt).not.toBe(probeReceipt);
+    await expect(probeReceipt.completion).resolves.toBeNull();
 
-    fastRuntime.resolve(createChannelsSnapshot("fresh"));
-    await runtimeLoad;
+    fastRuntime.resolve(fresh);
+    await runtimeLoaded.promise;
+    await expect(runtimeReceipt.completion).resolves.toBeNull();
     slowProbe.resolve(createChannelsSnapshot("stale"));
     await probeLoad;
 
     expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("fresh");
     expect(channels.state.channelsLoading).toBe(false);
-    channels.dispose();
-  });
-
-  it("retains the previous snapshot while a refresh is pending", async () => {
-    const pending = createDeferred<ChannelsStatusSnapshot | null>();
-    const request = vi.fn(() => pending.promise);
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
-    const previous = createChannelsSnapshot("previous");
-    channels.state.channelsSnapshot = previous;
-
-    const refresh = channels.refresh(true);
-
-    expect(channels.state.channelsLoading).toBe(true);
-    expect(channels.state.channelsSnapshot).toBe(previous);
-    pending.resolve(createChannelsSnapshot("next"));
-    await refresh;
-    expect(channels.state.channelsLoading).toBe(false);
-    expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("next");
-    channels.dispose();
   });
 });

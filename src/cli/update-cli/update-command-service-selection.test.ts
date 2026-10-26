@@ -27,7 +27,6 @@ it.each([
   { platform: "linux", fault: "missing manager UID" },
   { platform: "linux", fault: "invalid manager UID" },
   { platform: "linux", fault: "oversized command" },
-  { platform: "darwin", fault: "oversized command" },
   { platform: "linux", fault: "none" },
   { platform: "darwin", fault: "none" },
   { platform: "linux", fault: "sealed definition" },
@@ -133,9 +132,7 @@ it.each([
           });
         }
         if (!selected && !foreign) {
-          expect(inspection.serviceMutationSkipMessage).toContain(
-            "Restart the Gateway you launched manually",
-          );
+          expect(inspection.serviceMutationSkipMessage).toContain("openclaw gateway stop");
           expect(inspection.serviceEnv).toBeUndefined();
         }
         expect(native.stop).not.toHaveBeenCalled();

@@ -38,7 +38,7 @@ Extension relay configuration still requires a Gateway restart.
     },
     // snapshotDefaults: { mode: "efficient" }, // default snapshot mode when the caller omits one
     defaultProfile: "openclaw",
-    headless: false,
+    headless: true, // default for local managed profiles
     noSandbox: false,
     attachOnly: false,
     executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
@@ -76,12 +76,23 @@ an unmarked baseline. Existing-session snapshots omit deltas.
 
 ### Tab cleanup ownership
 
-Session tab cleanup applies only to tabs created by the OpenClaw browser tool
-with `action: "open"`. OpenClaw does not adopt tabs that were already open,
-opened by the user, or otherwise have unknown ownership. The
+Session tab cleanup applies only to tabs a session owns: tabs created by the
+OpenClaw browser tool with `action: "open"` and tabs opened from that session's
+Browser panel in the Control UI. OpenClaw does not adopt tabs that were already
+open, opened outside OpenClaw, or otherwise have unknown ownership. The
 `browser.tabCleanup` block controls periodic idle and cap sweeps for primary
 sessions. Changes apply on the next sweep without restarting the browser;
 disabling it does not disable explicit session lifecycle cleanup.
+
+Ownership includes the agent identity: two agents using the same session key,
+such as `global`, have separate tab membership and cleanup. Legacy durable records
+without an agent-qualified identity are discarded as invalid bookkeeping when
+cleanup reads the tab store. Their tabs stay open: OpenClaw does not guess an
+owner or adopt them into another session. Close those tabs manually if needed.
+
+Periodic cleanup belongs to the Browser plugin service and continues after the
+request that first started browser control ends. Stopping or reloading that
+service cancels future sweeps and waits for active cleanup to finish.
 
 OpenClaw-managed Chrome also applies a separate, best-effort cap of eight page
 tabs when opening a tab. This cap is independent of `browser.tabCleanup`;
@@ -184,6 +195,9 @@ main model can read the screenshot directly.
   `cdpUrl`.
 - Remote and `attachOnly` CDP reachability, WebSocket handshakes, and local
   managed-Chrome startup use built-in deadlines.
+- If the managed Chromium child exits before CDP discovery completes, startup
+  reports that child's exit status and bounded stderr rather than waiting out
+  the remaining discovery deadline.
 - Repeated managed Chrome launch/readiness failures are circuit-broken per
   profile. After several consecutive failures, OpenClaw pauses new launch
   attempts briefly instead of spawning Chromium on every browser tool call. Fix
@@ -196,8 +210,8 @@ main model can read the screenshot directly.
 
 - Browser navigation and open-tab requests are preflight checked. During the action and bounded post-action grace, guarded Playwright interactions (click, coordinate click, hover, drag, scroll, select, press, type, form fill, and evaluate) intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
 - Before each fresh OpenClaw-managed Chrome launch, OpenClaw best-effort disables network prediction, suppressing Chromium's observed speculative preconnect for those denied loads. This is defense in depth, not a policy boundary: a browser reused across a control-service restart and other browser backends may not share the hardening. Playwright routing is still not a network firewall and does not intercept redirect hops, a popup's first request, Service Worker traffic, page code that runs after the bounded guard window, or every background/subresource path. Complete egress isolation requires owner-side isolation or a policy-enforcing proxy.
-- In strict SSRF mode, remote CDP endpoint discovery and `/json/version` probes (`cdpUrl`) are checked too.
-- Guarded remote CDP connections now fail closed when the selected driver cannot
+- In strict SSRF mode, remote CDP endpoint discovery and `/json/version` checks (`cdpUrl`) are checked too.
+- Guarded remote CDP connections are rejected when the selected driver cannot
   keep the approved endpoint bound to the actual socket. Use the regular
   `openclaw` driver for Browserless, Browserbase, Notte, or other guarded
   remote CDP providers. `existing-session`/Chrome MCP profiles with an explicit
@@ -213,31 +227,51 @@ main model can read the screenshot directly.
   returned hostname is not enough; the WebSocket transport must use the endpoint
   that passed policy validation.
 - Gateway/provider `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables do not automatically proxy the OpenClaw-managed browser. Managed Chrome launches direct by default so provider proxy settings do not weaken browser SSRF checks.
-- OpenClaw-managed local CDP readiness probes and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
+- OpenClaw-managed local CDP readiness checks and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
 - To proxy the managed browser itself, pass explicit Chrome proxy flags through `browser.extraArgs`, such as `--proxy-server=...` or `--proxy-pac-url=...`. Strict SSRF mode blocks explicit browser proxy routing unless private-network browser access is intentionally enabled.
+- When `browser.ssrfPolicy` is absent, unrestricted same-host agents may open any loopback port in OpenClaw-owned local Chrome. Any explicit policy, including `{}`, disables this automatic exception. See [Local preview access](/tools/browser/security#local-preview-access).
 - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
 - `browser.ssrfPolicy.allowedHostnames` grants exact hosts while the rest of the private network remains blocked.
 - `browser.ssrfPolicy.allowRfc2544BenchmarkRange` and `browser.ssrfPolicy.allowIpv6UniqueLocalRange` narrowly allow trusted fake-IP proxy ranges.
-- `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 
 </Accordion>
 
 <Accordion title="Profile behavior">
 
 - `attachOnly: true` means never launch a local browser; only attach if one is already running.
-- `headless` can be set globally or per local managed profile. Per-profile values override `browser.headless`, so one locally launched profile can stay headless while another remains visible.
+- Local managed profiles are headless by default. Set `headless: false` for a visible window; existing explicit headed settings are preserved. `headless` can be set globally or per local managed profile. Per-profile values override `browser.headless`, so one locally launched profile can stay headless while another remains visible.
 - `POST /start?headless=true` and `openclaw browser start --headless` request a
   one-shot headless launch for local managed profiles without rewriting
   `browser.headless` or profile config. Existing-session, attach-only, and
   remote CDP profiles reject the override because OpenClaw does not launch those
   browser processes.
-- On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
-  default to headless automatically when neither the environment nor profile/global
-  config explicitly chooses headed mode. Use the unambiguous browser-level form
+- Local managed profiles default to headless on every platform, including hosts
+  with a desktop session. Existing-session, extension, remote, and attach-only
+  browser processes keep their externally selected mode. Use the unambiguous browser-level form
   `openclaw browser --json status`; trailing `openclaw browser status --json`
   also works because `status` does not define its own `--json`. The command reports
   `headlessSource` as `env`, `profile`, `config`,
-  `request`, `linux-display-fallback`, or `default`.
+  `request`, or `default`.
+- Fresh headless profiles are seeded before one browser launch; they do not run
+  a temporary browser solely to create preference files. Existing profile preferences
+  and cookie encryption settings are preserved.
+- When no installed Chromium-family browser is found, OpenClaw searches the
+  Playwright cache for full Chromium. Automatic discovery never switches to
+  headless shell, even if the full browser is removed. Discovery does not load
+  Playwright or download browsers.
+  On Linux and macOS, opt in to headless shell by setting a separate managed
+  profile's `executablePath` to the shell binary and keeping that profile headless.
+  Do not reuse a full Chromium profile: switching distributions can discard its
+  localStorage. Windows managed profiles require full Chromium.
+  The shell is a Chromium engine with its own third-party license obligations,
+  not an MIT-only binary.
+- Headless shell does not create Chromium's profile lock. On Linux and macOS,
+  cross-runtime stop and reset verify the live process, CDP listener, and exact
+  profile directory; reset preserves data if a shell still uses it on another
+  port or ownership cannot be proved. Launch and reset share a cross-runtime
+  profile lock. Managed shell launch and cross-runtime cleanup are unsupported
+  on Windows and fail closed; use full Chromium or attach to an externally
+  managed browser instead.
 - `OPENCLAW_BROWSER_HEADLESS=1` forces local managed launches headless for the
   current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode for ordinary
   starts and returns an actionable error on Linux hosts without a display server;
@@ -257,6 +291,9 @@ main model can read the screenshot directly.
 - Headless managed Chrome still uses the conservative `--disable-gpu` default.
   The diagnostics do not enable acceleration, add a global acceleration setting,
   or grant sandbox browser device access.
+- Headless Chromium cannot show Chrome's passkey dialog, so OpenClaw answers
+  passkey requests in headless browsers as dismissed and the page stays usable.
+  See [Passkeys in headless browsers](/tools/browser-login#passkeys-in-headless-browsers).
 - `executablePath` can be set globally or per local managed profile. Per-profile values override `browser.executablePath`, so different managed profiles can launch different Chromium-based browsers. Both forms accept `~` for your OS home directory.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome, Brave, Edge, Chromium, Chrome Canary.

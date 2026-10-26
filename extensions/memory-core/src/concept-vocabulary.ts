@@ -6,234 +6,215 @@ export const MAX_CONCEPT_TAGS = 8;
 
 type ConceptTagScriptFamily = "latin" | "cjk" | "mixed" | "other";
 
-export type ConceptTagScriptCoverage = {
-  latinEntryCount: number;
-  cjkEntryCount: number;
-  mixedEntryCount: number;
-  otherEntryCount: number;
-};
+export type ConceptTagScriptCoverage = ReturnType<typeof summarizeConceptTagScriptCoverage>;
 
-const LANGUAGE_STOP_WORDS = {
-  shared: [
-    "about",
-    "after",
-    "agent",
-    "again",
-    "also",
-    "assistant",
-    "because",
-    "before",
-    "being",
-    "between",
-    "build",
-    "called",
-    "could",
-    "daily",
-    "default",
-    "deploy",
-    "during",
-    "every",
-    "file",
-    "files",
-    "from",
-    "have",
-    "into",
-    "just",
-    "line",
-    "lines",
-    "long",
-    "main",
-    "make",
-    "memory",
-    "month",
-    "more",
-    "most",
-    "move",
-    "much",
-    "next",
-    "note",
-    "notes",
-    "over",
-    "part",
-    "past",
-    "port",
-    "same",
-    "score",
-    "search",
-    "session",
-    "sessions",
-    "short",
-    "should",
-    "since",
-    "some",
-    "subagent",
-    "system",
-    "than",
-    "that",
-    "their",
-    "there",
-    "these",
-    "they",
-    "this",
-    "through",
-    "today",
-    "user",
-    "using",
-    "with",
-    "work",
-    "workspace",
-    "year",
-  ],
-  english: ["and", "are", "for", "into", "its", "our", "the", "then", "were", "you", "your"],
-  spanish: [
-    "al",
-    "con",
-    "como",
-    "de",
-    "del",
-    "el",
-    "en",
-    "es",
-    "la",
-    "las",
-    "los",
-    "para",
-    "por",
-    "que",
-    "se",
-    "sin",
-    "su",
-    "sus",
-    "una",
-    "uno",
-    "unos",
-    "unas",
-    "y",
-  ],
-  french: [
-    "au",
-    "aux",
-    "avec",
-    "dans",
-    "de",
-    "des",
-    "du",
-    "en",
-    "est",
-    "et",
-    "la",
-    "le",
-    "les",
-    "ou",
-    "pour",
-    "que",
-    "qui",
-    "sans",
-    "ses",
-    "son",
-    "sur",
-    "une",
-    "un",
-  ],
-  german: [
-    "auf",
-    "aus",
-    "bei",
-    "das",
-    "dem",
-    "den",
-    "der",
-    "des",
-    "die",
-    "ein",
-    "eine",
-    "einem",
-    "einen",
-    "einer",
-    "für",
-    "im",
-    "in",
-    "mit",
-    "nach",
-    "oder",
-    "ohne",
-    "über",
-    "und",
-    "von",
-    "zu",
-    "zum",
-    "zur",
-  ],
-  cjk: [
-    "が",
-    "から",
-    "する",
-    "して",
-    "した",
-    "で",
-    "と",
-    "に",
-    "の",
-    "は",
-    "へ",
-    "まで",
-    "も",
-    "や",
-    "を",
-    "与",
-    "为",
-    "了",
-    "及",
-    "和",
-    "在",
-    "将",
-    "或",
-    "把",
-    "是",
-    "用",
-    "的",
-    "과",
-    "는",
-    "도",
-    "로",
-    "를",
-    "에",
-    "에서",
-    "와",
-    "은",
-    "으로",
-    "을",
-    "이",
-    "하다",
-    "한",
-    "할",
-    "해",
-    "했다",
-  ],
-  pathNoise: [
-    "cjs",
-    "cpp",
-    "cts",
-    "jsx",
-    "json",
-    "md",
-    "mjs",
-    "mts",
-    "text",
-    "toml",
-    "ts",
-    "tsx",
-    "txt",
-    "yaml",
-    "yml",
-  ],
-} as const;
-
-const CONCEPT_STOP_WORDS = new Set(
-  Object.values(LANGUAGE_STOP_WORDS)
-    .flat()
-    .map((word) => normalizeLowercaseStringOrEmpty(word)),
-);
+const CONCEPT_STOP_WORDS = new Set([
+  "about",
+  "after",
+  "agent",
+  "again",
+  "also",
+  "assistant",
+  "because",
+  "before",
+  "being",
+  "between",
+  "build",
+  "called",
+  "could",
+  "daily",
+  "default",
+  "deploy",
+  "during",
+  "every",
+  "file",
+  "files",
+  "from",
+  "have",
+  "into",
+  "just",
+  "line",
+  "lines",
+  "long",
+  "main",
+  "make",
+  "memory",
+  "month",
+  "more",
+  "most",
+  "move",
+  "much",
+  "next",
+  "note",
+  "notes",
+  "over",
+  "part",
+  "past",
+  "port",
+  "same",
+  "score",
+  "search",
+  "session",
+  "sessions",
+  "short",
+  "should",
+  "since",
+  "some",
+  "subagent",
+  "system",
+  "than",
+  "that",
+  "their",
+  "there",
+  "these",
+  "they",
+  "this",
+  "through",
+  "today",
+  "user",
+  "using",
+  "with",
+  "work",
+  "workspace",
+  "year",
+  "and",
+  "are",
+  "for",
+  "its",
+  "our",
+  "the",
+  "then",
+  "were",
+  "you",
+  "your",
+  "al",
+  "con",
+  "como",
+  "de",
+  "del",
+  "el",
+  "en",
+  "es",
+  "la",
+  "las",
+  "los",
+  "para",
+  "por",
+  "que",
+  "se",
+  "sin",
+  "su",
+  "sus",
+  "una",
+  "uno",
+  "unos",
+  "unas",
+  "y",
+  "au",
+  "aux",
+  "avec",
+  "dans",
+  "des",
+  "du",
+  "est",
+  "et",
+  "le",
+  "les",
+  "ou",
+  "pour",
+  "qui",
+  "sans",
+  "ses",
+  "son",
+  "sur",
+  "une",
+  "un",
+  "auf",
+  "aus",
+  "bei",
+  "das",
+  "dem",
+  "den",
+  "der",
+  "die",
+  "ein",
+  "eine",
+  "einem",
+  "einen",
+  "einer",
+  "für",
+  "im",
+  "in",
+  "mit",
+  "nach",
+  "oder",
+  "ohne",
+  "über",
+  "und",
+  "von",
+  "zu",
+  "zum",
+  "zur",
+  "が",
+  "から",
+  "する",
+  "して",
+  "した",
+  "で",
+  "と",
+  "に",
+  "の",
+  "は",
+  "へ",
+  "まで",
+  "も",
+  "や",
+  "を",
+  "与",
+  "为",
+  "了",
+  "及",
+  "和",
+  "在",
+  "将",
+  "或",
+  "把",
+  "是",
+  "用",
+  "的",
+  "과",
+  "는",
+  "도",
+  "로",
+  "를",
+  "에",
+  "에서",
+  "와",
+  "은",
+  "으로",
+  "을",
+  "이",
+  "하다",
+  "한",
+  "할",
+  "해",
+  "했다",
+  "cjs",
+  "cpp",
+  "cts",
+  "jsx",
+  "json",
+  "md",
+  "mjs",
+  "mts",
+  "text",
+  "toml",
+  "ts",
+  "tsx",
+  "txt",
+  "yaml",
+  "yml",
+]);
 
 const PROTECTED_GLOSSARY = [
   "backup",
@@ -287,8 +268,7 @@ const HIRAGANA_RE = /\p{Script=Hiragana}/u;
 const KATAKANA_RE = /\p{Script=Katakana}/u;
 const HANGUL_RE = /\p{Script=Hangul}/u;
 
-const DEFAULT_WORD_SEGMENTER =
-  typeof Intl.Segmenter === "function" ? new Intl.Segmenter("und", { granularity: "word" }) : null;
+const DEFAULT_WORD_SEGMENTER = new Intl.Segmenter("und", { granularity: "word" });
 
 function classifyConceptTagScript(tag: string): ConceptTagScriptFamily {
   const normalized = tag.normalize("NFKC");
@@ -373,49 +353,27 @@ const GLOSSARY_ENTRIES = PROTECTED_GLOSSARY.map((entry) => ({
 
 function collectGlossaryMatches(source: string): string[] {
   const normalizedSource = normalizeLowercaseStringOrEmpty(source.normalize("NFKC"));
-  const matches: string[] = [];
-  for (const { entry, wholeWord } of GLOSSARY_ENTRIES) {
-    const present = wholeWord ? wholeWord.test(normalizedSource) : normalizedSource.includes(entry);
-    if (present) {
-      matches.push(entry);
-    }
-  }
-  return matches;
-}
-
-function collectCompoundTokens(source: string): string[] {
-  return source.match(COMPOUND_TOKEN_RE) ?? [];
+  return GLOSSARY_ENTRIES.filter(({ entry, wholeWord }) =>
+    wholeWord ? wholeWord.test(normalizedSource) : normalizedSource.includes(entry),
+  ).map(({ entry }) => entry);
 }
 
 function collectSegmentTokens(source: string): string[] {
-  if (DEFAULT_WORD_SEGMENTER) {
-    return Array.from(DEFAULT_WORD_SEGMENTER.segment(source), (part) =>
-      part.isWordLike ? part.segment : "",
-    ).filter(Boolean);
-  }
-  return source.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return Array.from(DEFAULT_WORD_SEGMENTER.segment(source), (part) =>
+    part.isWordLike ? part.segment : "",
+  ).filter(Boolean);
 }
 
-export function deriveConceptTags(params: {
-  path: string;
-  snippet: string;
-  limit?: number;
-}): string[] {
+export function deriveConceptTags(params: { path: string; snippet: string }): string[] {
   // Recall annotations are control metadata; deriving tags from them can turn
   // project identities into promoted triggers instead of user-visible concepts.
   const visibleSnippet = params.snippet.replace(/<!--[\s\S]*?-->/gu, " ");
   const source = `${path.basename(params.path)} ${visibleSnippet}`;
-  const limit = Number.isFinite(params.limit)
-    ? Math.max(0, Math.floor(params.limit as number))
-    : MAX_CONCEPT_TAGS;
-  if (limit === 0) {
-    return [];
-  }
 
   const tags: string[] = [];
   const tokenSources = [
     collectGlossaryMatches(source),
-    collectCompoundTokens(source),
+    source.match(COMPOUND_TOKEN_RE) ?? [],
     collectSegmentTokens(source),
   ];
   for (const tokens of tokenSources) {
@@ -425,7 +383,7 @@ export function deriveConceptTags(params: {
         continue;
       }
       tags.push(normalized);
-      if (tags.length >= limit) {
+      if (tags.length >= MAX_CONCEPT_TAGS) {
         return tags;
       }
     }
@@ -433,10 +391,8 @@ export function deriveConceptTags(params: {
   return tags;
 }
 
-export function summarizeConceptTagScriptCoverage(
-  conceptTagsByEntry: string[][],
-): ConceptTagScriptCoverage {
-  const coverage: ConceptTagScriptCoverage = {
+export function summarizeConceptTagScriptCoverage(conceptTagsByEntry: string[][]) {
+  const coverage = {
     latinEntryCount: 0,
     cjkEntryCount: 0,
     mixedEntryCount: 0,
@@ -444,35 +400,8 @@ export function summarizeConceptTagScriptCoverage(
   };
 
   for (const conceptTags of conceptTagsByEntry) {
-    let hasLatin = false;
-    let hasCjk = false;
-    let hasOther = false;
-    for (const tag of conceptTags) {
-      const family = classifyConceptTagScript(tag);
-      if (family === "mixed") {
-        hasLatin = true;
-        hasCjk = true;
-        continue;
-      }
-      if (family === "latin") {
-        hasLatin = true;
-        continue;
-      }
-      if (family === "cjk") {
-        hasCjk = true;
-        continue;
-      }
-      hasOther = true;
-    }
-
-    if (hasLatin && hasCjk) {
-      coverage.mixedEntryCount += 1;
-    } else if (hasCjk) {
-      coverage.cjkEntryCount += 1;
-    } else if (hasLatin) {
-      coverage.latinEntryCount += 1;
-    } else if (hasOther) {
-      coverage.otherEntryCount += 1;
+    if (conceptTags.length > 0) {
+      coverage[`${classifyConceptTagScript(conceptTags.join(" "))}EntryCount`] += 1;
     }
   }
 

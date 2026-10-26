@@ -1,9 +1,28 @@
 import type { AgentMessage } from "@openclaw/agent-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { memoizeFrozenPlainDataProjection } from "./immutable-data.js";
 
 // Native replay retains the exact submitted prompt. Model-context consumers already
 // have its visible content; copying this storage-only payload duplicates the prompt.
 export const MODEL_CONTEXT_PRIVATE_METADATA_KEYS = ["upstreamUserText"] as const;
+
+const stripDetails = memoizeFrozenPlainDataProjection((record: Record<string, unknown>) => {
+  const details = asOptionalRecord(record.details);
+  if (
+    details?.[SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY] === true &&
+    Object.keys(details).length === 1
+  ) {
+    return record;
+  }
+  const sanitized = { ...record };
+  if (details?.[SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY] === true) {
+    sanitized.details = { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true };
+  } else {
+    delete sanitized.details;
+  }
+  return sanitized;
+});
 
 export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[];
 export function stripToolResultDetails(messages: unknown[]): unknown[];
@@ -14,15 +33,16 @@ export function stripToolResultDetails(messages: unknown[]): unknown[] {
     if (record?.role !== "toolResult" || !("details" in record)) {
       return message;
     }
-    const sanitized = { ...record };
-    delete sanitized.details;
-    touched = true;
+    const sanitized = stripDetails(record);
+    touched ||= sanitized !== message;
     return sanitized;
   });
   return touched ? out : messages;
 }
 
 /** A transient view; evidence and persistence readers must retain the original messages. */
+export function projectModelContextMessages(messages: AgentMessage[]): AgentMessage[];
+export function projectModelContextMessages(messages: unknown[]): unknown[];
 export function projectModelContextMessages(messages: unknown[]): unknown[] {
   const output: unknown[] = [];
   for (const message of stripToolResultDetails(messages)) {

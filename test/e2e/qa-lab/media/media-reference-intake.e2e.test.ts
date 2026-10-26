@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,43 +8,15 @@ import { loadWebMediaRaw } from "../../../../src/media/web-media.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { createSolidPngBuffer } from "../../../helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
-
-async function listenOnLoopback(server: Server): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("media fixture server did not expose a TCP port");
-  }
-  return address.port;
-}
-
-async function closeServer(server: Server): Promise<void> {
-  const closed = new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-  server.closeAllConnections();
-  await closed;
-}
+import { listen } from "./media-http.test-support.js";
 
 describe("media reference intake product proof", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  let server: Server | undefined;
+  let server: Awaited<ReturnType<typeof listen>> | undefined;
 
   afterEach(async () => {
     if (server) {
-      await closeServer(server);
+      await server.stop();
       server = undefined;
     }
   });
@@ -56,48 +28,42 @@ describe("media reference intake product proof", () => {
     await fs.writeFile(localPath, png);
 
     const requestedPaths: string[] = [];
-    server = createServer((request, response) => {
-      requestedPaths.push(request.url ?? "");
-      response.writeHead(200, {
-        "content-disposition": 'attachment; filename="remote.txt"',
-        "content-length": String(png.byteLength),
-        "content-type": "text/plain",
-      });
-      response.end(png);
-    });
-    const port = await listenOnLoopback(server);
-    const remoteUrl = `http://127.0.0.1:${port}/misleading.txt`;
+    server = await listen(
+      createServer((request, response) => {
+        requestedPaths.push(request.url ?? "");
+        response.writeHead(200, {
+          "content-disposition": 'attachment; filename="remote.txt"',
+          "content-length": String(png.byteLength),
+          "content-type": "text/plain",
+        });
+        response.end(png);
+      }),
+    );
+    const remoteUrl = `${server.url}/misleading.txt`;
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, async () => {
       const stored = await saveMediaBuffer(png, "text/plain", "inbound", 1024 * 1024, "stored.txt");
       expect(stored.contentType).toBe("image/png");
       expect(stored.id).toMatch(/\.txt$/);
 
-      const plainPath = await loadWebMediaRaw(localPath, {
-        localRoots: [root],
-        maxBytes: 1024 * 1024,
-      });
-      const fileUrl = await loadWebMediaRaw(pathToFileURL(localPath).toString(), {
-        localRoots: [root],
-        maxBytes: 1024 * 1024,
-      });
-      const remote = await loadWebMediaRaw(remoteUrl, {
-        maxBytes: 1024 * 1024,
-        ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
-      });
-      const mediaStore = await loadWebMediaRaw(`media://inbound/${stored.id}`, {
-        maxBytes: 1024 * 1024,
-      });
-
-      for (const result of [plainPath, fileUrl, remote, mediaStore]) {
+      const localOptions = { localRoots: [root] };
+      const remoteOptions = { ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } };
+      for (const [reference, options, fileName] of [
+        [localPath, localOptions, "misleading.txt"],
+        [pathToFileURL(localPath).toString(), localOptions, "misleading.txt"],
+        [remoteUrl, remoteOptions, "remote.txt"],
+        [`media://inbound/${stored.id}`, {}, undefined],
+      ] as const) {
+        const result = await loadWebMediaRaw(reference, {
+          maxBytes: 1024 * 1024,
+          ...options,
+        });
         expect(result.buffer).toEqual(png);
-        expect(result.contentType).toBe("image/png");
-        expect(result.kind).toBe("image");
+        expect([result.contentType, result.kind]).toEqual(["image/png", "image"]);
+        if (fileName) {
+          expect(result.fileName).toBe(fileName);
+        }
       }
-
-      expect(plainPath.fileName).toBe("misleading.txt");
-      expect(fileUrl.fileName).toBe("misleading.txt");
-      expect(remote.fileName).toBe("remote.txt");
       expect(requestedPaths).toEqual(["/misleading.txt"]);
     });
   });

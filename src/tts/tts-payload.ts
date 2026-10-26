@@ -4,8 +4,9 @@ import {
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { isVerbose, logVerbose } from "../globals.js";
+import { logVerbose } from "../globals.js";
 import { resolveSendableOutboundReplyParts } from "../infra/outbound/reply-payload-parts.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -16,17 +17,17 @@ import type { SpeechVoiceOption } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { isCodeHeavySpeechText, normalizeSpeechText } from "./speech-text.js";
 import { summarizeText } from "./tts-core.js";
+import { prepareTtsPreferences, type PreparedTtsPreferences } from "./tts-preferences.js";
 import {
   getResolvedSpeechProviderConfig,
   resolveSpeechProviderTimeoutMs,
-  resolveTtsProvider,
+  resolveTtsProviderAsync,
 } from "./tts-provider-resolution.js";
 import type { TtsStatusEntry } from "./tts-runtime-types.js";
 import {
   getTtsMaxLength,
   isSummarizationEnabled,
   resolveTtsConfig,
-  resolveTtsRuntimeConfig,
   resolveTtsSettingsSnapshot,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
@@ -50,7 +51,7 @@ export async function listSpeechVoices(params: {
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {
   assertSpeechRuntimeAvailable();
-  const cfg = params.cfg ? resolveTtsRuntimeConfig(params.cfg) : undefined;
+  const cfg = params.cfg ? selectLiveRuntimeConfig(params.cfg) : undefined;
   const provider = canonicalizeSpeechProviderId(params.provider, cfg);
   if (!provider) {
     throw new Error("speech provider id is required");
@@ -103,6 +104,7 @@ export async function maybeApplyTtsToPayloadCore(
   params: {
     payload: ReplyPayload;
     cfg: OpenClawConfig;
+    preparedTtsPreferences?: PreparedTtsPreferences;
     channel?: string;
     kind?: "tool" | "block" | "final";
     inboundAudio?: boolean;
@@ -118,9 +120,10 @@ export async function maybeApplyTtsToPayloadCore(
   if (params.payload.isCompactionNotice) {
     return params.payload;
   }
-  const cfg = resolveTtsRuntimeConfig(params.cfg);
+  const cfg = selectLiveRuntimeConfig(params.cfg);
   const { autoMode, config, prefsPath } = resolveTtsSettingsSnapshot({
     cfg,
+    preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     sessionAuto: params.ttsAuto,
     agentId: params.agentId,
     channelId: params.channel,
@@ -131,7 +134,7 @@ export async function maybeApplyTtsToPayloadCore(
   if (!explicitTts && (autoMode === "off" || ttsMetadata?.commandReply)) {
     return params.payload;
   }
-  const activeProvider = resolveTtsProvider(config, prefsPath);
+  const activeProvider = await resolveTtsProviderAsync(config, prefsPath);
 
   const reply = resolveSendableOutboundReplyParts(params.payload);
   const text = reply.text;
@@ -147,21 +150,10 @@ export async function maybeApplyTtsToPayloadCore(
       }
     : parseTtsDirectives(text, config.modelOverrides, directiveOptions);
   if (directives.warnings.length > 0) {
-    logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
+    logVerbose(`TTS: ignored ${directives.warnings.length} directive override(s)`);
   }
 
-  if (isVerbose()) {
-    const effectiveProvider = directives.overrides?.provider
-      ? (canonicalizeSpeechProviderId(directives.overrides.provider, cfg) ?? activeProvider)
-      : activeProvider;
-    logVerbose(
-      `TTS: auto mode enabled (${autoMode}), channel=${params.channel}, selected provider=${effectiveProvider}, config.provider=${config.provider}, config.providerSource=${config.providerSource}`,
-    );
-  }
-
-  const cleanedText = directives.cleanedText;
-  const trimmedCleaned = cleanedText.trim();
-  const visibleText = trimmedCleaned.length > 0 ? trimmedCleaned : "";
+  const visibleText = directives.cleanedText.trim();
   const explicitTtsText = directives.ttsText?.trim() || "";
   const ttsText = explicitTtsText || visibleText;
 
@@ -180,23 +172,24 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  const mode = config.mode ?? "final";
+  const mode = config.mode;
   if (mode === "final" && params.kind && params.kind !== "final") {
     return nextPayload;
   }
 
-  if (!ttsText.trim()) {
+  if (!ttsText) {
     return nextPayload;
   }
   if (reply.hasMedia || hasLegacyFinalMediaDirective(text)) {
     return nextPayload;
   }
-  if (!explicitTtsText && ttsText.trim().length < 10) {
+  if (!explicitTtsText && ttsText.length < 10) {
     return nextPayload;
   }
 
-  const maxLength = getTtsMaxLength(prefsPath);
-  let textForAudio = ttsText.trim();
+  // Synthesis rejects text over config.maxTextLength, so never prepare more than that.
+  const maxLength = Math.min(getTtsMaxLength(prefsPath), config.maxTextLength);
+  let textForAudio = ttsText;
   let wasSummarized = false;
 
   if (!explicitTtsText && isCodeHeavySpeechText(textForAudio)) {
@@ -219,6 +212,7 @@ export async function maybeApplyTtsToPayloadCore(
           cfg,
           config,
           timeoutMs: config.timeoutMs,
+          agentId: params.agentId,
         });
         textForAudio = summary.summary;
         wasSummarized = true;
@@ -228,9 +222,8 @@ export async function maybeApplyTtsToPayloadCore(
           );
           textForAudio = `${truncateUtf16Safe(textForAudio, config.maxTextLength - 3)}...`;
         }
-      } catch (err) {
-        const error = err as Error;
-        logVerbose(`TTS: summarization failed, truncating instead: ${error.message}`);
+      } catch {
+        logVerbose("TTS: summarization failed, truncating instead.");
         textForAudio = `${truncateUtf16Safe(textForAudio, maxLength - 3)}...`;
       }
     }
@@ -258,44 +251,38 @@ export async function maybeApplyTtsToPayloadCore(
     persistTtsAudio,
   );
 
-  if (result.success && result.audioPath) {
-    lastTtsAttempt = {
-      timestamp: Date.now(),
-      success: true,
-      textLength: text.length,
-      summarized: wasSummarized,
-      provider: result.provider,
-      persona: result.persona,
-      fallbackFrom: result.fallbackFrom,
-      attemptedProviders: result.attemptedProviders,
-      attempts: result.attempts,
-      latencyMs: result.latencyMs,
-    };
-
-    const payloadWithAudio = {
-      ...nextPayload,
-      mediaUrl: result.audioPath,
-      audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
-      spokenText: textForAudio,
-      trustedLocalMedia: true,
-    } as ReplyPayload;
-    return nextPayload.text?.trim()
-      ? markReplyPayloadAsTtsSupplement(payloadWithAudio)
-      : payloadWithAudio;
-  }
-
+  const succeeded = result.success && Boolean(result.audioPath);
   lastTtsAttempt = {
     timestamp: Date.now(),
-    success: false,
+    success: succeeded,
     textLength: text.length,
     summarized: wasSummarized,
     persona: result.persona,
     attemptedProviders: result.attemptedProviders,
     attempts: result.attempts,
-    error: result.error,
+    ...(succeeded
+      ? {
+          provider: result.provider,
+          fallbackFrom: result.fallbackFrom,
+          latencyMs: result.latencyMs,
+        }
+      : { error: result.error }),
   };
 
+  if (result.success && result.audioPath) {
+    const payloadWithAudio: ReplyPayload = {
+      ...nextPayload,
+      mediaUrl: result.audioPath,
+      audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
+      spokenText: textForAudio,
+      trustedLocalMedia: true,
+    };
+    return nextPayload.text?.trim()
+      ? markReplyPayloadAsTtsSupplement(payloadWithAudio)
+      : payloadWithAudio;
+  }
+
   const latency = Date.now() - ttsStart;
-  logVerbose(`TTS: conversion failed after ${latency}ms (${result.error ?? "unknown"}).`);
+  logVerbose(`TTS: conversion failed after ${latency}ms.`);
   return applyExplicitSpeechVisibleFallback(nextPayload, params.channel, explicitTtsText);
 }

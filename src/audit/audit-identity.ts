@@ -1,13 +1,14 @@
 /** Stable installation-local pseudonyms for sensitive audit identifiers. */
 import { createHmac, randomBytes } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
 type AuditIdentityDatabase = Pick<
@@ -27,7 +28,7 @@ const AUDIT_IDENTITY_DOMAIN = "openclaw.audit.identity.v1";
 // Only a top-level (depth-0) audit/evidence write may create the key: each
 // caller clears this cache on rollback, because a rolled-back outer transaction
 // around a nested creation would leave a cached key that was never persisted.
-const identityByDatabase = new WeakMap<DatabaseSync, AuditIdentityKey>();
+const identityByDatabase = new WeakMap<EngineConnection, AuditIdentityKey>();
 
 type AuditIdentityKey = {
   keyId: string;
@@ -66,8 +67,8 @@ function parseAuditIdentityKey(row: AuditIdentityKeyRow): AuditIdentityKey {
   return { keyId: row.key_id, key };
 }
 
-/** Load the stable audit identity key or create it transactionally on first use. */
-export function loadOrCreateAuditIdentityKey(db: DatabaseSync): AuditIdentityKey {
+/** Load the stable audit identity key or create it on first use. */
+export function loadOrCreateAuditIdentityKey(db: EngineConnection): AuditIdentityKey {
   const cached = identityByDatabase.get(db);
   if (cached) {
     return cached;
@@ -89,11 +90,7 @@ export function loadOrCreateAuditIdentityKey(db: DatabaseSync): AuditIdentityKey
     db,
     kysely.selectFrom("audit_events").select("sequence").where("kind", "=", "message").limit(1),
   );
-  const hasExecutionContextTable = Boolean(
-    db /* sqlite-allow-raw -- Missing-key integrity must tolerate pre-ensure current-schema DBs. */
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get("execution_identity_contexts"),
-  );
+  const hasExecutionContextTable = tableExists(db, "execution_identity_contexts");
   const retainedExecutionContext = hasExecutionContextTable
     ? executeSqliteQueryTakeFirstSync(
         db,
@@ -112,30 +109,15 @@ export function loadOrCreateAuditIdentityKey(db: DatabaseSync): AuditIdentityKey
     key: randomBytes(AUDIT_IDENTITY_KEY_BYTES),
     created_at: Date.now(),
   };
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("audit_identity_keys")
-      .values(candidate)
-      .onConflict((conflict) => conflict.column("id").doNothing()),
-  );
-  const stored = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("audit_identity_keys")
-      .select(["key_id", "key"])
-      .where("id", "=", AUDIT_IDENTITY_SINGLETON_ID),
-  );
-  if (!stored) {
-    throw new Error("audit identity key could not be created");
-  }
-  const identity = parseAuditIdentityKey(stored);
+  executeSqliteQuerySync(db, kysely.insertInto("audit_identity_keys").values(candidate));
+  const identity = { keyId: candidate.key_id, key: candidate.key };
+  registerAuditIdentityKeyForRedaction(identity.key);
   identityByDatabase.set(db, identity);
   return identity;
 }
 
 /** Forget transaction-local key state after a failed or rolled-back write. */
-export function clearAuditIdentityKeyCacheForDatabase(db: DatabaseSync): void {
+export function clearAuditIdentityKeyCacheForDatabase(db: EngineConnection): void {
   identityByDatabase.delete(db);
 }
 
@@ -169,7 +151,7 @@ export function pseudonymizeAuditIdentity(params: {
 
 /** Project one execution-identity ref without retaining its raw owner value. */
 export function pseudonymizeExecutionIdentityRef(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   kind: ExecutionIdentityRefKind;
   scope: string;
   value: string;

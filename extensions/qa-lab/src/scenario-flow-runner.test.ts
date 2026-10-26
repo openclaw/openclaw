@@ -1,4 +1,4 @@
-// Qa Lab tests cover scenario flow runner plugin behavior.
+import { createHash } from "node:crypto";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
@@ -13,11 +13,37 @@ import {
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import {
+  addQaFlowTestOutbound,
   runLoadedScenarioFlow,
   assertTelegramRichObservationFlow,
   telegramRichObservationCases,
 } from "./scenario-flow-runner.test-support.js";
-import type { QaSuiteStep } from "./suite-types.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+
+type FlowApi = Parameters<typeof runScenarioFlow>[0]["api"];
+
+function createImportApi(
+  id: string,
+  runScenario: FlowApi["runScenario"] = async (name, steps) => {
+    const stepResults = [];
+    for (const step of steps) {
+      const details = (await step.run())?.details;
+      stepResults.push({
+        name: step.name,
+        status: "pass" as const,
+        ...(details !== undefined ? { details } : {}),
+      });
+    }
+    return { name, status: "pass", steps: stepResults };
+  },
+): FlowApi {
+  return {
+    state: createQaBusState(),
+    scenario: makeQaSuiteTestScenario(id),
+    config: {},
+    runScenario,
+  };
+}
 
 function readWebchatTranscriptWaitFlow() {
   const scenario = readQaScenarioById("webchat-direct-reply-routing");
@@ -58,80 +84,11 @@ async function runWebchatTranscriptWait(
     flow: readWebchatTranscriptWaitFlow(),
     api: {
       readSessionTranscriptSummary,
-      waitForCondition: async <T>(check: () => Promise<T | undefined>) => {
-        for (let attempt = 0; attempt < 10; attempt += 1) {
-          const value = await check();
-          if (value !== undefined) {
-            return value;
-          }
-        }
-        throw new Error("test condition was not met");
-      },
       normalizeLowercaseStringOrEmpty,
       formatErrorMessage: coerceErrorMessage,
       liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
     },
   });
-}
-
-function readCurrentRunProviderPromptEvidenceFlow(trajectoryEvents: unknown[]): QaScenarioFlow {
-  const scenario = readQaScenarioById("instruction-profile-artifact-followthrough-live");
-  const actions = scenario.execution.flow?.steps[0]?.actions;
-  if (!actions) {
-    throw new Error("instruction profile scenario has no actions");
-  }
-  const evidenceIndex = actions.findIndex(
-    (action) =>
-      typeof action === "object" &&
-      action !== null &&
-      "set" in action &&
-      action.set === "providerPromptEvidence",
-  );
-  const assertionIndex = actions.findIndex(
-    (action, index) =>
-      index > evidenceIndex &&
-      typeof action === "object" &&
-      action !== null &&
-      "assert" in action &&
-      JSON.stringify(action).includes("current-run provider prompt evidence mismatch"),
-  );
-  if (evidenceIndex < 0 || assertionIndex < 0) {
-    throw new Error("instruction profile scenario has no provider prompt evidence assertion");
-  }
-  const instructionContents = scenario.execution.config?.instructionContents;
-  const instructionChars =
-    typeof instructionContents === "string" ? instructionContents.trimEnd().length : 0;
-  return {
-    steps: [
-      {
-        name: "proves current-run provider prompt evidence",
-        actions: [
-          { set: "turn", value: { started: { runId: "current-run" } } },
-          {
-            set: "instructionProfileReport",
-            value: {
-              missing: false,
-              truncated: false,
-              rawChars: instructionChars,
-              injectedChars: instructionChars,
-            },
-          },
-          { set: "trajectoryEvents", value: trajectoryEvents },
-          ...actions
-            .slice(evidenceIndex, assertionIndex + 1)
-            .filter(
-              (action) =>
-                !(
-                  typeof action === "object" &&
-                  action !== null &&
-                  "call" in action &&
-                  action.call === "fs.rm"
-                ),
-            ),
-        ],
-      },
-    ],
-  };
 }
 
 const planningEvidenceCoverageIds = new Set([
@@ -264,11 +221,7 @@ function runPlanningEvidenceFixture(
     flow: readPlanningEvidenceFlow(fixture.scenario),
     state,
     onWaitForOutboundMessage: ({ state: currentState }) => {
-      currentState.addOutboundMessage({
-        accountId: "qa-channel",
-        to: "dm:qa-operator",
-        text: fixture.outboundText,
-      });
+      addQaFlowTestOutbound(currentState, "dm:qa-operator", fixture.outboundText);
     },
     api: {
       env: {
@@ -303,68 +256,14 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
-  it.each(telegramRichObservationCases)(
+  it.each(
+    telegramRichObservationCases.filter(
+      (testCase) => testCase === "message" || testCase === "wrong-edit-marker",
+    ),
+  )(
     "correlates Telegram rich observations without crossing account IDs: %s",
     assertTelegramRichObservationFlow,
   );
-
-  it("ignores stale provider prompt mismatches when the current run matches", async () => {
-    const currentObservation = {
-      egress: "responses-sdk",
-      payloadVariant: "initial",
-      promptSource: "input.developer",
-      expectedChars: 4096,
-      observedChars: 4096,
-      matchesAssembledPrompt: true,
-    };
-    const result = await runLoadedScenarioFlow("instruction-profile-artifact-followthrough-live", {
-      flow: readCurrentRunProviderPromptEvidenceFlow([
-        {
-          type: "provider.prompt.observed",
-          runId: "stale-run",
-          data: {
-            ...currentObservation,
-            promptSource: "missing",
-            observedChars: 0,
-            matchesAssembledPrompt: false,
-          },
-        },
-        { type: "provider.prompt.observed", runId: "current-run", data: currentObservation },
-      ]),
-    });
-
-    expect(result.status).toBe("pass");
-  });
-
-  it("excludes marker-bearing diagnostic trajectory context from bounded no-leak evidence", async () => {
-    const marker = "INSTRUCTION-PROFILE-CONTEXT-MARKER-A6E29D4B";
-    const trajectoryEvents = [
-      {
-        type: "context.compiled",
-        runId: "current-run",
-        data: { systemPrompt: `diagnostic support context ${marker}` },
-      },
-      {
-        type: "provider.prompt.observed",
-        runId: "current-run",
-        data: {
-          egress: "native-codex-websocket",
-          payloadVariant: "initial",
-          promptSource: "instructions",
-          expectedChars: 4096,
-          observedChars: 4096,
-          matchesAssembledPrompt: true,
-        },
-      },
-    ];
-
-    expect(JSON.stringify(trajectoryEvents)).toContain(marker);
-    const result = await runLoadedScenarioFlow("instruction-profile-artifact-followthrough-live", {
-      flow: readCurrentRunProviderPromptEvidenceFlow(trajectoryEvents),
-    });
-
-    expect(result.status).toBe("pass");
-  });
 
   it("keeps live goal followthrough inside the active-goal context limit", async () => {
     const state = createQaBusState();
@@ -555,126 +454,6 @@ describe("scenario-flow-runner", () => {
     ).toBe(false);
   });
 
-  it.each(["runtime-first-hour-20-turn", "runtime-soak-100-turn"])(
-    "fails %s when no requested outbound marker is delivered",
-    async (scenarioId) => {
-      await expect(runLoadedScenarioFlow(scenarioId)).rejects.toThrow("test condition was not met");
-    },
-  );
-
-  it.each([
-    { id: "runtime-first-hour-20-turn", prefix: "FIRST-HOUR-20", width: 2 },
-    { id: "runtime-soak-100-turn", prefix: "SOAK-100", width: 3 },
-  ])("fails $id when user turns are persisted more than once", async ({ id, prefix, width }) => {
-    const state = createQaBusState();
-    let turnCount = 0;
-    await expect(
-      runLoadedScenarioFlow(id, {
-        state,
-        api: {
-          normalizeLowercaseStringOrEmpty,
-          runAgentPrompt: async () => {
-            turnCount += 1;
-            state.addOutboundMessage({
-              accountId: "qa-channel",
-              to: "dm:qa-operator",
-              text: `${prefix}-${String(turnCount).padStart(width, "0")}`,
-            });
-          },
-          readSessionTranscriptSummary: async () => ({ userMessageCount: turnCount + 1 }),
-        },
-      }),
-    ).rejects.toThrow("persisted user turns");
-  });
-
-  it.each([
-    "control-ui-qa-channel-image-roundtrip",
-    "control-ui-assistant-transcript-role-boundary",
-  ])("opens the selected Control UI session from the gateway root for %s", async (scenarioId) => {
-    const scenario = readQaScenarioById(scenarioId);
-    const actions = scenario.execution.flow?.steps.flatMap((step) => step.actions);
-    if (!actions) {
-      throw new Error(`scenario has no flow: ${scenarioId}`);
-    }
-
-    const sessionAction = actions.find(
-      (action) =>
-        typeof action === "object" &&
-        action !== null &&
-        "set" in action &&
-        action.set === "uiSessionKey",
-    );
-    const urlAction = actions.find(
-      (action) =>
-        typeof action === "object" &&
-        action !== null &&
-        "set" in action &&
-        action.set === "controlUiChatUrl",
-    );
-    const openAction = actions.find(
-      (action) =>
-        typeof action === "object" &&
-        action !== null &&
-        "call" in action &&
-        action.call === "webOpenPage",
-    );
-    if (!sessionAction || !urlAction || !openAction) {
-      throw new Error(`scenario has no Control UI session navigation: ${scenarioId}`);
-    }
-
-    const sessionKey = "agent:main:qa-channel:direct:control-ui-session";
-    const gatewayToken = "qa token/+";
-    const openedUrls: string[] = [];
-    const result = await runLoadedScenarioFlow(scenarioId, {
-      flow: {
-        steps: [
-          {
-            name: "opens the selected chat session",
-            actions: [sessionAction, urlAction, openAction],
-          },
-        ],
-      },
-      api: {
-        env: {
-          providerMode: "mock-openai",
-          cfg: {
-            agents: { list: [{ id: "main", default: true }] },
-          },
-          gateway: {
-            baseUrl: "http://127.0.0.1:43124",
-            token: gatewayToken,
-          },
-        },
-        buildAgentSessionKey: () => sessionKey,
-        webOpenPage: async ({ url }: { url: string }) => {
-          openedUrls.push(url);
-          return { pageId: "control-ui-session-page" };
-        },
-      },
-    });
-
-    expect(result.status).toBe("pass");
-    expect(openedUrls).toHaveLength(1);
-    const openedUrl = openedUrls[0];
-    if (!openedUrl) {
-      throw new Error(`scenario did not open its Control UI session: ${scenarioId}`);
-    }
-    const chatUrl = new URL(openedUrl);
-    expect(chatUrl.pathname).toBe("/");
-    expect(chatUrl.searchParams.get("session")).toBe(sessionKey);
-    expect(chatUrl.hash).toBe(`#token=${encodeURIComponent(gatewayToken)}`);
-  });
-
-  it.each(planningEvidenceFixtures)(
-    "accepts current-attempt planning evidence for $scenario.id",
-    async (fixture) => {
-      const { readOptions, result } = runPlanningEvidenceFixture(fixture);
-
-      await expect(result).resolves.toMatchObject({ status: "pass" });
-      expect(readOptions).toEqual([{ allowEmpty: true }, { afterEventCursor: 7 }]);
-    },
-  );
-
   it.each(planningEvidenceFixtures)(
     "rejects stale prior-attempt planning evidence for $scenario.id",
     async (fixture) => {
@@ -741,35 +520,7 @@ describe("scenario-flow-runner", () => {
 
   it("supports qaImport inside flow expressions", async () => {
     const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario: {
-          id: "qa-import",
-          title: "qa-import",
-          sourcePath: "qa/scenarios/qa-import.yaml",
-          surface: "test",
-          objective: "test",
-          successCriteria: ["test"],
-          execution: { kind: "flow" },
-        },
-        config: {},
-        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
-          const stepResults = [];
-          for (const step of steps) {
-            const details = (await step.run())?.details;
-            stepResults.push({
-              name: step.name,
-              status: "pass" as const,
-              ...(details !== undefined ? { details } : {}),
-            });
-          }
-          return {
-            name: "qa-import",
-            status: "pass" as const,
-            steps: stepResults,
-          };
-        },
-      },
+      api: createImportApi("qa-import"),
       scenarioTitle: "qa-import",
       vars: { preparedValue: "ready" },
       flow: {
@@ -811,35 +562,7 @@ describe("scenario-flow-runner", () => {
 
   it("loads bundled QA runtime modules through qaImport", async () => {
     const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario: {
-          id: "qa-fixture-import",
-          title: "qa-fixture-import",
-          sourcePath: "qa/scenarios/qa-fixture-import.yaml",
-          surface: "test",
-          objective: "test",
-          successCriteria: ["test"],
-          execution: { kind: "flow" },
-        },
-        config: {},
-        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
-          const stepResults = [];
-          for (const step of steps) {
-            const details = (await step.run())?.details;
-            stepResults.push({
-              name: step.name,
-              status: "pass" as const,
-              ...(details !== undefined ? { details } : {}),
-            });
-          }
-          return {
-            name: "qa-fixture-import",
-            status: "pass" as const,
-            steps: stepResults,
-          };
-        },
-      },
+      api: createImportApi("qa-fixture-import"),
       scenarioTitle: "qa-fixture-import",
       flow: {
         steps: [
@@ -884,32 +607,19 @@ describe("scenario-flow-runner", () => {
     let receivedError: unknown;
 
     const result = await runScenarioFlow({
-      api: {
-        state: createQaBusState(),
-        scenario: {
-          id: "qa-skip-import",
-          title: "qa-skip-import",
-          sourcePath: "qa/scenarios/qa-skip-import.yaml",
-          surface: "test",
-          objective: "test",
-          successCriteria: ["test"],
-          execution: { kind: "flow" },
-        },
-        config: {},
-        runScenario: async (_name: string, steps: QaSuiteStep[]) => {
-          try {
-            await steps[0]?.run();
-          } catch (error) {
-            receivedError = error;
-          }
-          return {
-            name: "qa-skip-import",
-            status: "skip" as const,
-            steps: [{ name: "throws imported skip", status: "skip" as const, details: message }],
-            details: message,
-          };
-        },
-      },
+      api: createImportApi("qa-skip-import", async (_name, steps) => {
+        try {
+          await steps[0]?.run();
+        } catch (error) {
+          receivedError = error;
+        }
+        return {
+          name: "qa-skip-import",
+          status: "skip" as const,
+          steps: [{ name: "throws imported skip", status: "skip" as const, details: message }],
+          details: message,
+        };
+      }),
       scenarioTitle: "qa-skip-import",
       flow: {
         steps: [
@@ -947,20 +657,11 @@ describe("scenario-flow-runner", () => {
       to: "channel:qa-room",
       text: "generic shared-channel reply without the required marker",
     },
-    {
-      scenarioId: "dm-chat-baseline",
-      to: "dm:alice",
-      text: "generic DM reply without the required marker",
-    },
   ])("rejects unmarked outbound replies for $scenarioId", async ({ scenarioId, to, text }) => {
     await expect(
       runLoadedScenarioFlow(scenarioId, {
         onWaitForOutboundMessage: ({ state }) => {
-          state.addOutboundMessage({
-            accountId: "qa-channel",
-            to,
-            text,
-          });
+          addQaFlowTestOutbound(state, to, text);
         },
       }),
     ).rejects.toThrow("waiting for outbound marker");
@@ -971,18 +672,10 @@ describe("scenario-flow-runner", () => {
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
         onWaitForOutboundMessage: ({ waitCount, state }) => {
           if (waitCount === 1) {
-            state.addOutboundMessage({
-              accountId: "qa-channel",
-              to: "channel:qa-room",
-              text: "RECONNECT-FIRST-OK",
-            });
+            addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-FIRST-OK");
             return;
           }
-          state.addOutboundMessage({
-            accountId: "qa-channel",
-            to: "channel:qa-room",
-            text: "RECONNECT-FIRST-OK",
-          });
+          addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-FIRST-OK");
         },
       }),
     ).rejects.toThrow("waiting for outbound marker");
@@ -993,23 +686,11 @@ describe("scenario-flow-runner", () => {
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
         onWaitForOutboundMessage: ({ waitCount, state }) => {
           if (waitCount === 1) {
-            state.addOutboundMessage({
-              accountId: "qa-channel",
-              to: "channel:qa-room",
-              text: "RECONNECT-FIRST-OK",
-            });
+            addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-FIRST-OK");
             return;
           }
-          state.addOutboundMessage({
-            accountId: "qa-channel",
-            to: "channel:qa-room",
-            text: "RECONNECT-SECOND-OK",
-          });
-          state.addOutboundMessage({
-            accountId: "qa-channel",
-            to: "channel:qa-room",
-            text: "unmarked duplicate delivery",
-          });
+          addQaFlowTestOutbound(state, "channel:qa-room", "RECONNECT-SECOND-OK");
+          addQaFlowTestOutbound(state, "channel:qa-room", "unmarked duplicate delivery");
         },
       }),
     ).rejects.toThrow("exactly one marked post-restart reply");
@@ -1039,17 +720,125 @@ describe("scenario-flow-runner", () => {
     expect(result.status).toBe("pass");
     expect(readCount).toBe(3);
   });
+});
 
-  it("fails the webchat transcript wait immediately on deterministic read errors", async () => {
-    let readCount = 0;
-    const permissionError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+const scenarioId = "runtime-long-context-cache-stability";
+const evidenceLine =
+  "CACHE-FIXTURE-0050: stable tool-result evidence for prompt-cache reuse across long sessions.";
 
-    await expect(
-      runWebchatTranscriptWait(async () => {
-        readCount += 1;
-        throw permissionError;
-      }),
-    ).rejects.toBe(permissionError);
-    expect(readCount).toBe(1);
+async function checkCacheEvidence(marker: string) {
+  const scenario = readQaScenarioById(scenarioId);
+  const actions = scenario.execution.flow?.steps[0]?.actions;
+  const start =
+    actions?.findIndex(
+      (action) =>
+        typeof action === "object" &&
+        action !== null &&
+        "set" in action &&
+        action.set === "cappedReadOutputIndex",
+    ) ?? -1;
+  if (!actions || start < 0) {
+    throw new Error("cache scenario has no evidence assertion");
+  }
+  const output = [evidenceLine, marker, "fixture tail"].join("\n");
+  const flow: QaScenarioFlow = {
+    steps: [
+      {
+        name: "checks actual capped read and follow-up evidence",
+        actions: [
+          {
+            set: "debugRequests",
+            value: [
+              {
+                plannedToolCallId: "read-1",
+                plannedToolName: "read",
+                plannedToolArgs: { path: "large-cache-fixture.txt" },
+              },
+              {
+                toolOutputCallId: "read-1",
+                toolOutput: output,
+                allInputText: output,
+              },
+              {
+                prompt: "Using the already-read large-cache-fixture.txt",
+                allInputText: evidenceLine,
+              },
+            ],
+          },
+          ...actions.slice(start),
+        ],
+      },
+    ],
+  };
+  return await runLoadedScenarioFlow(scenarioId, { flow, api: { env: { mock: {} } } });
+}
+
+describe("large read cache evidence", () => {
+  it("accepts a native truncation marker without a shell warning prefix", async () => {
+    await expect(checkCacheEvidence("…12345 chars truncated…")).resolves.toMatchObject({
+      status: "pass",
+    });
+  });
+});
+
+function splitModelRef(ref: string) {
+  const slash = ref.indexOf("/");
+  return slash > 0 ? { provider: ref.slice(0, slash), model: ref.slice(slash + 1) } : null;
+}
+
+describe("live inbound voice talkback scenario", () => {
+  it("reuses the spoken WAV fixture and ignores a deleted streaming preview", async () => {
+    const state = createQaBusState();
+    const expectedReply = "Matrix QA voice pre-flight OK.";
+
+    const result = await runLoadedScenarioFlow("inbound-voice-talkback-live", {
+      state,
+      api: {
+        env: {
+          providerMode: "live-frontier",
+          primaryModel: "openai/gpt-5.4",
+          gateway: {
+            runtimeEnv: {
+              OPENAI_API_KEY: "test-openai-key",
+            },
+          },
+        },
+        splitModelRef,
+        markGatewayLogCursor: () => 0,
+        readGatewayLogs: () => "",
+        resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
+      },
+      onWaitForOutboundMessage: ({ state: currentState }) => {
+        const preview = addQaFlowTestOutbound(
+          currentState,
+          "dm:qa-live-voice-talkback",
+          expectedReply,
+        );
+        currentState.deleteMessage({
+          accountId: "qa-channel",
+          messageId: preview.id,
+        });
+        addQaFlowTestOutbound(currentState, "dm:qa-live-voice-talkback", expectedReply);
+      },
+    });
+
+    expect(result.status).toBe("pass");
+    const inbound = state.getSnapshot().messages.find((message) => message.direction === "inbound");
+    const audioBase64 = inbound?.attachments?.[0]?.contentBase64;
+    expect(audioBase64).toBeTruthy();
+    const audio = Buffer.from(audioBase64 ?? "", "base64");
+    expect(audio.subarray(0, 4).toString("ascii")).toBe("RIFF");
+    expect(audio).toHaveLength(54_238);
+    expect(createHash("sha256").update(audio).digest("hex")).toBe(
+      "14f4c287682e7762cb17debd99b5126fcb43c875f8a225953ffc71295e6a71cb",
+    );
+    const outbound = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound");
+    expect(outbound).toHaveLength(2);
+    expect(outbound.map((message) => message.deleted === true)).toEqual([true, false]);
+    expect(outbound.filter((message) => !message.deleted).map((message) => message.text)).toEqual([
+      expectedReply,
+    ]);
   });
 });

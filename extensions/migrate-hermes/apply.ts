@@ -11,6 +11,7 @@ import {
   archiveMigrationItem,
   copyMemoryMigrationFileItem,
   copyMigrationFileItem,
+  resolvePlannedMigrationTargets,
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
@@ -32,7 +33,6 @@ import {
 import { applyModelItem } from "./model.js";
 import { buildHermesPlan } from "./plan.js";
 import { applySecretItem } from "./secrets.js";
-import { resolveTargets } from "./targets.js";
 
 const HERMES_SQLITE_SNAPSHOT_PREFIX = "openclaw-migrate-hermes-sqlite-";
 
@@ -146,7 +146,7 @@ export async function applyHermesPlan(params: {
   const plan = params.plan ?? (await buildHermesPlan(params.ctx));
   assertConsistentMemoryPlan(plan);
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "hermes");
-  const targets = resolveTargets(params.ctx);
+  const targets = resolvePlannedMigrationTargets(params.ctx);
   // Item ids are report labels, not unique execution keys. Preserve object identity so
   // providers can report repeated source items without cross-wiring their results.
   const appliedByItem = new Map<MigrationItem, MigrationItem>();

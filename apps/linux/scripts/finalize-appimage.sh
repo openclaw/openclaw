@@ -36,26 +36,21 @@ runtime=$("$tools_helper" runtime-path)
 "$tools_helper" verify post-build
 plugin="$(dirname -- "$runtime")/linuxdeploy-plugin-appimage.AppImage"
 
-mapfile -d '' forbidden_libraries < <(
+bundled_wayland_libraries() {
   find "$usr_lib" \( -type f -o -type l \) \
     \( -name 'libwayland-client.so*' \
     -o -name 'libwayland-cursor.so*' \
     -o -name 'libwayland-egl.so*' \
     -o -name 'libwayland-server.so*' \) \
     -print0
-)
+}
+
+mapfile -d '' forbidden_libraries < <(bundled_wayland_libraries)
 if [[ ${#forbidden_libraries[@]} -gt 0 ]]; then
   rm -f -- "${forbidden_libraries[@]}"
 fi
 
-mapfile -d '' remaining_libraries < <(
-  find "$usr_lib" \( -type f -o -type l \) \
-    \( -name 'libwayland-client.so*' \
-    -o -name 'libwayland-cursor.so*' \
-    -o -name 'libwayland-egl.so*' \
-    -o -name 'libwayland-server.so*' \) \
-    -print0
-)
+mapfile -d '' remaining_libraries < <(bundled_wayland_libraries)
 if [[ ${#remaining_libraries[@]} -gt 0 ]]; then
   echo "failed to remove bundled Wayland libraries" >&2
   exit 1

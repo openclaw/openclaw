@@ -5,16 +5,49 @@ import {
   readSessionActivitySummary,
 } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  readSessionTranscriptWatermark,
-  type SessionTranscriptWatermark,
-} from "../config/sessions/session-accessor.js";
+import type { SessionTranscriptWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark-read.js";
+import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 
 export type ActivitySummaryTarget = { key: string; agentId: string };
+
+/** The recap pump rechecks every queued state; resolve each agent's path once per store setting. */
+export function createActivitySummaryStorePaths(getConfig: () => OpenClawConfig) {
+  // Keyed by value: config publications can mutate the same object in place.
+  let store: string | undefined;
+  let paths = new Map<string, string>();
+  return (agentId: string): string => {
+    const current = getConfig().session?.store;
+    if (current !== store) {
+      store = current;
+      paths = new Map();
+    }
+    let storePath = paths.get(agentId);
+    if (storePath === undefined) {
+      storePath = resolveSessionStorePathCore(current, { agentId });
+      paths.set(agentId, storePath);
+    }
+    return storePath;
+  };
+}
+
+export function resolveActivitySummaryEventTarget(
+  cfg: OpenClawConfig,
+  key?: string,
+  agentId?: string,
+): ActivitySummaryTarget | undefined {
+  const agentOwner = agentId ?? (key ? parseAgentSessionKey(key)?.agentId : undefined);
+  return key && agentOwner
+    ? {
+        key: resolveSessionStoreKey({ cfg, sessionKey: key, storeAgentId: agentOwner }),
+        agentId: agentOwner,
+      }
+    : undefined;
+}
 type PendingState = {
   sessionId: string;
   storePath: string;
@@ -53,19 +86,22 @@ export function setSessionActivitySummaryState(
   } else {
     return false;
   }
-  sessionChanges.emit({ sessionKey: target.key, agentId: target.agentId });
+  sessionChanges.emit({
+    sessionKey: target.key,
+    agentId: target.agentId,
+    scope: "runtime",
+    facts: { kind: "unchanged" },
+  });
   return true;
 }
 
-/** Activity lists supply batched watermarks; explicit ensure reads one exact target. */
+/** Presentation consumes the watermark prepared with the row; it never opens its transcript. */
 export function projectSessionActivitySummary(
   params: ActivitySummaryTarget & {
     cfg: OpenClawConfig;
     entry: SessionEntry | undefined;
     enabled?: boolean;
     watermark?: SessionTranscriptWatermark;
-    /** Physical target for cold reads; pending work retains its configured-path identity. */
-    storeTarget?: { agentId: string; storePath: string };
   },
 ): SessionActivitySummary | undefined {
   const { entry } = params;
@@ -95,15 +131,7 @@ export function projectSessionActivitySummary(
   const enabled =
     params.enabled ??
     Boolean(resolveUtilityModelRefForAgent({ cfg: params.cfg, agentId: params.agentId }));
-  const watermark = summary
-    ? (params.watermark ??
-      readSessionTranscriptWatermark({
-        agentId: params.storeTarget?.agentId ?? params.agentId,
-        sessionId: entry.sessionId,
-        sessionKey: params.key,
-        storePath: params.storeTarget?.storePath ?? storePath,
-      }))
-    : undefined;
+  const watermark = params.watermark;
   const fresh =
     summary &&
     summary.formatRevision === ACTIVITY_SUMMARY_FORMAT_REVISION &&
@@ -119,5 +147,28 @@ export function projectSessionActivitySummary(
         : fresh
           ? "current"
           : "stale",
+  };
+}
+
+export async function prepareSessionActivitySummaryView(
+  params: Parameters<typeof projectSessionActivitySummary>[0] & {
+    storePath: string;
+    admitted: boolean;
+  },
+): Promise<() => SessionActivitySummary> {
+  const watermark =
+    params.entry && readSessionActivitySummary(params.entry)
+      ? await readSessionTranscriptWatermarkAsync({
+          storePath: params.storePath,
+          agentId: params.agentId,
+          sessionKey: params.key,
+          sessionId: params.entry.sessionId,
+        })
+      : undefined;
+  return () => {
+    const projected = projectSessionActivitySummary({ ...params, watermark });
+    return !params.admitted && projected?.state !== "current"
+      ? { ...projected, state: "unavailable" }
+      : (projected ?? { state: "updating" });
   };
 }

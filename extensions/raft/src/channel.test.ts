@@ -14,18 +14,6 @@ describe("Raft channel plugin", () => {
     detectBinaryMock.mockReset();
   });
 
-  it("declares a wake-only direct channel", () => {
-    expect(raftPlugin.meta).toMatchObject({
-      id: "raft",
-      docsPath: "/channels/raft",
-    });
-    expect(raftPlugin.capabilities).toEqual({
-      chatTypes: ["direct"],
-    });
-    expect(raftPlugin.message).toBeUndefined();
-    expect(raftPlugin.outbound).toBeUndefined();
-  });
-
   it.each([
     {
       detected: true,

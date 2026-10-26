@@ -1,17 +1,8 @@
-/**
- * Parses exec approval tool output and formats denial messages for users.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type ExecApprovalResult =
   | {
-      kind: "denied";
-      raw: string;
-      metadata: string;
-      body: string;
-    }
-  | {
-      kind: "finished";
+      kind: "denied" | "finished" | "outcome-unknown" | "not-dispatched";
       raw: string;
       metadata: string;
       body: string;
@@ -19,18 +10,6 @@ type ExecApprovalResult =
   | {
       kind: "completed";
       raw: string;
-      body: string;
-    }
-  | {
-      kind: "outcome-unknown";
-      raw: string;
-      metadata: string;
-      body: string;
-    }
-  | {
-      kind: "not-dispatched";
-      raw: string;
-      metadata: string;
       body: string;
     }
   | {
@@ -87,23 +66,13 @@ function parseExecApprovalResultWithMetadata(
   }
 
   const remainder = raw.slice(metadataEnd + 1);
-  if (bodySeparator === ":") {
-    if (!remainder.startsWith(":")) {
-      return null;
-    }
-    return {
-      metadata,
-      body: remainder.slice(1).trim(),
-    };
-  }
-
-  if (remainder && !remainder.startsWith("\n")) {
+  if (!remainder.startsWith(bodySeparator) && (bodySeparator === ":" || remainder)) {
     return null;
   }
 
   return {
     metadata,
-    body: remainder.startsWith("\n") ? remainder.slice(1).trim() : "",
+    body: remainder.slice(1).trim(),
   };
 }
 
@@ -113,52 +82,16 @@ export function parseExecApprovalResultText(resultText: string): ExecApprovalRes
     return { kind: "other", raw };
   }
 
-  const deniedResult = parseExecApprovalResultWithMetadata(raw, "Exec denied (", ":");
-  if (deniedResult) {
-    return {
-      kind: "denied",
-      raw,
-      metadata: deniedResult.metadata,
-      body: deniedResult.body,
-    };
-  }
-
-  const finishedResult = parseExecApprovalResultWithMetadata(raw, "Exec finished (", "\n");
-  if (finishedResult) {
-    return {
-      kind: "finished",
-      raw,
-      metadata: finishedResult.metadata,
-      body: finishedResult.body,
-    };
-  }
-
-  const outcomeUnknownResult = parseExecApprovalResultWithMetadata(
-    raw,
-    "Exec outcome unknown (",
-    "\n",
-  );
-  if (outcomeUnknownResult) {
-    return {
-      kind: "outcome-unknown",
-      raw,
-      metadata: outcomeUnknownResult.metadata,
-      body: outcomeUnknownResult.body,
-    };
-  }
-
-  const notDispatchedResult = parseExecApprovalResultWithMetadata(
-    raw,
-    "Exec not dispatched (",
-    "\n",
-  );
-  if (notDispatchedResult) {
-    return {
-      kind: "not-dispatched",
-      raw,
-      metadata: notDispatchedResult.metadata,
-      body: notDispatchedResult.body,
-    };
+  for (const [kind, prefix, separator] of [
+    ["denied", "Exec denied (", ":"],
+    ["finished", "Exec finished (", "\n"],
+    ["outcome-unknown", "Exec outcome unknown (", "\n"],
+    ["not-dispatched", "Exec not dispatched (", "\n"],
+  ] as const) {
+    const result = parseExecApprovalResultWithMetadata(raw, prefix, separator);
+    if (result) {
+      return { kind, raw, ...result };
+    }
   }
 
   const completedMatch = EXEC_COMPLETED_RE.exec(raw);
@@ -183,21 +116,22 @@ export function formatExecDeniedUserMessage(resultText: string): string | null {
     return null;
   }
 
-  const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
-  if (metadata.includes("approval-timeout")) {
+  return formatExecDeniedReasonMessage(parsed.metadata);
+}
+
+export function formatExecDeniedReasonMessage(deniedReason: string): string {
+  const reason = normalizeLowercaseStringOrEmpty(deniedReason);
+  if (reason.includes("approval-timeout")) {
     return "Command did not run: approval timed out.";
   }
-  if (metadata.includes("user-denied")) {
-    return "Command did not run: approval was denied.";
+  if (reason.includes("user-denied")) {
+    return "Command did not run: an operator declined this execution approval.";
   }
-  if (metadata.includes("allowlist-miss")) {
+  if (reason.includes("allowlist-miss") || reason === "approval-required") {
     return "Command did not run: approval is required.";
   }
-  if (metadata.includes("approval-request-failed")) {
+  if (reason.includes("approval-request-failed") || reason === "request-failed") {
     return "Command did not run: approval request failed.";
-  }
-  if (metadata.includes("spawn-failed") || metadata.includes("invoke-failed")) {
-    return "Command did not run.";
   }
   return "Command did not run.";
 }

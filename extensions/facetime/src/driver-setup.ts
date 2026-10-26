@@ -35,44 +35,33 @@ export async function inspectFaceTimeDriver(
   return readDriverStatus(result.stdout);
 }
 
-export async function installFaceTimeDriver(
-  params: DriverSetupParams & { callActive: boolean },
-): Promise<{ changed: boolean; status: "current" }> {
-  if (params.callActive) {
-    throw new Error("Cannot install the FaceTime audio driver during an active or pending call");
-  }
-  const before = await inspectFaceTimeDriver(params);
-  if (before === "current") {
-    return { changed: false, status: "current" };
-  }
+async function runDriverSetup(params: DriverSetupParams, action: "ensure" | "uninstall") {
   const script = resolve(params.pluginRoot, "scripts", "install-driver.sh");
-  const result = await params.runCommandWithTimeout(["/bin/sh", script, "--ensure"], {
+  const result = await params.runCommandWithTimeout(["/bin/sh", script, `--${action}`], {
     // The macOS administrator sheet can legitimately remain open while the
     // operator is away. Runtime shutdown aborts the whole process tree instead.
     killProcessTree: true,
     ...(params.signal ? { signal: params.signal } : {}),
   });
   if (result.code !== 0) {
+    const label = action === "ensure" ? "audio driver installation" : "uninstall";
     throw new Error(
-      `FaceTime audio driver installation failed: ${result.stderr || result.stdout || `exit ${result.code}`}`,
+      `FaceTime ${label} failed: ${result.stderr || result.stdout || `exit ${result.code}`}`,
     );
   }
-  const after = await inspectFaceTimeDriver(params);
-  if (after !== "current") {
-    throw new Error(`FaceTime audio driver did not become current (status: ${after})`);
+}
+
+export async function installFaceTimeDriver(
+  params: DriverSetupParams,
+): Promise<{ changed: boolean; status: "current" }> {
+  const before = await inspectFaceTimeDriver(params);
+  if (before === "current") {
+    return { changed: false, status: "current" };
   }
-  return { changed: true, status: after };
+  await runDriverSetup(params, "ensure");
+  return { changed: true, status: "current" };
 }
 
 export async function uninstallFaceTimeDriver(params: DriverSetupParams): Promise<void> {
-  const script = resolve(params.pluginRoot, "scripts", "install-driver.sh");
-  const result = await params.runCommandWithTimeout(["/bin/sh", script, "--uninstall"], {
-    killProcessTree: true,
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  if (result.code !== 0) {
-    throw new Error(
-      `FaceTime uninstall failed: ${result.stderr || result.stdout || `exit ${result.code}`}`,
-    );
-  }
+  await runDriverSetup(params, "uninstall");
 }

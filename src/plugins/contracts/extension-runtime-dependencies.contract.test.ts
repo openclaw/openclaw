@@ -17,11 +17,6 @@ const EXTENSION_RUNTIME_FILE_EXTENSIONS = new Set([".cjs", ".js", ".jsx", ".mjs"
 const BUILTIN_MODULES = new Set(builtinModules.map((moduleId) => moduleId.replace(/^node:/, "")));
 const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
   [
-    "extensions/canvas",
-    // The A2UI bundle probes this optional markdown renderer and falls back when absent.
-    new Set(["@a2ui/markdown-it"]),
-  ],
-  [
     "extensions/discord",
     // @discordjs/voice still probes the native addon in its dependency report path.
     new Set(["@discordjs/opus"]),
@@ -48,6 +43,11 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     "extensions/memory-core",
     // Packaged memory tools run through generated OpenClaw runtime chunks that parse JSON5 config.
     new Set(["json5"]),
+  ],
+  [
+    "extensions/openai",
+    // Werift loads the packaged binary codec through its runtime dependency graph.
+    new Set(["@shinyoshiaki/binary-data"]),
   ],
   [
     "extensions/slack",
@@ -139,11 +139,13 @@ function shouldSkipRuntimeFile(filePath: string): boolean {
     normalized.includes("/dist/") ||
     normalized.includes("/coverage/") ||
     normalized.includes("/assets/") ||
-    normalized.endsWith("/web/vite.config.ts")
+    // Bundler configs execute during asset preparation, not in the plugin runtime.
+    normalized.endsWith("/web/vite.config.ts") ||
+    normalized.endsWith("/rolldown.config.mjs")
   ) {
     return true;
   }
-  return /(\.(test|spec|d)\.(ts|tsx|js|jsx|mjs|cjs)$|\/(test|tests|__tests__|test-support)\/|test-(helpers|support|harness|mocks|fixtures|runtime|shared|utils)|\.test-(helpers|support|harness|mocks|fixtures|runtime|shared|utils)|fixture-test-support|mock-setup|test-fixtures|test-runtime-mocks|\.harness\.|e2e-harness|\.mock\.|-mock\.|-mocks\.|mocks-test-support|\.fixture|\.fixtures)/.test(
+  return /(\.(test|spec|d)\.(ts|tsx|js|jsx|mjs|cjs)$|\/(test|tests|__tests__|test-support)\/|test-(api|helpers|support|harness|mocks|fixtures|runtime|shared|utils)|\.test-(api|helpers|support|harness|mocks|fixtures|runtime|shared|utils)|fixture-test-support|mock-setup|test-fixtures|test-runtime-mocks|\.harness\.|e2e-harness|\.mock\.|-mock\.|-mocks\.|mocks-test-support|\.fixture|\.fixtures)/.test(
     normalized,
   );
 }

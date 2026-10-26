@@ -1,9 +1,20 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseGitHubItemTarget } from "./targets.js";
+import { parseGitHubTarget, type GitHubTarget } from "./targets.js";
+
+/** Host-prepared read identity; the plugin never discovers or selects managed credentials. */
+export type ControlUiGitHubPreviewIdentity = {
+  token: string | undefined;
+  cacheScope: string;
+  /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
+  optionalAuth?: true;
+  stale?: true;
+  signal?: AbortSignal;
+  revalidate: () => Promise<void>;
+  assertSelected: () => void;
+};
 
 // Shipped controlUi.githubPreview payload. The compatibility RPC retains these
 // provider-specific fields; new readers consume generic passive documents.
-/** Public GitHub metadata rendered by Control UI link hover cards. */
 /**
  * One co-author resolved from a `Co-authored-by` trailer. Only trailers using
  * GitHub's `<id>+<login>@users.noreply.github.com` form resolve, because the id
@@ -14,7 +25,8 @@ type ControlUiGitHubPreviewCoAuthor = {
   avatarDataUrl?: string;
 };
 
-export type ControlUiGitHubPreview = {
+export type ControlUiGitHubPreview = GitHubTarget & {
+  stale?: boolean;
   additions?: number;
   avatarDataUrl?: string;
   /** Bounded to the faces the card renders; `coAuthorCount` carries the true total. */
@@ -26,12 +38,8 @@ export type ControlUiGitHubPreview = {
   createdAt: string;
   deletions?: number;
   draft?: boolean;
-  kind: "issue" | "pull";
   login: string;
   mergedAt?: string;
-  number: number;
-  owner: string;
-  repo: string;
   state: string;
   stateReason?: string;
   title: string;
@@ -40,7 +48,7 @@ export type ControlUiGitHubPreview = {
 
 /** Validate the untyped dispatch payload before projecting it into a generic reader. */
 export function isControlUiGitHubPreview(value: unknown): value is ControlUiGitHubPreview {
-  if (!isRecord(value) || !parseGitHubItemTarget(value)) {
+  if (!isRecord(value) || !parseGitHubTarget(value)) {
     return false;
   }
   return (
@@ -54,6 +62,7 @@ export function isControlUiGitHubPreview(value: unknown): value is ControlUiGitH
       (key) =>
         value[key] === undefined || (typeof value[key] === "number" && Number.isFinite(value[key])),
     ) &&
+    (value.stale === undefined || typeof value.stale === "boolean") &&
     (value.draft === undefined || typeof value.draft === "boolean") &&
     (value.coAuthors === undefined ||
       (Array.isArray(value.coAuthors) &&
