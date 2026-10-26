@@ -40,8 +40,8 @@ const code = "```\n<think>code</think>\n```\n";
 it.each([
   ["Use `<final>` for final answers in code:\n```\n<final>42</final>\n```"],
   [`${code}<think>real hidden</think>visible`, `${code}visible`],
-])("preserves code examples: %j", (input, expected) => {
-  expect(stripReasoningTagsFromText(input)).toBe(expected ?? input);
+])("preserves code examples: %j", (input, expected = input) => {
+  expect(stripReasoningTagsFromText(input)).toBe(expected);
 });
 
 it.each([
