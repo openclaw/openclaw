@@ -19,12 +19,11 @@ const facts: AppleFmFacts = { available: true, modelName: "AFM", contextWindow: 
 const bundled = { rootDir: "/dist/extensions/apple-fm", source: "/dist/apple-fm-HASH.mjs" };
 
 function registeredProvider(location: { rootDir?: string; source: string } = bundled) {
-  const registration = capturePluginRegistration({
+  const [provider] = capturePluginRegistration({
     ...plugin,
     source: location.source,
     register: (api) => plugin.register({ ...api, rootDir: location.rootDir }),
-  });
-  const provider = registration.providers[0];
+  }).providers;
   const method = provider?.auth[0];
   const guided = method?.appGuidedSetup;
   const setup = method?.runNonInteractive;
@@ -33,18 +32,16 @@ function registeredProvider(location: { rootDir?: string; source: string } = bun
   return { provider, method, guided, setup, validate };
 }
 
-function setupContext(config: OpenClawConfig = {}) {
-  return {
-    config,
-    env: {},
-    runtime: createNonExitingRuntimeEnv(),
-    baseConfig: config,
-    authChoice: "apple-fm",
-    opts: {},
-    resolveApiKey: vi.fn(async () => null),
-    toApiKeyCredential: vi.fn(() => null),
-  };
-}
+const setupContext = (config: OpenClawConfig = {}) => ({
+  config,
+  env: {},
+  runtime: createNonExitingRuntimeEnv(),
+  baseConfig: config,
+  authChoice: "apple-fm",
+  opts: {},
+  resolveApiKey: vi.fn(async () => null),
+  toApiKeyCredential: vi.fn(() => null),
+});
 
 beforeEach(() => {
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
@@ -58,35 +55,29 @@ it("serves configured native facts and local auth only on Mac hosts", async () =
   const model = { primary: "existing/model", fallbacks: ["backup/model"] };
   const models = { "existing/model": { alias: "Existing" } };
   const existing = { baseUrl: "https://example.com", models: [] };
-  const base: OpenClawConfig = {
+  const base = {
     auth: { profiles: { "existing:default": { provider: "existing", mode: "api_key" } } },
     agents: { defaults: { model, models } },
     models: { mode: "replace", providers: { existing } },
-  };
-  const before = structuredClone(base);
-  const measured = { modelName: "Future model", contextWindow: 16_384 };
-  native.prepare.mockResolvedValue({ ...facts, ...measured });
+  } satisfies OpenClawConfig;
+  const expected = structuredClone(base);
+  native.prepare.mockResolvedValue({ ...facts, modelName: "Future model", contextWindow: 16_384 });
   const { provider, setup } = registeredProvider();
   const config = await setup(setupContext(base));
   assert(config);
   expect(native.createAppleFmNative).toHaveBeenCalledExactlyOnceWith(bundled.rootDir);
   const configured = config?.models?.providers?.["apple-fm"];
-  expect(base).toEqual(before);
-  expect(config).toEqual({
-    ...before,
-    models: { ...before.models, providers: { existing, "apple-fm": configured } },
-    agents: {
-      defaults: {
-        model,
-        utilityModel: "apple-fm/system",
-        models: { ...models, "apple-fm/system": { agentRuntime: { id: "openclaw" } } },
-      },
-    },
+  expect(base).toEqual(expected);
+  Object.assign(expected.models.providers, { "apple-fm": configured });
+  Object.assign(expected.agents.defaults, {
+    utilityModel: "apple-fm/system",
+    models: { ...models, "apple-fm/system": { agentRuntime: { id: "openclaw" } } },
   });
+  expect(config).toEqual(expected);
   expect(configured?.models[0]).toMatchObject({
     id: "system",
-    name: measured.modelName,
-    contextWindow: measured.contextWindow,
+    name: "Future model",
+    contextWindow: 16_384,
     maxTokens: 1_024,
     compat: { supportsTools: true, supportsJsonSchemaResponseFormat: true },
   });
@@ -95,13 +86,8 @@ it("serves configured native facts and local auth only on Mac hosts", async () =
     provider.resolveSyntheticAuth?.({ provider: "apple-fm", providerConfig: configured });
   expect(auth()).toMatchObject({ apiKey: "apple-fm-local" });
   expect(provider.resolveSyntheticAuth?.({ provider: "apple-fm" })).toBeUndefined();
-  const noAuth = { apiKey: undefined, mode: "none", source: "none" } as const;
-  const context = {
-    config,
-    env: {},
-    resolveProviderApiKey: () => ({ apiKey: undefined }),
-    resolveProviderAuth: () => noAuth,
-  };
+  const noAuth = () => ({ apiKey: undefined, mode: "none", source: "none" }) as const;
+  const context = { config, env: {}, resolveProviderApiKey: noAuth, resolveProviderAuth: noAuth };
   expect(await provider.catalog?.run(context)).toEqual({ provider: configured });
   expect(native.probe).not.toHaveBeenCalled();
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");

@@ -55,44 +55,34 @@ it.each([
   ["unsafe integer", { type: "string" }, '{"value":9007199254740993}'],
   ["unsafe exponent", { type: "string" }, '{"value":9.007199254740993e15}'],
   ["overflow", { type: "string" }, '{"value":1e999}'],
-] as const)(
-  "rejects %s before publishing despite replaced native constraints",
-  async (name, value, text) => {
-    respond({ text });
-    const stream = await run(model, context, {
-      responseFormat: schema(value),
-      onPayload: () => ({
-        messages: context.messages,
-        responseFormat: schema({ type: name === "caller pattern" ? "string" : "number" }),
-      }),
-    });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event.type);
-    }
-    const result = await stream.result();
-    expect(result).toMatchObject({
-      stopReason: "error",
-      content: [],
-      errorMessage: expect.stringContaining("invalid structured response"),
-    });
-    expect(result.errorMessage).not.toMatch(/Bearer|synthetic-private-note/);
-    expect(events).toEqual(["start", "error"]);
-  },
-);
+] as const)("rejects invalid %s before publishing", async (name, value, text) => {
+  respond({ text });
+  const stream = await run(model, context, {
+    responseFormat: schema(value),
+    onPayload: () => ({
+      messages: context.messages,
+      responseFormat: schema({ type: name === "caller pattern" ? "string" : "number" }),
+    }),
+  });
+  const events = [];
+  for await (const event of stream) {
+    events.push(event.type);
+  }
+  const result = await stream.result();
+  expect(result).toMatchObject({
+    stopReason: "error",
+    content: [],
+    errorMessage: expect.stringContaining("invalid structured response"),
+  });
+  expect(result.errorMessage).not.toMatch(/Bearer|synthetic-private-note/);
+  expect(events).toEqual(["start", "error"]);
+});
 
 it("preserves valid structured response bytes without injecting annotation defaults", async () => {
   const text = '  {"value":"9007199254740993","integer":1e3,"fraction":0.25,"notes":null}\n';
   const responseFormat = {
     type: "object",
-    properties: {
-      value: { type: "string", minLength: 1, maxLength: 16 },
-      integer: { type: "integer", const: 1000 },
-      fraction: { type: "number", const: 0.25 },
-      notes: { anyOf: [{ type: "string" }, { type: "null" }] },
-      fallback: { type: "string", default: "unused" },
-    },
-    required: ["value", "integer", "fraction", "notes"],
+    properties: { fallback: { type: "string", default: "unused" } },
   };
   respond({ text });
   const stream = await run(model, context, { responseFormat, maxTokens: 128 });

@@ -81,11 +81,8 @@ it("keeps discovery disposable until selection installs a reusable helper", asyn
   expect(await native.prepare()).toMatchObject(facts);
   expect(await native.probe()).toEqual(facts);
   expect(await native.prepare()).toEqual(facts);
-  const builds = command.mock.calls.filter(([argv]) => argv[0] === "/usr/bin/xcrun");
-  expect(builds.map(([argv]) => argv.filter((arg) => arg.startsWith("-O")))).toEqual([
-    ["-Onone"],
-    ["-O"],
-  ]);
+  const flags = command.mock.calls.flatMap(([argv]) => argv.filter((arg) => arg.startsWith("-O")));
+  expect(flags).toEqual(["-Onone", "-O"]);
   expect(command.mock.calls.every(([, options]) => options?.input === "")).toBe(true);
   expect(command.mock.calls.every(([, options]) => !options?.baseEnv?.OPENAI_API_KEY)).toBe(true);
 });
