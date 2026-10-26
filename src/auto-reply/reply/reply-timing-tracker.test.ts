@@ -27,32 +27,25 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([false, true])("logs once at the profiling=%s threshold", async (enabled) => {
+it.each([
+  [false, 5_000],
+  [true, 500],
+] as const)("logs once at the profiling=%s threshold", (enabled, duration) => {
   vi.stubEnv("OPENCLAW_DIAGNOSTICS", enabled ? "reply.profiler" : "");
-  const tracker = createReplyTimingTracker({
-    log: { warn },
-    enabled: isReplyProfilerEnabled(),
-  });
-  tracker.measureSync("sync", () => advance(enabled ? 500 : 0));
+  const tracker = createReplyTimingTracker({ log: { warn }, enabled: isReplyProfilerEnabled() });
   const log = () =>
-    tracker.logIfSlow({
-      message: "reply timings",
-      ...(enabled ? { outcome: "completed" } : { details: { runId: "run-1" } }),
-    });
+    tracker.logIfSlow({ message: "reply timings", outcome: "completed", details: identity });
   log();
-  expect(warn).toHaveBeenCalledTimes(Number(enabled));
-  if (!enabled) {
-    await tracker.measure("prepare", () => advance(5_000));
-  }
+  expect(warn).not.toHaveBeenCalled();
+  tracker.measureSync("prepare", () => advance(duration));
   log();
   log();
   expect(warn).toHaveBeenCalledExactlyOnceWith(
-    enabled ? expect.stringContaining("stages=sync:") : expect.any(String),
+    expect.stringContaining("stages=prepare:"),
     expect.objectContaining({
-      ...(enabled ? { outcome: "completed" } : { runId: "run-1" }),
-      spans: enabled
-        ? [expect.objectContaining({ name: "sync" })]
-        : expect.arrayContaining([span("prepare", 5_000)]),
+      ...identity,
+      outcome: "completed",
+      spans: [span("prepare", duration)],
     }),
   );
 });
@@ -63,26 +56,15 @@ it("keeps agent milestones repeatable without reopening the terminal log", () =>
 
   tracker.logMilestoneIfSlow({ ...identity, milestone: "model_started" });
   tracker.logMilestoneIfSlow({ ...identity, milestone: "" });
-  const terminal = {
-    runId: "run-1",
-    outcome: "error" as const,
-    error: "failed",
-    milestone: "unexpected",
-    token: "secret",
-  };
-  tracker.logIfSlow(terminal);
+  const terminal = { ...identity, outcome: "error" as const, error: "failed" };
+  const privateFields = { milestone: "unexpected", token: "secret" };
+  tracker.logIfSlow({ ...terminal, ...privateFields });
   tracker.logIfSlow({ ...identity, outcome: "completed" });
 
   expect(subsystemWarn.mock.calls.map(([, details]) => details)).toEqual([
     summary({ ...identity, milestone: "model_started" }),
     summary({ ...identity, milestone: "" }),
-    summary({
-      runId: "run-1",
-      sessionId: undefined,
-      sessionKey: undefined,
-      outcome: "error",
-      error: "failed",
-    }),
+    summary({ ...identity, outcome: "error", error: "failed" }),
   ]);
   expect(JSON.stringify(subsystemWarn.mock.calls)).not.toMatch(/secret|unexpected/);
 });
@@ -114,7 +96,7 @@ it("preserves dispatch timing messages and structured details", () => {
 
 it.each([false, true])(
   "logs first execution observations only (slow admission=%s)",
-  async (slowAdmission) => {
+  (slowAdmission) => {
     const agent = createAgentTurnTimingTracker();
     const dispatch = createReplyHotPathTimingTracker();
     const phase = (value: Parameters<typeof agent.logExecutionPhaseIfSlow>[0]["phase"]) =>
@@ -123,17 +105,13 @@ it.each([false, true])(
     phase(slowAdmission ? "runner_entered" : "turn_accepted");
     phase("model_call_started");
     expect(subsystemWarn).not.toHaveBeenCalled();
-    await dispatch.measure("reply.run_reply_resolver", () =>
-      agent.measure("embedded_run", () => {
-        nowMs = slowAdmission ? 21_000 : 20_000;
-        if (slowAdmission) {
-          phase("turn_accepted");
-          nowMs = 24_000;
-        }
-        phase("assistant_output_started");
-        phase("tool_execution_started");
-      }),
-    );
+    nowMs = slowAdmission ? 21_000 : 20_000;
+    if (slowAdmission) {
+      phase("turn_accepted");
+      nowMs = 24_000;
+    }
+    phase("assistant_output_started");
+    phase("tool_execution_started");
     const outputMs = nowMs;
     nowMs = 30_000;
     phase("tool_execution_started");
