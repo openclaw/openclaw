@@ -57,7 +57,7 @@ suite.define(() => {
         })),
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const control = page.locator(".chat-composer-model-control");
       const placeControl = (top: string) =>
         control.evaluate((element, y) => {

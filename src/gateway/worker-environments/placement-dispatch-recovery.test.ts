@@ -19,8 +19,7 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
-import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
-import { placementTurnOwner } from "./placement-record.js";
+import { makeClaimInput, WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -66,16 +65,9 @@ describe("worker placement restart recovery", () => {
           error,
         });
         if (scenario === "claimed turn" || scenario === "pending result") {
-          const claim = await placements.claimTurn({
-            ...REQUEST,
-            claimId: "retirement-claim",
-            runId: "retirement-run",
-            owner: {
-              kind: "worker",
-              environmentId: active.environmentId,
-              ownerEpoch: active.activeOwnerEpoch,
-            },
-          });
+          const claim = await placements.claimTurn(
+            makeClaimInput(active, "retirement-claim", "retirement-run"),
+          );
           if (scenario === "pending result") {
             await placements.markWorkspaceResultPending(claim);
             await placements.handoffWorkspaceResultRecovery(claim);
@@ -895,12 +887,7 @@ describe("worker placement restart recovery", () => {
           expectedGeneration: active.generation,
         });
       }
-      const claimInput = {
-        ...REQUEST,
-        claimId: reclaim ? "reclaim-unchanged" : "unchanged-turn",
-        runId: reclaim ? "reclaim-unchanged" : "unchanged-turn",
-        owner: placementTurnOwner(active),
-      };
+      const claimInput = makeClaimInput(active, reclaim ? "reclaim-unchanged" : "unchanged-turn");
       const claim = reclaim
         ? await placementStore.claimReclaimWorkspaceResult(claimInput)
         : await placementStore.claimTurn(claimInput);

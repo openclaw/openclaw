@@ -1,5 +1,4 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -31,6 +30,7 @@ import {
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   attachActiveEmbeddedRun,
@@ -38,6 +38,7 @@ import {
 } from "./subagent-control-native.test-support.js";
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
+import { mutateCleanup } from "./subagent-registry-sweep-cleanup.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { registerSubagentSweepKillCustodyTests } from "./subagent-registry-sweeper-kill-custody.test-support.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
@@ -137,6 +138,31 @@ describe("subagent registry recovery scheduling", () => {
   });
 
   registerSubagentSweepRetainedAuthorityTests(recoverRow, killSessionEntry);
+
+  it("isolates cleanup changes without copying the immutable run payload", async () => {
+    const { entry, runs } = createHarness({}, archivedRun());
+    const execution = { ...entry.execution };
+    using clone = vi.spyOn(globalThis, "structuredClone");
+
+    const updated = await mutateCleanup(
+      runs,
+      entry,
+      () => true,
+      (draft) => {
+        draft.execution.suppressSessionEffects = true;
+        draft.contextEngineCleanupCompletedAt = 123;
+      },
+    );
+
+    expect(entry.execution).toEqual(execution);
+    expect(entry.contextEngineCleanupCompletedAt).toBeUndefined();
+    expect(updated).toMatchObject({
+      execution: { suppressSessionEffects: true },
+      contextEngineCleanupCompletedAt: 123,
+    });
+    expect(runs.get(entry.runId)).toEqual(updated);
+    expect(clone.mock.calls.some(([value]) => value === entry)).toBe(false);
+  });
 
   it.each(["terminal", "running"] as const)(
     "only gives ended %s children requester-wake priority over suspended delivery cleanup",
@@ -787,13 +813,9 @@ describe("superseded subagent retirement", () => {
             storePath: state.sessionsDir("main"),
           };
         }
-        const cleanupEntered = createDeferred();
-        const releaseCleanup = createDeferred();
+        const cleanupGate = createEnteredGate();
         if (retireSuccessor) {
-          removeInternalSessionEffectsSession.mockImplementationOnce(async () => {
-            cleanupEntered.resolve();
-            await releaseCleanup.promise;
-          });
+          removeInternalSessionEffectsSession.mockImplementationOnce(cleanupGate.wait);
         }
         const successor = { ...run(), runId: "successor", generation: (entry.generation ?? 0) + 1 };
         const runs = new Map<string, SubagentRunRecord>();
@@ -821,10 +843,10 @@ describe("superseded subagent retirement", () => {
           });
           if (retireSuccessor) {
             try {
-              await cleanupEntered.promise;
+              await cleanupGate.entered;
               await persistRuns(runs, [[successor.runId, null]]);
             } finally {
-              releaseCleanup.resolve();
+              cleanupGate.release();
             }
           }
           if (refused) {

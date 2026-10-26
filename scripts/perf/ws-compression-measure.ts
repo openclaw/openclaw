@@ -11,6 +11,7 @@ import {
   type PerformanceEntry,
 } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
 import { createGatewayBroadcaster } from "../../src/gateway/server-broadcast.js";
@@ -34,8 +35,12 @@ const { values } = parseArgs({
     "start-at": { type: "string" },
     "warm-start-at": { type: "string" },
     "ready-file": { type: "string" },
+    codec: { type: "string" },
   },
 });
+const installCodec: typeof installGatewayDeflateCodec = values.codec
+  ? (await import(pathToFileURL(values.codec).href)).installGatewayDeflateCodec
+  : installGatewayDeflateCodec;
 function integer(label: keyof typeof values, fallback: number, min: number) {
   return parseStrictIntegerOption({ raw: values[label], fallback, label, min });
 }
@@ -164,11 +169,7 @@ try {
     clients.add({
       connId: `synthetic-${index}`,
       preparedRecipientProfileId: `profile-${index % profiles}`,
-      socket: createGatewayWebSocketTransport(
-        socket,
-        request.socket,
-        installGatewayDeflateCodec(socket),
-      ),
+      socket: createGatewayWebSocketTransport(socket, request.socket, installCodec(socket)),
       usesSharedGatewayAuth: false,
       connect: {
         minProtocol: 3,

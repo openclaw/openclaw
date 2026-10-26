@@ -39,6 +39,7 @@ import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
 import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: The fixture owns its database and transcript maintenance lifetime.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -48,20 +49,14 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const limits = { maxBytes: 1024 * 1024, maxEvents: 100 };
-const question = {
-  type: "message",
-  id: "question",
-  parentId: null,
-  timestamp: "2026-01-01T00:00:01Z",
-  message: { role: "user", content: "Original question" },
-};
-const answer = {
-  type: "message",
-  id: "answer",
-  parentId: "question",
-  timestamp: "2026-01-01T00:00:02Z",
-  message: { role: "assistant", content: "Original answer" },
-};
+const question = timedMessageEvent("question", null, "2026-01-01T00:00:01Z", {
+  role: "user",
+  content: "Original question",
+});
+const answer = timedMessageEvent("answer", "question", "2026-01-01T00:00:02Z", {
+  role: "assistant",
+  content: "Original answer",
+});
 
 function transcript(f: Fixture) {
   return [

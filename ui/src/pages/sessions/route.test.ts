@@ -4,6 +4,7 @@ import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionListOptions } from "../../lib/sessions/index.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import { page, type SessionsRouteData } from "./route.ts";
 
@@ -19,14 +20,11 @@ async function loadSessionsRoute(
     runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
     agentSelection: { state: { selectedId: scopeId, scopeId } },
   } as unknown as ApplicationContext;
-  const loaderOptions: RouteLoaderOptions = {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: { pathname: "/sessions", search, hash: "" },
-    deps: "",
-    cause: "navigation",
-  };
+  const loaderOptions: RouteLoaderOptions = createRouteLoaderOptions({
+    pathname: "/sessions",
+    search,
+    hash: "",
+  });
 
   const data = (await page.loader?.(context, loaderOptions)) as SessionsRouteData;
 

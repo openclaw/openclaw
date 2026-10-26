@@ -29,6 +29,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -200,18 +201,13 @@ export async function acknowledgeCompletedWorkerTurn(
     transcriptSeq: 2,
     liveSeq: 1,
   });
-  return {
+  return createCommandResult({
     stdout: JSON.stringify({
       status: "completed",
       transcriptLeafId: leafId,
       transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
     }),
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  });
 }
 
 let testState: OpenClawTestState;

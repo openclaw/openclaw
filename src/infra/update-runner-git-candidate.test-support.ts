@@ -9,7 +9,9 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { pathExists } from "../utils.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
@@ -335,15 +337,10 @@ export async function expectCancelledGitCandidateCleanup({
         );
         return buildResult;
       }
-      return {
+      return createCommandResult({
         stdout: argv[1] === "--version" ? pnpmVersion : "",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
         noOutputTimedOut: false,
-      };
+      });
     });
   try {
     const commandRunner = await buildUpdateCommandRunner();
@@ -482,7 +479,7 @@ export async function expectNoGitRuntimeStagingPaths(root: string, inspectionRoo
   for (const inspectionRoot of inspectionRoots) {
     await expectMissing(inspectionRoot);
   }
-  const entries = await fs.readdir(root, { recursive: true });
+  const entries = (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.relativePath);
   expect(
     entries.filter((entry) =>
       /\.openclaw-update-[0-9a-f]{8}-[0-9a-f-]{27}\.tmp(?:\/|$)/u.test(entry),

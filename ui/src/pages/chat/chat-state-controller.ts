@@ -220,15 +220,20 @@ export function createChatState<TState extends ChatPageHost>(
       state.canRestoreComposer = () => stateValue === state && composerPersistence.active;
       previousChatLoading = state.chatLoading;
       previousChatStream = state.chatStream;
-      // Publication also owns persistence and activity/retention effects in parked panes.
-      releaseRunPublication = chatRunPresentation(state).subscribe(() => {
+      const presentation = chatRunPresentation(state);
+      const releaseScroll = presentation.subscribe(() => {
         // Geometry commits follow a growing tail; locked readers also need same-height arrivals.
         if (state.chatFollowLocked) {
           captureRenderLifecycleChanges();
           schedulePendingScroll(false);
         }
-        publishStateEffects();
       });
+      // Continuing text leaves composer persistence and pane activity unchanged.
+      const releaseStateEffects = presentation.subscribeNonText(publishStateEffects);
+      releaseRunPublication = () => {
+        releaseScroll();
+        releaseStateEffects();
+      };
       // Queue transitions synchronously update pane retention and shell activity,
       // independently of whether the pane's projected frame is currently observed.
       cleanups.push(subscribeChatOutboxQueue(state, () => onStateChange?.()));
@@ -573,10 +578,19 @@ export function createChatState<TState extends ChatPageHost>(
     const loadingChanged = previousChatLoading !== state.chatLoading;
     const loadFinished = previousChatLoading && !state.chatLoading;
     const streamStarted = previousChatStream == null && typeof stream === "string";
+    const streamEnded = previousChatStream !== null && stream === null;
     previousTranscriptSources = sources;
     previousChatLoading = state.chatLoading;
     previousChatStream = stream;
     if (!messagesChanged && !streamChanged && !loadingChanged) {
+      return;
+    }
+    if (!messagesChanged && !loadingChanged && !streamStarted && !streamEnded) {
+      // Row ResizeObserver owns end-follow when text actually changes its height.
+      // Same-height arrivals still light the affordance for a departed reader.
+      if (state.chatFollowLocked) {
+        state.chatNewMessagesBelow = true;
+      }
       return;
     }
     pendingScroll = {

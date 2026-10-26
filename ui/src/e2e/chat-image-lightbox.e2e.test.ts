@@ -3,8 +3,9 @@ import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { exactButton, newChatPage } from "./chat-flow.test-support.ts";
+import { exactButton, newChatPage, chatMessage } from "./chat-flow.test-support.ts";
 import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -66,7 +67,7 @@ async function installImageGalleries(page: Page) {
     })),
   });
   await page.goto(`${suite.server.baseUrl}chat`);
-  await gateway.waitForRequest("chat.startup");
+  await gateway.waitForRequest("sessions.messages.subscribe");
 }
 
 suite.define(() => {
@@ -114,7 +115,7 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe");
 
     const transcriptTrigger = page.getByRole("button", { name: "Open image OpenClaw banner" });
     await transcriptTrigger.waitFor({ state: "visible", timeout: 10_000 });
@@ -343,11 +344,7 @@ suite.define(() => {
       if (url.searchParams.get("meta") === "1") {
         metadataSources.push(sources[index]!);
         await route.fulfill({
-          json: {
-            available: true,
-            mediaTicket: "gallery-proof",
-            mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-          },
+          json: mediaTicketPayload("gallery-proof", 300_000),
         });
       } else {
         expect(url.searchParams.get("mediaTicket")).toBe("gallery-proof");
@@ -364,22 +361,16 @@ suite.define(() => {
     });
     const gateway = await installMockGateway(page, {
       historyMessages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text:
-                "Three image attachments in one reply.\n\n" +
-                sources.map((source) => "MEDIA:" + source).join("\n"),
-            },
-          ],
-          timestamp: 1_800_000_000_000,
-        },
+        chatMessage(
+          "assistant",
+          "Three image attachments in one reply.\n\n" +
+            sources.map((source) => "MEDIA:" + source).join("\n"),
+          { timestamp: 1_800_000_000_000 },
+        ),
       ],
     });
     await page.goto(suite.server.baseUrl + "chat");
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe");
     const trigger = exactButton(page, "Open image before.png");
     const lightbox = page.locator("openclaw-image-lightbox");
     const image = lightbox.locator(".image");

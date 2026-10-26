@@ -284,6 +284,8 @@ export function createRequestNativeSubagentRuntime(
         thinking: params.thinking,
         fastMode: params.fastMode,
         context: params.context,
+        // Present only when requested, so existing replay fingerprints stay unchanged.
+        ...(params.blind === true ? { blind: true } : {}),
         runTimeoutSeconds: params.runTimeoutSeconds,
         outputSchema: profile?.outputSchema ?? params.outputSchema,
         runtime: "subagent",
@@ -376,6 +378,7 @@ export function createRequestNativeSubagentRuntime(
                     final.runtime !== "subagent" ||
                     final.mode !== "run" ||
                     final.collect !== true ||
+                    (params.blind === true && final.blind !== true) ||
                     (profile?.outputSchema !== undefined &&
                       stableStringify(final.outputSchema) !==
                         stableStringify(profile.outputSchema)) ||

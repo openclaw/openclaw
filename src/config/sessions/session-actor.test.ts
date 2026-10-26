@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
 import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
@@ -9,10 +10,7 @@ import {
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import {
-  getOpenClawAgentDatabaseIfOpen,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -67,78 +65,6 @@ const messageAppend = (actor: SessionActor, sessionId: string, message: unknown)
     messageJson: JSON.stringify(message),
   },
 });
-
-it.each(["main", "secondary"])(
-  "publishes %s actor initialization in a shared store",
-  async (agentId) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env, statePath }) => {
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        path: statePath("shared.sqlite"),
-      });
-      const identity = readOpenClawAgentDatabaseIdentity(database);
-      if (typeof identity.identity !== "string") {
-        throw new Error("Fixture requires durable storage");
-      }
-      const scope = {
-        agentId,
-        storePath: database.path,
-        sessionKey: `agent:${agentId}:actor-first-maintenance`,
-        sessionId: "actor-first-maintenance",
-      };
-      const actor = await createSessionActorFactory({
-        agentId: "main",
-        path: database.path,
-        env,
-      }).acquire(
-        {
-          sessionKey: scope.sessionKey,
-          database: {
-            kind: "file",
-            physicalIdentity: identity.identity,
-            birthtime: identity.birthtime,
-            nativeLocation: database.path,
-          },
-        },
-        { assertCurrent() {}, assertReadable() {} },
-      );
-      const ageChanges = vi.fn();
-      const stopAgeChanges = observeSessionEntryMaintenanceAgeChanges(
-        identity.identity,
-        ageChanges,
-      );
-      try {
-        const result = await appendSessionManagerActor({
-          actor,
-          toolResult: false,
-          assertCurrent() {},
-          append: {
-            kind: "message",
-            input: {
-              scope,
-              cwd: "/synthetic",
-              messageJson: JSON.stringify({ role: "user", content: "first input", timestamp: 2 }),
-            },
-            initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 2 } },
-          },
-        });
-        expect(result.failure).toBeUndefined();
-        expect(result.committed).toMatchObject({
-          kind: "message",
-          value: { snapshot: { ok: true } },
-        });
-        expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
-          sessionKey: scope.sessionKey,
-          entry: expect.objectContaining({ sessionId: scope.sessionId }),
-          previousEntry: undefined,
-        });
-      } finally {
-        stopAgeChanges();
-        await actor.release();
-      }
-    });
-  },
-);
 
 it("acquires existing incognito input from memory without opening a database", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -697,8 +623,7 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
           if (copy.entry) {
             copy.entry.sessionId = "policy-mutated";
           }
-          copy.version = { epoch: "policy-mutated", sequence: -1 };
-          copy.dependencySessionIds.length = 0;
+          copy.target = { ...copy.target, sessionKey: "policy-mutated" };
         },
       },
     );
@@ -721,7 +646,7 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
   });
 });
 
-it("admits tool appends once per transaction boundary without transferring transcript indexes", async () => {
+it("admits tool appends once per transaction boundary without transferring replica state", async () => {
   await withActor(async ({ actor, admissions }) => {
     const initial = await actor.read(authority);
     const append = messageAppend(actor, initial.entry!.sessionId, {
@@ -746,9 +671,12 @@ it("admits tool appends once per transaction boundary without transferring trans
         },
       });
       const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+      assert(isRecord(facts) && isRecord(facts.snapshot));
       expect(
-        isRecord(facts) && isRecord(facts.snapshot) && Object.hasOwn(facts.snapshot, "transcript"),
-      ).toBe(false);
+        serialize(facts.snapshot).byteLength -
+          serialize(facts.snapshot.target).byteLength -
+          serialize(facts.snapshot.entry).byteLength,
+      ).toBeLessThan(32);
     }
     const committed = actor.snapshot(authority)!;
     expect(committed.transcript.version.rawSeq).toBeGreaterThan(

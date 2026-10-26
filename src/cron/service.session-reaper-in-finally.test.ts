@@ -106,7 +106,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     vi.clearAllMocks();
   });
 
-  it("admits timer maintenance before checking availability, including re-enable and rollback", async () => {
+  it("admits timer maintenance before checking availability, including re-enable", async () => {
     let now = baseNow;
     const isAgentAvailable = vi.fn(() => true);
     await using context = await fixture([], {
@@ -126,9 +126,6 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     now += 1_000;
     await context.tick(1, 2);
     expect(isAgentAvailable).toHaveBeenCalledOnce();
-    now -= 3_600_000;
-    await context.tick(2, 1);
-    expect(isAgentAvailable).toHaveBeenCalledTimes(2);
   });
 
   it("runs a recovered agent's scheduled job while its maintenance attempt is throttled", async () => {

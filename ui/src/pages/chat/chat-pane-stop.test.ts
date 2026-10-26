@@ -351,7 +351,11 @@ describe("chat pane Stop intent", () => {
       fixture.reconnect();
       expect(await replayPendingChatAbort(fixture.state)).toBe(false);
       expect(fixture.state.pendingAbort?.runId).toBe("original-run");
-      expect(fixture.request).not.toHaveBeenCalled();
+      expect(
+        fixture.request.mock.calls.filter(
+          ([method]) => method === "chat.abort" || method === "sessions.abort",
+        ),
+      ).toEqual([]);
       fixture.pane.presented = false;
       fixture.session.sharingRole = sharingRole;
       const unsubscribe = fixture.state.sessions.subscribe((state) =>

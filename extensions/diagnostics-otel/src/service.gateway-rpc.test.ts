@@ -193,6 +193,7 @@ test("keeps runtime phase parents explicit when observations arrive under anothe
 });
 
 test.each([
+  { traces: true, metricsEnabled: true },
   { traces: false, metricsEnabled: true },
   { traces: true, metricsEnabled: false },
 ])(
@@ -205,6 +206,7 @@ test.each([
       let deliveredPhases = 0;
       let deliveredWebSocketMetrics = 0;
       let deliveredRetentionMetrics = 0;
+      let deliveredWorkerRequests = 0;
       await startOtelService({
         traces,
         metrics: metricsEnabled,
@@ -223,6 +225,9 @@ test.each([
                 if (event.type === "sessions.list.retention") {
                   deliveredRetentionMetrics++;
                 }
+                if (event.type === "worker.request") {
+                  deliveredWorkerRequests++;
+                }
                 listener(event, metadata, privateData);
               }, filter);
             },
@@ -240,6 +245,14 @@ test.each([
       emit({ type: "gateway.ws.connections", operators: 1 });
       emit({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
       emit({
+        type: "worker.request",
+        kind: "gitOperations",
+        requestClass: "task",
+        phase: "completed",
+        queueDepth: 0,
+        durationMs: 1,
+      });
+      emit({
         type: "model.usage",
         provider: "openai",
         model: "gpt-5.4",
@@ -256,6 +269,7 @@ test.each([
       expect(deliveredPhases).toBe(traces ? 1 : 0);
       expect(deliveredWebSocketMetrics).toBe(metricsEnabled ? 2 : 0);
       expect(deliveredRetentionMetrics).toBe(metricsEnabled ? 1 : 0);
+      expect(deliveredWorkerRequests).toBe(0);
       for (const name of [
         "openclaw.gateway.rpc.response",
         "openclaw.model.usage",

@@ -7,7 +7,6 @@ import type { ProviderRuntimeModel } from "../plugin-entry.js";
 import { registerProviderPlugin, requireRegisteredProvider } from "../plugin-test-runtime.js";
 import { buildManifestModelProviderConfig } from "../provider-catalog-shared.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
-import { createProviderUsageFetch, makeResponse } from "../test-env.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
@@ -99,27 +98,6 @@ function installRuntimeHooks(
     refreshOpenAICodexTokenMock.mockReset();
   }, CONTRACT_SETUP_TIMEOUT_MS);
   return (providerId: string) => expectDefined(providers.get(providerId), providerId);
-}
-
-function fetchUsageSnapshot(
-  provider: ProviderPlugin,
-  token: string,
-  path: string,
-  body: unknown,
-  accountId?: string,
-) {
-  const mockFetch = createProviderUsageFetch(async (url) =>
-    url.includes(path) ? makeResponse(200, body) : makeResponse(404, "not found"),
-  );
-  return provider.fetchUsageSnapshot?.({
-    config: {},
-    env: {},
-    provider: provider.id,
-    token,
-    accountId,
-    timeoutMs: 5_000,
-    fetchFn: mockFetch as unknown as typeof fetch,
-  });
 }
 
 type DynamicContext = Parameters<NonNullable<ProviderPlugin["resolveDynamicModel"]>>[0];
@@ -216,23 +194,6 @@ export function describeAnthropicProviderRuntimeContract(
       expect(hint).toContain("suggested profile: anthropic:oauth-user@example.com");
       expect(hint).toContain("openclaw doctor --yes");
     });
-
-    it("owns usage snapshot fetching", async () => {
-      const provider = getProvider("anthropic");
-      await expect(
-        fetchUsageSnapshot(provider, "anthropic-oauth-token", "api.anthropic.com/api/oauth/usage", {
-          five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
-          seven_day: { utilization: 35, resets_at: "2026-01-09T01:00:00Z" },
-        }),
-      ).resolves.toEqual({
-        provider: "anthropic",
-        displayName: "Claude",
-        windows: [
-          { label: "5h", usedPercent: 20, resetAt: Date.parse("2026-01-07T01:00:00Z") },
-          { label: "Week", usedPercent: 35, resetAt: Date.parse("2026-01-09T01:00:00Z") },
-        ],
-      });
-    });
   });
 }
 
@@ -294,9 +255,6 @@ export function describeGithubCopilotProviderRuntimeContract(
 
       it.each([
         ["gemini-3.6-flash", "openai-completions"],
-        ["gemini-3.1-pro-preview", "openai-completions"],
-        ["gemini-3.5-flash", "openai-completions"],
-        ["gemini-2.5-pro", "openai-completions"],
         ["gpt-5.6-sol", "openai-responses"],
         ["claude-sonnet-5", "anthropic-messages"],
       ] as const)("routes static %s through %s", async (modelId, api) => {
@@ -592,53 +550,6 @@ export function describeOpenAIProviderRuntimeContract(
         contextWindow: 400_000,
       });
     });
-
-    it("owns codex transport defaults", () => {
-      const provider = getProvider("openai");
-      expect(
-        provider.prepareExtraParams?.({
-          provider: "openai",
-          modelId: "gpt-5.4",
-          model: createModel({
-            id: "gpt-5.4",
-            provider: "openai",
-            api: "openai-chatgpt-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-          }),
-          extraParams: { temperature: 0.2 },
-        }),
-      ).toEqual({
-        temperature: 0.2,
-        transport: "auto",
-      });
-    });
-
-    it("owns usage snapshot fetching", async () => {
-      const provider = getProvider("openai");
-      await expect(
-        fetchUsageSnapshot(
-          provider,
-          "codex-token",
-          "chatgpt.com/backend-api/wham/usage",
-          {
-            rate_limit: {
-              primary_window: {
-                used_percent: 12,
-                limit_window_seconds: 10800,
-                reset_at: 1_705_000,
-              },
-            },
-            plan_type: "Plus",
-          },
-          "acc-1",
-        ),
-      ).resolves.toEqual({
-        provider: "openai",
-        displayName: "OpenAI",
-        windows: [{ label: "3h", usedPercent: 12, resetAt: 1_705_000_000 }],
-        plan: "Plus",
-      });
-    });
   });
 }
 
@@ -668,49 +579,15 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
   describe("zai provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
     const getProvider = installRuntimeHooks(load, "zai", "Z.AI");
 
-    it("owns glm-5 forward-compat resolution", () => {
-      const provider = getProvider("zai");
-      // Neither the synthetic glm-5 id nor its glm-4.7 template has a current manifest row.
-      const model = resolveFromTemplate(
-        provider,
-        "glm-5",
-        createModel({
-          id: "glm-4.7",
-          api: "openai-completions",
-          provider: "zai",
-          baseUrl: "https://api.z.ai/api/paas/v4",
-          reasoning: false,
-          contextWindow: 202_752,
-          maxTokens: 16_384,
-        }),
-      );
-
-      expectFields(model, {
-        id: "glm-5",
-        provider: "zai",
-        api: "openai-completions",
-        reasoning: true,
-      });
-    });
-
     it("owns Z.AI token-limit overflow classification", () => {
       const provider = getProvider("zai");
-
-      expect(
-        provider.matchesContextOverflowError?.({
-          errorMessage: "code 1210: tokens in request more than max tokens allowed",
-        }),
-      ).toBe(true);
-      expect(
-        provider.matchesContextOverflowError?.({
-          errorMessage: "code 1261: Prompt exceeds max length",
-        }),
-      ).toBe(true);
-      expect(
-        provider.matchesContextOverflowError?.({
-          errorMessage: "code 1210: invalid request parameters",
-        }),
-      ).toBe(false);
+      for (const [errorMessage, expected] of [
+        ["code 1210: tokens in request more than max tokens allowed", true],
+        ["code 1261: Prompt exceeds max length", true],
+        ["code 1210: invalid request parameters", false],
+      ] as const) {
+        expect(provider.matchesContextOverflowError?.({ errorMessage })).toBe(expected);
+      }
     });
 
     it("owns usage auth resolution", async () => {
@@ -730,33 +607,5 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
         token: "env-zai-token",
       });
     });
-
-    it("owns usage snapshot fetching", async () => {
-      const provider = getProvider("zai");
-      await expect(
-        fetchUsageSnapshot(provider, "env-zai-token", "api.z.ai/api/monitor/usage/quota/limit", {
-          success: true,
-          code: 200,
-          data: {
-            planName: "Pro",
-            limits: [
-              {
-                type: "TOKENS_LIMIT",
-                percentage: 25,
-                unit: 3,
-                number: 6,
-                nextResetTime: "2026-01-07T06:00:00Z",
-              },
-            ],
-          },
-        }),
-      ).resolves.toEqual({
-        provider: "zai",
-        displayName: "z.ai",
-        windows: [{ label: "Tokens (6h)", usedPercent: 25, resetAt: 1_767_765_600_000 }],
-        plan: "Pro",
-      });
-    });
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

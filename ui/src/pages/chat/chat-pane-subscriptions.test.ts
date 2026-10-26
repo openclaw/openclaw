@@ -24,7 +24,7 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 
 describe("chat pane approval replay subscriptions", () => {
   it("preserves live approval transitions received while session replay is awaiting publication", async () => {

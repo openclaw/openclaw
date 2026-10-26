@@ -6,7 +6,10 @@ type ContextFixture = Partial<Omit<Context, "configResult">> & {
   configResult?: Partial<Context["configResult"]>;
 };
 
-export function createDoctorPrompterFixture(shouldRepair = false): DoctorPrompter {
+export function createDoctorPrompterFixture(
+  shouldRepair = false,
+  interactive = false,
+): DoctorPrompter {
   return {
     confirm: vi.fn(async () => shouldRepair),
     confirmAutoFix: vi.fn(async () => shouldRepair),
@@ -18,8 +21,8 @@ export function createDoctorPrompterFixture(shouldRepair = false): DoctorPrompte
     repairMode: {
       shouldRepair,
       shouldForce: false,
-      nonInteractive: true,
-      canPrompt: false,
+      nonInteractive: !interactive,
+      canPrompt: interactive,
       updateInProgress: false,
     },
   };

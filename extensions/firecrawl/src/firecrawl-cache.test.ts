@@ -35,10 +35,9 @@ describe("Firecrawl search cache", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-      server.closeAllConnections();
-    });
+    const closed = server[Symbol.asyncDispose]();
+    server.closeAllConnections();
+    await closed;
   });
 
   async function search(query: string, cacheTtlMinutes: number, apiKey = "cache-test-key") {

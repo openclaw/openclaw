@@ -31,6 +31,7 @@ import {
 import type { AgentSession } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import * as toolSearch from "../../tool-search.js";
+import { createWorkspaceCompactionConfig } from "../compaction-workspace-config.test-support.js";
 import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
@@ -289,18 +290,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     fixture.input.attempt = {
       ...fixture.input.attempt,
       model: createAnthropicModelFixture(),
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-              postCompactionSections: ["Compaction fixture"],
-              recentTurnsPreserve: 0,
-              qualityGuard: { enabled: false },
-            },
-          },
-        },
-      },
+      config: createWorkspaceCompactionConfig(),
     };
     const { buildEmbeddedExtensionFactories } =
       await vi.importActual<typeof import("../extensions.js")>("../extensions.js");

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { GatewayAgentRow } from "../api/types.ts";
+import { modelSessionList } from "./chat-runtime-fixtures.test-support.ts";
 import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
@@ -96,24 +97,19 @@ suite.define(() => {
               profiles: [profile],
             },
             "sessions.create": { key: sessionKey, entry: { sessionId: "worker-session" } },
-            "sessions.list": {
-              count: 1,
-              ts: 1,
-              path: "",
-              defaults: { model: "gpt-4.1-mini", modelProvider: "openai", contextTokens: 128000 },
-              sessions: [
-                {
-                  key: sessionKey,
-                  kind: "direct",
-                  updatedAt: 1,
-                  displayName: "Worker inference",
-                  model: "gpt-4.1-mini",
-                  modelProvider: "openai",
-                  agentRuntime: runtime,
-                  placement,
-                },
-              ],
-            },
+            "sessions.list": modelSessionList(
+              {
+                key: sessionKey,
+                kind: "direct",
+                updatedAt: 1,
+                displayName: "Worker inference",
+                model: "gpt-4.1-mini",
+                modelProvider: "openai",
+                agentRuntime: runtime,
+                placement,
+              },
+              { model: "gpt-4.1-mini", modelProvider: "openai", contextTokens: 128000 },
+            ),
             "sessions.describe": {
               session: { key: sessionKey, sessionId: "worker-session", placement },
             },
@@ -171,7 +167,7 @@ suite.define(() => {
         // The URL can publish while the Chat module is still loading. Deliver
         // the synthetic terminal event only after its route and startup consumer exist.
         await waitForCommittedChatRoute(page);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await transcript.waitFor();
         await gateway.emitChatFinal({
           runId: "worker-initial",

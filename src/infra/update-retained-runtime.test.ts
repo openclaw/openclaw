@@ -12,6 +12,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { UPDATE_NATIVE_GATE_SOURCE } from "../cli/update-cli/update-command-native-gate.generated.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import * as commands from "../process/exec.js";
@@ -27,15 +28,25 @@ import * as temporaryArtifacts from "./temp-artifact-cleanup.js";
 import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
+import { expectRetainedNativeGate } from "./update-retained-native-gate.test-support.js";
 import { type RetainUpdateRuntime, withRetainedUpdateRuntime } from "./update-retained-runtime.js";
 
-const inspectionFixture = vi.hoisted(() => ({ moduleUrl: "" }));
+const inspectionFixture = vi.hoisted(() => ({ moduleUrl: "", nativeGateModuleUrl: "" }));
 vi.mock("./runtime-process-entrypoints.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./runtime-process-entrypoints.js")>();
   return {
     ...actual,
     runtimeProcessEntrypoints: {
       ...actual.runtimeProcessEntrypoints,
+      updateNativeGate: {
+        ...actual.runtimeProcessEntrypoints.updateNativeGate,
+        get currentModuleUrl() {
+          return (
+            inspectionFixture.nativeGateModuleUrl ||
+            actual.runtimeProcessEntrypoints.updateNativeGate.currentModuleUrl
+          );
+        },
+      },
       updateCandidateState: {
         ...actual.runtimeProcessEntrypoints.updateCandidateState,
         get currentModuleUrl() {
@@ -51,6 +62,7 @@ vi.mock("./runtime-process-entrypoints.js", async (importOriginal) => {
 
 afterEach(() => {
   inspectionFixture.moduleUrl = "";
+  inspectionFixture.nativeGateModuleUrl = "";
   vi.restoreAllMocks();
 });
 
@@ -442,6 +454,12 @@ process.stdout.write(JSON.stringify({ generation, mode: JSON.parse(input).mode }
 it("warns and continues the update without binding a replaced retained runtime", async () => {
   const { base, root, moduleUrl } = await runtimeFixture("retained-integrity-");
   const replaced = path.join(root, "dist/shared-old-hash.mjs");
+  inspectionFixture.nativeGateModuleUrl = pathToFileURL(
+    path.join(root, "dist/infra/runtime-process-entrypoints.js"),
+  ).href;
+  const nativeGate = path.join(root, "dist/cli/update-cli/update-command-native-gate.worker.js");
+  await mkdir(path.dirname(nativeGate), { recursive: true });
+  await writeFile(nativeGate, UPDATE_NATIVE_GATE_SOURCE);
   const wrapper = path.join(base, "replace-before-link.mjs");
   await writeFile(
     wrapper,
@@ -459,9 +477,9 @@ it("warns and continues the update without binding a replaced retained runtime",
      await import(pathToFileURL(process.argv.at(-1)).href);`,
   );
   const run = commands.runUtf8CommandWithTimeout;
-  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) =>
-    run([argv[0]!, wrapper, ...argv.slice(1)], options),
-  );
+  const sabotagedRetention = vi
+    .spyOn(commands, "runUtf8CommandWithTimeout")
+    .mockImplementation((argv, options) => run([argv[0]!, wrapper, ...argv.slice(1)], options));
   const log = path.join(base, "retention.log");
   const previousLoggerOverride = loggingState.overrideSettings;
   try {
@@ -474,6 +492,8 @@ it("warns and continues the update without binding a replaced retained runtime",
       expect(await retain(options)).toBeUndefined();
       expect(await retain(options)).toBeUndefined();
       expect(captureRuntimeWorkerSource(moduleUrlFor(root)).runtimeGeneration).toBeUndefined();
+      sabotagedRetention.mockRestore();
+      await expectRetainedNativeGate(nativeGate);
       await writeFile(path.join(root, "dist/updater.mjs"), "export const updated = true;\n");
       expect(await import(moduleUrlFor(root).href)).toMatchObject({ updated: true });
     });

@@ -22,6 +22,14 @@ function strictPolicy(allowedHostnames: string[]) {
   return { dangerouslyAllowPrivateNetwork: false, allowedHostnames };
 }
 
+function checkHostname(hostname: string, pattern: string, lookupFn: LookupFn) {
+  return assertBrowserNavigationAllowed({
+    url: `https://${hostname}`,
+    lookupFn,
+    ssrfPolicy: strictPolicy([pattern]),
+  });
+}
+
 type Request = Parameters<typeof assertBrowserNavigationRedirectChainAllowed>[0]["request"];
 function redirectChain(...urls: string[]): Request {
   return urls.reduce<Request>(
@@ -101,26 +109,16 @@ describe("browser navigation guard", () => {
     ["sub.example.com", "*.example.com", "93.184.216.34"],
   ])("allows strict-mode hostname %s through %s", async (hostname, pattern, address) => {
     const lookupFn = createLookupFn(address);
-    await expect(
-      assertBrowserNavigationAllowed({
-        url: `https://${hostname}`,
-        lookupFn,
-        ssrfPolicy: strictPolicy([pattern]),
-      }),
-    ).resolves.toBeUndefined();
+    await expect(checkHostname(hostname, pattern, lookupFn)).resolves.toBeUndefined();
   });
 
   it.each(["example.com", "evil-example.com"])(
     "does not match %s against a wildcard allowlist entry",
     async (hostname) => {
       const lookupFn = createLookupFn("93.184.216.34");
-      await expect(
-        assertBrowserNavigationAllowed({
-          url: `https://${hostname}`,
-          lookupFn,
-          ssrfPolicy: strictPolicy(["*.example.com"]),
-        }),
-      ).rejects.toThrow(/dns rebinding protections are unavailable/i);
+      await expect(checkHostname(hostname, "*.example.com", lookupFn)).rejects.toThrow(
+        /dns rebinding protections are unavailable/i,
+      );
       expect(lookupFn).not.toHaveBeenCalled();
     },
   );
@@ -190,19 +188,18 @@ describe("browser navigation guard", () => {
     ["http://private.example/internal", true],
     ["https://public.example/middle", false],
   ] as const)("checks intermediate redirect %s", async (middle, blocked) => {
-    const publicLookup = createLookupFn("93.184.216.34");
-    const privateLookup = createLookupFn("127.0.0.1");
     const result = assertBrowserNavigationRedirectChainAllowed({
       request: redirectChain(
         "https://public.example/start",
         middle,
         "https://public.example/final",
       ),
-      lookupFn: vi.fn(async (hostname: string) =>
-        hostname === "private.example"
-          ? privateLookup(hostname, { all: true })
-          : publicLookup(hostname, { all: true }),
-      ) as unknown as LookupFn,
+      lookupFn: vi.fn(async (hostname: string) => [
+        {
+          address: hostname === "private.example" ? "127.0.0.1" : "93.184.216.34",
+          family: 4,
+        },
+      ]) as unknown as LookupFn,
     });
     if (blocked) {
       await expect(result).rejects.toBeInstanceOf(SsrFBlockedError);

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getPostgresPool } from "../infra/postgres-sync/pool.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
@@ -174,7 +175,7 @@ function readPool(state: ReadRuntime, admitted: boolean, awaitedOnly: boolean) {
 }
 
 /** Capture the execution source before snapshot preparation yields. */
-export function captureOpenClawStateReadSource() {
+export function captureOpenClawStateReadSource(): Pick<StateReadSource, "createTransport" | "own"> {
   const captured = captureRuntimeWorkerSource(resolveRuntimeProcessEntrypointUrl("stateRead"));
   const nativeSource = captureRetainedNativeWorkerSource({
     runtimeGeneration: captured.runtimeGeneration,
@@ -214,65 +215,74 @@ export function captureOpenClawStateReadSource() {
     sources.set(nativeSource, created);
     runtime = created;
   }
-  const state = runtime;
-  const admitted = new Set<ReadOperation>();
-  return {
-    createTransport: (
-      command: OpenClawStateReadCommand,
-      onChunk?: OpenClawStateReadOptions["onChunk"],
-      onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
-      awaitedOnly = false,
-    ) =>
-      createReadTransport(
-        command,
-        state,
-        () => admitted.size > 0,
-        onChunk,
-        onChunkAsync,
-        awaitedOnly,
-      ),
-    own(close: () => Promise<void>): () => void {
-      if (state.sealed || state.closing) {
-        throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
-      }
-      const inContext = AsyncLocalStorage.snapshot();
-      const operation: ReadOperation = {
-        close: () => inContext(close),
-      };
-      state.operations.add(operation);
-      admitted.add(operation);
-      // A rejected result can still own failed cleanup. Only its owner releases it.
-      return () => {
-        state.operations.delete(operation);
-        admitted.delete(operation);
-      };
-    },
-  };
+  return new StateReadSource(runtime);
 }
 
-function createReadTransport(
-  command: OpenClawStateReadCommand,
-  state: ReadRuntime,
-  ownsAdmission: () => boolean,
-  onChunk?: OpenClawStateReadOptions["onChunk"],
-  onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
-  awaitedOnly = false,
-) {
-  // Capture nested input before the read owner can yield during snapshot preparation.
-  const capturedCommand = structuredClone(command);
-  type ReadTask = ReturnType<ReadPool["runTask"]>;
-  const tasks = new Map<ReadTask, { retire: boolean }>();
-  let closed = false;
-  let closing: Promise<void> | undefined;
-  let pendingChunks = 0;
-  let chunksDrained: (() => void) | undefined;
+class StateReadSource {
+  private readonly admitted = new Set<ReadOperation>();
 
-  const closeTask = async (task: ReadTask): Promise<void> => {
-    await task.close(tasks.get(task)?.retire ? { retire: true } : undefined);
-    tasks.delete(task);
-  };
+  constructor(readonly state: ReadRuntime) {}
 
-  const startRun = (
+  createTransport(
+    command: OpenClawStateReadCommand,
+    onChunk?: OpenClawStateReadOptions["onChunk"],
+    onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
+    awaitedOnly = false,
+  ): Pick<StateReadTransport, "startValidateFresh" | "startRead" | "startClose"> {
+    return new StateReadTransport(command, this, onChunk, onChunkAsync, awaitedOnly);
+  }
+
+  ownsAdmission(): boolean {
+    return this.admitted.size > 0;
+  }
+
+  own(close: () => Promise<void>): () => void {
+    const { state, admitted } = this;
+    if (state.sealed || state.closing) {
+      throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
+    }
+    const inContext = AsyncLocalStorage.snapshot();
+    const operation: ReadOperation = {
+      close: () => inContext(close),
+    };
+    state.operations.add(operation);
+    admitted.add(operation);
+    // A rejected result can still own failed cleanup. Only its owner releases it.
+    return () => {
+      state.operations.delete(operation);
+      admitted.delete(operation);
+    };
+  }
+}
+
+type ReadTask = ReturnType<ReadPool["runTask"]>;
+
+// Methods are shared; cancellation, command bytes, and failed cleanup remain per read.
+class StateReadTransport {
+  private readonly capturedCommand: OpenClawStateReadCommand;
+  private readonly tasks = new Map<ReadTask, { retire: boolean }>();
+  private closed = false;
+  private closing: Promise<void> | undefined;
+  private pendingChunks = 0;
+  private chunksDrained: (() => void) | undefined;
+
+  constructor(
+    command: OpenClawStateReadCommand,
+    private readonly source: StateReadSource,
+    private readonly onChunk?: OpenClawStateReadOptions["onChunk"],
+    private readonly onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
+    private readonly awaitedOnly = false,
+  ) {
+    // Capture nested input before the read owner can yield during snapshot preparation.
+    this.capturedCommand = structuredClone(command);
+  }
+
+  private async closeTask(task: ReadTask): Promise<void> {
+    await task.close(this.tasks.get(task)?.retire ? { retire: true } : undefined);
+    this.tasks.delete(task);
+  }
+
+  private startRun(
     context: OpenClawStateWorkerContext,
     location: string,
     checkFreshAdmission: boolean,
@@ -281,12 +291,19 @@ function createReadTransport(
     expectedIdentity?: string,
     snapshotRoot?: string,
     postgresSnapshot?: string,
-  ) => {
+  ) {
+    const { onChunk, onChunkAsync } = this;
     let releaseAdmission: (() => void) | undefined;
     const cleanup = { retire: true };
     try {
-      if (closed) {
+      if (this.closed) {
         throw new WorkerTaskError("Shared-state read transport is closed", "unavailable");
+      }
+      if (
+        context.databaseEngineSelection &&
+        Object.values(context.databaseEngineSelection.effectiveEngines).includes("postgres")
+      ) {
+        getPostgresPool();
       }
       const request: OpenClawStateReadRequest = {
         context: {
@@ -303,7 +320,7 @@ function createReadTransport(
         postgresSnapshot,
         command: { ...readCommand },
       };
-      const pool = readPool(state, ownsAdmission(), awaitedOnly);
+      const pool = readPool(this.source.state, this.source.ownsAdmission(), this.awaitedOnly);
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
@@ -339,20 +356,23 @@ function createReadTransport(
           diagnosticOperation: readCommand.type,
           ...(onChunkAsync
             ? {
-                async onRequest(value: unknown, { signal: taskSignal }: { signal: AbortSignal }) {
+                onRequest: async (
+                  value: unknown,
+                  { signal: taskSignal }: { signal: AbortSignal },
+                ) => {
                   authority.assertCurrent();
                   const signal = AbortSignal.any([authority.signal, taskSignal]);
                   signal.throwIfAborted();
-                  pendingChunks += 1;
+                  this.pendingChunks += 1;
                   try {
                     await onChunkAsync(value, signal);
                     signal.throwIfAborted();
                     authority.assertCurrent();
                     return { input: null, timeoutMs: 300_000 };
                   } finally {
-                    pendingChunks -= 1;
-                    if (pendingChunks === 0) {
-                      chunksDrained?.();
+                    this.pendingChunks -= 1;
+                    if (this.pendingChunks === 0) {
+                      this.chunksDrained?.();
                     }
                   }
                 },
@@ -368,7 +388,7 @@ function createReadTransport(
               : {}),
         },
       );
-      tasks.set(task, cleanup);
+      this.tasks.set(task, cleanup);
       const result = (async (): Promise<OpenClawStateReadOutcome> => {
         let outcome: OpenClawStateReadOutcome;
         try {
@@ -390,13 +410,13 @@ function createReadTransport(
       releaseAdmission = undefined;
       throw error;
     }
-  };
+  }
 
-  const startValidateFresh = async (
+  async startValidateFresh(
     context: OpenClawStateWorkerContext,
     authority: OpenClawStateReadAuthority,
-  ): Promise<void> => {
-    const run = startRun(
+  ): Promise<void> {
+    const run = this.startRun(
       context,
       context.admission.databasePath,
       true,
@@ -408,33 +428,36 @@ function createReadTransport(
       throw read.error;
     }
     authority.assertCurrent();
-    await closeTask(run.task);
-  };
-  const startRead = async (
+    await this.closeTask(run.task);
+  }
+  async startRead(
     source: OpenClawStateReadLocation,
     authority: OpenClawStateReadAuthority,
-  ): Promise<OpenClawStateReadOutcome> =>
-    await startRun(
+  ): Promise<OpenClawStateReadOutcome> {
+    return this.startRun(
       source.context,
       source.location,
       source.checkFreshAdmission,
-      capturedCommand,
+      this.capturedCommand,
       authority,
       source.expectedIdentity,
       source.snapshotRoot,
       source.postgresSnapshot,
     ).result;
-  const startClose = (): Promise<void> => {
-    closed = true;
-    if (closing) {
-      return closing;
+  }
+  startClose(): Promise<void> {
+    this.closed = true;
+    if (this.closing) {
+      return this.closing;
     }
-    closing = (async () => {
-      const releases = await Promise.allSettled([...tasks.keys()].map(closeTask));
+    this.closing = (async () => {
+      const releases = await Promise.allSettled(
+        [...this.tasks.keys()].map((task) => this.closeTask(task)),
+      );
       // Pool cancellation stops the worker, but an accepted host consumer still owns its data.
-      if (pendingChunks > 0) {
+      if (this.pendingChunks > 0) {
         await new Promise<void>((resolve) => {
-          chunksDrained = resolve;
+          this.chunksDrained = resolve;
         });
       }
       throwSqliteLifecycleErrors(
@@ -442,14 +465,9 @@ function createReadTransport(
         "Shared-state reader task cleanup failed",
       );
     })().finally(() => {
-      chunksDrained = undefined;
-      closing = undefined;
+      this.chunksDrained = undefined;
+      this.closing = undefined;
     });
-    return closing;
-  };
-  return {
-    startValidateFresh,
-    startRead,
-    startClose,
-  };
+    return this.closing;
+  }
 }

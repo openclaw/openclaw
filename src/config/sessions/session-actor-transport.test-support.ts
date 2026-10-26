@@ -100,6 +100,7 @@ function createFixture() {
     );
   let kernel = createKernel();
   const transport: SessionActorTransport = {
+    agentId: options.agentId,
     run(operation, authorize) {
       return runOpenClawAgentWorkerWrite(options, async () => {
         async function execute<Key extends keyof SessionActorOperations>(command: {

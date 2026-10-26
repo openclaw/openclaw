@@ -243,9 +243,7 @@ async function routeReplyOperation(
     payloadReplyDelivery &&
     params.replyDelivery &&
     replyDeliverySource &&
-    (normalizeMessageChannel(replyDeliverySource.channel) ??
-      normalizeOptionalLowercaseString(replyDeliverySource.channel)) ===
-      (normalizeMessageChannel(channelId) ?? normalizeOptionalLowercaseString(channelId)) &&
+    normalizeMessageChannel(replyDeliverySource.channel) === normalizeMessageChannel(channelId) &&
     normalizeAccountId(replyDeliverySource.accountId) === normalizeAccountId(accountId) &&
     normalizeChatType(payloadReplyDelivery.chatType ?? undefined) ===
       normalizeChatType(params.replyDelivery.chatType ?? undefined);

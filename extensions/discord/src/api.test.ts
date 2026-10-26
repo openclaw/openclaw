@@ -47,14 +47,7 @@ describe("fetchDiscord", () => {
   beforeEach(() => vi.useRealTimers());
   afterEach(async () => {
     vi.useRealTimers();
-    await Promise.all(
-      servers.splice(0).map(
-        (server) =>
-          new Promise<void>((resolve) => {
-            server.close(() => resolve());
-          }),
-      ),
-    );
+    await Promise.all(servers.splice(0).map((server) => server[Symbol.asyncDispose]()));
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });

@@ -7,6 +7,7 @@ import { expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ChatPendingInputsPage } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "../../test/helpers/gateway-restart-budget.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
@@ -17,12 +18,10 @@ import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js"
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import {
   printRecoveryFailureDiagnostics,
-  readRecoveryDiagnosticSnapshot,
   RECOVERY_PROBE_ID,
   writeRecoveryDiagnosticProbe,
 } from "./gateway.sessions-send-recovery.diagnostics.test-support.js";
@@ -36,8 +35,6 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
   async (shutdownSignal, test) => {
     await runQaGatewayTestFixture(test, async ({ signal, verifyCleanup }) => {
       const observed: string[] = [];
-      const benchmarkPort = Number(process.env.OPENCLAW_RECOVERY_BENCH_PORT) || undefined;
-      const providerRequests: unknown[] = [];
       const accepted = new Map<string, string>();
       const target = "agent:main:dashboard:peer-target";
       const steerTarget = "agent:main:dashboard:steer-target";
@@ -45,7 +42,13 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         { length: 3 },
         (_, index) => `agent:main:dashboard:parallel-${index}`,
       );
+      const expectedParallel = parallelTargets.map((_, index) =>
+        [1, 2].map((ordinal) => `PARALLEL_INPUT_${index}_${ordinal}`),
+      );
+      const waitFor = (assertion: () => void, timeout = 30_000) =>
+        vi.waitFor(assertion, { timeout });
       const parallelHeld = new Set<number>();
+      const parallelLabels = new Set<string>();
       const parallelResponses = new Map<number, ServerResponse>();
       const parallelObserved: string[][] = parallelTargets.map(() => []);
       let hold = true;
@@ -58,24 +61,37 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
       let recoveredResponse: ServerResponse | undefined;
       const recoveredResponseReady = createDeferred();
       const parallelResponsesReady = createDeferred();
+      const reply = (response: ServerResponse, text = "RECEIVED") =>
+        writeOpenAiResponsesText(response, {
+          text,
+          messageId: randomUUID(),
+          responseId: randomUUID(),
+        });
       const releaseHeldResponse = (response: ServerResponse | undefined) => {
         if (!response || response.destroyed || response.writableEnded) {
           return;
         }
-        writeOpenAiResponsesText(response, {
-          text: "RECEIVED",
-          messageId: randomUUID(),
-          responseId: randomUUID(),
-        });
+        reply(response);
       };
       const continueSteer = (response: ServerResponse) => {
         // Keep the receiver alive while the sender finishes asynchronous admission.
         expect(++steerContinuations).toBeLessThanOrEqual(8);
         writeToolCall(response, "session_status", {});
       };
+      const inputText = (content: unknown) =>
+        typeof content === "string"
+          ? content
+          : (Array.isArray(content) ? content : [])
+              .flatMap((block) => {
+                const record = asOptionalRecord(block);
+                return record?.type === "input_text" && typeof record.text === "string"
+                  ? [record.text]
+                  : [];
+              })
+              .join("\n");
       const providerServer = createServer((request, response) => {
         void (async () => {
-          const raw = await readProviderBody(request);
+          const raw = await readRequestText(request);
           if (request.method !== "POST") {
             response.writeHead(200).end('{"data":[]}');
             return;
@@ -91,7 +107,24 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
               item.role === "user" &&
               !JSON.stringify(item.content).includes("OpenClaw runtime context:"),
           );
-          const text = JSON.stringify(input[userIndex]?.content ?? "");
+          const userContent = input[userIndex]?.content;
+          const userText = inputText(userContent);
+          const isConversationLabelRequest =
+            userText.includes("conversationLabelSource") &&
+            input.some((item) =>
+              inputText(item.content).includes(
+                'Label only the text in the "conversationLabelSource" field',
+              ),
+            );
+          if (isConversationLabelRequest) {
+            const labelMarker = userText.match(/HOLD_PARALLEL_[0-9]+/u)?.[0];
+            if (labelMarker) {
+              parallelLabels.add(labelMarker);
+            }
+            reply(response, "Recovery test");
+            return;
+          }
+          const text = JSON.stringify(userContent ?? "");
           const outputIndex = input.findLastIndex((item) => item.type === "function_call_output");
           const parallelHold = text.match(/HOLD_PARALLEL_([0-9]+)/u);
           if (hold && parallelHold) {
@@ -110,25 +143,6 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
               return;
             }
           }
-          providerRequests.push({
-            hold,
-            userIndex,
-            frames: input
-              .map((item, index) => ({
-                i: index,
-                markers: JSON.stringify(item)
-                  .match(
-                    /(?:SEND_)?(?:PEER_UPDATE_[0-9]+|CHAT_UPDATE_[0-9]+|STEER_UPDATE)|HOLD_TARGET|HOLD_STEER/gu,
-                  )
-                  ?.slice(0, 2),
-              }))
-              .filter((frame) => frame.markers)
-              .slice(-4),
-          });
-          if (providerRequests.length > 6) {
-            providerRequests.shift();
-          }
-
           const sendMarker = text.match(
             /SEND_(STEER_UPDATE|PEER_UPDATE_[0-9]+|CANCELLED_UPDATE|RESET_SOURCE_UPDATE|REVOKED_UPDATE|ARCHIVED_SOURCE_UPDATE)/u,
           )?.[1];
@@ -145,11 +159,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
                 expect(output.targetDisposition).toBe("steered");
               }
               accepted.set(sendMarker, output.runId!);
-              writeOpenAiResponsesText(response, {
-                text: "SENT",
-                messageId: randomUUID(),
-                responseId: randomUUID(),
-              });
+              reply(response, "SENT");
             } else {
               expect(body.tools?.some((tool) => tool.name === "sessions_send")).toBe(true);
               writeToolCall(response, "sessions_send", {
@@ -201,11 +211,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             recoveredResponseReady.resolve();
             return;
           }
-          writeOpenAiResponsesText(response, {
-            text: "RECEIVED",
-            messageId: randomUUID(),
-            responseId: randomUUID(),
-          });
+          reply(response);
         })().catch((error: unknown) => {
           console.error(
             "Synthetic provider fixture failed",
@@ -217,17 +223,10 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           }
         });
       });
-      const baseUrl = benchmarkPort
-        ? await (async () => {
-            providerServer.listen(benchmarkPort + 1, "127.0.0.1");
-            await once(providerServer, "listening", { signal });
-            return `http://127.0.0.1:${benchmarkPort + 1}/v1`;
-          })()
-        : await listenProvider(providerServer);
+      const baseUrl = await listenProvider(providerServer);
       const profile = `peer-recovery-${randomUUID()}`;
       const gateway = await createOpenClawTestInstance({
         name: "peer-input-recovery",
-        port: benchmarkPort,
         cwd: process.cwd(),
         signal,
         verifyCleanup,
@@ -243,6 +242,8 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         },
       });
       let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
+      const request = <T = Record<string, unknown>>(method: string, params?: unknown) =>
+        client!.request<T>(method, params, { signal });
       const deviceIdentity = generateStoredDeviceIdentity();
       const connect = () =>
         acquireGatewayTestClient(
@@ -294,33 +295,22 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         idempotencyKey: string;
         queueMode: "followup";
       }> = [];
-      let beforeRestartLogs: number | undefined;
-      let startupSnapshot: unknown;
       const cancelledChatId = randomUUID();
-      const inputMarkers = () =>
-        Object.fromEntries([
-          ...[...accepted].map(([marker, runId]) => [runId, marker]),
-          ...chatRequests.map(({ idempotencyKey, message }) => [idempotencyKey, message.trim()]),
-          [cancelledChatId, "CANCELLED_CHAT"],
-        ]);
       const expectedDelivery = expectedUpdates.flatMap((message, i) => [
         message,
         `CHAT_UPDATE_${i + 1}`,
       ]);
-      const history = () =>
-        client!.request<{ pendingInputs: ChatPendingInputsPage }>(
-          "chat.history",
-          { sessionKey: target },
-          { signal },
-        );
+      type History = {
+        messages: Array<{
+          role?: string;
+          content?: unknown;
+          provenance?: { kind?: string; sourceTool?: string };
+        }>;
+        pendingInputs: ChatPendingInputsPage;
+      };
+      const history = (sessionKey = target) => request<History>("chat.history", { sessionKey });
       const expectPersistedSteer = async () => {
-        const result = await client!.request<{
-          messages: Array<{
-            role?: string;
-            content?: unknown;
-            provenance?: { kind?: string; sourceTool?: string };
-          }>;
-        }>("chat.history", { sessionKey: steerTarget }, { signal });
+        const result = await history(steerTarget);
         expect(
           result.messages.filter(
             (message) =>
@@ -332,11 +322,13 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         ).toHaveLength(1);
       };
       const start = (sessionKey: string, message: string) =>
-        client!.request<{ runId: string }>(
-          "agent",
-          { agentId: "main", sessionKey, message, deliver: false, idempotencyKey: randomUUID() },
-          { signal },
-        );
+        request<{ runId: string }>("agent", {
+          agentId: "main",
+          sessionKey,
+          message,
+          deliver: false,
+          idempotencyKey: randomUUID(),
+        });
       const archivedSource = "agent:main:dashboard:archived-source";
       let restarting: Promise<void> | undefined;
       try {
@@ -393,16 +385,8 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         await gateway.state.writeConfig(config);
         await gateway.startGateway();
         client = await connect();
-        const requester = await client.request<{ profile: { id: string } }>(
-          "users.self",
-          {},
-          { signal },
-        );
-        const preferencesBefore = await client.request(
-          "users.prefs.get",
-          { keys: ["ui.themeMode"] },
-          { signal },
-        );
+        const requester = await request<{ profile: { id: string } }>("users.self", {});
+        const preferencesBefore = await request("users.prefs.get", { keys: ["ui.themeMode"] });
         expect(preferencesBefore).toEqual({ status: "ok", entries: {} });
         const sessionIds = new Map<string, string>();
         for (const key of [
@@ -414,30 +398,26 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           archivedSource,
           ...parallelTargets,
         ]) {
-          const created = await client.request<{ sessionId: string }>(
-            "sessions.create",
-            { key, agentId: "main", communication: { send: "always", receive: "always" } },
-            { signal },
-          );
+          const created = await request<{ sessionId: string }>("sessions.create", {
+            key,
+            agentId: "main",
+            communication: { send: "always", receive: "always" },
+          });
           sessionIds.set(key, created.sessionId);
         }
         await start(target, "HOLD_TARGET");
-        await vi.waitFor(() => expect(held).toBe(true), { timeout: 30_000 });
+        await waitFor(() => expect(held).toBe(true));
         const send = async (from: string, message: string) => {
           const sender = await start(from, "SEND_" + message);
-          await client!.request(
-            "agent.wait",
-            { runId: sender.runId, timeoutMs: 30_000 },
-            { signal },
-          );
-          await vi.waitFor(() => expect(accepted.has(message)).toBe(true), { timeout: 30_000 });
+          await request("agent.wait", { runId: sender.runId, timeoutMs: 30_000 });
+          await waitFor(() => expect(accepted.has(message)).toBe(true));
           return accepted.get(message);
         };
         await start(steerTarget, "HOLD_STEER");
-        await vi.waitFor(() => expect(steerResponse).toBeDefined(), { timeout: 30_000 });
+        await waitFor(() => expect(steerResponse).toBeDefined());
         const steering = send(source, "STEER_UPDATE");
         await Promise.race([
-          vi.waitFor(() => expect(steerToolStarted).toBe(true), { timeout: 30_000 }),
+          waitFor(() => expect(steerToolStarted).toBe(true)),
           steering.then(() => {
             throw new Error("Steering acknowledged before the held input could be committed");
           }),
@@ -449,75 +429,54 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         await expectPersistedSteer();
         for (const [index, key] of parallelTargets.entries()) {
           await start(key, `HOLD_PARALLEL_${index}`);
-          await vi.waitFor(() => expect(parallelHeld.has(index)).toBe(true), {
-            timeout: 30_000,
-          });
+          await waitFor(() => expect(parallelHeld.has(index)).toBe(true));
           for (const ordinal of [1, 2]) {
-            await client.request(
-              "chat.send",
-              {
-                sessionKey: key,
-                message: `PARALLEL_INPUT_${index}_${ordinal}`,
-                idempotencyKey: randomUUID(),
-                queueMode: "followup",
-              },
-              { signal },
-            );
+            await request("chat.send", {
+              sessionKey: key,
+              message: `PARALLEL_INPUT_${index}_${ordinal}`,
+              idempotencyKey: randomUUID(),
+              queueMode: "followup",
+            });
           }
         }
         for (const message of expectedUpdates) {
           await send(source, message);
-          const request = {
+          const input = {
             sessionKey: target,
             message: `  CHAT_UPDATE_${chatRequests.length + 1}  `,
             idempotencyKey: randomUUID(),
             queueMode: "followup" as const,
           };
-          chatRequests.push(request);
-          const admitted = await client.request<{ runId: string }>("chat.send", request, {
-            signal,
-          });
-          expect(admitted.runId).toBe(request.idempotencyKey);
+          chatRequests.push(input);
+          const admitted = await request<{ runId: string }>("chat.send", input);
+          expect(admitted.runId).toBe(input.idempotencyKey);
         }
         const cancelled = await send(source, "CANCELLED_UPDATE");
         await send(resetSource, "RESET_SOURCE_UPDATE");
         await send(revokedSource, "REVOKED_UPDATE");
         await send(archivedSource, "ARCHIVED_SOURCE_UPDATE");
-        await client.request(
-          "chat.send",
-          {
-            sessionKey: target,
-            message: "CANCELLED_CHAT",
-            idempotencyKey: cancelledChatId,
-            queueMode: "followup",
-          },
-          { signal },
-        );
+        await request("chat.send", {
+          sessionKey: target,
+          message: "CANCELLED_CHAT",
+          idempotencyKey: cancelledChatId,
+          queueMode: "followup",
+        });
         const before = await history();
         expect(before.pendingInputs.items).toHaveLength(15);
         expect(JSON.stringify(before)).not.toContain("chatInputRecovery");
-        await client.request(
-          "chat.abort",
-          { sessionKey: target, runId: cancelledChatId },
-          { signal },
-        );
+        await request("chat.abort", { sessionKey: target, runId: cancelledChatId });
         expect(JSON.stringify(before)).not.toContain("sessionSendDelivery");
-        await client.request("chat.abort", { sessionKey: target, runId: cancelled }, { signal });
-        await client.request("sessions.reset", { key: resetSource }, { signal });
-        await client.request(
-          "sessions.patch",
-          { key: revokedSource, communication: { send: "never", receive: "always" } },
-          { signal },
-        );
-        await client.request(
-          "sessions.patch",
-          {
-            key: archivedSource,
-            archived: true,
-            expectedSessionId: sessionIds.get(archivedSource),
-          },
-          { signal },
-        );
+        await request("chat.abort", { sessionKey: target, runId: cancelled });
+        await request("sessions.reset", { key: resetSource });
+        await request("sessions.patch", {
+          key: revokedSource,
+          communication: { send: "never", receive: "always" },
+        });
+        await request("sessions.patch", {
+          key: archivedSource,
+          archived: true,
+          expectedSessionId: sessionIds.get(archivedSource),
+        });
         const firstPid = gateway.child?.pid;
         await client.stopAndWait();
         client = undefined;
@@ -537,37 +496,18 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           expect(oldProcess?.signalCode).not.toBe("SIGKILL");
         }
         hold = false;
-        // Capture after the old child is gone, so this read cannot affect which
-        // accepted writes survive its crash. Emit it only if the scenario fails.
-        startupSnapshot = await readRecoveryDiagnosticSnapshot(
-          path.join(gateway.state.agentDir("main"), "openclaw-agent.sqlite"),
-          target,
-          chatRequests[4]!.idempotencyKey,
-          inputMarkers(),
-        ).catch(() => ({ unavailable: true }));
-        beforeRestartLogs = gateway.logs().length;
-        const startAt = Number(process.env.OPENCLAW_RECOVERY_BENCH_START_AT);
-        if (startAt) {
-          expect(startAt).toBeGreaterThan(Date.now());
-          await new Promise((resolve) => {
-            setTimeout(resolve, startAt - Date.now());
-          });
-        }
+        const beforeRestartLogs = gateway.logs().length;
         const startup = (restarting = gateway.startGateway());
         const awaitRecovery = <T>(gate: PromiseLike<T>) =>
           withinTest(Promise.race([gate, startup.then(() => gate)]), signal);
-        try {
-          await awaitRecovery(recoveredResponseReady.promise);
-        } catch (error) {
-          throw new Error(
-            `Recovery did not reach the first chat input: ${JSON.stringify({ observed, providerRequests })}\n${gateway.logs()}`,
-            { cause: error },
-          );
-        }
+        await awaitRecovery(recoveredResponseReady.promise);
         // Startup may settle before or after held model calls; only its failure aborts waiting.
         // Require successful startup after releasing the provider responses below.
         // A held turn in one session must not keep other sessions from replaying.
         await awaitRecovery(parallelResponsesReady.promise);
+        expect(parallelLabels).toEqual(
+          new Set(parallelTargets.map((_, index) => `HOLD_PARALLEL_${index}`)),
+        );
         expect(parallelObserved).toEqual(
           parallelTargets.map((_, index) => [`PARALLEL_INPUT_${index}_1`]),
         );
@@ -576,10 +516,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             .logs()
             .slice(beforeRestartLogs)
             .match(/startup (?:trace|phase): sidecars\.subagent-recovery ([0-9.]+)ms/u);
-        await awaitRecovery(
-          vi.waitFor(() => expect(recoveryTrace()).not.toBeNull(), { timeout: 10_000 }),
-        );
-        const recoveryMs = Number(recoveryTrace()![1]);
+        await awaitRecovery(waitFor(() => expect(recoveryTrace()).not.toBeNull(), 10_000));
         for (const response of parallelResponses.values()) {
           releaseHeldResponse(response);
         }
@@ -590,32 +527,15 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         await expectPersistedSteer();
         // Stored text is trimmed; the recovery-to-fresh-admission handoff must
         // still dedupe the original request identity immediately after readiness.
-        const handoffRetry = await client.request<{ runId: string }>("chat.send", chatRequests[0], {
-          signal,
-        });
+        const handoffRetry = await request<{ runId: string }>("chat.send", chatRequests[0]);
         expect(handoffRetry.runId).toBe(chatRequests[0]!.idempotencyKey);
-        await vi.waitFor(
-          () => expect(observed, JSON.stringify(providerRequests)).toEqual(expectedDelivery),
-          {
-            timeout: 60_000,
-            interval: 200,
-          },
-        );
-        await vi.waitFor(
-          () =>
-            expect(parallelObserved).toEqual(
-              parallelTargets.map((_, index) => [
-                `PARALLEL_INPUT_${index}_1`,
-                `PARALLEL_INPUT_${index}_2`,
-              ]),
-            ),
-          { timeout: 60_000 },
-        );
+        await vi.waitFor(() => expect(observed).toEqual(expectedDelivery), {
+          timeout: 60_000,
+          interval: 200,
+        });
+        await waitFor(() => expect(parallelObserved).toEqual(expectedParallel), 60_000);
         for (const [index, key] of parallelTargets.entries()) {
-          const parallelHistory = await client.request<{
-            messages: Array<{ role?: string; content?: unknown }>;
-            pendingInputs: ChatPendingInputsPage;
-          }>("chat.history", { sessionKey: key }, { signal });
+          const parallelHistory = await history(key);
           expect(parallelHistory.pendingInputs.items).toEqual([]);
           for (const ordinal of [1, 2]) {
             expect(
@@ -627,78 +547,31 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             ).toHaveLength(1);
           }
         }
-        await vi.waitFor(
-          () => expect(gateway.logs()).toContain("Session delivery recovery blocked for "),
-          { timeout: 30_000 },
+        await waitFor(() =>
+          expect(gateway.logs()).toContain("Session delivery recovery blocked for "),
         );
         expect(recoveredThemeCalls).toBe(1);
-        const replayTimings = Object.fromEntries(
-          [
-            "sourceLoadMs",
-            "sessionLoadMs",
-            "authorityRestoreMs",
-            "communicationAdmissionMs",
-            "dispatchAckMs",
-            "retryWaitMs",
-          ].map((phase) => [phase, { count: 0, maxMs: 0 }]),
-        );
-        let replayInputs = 0;
-        for (const match of gateway
-          .logs()
-          .slice(beforeRestartLogs)
-          .matchAll(/Pending input replay: (\{[^\n]+\})/gu)) {
-          const sample = asOptionalRecord(JSON.parse(match[1]!));
-          if (!sample) {
-            continue;
-          }
-          replayInputs++;
-          for (const [phase, timing] of Object.entries(replayTimings)) {
-            const value = sample[phase];
-            if (typeof value === "number" && value > 0) {
-              timing.count++;
-              timing.maxMs = Math.max(timing.maxMs, value);
-            }
-          }
-        }
-        console.log(
-          `[pending-input-recovery] ${JSON.stringify({
-            shutdownSignal,
-            sessions: parallelTargets.length + 1,
-            inputs: expectedDelivery.length + parallelTargets.length * 2,
-            recoveryMs,
-            heldSessions: parallelResponses.size + 1,
-            replayInputs,
-            replayTimings,
-          })}`,
-        );
-        expect(await client.request("users.self", {}, { signal })).toMatchObject({
+        expect(await request("users.self", {})).toMatchObject({
           profile: { id: requester.profile.id },
         });
         // Read the exact original person's durable effect independently of model output.
-        expect(
-          await client.request("users.prefs.get", { keys: ["ui.themeMode"] }, { signal }),
-        ).toEqual({ status: "ok", entries: { "ui.themeMode": "dark" } });
+        expect(await request("users.prefs.get", { keys: ["ui.themeMode"] })).toEqual({
+          status: "ok",
+          entries: { "ui.themeMode": "dark" },
+        });
         // Reconnect/browser retries keep the original identity and cannot execute twice.
-        for (const request of chatRequests) {
-          const replay = await client.request<{ runId: string }>("chat.send", request, {
-            signal,
-          });
-          expect(replay.runId).toBe(request.idempotencyKey);
+        for (const input of chatRequests) {
+          const replay = await request<{ runId: string }>("chat.send", input);
+          expect(replay.runId).toBe(input.idempotencyKey);
         }
         const after = await history();
         expect(JSON.stringify(after)).not.toContain("chatInputRecovery");
         // History retains the cancelled receipt; only permission failures can replay.
-        expect(after.pendingInputs.items.map((item) => item.state)).toEqual([
-          "cancelled",
-          "interrupted",
-          "cancelled",
-          "cancelled",
-        ]);
-        expect(after.pendingInputs.items.map((item) => item.runId)).toEqual([
-          accepted.get("RESET_SOURCE_UPDATE"),
-          accepted.get("REVOKED_UPDATE"),
-          accepted.get("ARCHIVED_SOURCE_UPDATE"),
-          cancelledChatId,
+        expect(after.pendingInputs.items.map(({ state, runId }) => [state, runId])).toEqual([
+          ["cancelled", accepted.get("RESET_SOURCE_UPDATE")],
+          ["interrupted", accepted.get("REVOKED_UPDATE")],
+          ["cancelled", accepted.get("ARCHIVED_SOURCE_UPDATE")],
+          ["cancelled", cancelledChatId],
         ]);
         await client.stopAndWait();
         client = undefined;
@@ -712,12 +585,10 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           .split("Session delivery endpoint was replaced").length;
         await gateway.startGateway();
         client = await connect();
-        await vi.waitFor(
-          () =>
-            expect(
-              gateway.logs().split("Session delivery recovery blocked for ").length,
-            ).toBeGreaterThan(previousRecoveryWarnings),
-          { timeout: 30_000 },
+        await waitFor(() =>
+          expect(
+            gateway.logs().split("Session delivery recovery blocked for ").length,
+          ).toBeGreaterThan(previousRecoveryWarnings),
         );
         expect(gateway.logs().split("Session delivery endpoint was replaced")).toHaveLength(
           previousReplacementWarnings,
@@ -731,25 +602,19 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         expect(finalHistory).toContain("session was reset or replaced");
         expect(finalHistory).not.toContain(`From ${archivedSource}`);
         expect(gateway.logs()).not.toContain('"archived":true');
-        expect(observed, JSON.stringify(providerRequests)).toEqual(expectedDelivery);
-        expect(parallelObserved).toEqual(
-          parallelTargets.map((_, index) => [
-            `PARALLEL_INPUT_${index}_1`,
-            `PARALLEL_INPUT_${index}_2`,
-          ]),
-        );
+        expect(observed).toEqual(expectedDelivery);
+        expect(parallelObserved).toEqual(expectedParallel);
       } catch (error) {
         await printRecoveryFailureDiagnostics({
           client,
           databasePath: path.join(gateway.state.agentDir("main"), "openclaw-agent.sqlite"),
           sessionKey: target,
-          runId: chatRequests[4]?.idempotencyKey,
-          frames: providerRequests,
-          restartedLogs:
-            beforeRestartLogs === undefined ? "" : gateway.logs().slice(beforeRestartLogs),
-          startupSnapshot,
+          runId: chatRequests.at(-1)?.idempotencyKey,
+          frames: [],
+          restartedLogs: gateway.logs(),
+          startupSnapshot: undefined,
           logPath: gateway.state.path("gateway.log"),
-          markers: inputMarkers(),
+          markers: {},
         }).catch(() => console.error("[session-recovery-failure] diagnostics unavailable"));
         throw error;
       } finally {

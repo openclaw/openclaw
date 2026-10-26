@@ -56,6 +56,10 @@ const catalog = phaseEvent("sessions.catalog.list.planning", 10, {
   threadCpuMs: 2.5,
   privateText: "synthetic-private",
 });
+const startup = phaseEvent("chat.startup.pending_inputs", 1_250, {
+  privateText: "synthetic-private",
+  threadCpuMs: 999,
+});
 const send = phaseEvent("chat.send.snapshot", 10, {
   stage: "request",
   privateText: "synthetic-private",
@@ -114,6 +118,19 @@ openclaw_gateway_rpc_stage_thread_cpu_seconds_count{method="sessions.catalog.lis
     absent: [
       'openclaw_gateway_rpc_stage_thread_cpu_seconds_count{method="sessions.catalog.list",phase="provider"}',
     ],
+  },
+  {
+    name: "chat startup phases without asynchronous CPU attribution",
+    events: [startup, { ...startup, name: "chat.startup.projection_final", durationMs: 0 }],
+    samples: `openclaw_gateway_rpc_stage_seconds_count{method="chat.startup",phase="pending_inputs"} 1
+openclaw_gateway_rpc_stage_seconds_sum{method="chat.startup",phase="pending_inputs"} 1.25
+openclaw_gateway_rpc_stage_seconds_count{method="chat.startup",phase="projection_final"} 1`,
+    ignored: [
+      ...invalidDurations(startup),
+      { ...startup, name: "chat.startup.private-session" },
+      { ...startup, name: "chat.history.pending_inputs" },
+    ],
+    absent: ["thread_cpu", "privateText"],
   },
   {
     name: "chat.send request, startup and deferred delivery",

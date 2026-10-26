@@ -1,7 +1,7 @@
 import { lazy } from "solid-js";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ChatImportBoundary } from "./chat-import-boundary.tsx";
 import type { SessionFileSource } from "./chat-sidebar-content-types.ts";

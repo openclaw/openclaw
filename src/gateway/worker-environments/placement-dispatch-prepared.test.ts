@@ -18,6 +18,7 @@ import {
 } from "../../infra/node-runner-inventory.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type { NodeWorkerPreparedWorkspaceResult } from "../../worker/node-workspace-prepared-protocol.js";
 import {
   createNodeRegistryRuntime,
@@ -247,14 +248,7 @@ async function preparedHarness(
             },
           },
         });
-        return {
-          stdout: "",
-          stderr,
-          code: process.exitCode,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return createCommandResult({ stderr, code: process.exitCode });
       });
     }
     return { ...tunnel, environmentId: request.environmentId };

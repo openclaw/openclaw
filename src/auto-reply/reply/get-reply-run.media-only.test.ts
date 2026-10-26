@@ -1033,6 +1033,7 @@ describe("runPreparedReply media-only handling", () => {
   );
 
   it("projects prepared embedded prompt variants without changing CLI session guidance", async () => {
+    vi.mocked(buildInboundMetaSystemPrompt).mockReturnValueOnce("Inbound metadata.");
     vi.mocked(buildSourceConversationContext).mockImplementation(
       ({ sourceReplyDeliveryMode }) => `direct:${sourceReplyDeliveryMode ?? "automatic"}`,
     );
@@ -1042,26 +1043,38 @@ describe("runPreparedReply media-only handling", () => {
         sourceReplyDeliveryModeOrigin: "runtime_default",
       } as NonNullable<Parameters<typeof runPreparedReply>[0]["opts"]> &
         SourceReplyDeliveryRuntimeOptions,
-      ...turn("hello", { ...createProviderSurface("discord"), ChatType: "direct" }),
+      ...turn("hello", {
+        ...createProviderSurface("discord"),
+        ChatType: "direct",
+        GroupSystemPrompt: "Persistent policy.",
+      }),
     });
 
     const call = requireRunReplyAgentCall(-1);
     const followupRun = call.followupRun;
     const run = followupRun.run;
+    const initialTurnContext = { start: 0, text: "Inbound metadata.\n\ndirect:message_tool_only" };
+    const automaticTurnContext = { start: 0, text: "Inbound metadata.\n\ndirect:automatic" };
+    const staticPrompt = "direct:message_tool_only\n\nPersistent policy.";
+    const persistentSuffix = "\n\nPersistent policy.\n\npost-compaction refresh";
     const sourceReplyDeliveryRuntime = readSourceReplyDeliveryRuntime(run);
-    expect(run.extraSystemPrompt).toBe("direct:message_tool_only");
-    expect(run.extraSystemPromptStatic).toBe("direct:message_tool_only");
+    expect(run.extraSystemPrompt).toBe(`${initialTurnContext.text}\n\nPersistent policy.`);
+    expect(run.extraSystemPromptTurnContext).toEqual(initialTurnContext);
+    expect(run.extraSystemPromptStatic).toBe(staticPrompt);
     run.extraSystemPrompt += "\n\npost-compaction refresh";
     sourceReplyDeliveryRuntime?.applyMode(run, "automatic");
-    expect(run.extraSystemPrompt).toBe("direct:message_tool_only\n\npost-compaction refresh");
+    expect(run.extraSystemPrompt).toBe(`${initialTurnContext.text}${persistentSuffix}`);
+    expect(run.extraSystemPromptTurnContext).toEqual(initialTurnContext);
     sourceReplyDeliveryRuntime?.applyPreparedMode(run, "automatic");
     expect(sourceReplyDeliveryRuntime?.currentMode).toBe("automatic");
-    expect(run.extraSystemPrompt).toBe("direct:automatic\n\npost-compaction refresh");
-    expect(run.extraSystemPromptStatic).toBe("direct:message_tool_only");
+    expect(run.extraSystemPrompt).toBe(`${automaticTurnContext.text}${persistentSuffix}`);
+    expect(run.extraSystemPromptTurnContext).toEqual(automaticTurnContext);
+    expect(run.extraSystemPromptStatic).toBe(staticPrompt);
     sourceReplyDeliveryRuntime?.applyPreparedMode(run, "message_tool_only");
-    expect(run.extraSystemPrompt).toBe("direct:message_tool_only\n\npost-compaction refresh");
+    expect(run.extraSystemPrompt).toBe(`${initialTurnContext.text}${persistentSuffix}`);
+    expect(run.extraSystemPromptTurnContext).toEqual(initialTurnContext);
     expect(run.cliSessionBindingFacts).toEqual({
-      extraSystemPromptStatic: "direct:message_tool_only",
+      extraSystemPromptStatic: staticPrompt,
       sourceReplyDeliveryMode: "message_tool_only",
     });
   });
@@ -2433,7 +2446,7 @@ describe("runPreparedReply media-only handling", () => {
       }
       await runPreparedReply(params);
       expect(requireRunReplyAgentCall().followupRun.run.bootstrapUserProfileId).toBe(
-        kind === "session-internal" ? undefined : "carol",
+        kind === "session-internal" ? "alice" : "carol",
       );
     },
   );

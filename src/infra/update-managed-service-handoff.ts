@@ -2,14 +2,14 @@
 // Native activation requires exact parent exit; foreground activation joins server/lock closure.
 // Both use the same prepared helper before activation, migration and successor verification.
 // No-op updates and failed validation leave the serving parent untouched.
-import { spawn } from "node:child_process";
+import { spawn, type SpawnOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveSystemdServiceName } from "../daemon/systemd-service-files.js";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
@@ -20,7 +20,6 @@ import {
 import { isPidAlive } from "../shared/pid-alive.js";
 import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome-classification.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
@@ -29,6 +28,7 @@ import { resolveNodeSqliteLocation } from "./node-sqlite.js";
 import { resolveOpenClawCliEntryPath } from "./openclaw-cli-invocation.js";
 import { probePortUsage } from "./ports-probe.js";
 import type { GatewayRestartIntent } from "./restart-intent.js";
+import { resolveRuntimeScriptEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import {
   readControlPlaneUpdateSentinelMeta,
@@ -77,6 +77,7 @@ import {
   prepareManagedHandoffCliRuntime,
   resolveManagedHandoffNodeExecutable,
 } from "./update-managed-service-handoff-node.js";
+import { hasForegroundUpdatePaths } from "./update-managed-service-handoff-origin.js";
 import { MANAGED_HANDOFF_PARENT_SOURCE } from "./update-managed-service-handoff-parent-source.js";
 import { MANAGED_HANDOFF_RESULT_SOURCE } from "./update-managed-service-handoff-result-source.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
@@ -1064,7 +1065,7 @@ async function spawnManagedServiceUpdateHandoff(
   owner.leaseStore = identityStore;
   const parentStartIdentity = identityStore.processIdentity(parentPid).startIdentity;
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX));
-  const scriptPath = path.join(dir, "handoff.cjs");
+  const scriptPath = fileURLToPath(resolveRuntimeScriptEntrypointUrl("managedUpdateHandoff", dir));
   const paramsPath = path.join(dir, "handoff.json");
   const metaPath = path.join(dir, "sentinel-meta.json");
   const triageInputPath = path.join(dir, "update-failure.json");
@@ -1112,10 +1113,9 @@ async function spawnManagedServiceUpdateHandoff(
       ...(params.foregroundOrigin ? { foregroundOrigin: params.foregroundOrigin } : {}),
     },
   };
-  let spawnCommand = handoffNodeExecutable;
   const spawnArgs = [...runtimeArgs, scriptPath, paramsPath];
   let scopeUnit: string | undefined;
-  let systemdRunPath: string | undefined;
+  let systemdScope: { command: string; args: string[] } | undefined;
   if (
     !params.foregroundOrigin &&
     params.supervisor === "systemd" &&
@@ -1129,22 +1129,24 @@ async function spawnManagedServiceUpdateHandoff(
     if (!systemdRun) {
       throw new Error("systemd-run is required to launch a transient user scope");
     }
-    systemdRunPath = systemdRun;
     const normalized = params.handoffId.trim().replace(/[^A-Za-z0-9_.:@-]+/gu, "-");
     const suffix =
       normalized.replace(/^-+|-+$/gu, "").slice(0, 80) || `${process.pid}-${Date.now()}`;
     scopeUnit = `openclaw-${params.action ? "triage" : "update"}-${suffix}.scope`;
-    spawnArgs.unshift(
-      "--user",
-      "--scope",
-      "--collect",
-      `--unit=${scopeUnit}`,
-      ...(params.action
-        ? [`--property=PartOf=${resolveSystemdServiceName(serviceEnv)}.service`]
-        : []),
-      spawnCommand,
-    );
-    spawnCommand = systemdRun;
+    systemdScope = {
+      command: systemdRun,
+      args: [
+        "--user",
+        "--scope",
+        "--collect",
+        `--unit=${scopeUnit}`,
+        ...(params.action
+          ? [`--property=PartOf=${resolveSystemdServiceName(serviceEnv)}.service`]
+          : []),
+        handoffNodeExecutable,
+        ...spawnArgs,
+      ],
+    };
   }
   const stateDatabasePath = resolveOpenClawStateSqlitePath(serviceEnv);
   const preparedEnv = resolveManagedHandoffCommandEnv(serviceEnv, metaPath, metaFile.meta.runId);
@@ -1166,7 +1168,7 @@ async function spawnManagedServiceUpdateHandoff(
     action: params.action?.kind ?? "update",
     failure: params.action?.failure,
     scopeUnit,
-    systemdRun: systemdRunPath,
+    systemdRun: systemdScope?.command,
     parentPid,
     parentStartIdentity,
     parentExitTimeoutMs: owner.parentExitTimeoutMs,
@@ -1255,7 +1257,7 @@ async function spawnManagedServiceUpdateHandoff(
     if (params.foregroundOrigin && isGatewayRestartDraining()) {
       throw new GatewayDrainingError();
     }
-    const spawned = spawn(spawnCommand, spawnArgs, {
+    const spawnOptions: SpawnOptions = {
       cwd: dir,
       env,
       detached: true,
@@ -1263,7 +1265,10 @@ async function spawnManagedServiceUpdateHandoff(
         helperParams.stateEngine === "postgres"
           ? ["pipe", "pipe", helperLog?.fd ?? "ignore", "ipc"]
           : ["pipe", "pipe", helperLog?.fd ?? "ignore"],
-    });
+    };
+    const spawned = systemdScope
+      ? spawn(systemdScope.command, systemdScope.args, spawnOptions)
+      : spawn(handoffNodeExecutable, spawnArgs, spawnOptions);
     const { stdin, stdout } = spawned;
     if (!stdin || !stdout) {
       throw new Error("Managed handoff control pipes are unavailable");
@@ -1641,15 +1646,6 @@ function currentManagedServiceUpdateHandoff(
     return undefined;
   }
   return active;
-}
-
-function hasForegroundUpdatePaths(origin: ForegroundUpdateOrigin, env: NodeJS.ProcessEnv): boolean {
-  return (
-    resolvePathViaExistingAncestorSync(resolveOpenClawStateSqlitePath(env)) ===
-      origin.stateDatabasePath &&
-    resolvePathViaExistingAncestorSync(resolveConfigPath(env, resolveStateDir(env))) ===
-      origin.configPath
-  );
 }
 
 /** Called only before activation; later admission consumes the live helper's joined park fact. */

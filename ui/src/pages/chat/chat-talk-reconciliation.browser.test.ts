@@ -61,6 +61,9 @@ it("reconciles persisted voice while preserving the live tail", async () => {
     },
   ];
   renderChatPropsInto(fixture, props);
+  // Inspect the mounted history as well as the live tail after reconciliation.
+  transcript.scrollToEnd();
+  await expect.poll(() => fixture!.querySelectorAll(".chat-text").length).toBe(2);
   expect(fixture.querySelectorAll(".agent-chat__voice-turn")).toHaveLength(1);
   const renderedMessages = [...fixture.querySelectorAll(".chat-text")]
     .map((element) => element.textContent)

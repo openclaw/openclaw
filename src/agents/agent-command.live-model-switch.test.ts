@@ -73,6 +73,7 @@ import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "./run-termination.js";
+import { rejectOnNextAbort } from "./test-helpers/abort-signal.js";
 
 const state = vi.hoisted(() => ({
   defaultRuntimeConfig: {
@@ -865,6 +866,13 @@ function setupSameModelFallback() {
     );
     return { result, provider: params.provider, model: params.model, attempts: [first] };
   });
+}
+
+function mockSuccessfulModelAttempts(): void {
+  state.runAgentAttemptMock.mockImplementation(
+    async (params: { providerOverride: string; modelOverride: string }) =>
+      makeSuccessResult(params.providerOverride, params.modelOverride),
+  );
 }
 
 function setupSuccessfulAttempt(provider = "openai", model = "gpt-5.4"): void {
@@ -2285,10 +2293,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         attempts: [],
       };
     });
-    state.runAgentAttemptMock.mockImplementation(
-      async (params: { providerOverride: string; modelOverride: string }) =>
-        makeSuccessResult(params.providerOverride, params.modelOverride),
-    );
+    mockSuccessfulModelAttempts();
 
     await runBasicAgentCommand();
 
@@ -2386,10 +2391,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         attempts: [],
       };
     });
-    state.runAgentAttemptMock.mockImplementation(
-      async (params: { providerOverride: string; modelOverride: string }) =>
-        makeSuccessResult(params.providerOverride, params.modelOverride),
-    );
+    mockSuccessfulModelAttempts();
 
     await runBasicAgentCommand();
 
@@ -2463,10 +2465,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       const result = await runSubsequentFallbackAttempt(params, "gmn", "gpt-5.4", "unknown");
       return { result, provider: "gmn", model: "gpt-5.4", attempts: [] };
     });
-    state.runAgentAttemptMock.mockImplementation(
-      async (params: { providerOverride: string; modelOverride: string }) =>
-        makeSuccessResult(params.providerOverride, params.modelOverride),
-    );
+    mockSuccessfulModelAttempts();
 
     await runBasicAgentCommand();
 
@@ -3410,18 +3409,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         commandSignal = signal;
         entered.resolve();
         signal.throwIfAborted();
-        return await new Promise((_, reject) => {
-          signal.addEventListener(
-            "abort",
-            () =>
-              reject(
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new Error("Agent command aborted without an Error reason"),
-              ),
-            { once: true },
-          );
-        });
+        return await rejectOnNextAbort(signal, "Agent command aborted without an Error reason");
       });
       const reason = createReason();
       const command = agentCommand({

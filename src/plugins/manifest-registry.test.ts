@@ -9,18 +9,15 @@ import type { PluginCandidate } from "./discovery.js";
 import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
 import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "./manifest-registry.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import {
+  cleanupTrackedTempDirs,
+  makeTrackedTempDir,
+  mkdirSafeDir as mkdirSafe,
+} from "./test-helpers/fs-fixtures.js";
 
 vi.unmock("../version.js");
 
 const tempDirs: string[] = [];
-function mkdirSafe(dir: string) {
-  fs.mkdirSync(dir, { recursive: true });
-  if (process.platform !== "win32") {
-    fs.chmodSync(dir, 0o755);
-  }
-}
-
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-manifest-registry", tempDirs);
 }

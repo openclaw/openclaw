@@ -13,7 +13,7 @@ import {
   readSqliteDatabaseScopedWriteToken,
   sqliteSessionIdWriteScope,
 } from "../infra/sqlite-database-admission.js";
-import { retainAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
+import { retainAgentDatabase } from "../state/openclaw-agent-db-borrower.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -36,6 +36,7 @@ import {
 import {
   appendSqliteTrajectoryRuntimeEvents,
   createTrajectoryEvent,
+  trajectoryEventBytes as eventBytes,
 } from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
 
@@ -72,10 +73,6 @@ function startCurrent(payloadSize?: number) {
   const current = currentEvent("current", { payloadSize });
   append("session-1", [current]);
   return current;
-}
-
-function eventBytes(events: readonly TrajectoryEvent[]) {
-  return events.reduce((total, row) => total + Buffer.byteLength(JSON.stringify(row)) + 1, 0);
 }
 
 function nextWindow(...retained: TrajectoryEvent[]) {

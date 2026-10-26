@@ -63,12 +63,8 @@ export function readSessionRoutingFacts(
 
 /** Canonicalize an opaque session key into the agent-scoped store namespace. */
 export function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
-  const lowered = normalizeLowercaseStringOrEmpty(key);
-  if (lowered === "global" || lowered === "unknown") {
-    return lowered;
-  }
   const normalized = normalizeSessionKeyPreservingOpaquePeerIds(key);
-  return normalized.startsWith("agent:")
+  return normalized === "global" || normalized === "unknown" || normalized.startsWith("agent:")
     ? normalized
     : `agent:${normalizeAgentId(agentId)}:${normalized}`;
 }

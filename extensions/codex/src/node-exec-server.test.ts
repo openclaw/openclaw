@@ -19,6 +19,7 @@ import {
 } from "./node-exec-server.js";
 
 type JsonRpcRecord = Record<string, unknown>;
+type NodeCommandContext = NonNullable<Parameters<OpenClawPluginNodeHostCommand["handle"]>[2]>;
 const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
 
 function policyContext(
@@ -65,32 +66,26 @@ function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
     sessionKey: "agent:main:paired-session",
   };
   const release = vi.fn();
-  const acquireManagedWorkspaceAsync = vi.fn(
-    async (request: {
-      workspaceDir: string;
-      environmentId: string;
-      sessionId: string;
-      ownerEpoch: number;
-      sessionKey: string;
-    }) => {
-      if (
-        request.workspaceDir !== cwd ||
-        request.environmentId !== placement.environmentId ||
-        request.sessionId !== placement.sessionId ||
-        request.ownerEpoch !== placement.ownerEpoch ||
-        request.sessionKey !== placement.sessionKey
-      ) {
-        throw new Error("node placement does not own the requested workspace");
-      }
-      return { workspaceDir: cwd, ...(homeDir ? { homeDir } : {}), release };
-    },
-  );
+  const acquireManagedWorkspaceAsync = vi.fn<
+    NonNullable<NodeCommandContext["acquireManagedWorkspaceAsync"]>
+  >(async (request) => {
+    if (
+      request.workspaceDir !== cwd ||
+      request.environmentId !== placement.environmentId ||
+      request.sessionId !== placement.sessionId ||
+      request.ownerEpoch !== placement.ownerEpoch ||
+      request.sessionKey !== placement.sessionKey
+    ) {
+      throw new Error("node placement does not own the requested workspace");
+    }
+    return { workspaceDir: cwd, ...(homeDir ? { homeDir } : {}), release };
+  });
   const context = {
     sessionKey: placement.sessionKey,
     sendNodeEvent: async () => undefined,
     acquireManagedWorkspaceAsync,
     prepareExecAuthorization: () => () => {},
-  } satisfies NonNullable<Parameters<OpenClawPluginNodeHostCommand["handle"]>[2]>;
+  } satisfies NodeCommandContext;
   return { placement, context, acquireManagedWorkspaceAsync, release };
 }
 
@@ -99,10 +94,7 @@ function createNodeFrames(testSignal?: AbortSignal) {
   const signal = testSignal ? AbortSignal.any([controller.signal, testSignal]) : controller.signal;
   const messages = new EventEmitter();
   let receive: ((message: Uint8Array) => void | Promise<void>) | undefined;
-  let signalReady = () => {};
-  const ready = new Promise<void>((resolve) => {
-    signalReady = resolve;
-  });
+  const { promise: ready, resolve: signalReady } = Promise.withResolvers<void>();
   const outbound: JsonRpcRecord[] = [];
   const io: OpenClawPluginNodeHostCommandIo = {
     signal,

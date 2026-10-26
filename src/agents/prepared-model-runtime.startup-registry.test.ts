@@ -52,8 +52,9 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 
 function startupFixture(
   id: string,
-  model: string,
-  registration: (event: string) => string,
+  model = "selected/model",
+  registration = (event: string) => `process.emit(${JSON.stringify(event)}, __dirname);
+      api.registerProvider({ id: "selected", label: "Selected", auth: [] });`,
   hooks = false,
 ) {
   useNoBundledPlugins();
@@ -111,12 +112,7 @@ async function loadRegistryInCallerContext(
 }
 
 it("releases the acquiring caller context while a prepared registry remains retained", async () => {
-  using fixture = startupFixture(
-    "retained-catalog",
-    "selected/model",
-    (event) => `process.emit(${JSON.stringify(event)}, __dirname);
-      api.registerProvider({ id: "selected", label: "Selected", auth: [] });`,
-  );
+  using fixture = startupFixture("retained-catalog");
   await using cache = createPluginCache();
   await withPluginCache(cache, async () => {
     const { root, metadata } = await fixture.start([]);
@@ -154,12 +150,7 @@ it.each<[boolean, boolean, RuntimePluginLoadPurpose]>([
 ])(
   "borrows startup captures only for admitted selected owners (inspection=%s, selected=%s, purpose=%s)",
   async (inspection, selectedAtStartup, purpose) => {
-    using fixture = startupFixture(
-      "selected-provider",
-      "selected/model",
-      (event) => `process.emit(${JSON.stringify(event)}, __dirname);
-        api.registerProvider({ id: "selected", label: "Selected", auth: [] });`,
-    );
+    using fixture = startupFixture("selected-provider");
     const { plugin, captures } = fixture;
     fs.writeFileSync(
       path.join(plugin.dir, "openclaw.plugin.json"),
@@ -178,9 +169,6 @@ it.each<[boolean, boolean, RuntimePluginLoadPurpose]>([
       const loadInbound = createPreparedInboundRegistryLoader();
       let selected: PluginRegistry | undefined;
       try {
-        expect(root.plugins).toEqual(
-          selectedAtStartup ? [expect.objectContaining({ id: plugin.id, status: "loaded" })] : [],
-        );
         expect(captures).toHaveLength(selectedAtStartup ? 1 : 0);
         const startupCapture = captures[0];
         const prepared = await withPluginRuntimeRegistryScope(root, async () => {

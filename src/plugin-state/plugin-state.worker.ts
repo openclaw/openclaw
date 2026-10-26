@@ -200,6 +200,17 @@ export function executePluginStateCommand(
         const result = withPluginStateDatabaseReadOnly(
           "lookup",
           (store) => {
+            const shortcut = command.input.ifEmpty;
+            if (shortcut) {
+              const probe = executePluginStateOperation(
+                store,
+                command.input,
+                (_command, tx) => tx.entries(shortcut.store).length === 0,
+              );
+              if (probe.value) {
+                return { ...probe, value: shortcut.value, emptyShortcut: true as const };
+              }
+            }
             const run = () => executePluginStateOperation(store, command.input, handler);
             return store.db.isTransaction ? run() : runSqliteReadSnapshotSync(store.db, run);
           },

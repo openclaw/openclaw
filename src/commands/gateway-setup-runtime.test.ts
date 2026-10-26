@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { runtimeFixture } from "../cli/update-cli/update-command-fixtures.test-support.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { DaemonRuntimePinSnapshot } from "../daemon/runtime-pin-types.js";
 import { resolveDaemonInstallRuntimeInputs } from "./daemon-install-plan.shared.js";
+import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 
 const readPin = vi.hoisted(() => vi.fn<() => DaemonRuntimePinSnapshot>());
@@ -57,14 +59,10 @@ it.each([
   async ({ flow, nodePath, suggested }) => {
     Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
     vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue(nodePath);
-    vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
-      status: "supported",
-      version: "1.4.3",
-      sqliteVersion: "3.53.4",
-      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      nodeSharedSqlite: false,
-    });
-    const select = vi.fn(async (runtime: "node" | "bun") => runtime);
+    vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue(
+      runtimeFixture("1.4.3", "3.53.4"),
+    );
+    const select = vi.fn(async (runtime: GatewayDaemonRuntime) => runtime);
     const selection = await resolveGatewaySetupRuntime({
       env: {},
       existingCommand: null,

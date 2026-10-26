@@ -571,7 +571,7 @@ suite.define(() => {
           deferredMethods: ["sessions.move"],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await page.getByText("Run the workspace checks headlessly.", { exact: true }).waitFor();
         await page.waitForLoadState("networkidle");
         const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [], {

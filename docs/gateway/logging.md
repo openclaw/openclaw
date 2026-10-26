@@ -79,6 +79,14 @@ error. Check the reported cleanup error before retrying. Successful cleanup
 stays quiet, and failures remain best effort. Console diagnostics use the shared
 secret redactor; plain-text console fields are capped at 2,048 characters.
 
+Plugin replacement logs bounded retained-reference snapshots when work queues
+and warns when its drain deadline expires. Structured file records include the
+acquisition owner fields that were available when each reference was created:
+`agentId`, `sessionKey`, `runId`, and `serviceId`. These raw facts identify the
+work holding the previous generation; a missing owner stays `unknown`. Normal
+log egress applies secret redaction, and support bundles omit the nested owner
+details. Plain-text timeout warnings include the bounded structured fields.
+
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 
 ```bash

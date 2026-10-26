@@ -5,6 +5,18 @@ export const URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_test%40thread.v2/0?context=%7b%7d";
 export const CONSUMER_URL = "https://teams.live.com/meet/9326458712345?p=abc";
 export const MEETING_STATE_KEY = "__openclawTeamsMeeting";
+export const AUDIO_OUTPUTS = "__openclawTeamsAudioOutputs";
+export const MEETING_IDENTITY = "teams-work:19:meeting_test@thread.v2";
+export const meetingOwner = (overrides: Record<string, unknown> = {}) => ({
+  identity: MEETING_IDENTITY,
+  sessionId: "session-1",
+  ...overrides,
+});
+export const blackholeDevice = (kind: "input" | "output") => ({
+  deviceId: `blackhole-${kind}`,
+  kind: `audio${kind}`,
+  label: "BlackHole 2ch",
+});
 
 export function consumerLightMeetingUrl(meetingCode: string, passcode: string) {
   const coordinates = btoa(JSON.stringify({ meetingCode, passcode }));
@@ -92,11 +104,20 @@ export function control(params: {
   return node;
 }
 
+export const toggleOff = (kind: "camera" | "microphone") =>
+  control({ label: `Turn ${kind} off`, pressed: true, onClick: (node) => node.setPressed(false) });
+
+export const audioEntry = (
+  source: object,
+  bridge: object,
+  extra: Record<string, unknown> = {},
+) => ({ bridge, sessionId: "session-1", source, sourceMuted: false, ...extra });
+
 function findControl(
   selector: string | undefined,
-  entries: Array<[string, PageControl | undefined]>,
+  entries: Record<string, PageControl | undefined>,
 ) {
-  return entries.find(([needles]) =>
+  return Object.entries(entries).find(([needles]) =>
     needles.split("|").some((needle) => selector?.includes(needle)),
   )?.[1];
 }
@@ -109,10 +130,10 @@ export function captionRow(speaker: string, text: string, rowIdentity?: string):
   row.getAttribute = (name) =>
     name === "aria-posinset" && rowIdentity ? rowIdentity : getAttribute(name);
   row.querySelector = (selector) =>
-    findControl(selector, [
-      ['data-tid="author"', author],
-      ['data-tid="closed-caption-text"', content],
-    ]);
+    findControl(selector, {
+      'data-tid="author"': author,
+      'data-tid="closed-caption-text"': content,
+    });
   return row;
 }
 
@@ -204,26 +225,22 @@ export async function runStatusScript(params: StatusScriptParams) {
         ? (params.microphoneDeviceMenuAfterSettings ?? params.microphoneDeviceAfterSettings)
         : undefined;
       const captionsVisible = params.captionRows && captionsOn;
-      return findControl(selector, [
-        ["toggle-mute", params.microphone],
-        ["toggle-video", params.camera],
-        ["prejoin-join-button", params.join],
-        ["call-hangup|hangup-button", params.leave],
-        ["More", params.captionRows ? moreActions : undefined],
-        [
-          "closed-captions-button|title*=",
+      return findControl(selector, {
+        "toggle-mute": params.microphone,
+        "toggle-video": params.camera,
+        "prejoin-join-button": params.join,
+        "call-hangup|hangup-button": params.leave,
+        More: params.captionRows ? moreActions : undefined,
+        "closed-captions-button|title*=":
           params.captionRows && captionMenuOpen ? captionButton : undefined,
-        ],
-        ["closed-caption-renderer-wrapper", captionsVisible ? captionRenderer : undefined],
-        ["closed-caption-v2-virtual-list-content", captionsVisible ? captionContent : undefined],
-        ["audio-button-configure|Open audio options|device-settings-button", params.deviceSettings],
-        [
-          "selected-microphone-display|microphone-select|audio-device-input|device-settings-microphone",
+        "closed-caption-renderer-wrapper": captionsVisible ? captionRenderer : undefined,
+        "closed-caption-v2-virtual-list-content": captionsVisible ? captionContent : undefined,
+        "audio-button-configure|Open audio options|device-settings-button": params.deviceSettings,
+        "selected-microphone-display|microphone-select|audio-device-input|device-settings-microphone":
           selected,
-        ],
-        ["microphone-settings", menu],
-        ["permission-prompt|permission-error", params.permissionPrompt],
-      ]);
+        "microphone-settings": menu,
+        "permission-prompt|permission-error": params.permissionPrompt,
+      });
     },
     querySelectorAll(selector: string) {
       return selector === "button"
@@ -327,14 +344,11 @@ export function runAudioStatusScript(params: StatusOverrides = {}) {
 export function audioStatusParams(params: StatusOverrides = {}): StatusScriptParams {
   return {
     allowMicrophone: true,
-    devices: [
-      { deviceId: "blackhole-input", kind: "audioinput", label: "BlackHole 2ch" },
-      { deviceId: "blackhole-output", kind: "audiooutput", label: "BlackHole 2ch" },
-    ],
+    devices: [blackholeDevice("input"), blackholeDevice("output")],
     leave: control({ label: "Leave" }),
     microphone: control({ label: "Turn microphone off", pressed: true }),
     microphoneDevice: control({ label: "BlackHole 2ch" }),
-    priorMeeting: { identity: "teams-work:19:meeting_test@thread.v2" },
+    priorMeeting: { identity: MEETING_IDENTITY },
     ...params,
   };
 }
@@ -355,10 +369,10 @@ export function runLeaveScript(params: {
   const document = {
     body: { textContent: params.bodyText ?? "" },
     querySelector(selector: string) {
-      return findControl(selector, [
-        ["call-hangup", params.leave],
-        ["call-ended-screen|post-call-screen|prejoin-rejoin-button", params.postCall],
-      ]);
+      return findControl(selector, {
+        "call-hangup": params.leave,
+        "call-ended-screen|post-call-screen|prejoin-rejoin-button": params.postCall,
+      });
     },
   };
   const window = priorWindow({ priorAudioOutputs: params.priorAudioOutputs });

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isPathInside } from "./fs-safe.js";
@@ -8,12 +9,14 @@ import {
   completePendingPackageLifecycle,
   discardPendingPackageLifecycle,
   PackageLifecycleOwnershipError,
+  type PackageLifecycleScript,
 } from "./package-lifecycle.js";
 import { removePackageUpdatePath } from "./package-update-filesystem.js";
 import { classifyPackageUpdatePermissionFailure } from "./package-update-manager-preflight.js";
 import type { StagedPackageInstall } from "./package-update-swap-contract.js";
 import { mergePathPrepend } from "./path-prepend.js";
 import { resolveEnvironmentValue } from "./process-env.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 import { verifyPackageUpdateRecovery, type ResolvedGlobalInstallTarget } from "./update-global.js";
 import { prepareNativePackageStage } from "./update-native-package-stage.js";
 import {
@@ -64,12 +67,14 @@ export async function runPackageUpdateLifecycle(params: {
     await completePendingPackageLifecycle({
       packageRoot: params.packageRoot,
       timeoutMs: params.timeoutMs,
-      runScript: async (script) => {
+      runScript: async (script: PackageLifecycleScript) => {
         const step = await params.runStep({
           name: `${params.manager}-package-${script.name}`,
           argv: [
             params.nodeRunner ?? process.execPath,
-            path.join(params.packageRoot, script.relativePath),
+            fileURLToPath(
+              resolveExternalPackageRuntimeEntrypointUrl(script.name, params.packageRoot),
+            ),
           ],
           cwd: params.packageRoot,
           env,

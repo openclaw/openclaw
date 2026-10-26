@@ -5,7 +5,6 @@ import {
   createGatewayEvent,
   createGatewayStoreTestStore,
 } from "../../app/gateway-store.test-support.ts";
-import { loadSettings } from "../../app/settings.ts";
 import { i18n } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
@@ -14,6 +13,7 @@ import { createContext } from "../../test-helpers/app-sidebar.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
+  activitySettings,
   activityHello,
   activityResponse,
   activityRoster,
@@ -23,13 +23,7 @@ import {
 it("expires presence without another event, catches up after hiding, and stops on disposal", async () => {
   await i18n.setLocale("en");
   const { gateway: source, current } = createGatewayStoreTestStore({
-    settings: {
-      ...loadSettings(),
-      gatewayUrl: "wss://activity.example.test",
-      token: "",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-    },
+    settings: activitySettings(),
   });
   const sessions = createTestSessionCapability(source);
   try {

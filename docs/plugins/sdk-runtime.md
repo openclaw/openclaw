@@ -141,52 +141,47 @@ session, and current model authority.
 Start a normal parent turn
 in the current runtime before requesting a fork. The native hook relay must be
 enabled and available; otherwise the request fails closed.
-The built-in `openclaw` runtime replays the parent's recorded provider request,
-followed by its completed messages and the side question, preserving its system prompt, tools, reasoning
-settings, and prompt-cache affinity for OpenAI and Anthropic. It reuses prepared
-payload data without re-running the parent's one-shot continuation hooks.
-Completed asynchronous tool calls, their outcomes, and the final answer remain in
-conversation order.
-If a published tool call is still running when the fork starts, the built-in
-runtime includes a non-error placeholder saying its result is not available yet.
-This does not cancel the parent call or persist a result in the parent session.
-The replay uses the current prepared model's proxy and TLS policy. Session read
-authority is checked immediately before every network send, including retries.
+The built-in `openclaw` runtime builds the fork request when `forkSession` is
+called. Normal model turns do not serialize or retain fork snapshots, copy
+published messages, or schedule fork expiry timers. Active forks read the running
+session's current context; completed sessions are reconstructed from the persisted
+model context, including compaction and the pinned system prompt and tool schemas.
+Sessions with history can be forked after a restart without sending another normal
+message first. Routes without a persisted prompt pin rebuild their configured
+system prompt at fork time.
+Completed-session forks apply the configured channel history window and preserve
+compaction summaries. All built-in runtime forks omit the parent's prompt-cache
+identity, including forks of running sessions: they rebuild context independently
+and do not share the parent's complete request preparation.
+
+The fork uses the same provider payload builders as a normal request. Unchanged
+prompt and tool prefixes can reuse the provider's prompt cache. Cache reuse is
+not guaranteed: reconstruction, compaction, images, and one-shot context or
+payload hooks can produce different bytes. Forks do not re-run the parent's
+one-shot hooks. They return text and usage even when reconstruction misses the
+cache; callers should use the returned cache-read usage to measure actual reuse.
+
+Completed tool calls and their outcomes remain in conversation order. A tool
+call still running when the fork starts receives a non-error placeholder saying
+its result is not available yet. This does not cancel the call or persist a
+result in the parent session.
+
+The request uses the current model's credentials, proxy, and TLS policy. Session
+read authority is checked immediately before network sends, including retries.
 Native ChatGPT forks use independent connections without consuming or replacing
 the parent's continuation. Supported APIs are OpenAI Responses (including native
 ChatGPT), Chat Completions, and Anthropic Messages. Other APIs, including Bedrock,
-fail before dispatch because their transports cannot enforce the fork's live
-request authority.
-Tool choice is set to `none` before dispatch to prevent hosted tool execution;
-local tool calls are also denied, with at most two additional inference attempts.
-On Anthropic, changing tool choice invalidates the messages cache, but preserves
-the tool and system caches. Other APIs without a supported hosted-tool prohibition
-are rejected when the recorded request contains tools.
-The built-in runtime keeps snapshots for up to 90 minutes, with a shared 64 MiB
-retained-data budget and at most 1,000 sessions, until expiry or session cleanup.
-The budget includes request bytes, detached replay options, later publications
-(including Blob and typed-array backing storage), and conservative container and
-timer overhead. Shared transport runtimes are owned by their lifecycle, outside
-this request-data budget. Data that cannot be safely copied and accounted for
-does not replace an existing snapshot; an unretainable publication retires it.
-Opaque Blob publications retain a copy of their visible bytes, so a slice cannot
-pin a larger backing allocation. Forks wait for those copies before replay;
-shared-memory buffers cannot be retained for isolated replay.
-Keeping a snapshot does not retain the completed parent session or its transcript manager.
-The built-in runtime retains the prepared provider prefix instead of a second copy
-of conversation history. Forks convert only later publications and the side question;
-HTTP continuations retain the full prefix even when the parent sends only a suffix.
-Read-only forks do not acquire workspace placement authority, so a parent's
-pending placement publication does not block them. Normal parent settlement and
-usage updates preserve the fork's read authority. Session reset or deletion
-revokes even an in-flight fork before its answer can be returned.
-After a restart or without a prepared parent turn, the request fails closed:
-"Cache-parity session fork requires a parent turn prepared by this OpenClaw
-runtime. Send a normal message first." CLI runtimes are unsupported for
-`forkSession`, even when their backend can disable native tools. Ordinary `/btw`
-keeps its lightweight, tool-free context; CLI backends with native tools must
-explicitly support disabling them for side questions, while backends with no
-native tools need no additional declaration.
+fail before dispatch because their transports cannot enforce live fork authority.
+Tool choice is set to `none` to prevent hosted tool execution; local tool calls
+are denied, with at most two additional inference attempts. On Anthropic, changing
+tool choice invalidates the messages cache, while the tool and system caches can
+remain reusable.
+
+Read-only forks do not acquire workspace placement authority, write a transcript,
+or change the parent's history. Normal parent settlement preserves a fork's read
+authority; session reset or deletion revokes it before an answer can be returned.
+CLI runtimes remain unsupported for `forkSession`. Ordinary `/btw` keeps its
+lightweight, tool-free context.
 
 Conversation access is required through
 `plugins.entries.<id>.hooks.allowConversationAccess` (enabled by default only for
@@ -558,6 +553,15 @@ recipes in the worker/admission-only
 are opened through `openEngineStore`, without a public connection constructor.
 See [Database engine adapters](/plugins/sdk-overview/infrastructure#database-engine-adapters-experimental)
 for the contracts and boundary.
+
+Core worker transports carry PostgreSQL I/O pool endpoints into their children.
+An externally constructed worker, including one created with `createCpuTrackedWorker`,
+can still open PostgreSQL without that private capability: on first use it starts
+its own four I/O services through the same pool owner. This emits a once-per-thread
+warning and `openclaw.postgres.pool.self-root` diagnostic (`threadId`, `owner`), and
+increments `postgresPoolSelfRootCount` in worker diagnostics. The public worker
+constructor and connection ownership contracts are unchanged. Prefer the existing
+core worker transports when available to share the process pool.
 
 `readSqliteDatabaseWriteTokenForPath` from `openclaw/plugin-sdk/sqlite-runtime`
 reads the existing physical database identity and in-process writer receipt without
@@ -932,3 +936,19 @@ attempt-scoped snapshot or cold-start facts. Environment status and session
 placement expose these facts as `startStatus`; the host closes the callback when
 the attempt finishes or loses authority. Report capture progress only when capture
 is claimed. These display facts do not change allocation or enrollment ownership.
+
+## Runtime schema validation
+
+`openclaw/plugin-sdk/runtime-profile` exports `getRuntimeExecutionProfile()` and
+`RuntimeExecutionProfile` for choosing an implementation appropriate to the host.
+The profile is a process-stable build fact, not execution authorization.
+
+`openclaw/plugin-sdk/json-schema-validator` exports
+`createJsonSchemaValidatorProvider({ dialect, formats, validateSchema?, duplicateIds? })`
+for codegen-free JSON Schema checks. The provider owns schema preparation, reference
+registration, and cached checks. `formats` defines assertion formats; an empty map
+keeps formats as annotations. Set `validateSchema: true` when a consumer requires
+metaschema admission, and `duplicateIds: "reject"` when a new schema cannot reuse a
+registered root ID. The defaults preserve MCP's existing schema-admission behavior.
+Keep one provider per reference namespace; use a new provider when schemas must not
+retain references to previously registered IDs.

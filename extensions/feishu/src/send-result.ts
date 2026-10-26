@@ -45,7 +45,7 @@ function createFeishuSendReceipt(params: {
           },
         ]
       : [],
-    ...(params.replyToId?.trim() ? { replyToId: params.replyToId.trim() } : {}),
+    replyToId: params.replyToId?.trim() || undefined,
     kind: params.kind ?? "unknown",
   });
 }

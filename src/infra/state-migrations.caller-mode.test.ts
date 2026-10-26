@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginSetupModule from "../plugins/plugin-setup-module.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -325,25 +326,11 @@ it("keeps an unbound configured agent database unopened during copied-state plan
     const externalArtifactsBeforePlan = snapshotExternalArtifacts();
     expect(externalArtifactsBeforePlan["-wal"]).toBeDefined();
     expect(externalArtifactsBeforePlan["-shm"]).toBeDefined();
-    // oxlint-disable-next-line typescript/unbound-method
-    const originalPrepare = DatabaseSync.prototype.prepare;
     const externalQueries: string[] = [];
-    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-      this: DatabaseSync,
-      sql,
-    ) {
-      const databases = originalPrepare.call(this, "PRAGMA database_list").all() as Array<{
-        file?: unknown;
-      }>;
-      if (
-        databases.some(
-          (entry) =>
-            typeof entry.file === "string" && path.resolve(entry.file) === externalDatabasePath,
-        )
-      ) {
+    observeHostDataSql((sql, connection) => {
+      if (connection?.location() === externalDatabasePath) {
         externalQueries.push(sql);
       }
-      return originalPrepare.call(this, sql);
     });
     const plan = await fixture.plan();
     expect(snapshotExternalArtifacts()).toEqual(externalArtifactsBeforePlan);
@@ -364,7 +351,9 @@ it("keeps an unbound configured agent database unopened during copied-state plan
       });
     }
 
+    expect(externalQueries).toEqual([]);
     database.exec("INSERT INTO external_probe(value) VALUES ('wal-change')");
+    externalQueries.length = 0;
     const repeatedPlan = await fixture.plan();
     expect(repeatedPlan.planDigest).toBe(plan.planDigest);
     expect(repeatedPlan.snapshot.stateDigest).toBe(plan.snapshot.stateDigest);

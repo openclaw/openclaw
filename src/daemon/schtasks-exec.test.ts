@@ -1,6 +1,7 @@
 // Windows schtasks exec tests cover scheduled task command execution.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { execScheduledTaskEnabledChange, execSchtasks } from "./schtasks-exec.js";
 import { isRegisteredScheduledTask } from "./schtasks-runtime.js";
 
@@ -26,14 +27,9 @@ describe("execScheduledTaskEnabledChange", () => {
   ] as const)(
     "preserves only a confirmed native HRESULT from $termination: $stdout",
     async ({ stdout, termination, hresult }) => {
-      runCommandWithTimeout.mockResolvedValue({
-        stdout,
-        stderr: "",
-        code: 1,
-        signal: null,
-        killed: termination !== "exit",
-        termination,
-      });
+      runCommandWithTimeout.mockResolvedValue(
+        createCommandResult({ stdout, code: 1, killed: termination !== "exit", termination }),
+      );
 
       const result = await execScheduledTaskEnabledChange("OpenClaw Gateway", false);
 
@@ -52,14 +48,7 @@ afterEach(() => vi.unstubAllEnvs());
 describe("execSchtasks", () => {
   it("runs schtasks with a bounded timeout", async () => {
     vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
-    runCommandWithTimeout.mockResolvedValue({
-      stdout: "ok",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+    runCommandWithTimeout.mockResolvedValue(createCommandResult({ stdout: "ok" }));
 
     await expect(execSchtasks(["/Query"])).resolves.toEqual({
       stdout: "ok",
@@ -84,14 +73,9 @@ describe("execSchtasks", () => {
   ] as const)(
     "maps $termination into a non-zero lifecycle result",
     async ({ termination, detail }) => {
-      runCommandWithTimeout.mockResolvedValue({
-        stdout: "",
-        stderr: "",
-        code: null,
-        signal: "SIGTERM",
-        killed: true,
-        termination,
-      });
+      runCommandWithTimeout.mockResolvedValue(
+        createCommandResult({ code: null, signal: "SIGTERM", killed: true, termination }),
+      );
 
       await expect(
         execSchtasks(["/Change", "/TN", "OpenClaw Gateway", "/DISABLE"]),

@@ -380,11 +380,16 @@ export function buildUsageOverview(params: {
     hourlyMessages: Array.from({ length: 24 }, () => 0),
     hourlyErrors: Array.from({ length: 24 }, () => 0),
     filterOptions: {
-      agent: [...filters.agent].toSorted(),
-      channel: [...filters.channel].toSorted(),
-      provider: [...filters.provider].toSorted(),
-      model: [...filters.model].toSorted(),
-      tool: [...filters.tool].toSorted(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+      agent: [...filters.agent].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+      channel: [...filters.channel].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+      provider: [...filters.provider].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+      model: [...filters.model].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+      tool: [...filters.tool].sort(),
     },
   };
   for (const session of matched) {

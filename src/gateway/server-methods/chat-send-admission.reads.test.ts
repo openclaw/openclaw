@@ -820,3 +820,27 @@ it.each([
     }
   }),
 );
+it("names the changed store key when refusing a send prepared against stale storage", () =>
+  withAdmissionTest("chat-admission-store-key-changed", async (f) => {
+    f.seed();
+    const admission = await f.prepare();
+    const { sessionTarget } = admission.session;
+    const respond = vi.fn();
+    const outcome = await admitChatSend({
+      ...admission,
+      session: {
+        ...admission.session,
+        sessionTarget: { ...sessionTarget, storeKey: `${sessionTarget.storeKey}:replaced` },
+      },
+      respond,
+    });
+    expect(outcome.ok).toBe(false);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "Error: Session storage changed while starting work (store key). Retry.",
+      }),
+    );
+    expect(getRpcSource(f.runId)).toBeUndefined();
+  }));

@@ -169,6 +169,15 @@ If only one path is available, the other runs alone. Keyword boosts stay bounded
 without clipping distinct lexical scores to the same maximum, so relevance
 continues to influence ranking when dated notes decay.
 
+When both paths return results, the builtin engine scales each query's keyword
+scores before weighting them. The strongest keyword match earns at most the best
+semantic score, and every other keyword match earns a share in proportion to its
+BM25 relevance, never more than its own keyword score. A match much weaker than
+the query's best keyword match adds little, so sharing a common word rarely
+outweighs a note that is closer in meaning. This matters most for questions
+asked in a different language than the notes. `minScore` applies to the weighted
+sum of the cosine similarity and the scaled keyword score.
+
 The builtin engine then applies fixed ranking rules:
 
 ```text
@@ -228,7 +237,9 @@ redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
 there are no matches.
 
 A failed local embedding request preserves keyword access to a matching index
-and records the degraded provider in memory status and Gateway logs. A real model
+and records the degraded provider in memory status and Gateway logs. A query
+embedding that comes back as all zeros skips vector recall for that search and
+is reported in the Gateway log, so keyword-only results never pass silently. A real model
 or index-configuration mismatch still pauses search instead of serving
 mismatched data.
 

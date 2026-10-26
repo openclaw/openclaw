@@ -17,7 +17,10 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
+import {
+  openNativeMenu,
+  renderPaneHeaderInto,
+} from "./components/chat-pane-header.test-support.ts";
 import { isSidebarSlotVisible, type SidebarLayout } from "./sidebar-layout.ts";
 
 type DashboardPane = TestChatPane & {
@@ -37,7 +40,6 @@ type DashboardPane = TestChatPane & {
   handleBoardCommand: (event: BoardCommandEvent) => void;
   saveDashboardDefault: (row: GatewaySessionRow, agentId: string | undefined) => Promise<void>;
 };
-type HeaderMenu = HTMLElement;
 
 export const key = "agent:main:dashboard-defaults";
 
@@ -58,16 +60,6 @@ async function settleDashboardMenu() {
   flush();
   await Promise.resolve();
   flush();
-}
-
-async function openDashboardMenu(menu: HTMLElement) {
-  await settleDashboardMenu();
-  const panel = menu.querySelector<HTMLElement>(".oc-menu")!;
-  if (!panel.matches(":popover-open")) {
-    menu.querySelector<HTMLButtonElement>(".chat-dashboard-menu__trigger")!.click();
-    await settleDashboardMenu();
-  }
-  expect(panel.matches(":popover-open")).toBe(true);
 }
 
 export function createDashboardHarness(
@@ -185,14 +177,14 @@ export function createDashboardHarness(
       dashboard = mountSolid(() => pane.dashboardControls);
       onTestFinished(dashboard.unmount);
     }
-    const menu = dashboard.container.querySelector<HeaderMenu>(".chat-dashboard-menu");
+    const menu = dashboard.container.querySelector<HTMLElement>(".chat-dashboard-menu");
     expect(menu).not.toBeNull();
     if (
       state.sidebarLayout.columns.some((column) =>
         column.panels.some((panel) => panel.slot === "dashboard"),
       )
     ) {
-      await openDashboardMenu(menu!);
+      await openNativeMenu(menu!);
     } else {
       expect(
         presentation.header.layoutMenuActions?.find((action) => action.id === "dashboard-default"),
@@ -220,19 +212,16 @@ export function createDashboardHarness(
   };
 }
 
-export async function select(menu: ParentNode, value: string) {
-  if (!(menu instanceof HTMLElement) || !menu.matches(".chat-dashboard-menu")) {
-    throw new Error("Expected native Dashboard menu");
-  }
-  await openDashboardMenu(menu);
-  const item = menu.querySelector<HTMLElement>(`[data-value="${value}"]`);
-  expect(item, "Expected Dashboard action: " + value).not.toBeNull();
-  item!.click();
-  await settleDashboardMenu();
-}
-
 export function expectPresentation(layout: SidebarLayout, expanded: boolean) {
   expect(isSidebarSlotVisible(layout, "dashboard")).toBe(true);
   expect(layout.expanded).toBe(expanded);
   expect(isSidebarSlotVisible(layout, "conversation")).toBe(!expanded);
+}
+
+export async function select(menu: HTMLElement, value: string) {
+  await openNativeMenu(menu);
+  const item = menu.querySelector<HTMLElement>(`[data-value="${value}"]`);
+  expect(item, "Expected Dashboard action: " + value).not.toBeNull();
+  item!.click();
+  await settleDashboardMenu();
 }

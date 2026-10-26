@@ -6,7 +6,7 @@ import { expect } from "vitest";
 import { validReview } from "./pr-review-artifact-fixture.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
-export const cliFlags = (values: Record<string, string>) => Object.entries(values).flat();
+const cliFlags = (values: Record<string, string>) => Object.entries(values).flat();
 
 export function failRestore(root: string, env: NodeJS.ProcessEnv) {
   const realGit = spawnSync("sh", ["-c", "command -v git"], {

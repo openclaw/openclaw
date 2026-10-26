@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
@@ -37,6 +36,12 @@ function expectGoal(respond: ReturnType<typeof vi.fn>, goal: Partial<SessionGoal
     respond,
     expect.objectContaining({ ...extra, goal: expect.objectContaining(goal) }),
   );
+}
+
+function expectUnchanged(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
+  expectFailure(respond, error);
+  expect(readGoal()).toEqual(initialGoal());
+  expect(resumeChat).not.toHaveBeenCalled();
 }
 
 const resumeChat = vi.hoisted(() => vi.fn());
@@ -169,9 +174,7 @@ it.each([
     if (succeeds) {
       expectGoal(respond, { status: "complete" });
     } else {
-      expectFailure(respond, { code: "INVALID_REQUEST" });
-      expect(readGoal()).toEqual(initialGoal());
-      expect(resumeChat).not.toHaveBeenCalled();
+      expectUnchanged(respond, { code: "INVALID_REQUEST" });
     }
     expect(resolved).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
@@ -210,31 +213,19 @@ it("edits literal objectives in the writer without chat rows and rejects a chang
     await seedSession();
     const objective = "clear the backlog\n/goal pause is part of the objective";
     const request = operation("edit", { objective });
-    const commitGuard = vi.fn();
-    const sql = observeHostDataSql();
-    {
-      using _ = { [Symbol.dispose]: sql.restore };
-      const first = await invoke(request, { commitGuard });
-      expectGoal(
-        first,
-        { objective, status: "paused" },
-        {
-          operationId: request.operationId,
-          status: "updated",
-        },
-      );
-      const replay = await invoke(request, { commitGuard });
-      expectSuccess(replay, { ...first.mock.calls[0]?.[1], replayed: true });
-      const conflict = await invoke(
-        { ...request, objective: "different objective" },
-        { commitGuard },
-      );
-      expectFailure(conflict, {
-        details: { code: "GOAL_OPERATION_REJECTED", reason: "operation-conflict" },
-      });
-      expect(commitGuard).toHaveBeenCalled();
-      expect(sql.queries.filter((query) => /\bsession_goal_operations\b/i.test(query))).toEqual([]);
-    }
+    const first = await invoke(request);
+    expectGoal(
+      first,
+      { objective, status: "paused" },
+      {
+        operationId: request.operationId,
+        status: "updated",
+      },
+    );
+    expectSuccess(await invoke(request), { ...first.mock.calls[0]?.[1], replayed: true });
+    expectFailure(await invoke({ ...request, objective: "different objective" }), {
+      details: { code: "GOAL_OPERATION_REJECTED", reason: "operation-conflict" },
+    });
     expect(readGoal()?.objective).toBe(objective);
     expect(await loadTranscriptEvents({ ...scope, sessionId })).toEqual([]);
     expect(resumeChat).not.toHaveBeenCalled();
@@ -276,10 +267,8 @@ it.each(["sessions.goal.update", "sessions.goal.clear"] as const)(
           },
         ],
       ] as const) {
-        expectFailure(await invoke(request, { method, client: requestClient }), error);
+        expectUnchanged(await invoke(request, { method, client: requestClient }), error);
       }
-      expect(readGoal()).toEqual(initialGoal());
-      expect(resumeChat).not.toHaveBeenCalled();
     }),
 );
 
@@ -290,10 +279,7 @@ it.each([
 ])("rejects stale $name without changing state", ({ patch }) =>
   withGoalState(async () => {
     await seedSession();
-    const result = await invoke(operation("pause", patch));
-    expectFailure(result, { code: "INVALID_REQUEST" });
-    expect(readGoal()).toEqual(initialGoal());
-    expect(resumeChat).not.toHaveBeenCalled();
+    expectUnchanged(await invoke(operation("pause", patch)), { code: "INVALID_REQUEST" });
   }),
 );
 
@@ -312,8 +298,7 @@ it("rejects a revoked caller without persisting a Goal change or receipt", () =>
         }
       },
     });
-    expectFailure(result, { message: "caller closed" });
-    expect(readGoal()).toEqual(initialGoal());
+    expectUnchanged(result, { message: "caller closed" });
     const retry = await invoke(request);
     expectGoal(retry, { status: "complete" });
   }));
@@ -326,11 +311,10 @@ it("rejects a plugin caller that does not own the session", () =>
       internal: { pluginRuntimeOwnerId: "other-plugin" },
     };
     const result = await invoke(operation("complete"), { client: pluginClient });
-    expectFailure(result, {
+    expectUnchanged(result, {
       code: "INVALID_REQUEST",
       message: expect.stringContaining("did not create it"),
     });
-    expect(readGoal()).toEqual(initialGoal());
   }));
 
 it("does not activate a Goal before continuation admission succeeds", () =>

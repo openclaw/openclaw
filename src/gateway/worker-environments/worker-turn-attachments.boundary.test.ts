@@ -1,7 +1,8 @@
-import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -10,42 +11,22 @@ import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { parseNodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
-import {
-  ENVIRONMENT_ID,
-  MANIFEST_REF,
-  OWNER_EPOCH,
-  SESSION_ID,
-  acknowledgeCompletedWorkerTurn,
-  attachedEnvironment,
-  cleanupWorkerTurnLauncherTest,
-  createWorkerSessionTurnPlacementProvider,
-  createWorkerTurnTunnel,
-  credential,
-  openSessionManager,
-  placements,
-  root,
-  seedActivePlacement,
-  sessionTarget,
-  setupWorkerTurnLauncherTest,
-  turn,
-  workerTurnEnvironments,
-} from "./worker-turn-launcher.test-support.js";
+import * as worker from "./worker-turn-launcher.test-support.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { applyStagedWorkerWorkspace } from "./workspace-reconcile.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
-beforeEach(setupWorkerTurnLauncherTest);
-afterEach(cleanupWorkerTurnLauncherTest);
+beforeEach(worker.setupWorkerTurnLauncherTest);
+afterEach(worker.cleanupWorkerTurnLauncherTest);
 
 it.each(["worker-turn", "remote-exec"] as const)(
   "keeps later image and PDF originals readable with %s retention",
   async (executionMode) => {
-    const physicalRoot = await realpath(root);
+    const physicalRoot = await realpath(worker.root);
     const remote = path.join(physicalRoot, "remote");
     const local = path.join(physicalRoot, "local");
     const remoteHome = path.join(physicalRoot, "remote-home");
@@ -55,7 +36,7 @@ it.each(["worker-turn", "remote-exec"] as const)(
       await writeFile(path.join(directory, "remote-edits.txt"), "preserve me");
     }
     const base = await captureWorkspaceManifest({ root: local, baseCommit: null });
-    await seedActivePlacement(executionMode, remote);
+    await worker.seedActivePlacement(executionMode, remote);
     // These arrive after placement: the initial workspace snapshot cannot include them.
     const pdf = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(220_000, 65)]);
     const image = Buffer.from(
@@ -68,10 +49,13 @@ it.each(["worker-turn", "remote-exec"] as const)(
     ]);
     const recorder = createUserTurnTranscriptRecorder({
       message: buildPersistedUserTurnMessage({ text: "Read both attachments", media }),
-      target: { ...sessionTarget, sessionEntry: { sessionId: SESSION_ID, updatedAt: 1 } },
+      target: {
+        ...worker.sessionTarget,
+        sessionEntry: { sessionId: worker.SESSION_ID, updatedAt: 1 },
+      },
     });
     const input = {
-      ...turn(),
+      ...worker.turn(),
       workspaceDir: local,
       prompt: "Read both attachments",
       media: [media[0]!],
@@ -88,7 +72,9 @@ it.each(["worker-turn", "remote-exec"] as const)(
     let acceptedManifestPaths: string[] = [];
     const verifyFiles = async (prompt: string) => {
       const files: Buffer[] = [];
-      for (const entry of await readdir(remote, { recursive: true, withFileTypes: true })) {
+      for (const entry of (await listDirectoryTreeStrict(remote)).map(
+        (walkEntry) => walkEntry.dirent,
+      )) {
         if (!entry.isFile() || entry.name === "remote-edits.txt") {
           continue;
         }
@@ -109,18 +95,8 @@ it.each(["worker-turn", "remote-exec"] as const)(
         await writeFile(path.join(remote, file), content);
       }
     };
-    const tunnel = createWorkerTurnTunnel({
+    const tunnel = worker.createWorkerTurnTunnel({
       runWorkspaceCommand: vi.fn(async (command) => {
-        parseNodeWorkerWorkspaceExecInput(
-          JSON.stringify({
-            gatewayNamespace: "attachments",
-            environmentId: ENVIRONMENT_ID,
-            sessionId: SESSION_ID,
-            generation: OWNER_EPOCH,
-            argv: command.argv,
-            input: command.input,
-          }),
-        );
         return await runCommandWithTimeout([...command.argv], {
           cwd: remote,
           input: command.input,
@@ -130,25 +106,28 @@ it.each(["worker-turn", "remote-exec"] as const)(
       }),
       stageAttachments: async (request) => {
         const service = createNodeWorkspaceTransferService({
-          getOwner: () => ({ credential: credential(), environment: attachedEnvironment() }),
+          getOwner: () => ({
+            credential: worker.credential(),
+            environment: worker.attachedEnvironment(),
+          }),
           temporaryRoot: path.join(remoteHome, "transfers"),
         });
         const server = await startNodeWorkspaceTransferTestServer(service);
         try {
           await service.prepareSync({
-            environmentId: ENVIRONMENT_ID,
-            ownerEpoch: OWNER_EPOCH,
-            sessionId: SESSION_ID,
+            environmentId: worker.ENVIRONMENT_ID,
+            ownerEpoch: worker.OWNER_EPOCH,
+            sessionId: worker.SESSION_ID,
             localPath: local,
             isAuthorized: request.isAuthorized,
           });
           const prepared = await service.prepareAttachments({
             ...request,
-            environmentId: ENVIRONMENT_ID,
+            environmentId: worker.ENVIRONMENT_ID,
           });
           await runNodeWorkerWorkspaceTransfer({
             gatewayUrl: server.gatewayUrl,
-            environmentId: ENVIRONMENT_ID,
+            environmentId: worker.ENVIRONMENT_ID,
             workspaceDir: remote,
             manifestHome: remoteHome,
             transfer: {
@@ -172,11 +151,11 @@ it.each(["worker-turn", "remote-exec"] as const)(
             : prompt.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
         );
         request.onDispatchReady?.();
-        const session = await openSessionManager();
+        const session = await worker.openSessionManager();
         const transcriptLeafId = await session.appendMessageAsync(
           makeAgentAssistantMessage({ content: [{ type: "text", text: "Read both" }] }),
         );
-        return await acknowledgeCompletedWorkerTurn(request.turnClaim, transcriptLeafId);
+        return await worker.acknowledgeCompletedWorkerTurn(request.turnClaim, transcriptLeafId);
       }),
       reconcileWorkspace: vi.fn(async (request) => {
         if (request.source.kind !== "local") {
@@ -195,7 +174,7 @@ it.each(["worker-turn", "remote-exec"] as const)(
         const result = await applyStagedWorkerWorkspace({
           root: local,
           stagingRoot: remote,
-          baseManifestRef: MANIFEST_REF,
+          baseManifestRef: worker.MANIFEST_REF,
           currentManifestRef: manifestRef,
           base: base.manifest,
           current: parseWorkerWorkspaceManifest(raw, manifestRef),
@@ -213,18 +192,18 @@ it.each(["worker-turn", "remote-exec"] as const)(
         };
       }),
     });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      placements,
+    const provider = worker.createWorkerSessionTurnPlacementProvider({
+      placements: worker.placements,
       resolveWorkspace: async () => ({ kind: "local", path: local }),
-      environments: workerTurnEnvironments(tunnel, {
+      environments: worker.workerTurnEnvironments(tunnel, {
         acknowledgeCredentialDelivery: async () => true,
       }),
     });
-    await provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, async () => {
+    await provider.executeTurn({ ...worker.sessionTarget, runId: input.runId }, input, async () => {
       await verifyFiles(input.prompt);
       return { meta: { durationMs: 1 } };
     });
-    await waitForSessionRunEnd(SESSION_ID, null);
+    await waitForSessionRunEnd(worker.SESSION_ID, null);
     if (executionMode === "remote-exec") {
       const commands = vi.mocked(tunnel.runWorkspaceCommand).mock.calls;
       expect(commands.at(-1)?.[0].input).toBe(JSON.stringify({ op: "discover" }));
@@ -244,7 +223,8 @@ it.each(["worker-turn", "remote-exec"] as const)(
     expect(workerManifestPaths).toEqual(expectedPaths);
     expect(acceptedManifestPaths).toEqual(expectedFiles);
     expect(
-      (await readdir(local, { recursive: true }))
+      (await listDirectoryTreeStrict(local))
+        .map((walkEntry) => walkEntry.relativePath)
         .map((entry) => entry.split(path.sep).join("/"))
         .toSorted(),
     ).toEqual(expectedPaths);

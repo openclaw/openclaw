@@ -15,9 +15,14 @@ import {
 import { recordSessionParticipant as recordNativeParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
 import { recordSessionParticipantInWorker as recordSessionParticipant } from "../config/sessions/session-sharing-store.async.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -55,6 +60,71 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 
 afterEach(() => vi.restoreAllMocks());
 const mainConfig = { agents: { entries: { main: {} } } };
+
+it("retains materialized rows and sharing after unchanged prepared reads, but publishes real changes", () =>
+  withProjectionState(async (create) => {
+    const query = { agentId: "main", key: "agent:main:materialized-identity" };
+    const entry: SessionEntry = { sessionId: "materialized-identity", updatedAt: 1 };
+    write(query.key, entry);
+    const projection = await create({
+      cfg: { agents: { entries: { main: {} }, defaults: { model: "fixture/initial" } } },
+      modelCatalog: [],
+    });
+    await projection.ensureMaterialized();
+    expect(Object.values(projection.describe(query)!.materialized.row)).not.toContain(undefined);
+    // Profile patches and fresh materialization must use the same absent-field shape.
+    sessionChanges.emit({ all: true, scope: "profiles" });
+    const previous = projection.describe(query)!;
+    const materialized = previous.materialized;
+    expect(Object.values(materialized.row)).not.toContain(undefined);
+    const facts = previous.facts;
+    const before = getSessionRowSelectionMetrics().materialization;
+    sessionChanges.emit({ agentId: query.agentId, sessionKey: query.key, scope: "automation" });
+    const sharing = projection.sharingRevision;
+    await projection.ensureMaterialized();
+    const current = projection.describe(query)!;
+    expect(current.materialized).toBe(materialized);
+    expect(current.facts).toBe(facts);
+    expect(projection.sharingRevision).toBe(sharing);
+    expect(getSessionRowSelectionMetrics().materialization.skipped - before.skipped).toBe(1);
+
+    for (const patch of [
+      { label: "Renamed" },
+      { modelOverride: "changed-model", providerOverride: "fixture" },
+      { visibility: "read-only" as const },
+      { visibility: "shared" as const },
+      { status: "failed" as const },
+      { status: "done" as const },
+    ]) {
+      const prior = projection.describe(query)!.materialized;
+      const revision = projection.sharingRevision;
+      write(query.key, { ...entry, ...patch });
+      await projection.ensureMaterialized();
+      expect(projection.describe(query)!.materialized).not.toBe(prior);
+      expect(projection.describe(query)!.materialized.source.configuredAgentIds).toBe(
+        prior.source.configuredAgentIds,
+      );
+      expect(projection.sharingRevision).not.toBe(revision);
+      expect(projection.describe(query)!.materialized.source.entry).toMatchObject(patch);
+      expect(projection.snapshot(query).row).toMatchObject(
+        "modelOverride" in patch ? { model: "changed-model", modelProvider: "fixture" } : patch,
+      );
+    }
+    const scope = { agentId: query.agentId, sessionKey: query.key };
+    for (const member of [true, false]) {
+      const prior = projection.describe(query)!.materialized;
+      const revision = projection.sharingRevision;
+      if (member) {
+        addSessionMember(scope, { identityId: "fixture-viewer", addedBy: "fixture-owner" });
+      } else {
+        removeSessionMember(scope, "fixture-viewer");
+      }
+      await projection.ensureMaterialized();
+      expect(projection.describe(query)!.membership.has("fixture-viewer")).toBe(member);
+      expect(projection.describe(query)!.materialized).not.toBe(prior);
+      expect(projection.sharingRevision).not.toBe(revision);
+    }
+  }, true));
 
 function write(key: string, entry: SessionEntry, agentId = "main", storePath?: string) {
   replaceSessionEntrySync({ agentId, sessionKey: key, storePath }, entry);
@@ -586,6 +656,7 @@ it("searches cold archives with worker-prepared facts across publications and li
     const board = new SqliteBoardStore({
       resolveSession: ({ sessionKey }) => ({ agentId: "main", sessionKey }),
     });
+    const beforeBoard = projection.sharingRevision;
     await board.putWidget({
       sessionKey: key,
       name: "status",
@@ -594,6 +665,7 @@ it("searches cold archives with worker-prepared facts across publications and li
     expect((await list("fixture-runtime-next", true)).sessions.map((row) => row.key)).toEqual([
       key,
     ]);
+    expect(projection.sharingRevision).not.toBe(beforeBoard);
     expect((await list("fixture-runtime-next", false)).sessions).toEqual([]);
     replaceSessionEntrySync(target, { ...entry, lifecycleRevision: "replacement", updatedAt: 2 });
     expect((await list("fixture-runtime-next")).sessions).toEqual([]);

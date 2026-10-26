@@ -13,6 +13,7 @@ import {
   prepareModelCatalogDecisions,
   type ModelCatalogDecisionParams,
 } from "./model-catalog-decisions.js";
+import { createModelCatalogSnapshotView } from "./model-catalog-view.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
@@ -191,6 +192,9 @@ export async function resolveUtilityCompletionRuntimeForAgent(
       if (!entry) {
         return undefined;
       }
+      const variants = createModelCatalogSnapshotView(params.cfg, params.snapshot).variantsOf(
+        entry,
+      );
       const decisions = await prepareModelCatalogDecisions({
         ...params,
         preferredProfileId: prepared.authProfileId,
@@ -201,7 +205,7 @@ export async function resolveUtilityCompletionRuntimeForAgent(
         prepared.agentHarnessRuntimeOverride &&
         prepared.agentHarnessRuntimeOverride !== "claude-cli"
       ) {
-        const direct = decisions.evaluateEntry(entry, params.snapshot.routeVariants, "openclaw");
+        const direct = decisions.evaluateEntry(entry, variants, "openclaw");
         if (direct.availability === true) {
           delete prepared.agentHarnessRuntimeOverride;
         }
@@ -215,7 +219,7 @@ export async function resolveUtilityCompletionRuntimeForAgent(
       if (!runtime) {
         return undefined;
       }
-      const host = decisions.evaluateEntry(entry, params.snapshot.routeVariants, runtime.id);
+      const host = decisions.evaluateEntry(entry, variants, runtime.id);
       const available = decisions.evaluateNative(entry, host, runtime.id);
       // Preflight leaves temporary credential cooldowns to the execution retry owner.
       return (available.availability === true ||

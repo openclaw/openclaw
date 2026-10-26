@@ -1,3 +1,4 @@
+import { pbkdf2Sync, scryptSync } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createStallFlightRecorder } from "./diagnostic-stall-flight-recorder.js";
@@ -71,11 +72,17 @@ function fixture(firstProfile?: string) {
     handles[0]!.stop.mockReturnValue(firstProfile);
   }
   recorders.push(recorder);
-  const sampleAt = (value: number, stallMs = 1_500) => {
+  const sampleAt = (
+    value: number,
+    stall: { startedAt: number; endedAt: number } | null = {
+      startedAt: value - 1_500,
+      endedAt: value,
+    },
+  ) => {
     time = value;
-    return recorder.sample(stallMs);
+    return recorder.sample(stall ?? undefined);
   };
-  return { recorder, handles, warn, sampleAt };
+  return { recorder, handles, warn, sampleAt, elapse: (ms: number) => (time += ms) };
 }
 function capture(json: string) {
   const fixtureState = fixture(json);
@@ -83,18 +90,148 @@ function capture(json: string) {
 }
 it("rotates without a sampling gap and reports only the recent stall's inclusive frames", () => {
   const { recorder, handles, sampleAt } = fixture();
-  expect(sampleAt(5_000, 0)).toBeUndefined();
+  expect(sampleAt(5_000, null)).toBeUndefined();
   expect(native.start.mock.invocationCallOrder[1]).toBeLessThan(
     handles[0]!.stop.mock.invocationCallOrder[0]!,
   );
   const result = sampleAt(6_500);
   expect(result).toContain('inclusive=[["work1@node:timers:10",2]]');
-  expect(result).toContain("samples=2 intervalMs=10 truncated=false");
+  expect(result).toContain("samples=2 intervalMs=25 truncated=false");
   expect(result).not.toContain("work0");
   recorder.stop();
   expect(handles[2]![Symbol.dispose]).toHaveBeenCalledOnce();
   expect(sampleAt(12_000)).toBeUndefined();
   expect(native.start).toHaveBeenCalledTimes(3);
+});
+
+function sampledProfile(start: number, end: number, samples: Array<{ at: number; name: string }>) {
+  // Native profile timestamps have a different origin from performance.now().
+  const nativeOriginUs = 17_000_000;
+  let previousAt = start;
+  return JSON.stringify({
+    startTime: nativeOriginUs + start * 1_000,
+    endTime: nativeOriginUs + end * 1_000,
+    nodes: samples.map(({ name }, index) => ({
+      id: index + 1,
+      callFrame: {
+        functionName: name,
+        lineNumber: 9,
+        columnNumber: 0,
+        scriptId: 1,
+        url: "node:timers",
+      },
+    })),
+    samples: samples.map((_, index) => index + 1),
+    timeDeltas: samples.map(({ at }) => {
+      const delta = (at - previousAt) * 1_000;
+      previousAt = at;
+      return delta;
+    }),
+  });
+}
+
+it.skipIf(typeof getBuiltinModule("v8").startCpuProfile !== "function")(
+  "profiles a real 1,200 ms synchronous block without the unrelated work before its report",
+  async () => {
+    native.start.mockImplementation(getBuiltinModule("v8").startCpuProfile);
+    const warn = vi.fn();
+    const recorder = createStallFlightRecorder(warn);
+    recorders.push(recorder);
+    expect(native.start).toHaveBeenCalledOnce();
+    // A timer gives the block its real runtime stack without the test runner's ancestors.
+    const result = await new Promise<string | undefined>((resolve) => {
+      setTimeout(() => {
+        const startedAt = performance.now();
+        while (performance.now() - startedAt < 1_200) {
+          pbkdf2Sync("fixture", "fixture", 10_000, 32, "sha256");
+        }
+        const endedAt = performance.now();
+        while (performance.now() - endedAt < 600) {
+          scryptSync("fixture", "fixture", 32);
+        }
+        resolve(recorder.sample({ startedAt, endedAt }));
+      }, 0);
+    });
+    expect(warn).not.toHaveBeenCalled();
+    expect(result).toContain("pbkdf2Sync@node:internal/crypto/pbkdf2");
+    expect(result).not.toContain("scryptSync");
+  },
+);
+
+it.each([
+  {
+    name: "a delayed report",
+    startedAt: 500,
+    endedAt: 1_700,
+    reportAt: 2_500,
+    rotationAt: 0,
+    serializationMs: 0,
+    chunks: [
+      [
+        { at: 300, name: "earlierWork" },
+        { at: 525, name: "controlledBlock" },
+        { at: 1_000, name: "controlledBlock" },
+        { at: 1_675, name: "controlledBlock" },
+        { at: 1_750, name: "laterWork" },
+        { at: 2_300, name: "laterWork" },
+      ],
+    ],
+    expectedSamples: 3,
+  },
+  {
+    name: "retained chunks and slow serialization",
+    startedAt: 4_400,
+    endedAt: 5_600,
+    reportAt: 6_500,
+    rotationAt: 5_000,
+    serializationMs: 50,
+    chunks: [
+      [
+        { at: 4_200, name: "earlierWork" },
+        { at: 4_450, name: "controlledBlock" },
+        { at: 4_900, name: "controlledBlock" },
+      ],
+      [
+        { at: 5_100, name: "controlledBlock" },
+        { at: 5_575, name: "controlledBlock" },
+        { at: 5_625, name: "laterWork" },
+        { at: 6_100, name: "laterWork" },
+      ],
+    ],
+    expectedSamples: 4,
+  },
+])("attributes the 1,200 ms block itself across $name", (testCase) => {
+  const { handles, sampleAt, elapse } = fixture();
+  for (const [index, samples] of testCase.chunks.entries()) {
+    handles[index]!.stop.mockImplementation(() => {
+      elapse(testCase.serializationMs);
+      return sampledProfile(
+        index === 0 ? 0 : testCase.rotationAt,
+        index < testCase.chunks.length - 1 ? testCase.rotationAt : testCase.reportAt,
+        samples,
+      );
+    });
+  }
+  if (testCase.rotationAt) {
+    expect(sampleAt(testCase.rotationAt, null)).toBeUndefined();
+  }
+  const result = sampleAt(testCase.reportAt, {
+    startedAt: testCase.startedAt,
+    endedAt: testCase.endedAt,
+  });
+  expect(result).not.toContain("laterWork");
+  expect(result).not.toContain("earlierWork");
+  expect(result).toContain(
+    `inclusive=[["controlledBlock@node:timers:10",${testCase.expectedSamples}]]`,
+  );
+  expect(result).toContain("windowMs=1200");
+  expect(result).toContain(`samples=${testCase.expectedSamples} intervalMs=25 truncated=false`);
+  expect(result).toContain(
+    `windowStartMs=${Math.round(performance.timeOrigin + testCase.startedAt)}`,
+  );
+  expect(result).toContain(`windowEndMs=${Math.round(performance.timeOrigin + testCase.endedAt)}`);
+  const reportTime = Number(result?.match(/reportedAtMs=(\d+)/)?.[1]);
+  expect(reportTime).toBeGreaterThanOrEqual(Math.round(performance.timeOrigin + testCase.reportAt));
 });
 
 it.each([
@@ -140,10 +277,10 @@ it("caps oversized windows and disables failed capture without failing the sampl
   native.start.mockImplementation(() => {
     throw new Error("native failure");
   });
-  expect(recorder.sample(1_500)).toBeUndefined();
+  expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
   expect(warn).toHaveBeenCalledWith("stall flight recorder unavailable: profiler-capture-failed");
   expect(handles[1]![Symbol.dispose]).toHaveBeenCalledOnce();
-  expect(recorder.sample(1_500)).toBeUndefined();
+  expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
 });
 
 it.each([
@@ -163,6 +300,6 @@ it.each([
 ] as const)("leaves an unsupported or conflicting %s alone", (_kind, disable) => {
   disable();
   const { recorder } = fixture();
-  expect(recorder.sample(1_500)).toBeUndefined();
+  expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
   expect(native.start).not.toHaveBeenCalled();
 });
