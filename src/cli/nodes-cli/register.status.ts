@@ -372,8 +372,18 @@ export function registerNodesStatusCommands(nodes: Command) {
           const ip = typeof obj.remoteIp === "string" ? obj.remoteIp : null;
           const pathEnv = typeof obj.pathEnv === "string" ? obj.pathEnv : null;
           const versions = formatNodeVersions(obj as Parameters<typeof formatNodeVersions>[0]);
-          const lastActive = formatNodeTimeAgo(Date.now(), obj.lastActiveAtMs);
-          const stats = formatNodeHostStats(obj.hostStats, connected, Date.now());
+          const now = Date.now();
+          const lastActive = formatNodeTimeAgo(now, obj.lastActiveAtMs);
+          const stats = formatNodeHostStats(obj.hostStats, connected, now);
+          // Recorded contact facts, not user input: lastSeen is the newest
+          // Gateway contact (live presence or stored pairing history), and the
+          // connection age falls back to the stored last connection once the
+          // node is offline, when connectedAtMs is already gone.
+          const lastSeen = formatNodeTimeAgo(now, obj.lastSeenAtMs);
+          const connection = formatNodeTimeAgo(
+            now,
+            connected ? obj.connectedAtMs : (obj.lastConnectedAtMs ?? obj.connectedAtMs),
+          );
 
           const { heading, ok, warn, muted } = getNodesTheme();
           const status = `${paired ? ok("paired") : warn("unpaired")} · ${
@@ -398,6 +408,11 @@ export function registerNodesStatusCommands(nodes: Command) {
           addDetail(
             "Last input",
             lastActive ? `${lastActive}${obj.active === true ? " (active node)" : ""}` : null,
+          );
+          addDetail("Last seen", lastSeen);
+          addDetail(
+            "Connection",
+            connection && `${connected ? "connected" : "last connected"} ${connection}`,
           );
           rows.push({ Field: "Status", Value: status });
           addDetail("Approval", approvalState ? formatApprovalStateLabel(approvalState) : null);
