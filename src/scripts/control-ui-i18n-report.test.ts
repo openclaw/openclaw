@@ -8,17 +8,11 @@ import {
 } from "../../scripts/control-ui-i18n-report.ts";
 import type { RawCopyBaselineEntry } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 
-const rawCopyEntry = (path: string, count: number): RawCopyBaselineEntry => ({
-  count,
-  path,
-  kind: "html-text",
-  name: "text",
-  text: "Send",
-});
-const entries = [
-  rawCopyEntry("ui/src/ui/chat/render.ts", 2),
-  rawCopyEntry("ui/src/ui/views/agents-panels-tools.ts", 1),
-  rawCopyEntry("ui/src/ui/views/config-form.render.ts", 4),
+const copy = { kind: "html-text", name: "text", text: "Send" } as const;
+const entries: RawCopyBaselineEntry[] = [
+  { ...copy, path: "ui/src/ui/chat/render.ts", count: 2 },
+  { ...copy, path: "ui/src/ui/views/agents-panels-tools.ts", count: 1 },
+  { ...copy, path: "ui/src/ui/views/config-form.render.ts", count: 4 },
 ];
 
 const localeMeta = {
@@ -31,16 +25,6 @@ const localeMeta = {
   translatedKeys: 2,
   workflow: 1,
 };
-const translationSummary =
-  "Existing zh-CN translation keys (all Control UI): 2/3 filled, 1 fallback.";
-
-function reportFor(fallbackKeysInScope: string[], fallbackKeys = fallbackKeysInScope) {
-  return formatReport({
-    locale: { fallbackKeysInScope, meta: { ...localeMeta, fallbackKeys } },
-    rawCopy: summarizeRawCopy(entries, 1),
-    surface: "chat",
-  });
-}
 
 describe("control-ui-i18n report helpers", () => {
   it.each(["--surface", "--locale", "--top"])("rejects option-shaped values for %s", (flag) => {
@@ -72,25 +56,25 @@ describe("control-ui-i18n report helpers", () => {
     expect(filterTranslationKeysBySurface(keys, "sessions")).toEqual(["sessionsView.thinking"]);
   });
 
-  it("formats pasteable report text", () => {
-    const report = reportFor(["actions.cancel"]);
+  it.each<[string[], string]>([
+    [["actions.cancel"], "zh-CN has 1 missing key."],
+    [[], "No zh-CN locale problems found in this scope."],
+  ])("formats scoped fallback keys %j", (fallbackKeysInScope, issue) => {
+    const report = formatReport({
+      locale: { fallbackKeysInScope, meta: { ...localeMeta, fallbackKeys: ["actions.cancel"] } },
+      rawCopy: summarizeRawCopy(entries, 1),
+      surface: "chat",
+    });
     for (const line of [
       "Scope: Chat, Simplified Chinese (zh-CN)",
       "Hardcoded UI text outside i18n: 3 pieces in code, 7 total occurrences.",
-      translationSummary,
+      "Existing zh-CN translation keys (all Control UI): 2/3 filled, 1 fallback.",
       "Chat still has UI text written directly in code.",
-      "zh-CN has 1 missing key.",
+      issue,
       "4 Config form: ui/src/ui/views/config-form.render.ts",
     ]) {
       expect(report).toContain(`${line}\n`);
     }
-  });
-
-  it("keeps fallback-key issues scoped to the selected surface", () => {
-    const report = reportFor([], ["usage.common.emptyValue"]);
-
-    expect(report).toContain(`${translationSummary}\n`);
-    expect(report).toContain("No zh-CN locale problems found in this scope.\n");
-    expect(report).not.toContain("zh-CN has 1 missing key.\n");
+    expect(report.includes("zh-CN has 1 missing key.\n")).toBe(fallbackKeysInScope.length > 0);
   });
 });

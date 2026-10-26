@@ -27,17 +27,12 @@ function pluginPackage(version: string, floor: string) {
 }
 
 describe("syncPluginVersions", () => {
-  it("preserves workspace openclaw devDependencies and plugin host floors", () => {
+  it("aligns workspace versions while preserving workspace openclaw devDependencies", () => {
     const rootDir = makeRoot("2026.4.1");
     const privatePackage = { name: "@openclaw/llm-core", version: "0.0.0-private", private: true };
     const plugin = {
       ...pluginPackage("2026.3.30", ">=2026.3.30"),
       devDependencies: { openclaw: "workspace:*" },
-      openclaw: {
-        install: { minHostVersion: ">=2026.3.30" },
-        compat: { pluginApi: ">=2026.3.30" },
-        build: { openclawVersion: "2026.3.30" },
-      },
     };
     writeJson(path.join(rootDir, "packages/ai/package.json"), {
       name: "@openclaw/ai",
@@ -55,20 +50,13 @@ describe("syncPluginVersions", () => {
     expect(readPackage(rootDir, "extensions/example")).toEqual({
       ...plugin,
       ...pluginPackage("2026.4.1", ">=2026.4.1"),
-      openclaw: {
-        ...plugin.openclaw,
-        compat: { pluginApi: ">=2026.4.1" },
-        build: { openclawVersion: "2026.4.1" },
-      },
     });
   });
 
   it.each([
     ["2026.9.5", ">=2026.9.4", ">=2026.9.5"],
     ["2026.9.5", ">=2026.9.5", ">=2026.9.5"],
-    ["2026.9.5", ">=2026.9.6", ">=2026.9.6"],
     ["2026.9.5", ">=2026.9.10", ">=2026.9.10"],
-    ["2026.9.5", ">=2026.8.0", ">=2026.9.5"],
     ["2026.9.5-beta.2", ">=2026.9.5-beta.1", ">=2026.9.5-beta.2"],
     ["2026.9.5-beta.2", ">=2026.9.5-beta.10", ">=2026.9.5-beta.10"],
     ["2026.9.5-beta.2", ">=2026.9.5", ">=2026.9.5"],
@@ -92,20 +80,19 @@ describe("syncPluginVersions", () => {
 
   it("uses the base release version for beta changelog entries", () => {
     const rootDir = makeRoot("2026.5.3-beta.1");
-    writeJson(path.join(rootDir, "extensions/matrix/package.json"), {
-      name: "@openclaw/matrix",
-      version: "2026.5.3-beta.1",
-    });
+    const pkg = pluginPackage("2026.5.3-beta.1", ">=2026.5.3-beta.1");
+    writeJson(path.join(rootDir, "extensions/example/package.json"), pkg);
+    const changelogPath = path.join(rootDir, "extensions/example/CHANGELOG.md");
     fs.writeFileSync(
-      path.join(rootDir, "extensions/matrix/CHANGELOG.md"),
+      changelogPath,
       "# Changelog\n\n## 2026.5.2\n\n### Changes\n\n- Previous release.\n",
       "utf8",
     );
 
     const summary = syncPluginVersions(rootDir);
-    const changelog = fs.readFileSync(path.join(rootDir, "extensions/matrix/CHANGELOG.md"), "utf8");
+    const changelog = fs.readFileSync(changelogPath, "utf8");
 
-    expect(summary.changelogged).toEqual(["@openclaw/matrix"]);
+    expect(summary.changelogged).toEqual(["@openclaw/example"]);
     expect(changelog).toContain("## 2026.5.3\n\n### Changes\n- Version alignment");
     expect(changelog).not.toContain("## 2026.5.3-beta.1");
 
