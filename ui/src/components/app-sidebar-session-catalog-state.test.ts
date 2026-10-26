@@ -34,6 +34,30 @@ function catalog(ids: string[], details: Partial<SessionCatalogHost> = {}): Sess
   };
 }
 
+const cursors = { "gateway:local": "retry" };
+const merge = (current: SessionCatalog, page: SessionCatalog) =>
+  mergeSessionCatalogPage({ current, page, cursors });
+const refresh = (
+  current: SessionCatalog,
+  previous: SessionCatalog,
+  page: SessionCatalog,
+  depth: number,
+) => {
+  const request = vi.fn(async () => ({ catalogs: [page] }));
+  return {
+    request,
+    result: refetchExpandedSessionCatalogPages({
+      catalogs: [current],
+      previousCatalogs: [previous],
+      client: createTestGatewayClient(request),
+      agentId: "main",
+      pageDepths: new Map([[sessionCatalogHostKey("anthropic", "gateway:local"), depth]]),
+      isCurrent: () => true,
+      canRequestPage: () => true,
+    }),
+  };
+};
+
 it.each([
   { pendingScope: "host", recoveredIds: ["recovered"] },
   { pendingScope: "host", recoveredIds: [] },
@@ -49,23 +73,15 @@ it.each([
       pending.pending = true;
       pending.hosts = [];
     }
-    const merged = mergeSessionCatalogPage({
-      current: previous,
-      page: pending,
-      cursors: { "gateway:local": "retry" },
-    });
-    expect.soft(merged.advancedHostIds).toEqual([]);
-    expect(merged.repeatedHostIds).toEqual([]);
-    const request = vi.fn(async () => ({ catalogs: [pending] }));
-    const refreshed = await refetchExpandedSessionCatalogPages({
-      catalogs: [catalog(["fresh"], { nextCursor: "retry" })],
-      previousCatalogs: [previous],
-      client: createTestGatewayClient(request),
-      agentId: "main",
-      pageDepths: new Map([[sessionCatalogHostKey("anthropic", "gateway:local"), 2]]),
-      isCurrent: () => true,
-      canRequestPage: () => true,
-    });
+    const merged = merge(previous, pending);
+    expect(merged).toMatchObject({ advancedHostIds: [], repeatedHostIds: [] });
+    const { request, result: refreshing } = refresh(
+      catalog(["fresh"], { nextCursor: "retry" }),
+      previous,
+      pending,
+      2,
+    );
+    const refreshed = await refreshing;
     expect(request).toHaveBeenCalledTimes(1);
     for (const result of [merged.catalog, refreshed[0]]) {
       expect.soft(result?.hosts[0]).toMatchObject({
@@ -80,29 +96,19 @@ it.each([
       failed.error = error;
       failed.hosts = [];
     }
-    const rejected = mergeSessionCatalogPage({
-      current: merged.catalog,
-      page: failed,
-      cursors: { "gateway:local": "retry" },
-    });
+    const rejected = merge(merged.catalog, failed);
     expect(rejected.catalog.hosts[0]?.pending).not.toBe(true);
     expect(rejected.catalog.pending).not.toBe(true);
     expect(rejected.catalog.hosts[0]?.sessions).toEqual(previous.hosts[0]?.sessions);
-    const retrying = mergeSessionCatalogPage({
-      current: rejected.catalog,
-      page:
-        pendingScope === "host"
-          ? catalog([], { error, pending: true })
-          : { ...failed, pending: true },
-      cursors: { "gateway:local": "retry" },
-    });
+    const retrying = merge(
+      rejected.catalog,
+      pendingScope === "host"
+        ? catalog([], { error, pending: true })
+        : { ...failed, pending: true },
+    );
     expect(retrying.catalog.hosts[0]?.pending).toBe(true);
     expect(retrying.catalog.error ?? retrying.catalog.hosts[0]?.error).toEqual(error);
-    const recovered = mergeSessionCatalogPage({
-      current: retrying.catalog,
-      page: catalog([...recoveredIds]),
-      cursors: { "gateway:local": "retry" },
-    });
+    const recovered = merge(retrying.catalog, catalog([...recoveredIds]));
     expect(recovered.catalog.hosts[0]?.sessions.map((row) => row.threadId)).toEqual([
       "first",
       "expanded",
@@ -118,27 +124,15 @@ it.each([
 it.each(["host", "catalog"] as const)(
   "retains a truncated final page with a %s warning through pagination and refresh",
   async (warningScope) => {
-    const first = catalog(["first"], { nextCursor: "last-page" });
+    const first = catalog(["first"], { nextCursor: "retry" });
     const error = { code: "DISCOVERY_TRUNCATED", message: "Search by exact session ID." };
     const last = catalog(["last"], warningScope === "host" ? { error } : {});
     if (warningScope === "catalog") {
       last.error = error;
     }
-    const merged = mergeSessionCatalogPage({
-      current: first,
-      page: last,
-      cursors: { "gateway:local": "last-page" },
-    });
+    const merged = merge(first, last);
     expect.soft(merged.advancedHostIds).toEqual(["gateway:local"]);
-    const refreshed = await refetchExpandedSessionCatalogPages({
-      catalogs: [first],
-      previousCatalogs: [catalog(["first", "stale"])],
-      client: createTestGatewayClient(async () => ({ catalogs: [last] })),
-      agentId: "main",
-      pageDepths: new Map([[sessionCatalogHostKey("anthropic", "gateway:local"), 1]]),
-      isCurrent: () => true,
-      canRequestPage: () => true,
-    });
+    const refreshed = await refresh(first, catalog(["first", "stale"]), last, 1).result;
     for (const result of [merged.catalog, refreshed[0]]) {
       const host = result?.hosts[0];
       expect(host?.sessions.map((row) => row.threadId)).toEqual(["first", "last"]);

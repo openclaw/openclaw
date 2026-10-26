@@ -54,6 +54,15 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
     });
     owner.sessionData.requestSessionDataUpdate();
   };
+  const publishRow = (key: string, fields: Partial<SessionsListResult["sessions"][number]>) => {
+    const result = sessions.sessions.state.result!;
+    publishList({
+      ...result,
+      sessions: result.sessions.map((row) =>
+        row.key === key ? Object.assign({}, row, fields) : row,
+      ),
+    });
+  };
   const access = vi.spyOn(owner, "readSessionMutationAccess");
   // oxlint-disable-next-line typescript/unbound-method -- Replay with the intercepted string receiver below.
   const trim = String.prototype.trim;
@@ -70,13 +79,7 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
       sidebar.devGitBranch = "cosmetic-update";
     },
     () => {
-      const result = sessions.sessions.state.result!;
-      publishList({
-        ...result,
-        sessions: result.sessions.map((row) =>
-          row.key === keys[1] ? Object.assign({}, row, { label: "Changed other row" }) : row,
-        ),
-      });
+      publishRow(keys[1]!, { label: "Changed other row" });
     },
   ].entries()) {
     access.mockClear();
@@ -112,21 +115,9 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
   const archive = () =>
     currentRow().querySelector<HTMLButtonElement>("[data-sidebar-session-archive]")!;
   expect(archive().disabled).toBe(false);
-  const publishFirst = (fields: {
-    sharingRole?: "owner" | "viewer";
-    lastMessagePreview?: string;
-  }) => {
-    const result = sessions.sessions.state.result!;
-    publishList({
-      ...result,
-      sessions: result.sessions.map((row) =>
-        row.key === keys[0] ? Object.assign({}, row, fields) : row,
-      ),
-    });
-  };
-  publishFirst({ sharingRole: "viewer" });
+  publishRow(keys[0]!, { sharingRole: "viewer" });
   await waitForSolid(() => expect(archive().disabled).toBe(true));
-  publishFirst({ sharingRole: "owner", lastMessagePreview: "Updated preview" });
+  publishRow(keys[0]!, { sharingRole: "owner", lastMessagePreview: "Updated preview" });
   await waitForSolid(() => {
     expect(archive().disabled).toBe(false);
     expect(currentRow().textContent).toContain("Updated preview");
