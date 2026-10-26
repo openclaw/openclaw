@@ -9,11 +9,9 @@ import { inspectLinuxProcessGroupStats as inspectStats } from "./posix-process-s
 const procFs = vi.hoisted(() => ({ readFileSync: vi.fn(), readdirSync: vi.fn() }));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  const overrides = {
-    readFileSync: procFs.readFileSync.mockImplementation(actual.readFileSync),
-    readdirSync: procFs.readdirSync.mockImplementation(actual.readdirSync),
-  };
-  return { ...actual, ...overrides, default: { ...actual, ...overrides } };
+  procFs.readFileSync.mockImplementation(actual.readFileSync);
+  procFs.readdirSync.mockImplementation(actual.readdirSync);
+  return { ...actual, ...procFs, default: { ...actual, ...procFs } };
 });
 
 afterEach(() => vi.restoreAllMocks());

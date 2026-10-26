@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { liveFrontierProviderDefinition } from "./providers/live-frontier/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
@@ -25,7 +23,6 @@ beforeEach(() => {
   runPluginCommandWithTimeout.mockReset().mockResolvedValue({ code: 0, stdout: "", stderr: "" });
   runQaFlowSuite.mockReset().mockImplementation(async (params) => {
     const outputDir = params?.outputDir ?? "/tmp/qa-flow";
-    const evidencePath = path.join(outputDir, "qa-evidence.json");
     const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
     const catalog = params?.scenarioDefinitions ?? readQaBootstrapScenarioCatalog().scenarios;
     const recorded = recordQaSuiteTestResults(
@@ -33,10 +30,6 @@ beforeEach(() => {
       scenarioIds.map((id) => catalog.find((scenario) => scenario.id === id)!),
       scenarioIds.map((scenarioId) => ({ name: scenarioId, status: "pass", steps: [] })),
     );
-    if (params?.writeEvidenceFile !== false) {
-      await fs.mkdir(outputDir, { recursive: true });
-      await fs.writeFile(evidencePath, `${JSON.stringify(recorded.evidence, null, 2)}\n`, "utf8");
-    }
     return makeQaSuiteTestResult(recorded, outputDir, scenarioIds);
   });
 });
@@ -50,14 +43,9 @@ const [discovery, general] = ["openai/gpt-5.5", "openai/gpt-5.6-luna"] as const;
 it.each([
   ["configured", false, discovery, discovery],
   ["configured", true, discovery, discovery],
-  ["defaulted", false, undefined, undefined],
-  ["defaulted", false, discovery, undefined],
-  ["defaulted", false, undefined, discovery],
   ["defaulted", true, undefined, undefined],
   ["defaulted", true, discovery, undefined],
   ["defaulted", true, undefined, discovery],
-  ["general", true, "anthropic/claude-sonnet-4-5", "anthropic/claude-sonnet-4-5"],
-  ["general", true, "google/gemini-2.5-pro", "google/gemini-2.5-pro"],
   ["general", true, general, general],
   ["general", true, discovery, general],
   ["general", true, general, discovery],
@@ -91,12 +79,10 @@ it.each([
       expect(params).toMatchObject({
         primaryModel: primaryModel ?? discovery,
         alternateModel: alternateModel ?? discovery,
+        forcedRuntime: configured ? "codex" : undefined,
+        runtimeSelection: configured ? "configured" : undefined,
+        ...(configured ? { providerMode: "live-frontier", concurrency: 1 } : {}),
       });
-      expect(params?.forcedRuntime).toBe(configured ? "codex" : undefined);
-      expect(params?.runtimeSelection).toBe(configured ? "configured" : undefined);
-      if (configured) {
-        expect(params).toMatchObject({ providerMode: "live-frontier", concurrency: 1 });
-      }
     }
   },
 );

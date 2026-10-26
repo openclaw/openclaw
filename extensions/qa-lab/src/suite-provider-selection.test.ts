@@ -8,9 +8,10 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { makeTempDir, cleanup } = createTempDirHarness();
 afterEach(cleanup);
-const failStartup = () =>
+const startupError = "selected provider lane reached lab startup";
+const failStartup = (message = startupError) =>
   vi.fn(async () => {
-    throw new Error("selected provider lane reached lab startup");
+    throw new Error(message);
   });
 it.each([
   {
@@ -32,16 +33,15 @@ it.each([
 ])(
   "adopts the provider requirement for directly selected $scenarioId",
   async ({ scenarioId, ...selection }) => {
-    const repoRoot = await makeTempDir("qa-suite-provider-lane-");
     const startLab = failStartup();
     await expect(
       runQaFlowSuiteFromRuntime({
-        repoRoot,
+        repoRoot: await makeTempDir("qa-suite-provider-lane-"),
         scenarioIds: [scenarioId],
         ...selection,
         startLab,
       }),
-    ).rejects.toThrow("selected provider lane reached lab startup");
+    ).rejects.toThrow(startupError);
     expect(startLab).toHaveBeenCalledOnce();
   },
 );
@@ -61,9 +61,7 @@ it("invalidates prior terminal artifacts before replacement startup fails", asyn
       outputDir,
       scenarioIds: ["goal-context-next-turn"],
       concurrency: 1,
-      startLab: async () => {
-        throw new Error("replacement startup failed");
-      },
+      startLab: failStartup("replacement startup failed"),
     }),
   ).rejects.toThrow("replacement startup failed");
   for (const artifactPath of artifactPaths) {
@@ -72,7 +70,7 @@ it("invalidates prior terminal artifacts before replacement startup fails", asyn
 });
 
 it.each([
-  [undefined, 1, "selected provider lane reached lab startup"],
+  [undefined, 1, startupError],
   ["mock-openai", 0, "providerMode=live-frontier"],
 ] as const)("resolves required provider with override %s", async (providerMode, calls, details) => {
   const startLab = failStartup();
@@ -96,6 +94,5 @@ it.each([
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "openai/gpt-5.6-terra",
     });
-    expect(run.primaryModel).not.toBe(run.alternateModel);
   }
 });
