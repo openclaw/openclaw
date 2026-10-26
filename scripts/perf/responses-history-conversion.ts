@@ -99,10 +99,14 @@ if (process.argv.includes("--retained")) {
       const fields = snapshot.snapshot.meta.node_fields;
       const name = fields.indexOf("name");
       const size = fields.indexOf("self_size");
+      assert(name >= 0 && size >= 0, "snapshot must describe node names and sizes");
       retainedImageStrings = { count: 0, bytes: 0 };
       for (let index = 0; index < snapshot.nodes.length; index += fields.length) {
-        const value = snapshot.strings[snapshot.nodes[index + name]];
+        const nameIndex = snapshot.nodes[index + name];
         const bytes = snapshot.nodes[index + size];
+        assert(nameIndex !== undefined && bytes !== undefined, "snapshot node must be complete");
+        const value = snapshot.strings[nameIndex];
+        assert(value !== undefined, "snapshot node name must exist");
         if (bytes > 500 * 1024 && /^(?:data:image\/[^,]+,)?iVBORw0KGgo/.test(value)) {
           retainedImageStrings.count++;
           retainedImageStrings.bytes += bytes;
