@@ -9,6 +9,7 @@ import {
 import { createMemo, createSignal, For, onSettled } from "solid-js";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { createScrollPosition } from "../lib/reactive/scroll-state.ts";
+import { measurePickerRow } from "./picker-row-measurement.ts";
 import type { PickerOption } from "./select-picker-types.ts";
 
 export type PickerWindowRow<Option> = {
@@ -52,6 +53,7 @@ export default function PickerWindow<Option extends PickerOption>(props: {
     count: 0,
     getScrollElement: props.viewport,
     estimateSize: () => 32,
+    measureElement: measurePickerRow,
     observeElementRect,
     observeElementOffset,
     scrollToFn: elementScroll,

@@ -8,6 +8,7 @@ import {
   type VirtualItem,
 } from "@tanstack/virtual-core";
 import { createProjection, createSignal, onSettled, Show } from "solid-js";
+import { measurePickerRow } from "../../../components/picker-row-measurement.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 
 export type ModelPickerRowRenderer = (key: string, render: () => JSX.Element) => JSX.Element;
@@ -29,6 +30,7 @@ export function createModelPickerWindow(
     count: 0,
     getScrollElement: () => viewport,
     estimateSize: () => 32,
+    measureElement: measurePickerRow,
     observeElementRect,
     observeElementOffset,
     scrollToFn: elementScroll,
