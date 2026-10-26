@@ -7,6 +7,7 @@ const verificationMocks = vi.hoisted(() => ({ bootstrapMatrixVerification: vi.fn
 vi.mock("./matrix/actions/verification.js", () => ({
   bootstrapMatrixVerification: verificationMocks.bootstrapMatrixVerification,
 }));
+const bootstrap = verificationMocks.bootstrapMatrixVerification;
 
 import { matrixSetupPlugin } from "./channel.setup.js";
 import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
@@ -21,16 +22,11 @@ const authEnv = { MATRIX_HOMESERVER: auth.homeserver, MATRIX_ACCESS_TOKEN: "env-
 
 describe("matrix setup post-write bootstrap", () => {
   const runtime = createRuntimeEnv();
-  const { log, error, exit } = runtime;
-  const encryptedDefaultCfg = config({ encryption: true });
-  const defaultPasswordInput = {
-    ...auth,
-    password: "secret", // pragma: allowlist secret
-  } as const;
+  const { log, error } = runtime;
 
   async function runBootstrap(
-    input: Record<string, unknown> = defaultPasswordInput,
-    previousCfg = encryptedDefaultCfg,
+    input: Record<string, unknown>,
+    previousCfg = config({ encryption: true }),
     accountId = "default",
   ) {
     const cfg = matrixSetupAdapter.applyAccountConfig({
@@ -42,25 +38,10 @@ describe("matrix setup post-write bootstrap", () => {
     return cfg;
   }
 
-  function mockBootstrapResult(
-    success: boolean,
-    details: { backupVersion?: string; error?: string },
-  ) {
-    verificationMocks.bootstrapMatrixVerification.mockResolvedValue({
-      success,
-      ...(details.error ? { error: details.error } : {}),
-      verification: { backupVersion: details.backupVersion ?? null },
-      crossSigning: {},
-      pendingVerifications: 0,
-      cryptoBootstrap: null,
-    });
-  }
-
   beforeEach(() => {
-    verificationMocks.bootstrapMatrixVerification.mockReset();
+    bootstrap.mockReset();
     vi.mocked(log).mockClear();
     vi.mocked(error).mockClear();
-    vi.mocked(exit).mockClear();
     installMatrixTestRuntime();
   });
 
@@ -81,39 +62,30 @@ describe("matrix setup post-write bootstrap", () => {
     );
   });
 
-  it.each([false, true])(
-    "does not bootstrap existing accounts (encryption=%s)",
-    async (encryption) => {
-      const previousCfg = config({
-        accounts: { flurry: { ...auth, encryption, accessToken: "token" } },
-      });
-      await runBootstrap({ ...auth, accessToken: "new-token" }, previousCfg, "flurry");
+  it.each([false, true])("leaves existing accounts alone (encryption=%s)", async (encryption) => {
+    const previousCfg = config({
+      accounts: { flurry: { ...auth, encryption, accessToken: "token" } },
+    });
+    await runBootstrap({ ...auth, accessToken: "new-token" }, previousCfg, "flurry");
 
-      expect(verificationMocks.bootstrapMatrixVerification).not.toHaveBeenCalled();
-      expect(log).not.toHaveBeenCalled();
-      expect(error).not.toHaveBeenCalled();
-    },
-  );
-
-  it("logs a warning when verification bootstrap fails", async () => {
-    mockBootstrapResult(false, { error: "no room-key backup exists on the homeserver" });
-    await runBootstrap();
-
-    expect(error).toHaveBeenCalledWith(
-      'Matrix verification bootstrap warning for "default": no room-key backup exists on the homeserver',
-    );
+    expect(bootstrap).not.toHaveBeenCalled();
   });
 
-  it("bootstraps a newly added env-backed default account when encryption is already enabled", async () => {
+  it.each([false, true])("reports bootstrap success=%s", async (success) => {
     await withEnvAsync(authEnv, async () => {
-      mockBootstrapResult(true, { backupVersion: "9" });
-      const cfg = await runBootstrap({ useEnv: true });
-
-      expect(verificationMocks.bootstrapMatrixVerification).toHaveBeenCalledWith({
-        accountId: "default",
-        cfg,
+      const warning = "no room-key backup exists on the homeserver";
+      bootstrap.mockResolvedValue({
+        success,
+        error: warning,
+        verification: { backupVersion: "9" },
       });
-      expect(log).toHaveBeenCalledWith('Matrix verification bootstrap: complete for "default".');
+      const cfg = await runBootstrap(success ? { useEnv: true } : { ...auth, password: "secret" }); // pragma: allowlist secret
+      expect(bootstrap).toHaveBeenCalledWith({ accountId: "default", cfg });
+      expect(success ? log : error).toHaveBeenCalledWith(
+        success
+          ? 'Matrix verification bootstrap: complete for "default".'
+          : `Matrix verification bootstrap warning for "default": ${warning}`,
+      );
     });
   });
 

@@ -16,14 +16,13 @@ const runtimeStub = {
   },
 } as unknown as PluginRuntime;
 
+const auth = {
+  homeserver: "https://matrix.example.org",
+  userId: "@bot:example.org",
+  accessToken: "token",
+};
 function matrixConfig(overrides: Partial<MatrixConfig> = {}): CoreConfig {
-  const matrix = {
-    enabled: true,
-    homeserver: "https://matrix.example.org",
-    userId: "@bot:example.org",
-    accessToken: "token",
-    ...overrides,
-  };
+  const matrix = { enabled: true, ...auth, ...overrides };
   return { channels: { matrix } };
 }
 
@@ -50,8 +49,7 @@ describe("matrixMessageActions", () => {
     });
     credentials.resolve({
       accountId: "default",
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
+      ...auth,
       accessToken: "stored-token",
       createdAt: "2026-03-19T00:00:00.000Z",
     });
@@ -69,39 +67,30 @@ describe("matrixMessageActions", () => {
   });
 
   it.each([
-    [
-      "reactions",
-      ["emoji-list", "react"],
-      ["react", "reactions"],
-      ["emoji"],
-      'action:"emoji-list"',
-    ],
-    ["messages", ["read"], [], ["before", "after"], "nextBatch/prevBatch, not an event id"],
-  ] as const)(
-    "gates %s actions and schema hints together",
-    (gate, actions, schemaActions, keys, hint) => {
-      const enabled = discover();
-      const disabled = discover({ actions: { [gate]: false } });
-      const property = expect.objectContaining({ description: expect.stringContaining(hint) });
-      expect(listSchemas(enabled?.schema)).toContainEqual({
-        actions: [...schemaActions],
-        properties: Object.fromEntries(keys.map((key) => [key, property])),
-      });
-      for (const action of actions) {
-        expect(enabled?.actions).toContain(action);
-        expect(disabled?.actions).not.toContain(action);
-      }
-      expect(listSchemas(disabled?.schema).some((s) => keys[0] in s.properties)).toBe(false);
-      if (gate === "reactions") {
-        expect(matrixMessageActions.supportsAction?.({ action: "emoji-list" } as never)).toBe(true);
-      }
-    },
-  );
+    ["reactions", ["emoji"], 'action:"emoji-list"'],
+    ["messages", ["before", "after"], "nextBatch/prevBatch, not an event id"],
+  ] as const)("gates %s actions and schema hints", (gate, keys, hint) => {
+    const actions = gate === "reactions" ? (["emoji-list", "react"] as const) : (["read"] as const);
+    const enabled = discover();
+    const disabled = discover({ actions: { [gate]: false } });
+    const property = expect.objectContaining({ description: expect.stringContaining(hint) });
+    expect(listSchemas(enabled?.schema)).toContainEqual({
+      actions: gate === "reactions" ? ["react", "reactions"] : [],
+      properties: Object.fromEntries(keys.map((key) => [key, property])),
+    });
+    for (const action of actions) {
+      expect(enabled?.actions).toContain(action);
+      expect(disabled?.actions).not.toContain(action);
+    }
+    expect(listSchemas(disabled?.schema).some((s) => keys[0] in s.properties)).toBe(false);
+    if (gate === "reactions") {
+      expect(matrixMessageActions.supportsAction?.({ action: "emoji-list" } as never)).toBe(true);
+    }
+  });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {
-    const account = { homeserver: "https://matrix.example.org", accessToken: "token" };
     const discovery = matrixMessageActions.describeMessageTool({
-      cfg: { channels: { matrix: { accounts: { assistant: account, ops: account } } } },
+      cfg: { channels: { matrix: { accounts: { assistant: auth, ops: auth } } } },
     } as never);
     expect(discovery).toStrictEqual({ actions: [], capabilities: [] });
   });

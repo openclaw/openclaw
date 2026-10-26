@@ -35,18 +35,6 @@ describe("matrix directory live", () => {
     requestJsonMock.mockReset().mockResolvedValue({ results: [] });
   });
 
-  it.each([
-    ["peer", listMatrixDirectoryPeersLive, "   "],
-    ["group", listMatrixDirectoryGroupsLive, ""],
-  ] as const)(
-    "returns no %s results for empty query without resolving auth",
-    async (_kind, list, query) => {
-      expect(await list({ cfg, query })).toStrictEqual([]);
-      expect(resolveMatrixAuth).not.toHaveBeenCalled();
-      expect(requestJsonMock).not.toHaveBeenCalled();
-    },
-  );
-
   it("preserves query casing when searching the Matrix user directory", async () => {
     await listMatrixDirectoryPeersLive({ ...scoped, query: "Alice", limit: 3 });
     expectRequest("POST", "/_matrix/client/v3/user_directory/search", {
@@ -56,25 +44,23 @@ describe("matrix directory live", () => {
   });
 
   it.each([
+    [listMatrixDirectoryPeersLive, "   ", []],
+    [listMatrixDirectoryGroupsLive, "", []],
     [
-      "user",
       listMatrixDirectoryPeersLive,
       "matrix:user:@Alice:Example.org",
-      { kind: "user", id: "@Alice:Example.org" },
+      [{ kind: "user", id: "@Alice:Example.org" }],
     ],
     [
-      "room",
       listMatrixDirectoryGroupsLive,
       "matrix:room:!team:example.org",
-      { kind: "group", id: "!team:example.org", name: "!team:example.org" },
+      [{ kind: "group", id: "!team:example.org", name: "!team:example.org" }],
     ],
-  ] as const)(
-    "accepts a prefixed %s id without Matrix lookups",
-    async (_kind, list, query, expected) => {
-      expect(await list({ cfg, query })).toEqual([expected]);
-      expect(requestJsonMock).not.toHaveBeenCalled();
-    },
-  );
+  ] as const)("resolves %s %s locally", async (list, query, expected) => {
+    expect(await list({ cfg, query })).toEqual(expected);
+    expect(resolveMatrixAuth).not.toHaveBeenCalled();
+    expect(requestJsonMock).not.toHaveBeenCalled();
+  });
 
   it("resolves prefixed room aliases through the hardened Matrix HTTP client", async () => {
     const id = "!team:example.org",

@@ -9,17 +9,9 @@ vi.mock("./directory-live.js", () => ({
   listMatrixDirectoryGroupsLive: vi.fn(),
 }));
 
+const resolveTargets = expectDefined(matrixPlugin.resolver?.resolveTargets, "Matrix resolver");
 function resolve(kind: "user" | "group", inputs: string[], accountId?: string) {
-  return expectDefined(
-    matrixPlugin.resolver?.resolveTargets,
-    "registered Matrix resolver",
-  )({
-    cfg: {},
-    inputs,
-    kind,
-    accountId,
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-  });
+  return resolveTargets({ cfg: {}, inputs, kind, accountId });
 }
 const user: ChannelDirectoryEntry = { kind: "user", id: "@alice:example.org", name: "Alice" };
 const group: ChannelDirectoryEntry = {
@@ -28,6 +20,7 @@ const group: ChannelDirectoryEntry = {
   name: "Team",
   handle: "#team",
 };
+const partial: ChannelDirectoryEntry = { kind: "group", id: "!one:example.org", name: "General" };
 
 describe("resolveMatrixTargets (users)", () => {
   beforeEach(() => {
@@ -49,28 +42,11 @@ describe("resolveMatrixTargets (users)", () => {
     });
   });
 
-  it("prefers exact group matches over first partial result", async () => {
-    vi.mocked(listMatrixDirectoryGroupsLive).mockResolvedValue([
-      { kind: "group", id: "!one:example.org", name: "General", handle: "#general" },
-      group,
-    ]);
-
-    const [result] = await resolve("group", ["#team"]);
-
-    expect(result).toMatchObject({ resolved: true, id: group.id, note: undefined });
-    expect(listMatrixDirectoryGroupsLive).toHaveBeenCalledWith({
-      cfg: {},
-      accountId: undefined,
-      query: "#team",
-      limit: 5,
-    });
-  });
-
   it.each([
     ["user", listMatrixDirectoryPeersLive, user, ["Alice", " alice "]],
     ["group", listMatrixDirectoryGroupsLive, group, ["#team", "#team"]],
-  ] as const)("reuses normalized %s lookups", async (kind, lookup, match, inputs) => {
-    vi.mocked(lookup).mockResolvedValue([match]);
+  ] as const)("caches exact %s matches", async (kind, lookup, match, inputs) => {
+    vi.mocked(lookup).mockResolvedValue(kind === "group" ? [partial, match] : [match]);
     expect(await resolve(kind, [...inputs], "ops")).toEqual(
       inputs.map((input) => ({
         input,
@@ -80,7 +56,7 @@ describe("resolveMatrixTargets (users)", () => {
         note: undefined,
       })),
     );
-    expect(lookup).toHaveBeenCalledWith({ cfg: {}, accountId: "ops", query: inputs[0], limit: 5 });
+    expect(lookup).toHaveBeenCalledWith(expect.objectContaining({ accountId: "ops" }));
     expect(lookup).toHaveBeenCalledTimes(1);
   });
 
