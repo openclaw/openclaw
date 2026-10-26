@@ -27,7 +27,7 @@ export function createWorkspaceNodeDispatcher(remote: string) {
   );
   return async (
     request: { command: string; params?: unknown; assertCurrent?: () => void },
-    pluginConfig: Record<string, unknown>,
+    pluginConfig?: Record<string, unknown>,
     io?: OpenClawPluginNodeHostCommandIo,
   ) => {
     const { ctx, invokeNode } = createCtx({
@@ -35,7 +35,8 @@ export function createWorkspaceNodeDispatcher(remote: string) {
       params: request.params as Record<string, unknown>,
       pluginConfig,
     });
-    invokeNode.mockImplementation(async ({ params } = {}) => {
+    invokeNode.mockImplementation(async (options: Parameters<typeof invokeNode>[0] = {}) => {
+      const { params } = options;
       request.assertCurrent?.();
       io?.signal.throwIfAborted();
       const command = commands.get(request.command);

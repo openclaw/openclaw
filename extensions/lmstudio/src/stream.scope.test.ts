@@ -88,7 +88,7 @@ it.each(["credential", "headers", "timeout", "agent"] as const)(
 it("does not share an in-flight preload across different headers", async () => {
   const scenario = createScenario("concurrent-headers", false);
   await Promise.all(
-    ["first", "second"].map((route) => scenario.run(route, { apiKey: "fixture-valid" })),
+    ["first", "second"].map(async (route) => scenario.run(route, { apiKey: "fixture-valid" })),
   );
   expect(scenario.loads()).toBe(2);
   expect(scenario.dispatched).toEqual(

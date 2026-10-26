@@ -87,7 +87,12 @@ it("serves configured native facts and local auth only on Mac hosts", async () =
   expect(auth()).toMatchObject({ apiKey: "apple-fm-local" });
   expect(provider.resolveSyntheticAuth?.({ provider: "apple-fm" })).toBeUndefined();
   const noAuth = () => ({ apiKey: undefined, mode: "none", source: "none" }) as const;
-  const context = { config, env: {}, resolveProviderApiKey: noAuth, resolveProviderAuth: noAuth };
+  const context = {
+    config,
+    env: {},
+    resolveProviderApiKey: () => ({ apiKey: undefined }),
+    resolveProviderAuth: noAuth,
+  };
   expect(await provider.catalog?.run(context)).toEqual({ provider: configured });
   expect(native.probe).not.toHaveBeenCalled();
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");

@@ -29,7 +29,9 @@ function fixture(evaluate: DecisionProviderV1["evaluate"] = async () => answer) 
   const provider = { id: "fixture", contractVersion: 1 as const, evaluate };
   const { registry: root, record } = createDecisionRegistry(config, provider);
   setPluginRuntimeLoadContext(root, createToolLoadContext(config, "/synthetic"));
-  onTestFinished(async () => getPluginInstance(record)?.dispose());
+  onTestFinished(async () => {
+    await getPluginInstance(record)?.dispose();
+  });
   const target = createEmptyPluginRegistry();
   const localRecord = { ...record };
   target.plugins.push(localRecord);
