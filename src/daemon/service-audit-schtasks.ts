@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DOMParser } from "linkedom";
+import type { DOMParser } from "linkedom";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   getWindowsPowerShellExePath,
@@ -72,6 +72,7 @@ export async function auditScheduledTaskDefinition(
   if (query.code !== 0) {
     throw new Error("Scheduled Task definition could not be read.");
   }
+  const { DOMParser } = await import("linkedom");
   const parser = new DOMParser();
   const xml = query.stdout.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "");
   const installed = parser.parseFromString(xml, "text/xml");
