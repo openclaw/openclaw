@@ -48,13 +48,9 @@ function expectConsultCall(
   question: string,
   metadata?: unknown,
 ) {
-  const call = consult.mock.calls[callIndex]?.[0];
-  if (call === undefined) {
-    throw new Error(`Expected talkback consult call ${callIndex}`);
-  }
-  const { signal, ...request } = call;
-  expect(signal).toBeInstanceOf(AbortSignal);
-  expect(request).toStrictEqual({ metadata, question, responseStyle: "brief" });
+  expect(consult.mock.calls[callIndex]).toStrictEqual([
+    { metadata, question, responseStyle: "brief", signal: expect.any(AbortSignal) },
+  ]);
 }
 
 describe("realtime voice agent talkback queue", () => {
@@ -156,10 +152,7 @@ describe("realtime voice agent talkback queue", () => {
     queue.enqueue("late question");
     await vi.runAllTimersAsync();
 
-    if (!signal) {
-      throw new Error("Expected talkback consult abort signal");
-    }
-    expect(signal.aborted).toBe(true);
+    expect(signal?.aborted).toBe(true);
     expect(consult).toHaveBeenCalledOnce();
     expect(deliver).not.toHaveBeenCalled();
     expect(logger.warn).not.toHaveBeenCalled();
