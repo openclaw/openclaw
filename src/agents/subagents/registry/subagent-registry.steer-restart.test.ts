@@ -192,6 +192,7 @@ vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitiali
 vi.mock("../../../context-engine/registry.js", () => ({
   resolveContextEngine: vi.fn(async () => noopContextEngine),
 }));
+// mock-isolation: Steer tests supply registry handles without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
   const loadRegistry = vi.fn<

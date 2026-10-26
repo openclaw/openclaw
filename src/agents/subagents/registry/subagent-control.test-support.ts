@@ -45,6 +45,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 vi.mock("../../../context-engine/registry.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
+// mock-isolation: Control tests supply registry handles without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { getActivePluginRegistry } = await import("../../../plugins/runtime.js");
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");

@@ -43,6 +43,7 @@ import { isSameSubagentRun } from "../registry/subagent-run-generation.js";
 import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
+// mock-isolation: Spawn authority tests supply registries without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", () => {
   const loadRegistry =
     vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>();

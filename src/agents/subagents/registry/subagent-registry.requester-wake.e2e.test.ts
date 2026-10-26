@@ -130,6 +130,7 @@ const loadConfigMock = vi.mocked(getRuntimeConfig);
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
+// mock-isolation: Requester-wake tests supply registries without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
   const loadRegistry = vi.fn<

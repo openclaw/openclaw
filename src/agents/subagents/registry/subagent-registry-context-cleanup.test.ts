@@ -44,6 +44,7 @@ vi.mock("./subagent-session-reconciliation.js", { spy: true });
 vi.mock("../../internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession: vi.fn(),
 }));
+// mock-isolation: Cleanup tests own their engine registry without loading installed plugins.
 vi.mock("../../runtime-plugins.js", () => {
   const loadRegistry = vi.fn<typeof loadAgentRuntimePluginRegistryHandle>();
   return {
