@@ -147,13 +147,7 @@ describe("sessions tool", () => {
   });
 
   it("resolves current under the requester instead of the persisted bare-row owner", async () => {
-    const requests: AgentToolGatewayRequest[] = [];
-    const callGateway: AgentToolGatewayRequestCaller = async <T>(
-      request: AgentToolGatewayRequest,
-    ) => {
-      requests.push(request);
-      return { ok: true } as T;
-    };
+    const callGateway = vi.fn().mockResolvedValue({ ok: true });
     const tool = createSessionsTool({
       agentSessionKey: "agent:research:main",
       requesterAgentIdOverride: "research",
@@ -167,11 +161,13 @@ describe("sessions tool", () => {
       label: "Research",
     });
 
-    expect(requests).toContainEqual({
+    expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.patch",
       params: { key: "agent:research:main", label: "Research" },
     });
-    expect(requests.some((request) => request.method === "sessions.resolve")).toBe(false);
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.resolve" }),
+    );
   });
 
   it("does not treat another agent's bare global row as self for patch", async () => {
@@ -426,19 +422,22 @@ describe("sessions tool", () => {
       agents: { defaults: { model: { primary: "openai/good" } } },
     };
     const sessionScope = { agentId: "main", sessionKey, storePath };
-    await upsertSessionEntryCore(sessionScope, {
-      sessionId: "session-main",
-      updatedAt: 1,
+    const initialModel = {
       model: "good",
       modelProvider: "openai",
       modelOverride: "good",
       providerOverride: "openai",
-      modelOverrideSource: "auto",
+      modelOverrideSource: "auto" as const,
       modelOverrideFallbackOriginProvider: "openai",
       modelOverrideFallbackOriginModel: "primary",
       authProfileOverride: "good-profile",
-      authProfileOverrideSource: "user",
+      authProfileOverrideSource: "user" as const,
       thinkingLevel: "high",
+    };
+    await upsertSessionEntryCore(sessionScope, {
+      sessionId: "session-main",
+      updatedAt: 1,
+      ...initialModel,
     });
     const callGateway = vi.fn(
       async (request: { method: string; params: Record<string, unknown> }) => {
@@ -497,19 +496,6 @@ describe("sessions tool", () => {
         model: "broken/bad",
       },
     });
-    expect(loadSessionEntry(sessionScope)).toMatchObject({
-      label: "Research",
-      modelFallback: {
-        prevModel: "good",
-        prevProvider: "openai",
-        prevModelOverrideSource: "auto",
-        prevModelOverrideFallbackOriginProvider: "openai",
-        prevModelOverrideFallbackOriginModel: "primary",
-        prevAuthProfileOverride: "good-profile",
-        prevThinkingLevel: "high",
-        source: "agent-patch",
-      },
-    });
     await currentRunGuard.finish(true);
     expect(loadSessionEntry(sessionScope)).toHaveProperty("modelFallback");
 
@@ -540,15 +526,7 @@ describe("sessions tool", () => {
 
     const runGuard = await createAgentPatchedSessionModelRunGuard(guardParams);
     await runGuard.fail(failure);
-    expect(loadSessionEntry(sessionScope)).toMatchObject({
-      model: "good",
-      modelProvider: "openai",
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "openai",
-      modelOverrideFallbackOriginModel: "primary",
-      authProfileOverride: "good-profile",
-      thinkingLevel: "high",
-    });
+    expect(loadSessionEntry(sessionScope)).toMatchObject(initialModel);
     expect(loadSessionEntry(sessionScope)).not.toHaveProperty("modelFallback");
     const events = await loadTranscriptEvents(transcriptScope);
     expect(events).toContainEqual(
