@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as fsSafe from "../../infra/fs-safe.js";
 import {
   readInstalledSkill,
   searchInstalledSkills,
@@ -50,9 +51,19 @@ describe("installed skill catalog", () => {
     ).toHaveLength(0);
   });
 
-  it("refreshes body facts after edits, replacement and removal of the admitted file", async () => {
+  it("refreshes body facts when admitted file revisions change or disappear", async () => {
     const directory = temps.make("skill-body-edits-");
     const filePath = path.join(directory, "SKILL.md");
+    // Filesystem clock ticks need not distinguish immediate writes of equal size.
+    let ctimeMs = 1;
+    const open = fsSafe.openLocalFileSafely;
+    vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (options) => {
+      const opened = await open(options);
+      if (options.filePath === filePath) {
+        opened.stat.ctimeMs = ctimeMs;
+      }
+      return opened;
+    });
     const guide = skill("guide", "Guide");
     guide.source = { filePath };
     await fs.writeFile(filePath, "quasars");
@@ -61,6 +72,12 @@ describe("installed skill catalog", () => {
     expect(await matchingNames([guide], "quasars")).toEqual(["guide"]);
     await fs.writeFile(filePath, "pulsars");
     await fs.utimes(filePath, original.atime, original.mtime);
+    expect(await fs.stat(filePath)).toMatchObject({
+      ino: original.ino,
+      size: original.size,
+      mtimeMs: original.mtimeMs,
+    });
+    ctimeMs = 2;
     expect(await matchingNames([guide], "quasars")).toEqual([]);
     expect(await matchingNames([guide], "pulsars")).toEqual(["guide"]);
     const replacement = path.join(directory, "replacement");
