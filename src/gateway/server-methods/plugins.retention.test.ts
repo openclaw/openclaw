@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
@@ -16,7 +15,7 @@ import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { gatewayConnect } from "../server/client-fixtures.test-support.js";
-import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const inspectManagedPlugin = vi.hoisted(() => vi.fn());
 // mock-isolation: Inventory I/O must not load installed plugins or operator state.
@@ -33,12 +32,9 @@ const acquisitionOwner = {
   runId: "private-run",
 };
 
-// Use accepted handshake facts without creating a transport or starting a Gateway.
-function adminClient(): GatewayClient {
-  return {
-    connect: gatewayConnect(["operator.admin"], { id: "test", mode: "test" }, 3),
-  };
-}
+const adminClient = () => ({
+  connect: gatewayConnect(["operator.admin"], { id: "test", mode: "test" }, 3),
+});
 
 // Real instances retain host work; no plugin module needs to be evaluated.
 function retainedPlugin(registry = createEmptyPluginRegistry(), id = inspection.plugin.id) {
@@ -63,10 +59,7 @@ async function inspect(
   await withPluginRuntimeGatewayRequestScope(
     { pluginRegistry: registry, isWebchatConnect: () => false },
     () =>
-      expectDefined(
-        pluginsHandlers["plugins.inspect"],
-        "plugins.inspect handler",
-      )({
+      pluginsHandlers["plugins.inspect"]!({
         req: { type: "req", id: "retention-inspection", method: "plugins.inspect", params },
         params,
         client: adminClient(),

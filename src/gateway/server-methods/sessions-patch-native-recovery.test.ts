@@ -69,6 +69,11 @@ async function prepare(
   return result;
 }
 
+function restriction(result: Awaited<ReturnType<typeof prepare>>) {
+  assert(!result.ok, "Expected native refusal");
+  return result.error.details;
+}
+
 it.each([
   { reason: "sandbox", tools: undefined },
   { reason: "workspace-only", tools: { fs: { workspaceOnly: true } } },
@@ -76,22 +81,17 @@ it.each([
 ])("offers chat-bound recovery for optional $reason", async ({ tools, reason }) => {
   const entry = tools ? unrestricted({ agentRuntimeOverride: "native-fixture" }) : { ...original };
   const config = tools ? { tools } : cfg;
-  expect(await prepare(entry, true, config)).toMatchObject({
-    ok: false,
-    error: {
-      details: {
-        code: "AGENT_RUNTIME_RESTRICTED",
-        reason,
-        runtimeId: "native-fixture",
-        recovery: {
-          action: "use-native-permissions",
-          sessionId: original.sessionId,
-          lifecycleRevision: original.lifecycleRevision,
-          expectedPermissionMode: "workspace",
-          expectedSandboxMode: null,
-          expectedNativeRuntimeConsent: null,
-        },
-      },
+  expect(restriction(await prepare(entry, true, config))).toMatchObject({
+    code: "AGENT_RUNTIME_RESTRICTED",
+    reason,
+    runtimeId: "native-fixture",
+    recovery: {
+      action: "use-native-permissions",
+      sessionId: original.sessionId,
+      lifecycleRevision: original.lifecycleRevision,
+      expectedPermissionMode: "workspace",
+      expectedSandboxMode: null,
+      expectedNativeRuntimeConsent: null,
     },
   });
   if (tools) {
@@ -123,10 +123,9 @@ it.each([
 ] satisfies [string, Partial<SessionEntry>, boolean, OpenClawConfig, string][])(
   "does not offer an escape from %s",
   async (_label, overrides, admin, config, reason) => {
-    const result = await prepare({ ...original, ...overrides }, admin, config);
-    assert(!result.ok, "Expected native refusal");
-    expect(result.error.details).toMatchObject({ code: "AGENT_RUNTIME_RESTRICTED", reason });
-    expect(result.error.details).not.toHaveProperty("recovery");
+    const details = restriction(await prepare({ ...original, ...overrides }, admin, config));
+    expect(details).toMatchObject({ code: "AGENT_RUNTIME_RESTRICTED", reason });
+    expect(details).not.toHaveProperty("recovery");
   },
 );
 

@@ -46,13 +46,11 @@ const create = (
   directSessionReq<{ entry: InternalSessionEntry }>("sessions.create", { key, ...params }, options);
 beforeEach(async () => {
   ({ storePath } = await createSessionStoreDir());
-  const base = createNodeWorkerBundleTestNode();
-  node = {
-    ...base,
+  node = createNodeWorkerBundleTestNode({
     nodeId: folder.deviceId,
-    workerHost: { ...base.workerHost, deviceFolders: true },
+    workerHost: { deviceFolders: true },
     commands: ["system.run"],
-  };
+  });
   mocks.getTransport.mockReturnValue({
     getCurrentNode: getCurrentNode.mockReset().mockResolvedValue(node),
     listCurrentNodes: vi.fn(async () => [node]),
