@@ -74,7 +74,7 @@ function boardSnapshot(revision = 1): BoardSnapshot {
 }
 
 /** Saved core reports exercise the production board without synthetic iframe processes. */
-export function createDataBoardFixture(_sandbox?: InteractionSandbox): InteractionFixtureOverrides {
+function createDataBoardFixture(_sandbox?: InteractionSandbox): InteractionFixtureOverrides {
   return {
     featureMethods: ["board.get"],
     featureEvents: ["board.changed"],

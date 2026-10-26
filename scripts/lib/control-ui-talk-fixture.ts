@@ -87,7 +87,7 @@ export type TalkBenchState =
   | "idle"
   | "hidden"
   | "hidden-transcribing";
-export type TalkBenchProof = {
+type TalkBenchProof = {
   peer?: { channel: EventTarget; remoteDescription: RTCSessionDescriptionInit | null };
   analyserReads: number;
   meterStyleMutations: number;
