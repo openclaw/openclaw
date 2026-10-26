@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import assert from "node:assert/strict";
+import { hash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -19,8 +20,7 @@ function inspect(
   const version = "0.20.0";
   const nativeFile = "libcua_driver_sdk.so";
   const nativeContents = "accepted native artifact";
-  const expectedDigest =
-    options.expectedDigest ?? createHash("sha256").update(nativeContents).digest("hex");
+  const expectedDigest = options.expectedDigest ?? hash("sha256", nativeContents);
   const packages = new Map<string, string>();
   const addPackage = (name: string, packageVersion: string) => {
     const pathname = path.join(root, `${packages.size}.json`);
@@ -63,25 +63,20 @@ it("resolves the installed SDK package through import conditions", async () => {
   vi.resetModules();
   const artifactVerification = await import("./driver-artifact-verification.js");
   const inspectionSpy = vi.spyOn(artifactVerification, "inspectCuaDriverArtifacts");
-  try {
-    const { verifyInstalledCuaDriverArtifacts } = await import("./driver-artifacts.js");
-    expect(verifyInstalledCuaDriverArtifacts()).toEqual({ ok: true });
+  onTestFinished(() => inspectionSpy.mockRestore());
+  const { verifyInstalledCuaDriverArtifacts } = await import("./driver-artifacts.js");
+  expect(verifyInstalledCuaDriverArtifacts()).toEqual({ ok: true });
 
-    // macOS skips digests; still exercise native package resolution through the SDK.
-    const { resolvePackageJson, linuxLibc } = inspectionSpy.mock.lastCall![0];
-    const sdkManifestPath = resolvePackageJson("@trycua/cua-driver");
-    if (!sdkManifestPath) {
-      throw new Error("Installed CUA Driver SDK resolution was not observed");
-    }
-    const suffixes: Partial<Record<NodeJS.Platform, string>> = {
-      linux: `-${linuxLibc}`,
-      win32: "-msvc",
-    };
-    const platformPackage = `@trycua/cua-driver-${process.platform}-${process.arch}${suffixes[process.platform] ?? ""}`;
-    expect(resolvePackageJson(platformPackage)).toBe(
-      createRequire(sdkManifestPath).resolve(`${platformPackage}/package.json`),
-    );
-  } finally {
-    inspectionSpy.mockRestore();
-  }
+  // macOS skips digests; still exercise native package resolution through the SDK.
+  const { resolvePackageJson, linuxLibc } = inspectionSpy.mock.lastCall![0];
+  const sdkManifestPath = resolvePackageJson("@trycua/cua-driver");
+  assert(sdkManifestPath, "Installed CUA Driver SDK resolution was not observed");
+  const suffixes: Partial<Record<NodeJS.Platform, string>> = {
+    linux: `-${linuxLibc}`,
+    win32: "-msvc",
+  };
+  const platformPackage = `@trycua/cua-driver-${process.platform}-${process.arch}${suffixes[process.platform] ?? ""}`;
+  expect(resolvePackageJson(platformPackage)).toBe(
+    createRequire(sdkManifestPath).resolve(`${platformPackage}/package.json`),
+  );
 });
