@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import type {
   SessionEventOptions,
@@ -35,18 +35,11 @@ vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   enqueueSessionEventForHost: host.enqueue,
 }));
 
-const registries: Array<ReturnType<typeof createRuntimeTestRegistry>["registry"]> = [];
-afterEach(async () => {
-  await Promise.all(
-    registries.splice(0).map((registry) => disposePluginRegistryInstances(registry)),
-  );
-  vi.clearAllMocks();
-});
-
 function fixture() {
+  vi.clearAllMocks();
   const runtime = createPluginRuntime();
   const builder = createRuntimeTestRegistry(runtime);
-  registries.push(builder.registry);
+  onTestFinished(async () => void (await disposePluginRegistryInstances(builder.registry)));
   const record = createOwnershipRecord("event-owner");
   const api = builder.createApi(record, { config: {}, pluginConfig: {} });
   return { runtime, builder, record, system: api.runtime.system };

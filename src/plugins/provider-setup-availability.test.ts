@@ -1,11 +1,13 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { detectAvailableSetupProviderIds } from "./provider-setup-availability.js";
 
-const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn());
+const loadManifestMetadataSnapshot = vi.hoisted(() =>
+  vi.fn(() => ({ manifestRegistry: { plugins: [] } })),
+);
 const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn());
 const enablePluginInConfig = vi.hoisted(() => vi.fn());
 const enablePluginWithCapabilityConsent = vi.hoisted(() => vi.fn());
-const resolvePluginProvidersCore = vi.hoisted(() => vi.fn());
+const resolvePluginProvidersCore = vi.hoisted(() => vi.fn(() => []));
 
 // mock-isolation: The fixture supplies the inventory instead of discovering installed plugins.
 vi.mock("./manifest-contract-eligibility.js", () => ({ loadManifestMetadataSnapshot }));
@@ -16,10 +18,8 @@ vi.mock("./enable.js", () => ({ enablePluginInConfig, enablePluginWithCapability
 // mock-isolation: Availability probes use controlled providers without loading runtime integrations.
 vi.mock("./providers.runtime.js", () => ({ resolvePluginProvidersCore }));
 
-const metadataSnapshot = { manifestRegistry: { plugins: [] } };
 beforeEach(() => {
   vi.clearAllMocks();
-  loadManifestMetadataSnapshot.mockReturnValue(metadataSnapshot);
   resolveManifestProviderAuthChoices.mockReturnValue([
     {
       pluginId: "ollama",
@@ -32,7 +32,6 @@ beforeEach(() => {
   ]);
   enablePluginInConfig.mockImplementation((config: unknown) => ({ config, enabled: true }));
   enablePluginWithCapabilityConsent.mockImplementation(enablePluginInConfig);
-  resolvePluginProvidersCore.mockReturnValue([]);
 });
 
 it("does not execute a discovery runtime that needs capability consent", async () => {

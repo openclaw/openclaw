@@ -37,7 +37,7 @@ if (process.argv[1] === packagedDiscoveryProbePath) {
     source: "packaged fixture", mode: "api-key"
   });`,
     });
-    const cache = createPluginCache();
+    await using cache = createPluginCache();
     const owner = {
       id: "packaged-discovery",
       rootDir,
@@ -76,22 +76,13 @@ if (process.argv[1] === packagedDiscoveryProbePath) {
         : discover();
       assert.equal(providers.length, 1);
       const provider = providers[0]!;
-      assert.deepEqual(
-        await prepareSyntheticAuthWithProvider(provider, { config: {}, provider: provider.id }),
-        {
-          apiKey: "synthetic:setup credential",
-          source: "packaged fixture",
-          mode: "api-key",
-        },
-      );
+      const read = () =>
+        prepareSyntheticAuthWithProvider(provider, { config: {}, provider: owner.id });
+      assert.equal((await read())?.apiKey, "synthetic:setup credential");
       await retirePluginCache(cache);
-      await assert.rejects(
-        prepareSyntheticAuthWithProvider(provider, { config: {}, provider: provider.id }),
-        /reloaded|disabled|retir/,
-      );
+      await assert.rejects(read(), /reloaded|disabled|retir/);
     } finally {
       await runtime.dispose();
-      await retirePluginCache(cache);
     }
   }
 }

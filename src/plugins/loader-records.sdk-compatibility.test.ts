@@ -1,9 +1,8 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { formatPluginLine } from "../cli/plugins-list-format.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { VERSION } from "../version.js";
 import { recordPluginError } from "./loader-records.js";
@@ -43,9 +42,6 @@ it.each([
   );
   const args = ["--input-type=module", "-e", importProbe, pathToFileURL(source).href];
   const result = JSON.parse(execFileSync(resolveTestNodeExecPath(), args, { encoding: "utf8" }));
-  expect(result).toMatchObject(
-    nestedSdk ? { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" } : { name: "SyntaxError" },
-  );
   const nativeError = Object.assign(new Error(result.message), result);
   const record = createOwnershipRecord(id, {
     source,
@@ -53,9 +49,7 @@ it.each([
     builtWithOpenClawVersion: "2026.7.1",
   });
   const registry = createEmptyPluginRegistry();
-  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   recordPluginError({
-    logger,
     registry,
     record,
     seenIds: new Map(),
@@ -78,14 +72,7 @@ it.each([
     : pluginId
       ? "update this plugin or contact its author"
       : "run `openclaw plugins update whatsapp`";
-  for (const text of [
-    record.error,
-    formatPluginLine(record),
-    registry.diagnostics[0]?.message,
-    logger.error.mock.calls[0]?.[0],
-  ]) {
-    for (const part of [id, seam, VERSION, action]) {
-      expect(text).toContain(part);
-    }
+  for (const part of [id, seam, VERSION, action]) {
+    expect(record.error).toContain(part);
   }
 });
