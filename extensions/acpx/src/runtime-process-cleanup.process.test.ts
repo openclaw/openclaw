@@ -16,7 +16,6 @@ import {
   prepareTestWrappers,
   testProcessLeases,
   withProcessRuntime,
-  type RuntimeHandle,
 } from "./runtime-process.test-support.js";
 
 afterEach(() => {
@@ -35,7 +34,6 @@ it.skipIf(process.platform === "win32").each([false, true])(
         const target = { ...fixtureSession("leased-reset"), agentId: "main", agent: "codex" };
         const gate = createTestGate();
         let closing: Promise<void> | undefined;
-        let fresh: RuntimeHandle | undefined;
         try {
           const first = await runtime.ensureSession(target);
           assert.ok(first.acpxRecordId, "Initial physical record ID is missing");
@@ -59,7 +57,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
           void closing.catch(() => {});
           await gate.entered;
           await runtime.prepareFreshSession(target);
-          fresh = await runtime.ensureSession(target);
+          const fresh = await runtime.ensureSession(target);
           assert.ok(fresh.acpxRecordId, "Successor physical record ID is missing");
           const freshRecord = await store.load(fresh.acpxRecordId);
           const identity = readAcpxProcessLeaseIdentity(freshRecord?.agentArgv);
@@ -83,9 +81,6 @@ it.skipIf(process.platform === "win32").each([false, true])(
         } finally {
           await gate.settle(closing);
           vi.restoreAllMocks();
-          if (fresh) {
-            await runtime.close({ handle: fresh, reason: "test-complete" }).catch(() => {});
-          }
         }
       },
       async (state) => {

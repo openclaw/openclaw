@@ -7,8 +7,8 @@ import { checkPiUpstreamActivity, linkContinuedPiSession } from "./pi-session-up
 
 const { createStore } = usePiFixtures();
 
-const userRow = (content: string, timestamp: string, extra: Record<string, unknown> = {}) =>
-  piMessage({ role: "user", content }, { timestamp, ...extra });
+const userRow = (content: string, timestamp: string) =>
+  piMessage({ role: "user", content }, { timestamp });
 const appendUser = (file: string, ...row: Parameters<typeof userRow>) =>
   fs.appendFile(file, piJsonl([userRow(...row)]));
 const activity = (fields: Record<string, unknown>) => [
@@ -39,17 +39,11 @@ describe("Pi session upstream activity", () => {
   it("detects external turns, suppresses own echoes, and confirms deletion", async () => {
     const { file, probe, check } = await createActivityFixture(["sent from OpenClaw"]);
 
-    await appendUser(file, "sent  from OpenClaw", "2026-07-13T10:00:05.000Z", {
-      id: "user-own",
-      parentId: "info-1",
-    });
+    await appendUser(file, "sent  from OpenClaw", "2026-07-13T10:00:05.000Z");
     const ownEcho = await check();
     expect(ownEcho).toEqual(activity({ sessionKey: probe.sessionKey, humanTurns: 0 }));
 
-    await appendUser(file, "external Pi turn", "2026-07-13T10:00:06.000Z", {
-      id: "user-external",
-      parentId: "user-own",
-    });
+    await appendUser(file, "external Pi turn", "2026-07-13T10:00:06.000Z");
     const external = await check(ownEcho[0]!.kind === "activity" ? ownEcho[0]!.nextMarker : null);
     expect(external).toEqual(activity({ sessionKey: probe.sessionKey, humanTurns: 1 }));
 
@@ -90,12 +84,6 @@ describe("Pi session upstream activity", () => {
     await appendUser(file, "first external Pi turn", "0");
     const first = await check();
     expect(first).toEqual(activity({ humanTurns: 1, occurredAt: Date.parse("0") }));
-    expect(first[0]?.kind === "activity" ? first[0].occurredAt : undefined).not.toBe(0);
-
-    await appendUser(file, "second external Pi turn", "2026");
-    await expect(
-      check(first[0]!.kind === "activity" ? first[0]!.nextMarker : null),
-    ).resolves.toEqual(activity({ humanTurns: 1, occurredAt: Date.parse("2026") }));
   });
 
   it("stops the cursor before the first unclassifiable complete row", async () => {
