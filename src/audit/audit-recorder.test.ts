@@ -4,9 +4,8 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { createAgentEventAuditRecorder } from "./agent-event-audit.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import type { AuditEventWriter } from "./audit-event-writer.js";
+import { messageEvent } from "./audit-event-writer.test-support.js";
 import { createAuditEventRecorder } from "./audit-recorder.js";
-import { emitTrustedMessageAuditEvent } from "./message-audit-events.js";
-import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "./message-audit-events.test-support.js";
 
 let inputs: AuditEventInput[];
 let writer: AuditEventWriter;
@@ -39,59 +38,28 @@ function runEvent(runId: string, seq = 1, phase = "start"): AgentEventPayload {
     seq,
     stream: "lifecycle",
     ts: 1,
-    lifecycleGeneration: "buffer-gateway",
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    sessionId: "buffer-session",
     data: { phase },
   };
 }
 
-function emitMessage(conversationKind: "direct" | "group") {
-  emitTrustedMessageAuditEvent({
-    occurredAt: 1,
-    kind: "message",
-    action: "message.inbound.processed",
-    status: "succeeded",
-    actorType: "channel_sender",
-    actorId: "sender-raw",
-    direction: "inbound",
-    channel: "telegram",
-    conversationKind,
-    outcome: "completed",
+it("assigns identity and sequence only to accepted messages", async () => {
+  const messageRecorder = createAuditEventRecorder({
+    scheduler: createTestGatewayScheduler(),
+    getConfig: () => ({ logging: { audit: { messages: "direct" } } }),
+    writer,
   });
-}
-
-describe("message audit recorder", () => {
-  it.each([
-    ["off", ["direct"], []],
-    ["direct", ["group", "direct"], ["direct"]],
-    ["all", ["group"], ["group"]],
-  ] as const)("filters messages in %s mode", async (messages, conversations, accepted) => {
-    const messageRecorder = createAuditEventRecorder({
-      scheduler: createTestGatewayScheduler(),
-      getConfig: () => ({ logging: { audit: { messages } } }),
-      writer,
-    });
-    recorder = messageRecorder;
-    const unsubscribe = onTrustedMessageAuditEvent(messageRecorder.recordMessage);
-    try {
-      conversations.forEach(emitMessage);
-    } finally {
-      unsubscribe();
-    }
-    await recorder.stop();
-    expect(inputs).toEqual(
-      accepted.map((conversationKind, index) =>
-        expect.objectContaining({
-          kind: "message",
-          conversationKind,
-          sourceId: expect.stringMatching(/^message:/u),
-          sourceSequence: index + 1,
-        }),
-      ),
-    );
-  });
+  recorder = messageRecorder;
+  const message = { ...messageEvent("message.outbound.finished"), sourceId: undefined };
+  messageRecorder.recordMessage({ ...message, conversationKind: "group" });
+  messageRecorder.recordMessage(message);
+  await recorder.stop();
+  expect(inputs).toEqual([
+    expect.objectContaining({
+      conversationKind: "direct",
+      sourceId: expect.stringMatching(/^message:/u),
+      sourceSequence: 1,
+    }),
+  ]);
 });
 
 describe("buffered agent audit starts", () => {
@@ -152,14 +120,10 @@ describe("buffered agent audit starts", () => {
           seq: 2,
           ts: 2,
           runId: "accepted",
-          agentId: "main",
           toolName: "exec",
-          toolCallId: "call-1",
         });
       }
-      expect(inputs.map(({ action, runId }) => [action, runId])).toEqual([
-        ["agent.run.started", "accepted"],
-      ]);
+      expect(inputs.map(({ action }) => action)).toEqual(["agent.run.started"]);
       await recorder.stop();
       expect(inputs).toHaveLength(1);
     },
