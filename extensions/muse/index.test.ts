@@ -25,7 +25,7 @@ it("awaits one native host disposal across replacement and inspection cleanup", 
   plugin.register(
     createTestPluginApi({
       id: "muse",
-      registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle),
+      lifecycle: { registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle) },
     }),
   );
   const lifecycle = expectDefined(lifecycles[0], "Muse runtime cleanup");
@@ -48,7 +48,7 @@ it("preserves the native host for session reset but releases it when disabled", 
   plugin.register(
     createTestPluginApi({
       id: "muse",
-      registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle),
+      lifecycle: { registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle) },
     }),
   );
   const lifecycle = expectDefined(lifecycles[0], "Muse runtime cleanup");

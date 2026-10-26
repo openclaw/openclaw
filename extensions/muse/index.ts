@@ -33,7 +33,7 @@ export default definePluginEntry({
     });
     let disposal: Promise<void> | undefined;
     const dispose = () => (disposal ??= Promise.resolve().then(() => harness.dispose?.()));
-    api.registerRuntimeLifecycle({
+    api.lifecycle.registerRuntimeLifecycle({
       id: "muse-runtime",
       cleanup: ({ reason }) =>
         reason === "restart" || reason === "disable" ? dispose() : undefined,
