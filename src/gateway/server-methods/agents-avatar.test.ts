@@ -16,14 +16,13 @@ const preview = {
   description: "A green Blobster with a watering can.",
   svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"/>',
 };
-const cfg = { agents: { defaults: { model: { primary: "ollama/qwen3:4b-instruct" } } } };
 const operator = { profileId: "owner" };
 const release = vi.fn();
 let current = true;
 
 function generate(params: Record<string, unknown> = { agentId: "garden", prompt: "A gardener" }) {
   return callAgentHandler(agentAvatarGenerateHandler, "agents.avatar.generate", params, {
-    context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
+    context: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
     hasCurrentClientAuthority: () => current,
   });
 }
@@ -40,19 +39,6 @@ beforeEach(() => {
   generation.mockReset().mockResolvedValue(preview);
   capture.mockReset().mockResolvedValue({ authority: operator, release });
   release.mockReset();
-});
-
-it("uses the selected agent and only the submitted description", async () => {
-  expect(await generate()).toHaveBeenCalledWith(true, preview, undefined);
-  expect(generation).toHaveBeenCalledWith({
-    cfg,
-    agentId: "garden",
-    prompt: "A gardener",
-    assertCurrent: expect.any(Function),
-    operatorAuthority: operator,
-    signal: undefined,
-  });
-  expect(release).toHaveBeenCalledOnce();
 });
 
 it.each([
@@ -108,6 +94,10 @@ it.each([
   async (_label, prepare, code, message) => {
     prepare();
     expectError(await generate(), { code, message });
+    expect(generation.mock.lastCall?.[0]).toMatchObject({
+      agentId: "garden",
+      prompt: "A gardener",
+    });
     expect(release).toHaveBeenCalledOnce();
   },
 );

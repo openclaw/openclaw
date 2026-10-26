@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createMacosAppInstallOwner } from "../../commands/test-runtime-config-helpers.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import {
   adoptUpdateCampaignMock,
   invokeUpdateRun,
@@ -34,14 +35,12 @@ async function invokeInstalledUpdate(prepare: (root: string) => Promise<void>) {
 }
 
 function expectNoUpdateEffects(...effects: MockInstance[]) {
-  for (const effect of [
+  expectNoCalls(
     ...effects,
     adoptUpdateCampaignMock,
     startManagedServiceUpdateHandoffMock,
     scheduleGatewayRestartMock,
-  ]) {
-    expect(effect).not.toHaveBeenCalled();
-  }
+  );
   expect(sentinelState.capturedPayload).toBeUndefined();
 }
 
