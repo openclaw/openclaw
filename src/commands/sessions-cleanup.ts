@@ -118,9 +118,9 @@ function renderAppliedResult(
         runtime.log("");
       }
       if (summaries.length > 1) {
-        runtime.log(`Agent: ${summary.agentId}`);
+        runtime.log(`Agent: ${sanitizeTerminalText(summary.agentId)}`);
       }
-      runtime.log(`Session store: ${summary.storePath}`);
+      runtime.log(`Session store: ${sanitizeTerminalText(summary.storePath)}`);
       runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
       if (summary.unreferencedArtifacts?.removedFiles) {
         runtime.log(`Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`);
@@ -224,9 +224,9 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
         agentId: storeSummary.agentId,
       }).path;
       if (showAgentHeader) {
-        runtime.log(`Agent: ${storeSummary.agentId}`);
+        runtime.log(`Agent: ${sanitizeTerminalText(storeSummary.agentId)}`);
       }
-      runtime.log(`Session store: ${displayStorePath}`);
+      runtime.log(`Session store: ${sanitizeTerminalText(displayStorePath)}`);
       runtime.log(`Maintenance mode: ${storeSummary.mode}`);
       runtime.log(
         `Entries: ${storeSummary.beforeCount} -> ${storeSummary.afterCount} (remove ${storeSummary.beforeCount - storeSummary.afterCount})`,

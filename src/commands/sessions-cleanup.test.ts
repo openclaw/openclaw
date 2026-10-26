@@ -280,6 +280,35 @@ describe("sessionsCleanupCommand", () => {
     expectLogsToInclude(logs, `Session store: ${remoteStorePath}`);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls in store headers without changing the underlying path",
+    async () => {
+      const forged = "sessions-café\u001b[31m\noperator-forged\tend\rrow\u0007";
+
+      // Gateway-delegated apply path renders summary.storePath (renderAppliedResult).
+      mocks.callGateway.mockResolvedValue(gatewayCleanupResult(forged));
+      await cleanup({ enforce: true });
+      const applied = logs.find((line) => line.includes("Session store:"));
+      expect(applied).not.toMatch(/\p{Cc}/u);
+      expect(applied).toContain("sessions-café\\noperator-forged\\tend\\rrow");
+
+      // Local dry-run path renders displayStorePath (resolveSqliteTargetFromSessionStorePath).
+      vi.clearAllMocks();
+      mockPreviews(
+        cleanupPreview({
+          storePath: forged,
+          beforeCount: 3,
+          afterCount: 2,
+          mode: "warn",
+          unreferencedArtifacts: artifactStats(),
+        }),
+      );
+      await cleanup({ dryRun: true });
+      const preview = logs.find((line) => line.includes("Session store:"));
+      expect(preview).not.toMatch(/\p{Cc}/u);
+    },
+  );
+
   it("renders a dry-run action table with keep/archive/prune actions", async () => {
     mockPreviews(
       cleanupPreview(
