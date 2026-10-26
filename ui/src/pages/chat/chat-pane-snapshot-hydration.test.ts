@@ -208,6 +208,50 @@ describe("stored chat snapshot hydration", () => {
     },
   );
 
+  it.each(["initially", "while waiting"] as const)(
+    "adopts post-hello history without a paint when hidden %s",
+    async (hiddenAt) => {
+      vi.useFakeTimers();
+      const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(hiddenAt === "initially");
+      const pane = createMountedPane("agent:main:hidden-history", new Map());
+      pane.context.gateway.snapshot.phase = "connected";
+      const snapshot = {
+        messages: [nativeHistoryMessage(1, "cached hidden transcript")],
+        sessionId: "saved-session",
+        pagination: { hasMore: false as const },
+      };
+      const store = new SessionSnapshotStore();
+      vi.spyOn(store, "read").mockResolvedValue(snapshot);
+      pane.sessionSnapshotStore = store;
+      try {
+        const state = startPane(pane);
+        const hydration = expectDefined(
+          chatHistoryRequests(state).initialSnapshotHydration,
+          "pending snapshot hydration",
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        if (hiddenAt === "while waiting") {
+          expect(state.chatMessages).toEqual([]);
+          hidden.mockReturnValue(true);
+          document.dispatchEvent(new Event("visibilitychange"));
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        expect(state.chatMessages).toEqual(snapshot.messages);
+        await hydration.promise;
+        expect(hydration.adoptReadySnapshot).toBeUndefined();
+        const adopted = state.chatMessages;
+        vi.advanceTimersToNextFrame();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(state.chatMessages).toBe(adopted);
+      } finally {
+        pane.disconnectedCallback();
+        store.disconnect();
+        hidden.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(
     ["memory", "stored"].flatMap((cacheMode) =>
       ["Gateway Author", undefined].map((senderName) => ({ cacheMode, senderName })),

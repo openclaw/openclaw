@@ -1,3 +1,4 @@
+import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { mergeStoredChatSessionSnapshot } from "./chat-board-snapshot.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
@@ -54,9 +55,7 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
     const reading = this.sessionSnapshotStore.read(
       cacheKey,
       (board) => void restoreBoard(board),
-      (snapshot) => {
-        readySnapshot = snapshot;
-      },
+      (snapshot) => (readySnapshot = snapshot),
     );
     const adoptSnapshot = (afterPaint: boolean) => {
       if (readySnapshot === undefined) {
@@ -64,10 +63,15 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       }
       const storedSnapshot = readySnapshot;
       return (adoption ??= (async () => {
-        if (storedSnapshot && afterPaint) {
-          // Receipt and post-hello adoption yield; pre-hello cache owns first paint.
+        if (storedSnapshot && afterPaint && !document.hidden) {
+          // Visible adoption waits for paint; hiding must release pending history.
           await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => window.setTimeout(resolve, 0));
+            const release = () => {
+              stopVisibility();
+              resolve();
+            };
+            const stopVisibility = listen(document, "visibilitychange", release);
+            requestAnimationFrame(() => window.setTimeout(release, 0));
           });
         }
         delete hydration.adoptReadySnapshot;
@@ -75,19 +79,18 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
         if (!isCurrent()) {
           return;
         }
-        const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
-        if (requests.acceptedHistory || !snapshot) {
+        const cached = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
+        if (requests.acceptedHistory || !cached) {
           return;
         }
         // A sibling may already own a newer base in the shared cache.
-        applyChatCacheSnapshot(state, snapshot);
-        const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-        cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
+        applyChatCacheSnapshot(state, cached);
+        cacheChatSessionSnapshot(cache, state, target, { ...cached, messages: state.chatMessages });
         this.syncSessionReactions();
-        if (snapshot.progressCard !== undefined) {
+        if (cached.progressCard !== undefined) {
           const progressTarget = this.resolveChatReadTarget();
           if (progressTarget) {
-            this.progressCards.hydrate(progressTarget, snapshot.progressCard);
+            this.progressCards.hydrate(progressTarget, cached.progressCard);
           }
         }
       })());
@@ -111,8 +114,7 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
           ) {
             await gateway.client.connectSent;
           }
-          // Scoped snapshots can paint while the route awaits live revalidation.
-          // The pending route still gates commands and authenticated resources.
+          // Cached rows can paint before live route confirmation, which still gates commands.
           if (!isCurrent()) {
             return;
           }

@@ -754,16 +754,19 @@ describe("first chat startup snapshot ordering", () => {
     expect(h.state.chatMessages).toEqual(liveMessages);
   });
 
-  it.each(
-    [true, false].flatMap((beforeHello) =>
+  it.each([
+    ...[true, false].flatMap((beforeHello) =>
       (["current", "scope", "generation"] as const).map((transition) => ({
         beforeHello,
         transition,
+        hidden: false,
       })),
     ),
-  )(
-    "sends prepared history facts without publishing rows at dispatch ($transition, beforeHello=$beforeHello)",
-    async ({ beforeHello, transition }) => {
+    { beforeHello: false, transition: "current" as const, hidden: true },
+  ])(
+    "sends prepared history facts without publishing rows at dispatch ($transition, beforeHello=$beforeHello, hidden=$hidden)",
+    async ({ beforeHello, transition, hidden }) => {
+      vi.spyOn(document, "hidden", "get").mockReturnValue(hidden);
       const cacheKey = resolveChatSnapshotKey(
         { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
         { sessionKey },
@@ -830,13 +833,15 @@ describe("first chat startup snapshot ordering", () => {
       });
       await replyReady.promise;
       await vi.advanceTimersByTimeAsync(0);
-      expect(h.state.chatMessages).toEqual([]);
-      if (transition === "current") {
-        expect(chatHistoryRequests(h.state).initialHistory).toBeUndefined();
+      if (!hidden) {
+        expect(h.state.chatMessages).toEqual([]);
+        if (transition === "current") {
+          expect(chatHistoryRequests(h.state).initialHistory).toBeUndefined();
+        }
+        vi.advanceTimersToNextFrame();
+        expect(h.state.chatMessages).toEqual([]);
+        await vi.advanceTimersByTimeAsync(1);
       }
-      vi.advanceTimersToNextFrame();
-      expect(h.state.chatMessages).toEqual([]);
-      await vi.advanceTimersByTimeAsync(1);
       expect(subscriptionSettled).toBe(true);
       await subscription;
       expect(rowsAtDispatch).toEqual([]);
