@@ -60,6 +60,12 @@ import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+function profileClient(profileId: string) {
+  const client = sharingPolicyClient({ user: profileId });
+  prepareGatewayRecipientProfile(client);
+  return client;
+}
+
 it("encodes only the wire representation of retained sidebar rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const keys = ["agent:main:encoding-a", "agent:main:encoding-b"];
@@ -116,11 +122,8 @@ it("does not derive discarded send diagnostics while interleaving row modes and 
     const cfg = rolePolicyConfig();
     const owner = ensureProfileForEmail("owner@row-mode.test");
     const guest = ensureProfileForEmail("guest@row-mode.test");
-    const clients = [owner, guest].map((profile) => sharingPolicyClient({ user: profile.id }));
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    for (const client of clients) {
-      prepareGatewayRecipientProfile(client);
-    }
+    const clients = [owner, guest].map((profile) => profileClient(profile.id));
     for (const visibility of ["shared", "draft"] as const) {
       seedRow(`agent:main:${visibility}`, {
         sessionId: visibility,
@@ -259,15 +262,13 @@ it("projects send policy and recipient restrictions, clearing them when the curr
     cfg.session = {
       sendPolicy: { rules: [{ action: "deny", match: { keyPrefix: "policy-blocked" } }] },
     };
-    const clients = ["write", "view", "suggest", "restricted"].map((role) => {
+    const profiles = ["write", "view", "suggest", "restricted"].map((role) => {
       const profile = ensureProfileForEmail(`${role}@send-presentation.test`);
       setUserProfileRole(profile.id, role);
-      return sharingPolicyClient({ user: profile.id });
+      return profile;
     });
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    for (const client of clients) {
-      prepareGatewayRecipientProfile(client);
-    }
+    const clients = profiles.map((profile) => profileClient(profile.id));
     const creatorId = clients[0]!.authenticatedUserProfile!.profileId;
     const keys = ["host", "sandbox", "entry-blocked", "policy-blocked"];
     for (const key of keys) {
@@ -784,8 +785,7 @@ it("preserves selected account across role changes but rejects a changed merge i
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const source = ensureProfileForEmail("source@expected-profile.test");
     const target = ensureProfileForEmail("target@expected-profile.test");
-    const client = sharingPolicyClient({ user: source.id }) as GatewayWsClient;
-    prepareGatewayRecipientProfile(client);
+    const client = profileClient(source.id) as GatewayWsClient;
     const release = (await prepareUserProfileCatalog()).release;
     try {
       const binding = (await createExpectedProfileBinding(source.id, client))!;
@@ -822,17 +822,18 @@ it("preserves selected account across role changes but rejects a changed merge i
 it("reuses unchanged run presentation and refreshes follow-up activity and row replacements", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:subagent:progress-fact";
-    seedRow(key, {
+    const entry = {
       sessionId: "progress-fact",
       updatedAt: 1,
-      status: "done",
+      status: "done" as const,
       spawnedBy: "agent:main:parent",
-    });
+    };
+    seedRow(key, entry);
     using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
     const list = () => listProjectedSessions({ projection, opts: { limit: 10 } });
-    expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).not.toBe(
-      true,
-    );
+    const active = async () =>
+      (await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun;
+    expect(await active()).not.toBe(true);
     const index = projection.state.rowContext.projectedAgentRuns!;
     using keys = vi.spyOn(index.sessionKeys, "get");
     using ids = vi.spyOn(index.sessionIds, "get");
@@ -851,29 +852,18 @@ it("reuses unchanged run presentation and refreshes follow-up activity and row r
       { trackOwner: true, ownsContext: true },
     );
     try {
-      expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).toBe(
-        true,
-      );
+      expect(await active()).toBe(true);
       const activeState = states.mock.results.at(-1)?.value;
       expect(activeState).not.toBe(initialState);
       expect(initialState.fields.hasActiveSubagentRun).not.toBe(true);
       await list();
       expect(states.mock.results.at(-1)?.value).toBe(activeState);
-      seedRow(key, {
-        sessionId: "replacement-session",
-        updatedAt: 2,
-        status: "done",
-        spawnedBy: "agent:main:parent",
-      });
-      expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).not.toBe(
-        true,
-      );
+      seedRow(key, { ...entry, sessionId: "replacement-session", updatedAt: 2 });
+      expect(await active()).not.toBe(true);
     } finally {
       releaseAgentRunContext("progress-fact-follow-up", claim);
     }
-    expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).not.toBe(
-      true,
-    );
+    expect(await active()).not.toBe(true);
   });
 });
 
