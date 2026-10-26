@@ -76,6 +76,35 @@ describe("Discord webhook transport", () => {
     expect(jsonSpy).not.toHaveBeenCalled();
   });
 
+  it("aborts an in-flight webhook send when the caller signal aborts", async () => {
+    const controller = new AbortController();
+    const reason = new Error("caller aborted");
+    let requestSignal: AbortSignal | undefined;
+    // Real fetch rejects with the signal's reason when it aborts; mirror that.
+    fetchMock.mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((resolve, reject) => {
+          requestSignal = init?.signal;
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject((init.signal as AbortSignal).reason),
+            { once: true },
+          );
+          void resolve;
+        }),
+    );
+
+    const settled = expect(
+      sendWebhook("hello", { ...opts, signal: controller.signal }),
+    ).rejects.toBe(reason);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort(reason);
+    await settled;
+
+    expect(requestSignal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps an accepted send when the response body exceeds the limit", async () => {
     const tracked = cancelTrackedTextResponse(`{"id":"${"x".repeat(16 * 1024 * 1024)}"}`, {
       status: 200,

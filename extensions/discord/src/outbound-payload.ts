@@ -80,6 +80,9 @@ async function createDiscordOutboundSendContext(ctx: DiscordOutboundContext) {
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
+    // Live caller cancellation must reach the abort-aware REST/retry path; the
+    // sender projections used to drop it (see issue #184060).
+    signal: ctx.signal,
     onPlatformSendDispatch: delivery.onPlatformSendDispatch,
     assertPlatformSendAuthorized: delivery.assertPlatformSendAuthorized,
   };
@@ -380,6 +383,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
                 accountId: binding.accountId,
                 threadId: binding.threadId,
                 cfg: ctx.cfg,
+                signal: ctx.signal,
                 username: truncateUtf16Safe(username, 80) || undefined,
                 avatarUrl: normalizeOptionalString(ctx.identity?.avatarUrl),
                 tableMode: ctx.formatting?.tableMode,
@@ -469,6 +473,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       accountId,
       threadId,
       silent,
+      signal,
       sessionKey,
       inboundEventKind,
       onPlatformSendDispatch,
@@ -486,6 +491,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         threadId: threadId ?? undefined,
         silent: silent ?? undefined,
         cfg,
+        signal,
         onPlatformSendDispatch,
         assertPlatformSendAuthorized: assertDirectAdapterHandoff,
       });

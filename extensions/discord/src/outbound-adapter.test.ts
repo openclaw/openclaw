@@ -248,6 +248,92 @@ it("falls back to bot send when Discord rejects the webhook send", async () => {
   );
 });
 
+it("forwards the caller cancellation signal to bot text sends", async () => {
+  const controller = new AbortController();
+
+  await outbound.sendText?.({
+    ...sendContext(),
+    text: "cancellable",
+    signal: controller.signal,
+  });
+
+  expect(mockObjectArg(sendMessage, 0).signal).toBe(controller.signal);
+});
+
+it("forwards the caller cancellation signal to media sends", async () => {
+  const controller = new AbortController();
+
+  await outbound.sendMedia?.({
+    ...sendContext(),
+    text: "caption",
+    mediaUrl: "https://example.com/pic.png",
+    signal: controller.signal,
+  });
+
+  expect(mockObjectArg(sendMessage, 0).signal).toBe(controller.signal);
+});
+
+it("forwards the caller cancellation signal to voice sends", async () => {
+  const controller = new AbortController();
+
+  await outbound.sendMedia?.({
+    ...sendContext(),
+    text: "",
+    mediaUrl: "https://example.com/voice.ogg",
+    audioAsVoice: true,
+    signal: controller.signal,
+  });
+
+  expect(mockCall(sendVoice, 0).slice(0, 2)).toEqual(["channel:123456", "https://example.com/voice.ogg"]);
+  expect(mockObjectArg(sendVoice, 0, 2).signal).toBe(controller.signal);
+});
+
+it("forwards the caller cancellation signal to webhook persona sends", async () => {
+  mockDiscordBoundThreadManager(hoisted);
+  const controller = new AbortController();
+
+  await outbound.sendText?.({
+    ...sendContext("channel:parent-1"),
+    text: "persona",
+    threadId: "thread-1",
+    signal: controller.signal,
+  });
+
+  expect(mockObjectArg(sendWebhook, 0, 1).signal).toBe(controller.signal);
+});
+
+it("forwards the caller cancellation signal to poll sends", async () => {
+  const controller = new AbortController();
+  const sessionKey = "agent:main:discord:channel:parent-1";
+  const end = beginInboundDelivery(sessionKey, vi.fn());
+  sendPoll.mockResolvedValueOnce({
+    messageId: "poll-1",
+    channelId: "thread-1",
+    receipt: createDiscordSendReceipt({
+      platformMessageIds: ["poll-1"],
+      channelId: "thread-1",
+      kind: "poll",
+      threadId: "thread-1",
+    }),
+  });
+  try {
+    await outbound.sendPoll?.({
+      ...sendContext("channel:parent-1"),
+      poll,
+      content: "Vote now",
+      threadId: "thread-1",
+      silent: true,
+      signal: controller.signal,
+      sessionKey,
+      inboundEventKind: "room_event",
+    });
+  } finally {
+    end();
+  }
+
+  expect(mockObjectArg(sendPoll, 0, 2).signal).toBe(controller.signal);
+});
+
 it("routes poll sends to thread target when threadId is provided", async () => {
   const onPlatformSendDispatch = vi.fn(async () => undefined);
   const markInboundEventDelivered = vi.fn();
