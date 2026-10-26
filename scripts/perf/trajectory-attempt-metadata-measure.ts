@@ -69,11 +69,15 @@ process.argv = ["node", "/synthetic/home/trajectory-benchmark.js"];
 function config(revision: number): OpenClawConfig {
   const source: OpenClawConfig = {
     agents: {
-      list: Array.from({ length: 40 }, (_, index) => ({
-        id: `synthetic-agent-${index}`,
-        name: `Synthetic agent ${index}, revision ${revision}`,
-        workspace: `/synthetic/workspaces/agent-${index}`,
-      })),
+      entries: Object.fromEntries(
+        Array.from({ length: 40 }, (_, index) => [
+          `synthetic-agent-${index}`,
+          {
+            name: `Synthetic agent ${index}, revision ${revision}`,
+            workspace: `/synthetic/workspaces/agent-${index}`,
+          },
+        ]),
+      ),
     },
     plugins: {
       entries: Object.fromEntries(
@@ -123,7 +127,7 @@ function tools(revision: number) {
 }
 
 const configs = [config(1), config(2)];
-const catalogs = [tools(1), tools(2)];
+const catalogs = [tools(1), tools(2)] as const;
 const metadata = (index: number) =>
   buildTrajectoryRunMetadata({
     env,
@@ -135,7 +139,7 @@ const metadata = (index: number) =>
     timeoutMs: 30_000,
   });
 const toolDefinitions = (index: number) =>
-  toTrajectoryToolDefinitions(catalogs[index % catalogs.length]);
+  toTrajectoryToolDefinitions(catalogs[index % 2 === 0 ? 0 : 1]);
 const golden = [0, 1, 0].map((index) => ({
   metadata: { ...metadata(index), capturedAt: "<timestamp>" },
   tools: toolDefinitions(index),
