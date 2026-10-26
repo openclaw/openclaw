@@ -66,6 +66,8 @@ const repositoryScriptEntries = [
   "scripts/perf/repeat-cron-test.mjs!",
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
+  // Its header documents the full transcript-pairing repair benchmark.
+  "scripts/perf/tool-result-pairing-measure.ts!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
