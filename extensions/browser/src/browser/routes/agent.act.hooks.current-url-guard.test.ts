@@ -32,17 +32,26 @@ vi.mock("../pw-ai-module.js", () => ({ getPwAiModule: vi.fn(async () => pwMocks)
 
 const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js");
 
-function createProfileContext(options?: {
+type ProfileOptions = {
   attachOnly?: boolean;
   driver?: "openclaw" | "extension" | "existing-session";
-}) {
-  return {
+};
+
+async function callHook(
+  path: "/hooks/file-chooser" | "/hooks/dialog",
+  body: Record<string, unknown>,
+  profile: ProfileOptions = {},
+  allowPrivateNetwork = false,
+) {
+  const { app, postHandlers } = createBrowserRouteApp();
+  const profileCtx = {
     profile: {
-      attachOnly: options?.attachOnly ?? false,
+      attachOnly: false,
       cdpIsLoopback: true,
       cdpUrl: "http://127.0.0.1:9222",
-      driver: options?.driver ?? ("openclaw" as const),
+      driver: "openclaw",
       name: "default",
+      ...profile,
     },
     ensureTabAvailable: vi.fn(async () => ({
       targetId: "tab-1",
@@ -52,38 +61,24 @@ function createProfileContext(options?: {
     })),
     listTabs: vi.fn(async () => []),
   };
-}
-
-async function callHook(params: {
-  path: "/hooks/file-chooser" | "/hooks/dialog";
-  body: Record<string, unknown>;
-  profileCtx: ReturnType<typeof createProfileContext>;
-  allowPrivateNetwork?: boolean;
-}) {
-  const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentActHookRoutes(app, {
-    forProfile: () => params.profileCtx,
+    forProfile: () => profileCtx,
     state: () => ({
       resolved: {
         actionTimeoutMs: 60_000,
         extraArgs: [],
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork === true },
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: allowPrivateNetwork },
       },
     }),
   } as never);
-  return await runRoute(postHandlers.get(params.path), { body: params.body });
+  return await runRoute(postHandlers.get(path), { body });
 }
 
 async function upload(
-  profile: Parameters<typeof createProfileContext>[0],
+  profile: ProfileOptions,
   body: Record<string, unknown> = { paths: ["/tmp/upload.txt"], ref: "upload-button" },
 ) {
-  return await callHook({
-    path: "/hooks/file-chooser",
-    body,
-    profileCtx: createProfileContext(profile),
-    allowPrivateNetwork: true,
-  });
+  return callHook("/hooks/file-chooser", body, profile, true);
 }
 
 const sideEffects = Object.values({ ...mcp, ...pathMocks, ...pwMocks });
@@ -101,9 +96,8 @@ describe("agent act hook current URL guard", () => {
   ] as const)(
     "blocks %s before page side effects on a disallowed current tab",
     async (path, body) => {
-      const response = await callHook({ path, body, profileCtx: createProfileContext() });
       expectResponse(
-        response,
+        await callHook(path, body),
         { error: "browser navigation blocked by policy", reason: "navigation_blocked" },
         400,
       );
