@@ -244,6 +244,9 @@ const repositoryScriptEntries = [
   "scripts/perf/mention-inbox-measure.ts!",
   // scripts/perf/README.md invokes this main-thread stall measurement CLI by path.
   "scripts/perf/main-thread-stall-measure.mjs!",
+  // Cold-load diagnostics invoked directly as documented in their headers.
+  "scripts/perf/gateway-main-heap-preload.mjs!",
+  "scripts/perf/headless-tools-cold-import.mjs!",
   // scripts/perf/README.md invokes these measurement commands by path.
   "scripts/perf/cron-delivery-gateway-entry.ts!",
   "scripts/perf/plugin-policy-read-measure.mjs!",
@@ -286,6 +289,7 @@ const repositoryScriptEntries = [
   "scripts/perf/audio-queue-pool-retention.ts!",
   "scripts/perf/catalog-worker-retention-measure.ts!",
   "scripts/perf/codex-catalog-reconcile-measure.ts!",
+  "scripts/perf/codex-catalog-rollouts.ts!",
   "scripts/perf/command-capture-pool-retention.ts!",
   "scripts/perf/control-ui-forbidden-rpc-measure.ts!",
   "scripts/perf/device-pairing-publication-measure.ts!",
@@ -357,6 +361,7 @@ const repositoryScriptEntries = [
   "scripts/perf/board-layout-measure.mjs!",
   "scripts/perf/channel-run-admission-measure.mjs!",
   "scripts/perf/chat-history-param-validation-measure.mjs!",
+  "scripts/perf/claude-session-catalog-measure.ts!",
   "scripts/perf/codex-catalog-hydrate-measure.ts!",
   "scripts/perf/cron-continuation-snapshot-measure.ts!",
   "scripts/perf/cron-history-plan-measure.ts!",
@@ -429,6 +434,7 @@ const repositoryScriptEntries = [
   "scripts/perf/misc-fresh-array-copies-measure.mjs!",
   "scripts/perf/native-control-port-measure.ts!",
   "scripts/perf/plugin-fresh-arrays-measure.mjs!",
+  "scripts/perf/placement-session-evidence-measure.ts!",
   "scripts/perf/plugin-registry-normalizer-measure.ts!",
   "scripts/perf/provider-auth-lookup-maps-measure.ts!",
   "scripts/perf/provider-request-preparation-measure.ts!",
@@ -532,6 +538,7 @@ const repositoryScriptEntries = [
   "scripts/perf/state-read-session-list-bench.ts!",
   "scripts/perf/state-read-worker-bench.ts!",
   "scripts/perf/stream-idle-watchdog.ts!",
+  "scripts/perf/tool-call-stream-buffer-measure.ts!",
   "scripts/perf/tool-source-reply-completion-measure.mjs!",
   "scripts/perf/transcript-model-context-measure.ts!",
   "scripts/perf/ws-event-metrics-measure.ts!",

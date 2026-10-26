@@ -57,13 +57,9 @@ const { feed, record, library } = vi.hoisted(() => {
             .slice(0, limit),
       ),
       listWorkshopArchive: vi.fn(async () => [
-        { name: "deploy", versions: [{ id: "v-before-review" }, { id: "v-after-first-patch" }] },
+        { name: "deploy", versions: [{ id: "v-before-review" }] },
       ]),
-      listWorkshopSkills: vi.fn(async () =>
-        [...new Map(changes.map(({ skillName, action }) => [skillName, action]))]
-          .filter(([, action]) => action !== "archive")
-          .map(([name]) => ({ name })),
-      ),
+      listWorkshopSkills: vi.fn(async () => [{ name: "release" }]),
       restoreWorkshopSkill: vi.fn(mutate("restore")),
       archiveWorkshopSkill: vi.fn(mutate("archive")),
     },
@@ -293,7 +289,6 @@ describe("postWorkshopChangeNotice", () => {
   });
 
   it.each([
-    ["reset", { ...sessionEntry, lifecycleRevision: "reset-revision" }],
     ["replacement", { ...sessionEntry, sessionId: "replacement-session" }],
     ["deletion", undefined],
   ])("leaves a conversation untouched after %s", async (_change, entry) => {

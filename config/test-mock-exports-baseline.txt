@@ -936,8 +936,6 @@
 ["extensions/tlon/src/monitor/monitor.test-harness.ts","openclaw/plugin-sdk/media-runtime","e634d7eee226189b2059a0784225981d479e61e88cf407c95f3158e579c1ca17",1]
 ["extensions/tlon/src/monitor/monitor.test-harness.ts","openclaw/plugin-sdk/runtime-env","3f1f76204241d75ff9934f25985fe6c66aa5da7580f523d8a1b35c8673574e91",1]
 ["extensions/tlon/src/outbound-tool-trace-sanitize.test.ts","./urbit/upload.js","55e146b4d8c56c60ab3080741845caeaf4e2489b236a89f9854271d2f2c5a926",1]
-["extensions/tlon/src/urbit/sse-client.test.ts","./fetch.js","5d4eb22d0ed4041932f0ea1afd3a809159c385b6621dc8efd2dd24a728144828",1]
-["extensions/tlon/src/urbit/upload.test.ts","../tlon-api.js","5cba415ba807e7ef1e5a98697074b2c80d3829c249c93de553ffe79776488a81",1]
 ["extensions/tlon/src/urbit/upload.test.ts","openclaw/plugin-sdk/media-runtime","e9f06b2cdd76e993e5cbfaa5e08b9c654c0f64bc879d5fc6ae7cfb0fd3212e2d",1]
 ["extensions/tts-local-cli/speech-provider-stream-error.test.ts","openclaw/plugin-sdk/process-runtime","2d8e5d7a2fea5b49cfab1b7f7ec30f377adae0a0be3b0138a81c2a9eab5774ab",1]
 ["extensions/tts-local-cli/speech-provider.test.ts","openclaw/plugin-sdk/media-runtime","66e3647d30b80559fac02332e276729fa1c174fbedd6397508816525691213bf",1]
