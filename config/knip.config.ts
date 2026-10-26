@@ -206,6 +206,7 @@ const repositoryScriptEntries = [
   "scripts/perf/worktree-prompt-native-measure.ts!",
   "scripts/perf/worktree-prompt-overlap-measure.ts!",
   "scripts/perf/code-mode-worker-burst-measure.ts!",
+  "scripts/perf/code-mode-worker-residency-measure.ts!",
   "scripts/perf/embedded-subscribe-events-measure.ts!",
   "scripts/perf/harness-selection-copy-measure.ts!",
   "scripts/perf/session-catalog-pairing-measure.ts!",
