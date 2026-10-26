@@ -1,6 +1,6 @@
 export const CODE_PREVIEW_LINE_COUNT = 7;
 
-export type CodeHighlightChunk = { html: string; to: number };
+type CodeHighlightChunk = { html: string; to: number };
 export type CodeHighlightRequest = { id: number; source: string; language: string };
 export type CodeHighlightReply = {
   id: number;

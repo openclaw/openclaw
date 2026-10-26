@@ -528,6 +528,16 @@ read/write counts and preserve the last measured comparison baseline. A later
 reported zero still counts as a measured miss. This distinction applies to local
 engines with optional cache metrics as well as compatible cloud APIs.
 
+On routes that pin the system prompt, the `[prompt-cache] cache read dropped`
+warning includes `systemPromptSeries=pinned` when the saved series was reused,
+or `systemPromptSeries=restarted:<reason>` when the attempt restarted it.
+Reasons are `new` (no saved series), `history` (compaction or a history rewrite),
+`model-change` (a model-change entry after the checkpoint), or `route:<part>`.
+The route part names the first changed element: `provider`, `model`, `api`,
+`baseUrl`, `inHistorySystemUpdates`, or `personalProfile`. Only these reason
+tokens are reported, never profile IDs, route-key contents, or prompt text.
+Routes without a system-prompt series omit the field.
+
 The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; active sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
 
 For encoded provider requests, `providerPrefix` compares the serialized instructions, tools, and up to 512 input items. It names the first changed item, with bounded protocol fields for the first 32 items, such as `message:3.encrypted_content`, plus changed request parameters such as `parameters:prompt_cache_key`. Values and unknown field names are never logged. `order` means object key order changed without a tracked field-value change; it is wire evidence, not proof that the provider rendered different tokens. Beyond the item limit, a tail digest can detect changes but cannot locate the first differing item.

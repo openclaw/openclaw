@@ -20,7 +20,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  observeMainThreadSql,
+  expectNoMainThreadSql as withoutHostSql,
+} from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createExecApprovalPolicySnapshot } from "./exec-approvals-allow-always.js";
 import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
@@ -138,16 +141,6 @@ async function withForeignDatabase<T>(run: (db: DatabaseSync) => T | Promise<T>)
     return await run(db);
   } finally {
     db.close();
-  }
-}
-
-async function withoutHostSql(run: () => Promise<void>) {
-  const sql = observeMainThreadSql();
-  try {
-    await run();
-    sql.expectIdle();
-  } finally {
-    sql.restore();
   }
 }
 

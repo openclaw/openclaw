@@ -15,6 +15,7 @@ import { getProviderPromptState } from "../provider-prompt-state.js";
 import {
   retainEmbeddedSessionPromptState,
   beginSessionSystemPrompt,
+  buildSystemPromptRouteKey,
   prepareSessionSystemPrompt,
   prepareSessionToolSurface,
   retireSessionSystemPrompt,
@@ -51,6 +52,7 @@ type EmbeddedAttemptSessionRuntimeState = {
   prePromptMessageCount: number;
   promptCache: EmbeddedRunAttemptResult["promptCache"];
   systemPromptText: string;
+  systemPromptSeries?: ReturnType<typeof prepareSessionSystemPrompt>["seriesStatus"];
 };
 
 export async function prepareEmbeddedAttemptSessionRuntime(input: {
@@ -147,15 +149,15 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const sessionPromptState = promptStateLease.state;
   const usesSystemPromptSeries =
     !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
-  const promptRouteKey = JSON.stringify([
-    attempt.provider,
-    attempt.modelId,
-    attempt.model.api,
-    attempt.model.baseUrl,
-    transcriptPolicy.inHistorySystemUpdates === true,
-    // Personal bootstrap follows the selected human, not only the session ID.
-    attempt.bootstrapUserProfileId,
-  ]);
+  const promptRouteKey = buildSystemPromptRouteKey({
+    provider: attempt.provider,
+    model: attempt.modelId,
+    api: attempt.model.api,
+    baseUrl: attempt.model.baseUrl,
+    inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates === true,
+    // Personal bootstrap follows the session's selected human, not only the session ID.
+    personalProfile: attempt.bootstrapUserProfileId,
+  });
   // Retire old overrides before new carriers without checkpointing unadmitted notices.
   const retireSystemPromptUpdates = () =>
     sessionLock.withOwnedTranscriptWrite(() =>
@@ -191,6 +193,10 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
             systemPrompt: freshSystemPrompt,
             entries: sessionManager.getBranch(),
           });
+          // Keep an attempt's restart visible through subsequent continuation preparations.
+          if (prepared.restart || state.systemPromptSeries === undefined) {
+            state.systemPromptSeries = prepared.seriesStatus;
+          }
           let restartRecorded = false;
           if (prepared.restart && resources.session) {
             await retireSystemPromptUpdates();

@@ -41,13 +41,14 @@ export function normalizeBoardLayout(layout: BoardLayout): BoardLayout {
 }
 
 // Public operations take ownership once; successive operations only reorder that copy.
+/* oxlint-disable unicorn/no-array-sort -- Private helpers sort cloned layouts or fresh filtered arrays. */
 function normalizeOwnedLayout(layout: BoardLayout): BoardLayout {
-  const tabs = layout.tabs.toSorted(comparePosition);
+  const tabs = layout.tabs.sort(comparePosition);
   tabs.forEach((tab, position) => {
     tab.position = position;
   });
   const tabPosition = new Map(tabs.map((tab) => [tab.tabId, tab.position]));
-  const widgets = layout.widgets.toSorted((a, b) => {
+  const widgets = layout.widgets.sort((a, b) => {
     const tabDelta =
       (tabPosition.get(a.tabId) ?? Number.MAX_SAFE_INTEGER) -
       (tabPosition.get(b.tabId) ?? Number.MAX_SAFE_INTEGER);
@@ -79,7 +80,7 @@ function requireWidget(layout: BoardLayout, name: string): BoardWidget {
 }
 
 function moveTab(layout: BoardLayout, tab: BoardTab, position: number): void {
-  const ordered = layout.tabs.toSorted(comparePosition).filter((candidate) => candidate !== tab);
+  const ordered = layout.tabs.filter((candidate) => candidate !== tab).sort(comparePosition);
   ordered.splice(clampInteger(position, 0, ordered.length), 0, tab);
   ordered.forEach((candidate, index) => {
     candidate.position = index;
@@ -103,7 +104,7 @@ function moveWidget(
   }
   const targetWidgets = layout.widgets
     .filter((candidate) => candidate.tabId === targetTabId && candidate !== widget)
-    .toSorted(comparePosition);
+    .sort(comparePosition);
   let targetPosition = targetWidgets.length;
   if (after !== undefined) {
     if (after === widget.name) {
@@ -165,10 +166,10 @@ function applyBoardOp(layout: BoardLayout, op: BoardOp): void {
       const tab = requireTab(layout, op.tabId);
       const remainingTabs = layout.tabs
         .filter((candidate) => candidate !== tab)
-        .toSorted(comparePosition);
+        .sort(comparePosition);
       const tabWidgets = layout.widgets
         .filter((widget) => widget.tabId === tab.tabId)
-        .toSorted(comparePosition);
+        .sort(comparePosition);
       if (remainingTabs.length === 0 && tabWidgets.length > 0) {
         throw new BoardValidationError(
           "invalid_operation",
@@ -225,15 +226,15 @@ function applyBoardOp(layout: BoardLayout, op: BoardOp): void {
   }
 }
 
+/* oxlint-enable unicorn/no-array-sort */
+
 export function applyBoardOps(layout: BoardLayout, ops: readonly BoardOp[]): BoardLayout {
   const next = structuredClone(layout);
   for (const op of ops) {
     applyBoardOp(next, op);
-    const normalized = normalizeOwnedLayout(next);
-    next.tabs = normalized.tabs;
-    next.widgets = normalized.widgets;
+    normalizeOwnedLayout(next);
   }
-  return normalizeOwnedLayout(next);
+  return ops.length > 0 ? { tabs: next.tabs, widgets: next.widgets } : normalizeOwnedLayout(next);
 }
 
 export function insertBoardWidget(

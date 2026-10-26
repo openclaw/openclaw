@@ -1835,7 +1835,6 @@ src/gateway/tools-invoke-shared.ts	3
 src/gateway/watch-node-http.ts	3
 src/gateway/worker-environments/bundle.ts	5
 src/gateway/worker-environments/inference-runtime.ts	2
-src/gateway/worker-environments/live-event-projection.ts	1
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/placement-state.ts	2
 src/gateway/worker-environments/service-validation.ts	2
@@ -2059,7 +2058,7 @@ src/plugin-sdk/channel-entry-contract.ts	6
 src/plugin-sdk/channel-inbound.ts	2
 src/plugin-sdk/channel-ingress-runtime.ts	1
 src/plugin-sdk/channel-outbound.ts	1
-src/plugin-sdk/channel-replay-guard.ts	2
+src/plugin-sdk/channel-replay-guard.ts	1
 src/plugin-sdk/core.ts	3
 src/plugin-sdk/dedupe-runtime.ts	1
 src/plugin-sdk/extension-shared.ts	6

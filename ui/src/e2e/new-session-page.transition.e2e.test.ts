@@ -156,6 +156,7 @@ async function assertCreateRecovery(
   const imageFile = path.join(process.cwd(), "ui/public", imageFileName);
   const imageContent = (await readFile(imageFile)).toString("base64");
   const gateway = await installMockGateway(page, {
+    subscriptionInitialHistory: false,
     heldMethods: ["chat.startup"],
     workspaceGit: true,
     methodResponses: {
@@ -561,6 +562,7 @@ suite.define(() => {
       },
     );
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       agentModel: "openai/gpt-5.6-sol",
       featureMethods: [
         "agent.wait",

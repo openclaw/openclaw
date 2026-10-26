@@ -126,7 +126,7 @@ suite.define(() => {
           ],
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, child.key));
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await page.getByText("View-only subagent", { exact: true }).waitFor();
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const bubble = activePane.locator('.chat-bubble[data-entry-id="review-result"]');
@@ -236,7 +236,7 @@ suite.define(() => {
             : [source],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const bubble = page.locator(`.chat-bubble[data-entry-id="${sourceId}"]`);
       await bubble.waitFor({ state: "visible" });
       if (kind === "image") {

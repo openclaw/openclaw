@@ -144,6 +144,26 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
     expect(captures).not.toHaveBeenCalled();
     expect(sharing).not.toHaveBeenCalled();
 
+    // A new lineage revision must recheck the audience, not reconstruct an unchanged source.
+    await f.seed("agent:main:currency-unrelated", f.profile.id);
+    await projection.ensureMaterialized();
+    const describes = vi.spyOn(projection, "describe");
+    const selections = vi.spyOn(projection, "selectEntries");
+    try {
+      expect(await read()).toBe(target);
+      expect(selections).toHaveBeenCalledTimes(2);
+      selections.mockClear();
+      for (let index = 0; index < 20; index++) {
+        expect(await read()).toBe(target);
+        target.assertCurrent!();
+      }
+      expect(describes).not.toHaveBeenCalled();
+      expect(selections).not.toHaveBeenCalled();
+    } finally {
+      describes.mockRestore();
+      selections.mockRestore();
+    }
+
     const admissions = listAgentDatabaseAdmissionRefusals();
     try {
       recordAgentDatabaseAdmissions([

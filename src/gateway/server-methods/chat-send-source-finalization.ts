@@ -328,8 +328,8 @@ async function finalizeChatSendAgentReplyPayloads(
               broadcastContent: replyBroadcastContent,
             } = await buildContent(inputsByIndex[inputIndex] ?? []);
             const state: SourceReplyContentState = {
-              broadcastContent: replyBroadcastContent ? [...replyBroadcastContent] : [],
-              persistedContent: persistedContent ? [...persistedContent] : [],
+              broadcastContent: replyBroadcastContent ?? [],
+              persistedContent: persistedContent ?? [],
               hasManagedOutgoingContent: hasManagedOutgoingAssistantContent(persistedContent),
               backedManagedOutgoingContent: false,
             };

@@ -60,8 +60,6 @@ function selectTaskPublicationSessions(
   root: PublicationRow,
   allows: PublicationFilter,
 ) {
-  // Registry publications can defer parent-index updates until row preparation.
-  void projection.state;
   const revision = projection.readTaskPublicationRevision();
   const nodes = getOrCreateWeakOwnerMap(nodesByRevision, revision);
   const sharing = projection.sharingRevision;
@@ -114,14 +112,17 @@ export function prepareTaskPublicationSessions(
   root: PublicationRow,
   getAllows: () => PublicationFilter,
 ) {
-  let prepared = selectTaskPublicationSessions(projection, root, getAllows());
+  // Registry publications can defer parent-index updates until row preparation.
+  const initialAllows = getAllows();
+  void projection.state;
+  let prepared = selectTaskPublicationSessions(projection, root, initialAllows);
   const sessions = prepared.sessions;
   return {
     sessions,
     assertCurrent: () => {
       // Registry publication can defer the lineage update until preparation.
-      void projection.state;
       const allows = getAllows();
+      void projection.state;
       if (prepared.revision === projection.readTaskPublicationRevision()) {
         const sharing = projection.sharingRevision;
         const rows = sharing ? getOrCreateWeakOwnerMap(rowsByRevision, sharing) : undefined;

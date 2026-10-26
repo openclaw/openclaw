@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   registerSerializedJsonArray,
+  serializedJsonArrayBytes,
   SerializedGatewayFrame,
   SerializedJsonArray,
   SerializedJsonPayload,
@@ -8,6 +9,38 @@ import {
 } from "./serialized-json.js";
 
 describe("serialized Gateway response arrays", () => {
+  it.each([{ rows: [] }, { rows: [{ label: '雪🦞\\"\n' }, { label: "ready" }] }])(
+    "defers owned array encoding until transport use and reuses it thereafter (%j)",
+    ({ rows }) => {
+      const allocate = vi.spyOn(Buffer, "allocUnsafeSlow");
+      try {
+        registerSerializedJsonArray(
+          rows,
+          rows.map((row) => JSON.stringify(row)),
+        );
+        const retainedBytes = serializedJsonArrayBytes(rows);
+        expect(retainedBytes).toBeGreaterThanOrEqual(Buffer.byteLength(JSON.stringify(rows)));
+        expect(allocate).not.toHaveBeenCalled();
+        const frame = { type: "res", payload: { rows } };
+        const first = serializeGatewayFrame(frame);
+        expect(allocate).toHaveBeenCalledOnce();
+        const second = serializeGatewayFrame(frame);
+        expect(allocate).toHaveBeenCalledOnce();
+        expect(first).toBeInstanceOf(SerializedGatewayFrame);
+        expect(second).toBeInstanceOf(SerializedGatewayFrame);
+        const segment = (first as SerializedGatewayFrame).segments.find(
+          (part) => Buffer.from(part).toString() === JSON.stringify(rows),
+        );
+        expect(segment).toBeDefined();
+        expect((second as SerializedGatewayFrame).segments).toContain(segment);
+        expect(serializedJsonArrayBytes(rows)).toBe(retainedBytes);
+        expect(first.toString()).toBe(JSON.stringify(frame));
+      } finally {
+        allocate.mockRestore();
+      }
+    },
+  );
+
   it("retains only owned bytes for cached arrays and shared response payloads", () => {
     const rows = [{ label: '雪🦞\\"\n' }];
     registerSerializedJsonArray(

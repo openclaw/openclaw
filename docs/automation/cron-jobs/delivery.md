@@ -30,7 +30,9 @@ while best-effort delivery can complete successfully without claiming delivery.
 When `gateway.publicOrigin` is configured and the Control UI is enabled, chat
 notifications include an `Inspect` link into the Control UI. Command and script
 completion announcements open the automation run; isolated agent announcements
-open the run's session.
+open the run's session. Telegram and Discord show a compact **Inspect run**
+link instead of the full URL; other channels retain the plain `Inspect: <URL>`
+footer.
 
 With `announce`, the chat that receives the result owns it. The result is added to the conversation after the channel confirms delivery, using the content actually sent after channel transforms and hooks. OpenClaw writes one assistant message into that chat's transcript so the next reply can use it as context. The result records its job and run; retries do not duplicate it, and it can commit while a turn is running. Transcript writes remain ordered, and the running turn keeps ownership of its reply. Destination creation and remembered-route updates happen only after confirmed delivery; newly created destinations inherit the source session's required sandbox policy.
 

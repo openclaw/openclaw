@@ -431,9 +431,10 @@ export function findSkillUsageMatch(params: {
     if (typeof name !== "string") {
       return undefined;
     }
+    const normalizedName = name.trim();
     const snapshot = params.ctx?.skillsSnapshot;
     const skill = (snapshot?.discoverySkills ?? snapshot?.resolvedSkills)?.find(
-      (entry) => entry.name === name.trim() && !entry.disableModelInvocation,
+      (entry) => entry.name === normalizedName && !entry.disableModelInvocation,
     );
     if (!skill) {
       return undefined;

@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import type { WorkboardLink } from "@openclaw/workboard-contract";
 import { chromium, expect, type CDPSession, type Page } from "playwright/test";
 import { controlUiPluginAssetPrefix } from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { readPluginControlUiAssets } from "../src/plugins/control-ui-assets.js";
@@ -38,6 +39,7 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "10" },
     "pair-offset": { type: "string", default: "0" },
     cards: { type: "string", default: "300" },
+    "linked-dependencies": { type: "boolean", default: false },
     output: { type: "string", default: ".artifacts/plugin-views/measure" },
     trace: { type: "boolean", default: false },
     coverage: { type: "boolean", default: false },
@@ -95,7 +97,17 @@ type Sample = {
   coverage?: unknown;
   warmCoverage?: unknown;
   menuReturnFocusAfterRowsChange?: boolean;
+  dependencyChildRetainedAfterParentUpdate?: boolean;
   hostPrefetch?: unknown;
+  workboardFixture?: {
+    generatedAt: number;
+    createdAt: number;
+    updatedAt: number;
+    initialAgeMs: number;
+    expectedUpdatedText: string;
+    coldObservedAt?: number;
+    warmObservedAt?: number;
+  };
   postGcMemory?: { heapBytes: number; nodes: number; elements: number; menuElements: number };
 };
 const results: Sample[] = [];
@@ -103,45 +115,113 @@ const roots = [values["plugin-root"], values["compare-plugin-root"]].filter(
   (root): root is string => Boolean(root),
 );
 const statuses = ["todo", "ready", "running", "review", "blocked", "done"];
-const fixtureTime = Date.now();
-const seed = buildWorkboardMocks(fixtureTime, { id: "benchmark", label: "Benchmark" });
-seed.cards = Array.from({ length: cardCount }, (_, index) => ({
-  ...seed.cards[0]!,
-  id: `bench-${index}`,
-  title: `Benchmark card ${String(index).padStart(3, "0")}`,
-  status: statuses[index % statuses.length]!,
-  position: (Math.floor(index / statuses.length) + 1) * 1000,
-  sessionKey: undefined,
-  createdAt: fixtureTime - 60_000,
-  updatedAt: fixtureTime,
-  priority: index % 2 ? "high" : "normal",
-  labels: [index % 2 ? "review" : "engineering"],
-  metadata: { automation: { boardId: "benchmark" } },
-}));
-seed.boards = [
-  {
-    ...seed.board,
-    id: "benchmark",
-    name: "Benchmark board",
-    total: cardCount,
-    active: cardCount,
-    archived: 0,
-    byStatus: Object.fromEntries(
-      statuses.map((status) => [
-        status,
-        seed.cards.filter((card) => card.status === status).length,
-      ]),
-    ),
-  },
-];
-seed.methodResponses["workboard.cards.list"].cards = seed.cards;
-seed.methodResponses["workboard.cards.list"].boards = seed.boards;
-seed.methodResponses["workboard.boards.list"].boards = seed.boards;
+const linkedDependencies = values["linked-dependencies"];
+const rootCount = linkedDependencies ? Math.max(2, Math.ceil(cardCount / 10)) : 0;
+const workboardInitialAgeMs = (2 * 24 + 3) * 60 * 60 * 1000;
+function createWorkboardFixture(fixtureTime: number) {
+  const seed = buildWorkboardMocks(fixtureTime, { id: "benchmark", label: "Benchmark" });
+  const updatedAt = fixtureTime - workboardInitialAgeMs;
+  const createdAt = updatedAt - 24 * 60 * 60 * 1000;
+  const cardStatuses = Array.from(
+    { length: cardCount },
+    (_, index) => statuses[index % statuses.length]!,
+  );
+  const links: (WorkboardLink & { targetCardId: string })[][] = Array.from(
+    { length: cardCount },
+    () => [],
+  );
+  if (linkedDependencies) {
+    // Its child with root zero clears when root zero finishes.
+    cardStatuses[rootCount - 1] = "done";
+    for (let child = rootCount; child < cardCount; child++) {
+      const ordinal = child - rootCount;
+      const parents = [ordinal % rootCount, (ordinal + 1) % rootCount];
+      cardStatuses[child] = parents.every((parent) => cardStatuses[parent] === "done")
+        ? "ready"
+        : "todo";
+      for (const parent of parents) {
+        links[child]!.push({
+          id: `dep-${child}-${parent}-parent`,
+          type: "parent",
+          targetCardId: `bench-${parent}`,
+          createdAt: updatedAt,
+        });
+        links[parent]!.push({
+          id: `dep-${child}-${parent}-child`,
+          type: "child",
+          targetCardId: `bench-${child}`,
+          createdAt: updatedAt,
+        });
+      }
+    }
+  }
+  const positions = new Map<string, number>();
+  const cards = Array.from({ length: cardCount }, (_, index) => {
+    const status = cardStatuses[index]!;
+    const position = (positions.get(status) ?? 0) + 1000;
+    positions.set(status, position);
+    return {
+      ...seed.cards[0]!,
+      id: `bench-${index}`,
+      title: `Benchmark card ${String(index).padStart(3, "0")}`,
+      status,
+      position,
+      sessionKey: undefined,
+      createdAt,
+      updatedAt,
+      priority: index % 2 ? "high" : "normal",
+      labels: [index % 2 ? "review" : "engineering"],
+      metadata: {
+        automation: { boardId: "benchmark" },
+        ...(linkedDependencies ? { links: links[index] } : {}),
+      },
+    };
+  });
+  if (linkedDependencies) {
+    const cardsById = new Map(cards.map((card) => [card.id, card]));
+    for (const card of cards.slice(rootCount)) {
+      const parents = card.metadata.links!.filter((link) => link.type === "parent");
+      expect(parents).toHaveLength(2);
+      expect(card.status).toBe(
+        parents.every((parent) => cardsById.get(parent.targetCardId)?.status === "done")
+          ? "ready"
+          : "todo",
+      );
+    }
+  }
+  seed.cards = cards;
+  seed.boards = [
+    {
+      ...seed.board,
+      id: "benchmark",
+      name: "Benchmark board",
+      total: cardCount,
+      active: cardCount,
+      archived: 0,
+      byStatus: Object.fromEntries(
+        statuses.map((status) => [
+          status,
+          seed.cards.filter((card) => card.status === status).length,
+        ]),
+      ),
+    },
+  ];
+  seed.methodResponses["workboard.cards.list"].cards = seed.cards;
+  seed.methodResponses["workboard.cards.list"].boards = seed.boards;
+  seed.methodResponses["workboard.boards.list"].boards = seed.boards;
+  return seed;
+}
 
 async function metrics(cdp: CDPSession): Promise<Metrics> {
   const result: { metrics: Array<{ name: string; value: number }> } =
     await cdp.send("Performance.getMetrics");
-  return Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  const snapshot = Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  for (const name of ["TaskOtherDuration", "V8CompileDuration", "DevToolsCommandDuration"]) {
+    if (!Number.isFinite(snapshot[name])) {
+      throw new Error(`Chromium Performance.getMetrics is missing a finite ${name}`);
+    }
+  }
+  return snapshot;
 }
 async function frames(page: Page) {
   await page.evaluate(
@@ -198,6 +278,7 @@ function scenario(
   plugin: string,
   descriptor: Awaited<ReturnType<typeof loadPlugin>>["descriptor"],
   build: { buildId: string; version: string },
+  seed: ReturnType<typeof createWorkboardFixture>,
 ): ControlUiMockGatewayScenario {
   const common: ControlUiMockGatewayScenario = {
     serverBuildId: build.buildId,
@@ -332,6 +413,8 @@ try {
           const page = await context.newPage();
           page.setDefaultTimeout(30_000);
           const cdp = await context.newCDPSession(page);
+          const fixtureTime = Date.now();
+          const seed = createWorkboardFixture(fixtureTime);
           const sample: Sample = {
             plugin,
             profile,
@@ -343,6 +426,17 @@ try {
             status: "failed",
             steps: [],
             errors: [],
+            ...(plugin === "workboard"
+              ? {
+                  workboardFixture: {
+                    generatedAt: fixtureTime,
+                    createdAt: seed.cards[0]!.createdAt,
+                    updatedAt: seed.cards[0]!.updatedAt,
+                    initialAgeMs: workboardInitialAgeMs,
+                    expectedUpdatedText: "2d ago",
+                  },
+                }
+              : {}),
           };
           page.on("pageerror", (error) => sample.errors.push(error.message));
           let navigationManifest:
@@ -402,7 +496,7 @@ try {
             });
             const gateway = await installMockGateway(
               page,
-              scenario(plugin, asset.descriptor, build),
+              scenario(plugin, asset.descriptor, build, seed),
             );
             if (plugin === "workboard") {
               await page.addInitScript(installWorkboardBoardMock, seed);
@@ -514,6 +608,9 @@ try {
                   [
                     "TaskDuration",
                     "ScriptDuration",
+                    "TaskOtherDuration",
+                    "V8CompileDuration",
+                    "DevToolsCommandDuration",
                     "LayoutDuration",
                     "RecalcStyleDuration",
                     "LayoutCount",
@@ -559,6 +656,9 @@ try {
                 await expect(page.locator(".workboard-create")).toBeEnabled();
                 await expect(page.locator(".workboard-card__menu-trigger")).toHaveCount(cardCount);
                 await expect(page.locator(".workboard-card__menu-trigger").nth(1)).toBeVisible();
+                await expect(
+                  page.locator('[data-card-id="bench-0"] .workboard-card__updated'),
+                ).toHaveText("2d ago");
               } else if (plugin === "memory-core") {
                 await expect(
                   page.getByRole("searchbox", { name: "Search memories" }),
@@ -611,6 +711,9 @@ try {
               },
               true,
             );
+            if (sample.workboardFixture) {
+              sample.workboardFixture.coldObservedAt = Date.now();
+            }
             if (values.coverage) {
               sample.coverage = await stopCoverage("cold");
             }
@@ -704,6 +807,9 @@ try {
               await navigate(`/${route}`);
               await ready();
             });
+            if (sample.workboardFixture) {
+              sample.workboardFixture.warmObservedAt = Date.now();
+            }
             if (values.coverage) {
               sample.warmCoverage = await stopCoverage("warm");
             }
@@ -763,8 +869,19 @@ try {
                   .toBeGreaterThan(before);
               });
               await step("open-card", async () => {
-                await page.locator(".workboard-card").first().click();
+                const card = linkedDependencies
+                  ? page.locator(
+                      `.workboard-column__item[data-card-id="bench-${rootCount}"] .workboard-card`,
+                    )
+                  : page.locator(".workboard-card").first();
+                await card.click();
                 await expect(page.locator(".workboard-detail")).toBeVisible();
+                if (linkedDependencies) {
+                  const dependencies = page.locator(".workboard-detail__dependencies li");
+                  await expect(dependencies).toHaveCount(2);
+                  await expect(dependencies.nth(0)).toContainText("Benchmark card 000");
+                  await expect(dependencies.nth(1)).toContainText("Benchmark card 001");
+                }
               });
               await page.keyboard.press("Escape");
               const source = page
@@ -777,22 +894,63 @@ try {
               if (!sourceTitle) {
                 throw new Error("Benchmark card is missing its unique title");
               }
+              let acknowledgedMove:
+                | Pick<(typeof seed.cards)[number], "id" | "status" | "position">
+                | undefined;
               await step("drag-reorder", async () => {
                 const before = (await gateway.getRequests("workboard.cards.move")).length;
                 await source.dragTo(target);
-                await gateway.waitForRequest("workboard.cards.move", { after: before });
+                const request = await gateway.waitForRequest("workboard.cards.move", {
+                  after: before,
+                });
+                const { id, status, position } = request.params as NonNullable<
+                  typeof acknowledgedMove
+                >;
+                acknowledgedMove = { id, status, position };
                 await expect(
                   target
                     .locator(".workboard-card")
                     .getByRole("heading", { name: sourceTitle, exact: true }),
                 ).toHaveCount(1);
               });
+              expect(acknowledgedMove).toMatchObject({
+                id: "bench-0",
+                status: "ready",
+                position: expect.any(Number),
+              });
+              const dependencyChild = linkedDependencies
+                ? page.locator(
+                    `.workboard-column__item[data-card-id="bench-${rootCount * 2 - 1}"] .workboard-card`,
+                  )
+                : undefined;
+              if (dependencyChild) {
+                await dependencyChild.scrollIntoViewIfNeeded();
+                await expect(dependencyChild.locator(".workboard-card__alert")).toHaveText(
+                  "1 blocked",
+                );
+              }
+              const retainedChild = await dependencyChild?.elementHandle();
               await step("live-update", async () => {
+                const updatedAt = Date.now() + 10_000;
                 const card = {
                   ...seed.cards[0]!,
+                  ...acknowledgedMove,
                   title: "Live benchmark update",
-                  updatedAt: fixtureTime + 10_000,
+                  updatedAt,
+                  ...(linkedDependencies ? { status: "done", completedAt: updatedAt } : {}),
                 };
+                const cards = [card, ...seed.cards.slice(1)];
+                const boards = seed.boards.map((board) =>
+                  Object.assign({}, board, {
+                    byStatus: Object.fromEntries(
+                      statuses.map((status) => [
+                        status,
+                        cards.filter((entry) => entry.status === status).length,
+                      ]),
+                    ),
+                    updatedAt,
+                  }),
+                );
                 await page.evaluate(
                   (payload) => {
                     const browserGateway = (
@@ -805,16 +963,29 @@ try {
                       respond(payload),
                     );
                   },
-                  { statuses, cards: [card, ...seed.cards.slice(1)], boards: seed.boards },
+                  { statuses, cards, boards },
                 );
                 await gateway.emitGatewayEvent("plugin.workboard.changed", {
                   epoch: "benchmark-live",
                   revision: 1,
                 });
                 await expect(
-                  page.locator(".workboard-card", { hasText: "Live benchmark update" }),
-                ).toBeVisible();
+                  page.locator('.workboard-column__item[data-card-id="bench-0"] h3'),
+                ).toHaveText("Live benchmark update");
+                if (dependencyChild) {
+                  await expect(dependencyChild.locator(".workboard-card__alert")).toHaveCount(0);
+                }
               });
+              if (dependencyChild) {
+                expect(retainedChild).not.toBeNull();
+                expect(
+                  await dependencyChild.evaluate(
+                    (element, retained) => element === retained,
+                    retainedChild,
+                  ),
+                ).toBe(true);
+                sample.dependencyChildRetainedAfterParentUpdate = true;
+              }
             } else if (plugin === "memory-core" && !values["loads-only"]) {
               await step("search-20", async () => {
                 await page.getByRole("searchbox", { name: "Search memories" }).fill("Benchmark");
@@ -1006,12 +1177,35 @@ try {
   await server.close();
 }
 const summary = [];
+const comparisonPairs = [];
 for (const plugin of pluginIds) {
   for (const profile of profiles) {
+    const cellSamples = results.filter(
+      (sample) => sample.plugin === plugin && sample.profile === profile,
+    );
+    const pairOutcomes = Array.from({ length: pairs }, (_, index) => {
+      const pair = pairOffset + index + 1;
+      const missingVariants = [...bundles.keys()].filter(
+        (variant) =>
+          !cellSamples.some((sample) => sample.pair === pair && sample.variant === variant),
+      );
+      const failedVariants = cellSamples
+        .filter((sample) => sample.pair === pair && sample.status !== "passed")
+        .map((sample) => sample.variant);
+      return {
+        pair,
+        included: missingVariants.length === 0 && failedVariants.length === 0,
+        missingVariants,
+        failedVariants,
+      };
+    });
+    comparisonPairs.push({ plugin, profile, pairs: pairOutcomes });
+    const includedPairs = new Set(
+      pairOutcomes.filter((pair) => pair.included).map((pair) => pair.pair),
+    );
     for (const variant of bundles.keys()) {
-      const samples = results.filter(
-        (sample) =>
-          sample.plugin === plugin && sample.profile === profile && sample.variant === variant,
+      const samples = cellSamples.filter(
+        (sample) => sample.variant === variant && includedPairs.has(sample.pair),
       );
       for (const id of new Set(samples.flatMap((sample) => sample.steps.map((step) => step.id)))) {
         const steps = samples.flatMap((sample) => sample.steps.filter((step) => step.id === id));
@@ -1045,6 +1239,11 @@ await writeFile(
     {
       workload: {
         cards: cardCount,
+        linkedDependencies,
+        dependencyRoots: rootCount,
+        dependencyChildren: linkedDependencies ? cardCount - rootCount : 0,
+        dependencyParentLinks: linkedDependencies ? (cardCount - rootCount) * 2 : 0,
+        dependencyChildLinks: linkedDependencies ? (cardCount - rootCount) * 2 : 0,
         memoryResults: 20,
         nostr: "settings/profile; no feed renderer exists",
       },
@@ -1075,6 +1274,7 @@ await writeFile(
         remote: "100ms delay per HTTP request and synthetic WebSocket response/event delivery",
         warm: "In-document route remount with resident modules; request routing disables HTTP cache",
       },
+      comparisonPairs,
       summary,
     },
     null,

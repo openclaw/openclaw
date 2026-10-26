@@ -392,6 +392,7 @@ export async function executePreparedReplyRun(
   const groupTurn = getGroupThreadTurn();
   const personalBootstrapEligible = isSessionPersonalBootstrapTurn({
     ...ctx,
+    SessionKey: sessionKey,
     InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
     InputProvenance: inputProvenance,
   });

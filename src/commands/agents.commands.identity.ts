@@ -55,16 +55,14 @@ export async function agentsSetIdentityCommand(opts: {
   const avatarRaw = normalizeOptionalString(opts.avatar);
   const hasExplicitIdentity = Boolean(nameRaw || emojiRaw || themeRaw || avatarRaw);
 
-  // An explicit blank flag must not silently fall back to the workspace identity.
-  if (typeof opts.identityFile === "string" && !opts.identityFile.trim()) {
-    throwExpectedCliError("--identity-file must not be blank");
-  }
-  if (typeof opts.workspace === "string" && !opts.workspace.trim()) {
-    throwExpectedCliError("--workspace must not be blank");
-  }
-
   const identityFileRaw = normalizeOptionalString(opts.identityFile);
   const workspaceRaw = normalizeOptionalString(opts.workspace);
+  if (opts.identityFile !== undefined && !identityFileRaw) {
+    throwExpectedCliError("--identity-file must not be blank");
+  }
+  if (opts.workspace !== undefined && !workspaceRaw) {
+    throwExpectedCliError("--workspace must not be blank");
+  }
   const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
   const normalizedAgent = opts.agent === undefined ? null : normalizeAgentIdStrict(opts.agent);
   if (normalizedAgent && !normalizedAgent.ok) {

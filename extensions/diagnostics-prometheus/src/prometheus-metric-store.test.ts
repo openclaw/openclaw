@@ -1,11 +1,108 @@
+import { createHash } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
+import renderShape from "../benchmarks/render-shape.json" with { type: "json" };
 import {
   PROMETHEUS_FAMILY_RESERVES,
   type PrometheusMetricName,
 } from "./prometheus-family-budget.js";
+import * as prometheusFormat from "./prometheus-format.js";
 import { createPrometheusMetricStore } from "./prometheus-metric-store.js";
+
+it("preserves the observed registry's golden exposition across cold and warm scrapes", () => {
+  const store = createPrometheusMetricStore();
+  for (const { name, labelSets, finiteBuckets } of renderShape.histograms) {
+    for (let index = 0; index < labelSets; index++) {
+      store.histogram(
+        name as PrometheusMetricName,
+        "Synthetic histogram",
+        { kind: `kind-${index % 8}`, worker_slot: String(index) },
+        0.005 * ((index % 17) + 1),
+        finiteBuckets,
+      );
+    }
+  }
+  for (const { name, labelSets, type } of renderShape.scalars) {
+    for (let index = 0; index < labelSets; index++) {
+      store[type === "counter" ? "counter" : "gauge"](
+        name as PrometheusMetricName,
+        "Synthetic scalar",
+        { kind: `kind-${index % 8}`, worker_slot: String(index) },
+        index + 1,
+      );
+    }
+  }
+  // Captured from the pre-optimization owner benchmark: 4,628 series / 60,154 rows.
+  for (let scrape = 0; scrape < 2; scrape++) {
+    const rendered = store.render();
+    expect(rendered.length).toBe(5278020);
+    expect(createHash("sha256").update(rendered).digest("hex")).toBe(
+      "8bca72cac3d5f446991fa7c930ee2f81d56ec23d4f4afba9c4b514feb8a71cce",
+    );
+    rendered.buffer.transfer(0);
+  }
+});
+
+it("formats unchanged family headers once across interleaved scrapes and value updates", () => {
+  const first = createPrometheusMetricStore();
+  const second = createPrometheusMetricStore();
+  first.counter("openclaw_run_completed_total", "Runs.", { worker: "z" });
+  first.gauge("openclaw_worker_queue_depth", "Runs.", {}, 1);
+  first.histogram("openclaw_run_duration_seconds", "Duration.", {}, 0.5, [1]);
+  second.counter("openclaw_run_completed_total", "Other runs.", {});
+  const format = vi.spyOn(prometheusFormat, "escapeHelp");
+  try {
+    expect(first.render().toString()).toContain(
+      "# HELP openclaw_worker_queue_depth Runs.\n# TYPE openclaw_worker_queue_depth gauge\n",
+    );
+    second.render();
+    expect(format).toHaveBeenCalledTimes(4);
+    format.mockClear();
+
+    first.counter("openclaw_run_completed_total", "Ignored replacement help.", { worker: "z" });
+    first.gauge("openclaw_worker_queue_depth", "Runs.", {}, 2);
+    first.histogram("openclaw_run_duration_seconds", "Duration.", {}, 0.5, [1]);
+    first.render();
+    second.render();
+    first.render();
+    expect(format).not.toHaveBeenCalled();
+
+    // A newly admitted series can sort ahead of the previous header owner.
+    first.counter("openclaw_run_completed_total", "Earlier runs.\n", { worker: "a" });
+    format.mockClear();
+    expect(first.render().toString()).toContain(
+      "# HELP openclaw_run_completed_total Earlier runs.\\n\n",
+    );
+    expect(format).toHaveBeenCalledTimes(1);
+    format.mockClear();
+    expect(second.render().toString()).toContain(
+      "# HELP openclaw_run_completed_total Other runs.\n",
+    );
+    first.render();
+    expect(format).not.toHaveBeenCalled();
+  } finally {
+    format.mockRestore();
+  }
+});
+
+it("selects header help and type after gauge removal, cross-type admission, and reset", () => {
+  const store = createPrometheusMetricStore();
+  const name = "openclaw_run_duration_seconds";
+  const header = (help: string, type: string) => `# HELP ${name} ${help}\n# TYPE ${name} ${type}\n`;
+  store.histogram(name, "Duration.", {}, 0.5, [1]);
+  expect(store.render().toString()).toContain(header("Duration.", "histogram"));
+  store.gauge(name, "Duration.", {}, 2);
+  expect(store.render().toString()).toContain(header("Duration.", "gauge"));
+  store.clearGauges(name);
+  expect(store.render().toString()).toContain(header("Duration.", "histogram"));
+  store.counter(name, "Duration.", {}, 3);
+  expect(store.render().toString()).toContain(header("Duration.", "counter"));
+  store.reset();
+  expect(store.render().length).toBe(0);
+  store.gauge(name, "Restarted duration.", {}, 4);
+  expect(store.render().toString()).toBe(`${header("Restarted duration.", "gauge")}${name} 4\n`);
+});
 
 it("formats unchanged series only once across interleaved scrapes and updates", () => {
   const first = createPrometheusMetricStore();

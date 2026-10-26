@@ -184,7 +184,10 @@ export function warmReloadProbe() {
           if (method === "connect") {
             mark("hello");
           }
-          if (method === "chat.startup") {
+          if (
+            method === "chat.startup" ||
+            (method === "sessions.messages.subscribe" && frame.payload?.initialHistory)
+          ) {
             mark("catchupResponse");
           }
         }
