@@ -60,21 +60,20 @@ const providerRenames = [{ from: "old", to: "new", baseUrl: "https://models.exam
 const providerConfig = (baseUrl: string) => ({ baseUrl, models: [] });
 
 function mockExternalShadow(enabledByDefault = false) {
-  const bundled = registry({
+  const plugin = {
     id: "matrix",
-    rootDir: makeTempDir(),
-    origin: "bundled",
     doctorContract: { stateMigrations: [{ id: "matrix-inbound-dedupe-to-claimable-dedupe" }] },
-  });
-  mocks.loadPluginManifestRegistry.mockReturnValueOnce(bundled).mockReturnValueOnce(
-    registry({
-      id: "matrix",
-      rootDir: makeTempDir(),
-      origin: "global",
-      doctorContract: bundled.plugins[0]?.doctorContract,
-      ...(enabledByDefault ? { enabledByDefault } : {}),
-    }),
-  );
+  };
+  mocks.loadPluginManifestRegistry
+    .mockReturnValueOnce(registry({ ...plugin, rootDir: makeTempDir() }))
+    .mockReturnValueOnce(
+      registry({
+        ...plugin,
+        rootDir: makeTempDir(),
+        origin: "global",
+        ...(enabledByDefault ? { enabledByDefault } : {}),
+      }),
+    );
 }
 
 describe("doctor-contract-registry module loader", () => {
@@ -117,11 +116,7 @@ describe("doctor-contract-registry module loader", () => {
   it("defers declared provider renames during compatibility preflight", () => {
     mockContract(
       { providerRenames },
-      {
-        id: "rename-owner",
-        providers: ["old", "new"],
-        doctorContract: { configRepair: true },
-      },
+      { id: "rename-owner", providers: ["old", "new"], doctorContract: { configRepair: true } },
     );
     const config: OpenClawConfig = {
       models: {
@@ -162,17 +157,13 @@ describe("doctor-contract-registry module loader", () => {
     expect(config).toEqual({});
     expect(result.config).toEqual(mode === "repair" ? { repaired: true } : {});
     expect(result.changes).toEqual(mode === "repair" ? ["repaired config"] : []);
-    expect(result.warnings).toEqual(
+    const warning =
       mode === "throw"
-        ? [
-            expect.stringContaining(
-              'Plugin "normalizer-only" config repair failed: fixture repair failed',
-            ),
-          ]
-        : mode === "warning"
-          ? ["Repair requires operator input."]
-          : undefined,
-    );
+        ? expect.stringContaining(
+            'Plugin "normalizer-only" config repair failed: fixture repair failed',
+          )
+        : "Repair requires operator input.";
+    expect(result.warnings).toEqual(mode === "repair" ? undefined : [warning]);
   });
 
   it.each(["js", "ts"])(
@@ -320,30 +311,20 @@ describe("doctor-contract-registry selection", () => {
     "voice",
     "worker",
   ];
+  const officialOwner = { ownerId: "feishu", trusted: true, pins: true };
   it.each([
     { name: "missing official plugin", pins: true },
     { name: "unresolved host facts", warning: "Resolve account ambiguity", pins: false },
     { name: "deferred installed owner", ownerId: "feishu", pins: false },
-    { name: "deferred trusted official owner", ownerId: "feishu", trusted: true, pins: true },
-    {
-      name: "deferred trusted owner with authored endpoints",
-      ownerId: "feishu",
-      trusted: true,
-      explicit: true,
-      pins: true,
-    },
+    { name: "deferred trusted official owner", ...officialOwner },
+    { name: "deferred trusted owner with authored endpoints", ...officialOwner, explicit: true },
     {
       name: "deferred trusted owner excluded by the allowlist",
-      ownerId: "feishu",
-      trusted: true,
+      ...officialOwner,
       restricted: true,
       pins: false,
     },
-    {
-      name: "deferred replacement owner",
-      ownerId: "custom-feishu",
-      pins: false,
-    },
+    { name: "deferred replacement owner", ownerId: "custom-feishu", pins: false },
   ])("preserves historical webhook ownership for $name", (scenario) => {
     const { ownerId, trusted, restricted, warning, explicit = false, pins } = scenario;
     const config: OpenClawConfig = {
@@ -711,17 +692,12 @@ it("repairs retained channel config before installation without selecting state 
 });
 
 it.each([false, true])("keeps installed owner (configRepair=%s)", (configRepair) => {
-  mocks.loadPluginManifestRegistry.mockReturnValue({
-    plugins: [
-      {
-        id: "installed-owner",
-        channels: ["discord"],
-        providers: [],
-        rootDir: makeTempDir(),
-        doctorContract: { configRepair },
-      },
-    ],
-    diagnostics: [],
+  mockRawDoctorPlugins({
+    id: "installed-owner",
+    channels: ["discord"],
+    providers: [],
+    rootDir: makeTempDir(),
+    doctorContract: { configRepair },
   });
   const config = channelConfig();
   expect(doctor.listPluginDoctorLegacyConfigRules({ config, env: {} })).toEqual([]);
