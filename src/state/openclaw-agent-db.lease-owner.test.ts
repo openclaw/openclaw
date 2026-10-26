@@ -5,8 +5,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as databaseProcessRole from "../infra/database-engine/admission-scope.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseWriteRevision,
+  revokeSqliteDatabaseAdmissionsForPath,
+} from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { observeSqliteWalPeriodicWork } from "../infra/sqlite-wal-scheduler.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   agentDatabaseBorrowers,
@@ -22,6 +26,7 @@ import {
   borrowOpenClawAgentDatabase,
   clearOpenClawAgentDatabaseOpenFailure,
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
@@ -326,11 +331,11 @@ describe("openclaw agent database handle cache", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   });
 
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawStateDatabaseForTest();
   });
 
   it("does not count periodic WAL maintenance as database activity", async () => {
@@ -339,6 +344,98 @@ describe("openclaw agent database handle cache", () => {
     await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
     expect(database.db.isOpen).toBe(false);
   });
+
+  it.each([false, true])(
+    "defers idle eviction during sidecar inspection (replaced: %s)",
+    async (replaced) => {
+      vi.useRealTimers();
+      openOpenClawStateDatabase({ env });
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const scheduled = observeSqliteWalPeriodicWork();
+      const timeout = globalThis.setTimeout;
+      let evict: (() => void) | undefined;
+      const timer = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((callback, delay, ...args) => {
+          if (delay === SQLITE_IDLE_HANDLE_TTL_MS) {
+            evict = () => callback(...args);
+          }
+          return timeout(callback, delay, ...args);
+        });
+      const database = openOpenClawAgentDatabase({ agentId: "idle-inspection", env });
+      platform.mockRestore();
+      timer.mockRestore();
+      scheduled.restore();
+      expect(evict).toBeDefined();
+      const originalLease = readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })[0];
+      expect(originalLease).toBeDefined();
+      const revision = readSqliteDatabaseWriteRevision(database.db);
+      expect(revision).toBeDefined();
+      const inspecting = createDeferredCore();
+      const inspected = createDeferredCore<fs.BigIntStats>();
+      const directoryFs: { readdir(pathname: fs.PathLike): Promise<string[]> } = fs.promises;
+      const directory = vi.spyOn(directoryFs, "readdir").mockResolvedValue(["42"]);
+      const link = vi.spyOn(fs.promises, "readlink").mockResolvedValue(`${database.path}-wal`);
+      const descriptor = vi.spyOn(fs, "fstat").mockImplementation((_fd, _options, callback) => {
+        if (!database.db.isOpen) {
+          callback(Object.assign(new Error("closed"), { code: "EBADF" }), {} as fs.BigIntStats);
+        } else {
+          callback(null, { dev: 10n, ino: 20n, nlink: 1n } as fs.BigIntStats);
+        }
+      });
+      const stat = fs.promises.stat;
+      const pathname = vi.spyOn(fs.promises, "stat").mockImplementation(async (...args) => {
+        if (args[0] !== `${database.path}-wal`) {
+          return stat(...args);
+        }
+        inspecting.resolve();
+        return inspected.promise;
+      });
+      if (replaced) {
+        vi.spyOn(fs, "writeSync").mockReturnValue(1);
+      }
+      const terminate = process.kill.bind(process);
+      const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid !== process.pid || signal !== "SIGKILL") {
+          return terminate(pid, signal);
+        }
+        expect(database.db.isOpen).toBe(true);
+        expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toHaveLength(1);
+        expect(readSqliteDatabaseWriteRevision(database.db)).toBe(revision);
+        return true;
+      });
+      vi.spyOn(process, "abort").mockImplementation(() => {
+        throw new Error("process abort intercepted");
+      });
+      const running = scheduled.periodic();
+      try {
+        await inspecting.promise;
+        evict?.();
+        expect(database.db.isOpen).toBe(true);
+        expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toHaveLength(1);
+        expect(readSqliteDatabaseWriteRevision(database.db)).toBe(revision);
+      } finally {
+        if (!replaced) {
+          directory.mockRestore();
+          link.mockRestore();
+          descriptor.mockRestore();
+          pathname.mockRestore();
+        }
+        inspected.resolve({ dev: 10n, ino: replaced ? 21n : 20n } as fs.BigIntStats);
+        await running;
+      }
+      if (replaced) {
+        expect(kill).toHaveBeenCalledWith(process.pid, "SIGKILL");
+      } else {
+        evict?.();
+        expect(kill).not.toHaveBeenCalledWith(process.pid, "SIGKILL");
+        expect(database.db.isOpen).toBe(false);
+        expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).not.toContainEqual(
+          originalLease,
+        );
+      }
+    },
+  );
 
   it("retains concurrent admissions through the transaction's borrower handoff", async () => {
     const entered = createDeferredCore();

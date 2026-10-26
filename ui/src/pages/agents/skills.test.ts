@@ -50,11 +50,11 @@ describe("createAgentSkillActions", () => {
 });
 
 describe("createAgentSkillsReset", () => {
-  it("deletes the authored allowlist through an explicit config patch", async () => {
+  function resetFixture(target: string, isCurrent = () => true) {
     const patch = vi.fn(async () => true);
     const runtimeConfig = {
       agentEntry: vi.fn(() => ({
-        path: ["agents", "entries", "Research"],
+        path: ["agents", "entries", target],
         entry: { skills: ["coding-agent"] },
       })),
       patch,
@@ -75,20 +75,18 @@ describe("createAgentSkillsReset", () => {
       state,
       context: { agents, runtimeConfig },
       canReset: () => true,
-      isCurrent: () => true,
+      isCurrent,
       onUpdated,
     });
+    return { reset, patch, onUpdated };
+  }
 
+  it("deletes the authored allowlist through an explicit config patch", async () => {
+    const { reset, patch, onUpdated } = resetFixture("Research");
     await reset.clear("research");
 
     expect(patch).toHaveBeenCalledWith({
-      raw: {
-        agents: {
-          entries: {
-            Research: { skills: null },
-          },
-        },
-      },
+      raw: { agents: { entries: { Research: { skills: null } } } },
       note: "Reset agent skills to inherited defaults",
       replacePaths: ["agents.entries.Research.skills"],
       canDispatch: expect.any(Function),
@@ -97,33 +95,8 @@ describe("createAgentSkillsReset", () => {
   });
 
   it("does not queue a patch after its caller becomes stale", async () => {
-    const patch = vi.fn(async () => true);
-    const runtimeConfig = {
-      agentEntry: vi.fn(() => ({
-        path: ["agents", "entries", "main"],
-        entry: { skills: ["coding-agent"] },
-      })),
-      patch,
-    } as unknown as RuntimeConfigCapability;
-    const client = {} as GatewayBrowserClient;
-    const agents = {} as ApplicationContext["agents"];
-    const state: AgentSkillsState = {
-      client,
-      connected: true,
-      requestGeneration: 1,
-      agentSkillsRead: null,
-      agentSkillsReport: null,
-      agentSkillsAgentId: null,
-    };
     const isCurrent = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
-    const reset = createAgentSkillsReset({
-      retired: createAgentsPageLifetime().retired,
-      state,
-      context: { agents, runtimeConfig },
-      canReset: () => true,
-      isCurrent,
-      onUpdated: vi.fn(),
-    });
+    const { reset, patch } = resetFixture("main", isCurrent);
 
     await reset.clear("main");
     expect(patch).not.toHaveBeenCalled();

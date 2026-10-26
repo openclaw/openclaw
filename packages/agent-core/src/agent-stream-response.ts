@@ -361,14 +361,14 @@ export async function streamAgentResponse(
             case "toolcall_end":
               if (partialMessage) {
                 // Only updates assembled here prove appends; provider snapshots can correct text.
-                const priorBlock = partialMessage.content[event.contentIndex];
-                const append =
-                  repetitionGuard && event.type === "text_delta" && event.partial === undefined
-                    ? {
-                        offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
-                        delta: event.delta,
-                      }
-                    : undefined;
+                let append: { offset: number; delta: string } | undefined;
+                if (repetitionGuard && event.type === "text_delta" && event.partial === undefined) {
+                  const priorBlock = partialMessage.content[event.contentIndex];
+                  append = {
+                    offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
+                    delta: event.delta,
+                  };
+                }
                 let message: AssistantMessage = partialMessage;
                 if ("partial" in event && event.partial) {
                   message = event.partial;
@@ -404,8 +404,10 @@ export async function streamAgentResponse(
                 const fragmentEvent = {
                   ...event,
                   contentIndex: event.contentIndex - committedContentCount,
-                  ...("partial" in event ? { partial: fragment } : {}),
                 };
+                if ("partial" in event) {
+                  fragmentEvent.partial = fragment;
+                }
                 await emit({
                   type: "message_update",
                   assistantMessageEvent: fragmentEvent,

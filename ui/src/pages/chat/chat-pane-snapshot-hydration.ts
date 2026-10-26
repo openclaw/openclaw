@@ -71,6 +71,7 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
             applyChatCacheSnapshot(state, snapshot);
             const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
             cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
+            this.syncSessionReactions();
             if (snapshot.progressCard !== undefined) {
               const progressTarget = this.resolveChatReadTarget();
               if (progressTarget) {

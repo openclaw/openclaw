@@ -169,8 +169,8 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       (runtimeRepair === "launcher" ? `ExecStart=\nExecStart=${programArguments.join(" ")}\n` : "");
     const operatorFile = path.join(runtimeDir, "openclaw-homeassistant.env");
     if (runtimeRepair) {
-      await fs.mkdir(path.dirname(dropInPath));
-      await fs.writeFile(dropInPath, dropIn);
+      await fs.mkdir(path.dirname(dropInPath), { mode: 0o700 });
+      await fs.writeFile(dropInPath, dropIn, { mode: 0o600 });
       await fs.writeFile(
         operatorFile,
         runtimeRepair === "PATH" ? `PATH=${environment.PATH}\n` : "HA_FIXTURE=retained\n",

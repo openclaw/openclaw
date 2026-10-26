@@ -201,19 +201,12 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
       });
     },
     // Observation can outlive consumption; never capture request options or its signal.
-    observe: observeProviderRateLimit.bind(undefined, scope, key, inherited),
+    observe: key && !inherited ? observeProviderRateLimit.bind(undefined, scope, key) : undefined,
   };
 }
 
-function observeProviderRateLimit(
-  scope: string,
-  key: string | undefined,
-  inherited: boolean,
-  message: AssistantMessage,
-): void {
+function observeProviderRateLimit(scope: string, key: string, message: AssistantMessage): void {
   if (
-    !key ||
-    inherited ||
     message.stopReason !== "error" ||
     !hasOrganizationTpmRateLimitEvidence(message.errorMessage) ||
     message.retryAfterMs === null

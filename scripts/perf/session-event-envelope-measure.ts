@@ -13,10 +13,13 @@
  * allocation runs. Acceptance: identical payload digest, lower allocation and CPU;
  * report absolute costs and spread, and do not infer whole-Gateway tail changes.
  * --fresh-fields replaces every nested field per event to measure misses separately.
+ * --profile <path> saves the sampled profile when used with --allocations.
+ * --encode-envelopes includes JSON encoding once per distinct projected payload,
+ * checking object-shape costs as well as projection; it does not measure transport.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
@@ -36,6 +39,8 @@ const { values } = parseArgs({
     events: { type: "string", default: "3000" },
     clients: { type: "string", default: "65" },
     allocations: { type: "boolean", default: false },
+    profile: { type: "string" },
+    "encode-envelopes": { type: "boolean", default: false },
     "fresh-fields": { type: "boolean", default: false },
   },
 });
@@ -190,6 +195,8 @@ const context: Parameters<ReturnType<typeof prepareSessionEventProjection>>[3] =
   createRunProjector: () => () => ({ active: false }),
 };
 const prepare = prepareSessionEventProjection(projection);
+let envelopeEncodings = 0;
+let envelopeBytes = 0;
 function publish(index: number, digest?: ReturnType<typeof createHash>) {
   row = freezeTrustedJsonSnapshot({
     ...rowFields,
@@ -224,6 +231,7 @@ function publish(index: number, digest?: ReturnType<typeof createHash>) {
     context,
   );
   assert(project);
+  const encodedPayloads = values["encode-envelopes"] ? new Set<unknown>() : undefined;
   for (const [position, peer] of peers.entries()) {
     // Staggered delivery creates distinct live histories without growing the recipient set.
     if (index % 17 === position % 17) {
@@ -231,6 +239,11 @@ function publish(index: number, digest?: ReturnType<typeof createHash>) {
     }
     const result = project(peer.client);
     assert(result);
+    if (encodedPayloads && !encodedPayloads.has(result.payload)) {
+      encodedPayloads.add(result.payload);
+      envelopeBytes += Buffer.byteLength(JSON.stringify({ payload: result.payload }));
+      envelopeEncodings++;
+    }
     digest?.update(JSON.stringify(result.payload));
     result.delivered?.(peer.client);
   }
@@ -241,6 +254,8 @@ for (let index = 0; index < 200; index++) {
 for (const peer of peers) {
   peer.rows.clear();
 }
+envelopeEncodings = 0;
+envelopeBytes = 0;
 global.gc?.();
 const inspector = new Session();
 if (values.allocations) {
@@ -261,9 +276,13 @@ for (let index = 0; index < events; index++) {
 const elapsedMs = performance.now() - start;
 const cpu = process.threadCpuUsage(cpuStart);
 const memoryAfter = process.memoryUsage();
+const measuredEncoding = { envelopeEncodings, envelopeBytes };
 let sampledBytes: number | undefined;
 if (values.allocations) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
+  if (values.profile) {
+    writeFileSync(values.profile, JSON.stringify(profile));
+  }
   const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
     node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
   sampledBytes = sum(profile.head);
@@ -286,6 +305,8 @@ console.log(
     events,
     clients,
     freshFields: values["fresh-fields"],
+    encodeEnvelopes: values["encode-envelopes"],
+    ...measuredEncoding,
     mode: values.allocations ? "allocation" : "timing",
     elapsedMs,
     threadCpuMs: (cpu.user + cpu.system) / 1000,

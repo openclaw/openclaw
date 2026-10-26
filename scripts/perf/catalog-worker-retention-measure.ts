@@ -7,11 +7,14 @@
  * production worker diagnostics enabled and memory requests every 30 seconds. No forced GC
  * occurs inside that window. The preload's sampling/polling overhead is present in both arms.
  * Source-mode heap includes the TypeScript loader; do not equate it with packaged Gateway RSS.
+ * --task-rounds 20 --measure-tasks profiles tasks after the first cold request. Add
+ * --sample-allocation for a separate allocation pass; omit it for timing measurements.
  * This exercises a real catalog worker, not a complete Gateway or its client workload.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -29,6 +32,9 @@ const { values } = parseArgs({
     snapshot: { type: "boolean", default: false },
     "runtime-plugin": { type: "boolean", default: false },
     "idle-seconds": { type: "string", default: "0" },
+    "task-rounds": { type: "string", default: "2" },
+    "measure-tasks": { type: "boolean", default: false },
+    "sample-allocation": { type: "boolean", default: false },
   },
 });
 assert(values.output, "--output must name a new synthetic fixture directory");
@@ -37,8 +43,10 @@ assert(!fs.existsSync(root), "Refusing to reuse an existing fixture directory");
 const rows = Number(values.models);
 const workspaces = Number(values.workspaces);
 const idleSeconds = Number(values["idle-seconds"]);
+const taskRounds = Number(values["task-rounds"]);
 assert(Number.isSafeInteger(rows) && rows > 0);
 assert(Number.isSafeInteger(workspaces) && workspaces > 0);
+assert(Number.isSafeInteger(taskRounds) && taskRounds > 0);
 assert(Number.isSafeInteger(idleSeconds) && idleSeconds >= 0, "--idle-seconds must be nonnegative");
 const output = path.join(root, "workers");
 const env = {
@@ -55,7 +63,7 @@ for (const dir of [output, env.HOME, env.OPENCLAW_STATE_DIR, env.CODEX_HOME, env
   fs.mkdirSync(dir, { recursive: true });
 }
 Object.assign(process.env, env, { OPENCLAW_BENCH_RETAINED_WORKER_DIR: output });
-if (idleSeconds > 0) {
+if (idleSeconds > 0 || values["sample-allocation"]) {
   process.env.OPENCLAW_BENCH_SAMPLE_ALLOCATION = "1";
 }
 if (values["owner-dir"]) {
@@ -193,10 +201,12 @@ async function sample(
   }
   const result = JSON.parse(fs.readFileSync(reply, "utf8"));
   assert(result.ok, JSON.stringify(result));
-  console.log(JSON.stringify({ phase: name, commands, workspaces, rows, ...result }));
+  console.log(
+    JSON.stringify({ phase: name, commands, workspaces, rows, hostLoad: os.loadavg(), ...result }),
+  );
 }
 try {
-  for (let revision = 0; revision < 2; revision++) {
+  for (let revision = 0; revision < taskRounds; revision++) {
     const remoteCatalog = {
       sourceUrl: "https://catalog.invalid/catalog.json",
       revision: `synthetic-revision-${revision}`,
@@ -246,12 +256,20 @@ try {
       commands++;
       if (index === 0 && revision === 0) {
         await sample("one");
+        if (values["measure-tasks"]) {
+          await sample("tasks-start", "start");
+        }
       }
     }
-    await sample(
-      `revision-${revision}`,
-      values.snapshot && revision === 1 ? "snapshot" : "collect",
-    );
+    if (!values["measure-tasks"]) {
+      await sample(
+        `revision-${revision}`,
+        values.snapshot && revision === taskRounds - 1 ? "snapshot" : "collect",
+      );
+    }
+  }
+  if (values["measure-tasks"]) {
+    await sample("tasks-stop", "stop");
   }
   console.log(JSON.stringify({ phase: "requests", requests }));
   if (workerMetrics) {

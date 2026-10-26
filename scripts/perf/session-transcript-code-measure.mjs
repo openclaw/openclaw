@@ -1,6 +1,13 @@
 // Synthetic worker proof: node --import ./scripts/tsx.mjs scripts/perf/session-transcript-code-measure.mjs --output <new-directory> --baseline-ref <commit> --samples 5 --snapshots
 // Alternate baseline/candidate order; each task kind gets a fresh isolate in each prewarm mode.
 // Timings finish before forced GC. Snapshots use the committed aggregate-only code analyzer.
+// Warm allocation/CPU proof (Node 26.12+): add --messages 1024 --payload-bytes 2048
+// --iterations 2000 --warmup 20 --prewarm false --task-kind transcript-hydration.
+// Repeat --task-kind for compaction-context, recent-active-events, model-context or history-page.
+// V8 allocation counters and natural GC reclamation are measured inside the real worker;
+// first/last replies are compared across arms outside measured work. No Gateway claims.
+// Accept reduced allocation/CPU with byte/order-identical replies and no material adverse
+// matched timing/GC result; run --control before treating noisy tails as regressions.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -23,6 +30,10 @@ const { values } = parseArgs({
     samples: { type: "string", default: "5" },
     control: { type: "boolean", default: false },
     snapshots: { type: "boolean", default: false },
+    messages: { type: "string", default: "2" },
+    "payload-bytes": { type: "string", default: "0" },
+    iterations: { type: "string", default: "0" },
+    warmup: { type: "string", default: "20" },
   },
 });
 assert(values.output, "--output is required");
@@ -39,6 +50,14 @@ const output = path.resolve(values.output);
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const samples = Number(values.samples);
 assert(Number.isSafeInteger(samples) && samples > 0);
+const messageCount = Number(values.messages);
+const payloadBytes = Number(values["payload-bytes"]);
+const iterations = Number(values.iterations);
+const warmup = Number(values.warmup);
+for (const count of [messageCount, payloadBytes, iterations, warmup]) {
+  assert(Number.isSafeInteger(count) && count >= 0, "Counts must be nonnegative integers");
+}
+assert(messageCount >= 2, "--messages must be at least two");
 await fs.mkdir(output);
 for (const directory of ["home", "state", "tmp"]) {
   await fs.mkdir(path.join(output, directory));
@@ -160,38 +179,64 @@ const events = [
     cwd: "/synthetic",
     timestamp,
   },
-  {
-    type: "message",
-    id: "synthetic-user",
-    parentId: null,
-    timestamp,
-    message: { role: "user", content: "Synthetic borrower question", timestamp: 1 },
-  },
-  {
-    type: "message",
-    id: "synthetic-assistant",
-    parentId: "synthetic-user",
-    timestamp,
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "Synthetic borrower response" }],
-      provider: "synthetic",
-      model: "synthetic",
-      api: "synthetic",
-      stopReason: "stop",
-      usage: { input: 1, output: 1, totalTokens: 2, cost: { input: 0, output: 0, total: 0 } },
-      timestamp: 2,
-    },
-  },
+  ...Array.from({ length: messageCount }, (_, index) => {
+    const text = `Synthetic ${index}: ` + "x".repeat(payloadBytes);
+    const turn = Math.floor(index / 4);
+    const messages = [
+      { role: "user", content: text, timestamp: index },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: `call-${turn}`, name: "read", arguments: { text } }],
+        provider: "synthetic",
+        model: "synthetic",
+        api: "synthetic",
+        stopReason: "toolUse",
+        timestamp: index,
+      },
+      {
+        role: "toolResult",
+        toolCallId: `call-${turn}`,
+        toolName: "read",
+        content: [{ type: "text", text }],
+        isError: false,
+        timestamp: index,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        provider: "synthetic",
+        model: "synthetic",
+        api: "synthetic",
+        stopReason: "stop",
+        timestamp: index,
+      },
+    ];
+    return {
+      type: "message",
+      id: `synthetic-${index}`,
+      parentId: index ? `synthetic-${index - 1}` : null,
+      timestamp,
+      message: messages[index % 4],
+    };
+  }),
 ];
 let database;
+let compressedRows;
 try {
   runOpenClawAgentWriteTransaction((opened) => {
     database = { agentId: opened.agentId, path: opened.path };
     writeSessionEntry(opened, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
     appendTranscriptEventsInTransaction(opened, scope, events);
+    compressedRows = opened.db
+      .prepare(
+        "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
+      )
+      .get(scope.sessionId).count;
   }, scope);
   await waitForSessionTranscriptProjection(scope);
+  if (payloadBytes >= 1024) {
+    assert.equal(compressedRows, messageCount, "Synthetic message payloads must be compressed");
+  }
 } finally {
   await closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
 }
@@ -202,8 +247,34 @@ const target = {
   storePath: database.path,
   sessionFile: formatSqliteSessionFileMarker({ ...scope, storePath: database.path }),
 };
+const { resolveSqliteTranscriptReadScope } =
+  await import("../../src/config/sessions/session-accessor.sqlite-scope.js");
+const resolvedScope = resolveSqliteTranscriptReadScope(target);
+const limits = { maxEvents: 128, maxBytes: 1024 * 1024 };
 const requests = {
   prewarm: { kind: "prewarm", env, database },
+  "transcript-hydration": {
+    kind: "transcript-hydration",
+    database,
+    target,
+    resolvedScope,
+    limits,
+  },
+  "compaction-context": {
+    kind: "transcript-hydration",
+    database,
+    target,
+    resolvedScope,
+    limits: { compaction: true },
+  },
+  "recent-active-events": {
+    kind: "recent-active-events",
+    database,
+    target,
+    resolvedScope,
+    maxEvents: 128,
+  },
+  "model-context": { kind: "model-context", target, limits },
   "session-entry-read": { kind: "session-entry-read", database, scope: target },
   "session-entry-list": {
     kind: "session-entry-list",
@@ -216,11 +287,16 @@ const requests = {
     target: { transcript: target },
     request: {
       kind: "recent-page",
-      params: { target, options: { maxMessages: 10, maxBytes: 65536 } },
+      params: { target, options: { maxMessages: 128, maxBytes: 1024 * 1024 } },
     },
   },
 };
-const kinds = values["task-kind"] ?? Object.keys(requests);
+const kinds = values["task-kind"] ?? [
+  "prewarm",
+  "session-entry-read",
+  "session-entry-list",
+  "history-page",
+];
 for (const kind of kinds) {
   assert(Object.hasOwn(requests, kind), `Unknown --task-kind ${kind}`);
 }
@@ -241,7 +317,9 @@ const report = {
   diffSha256: createHash("sha256").update(diff).digest("hex"),
   fixture: {
     sessions: 1,
-    messages: 2,
+    messages: messageCount,
+    payloadBytes,
+    compressedRows,
     sha256: createHash("sha256").update(JSON.stringify(events)).digest("hex"),
   },
   limitations: [
@@ -249,8 +327,15 @@ const report = {
     "Forced-GC retention is not allocation churn or natural-GC latency",
     "Code analyzer retained rows overlap; use its total union, never sum rows",
   ],
+  iterations,
+  warmup,
   results: [],
 };
+const digests = new Map();
+function digest(value) {
+  const bytes = JSON.stringify(value, (_key, item) => (item instanceof Map ? [...item] : item));
+  return createHash("sha256").update(bytes).digest("hex");
+}
 for (let sample = 0; sample < samples; sample++) {
   for (const prewarmHistory of modes) {
     for (const kind of kinds) {
@@ -277,6 +362,7 @@ for (let sample = 0; sample < samples; sample++) {
               import.meta.url,
             ).href,
             prewarmHistory,
+            captureGc: iterations > 0,
             diagnostics: diagnostics.port2,
             baselineDir:
               values.control || side === "baseline" ? preparedBaselineDir : preparedCandidateDir,
@@ -293,7 +379,7 @@ for (let sample = 0; sample < samples; sample++) {
           }
         };
         worker.on("error", fail);
-        const timeout = setTimeout(() => fail(new Error("Worker measurement timed out")), 120000);
+        const timeout = setTimeout(() => fail(new Error("Worker measurement timed out")), 900000);
         diagnostics.port1.on("message", (message) => {
           if (message.ready) {
             ready.resolve();
@@ -327,29 +413,84 @@ for (let sample = 0; sample < samples; sample++) {
           ]);
           await taskReady.promise;
           const coldReadyMs = performance.now() - started;
-          const id = ++sequence;
-          const task = Promise.withResolvers();
-          pending.set(id, task);
+          const requestTask = async () => {
+            const id = ++sequence;
+            const task = Promise.withResolvers();
+            pending.set(id, task);
+            tasks.port1.postMessage({
+              taskId: id,
+              input: requests[kind],
+              interactive: true,
+              nativeSections: new SharedArrayBuffer(4),
+              taskContext: { deletedAgentDatabaseFences: [] },
+            });
+            const reply = await task.promise;
+            if (!reply.ok) {
+              throw new Error(JSON.stringify(reply));
+            }
+            return reply.value;
+          };
+          const diagnostic = (operation) => {
+            const id = ++sequence;
+            const reply = Promise.withResolvers();
+            pending.set(id, reply);
+            diagnostics.port1.postMessage({ id, operation });
+            return reply.promise;
+          };
           const taskStarted = performance.now();
-          tasks.port1.postMessage({
-            taskId: id,
-            input: requests[kind],
-            interactive: true,
-            nativeSections: new SharedArrayBuffer(4),
-            taskContext: { deletedAgentDatabaseFences: [] },
-          });
-          const reply = await task.promise;
+          let reply = await requestTask();
           const firstTaskMs = performance.now() - taskStarted;
-          assert.equal(reply.ok, true, JSON.stringify(reply));
           if (kind === "session-entry-read") {
-            assert.equal(reply.value.entry?.sessionId, scope.sessionId);
+            assert.equal(reply.entry?.sessionId, scope.sessionId);
           } else if (kind === "session-entry-list") {
-            assert.equal(reply.value.entries[0]?.entry.sessionId, scope.sessionId);
+            assert.equal(reply.entries[0]?.entry.sessionId, scope.sessionId);
           } else if (kind === "history-page") {
-            assert.equal(reply.value.result.messages.length, 2);
-            assert.equal(reply.value.result.messages[0].role, "user");
+            assert.equal(reply.result.messages.length, Math.min(messageCount, 128));
+          } else if (kind === "prewarm") {
+            assert.deepEqual(reply, { kind: "prewarm" });
+          } else if (kind === "transcript-hydration" || kind === "compaction-context") {
+            assert.equal(reply.kind, "bounded");
+            const selected =
+              kind === "compaction-context" ? messageCount : Math.min(messageCount, 128);
+            assert.equal(reply.snapshot.events.length, selected + 1);
+            assert.equal(reply.snapshot.events[0].id, scope.sessionId);
+            assert.equal(reply.snapshot.events[1].id, `synthetic-${messageCount - selected}`);
+            assert.equal(reply.snapshot.events.at(-1).id, `synthetic-${messageCount - 1}`);
+          } else if (kind === "recent-active-events") {
+            const selected = Math.min(messageCount, 128);
+            assert.equal(reply.events.length, selected);
+            assert.equal(reply.events[0].id, `synthetic-${messageCount - selected}`);
+            assert.equal(reply.events.at(-1).id, `synthetic-${messageCount - 1}`);
           } else {
-            assert.deepEqual(reply.value, { kind: "prewarm" });
+            assert(reply.events.length > 0);
+            assert.equal(reply.events.at(-1).id, `synthetic-${messageCount - 1}`);
+          }
+          const expectedDigest = digests.get(kind) ?? digest(reply);
+          digests.set(kind, expectedDigest);
+          assert.equal(digest(reply), expectedDigest, `${kind} first result changed`);
+          let measured;
+          if (iterations) {
+            for (let index = 0; index < warmup; index++) {
+              reply = await requestTask();
+            }
+            const before = await diagnostic("begin");
+            const measuredStarted = performance.now();
+            for (let index = 0; index < iterations; index++) {
+              reply = await requestTask();
+            }
+            const elapsedMs = performance.now() - measuredStarted;
+            measured = await diagnostic("end");
+            assert.equal(digest(reply), expectedDigest, `${kind} repeated result changed`);
+            measured = {
+              ...measured,
+              elapsedMs,
+              iterations,
+              cpuUsPerTask: (measured.cpuMs * 1000) / iterations,
+              allocatedBytesPerTask: measured.allocatedBytes / iterations,
+              reclaimedBytes: measured.gcReclaimedBytes,
+              beforeMemory: before.memory,
+            };
+            measured.reclaimedBytesPerTask = measured.reclaimedBytes / iterations;
           }
           const label = `${sample}-${prewarmHistory ? "prewarmed" : "cold"}-${kind}-${side}`;
           const inspect = Promise.withResolvers();
@@ -392,6 +533,9 @@ for (let sample = 0; sample < samples; sample++) {
             firstTaskMs,
             coldTaskMs: coldReadyMs + firstTaskMs,
             ...retained,
+            resultDigest: expectedDigest,
+            measured,
+            hostLoadAfter: { loadavg: os.loadavg(), freeMemory: os.freemem() },
             ...(codeAnalysis ? { codeAnalysis } : {}),
           };
           report.results.push(result);
@@ -404,6 +548,7 @@ for (let sample = 0; sample < samples; sample++) {
               prewarmHistory,
               coldReadyMs,
               firstTaskMs,
+              measured,
               heapBytes: retained.heap.used_heap_size,
               code: retained.code,
               scripts: retained.scriptCount,
