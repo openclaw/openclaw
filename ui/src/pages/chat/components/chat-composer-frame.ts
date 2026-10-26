@@ -253,8 +253,6 @@ export function createChatComposerContext(
     const clearedSubmittedDraft =
       hostDraft === "" && submittedDraft !== "" && target?.value === submittedDraft;
     if (clearedSubmittedDraft) {
-      state.slashMenu.reset();
-      state.skillMenu.reset();
       state.pendingClearedSubmittedDraft = {
         key: draftKey,
         value: submittedDraft,
@@ -266,6 +264,14 @@ export function createChatComposerContext(
       target.value = hostDraft;
       adjustTextareaHeight(target);
     }
+  };
+
+  const settleSubmittedCommandMenus = () => {
+    if (state.composerDraftScope !== draftScope || (props.getDraft?.() ?? props.draft) !== "") {
+      return;
+    }
+    state.slashMenu.reset();
+    state.skillMenu.reset();
   };
 
   const submitDraft = (
@@ -287,8 +293,13 @@ export function createChatComposerContext(
       void goalComposer.submit(submissionAction);
       return;
     }
-    void props.onSend(followUpModeOverride, submissionAction);
+    const completion = props.onSend(followUpModeOverride, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
+    if (completion) {
+      void completion.then(settleSubmittedCommandMenus, () => undefined);
+    } else {
+      settleSubmittedCommandMenus();
+    }
   };
 
   const acceptPrediction = () => {

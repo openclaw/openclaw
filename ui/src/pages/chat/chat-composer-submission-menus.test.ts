@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
@@ -28,15 +29,12 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
-function createSubmissionHarness(clears: boolean) {
+function createSubmissionHarness(
+  submit: (setDraft: (next: string) => void) => void | Promise<boolean | void>,
+) {
   let draft = "";
   const onDraftChange = vi.fn((next: string) => {
     draft = next;
-  });
-  const onSend = vi.fn(() => {
-    if (clears) {
-      draft = "";
-    }
   });
   const container = createComposerContainer();
   const render = () =>
@@ -44,10 +42,14 @@ function createSubmissionHarness(clears: boolean) {
       draft,
       getDraft: () => draft,
       onDraftChange,
-      onSend,
+      onSend: () => submit(setDraft),
     });
+  const setDraft = (next: string) => {
+    draft = next;
+    render();
+  };
   render();
-  return { container, onSend, readDraft: () => draft, render };
+  return { container, readDraft: () => draft };
 }
 
 it.each([
@@ -78,13 +80,17 @@ it.each([
     if (menu === "skill") {
       replaceSkillCommands({ key: "prose", description: "Draft polished prose." });
     }
-    const { container, onSend, readDraft, render } = createSubmissionHarness(clears);
+    const onSend = vi.fn((setDraft: (next: string) => void) => {
+      if (clears) {
+        setDraft("");
+      }
+    });
+    const { container, readDraft } = createSubmissionHarness(onSend);
     inputDraftAtEnd(container, submittedDraft);
     await waitForSolid(() => expect(container.querySelector(selector)).not.toBeNull());
 
     container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.click();
     flush();
-    render();
 
     expect(onSend).toHaveBeenCalledOnce();
     expect(readDraft()).toBe(clears ? "" : submittedDraft);
@@ -96,3 +102,45 @@ it.each([
     }
   },
 );
+
+it("settles a command menu after an accepted asynchronous clear", async () => {
+  const admitted = createDeferred();
+  const completion = createDeferred();
+  const { container } = createSubmissionHarness(async (setDraft) => {
+    admitted.resolve();
+    await completion.promise;
+    setDraft("");
+  });
+  inputDraftAtEnd(container, "/help");
+  await waitForSolid(() => expect(container.querySelector(".slash-menu")).not.toBeNull());
+
+  container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.click();
+  await admitted.promise;
+  expect(getComposerTextarea(container).value).toBe("/help");
+  completion.resolve();
+
+  await waitForSolid(() => {
+    expect(getComposerTextarea(container).value).toBe("");
+    expect(container.querySelector(".slash-menu")).toBeNull();
+  });
+});
+
+it("keeps a restored command menu after asynchronous submission failure", async () => {
+  const failed = createDeferred();
+  const { container } = createSubmissionHarness(async (setDraft) => {
+    setDraft("");
+    await failed.promise;
+    setDraft("/help");
+    return false;
+  });
+  inputDraftAtEnd(container, "/help");
+  await waitForSolid(() => expect(container.querySelector(".slash-menu")).not.toBeNull());
+
+  container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')!.click();
+  failed.resolve();
+
+  await waitForSolid(() => {
+    expect(getComposerTextarea(container).value).toBe("/help");
+    expect(container.querySelector(".slash-menu")).not.toBeNull();
+  });
+});
