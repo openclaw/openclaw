@@ -18,6 +18,7 @@ const applyPluginAutoEnableMock = vi.hoisted(() =>
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: applyPluginAutoEnableMock,
 }));
+// mock-isolation: keep activation input tests independent of bundled discovery.
 vi.mock("./bundled-compat.js", () => ({
   withBundledPluginEnablementCompat: (params: { config?: OpenClawConfig }) => params.config,
 }));

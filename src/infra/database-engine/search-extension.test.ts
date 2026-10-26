@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { buildMemoryIndexStrictSchema } from "../../../packages/memory-host-sdk/src/host/memory-schema-base.js";
 import {
   memoryTextSearchSchema,

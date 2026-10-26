@@ -2,14 +2,17 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  type createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { captureUiProof, createThemedChatOpener } from "./theme-typography.test-support.ts";
 
 export function defineTypographyModuleBoundaryTests(
   suite: ReturnType<typeof createControlUiE2eSuite>,
-  _moduleRequest: (sourcePath: string) => RegExp,
+  moduleRequest: (sourcePath: string) => RegExp,
 ) {
-  describe("Typography shortcuts", () => {
+  describe("Typography module loading", () => {
     const openThemedChat = createThemedChatOpener(suite);
 
     it.each(["MacIntel", "Linux x86_64"])(
@@ -19,7 +22,39 @@ export function defineTypographyModuleBoundaryTests(
         await page.addInitScript((value) => {
           Object.defineProperty(navigator, "platform", { get: () => value });
         }, platform);
-        await page.goto(`${suite.server.baseUrl}chat`);
+        const popupModule = await holdModuleResponse(
+          page,
+          moduleRequest("ui/src/components/solid/tooltip.tsx"),
+        );
+        try {
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const trigger = page.locator(".sidebar-brand__search");
+          await trigger.waitFor();
+          expect(popupModule.requests()).toBe(0);
+          await trigger.focus();
+          await popupModule.request;
+          expect(popupModule.requests()).toBe(1);
+          const popupId = await trigger.evaluate(
+            (element) =>
+              element
+                .closest("openclaw-tooltip")
+                ?.shadowRoot?.querySelector(".tooltip-surface[popover]")?.id,
+          );
+          expect(popupId).toBeTruthy();
+          const popup = page.locator(`#${popupId}`);
+          expect(await popup.isVisible()).toBe(false);
+          await expect.poll(() => trigger.getAttribute("aria-describedby")).not.toBeNull();
+          popupModule.release();
+          await popup.waitFor({ state: "visible" });
+          await expect.poll(() => trigger.getAttribute("aria-describedby")).not.toBeNull();
+          expect(await popup.evaluate((element) => element.matches(":popover-open"))).toBe(true);
+          await page.keyboard.press("Escape");
+          await popup.waitFor({ state: "hidden" });
+          expect(await popup.evaluate((element) => element.matches(":popover-open"))).toBe(false);
+          expect(popupModule.requests()).toBe(1);
+        } finally {
+          popupModule.release();
+        }
         const identity = page.locator(".sidebar-identity-card");
         await identity.focus();
         await page.keyboard.press("Enter");

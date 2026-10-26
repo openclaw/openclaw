@@ -10,6 +10,7 @@ type Snapshot = {
 };
 const loadSnapshot = vi.hoisted(() => vi.fn<() => Snapshot>());
 
+// mock-isolation: control the ambient registry independently of captured generations.
 vi.mock("./runtime-state.js", () => ({ getPluginRegistryState }));
 
 // mock-isolation: supply registry snapshots without loading installed plugins.

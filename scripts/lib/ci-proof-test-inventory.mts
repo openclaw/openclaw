@@ -1827,6 +1827,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/update-cli/update-command-foreground.test.ts",
   "src/cli/update-cli/update-command-fresh-doctor.test.ts",
   "src/cli/update-cli/update-command-fresh-inspection.test.ts",
+  "src/cli/update-cli/update-command-fresh-overrides.test.ts",
   "src/cli/update-cli/update-command-fresh-preview.test.ts",
   "src/cli/update-cli/update-command-git-snapshot.test.ts",
   "src/cli/update-cli/update-command-include-channel.test.ts",

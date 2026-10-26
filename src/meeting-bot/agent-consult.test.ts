@@ -25,7 +25,6 @@ function handleToolCall(
     logger: {} as never,
   }).handleToolCall({
     meetingSessionId: "meeting-1",
-    args,
     transcript: [],
     strategy,
     session: {

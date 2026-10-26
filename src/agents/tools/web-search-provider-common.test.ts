@@ -36,11 +36,14 @@ async function requestSearch(
       }
     },
     async (baseUrl) => {
-      vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
-        const response = await realFetch(baseUrl, init);
-        received?.();
-        return response;
-      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+          const response = await realFetch(baseUrl, init);
+          received?.();
+          return response;
+        }),
+      );
       result = await postJson({ ...requestDefaults, ...params }, (response) =>
         response.json(),
       ).catch((cause: unknown) => cause);

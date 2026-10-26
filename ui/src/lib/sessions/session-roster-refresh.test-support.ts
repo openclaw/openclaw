@@ -76,8 +76,11 @@ export function rosterFixture(
   return { ...harness, ...ownRoster(harness.gateway) };
 }
 
-export function rosterReadFixture<P = unknown>(read: (params?: P) => unknown, ownerId?: string) {
-  const request = sessionRequest({ "sessions.list": read });
+export function rosterReadFixture(
+  read: (params: ReturnType<typeof listParams>) => unknown,
+  ownerId?: string,
+) {
+  const request = vi.fn((method: string, params?: unknown) => read(listParams(method, params)));
   const client = createTestGatewayClient(request);
   return { request, ...rosterFixture(client.request.bind(client), { ownerId }) };
 }

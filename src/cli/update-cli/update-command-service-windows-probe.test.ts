@@ -113,7 +113,7 @@ it.each([
         expect(inspected.serviceMutationSkipMessage).toContain(
           stage === "unavailable"
             ? "Task Scheduler check failed (exit 2)."
-            : stage === "command then runtime" || stage === "runtime"
+            : stage === "command then runtime"
               ? "Scheduled Task check timed out after 47000 ms (ETIMEDOUT)."
               : "Task Scheduler check timed out after 47000 ms.",
         );
