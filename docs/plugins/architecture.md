@@ -248,6 +248,8 @@ Hot registry publication does not wait for retired host cleanup; terminal shutdo
 
 The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.
 
+Gateway `plugins.list` serves installed metadata without waiting for hosted catalog or category enrichment. While the generation's shared enrichment is pending, the response uses bundled presentation metadata and includes a pending diagnostic; refresh the list to read the completed facts. Unavailable category enrichment remains recorded until an explicit catalog refresh or metadata generation change. Config validation, enablement, and runtime service health still use current local facts on each read.
+
 Install, update, registry refresh, and doctor flows may read fresh package metadata to validate their changes. A management snapshot or installed-index write alone does not replace the running Gateway's inventory: the Gateway lifecycle owner must prepare and publish it. Runtime flows use their selected snapshot or lookup table instead of falling back to cold management paths.
 
 ### Runtime instance and source lifetime

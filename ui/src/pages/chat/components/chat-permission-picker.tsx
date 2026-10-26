@@ -1,6 +1,7 @@
 import { createMemo, createUniqueId, onSettled } from "solid-js";
 import type { SessionPermissionMode } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { Kbd } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "../../../components/solid/menu.tsx";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
@@ -125,7 +126,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
           details: (
             <span class="chat-controls__permission-option-state" aria-hidden="true">
               {!selected && !locked && (
-                <span class="chat-controls__permission-shortcut">{index + 1}</span>
+                <Kbd class="chat-controls__permission-shortcut" keys={index + 1} />
               )}
               {locked && (
                 <span class="chat-controls__permission-lock">

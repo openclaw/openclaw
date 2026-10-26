@@ -24,6 +24,7 @@ import {
 import {
   SKILL_AUTHORING_STANDARDS_PROMPT,
   SKILL_DO_NOT_CAPTURE_PROMPT,
+  SKILL_LEARNING_METHOD_PROMPT,
 } from "../../skills/workshop/skill-authoring-standards.js";
 import {
   resolveAllowedPluginToolNames,
@@ -75,7 +76,8 @@ function buildLearnPrompt(request: string, media: LearnMedia): string {
   }
   if (media.workshop) {
     lines.push(
-      `Write ${memory ? "skills " : ""}with skill_workshop: list and view related skills first, patch the one that covers this class of task, and create a new skill only when none does. When related skills cover the same class of task, merge them into one umbrella skill: patch the survivor, then archive the rest with absorbed_into. Put reusable scripts under scripts/ and reference them from the step that runs them. Pass a short reason.`,
+      `Write ${memory ? "skills " : ""}with skill_workshop: list and view related skills first, and make the fewest changes that cover what you found. Put reusable scripts under scripts/ and reference them from the step that runs them. Pass a short reason.`,
+      SKILL_LEARNING_METHOD_PROMPT,
     );
   }
   lines.push(...media.memoryGuidance);
@@ -103,7 +105,8 @@ function buildDraftReviewPrompt(drafts: readonly WorkshopDraft[], focus: string)
     `Drafts to review (JSON): ${JSON.stringify(listed)}. Review only these.`,
     ...(focus ? [`User focus (JSON string): ${JSON.stringify(focus)}`] : []),
     "",
-    "View each draft with skill_workshop action=view draft=<id>, and view the live skill it would change. Judge the drafts together: most are local fixes, so keep only lessons that change what you do next time across tasks, merging related drafts into one change.",
+    "View each draft with skill_workshop action=view draft=<id>, and view the live skill it would change. Judge the drafts together by the method below: most are local fixes, and related drafts merge into one change.",
+    SKILL_LEARNING_METHOD_PROMPT,
     "Do not save anything yet. Show the user each change you would make (the skill, what changes, which drafts it uses) and each draft you would drop and why, then ask which to save.",
     "When the user answers, save the approved changes with create or patch and a short reason, discard the drafts the user approved or rejected, and leave drafts the user did not decide on for a later review.",
     "",

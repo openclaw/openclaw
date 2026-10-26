@@ -39,20 +39,6 @@ const SUPPORTED_DURATION_SECONDS = [4, 6, 8] as const;
 const SUPPORTED_DURATIONS_HINT = Symbol.for("openclaw.videoGeneration.supportedDurations");
 const SUPPORTED_RESOLUTIONS = ["720P", "1080P"] as const;
 
-type OpenRouterVideoResponse = {
-  id?: string;
-  generation_id?: string | null;
-  polling_url?: string;
-  status?: string;
-  unsigned_urls?: string[];
-  error?: string | null;
-  model?: string | null;
-  usage?: {
-    cost?: number | null;
-    is_byok?: boolean;
-  };
-};
-
 type OpenRouterImagePart = {
   type: "image_url";
   image_url: { url: string };
@@ -62,7 +48,7 @@ type OpenRouterFrameImagePart = OpenRouterImagePart & {
   frame_type: "first_frame" | "last_frame";
 };
 
-function readOpenRouterVideoResponse(payload: Record<string, unknown>): OpenRouterVideoResponse {
+function readOpenRouterVideoResponse(payload: Record<string, unknown>) {
   const unsignedUrls = payload.unsigned_urls;
   if (unsignedUrls !== undefined && unsignedUrls !== null && !Array.isArray(unsignedUrls)) {
     throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);

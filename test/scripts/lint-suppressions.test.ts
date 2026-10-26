@@ -133,6 +133,8 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(productionLintSuppressions)).toEqual(
       [
+        // Indexed scans avoid per-row iterator allocations on frozen catalog snapshots.
+        "extensions/anthropic/session-catalog-runtime.ts|typescript/prefer-for-of|1",
         // These callbacks run only in the page and preserve page-thrown message coercion.
         "extensions/browser/src/browser/page-function-runtime.ts|@typescript-eslint/no-base-to-string|1",
         "extensions/browser/src/browser/page-function-runtime.ts|no-eval|2",
