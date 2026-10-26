@@ -55,6 +55,9 @@ function event(sessionId: string, flowId: string): CaptureEventRecord {
   };
 }
 
+const write = (store: Lease["store"], sessionId: string, flowId: string, data: string) =>
+  store.recordEventWithPayload(event(sessionId, flowId), { data });
+
 describe("async capture store", () => {
   it("persists immutable FIFO input on a worker and preserves shared blob custody", async () => {
     const native = requireNodeSqlite();
@@ -89,9 +92,7 @@ describe("async capture store", () => {
     });
     submitted.flowId = "mutated";
     bytes.fill(0);
-    const secondWrite = store.recordEventWithPayload(event("first", "accepted-second"), {
-      data: "shared café",
-    });
+    const secondWrite = write(store, "first", "accepted-second", "shared café");
     const orderedRead = store.getSessionEvents("first");
     await Promise.all([sessionWrite, firstWrite, secondWrite]);
     const rows = await orderedRead;
@@ -105,9 +106,7 @@ describe("async capture store", () => {
     expect(await store.listSessions()).toMatchObject([
       { id: "first", sourceProcess: "fixture", eventCount: 2 },
     ]);
-    await store.recordEventWithPayload(event("second", "shared-reference"), {
-      data: "shared café",
-    });
+    await write(store, "second", "shared-reference", "shared café");
     expect(await store.deleteSessions(["first"])).toEqual({ sessions: 1, events: 2, blobs: 0 });
     expect(await store.readBlob(blobId)).toBe("shared café");
     expect(await store.purgeAll()).toEqual({ sessions: 1, events: 1, blobs: 1 });
@@ -151,9 +150,7 @@ describe("async capture store", () => {
     expect(await reader.readBlob(blobId)).toBe("reader payload");
     await withOpenClawStateDatabaseReadSnapshot(
       async () => {
-        await store.recordEventWithPayload(event("reader-session", "after-snapshot"), {
-          data: "newer payload",
-        });
+        await write(store, "reader-session", "after-snapshot", "newer payload");
         expect(await reader.getSessionEvents("reader-session")).toEqual(rows);
         expect(await reader.readBlob(blobId)).toBe("reader payload");
       },
@@ -171,11 +168,9 @@ describe("async capture store", () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("capture-async-close-") };
     const { store, release } = await acquire(env);
     let writeSettled = false;
-    const writing = store
-      .recordEventWithPayload(event("accepted", "before-close"), { data: "accepted bytes" })
-      .then(() => {
-        writeSettled = true;
-      });
+    const writing = write(store, "accepted", "before-close", "accepted bytes").then(() => {
+      writeSettled = true;
+    });
     const closing = release();
     expect(store.close()).toBe(closing);
     await closing;

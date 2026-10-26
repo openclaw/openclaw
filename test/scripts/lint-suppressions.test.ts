@@ -133,6 +133,8 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(productionLintSuppressions)).toEqual(
       [
+        // Indexed scans avoid per-row iterator allocations on frozen catalog snapshots.
+        "extensions/anthropic/session-catalog-runtime.ts|typescript/prefer-for-of|1",
         // These callbacks run only in the page and preserve page-thrown message coercion.
         "extensions/browser/src/browser/page-function-runtime.ts|@typescript-eslint/no-base-to-string|1",
         "extensions/browser/src/browser/page-function-runtime.ts|no-eval|2",
@@ -279,6 +281,8 @@ describe("production lint suppressions", () => {
         "src/gateway/session-companion-prompt.ts|unicorn/no-array-sort|1",
         // Preserve the measured indexed fanout loop while reusing envelope tuples.
         "src/gateway/session-event-projection.ts|typescript/prefer-for-of|1",
+        // Event field ordering sorts only the freshly filtered, audience-private key array.
+        "src/gateway/session-event-projection.ts|unicorn/no-array-sort|1",
         "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",
         // Node worker ports do not accept a browser target origin.
         "src/gateway/system-ca-warmup.worker.ts|unicorn/require-post-message-target-origin|1",
