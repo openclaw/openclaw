@@ -1,15 +1,22 @@
 /**
  * Provider-update owner probe (1,000 history entries, 40 tools; no live services).
  * Run unchanged on base and candidate, alternating order for at least five pairs:
- * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --mode timing
+ * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --mode timing --events 3000 --turns 200 --warmup 20
  * Repeat with --mode allocation; timing under the sampler is diagnostic only.
  * --snapshots false exercises partial-free text deltas instead of checkpoints.
  * --async-fragments true --events 4 --turns 5000 --warmup 250 replays async tool fragments
  * followed by a text tail; compare allocation and CPU per committed fragment.
+ * --event-type text_delta|thinking_delta|toolcall_delta selects snapshot updates.
+ * --mode verify replays a fixed multi-turn recording with all update kinds, async
+ * fragments and a blocking tool; compare its outputSha256 across revisions.
+ * --profile /path/profile.json saves allocation stacks. Use --no-turbo-inlining
+ * for attribution only, and normal optimization for the paired measurements.
  * Accept lower allocation/update with stable CPU and identical delivery counts;
  * this measures the real agent loop, not whole-Gateway throughput or latency.
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
@@ -26,6 +33,8 @@ import type { AssistantMessageEvent } from "../../packages/llm-core/src/types.js
 
 const { values } = parseArgs({
   options: {
+    profile: { type: "string" },
+    "event-type": { type: "string", default: "thinking_delta" },
     mode: { type: "string", default: "timing" },
     events: { type: "string", default: "20000" },
     turns: { type: "string", default: "10" },
@@ -40,19 +49,29 @@ const warmup = Number(values.warmup);
 assert(Number.isSafeInteger(events) && events > 0);
 assert(Number.isSafeInteger(turns) && turns > 0);
 assert(Number.isSafeInteger(warmup) && warmup > 0);
-assert(values.mode === "timing" || values.mode === "allocation");
+assert(["timing", "allocation", "verify"].includes(values.mode));
 assert(values.snapshots === "true" || values.snapshots === "false");
 assert(values["async-fragments"] === "true" || values["async-fragments"] === "false");
 const asyncFragments = values["async-fragments"] === "true";
 const snapshots = values.snapshots === "true";
+const eventType = values["event-type"];
+assert(
+  eventType === "thinking_delta" || eventType === "text_delta" || eventType === "toolcall_delta",
+);
 const message = makeAssistantMessage(
-  snapshots ? [{ type: "thinking", thinking: "synthetic thought" }] : [],
+  snapshots
+    ? values["event-type"] === "thinking_delta"
+      ? [{ type: "thinking", thinking: "synthetic thought" }]
+      : values["event-type"] === "text_delta"
+        ? [{ type: "text", text: "synthetic text" }]
+        : [makeCall("synthetic_0", "call-probe")]
+    : [],
 );
 const update: AssistantMessageEvent = snapshots
-  ? { type: "thinking_delta", contentIndex: 0, delta: "x", partial: message }
+  ? { type: eventType, contentIndex: 0, delta: "x", partial: message }
   : { type: "text_delta", contentIndex: 0, delta: "x" };
 const finalMessage = snapshots
-  ? message
+  ? { ...message, stopReason: "stop" as const }
   : makeAssistantMessage([{ type: "text", text: "x".repeat(events) }]);
 const history = Array.from({ length: 1000 }, (_, index) => user(`synthetic ${index}`, index));
 const tools = Array.from({ length: 40 }, (_, index) => makeTool(`synthetic_${index}`));
@@ -112,6 +131,100 @@ async function run() {
     },
   );
 }
+// Record checkpoints before replay so provider fixture allocation is not confused
+// with the owner. Freeze time only in this separate byte-equality pass.
+async function verifyRecording() {
+  const asyncCall = { ...makeCall("synthetic_0", "async-call"), async: true as const };
+  const blockingCall = makeCall("synthetic_1", "blocking-call");
+  const recordedMessage = makeAssistantMessage([]);
+  recordedMessage.responseId = "recorded-response";
+  const recording: AssistantMessageEvent[] = [
+    { type: "start", partial: structuredClone(recordedMessage) },
+  ];
+  const checkpoint = () => structuredClone(recordedMessage);
+  for (const block of [
+    { type: "thinking", thinking: "inspect" } as const,
+    { type: "text", text: "before" } as const,
+    asyncCall,
+    { type: "text", text: "after" } as const,
+    blockingCall,
+  ]) {
+    const contentIndex = recordedMessage.content.length;
+    recordedMessage.content.push(block);
+    if (block.type === "toolCall") {
+      recording.push(
+        { type: "toolcall_start", contentIndex, partial: checkpoint() },
+        { type: "toolcall_delta", contentIndex, delta: "{}", partial: checkpoint() },
+        { type: "toolcall_end", contentIndex, toolCall: block, partial: checkpoint() },
+      );
+    } else if (block.type === "thinking") {
+      recording.push(
+        { type: "thinking_start", contentIndex, partial: checkpoint() },
+        { type: "thinking_delta", contentIndex, delta: block.thinking, partial: checkpoint() },
+        { type: "thinking_end", contentIndex, content: block.thinking, partial: checkpoint() },
+      );
+    } else {
+      recording.push(
+        { type: "text_start", contentIndex, partial: checkpoint() },
+        { type: "text_delta", contentIndex, delta: block.text, partial: checkpoint() },
+        { type: "text_delta", contentIndex, delta: "!" },
+        { type: "text_delta", contentIndex, delta: "?", partial: undefined },
+        { type: "text_end", contentIndex, content: block.text, partial: checkpoint() },
+      );
+    }
+  }
+  recordedMessage.stopReason = "toolUse";
+  recording.push({ type: "done", reason: "toolUse", message: checkpoint() });
+  const terminal = makeAssistantMessage([{ type: "text", text: "finished" }]);
+  const continuation: AssistantMessageEvent[] = [
+    { type: "start", partial: terminal },
+    { type: "text_delta", contentIndex: 0, delta: "finished", partial: terminal },
+    { type: "done", reason: "stop", message: terminal },
+  ];
+  const output = createHash("sha256");
+  let emitted = 0;
+  let request = 0;
+  const now = Date.now;
+  Date.now = () => 1;
+  try {
+    const messages = await runAgentLoop(
+      [user()],
+      { systemPrompt: "synthetic recording", messages: history, tools },
+      config,
+      (event) => {
+        output.update(JSON.stringify(event));
+        emitted++;
+      },
+      undefined,
+      () => {
+        const replay = request++ === 0 ? recording : continuation;
+        assert(request <= 2);
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield* replay;
+          },
+          result: async () => (replay === recording ? recordedMessage : terminal),
+        };
+      },
+    );
+    output.update(JSON.stringify(messages));
+  } finally {
+    Date.now = now;
+  }
+  assert.equal(request, 2);
+  console.log(
+    JSON.stringify({
+      mode: "verify",
+      emitted,
+      requests: request,
+      outputSha256: output.digest("hex"),
+    }),
+  );
+}
+if (values.mode === "verify") {
+  await verifyRecording();
+  process.exit(0);
+}
 for (let turn = 0; turn < warmup; turn++) {
   await run();
 }
@@ -139,6 +252,9 @@ let allocatedBytes: number | undefined;
 if (allocation) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   inspector.disconnect();
+  if (values.profile) {
+    writeFileSync(values.profile, JSON.stringify(profile));
+  }
   const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
     node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
   allocatedBytes = sum(profile.head);
@@ -147,6 +263,7 @@ assert.equal(deliveries, events * turns);
 console.log(
   JSON.stringify({
     mode: values.mode,
+    eventType: values["event-type"],
     snapshots,
     asyncFragments,
     events,

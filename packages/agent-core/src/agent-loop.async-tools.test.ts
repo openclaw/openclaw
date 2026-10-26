@@ -216,6 +216,82 @@ it.each(["mixed-parallel", "deferred-exclusive"] as const)(
   },
 );
 
+it("forwards unchanged updates without copying events or inspecting prior content", async () => {
+  const message = fixtures.makeAssistantMessage([
+    { type: "thinking", thinking: "synthetic thought" },
+    { type: "text", text: "answer" },
+    fixtures.makeCall("lookup"),
+  ]);
+  message.stopReason = "stop";
+  let blockReads = 0;
+  message.content = new Proxy(message.content, {
+    get(target, key, receiver) {
+      if (key === "0") {
+        blockReads++;
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  const updates: AssistantMessageEvent[] = [
+    { type: "thinking_start", contentIndex: 0, partial: message },
+    { type: "thinking_delta", contentIndex: 0, delta: "synthetic thought", partial: message },
+    { type: "thinking_end", contentIndex: 0, content: "synthetic thought", partial: message },
+    { type: "text_start", contentIndex: 1, partial: message },
+    { type: "text_delta", contentIndex: 1, delta: "answer", partial: message },
+    { type: "text_end", contentIndex: 1, content: "answer", partial: message },
+    { type: "toolcall_start", contentIndex: 2, partial: message },
+    { type: "toolcall_delta", contentIndex: 2, delta: "{}", partial: message },
+  ];
+  const readsAtUpdate: number[] = [];
+  await runAgentLoop(
+    [fixtures.user("hello")],
+    { systemPrompt: "", messages: [] },
+    fixtures.config,
+    (event) => {
+      if (event.type === "message_start" && event.message.role === "assistant") {
+        blockReads = 0;
+      }
+      if (event.type === "message_update") {
+        expect(event.assistantMessageEvent).toBe(updates[readsAtUpdate.length]);
+        readsAtUpdate.push(blockReads);
+        expect(event.message).not.toBe(message);
+      }
+    },
+    undefined,
+    () => fixtures.reply(message, [{ type: "start", partial: message }, ...updates]),
+  );
+  expect(readsAtUpdate).toEqual(updates.map(() => 0));
+});
+
+it("does not commit an async fragment when a listener changes an ordinary update type", async () => {
+  const message = fixtures.makeAssistantMessage([{ type: "text", text: "answer" }]);
+  const events: AgentEvent[] = [];
+  await runAgentLoop(
+    [fixtures.user("hello")],
+    { systemPrompt: "", messages: [] },
+    fixtures.config,
+    (event) => {
+      events.push(event);
+      if (event.type === "message_update") {
+        Object.assign(event.assistantMessageEvent, {
+          type: "toolcall_end",
+          toolCall: { ...fixtures.makeCall("lookup"), async: true },
+        });
+      }
+    },
+    undefined,
+    () =>
+      fixtures.reply(message, [
+        { type: "start", partial: message },
+        { type: "text_delta", contentIndex: 0, delta: "answer", partial: message },
+      ]),
+  );
+  expect(
+    events.filter((event) => event.type === "message_end" && event.message.role === "assistant"),
+  ).toEqual([{ type: "message_end", message }]);
+  expect(events.some((event) => event.type === "tool_execution_start")).toBe(false);
+});
+
 it("transfers the detached async prefix directly to persistence preparation", async () => {
   const lookup = call("lookup");
   const source = assistant([lookup], "stop", "response-lookup");

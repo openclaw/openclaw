@@ -8,7 +8,12 @@ import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   REPETITIVE_OUTPUT_ERROR_CODE,
 } from "@openclaw/llm-core";
-import type { AssistantMessage, Context, ToolResultMessage } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  ToolResultMessage,
+} from "@openclaw/llm-core";
 import { AssistantRepetitionGuard } from "./assistant-repetition-guard.js";
 import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
@@ -339,6 +344,26 @@ export async function streamAgentResponse(
           await emit({ type: "message_end", message });
         };
 
+        function projectEvent(
+          event: Extract<AssistantMessageEvent, { contentIndex: number }>,
+          fragment: AssistantMessage,
+          completedToolCall: boolean,
+        ) {
+          // Keep completion events isolated: their original fields govern admission after emit.
+          if (
+            committedContentCount === 0 &&
+            !completedToolCall &&
+            (!("partial" in event) || event.partial === fragment)
+          ) {
+            return event;
+          }
+          const projected = { ...event, contentIndex: event.contentIndex - committedContentCount };
+          if ("partial" in event) {
+            projected.partial = fragment;
+          }
+          return projected;
+        }
+
         for await (const event of response) {
           switch (event.type) {
             case "start": {
@@ -401,20 +426,15 @@ export async function streamAgentResponse(
                 } else {
                   context.messages[partialIndex] = fragment;
                 }
-                const fragmentEvent = {
-                  ...event,
-                  contentIndex: event.contentIndex - committedContentCount,
-                };
-                if ("partial" in event) {
-                  fragmentEvent.partial = fragment;
-                }
+                const completedToolCall = event.type === "toolcall_end";
+                const fragmentEvent = projectEvent(event, fragment, completedToolCall);
                 await emit({
                   type: "message_update",
                   assistantMessageEvent: fragmentEvent,
                   message: { ...fragment },
                 });
                 if (
-                  event.type === "toolcall_end" &&
+                  completedToolCall &&
                   event.toolCall.async &&
                   !executedIds.has(event.toolCall.id) &&
                   message.content
