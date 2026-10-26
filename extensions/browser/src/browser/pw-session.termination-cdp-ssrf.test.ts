@@ -9,41 +9,11 @@ import { forceDisconnectPlaywrightForTarget } from "./pw-session.js";
 const { closePlaywrightBrowserConnection, listPagesViaPlaywright } = pwAi;
 
 const socketOpened = vi.hoisted(() =>
-  vi.fn<(url: string, options?: { agent?: unknown }) => void>(),
+  vi.fn(function (_url: string, _options?: { agent?: unknown }) {
+    throw new Error("test socket should not open");
+  }),
 );
-
-vi.mock("openclaw/plugin-sdk/websocket-runtime", () => {
-  class MockWebSocket {
-    static OPEN = 1;
-
-    readyState = 0;
-    private readonly handlers = new Map<string, (error?: Error) => void>();
-
-    constructor(url: string, options?: { agent?: unknown }) {
-      socketOpened(url, options);
-      setTimeout(() => {
-        this.handlers.get("error")?.(new Error("test socket should not open"));
-      }, 0);
-    }
-
-    on(event: string, handler: (error?: Error) => void) {
-      this.handlers.set(event, handler);
-      return this;
-    }
-
-    close() {
-      if (this.readyState === 3) {
-        return;
-      }
-      this.readyState = 3;
-      this.handlers.get("close")?.();
-    }
-
-    send() {}
-  }
-
-  return { WebSocket: MockWebSocket };
-});
+vi.mock("openclaw/plugin-sdk/websocket-runtime", () => ({ WebSocket: socketOpened }));
 
 vi.mock(
   "./pw-session-cdp-transport.js",
@@ -137,17 +107,12 @@ describe("pw-session termination CDP SSRF guard", () => {
 
   it("uses the discovered target lookup pin for best-effort termination sockets", async () => {
     const { page } = installBrowserMock();
-    const lookup = vi.fn((_hostname: string, options: unknown, callback?: unknown) => {
-      const cb = typeof options === "function" ? options : callback;
-      if (typeof cb === "function") {
-        cb(null, "127.0.0.1", 4);
-      }
-    });
+    const lookup = vi.fn<typeof import("node:dns").lookup>();
     const assertAllowedSpy = vi
       .spyOn(await import("./cdp.helpers.js"), "assertCdpEndpointAllowed")
       .mockImplementation(async (url: string) =>
         url.includes("/devtools/page/")
-          ? { hostname: "cdp-pinned.test", addresses: ["127.0.0.1"], lookup: lookup as never }
+          ? { hostname: "cdp-pinned.test", addresses: ["127.0.0.1"], lookup }
           : undefined,
       );
     onTestFinished(() => {

@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import * as fixture from "./chrome-mcp.chromium.test-support.js";
@@ -108,11 +107,6 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")("Chrome MCP frame l
               labels: true,
               ...(clipToFrameRef ? { ref: frameRef } : {}),
             });
-            const proofDir = process.env.OPENCLAW_BROWSER_MCP_LABEL_PROOF_DIR;
-            if (proofDir && mode === "iframe") {
-              await fs.mkdir(proofDir, { recursive: true });
-              await page.screenshot({ path: path.join(proofDir, "iframe-after-operation.png") });
-            }
             if (mode === "removed iframe element") {
               expect(response.statusCode, JSON.stringify(response.body)).toBeGreaterThanOrEqual(
                 400,
