@@ -463,6 +463,7 @@ const repositoryScriptEntries = [
   "scripts/perf/model-stream-scheduler-measure.ts!",
   "scripts/perf/node-bootstrap-runtime-chunks-measure.ts!",
   "scripts/perf/openai-sdk-stream-measure.ts!",
+  "scripts/perf/openai-sse-decode-measure.ts!",
   "scripts/perf/placement-recovery-reads-bench.ts!",
   "scripts/perf/plain-tool-brace-measure.ts!",
   "scripts/perf/plugin-cache-stat-facts.ts!",

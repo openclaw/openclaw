@@ -34,31 +34,47 @@ export async function* iterateSseFrames(
   assertWithinLimit?: (pending: string) => void,
 ): AsyncGenerator<{ frame: string; terminated: boolean }> {
   const decoder = new TextDecoder();
-  let buffer = "";
+  const parts: string[] = [];
+  let tail = "";
   // CRLF remains one line ending even when the delimiter expression backtracks.
   const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
-  let scanOffset = 0;
   for (;;) {
     const { done, value } = await read();
-    buffer += decoder.decode(value, { stream: !done });
-    delimiter.lastIndex = scanOffset;
+    const buffer = tail + decoder.decode(value, { stream: !done });
+    let start = 0;
+    delimiter.lastIndex = 0;
     for (;;) {
       const boundary = delimiter.exec(buffer);
-      if (!boundary && (!done || !buffer)) {
+      if (!boundary && (!done || (!parts.length && start === buffer.length))) {
         break;
       }
       const frameEnd = boundary?.index ?? buffer.length;
-      const frame = buffer.slice(0, frameEnd);
+      let frame = buffer.slice(start, frameEnd);
+      if (parts.length) {
+        parts.push(frame);
+        frame = parts.join("");
+        parts.length = 0;
+      }
       assertWithinLimit?.(frame);
-      buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
-      delimiter.lastIndex = 0;
+      start = boundary ? frameEnd + boundary[0].length : buffer.length;
       yield { frame, terminated: boundary !== null };
+      if (!boundary) {
+        break;
+      }
     }
-    assertWithinLimit?.(buffer);
+    const pending = buffer.slice(start);
+    // Scan only new text plus the maximum delimiter overlap. Regex on an ever-growing
+    // concatenated string would flatten/copy the entire pending frame on every read.
+    const last = pending.charCodeAt(pending.length - 1);
+    const split = last === 10 || last === 13 ? Math.max(0, pending.length - 3) : pending.length;
+    if (split > 0) {
+      parts.push(pending.slice(0, split));
+    }
+    tail = pending.slice(split);
+    assertWithinLimit?.(parts.join("") + tail);
     if (done) {
       return;
     }
-    scanOffset = Math.max(0, buffer.length - 3);
   }
 }
 
