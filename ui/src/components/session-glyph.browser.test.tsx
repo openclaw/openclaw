@@ -24,8 +24,14 @@ afterEach(() => {
 describe.skipIf(!hasBrowserLayout)("sidebar glyph geometry", () => {
   it("keeps attention artwork compact in Team slots", () => {
     const host = document.body.appendChild(document.createElement("div"));
-    const row = projectSidebarSession({ key: "agent:main:attention-geometry" });
-    row.attention = { kind: "error", reason: "Synthetic failure", sourceSessionKey: row.key };
+    const row = {
+      ...projectSidebarSession({ key: "agent:main:attention-geometry" }),
+      attention: {
+        kind: "error" as const,
+        reason: "Synthetic failure",
+        sourceSessionKey: "agent:main:attention-geometry",
+      },
+    };
     mountSolid(
       () => (
         <>
