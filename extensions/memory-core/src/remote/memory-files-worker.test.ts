@@ -34,7 +34,8 @@ function start<T extends Writable>(output: T, watch = true) {
 }
 function observeClose() {
   const closing = createDeferred<{ retired: Promise<void> }>();
-  const original = vi.fn(MemoryFileWatcher.prototype.close);
+  // oxlint-disable-next-line typescript/unbound-method -- Called with the intercepted owner.
+  const original = MemoryFileWatcher.prototype.close;
   const close = vi.spyOn(MemoryFileWatcher.prototype, "close");
   close.mockImplementation(function (this: MemoryFileWatcher) {
     const retired = original.call(this);
@@ -47,7 +48,8 @@ it("revokes remote admission while startup is awaiting filesystem discovery", as
   const entered = createDeferred<AbortSignal>();
   const resume = fixture.barrier();
   const closing = observeClose();
-  const original = vi.fn(MemoryWatchPolicy.prototype.observations);
+  // oxlint-disable-next-line typescript/unbound-method -- Called with the intercepted owner.
+  const original = MemoryWatchPolicy.prototype.observations;
   const observations = vi.spyOn(MemoryWatchPolicy.prototype, "observations");
   observations.mockImplementation(async function (this: MemoryWatchPolicy, signal) {
     const groups = await original.call(this, signal);

@@ -55,9 +55,9 @@ async function createConsult(excludeFromContext = true) {
     await flushTalkRealtimeRelayVoiceWrites({ relaySessionId: relay.id, connId: relay.connId });
   };
   const messages = async () =>
-    (await loadTranscriptEvents(scope)).filter(
-      (entry) => isIndexedSessionEntry(entry) && entry.type === "message",
-    );
+    (await loadTranscriptEvents(scope))
+      .filter(isIndexedSessionEntry)
+      .filter((entry) => entry.type === "message");
   const open = () => SessionManager.openBounded(scope, { maxBytes: 100_000, maxEvents: 100 });
   const expectRejected = async (message: typeof consult, error: string) => {
     const before = await messages();

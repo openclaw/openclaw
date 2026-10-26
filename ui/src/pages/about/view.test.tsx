@@ -33,7 +33,12 @@ function render(overrides: Partial<AboutProps> = {}, build: Partial<AboutProps["
     ...overrides,
   };
   const view = mountSolid(AboutView, props);
-  return { ...view, query: view.container.querySelector.bind(view.container), props };
+  return {
+    ...view,
+    query: view.container.querySelector.bind(view.container),
+    props,
+    update: (next: AboutProps) => view.update(next),
+  };
 }
 
 beforeEach(() => i18n.setLocale("en"));

@@ -43,7 +43,13 @@ describe("logbook registration", () => {
       scheduler: createTestPluginServiceScheduler(),
     };
     const store = await LogbookStore.open(path.join(stateDir, "logbook"), workerModuleUrl);
-    fixture.defer(() => Promise.resolve(service.stop?.(context)).finally(() => store.close()));
+    fixture.defer(async () => {
+      try {
+        await service.stop?.(context);
+      } finally {
+        await store.close();
+      }
+    });
     vi.spyOn(LogbookStore, "open").mockResolvedValueOnce(store);
     await service.start(context);
     const startMs = Date.now();

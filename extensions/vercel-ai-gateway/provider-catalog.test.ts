@@ -4,7 +4,8 @@ import { afterEach, expect, it, vi } from "vitest";
 
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchMock,
   ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => ({
     allowedHostnames: [new URL(baseUrl).hostname],

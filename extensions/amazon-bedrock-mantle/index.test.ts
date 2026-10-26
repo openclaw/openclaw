@@ -17,7 +17,7 @@ describe("amazon-bedrock-mantle provider plugin", () => {
       config,
       env: { ...env, AWS_BEARER_TOKEN_BEDROCK: bearerToken },
     } as never);
-  const mockModels = <T extends { id: string }>(data: T[]) =>
+  const mockModels = (data: unknown[]) =>
     vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ data }));
 
   it("uses live plugin config to disable catalog discovery", async () => {

@@ -64,12 +64,13 @@ it("registers wizard auth and writes the selected region and credentials", async
   });
   const { ctx, select } = createRuntimeContext("cn");
   const result = await auth.run(ctx);
-  const prompt = select.mock.calls[0]?.[0];
-  expect(prompt?.initialValue).toBe("international");
-  expect(prompt?.options.map(({ value, hint }) => ({ value, hint }))).toEqual([
-    { value: "international", hint: PIXVERSE_BASE_URL_BY_REGION.international },
-    { value: "cn", hint: PIXVERSE_BASE_URL_BY_REGION.cn },
-  ]);
+  expect(select.mock.calls[0]?.[0]).toMatchObject({
+    initialValue: "international",
+    options: [
+      { value: "international", hint: PIXVERSE_BASE_URL_BY_REGION.international },
+      { value: "cn", hint: PIXVERSE_BASE_URL_BY_REGION.cn },
+    ],
+  });
   expect(result.defaultModel).toBeUndefined();
   expect(result.notes).toEqual([`PixVerse endpoint: CN (${PIXVERSE_BASE_URL_BY_REGION.cn})`]);
   expect(result.profiles).toEqual([
@@ -83,7 +84,9 @@ it("registers wizard auth and writes the selected region and credentials", async
     baseUrl: PIXVERSE_BASE_URL_BY_REGION.cn,
     region: "cn",
   });
-  expect(result.configPatch?.agents?.defaults?.mediaModels?.video?.primary).toBe("pixverse/v6");
+  expect(result.configPatch?.agents?.defaults?.mediaModels?.video).toEqual({
+    primary: "pixverse/v6",
+  });
 });
 
 it("preserves an existing video generation default through setup", async () => {
@@ -92,7 +95,9 @@ it("preserves an existing video generation default through setup", async () => {
     agents: { defaults: { mediaModels: { video: { primary: "openai/sora-2" } } } },
   });
   const result = await auth.run(ctx);
-  expect(result.configPatch?.agents?.defaults?.mediaModels?.video?.primary).toBe("openai/sora-2");
+  expect(result.configPatch?.agents?.defaults?.mediaModels?.video).toEqual({
+    primary: "openai/sora-2",
+  });
 });
 
 it.each([
