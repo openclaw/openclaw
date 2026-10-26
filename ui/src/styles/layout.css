@@ -2084,21 +2084,91 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-online__row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
+  column-gap: 8px;
   min-width: 0;
+  padding-inline: 8px;
   border-radius: var(--radius-md);
 }
 
-.sidebar-online__person {
-  flex: 1;
+/* The menu shares the name track, not a permanently reserved action column. */
+.sidebar-online__menu {
+  grid-area: 1 / 2;
+  justify-self: end;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar-online__row:is(:hover, :focus-within) .sidebar-online__menu,
+.sidebar-online__menu:has([aria-expanded="true"]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-online__row:is(:hover, :focus-within):has(.sidebar-online__menu)
+  .sidebar-online__person-name {
+  padding-inline-end: 28px;
+}
+
+.sidebar-online__menu-trigger.oc-menu-trigger {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
+  place-items: center;
+  width: 24px;
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--muted);
+}
+
+.sidebar-online__menu-trigger svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-online__menu .oc-menu-item__icon,
+.sidebar-online__menu .oc-menu-item__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-online__menu-separator {
+  margin: 4px;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-online__menu {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar-online__row:has(.sidebar-online__menu) .sidebar-online__person-name {
+    padding-inline-end: 36px;
+  }
+
+  .sidebar-online__menu-trigger.oc-menu-trigger {
+    width: 32px;
+    height: 40px;
+  }
+}
+
+.sidebar-online__person {
+  grid-area: 1 / 1 / 2 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
   align-items: baseline;
   gap: 8px;
-  width: 100%;
+  width: auto;
   min-width: 0;
   min-height: 32px;
+  margin-inline: -8px;
   padding: 4px 8px;
   border: 0;
   border-radius: var(--radius-md);
@@ -2113,7 +2183,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
     opacity var(--duration-fast) ease;
 }
 
-.sidebar-online__person:hover,
+.sidebar-online__row:hover .sidebar-online__person,
 .sidebar-online__person:focus-visible {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }

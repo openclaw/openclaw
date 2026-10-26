@@ -1232,6 +1232,13 @@ const startupEnglish = {
       total: "Total sessions",
       name: "Name",
     },
+    menu: {
+      label: "Actions for {name}",
+      pin: "Pin to sidebar",
+      unpin: "Unpin from sidebar",
+      openNewTab: "Open activity in new tab",
+      copyLink: "Copy activity link",
+    },
     active: "Active",
     onlineActive: "Online · Active",
     onlineIdle: "Online · Idle",
