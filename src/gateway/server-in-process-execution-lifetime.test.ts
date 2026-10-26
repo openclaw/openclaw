@@ -8,8 +8,7 @@ import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
-import { createKernelFixture } from "./server-kernel.fixture-test-support.js";
-import { createGatewayKernel } from "./server-kernel.js";
+import { closeKernelFixture, createKernelFixture } from "./server-kernel.fixture-test-support.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
@@ -59,7 +58,6 @@ describe("in-process Gateway original execution ownership", () => {
     "keeps %s execution alive after acceptance until its Gateway can release dependencies",
     async (surface, { signal }) => {
       const fixture = await createKernelFixture(`gateway-${surface}-execution`);
-      const { state } = fixture;
       const release = createDeferred();
       const drainEntered = createDeferred();
       const order: string[] = [];
@@ -69,7 +67,7 @@ describe("in-process Gateway original execution ownership", () => {
       const accepted = { status: "accepted", runId: "in-process-tail" };
       const unblock = () => release.resolve();
       signal.addEventListener("abort", unblock, { once: true });
-      let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+      let kernel: Awaited<ReturnType<typeof fixture.open>> | undefined;
       let closing: Promise<void> | undefined;
       let request: Promise<unknown> | undefined;
       try {
@@ -115,10 +113,7 @@ describe("in-process Gateway original execution ownership", () => {
                 message: "hold the original turn",
                 idempotencyKey: "in-process-tail",
               });
-        expect(await request).toMatchObject({
-          ok: true,
-          payload: { status: "accepted", runId: "in-process-tail" },
-        });
+        expect(await request).toMatchObject({ ok: true, payload: accepted });
         expect(order).toEqual([]);
         kernel.registerGatewayLifetimeSidecars({
           stop: () => {
@@ -134,18 +129,16 @@ describe("in-process Gateway original execution ownership", () => {
         closing = kernel.closeOnStartupFailure();
         await drainEntered.promise;
         await nextTurn();
-        const beforeRelease = [...order];
+        expect(order).toEqual([]);
         unblock();
         await originalCompletion;
         await closing;
-        expect(beforeRelease).toEqual([]);
         expect(order).toEqual(["execution settled", "dependencies stopped"]);
       } finally {
         unblock();
         try {
           await Promise.allSettled([request, originalCompletion, closing]);
-          await kernel?.closeOnStartupFailure();
-          await state.cleanup();
+          await closeKernelFixture(kernel, fixture.state);
         } finally {
           vi.restoreAllMocks();
           signal.removeEventListener("abort", unblock);
