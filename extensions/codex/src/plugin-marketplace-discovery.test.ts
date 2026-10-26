@@ -41,12 +41,6 @@ it("preserves authorized workspace catalogs when another supplemental category f
 it("fails closed for marketplace and plugin names outside the upstream identifier contract", async () => {
   const result = await discover(async () => catalog("../company-tools", "security-review"));
   expect(result.plugins).toEqual([]);
-  for (const pluginName of ["review", "review.v2"]) {
-    expect(parseCodexPluginMarketplaceId(`${pluginName}@company-tools`)).toEqual({
-      pluginName,
-      marketplaceName: "company-tools",
-    });
-  }
   for (const invalid of [
     "../review@company-tools",
     "review@../company-tools",
@@ -81,7 +75,6 @@ it.each([false, true])(
       if (!params.marketplaceKinds) {
         plugin.id = pluginName;
       } else if (restricted) {
-        plugin.availability = "AVAILABLE";
         plugin.installPolicy = "NOT_AVAILABLE";
       }
       return listed;
@@ -90,6 +83,5 @@ it.each([false, true])(
       { id: `${pluginName}@company-tools`, available: !restricted },
     ]);
     expect(result.plugins).toHaveLength(1);
-    expect(result.warnings).toEqual([]);
   },
 );

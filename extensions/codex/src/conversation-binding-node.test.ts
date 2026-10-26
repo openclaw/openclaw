@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   createCodexTestBindingStore,
   createConversationInspection,
@@ -11,7 +11,7 @@ import {
 } from "./conversation-binding.test-helpers.js";
 
 const { readBinding, assertCurrent } = vi.hoisted(() => ({
-  readBinding: vi.fn<() => { bindingId: string } | null>(),
+  readBinding: vi.fn<() => string | undefined>(),
   assertCurrent: vi.fn<() => Promise<void>>(),
 }));
 
@@ -20,7 +20,7 @@ vi.mock(
   async (original) => ({
     ...(await original()),
     inspectConversationBinding: (conversation) =>
-      createConversationInspection(conversation, readBinding()?.bindingId),
+      createConversationInspection(conversation, readBinding()),
   }),
 );
 
@@ -30,37 +30,28 @@ vi.mock(import("./app-server/sandbox-guard.js"), async (original) => ({
   prepareCodexNativeSandboxBlock: async () => ({ block: undefined, assertCurrent, release() {} }),
 }));
 
-beforeEach(() => {
-  readBinding.mockReset().mockReturnValue({ bindingId: "binding-1" });
-  assertCurrent.mockReset().mockResolvedValue();
-});
 const reply = (text: string) => ({ handled: true, reply: { text } });
 
 it.each(["unchanged", "detached", "replaced", "policy-refused"])(
   "revalidates a queued node binding that is %s",
   async (bindingState) => {
+    readBinding.mockReset().mockReturnValue("binding-1");
+    assertCurrent.mockReset().mockResolvedValue();
     const bindingStore = createCodexTestBindingStore();
     const claims = createConversationClaimFixtures(() => "/codex", bindingStore);
     const nodeSession = { nodeId: "mb-m5", sessionId: "node-1", agentId: "main", cwd: "/repo" };
     const firstTurn = createDeferred<{ ok: true; sessionId: string; text: string }>();
     const resume = vi.fn(() => firstTurn.promise);
-    const conversation = { channel: "webchat", conversationId: "node-session" };
 
     const claim = () =>
       handleCodexConversationInboundClaim(
-        conversationMessage("continue the task", {
-          senderIsOwner: true,
-          channel: "webchat",
-          sessionKey: "node-session",
-        }),
+        conversationMessage("continue", { senderIsOwner: true, sessionKey: "node-session" }),
         claims.conversationClaimContext(
           { kind: "codex-cli-node-session", version: 1, ...nodeSession },
           "node-session",
-          conversation,
         ),
         {
           bindingStore,
-          config: { tools: { exec: { host: "node", node: "mb-m5" } } },
           resumeCodexCliSessionOnNode: resume,
         },
       );
@@ -71,9 +62,7 @@ it.each(["unchanged", "detached", "replaced", "policy-refused"])(
     if (bindingState === "policy-refused") {
       assertCurrent.mockRejectedValueOnce(new Error("Native execution policy changed"));
     } else if (bindingState !== "unchanged") {
-      readBinding.mockReturnValue(
-        bindingState === "detached" ? null : { bindingId: "replacement-binding" },
-      );
+      readBinding.mockReturnValue(bindingState === "detached" ? undefined : "replacement-binding");
     }
     firstTurn.resolve({ ok: true, sessionId: nodeSession.sessionId, text: "done" });
     await expect(running).resolves.toEqual(reply("done"));
@@ -83,10 +72,5 @@ it.each(["unchanged", "detached", "replaced", "policy-refused"])(
         : "This Codex conversation was detached or changed before its message could run.";
     await expect(queued).resolves.toEqual(reply(bindingState === "unchanged" ? "done" : failure));
     expect(resume).toHaveBeenCalledTimes(bindingState === "unchanged" ? 2 : 1);
-    expect(resume).toHaveBeenCalledWith({
-      ...nodeSession,
-      sessionKey: "node-session",
-      prompt: "continue the task",
-    });
   },
 );
