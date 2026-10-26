@@ -8,6 +8,7 @@ const MAIN_SESSION_KEY = "agent:main:main";
 
 const { listBySessionMock } = vi.hoisted(() => ({ listBySessionMock: vi.fn() }));
 
+// mock-isolation: Use synthetic channel descriptors without loading the bundled plugin registry.
 vi.mock("../../../channels/plugins/index.js", () => ({
   getChannelPlugin: (channel: string) =>
     channel === "thread-chat" || channel === "room-chat"

@@ -34,40 +34,43 @@ it.each([
     '{"code":"EACCES"}',
     'Your request couldn\'t be completed: {"code":"EACCES"}',
   ],
-])("appends failure copy and retains its diagnostic: %s", async (error, diagnostic, content) => {
-  expect.hasAssertions();
-  vi.mocked(appendSessionTranscriptReport).mockImplementation(async (_target, report) => {
-    if (report.kind !== "custom") {
-      throw new Error("Expected a custom run-failure notice");
-    }
-    expect(report.selectReport(undefined)).toMatchObject({
-      customType: "run-failed-before-reply",
-      content,
-      display: true,
-      excludeFromContext: true,
-      details: { runId: "failed-run", error: diagnostic },
+] as const)(
+  "appends failure copy and retains its diagnostic: %s",
+  async (error, diagnostic, content) => {
+    expect.hasAssertions();
+    vi.mocked(appendSessionTranscriptReport).mockImplementation(async (_target, report) => {
+      if (report.kind !== "custom") {
+        throw new Error("Expected a custom run-failure notice");
+      }
+      expect(report.selectReport(undefined)).toMatchObject({
+        customType: "run-failed-before-reply",
+        content,
+        display: true,
+        excludeFromContext: true,
+        details: { runId: "failed-run", error: diagnostic },
+      });
+      return { ok: true, value: undefined };
     });
-    return { ok: true, value: undefined };
-  });
 
-  await recordGatewaySessionRunFailure({
-    target: {
-      agentId: "main",
-      storePath: "/synthetic/sessions.json",
-      sessionKey: "agent:main:run-failure-copy",
-      sessionId: "run-failure-copy",
-    },
-    runId: "failed-run",
-    error,
-  });
-});
+    await recordGatewaySessionRunFailure({
+      target: {
+        agentId: "main",
+        storePath: "/synthetic/sessions.json",
+        sessionKey: "agent:main:run-failure-copy",
+        sessionId: "run-failure-copy",
+      },
+      runId: "failed-run",
+      error,
+    });
+  },
+);
 
 it.each([
-  ...storageFailures.map(([, legacyError, summary]) => [legacyError, summary]),
+  ...storageFailures.map(([, legacyError, summary]) => [legacyError, summary] as const),
   ...[
     "Synthetic run failure",
     "EACCES: permission denied, scandir '/synthetic/workspace-main'",
-  ].map((error) => [error, error]),
+  ].map((error) => [error, error] as const),
 ])("resolves session-row error: %s", (error, expected) => {
   expect(resolveSessionRunError({ error }, "failed")).toBe(expected);
 });
