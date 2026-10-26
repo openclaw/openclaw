@@ -94,7 +94,7 @@ export function modelOptionSearchRow(options: ModelPresentationProps): ChatModel
       .join(" ")
       .toLocaleLowerCase(),
     providerLabel: providerDisplayLabel(options.entry.provider).toLocaleLowerCase(),
-    reference: options.entry.value.toLocaleLowerCase(),
+    reference: options.entry.value,
     selected: view.selected,
     hasShortcut: !view.selected,
     disabled:

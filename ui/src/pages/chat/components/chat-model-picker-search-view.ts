@@ -25,7 +25,7 @@ function modelMatchRank(row: ChatModelSearchRow, query: string): number | null {
   if (row.providerLabel.includes(query)) {
     return 4;
   }
-  return row.reference.includes(query) ? 5 : null;
+  return row.reference.toLocaleLowerCase().includes(query) ? 5 : null;
 }
 
 /** The retained lazy panel owns ranking and disclosure; input/shortcut admission stays eager. */

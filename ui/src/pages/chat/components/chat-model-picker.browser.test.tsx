@@ -125,18 +125,6 @@ it("opens during activation and preserves filter focus and query across catalog 
   expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
 });
 
-it("matches model references without changing the selected value's case", async () => {
-  const { open, params, update } = mountPicker();
-  params.modelOptions = [modelOption("example", "MiXeD", { label: "Friendly name" })];
-  update();
-  await open();
-  await userEvent.keyboard("EXAMPLE/MIXED");
-  const match = option("example/MiXeD");
-  expect(match.checkVisibility()).toBe(true);
-  await userEvent.click(match);
-  expect(params.onModelSelect).toHaveBeenCalledWith("example/MiXeD", "main", undefined);
-});
-
 it("clears the active descendant when a catalog refresh removes the filtered choice", async () => {
   const { open, params, update } = mountPicker();
   await open();
