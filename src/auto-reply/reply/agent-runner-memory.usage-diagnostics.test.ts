@@ -119,9 +119,9 @@ it.each([false, true])("settles usage independently of a returned error: %s", as
       context: { limit: 100_000, used: 10 },
       costUsd: 0.125,
       durationMs: 123,
-      channel: undefined,
     },
   ]);
+  expect(events[0]?.channel).toBeUndefined();
   expect(followupRun.run.sessionId).toBe("session");
   expect(loadSessionEntry({ storePath, sessionKey: "main" })).not.toHaveProperty("inputTokens");
 });
