@@ -431,6 +431,12 @@ it("resolves runtime aliases and import/require conditions without following dec
 
 it.each([
   {
+    name: "local avatar worker",
+    entrypoints: ["src/agents/identity-avatar-file.worker.ts"],
+    dynamic: false,
+    deferredOwners: ["src/agents/agent-scope.ts", "src/agents/agent-scope-config.ts"],
+  },
+  {
     name: "native update authority",
     dynamic: false,
     entrypoints: [
