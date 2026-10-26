@@ -6,8 +6,6 @@ import { resolveGoogleMeetConfig } from "../config.js";
 import type { GoogleMeetRuntime } from "../runtime.js";
 import { captureStdout, meetApiFixtures } from "./fixtures.test-helpers.js";
 
-afterEach(() => vi.restoreAllMocks());
-
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
@@ -18,10 +16,9 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 
 export function useCli() {
   let stdout: ReturnType<typeof captureStdout>;
-  beforeEach(() => {
-    stdout = captureStdout();
-  });
+  beforeEach(() => (stdout = captureStdout()));
   afterEach(() => {
+    vi.restoreAllMocks();
     stdout.restore();
     vi.unstubAllGlobals();
     process.exitCode = undefined;
@@ -43,24 +40,20 @@ export function useCli() {
 
 export const jsonResponse = (value: unknown): Response => Response.json(value);
 
-function requestUrl(input: RequestInfo | URL): URL {
-  return new URL(typeof input === "string" || input instanceof URL ? input : input.url);
-}
-
-export function expectText(text: string, ...parts: string[]) {
-  for (const part of parts) {
-    expect(text).toContain(part);
-  }
-}
-
-export function stubJsonRoutes(routes: Record<string, unknown>) {
+function stubFetch(respond: (url: URL) => Response | undefined) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const response = routes[requestUrl(input).href];
-    return response ? jsonResponse(response) : new Response("not found", { status: 404 });
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    return respond(url) ?? new Response("not found", { status: 404 });
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
+
+export const expectText = (text: string, ...parts: string[]) =>
+  parts.forEach((part) => expect(text).toContain(part));
+
+export const stubJsonRoutes = (routes: Record<string, unknown>) =>
+  stubFetch(({ href }) => (routes[href] ? jsonResponse(routes[href]) : undefined));
 
 export function stubMeetArtifactsApi(
   options: { failSmartNoteDocumentBody?: boolean; participantDisplayName?: string } = {},
@@ -70,23 +63,18 @@ export function stubMeetArtifactsApi(
     "/drive/v3/files/doc-1/export": "Transcript document body.",
     "/drive/v3/files/notes-1/export": "Smart note document body.",
   };
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const { pathname } = requestUrl(input);
-      if (fixtures[pathname]) {
-        return jsonResponse(fixtures[pathname]);
-      }
-      if (pathname === "/drive/v3/files/notes-1/export" && options.failSmartNoteDocumentBody) {
-        return new Response("insufficientPermissions", { status: 403 });
-      }
-      const document = documents[pathname];
-      return new Response(document ?? "not found", {
-        status: document ? 200 : 404,
-        ...(document ? { headers: { "Content-Type": "text/plain" } } : {}),
-      });
-    }),
-  );
+  stubFetch(({ pathname }) => {
+    if (fixtures[pathname]) {
+      return jsonResponse(fixtures[pathname]);
+    }
+    if (pathname === "/drive/v3/files/notes-1/export" && options.failSmartNoteDocumentBody) {
+      return new Response("insufficientPermissions", { status: 403 });
+    }
+    const document = documents[pathname];
+    return document
+      ? new Response(document, { headers: { "Content-Type": "text/plain" } })
+      : undefined;
+  });
 }
 
 export function setupCli(params: {
