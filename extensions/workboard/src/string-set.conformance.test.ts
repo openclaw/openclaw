@@ -1,16 +1,10 @@
 import path from "node:path";
-import { sql } from "kysely";
 import { withEngineStoreAdmission } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  runSqliteImmediateTransactionSync,
-  sqliteStringSet,
-} from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadCardChildRows, type WorkboardCardDatabase } from "./sqlite-store-records.js";
+import { loadCardChildRows } from "./sqlite-store-records.js";
 import { createWorkboardDatabase } from "./sqlite-store-schema.js";
 import { workboardTestDatabaseInput } from "./test/database-config.js";
 
@@ -85,22 +79,6 @@ for (const engine of ["sqlite", "postgres"] as const) {
             throw new Error("Workboard fixture is unavailable");
           }
           const { db } = owner;
-          // ASCII fixture IDs have the same encoding as the previous PG lowering.
-          const previousSet =
-            engine === "postgres"
-              ? /* kysely-allow-raw: Keep the previous PG lowering as a semantic control. */
-                sql<string>`(SELECT value FROM json_array_elements_text(${JSON.stringify(values)}::json) AS value)`
-              : sqliteStringSet(values);
-          const previous = executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<WorkboardCardDatabase>(db)
-              .selectFrom("workboard_card_events")
-              .select(["id", "card_id"])
-              .where("card_id", "in", previousSet)
-              .orderBy("card_id")
-              .orderBy("ordinal"),
-          ).rows;
-          expect(previous).toEqual(expected.map((id) => ({ id: `event-${id}`, card_id: id })));
           const current = loadCardChildRows(db, values).byTable.get("workboard_card_events");
           if (!current) {
             throw new Error("Workboard event preload is missing");

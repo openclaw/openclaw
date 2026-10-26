@@ -10,16 +10,10 @@ const gatewayRuntime = vi.hoisted(() => ({
   isImplicitLocalGatewayTargetFromCli: vi.fn(async () => false),
 }));
 
-vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/gateway-runtime")>(
-    "openclaw/plugin-sdk/gateway-runtime",
-  );
-  return {
-    ...actual,
-    callGatewayFromCli: gatewayRuntime.callGatewayFromCli,
-    isImplicitLocalGatewayTargetFromCli: gatewayRuntime.isImplicitLocalGatewayTargetFromCli,
-  };
-});
+vi.mock(import("openclaw/plugin-sdk/gateway-runtime"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...gatewayRuntime,
+}));
 
 vi.mock("openclaw/plugin-sdk/cli-state-owner", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/cli-state-owner")>()),
@@ -30,18 +24,7 @@ vi.mock("openclaw/plugin-sdk/cli-state-owner", async (importOriginal) => ({
   }) => runLocal({ assertCurrent() {} }),
 }));
 
-function createProgram(store: WorkboardStore): Command {
-  const program = new Command();
-  program.exitOverride();
-  program.configureOutput({
-    writeErr: () => {},
-    writeOut: () => {},
-  });
-  registerWorkboardCli({ program, withStore: async (action) => action(store) });
-  return program;
-}
-
-async function captureStdout(run: () => Promise<void>): Promise<string> {
+async function captureStdout(run: () => Promise<unknown>): Promise<string> {
   let output = "";
   using _ = vi.spyOn(process.stdout, "write").mockImplementation((chunk): boolean => {
     output += String(chunk);
@@ -55,14 +38,12 @@ describe("registerWorkboardCli", () => {
   let store: WorkboardStore;
   let program: Command;
   const parse = (...args: string[]) => program.parseAsync(["workboard", ...args], { from: "user" });
-  const captureCli = (...args: string[]) =>
-    captureStdout(async () => {
-      await parse(...args);
-    });
+  const captureCli = (...args: string[]) => captureStdout(() => parse(...args));
 
   beforeEach(() => {
     store = createWorkboardSqliteTestStore();
-    program = createProgram(store);
+    program = new Command().exitOverride().configureOutput({ writeErr() {}, writeOut() {} });
+    registerWorkboardCli({ program, withStore: async (action) => action(store) });
     gatewayRuntime.callGatewayFromCli.mockReset();
     gatewayRuntime.isImplicitLocalGatewayTargetFromCli.mockReset().mockResolvedValue(false);
     delete process.env.OPENCLAW_GATEWAY_URL;
@@ -71,12 +52,11 @@ describe("registerWorkboardCli", () => {
   it("redacts claim tokens from card JSON output", async () => {
     const card = await store.create({ title: "Claimed worker", status: "running" });
     await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
-    const listOutput = await captureCli("list", "--json");
-    const showOutput = await captureCli("show", card.id, "--json");
-    expect(listOutput).not.toContain("secret-token");
-    expect(showOutput).not.toContain("secret-token");
-    expect(listOutput).toContain("[redacted]");
-    expect(showOutput).toContain("[redacted]");
+    for (const args of [["list"], ["show", card.id]]) {
+      const output = await captureCli(...args, "--json");
+      expect(output).not.toContain("secret-token");
+      expect(output).toContain("[redacted]");
+    }
   });
 
   it("hides archived cards from text output by default and reveals them with --include-archived", async () => {
@@ -101,27 +81,25 @@ describe("registerWorkboardCli", () => {
     await store.create({ title: "Queued work", status: "todo" });
     const output = await captureCli("list", "--status", "running", "--json");
     expect(JSON.parse(output)).toMatchObject({ cards: [{ id: running.id }] });
-    await captureStdout(async () => {
-      await expect(parse("list", "--status", "runnning", "--json")).rejects.toThrow(
+    await captureStdout(() =>
+      expect(parse("list", "--status", "runnning", "--json")).rejects.toThrow(
         /Allowed choices are.*running/,
-      );
-    });
+      ),
+    );
   });
 
   it("requests minimum scopes unless full-host access is explicit", async () => {
     gatewayRuntime.callGatewayFromCli.mockResolvedValue({ started: [], startFailures: [] });
-    await parse("dispatch");
-    expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[0]).toBe("workboard.cards.dispatch");
-    expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[2]).not.toHaveProperty("maxStarts");
-    expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[3]).toEqual({
-      mode: "cli",
-      scopes: ["operator.write", "operator.read"],
-    });
-    await parse("dispatch", "--admin");
-    expect(gatewayRuntime.callGatewayFromCli.mock.calls[1]?.[3]).toEqual({
-      mode: "cli",
-      scopes: ["operator.admin", "operator.write", "operator.read"],
-    });
+    for (const admin of [false, true]) {
+      await parse("dispatch", ...(admin ? ["--admin"] : []));
+      const [method, , input, options] = gatewayRuntime.callGatewayFromCli.mock.lastCall!;
+      expect(method).toBe("workboard.cards.dispatch");
+      expect(input).not.toHaveProperty("maxStarts");
+      expect(options).toEqual({
+        mode: "cli",
+        scopes: [...(admin ? ["operator.admin"] : []), "operator.write", "operator.read"],
+      });
+    }
   });
 
   it.each([false, true])("reports each dispatch failure with JSON=%s", async (json) => {
@@ -163,8 +141,8 @@ describe("registerWorkboardCli", () => {
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
   });
 
-  it.each(["1e3"])("rejects invalid --max-starts value %s", async (value) => {
-    await expect(parse("dispatch", "--max-starts", value)).rejects.toThrow(
+  it("rejects invalid --max-starts value", async () => {
+    await expect(parse("dispatch", "--max-starts", "1e3")).rejects.toThrow(
       "--max-starts must be a positive integer.",
     );
     expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();

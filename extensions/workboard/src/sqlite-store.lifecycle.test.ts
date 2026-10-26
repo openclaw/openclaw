@@ -1,6 +1,6 @@
 import { deserialize, serialize } from "node:v8";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   encodeWorkboardSqliteFailure,
   unwrapWorkboardSqliteResult,
@@ -108,9 +108,7 @@ describe("Workboard SQLite facade cleanup", () => {
     const failure = new AggregateError(
       [sqlite, new TypeError("cleanup failed")],
       "write and cleanup failed",
-      {
-        cause: sqlite,
-      },
+      { cause: sqlite },
     );
     const encoded: WorkboardSqliteResult<never> = {
       ok: false,
@@ -123,9 +121,7 @@ describe("Workboard SQLite facade cleanup", () => {
     } catch (error) {
       decoded = error;
     }
-    if (!(decoded instanceof AggregateError)) {
-      throw new Error("Expected the transported aggregate failure");
-    }
+    assert(decoded instanceof AggregateError);
     expect(decoded.message).toBe("write and cleanup failed");
     expect(decoded.errors).toHaveLength(2);
     expect(decoded.errors[0]).toMatchObject({
