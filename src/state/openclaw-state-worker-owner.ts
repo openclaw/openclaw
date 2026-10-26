@@ -384,6 +384,15 @@ function createSharedStateWorkerOwner() {
                 ...source,
                 databasePath: admission.databasePath,
                 existingOnly,
+                ...(existingOnly && admission.identity.key.startsWith("file:")
+                  ? {
+                      admission: {
+                        identity: admission.identity.key,
+                        birthtime: admission.identity.birthtime,
+                        assertCurrent: openingGuard.assertCurrent,
+                      },
+                    }
+                  : {}),
               },
               context,
               openingGuard.assertCurrent,
@@ -461,7 +470,10 @@ function createSharedStateWorkerOwner() {
       }
       try {
         if (!entry.bound) {
-          publishOpenClawStateDatabaseWorkerAdmission(entry.context.admission);
+          publishOpenClawStateDatabaseWorkerAdmission(
+            entry.context.admission,
+            getSqliteWorkerActorIdentity(store).identity,
+          );
           entry.bound = true;
         }
       } catch (error) {

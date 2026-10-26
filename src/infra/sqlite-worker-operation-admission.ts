@@ -19,6 +19,7 @@ import {
   SqliteWorkerError,
   type SqliteWorkerAdmissionRequest,
   type SqliteWorkerExecutionAuthority,
+  type SqliteWorkerRequest,
 } from "./sqlite-worker-contract.js";
 import {
   SQLITE_COLD_ADMISSION_PENDING,
@@ -81,6 +82,7 @@ export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner &
 export type SqliteWorkerAdmissionFactory = (operation: RetainedWorkerTransactionAdmission) => {
   admission: SqliteWorkerOperationAdmission;
   nativeLocations: readonly string[];
+  databaseIdentity?: SqliteWorkerRequest["databaseIdentity"];
 };
 
 type CommitObserver = (committed: { facts: unknown }) => void;

@@ -278,7 +278,7 @@ export async function resolveOpenedSqliteWorkerIdentity(
   databasePath: string,
   previous: DatabasePathIdentity,
   isOwnedElsewhere: (key: string) => boolean,
-): Promise<string> {
+): Promise<DatabasePathIdentity> {
   const openedIdentity = await readDatabasePathIdentity(databasePath);
   const physical = openedIdentity.key;
   if (openedIdentity.canonicalPath !== previous.canonicalPath) {
@@ -293,7 +293,7 @@ export async function resolveOpenedSqliteWorkerIdentity(
   if (previous.key.startsWith("file:") && physical !== previous.key) {
     throw new Error("SQLite database file identity changed during open");
   }
-  return physical;
+  return openedIdentity;
 }
 
 export function findUnclaimedSharedStateActors(

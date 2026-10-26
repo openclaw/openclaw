@@ -277,6 +277,7 @@ export class SqliteWorkerBroker {
         markNativeStopped: nativeStopped.resolve,
         id: ++this.nextActor,
         key,
+        identity,
         // Native ownership pins its opening paths even after the first client closes.
         pathReferences: new Map([...admittedPaths].map((pathname) => [pathname, 1])),
         moduleUrl,
@@ -332,10 +333,11 @@ export class SqliteWorkerBroker {
           const existing = this.actors.get(id);
           return existing !== undefined && existing !== opening;
         });
-        if (physical !== key) {
+        opening.identity = physical;
+        if (physical.key !== key) {
           this.actors.delete(key);
-          opening.key = physical;
-          this.actors.set(physical, opening);
+          opening.key = physical.key;
+          this.actors.set(physical.key, opening);
         }
       });
     }
@@ -448,7 +450,7 @@ export class SqliteWorkerBroker {
     return this.lifecycle.retireActor(identity);
   }
 
-  getActorIdentity(store: object): Readonly<Pick<Actor, "key" | "databasePath">> {
+  getActorIdentity(store: object): Readonly<Pick<Actor, "key" | "databasePath" | "identity">> {
     const client = this.stores.get(store);
     // Retained facts remain readable after worker failure; dispatch owns liveness.
     if (!client || client.sealed || !client.actor.stateContext) {

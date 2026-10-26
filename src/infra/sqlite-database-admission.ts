@@ -192,6 +192,15 @@ function exchange(target: string | Admission, create?: boolean): void {
 
 /** Identity descriptors stay open for the process: closing one can release SQLite's POSIX locks. */
 export function retainSqliteDatabaseAdmissionLocation(location: string): void {
+  const retained = state.registry.forLocation(location);
+  if (
+    retained &&
+    state.registry.descriptors.get(retained.identity)?.descriptor === retained.descriptor
+  ) {
+    // Native opens check physical identity; warm exchanges retain the original descriptor facts.
+    seals.load(retained);
+    return;
+  }
   const observed = fs.statSync(location, { bigint: true });
   if (!observed.isFile()) {
     return;

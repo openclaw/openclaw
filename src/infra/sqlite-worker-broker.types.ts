@@ -11,6 +11,7 @@ import type {
   SqliteWorkerReply,
   SqliteWorkerCloseReceipt,
 } from "./sqlite-worker-contract.js";
+import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerOperationAdmission,
@@ -91,6 +92,7 @@ export type Actor = {
   stateAccess: Awaited<ReturnType<typeof captureStateDatabaseAccess>>;
   id: number;
   key: string;
+  identity: DatabasePathIdentity;
   databasePath: string;
   pathReferences: Map<string, number>;
   moduleUrl: string;

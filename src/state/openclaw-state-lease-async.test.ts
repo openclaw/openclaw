@@ -1,6 +1,10 @@
 import { once } from "node:events";
+import { renameSync, unlinkSync } from "node:fs";
+import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState as withState } from "../test-utils/openclaw-test-state.js";
@@ -23,6 +27,96 @@ function expectReleased(database: ReturnType<typeof openDatabase>, key: string) 
       .all("core:test", key),
   ).toEqual([]);
 }
+
+// Windows does not permit this fixture to replace an open native database.
+it.skipIf(process.platform === "win32").each([undefined, "worker"] as const)(
+  "refuses a replaced cold-acquired database with %s heartbeat and settles without retiring its original actor",
+  async (heartbeat) => {
+    await withState({ label: "async-lease-replaced-source" }, async (state) => {
+      const context = captureContext({ env: state.env });
+      const operation = withLease(
+        { ...leaseOptions, key: "replaced-source", heartbeat },
+        context,
+        async (lease) => {
+          const databasePath = context.admission.databasePath;
+          const original = `${databasePath}.original`;
+          const replacement = `${databasePath}.replacement`;
+          await fs.copyFile(databasePath, replacement);
+          await fs.rename(databasePath, original);
+          await fs.rename(replacement, databasePath);
+          try {
+            await expect(lease.assertOwned()).rejects.toThrow();
+          } finally {
+            await fs.unlink(databasePath);
+            await fs.rename(original, databasePath);
+          }
+          // A heartbeat worker records permanent loss; a refused actor request still settles.
+          if (heartbeat !== "worker") {
+            await lease.assertOwned();
+          }
+        },
+      );
+      if (heartbeat === "worker") {
+        await expect(operation).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+      } else {
+        await operation;
+      }
+      await withLease({ ...leaseOptions, key: "original-sibling" }, context, async (lease) => {
+        await lease.assertOwned();
+      });
+      expectReleased(openDatabase({ env: state.env }), "replaced-source");
+    });
+  },
+);
+
+// Windows does not permit replacing the heartbeat's open lock file.
+it.skipIf(process.platform === "win32")(
+  "refuses a held worker lease effect after identical-byte Gateway owner replacement",
+  async () => {
+    await withState({ label: "async-lease-replaced-gateway-owner" }, async (state) => {
+      const database = openDatabase({ env: state.env });
+      const owner = acquireGatewayStateOwner({
+        databasePath: database.path,
+        payload: {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: state.configPath,
+          processNamespace: readGatewayLockProcessNamespace(),
+          role: "gateway",
+        },
+      });
+      const effect = vi.fn();
+      try {
+        const operation = withLease(
+          { ...leaseOptions, key: "replaced-gateway-owner", heartbeat: "worker" },
+          captureContext({ env: state.env }),
+          async (lease) => {
+            await lease.assertOwned();
+            const original = `${owner.path}.original`;
+            const replacement = `${owner.path}.replacement`;
+            await fs.copyFile(owner.path, replacement);
+            renameSync(owner.path, original);
+            renameSync(replacement, owner.path);
+            try {
+              await lease.assertOwned();
+              effect();
+            } finally {
+              unlinkSync(owner.path);
+              renameSync(original, owner.path);
+              // Restore custody before releasing it so accepted lease cleanup can settle.
+              owner.release();
+            }
+          },
+        );
+        await expect(operation).rejects.toThrow();
+        expect(effect).not.toHaveBeenCalled();
+      } finally {
+        owner.release();
+      }
+      expectReleased(openDatabase({ env: state.env }), "replaced-gateway-owner");
+    });
+  },
+);
 
 it("refuses a worker-leased effect after expiry before the host expiry callback runs", async () => {
   await withState({ label: "async-lease-effect-expiry" }, async (state) => {

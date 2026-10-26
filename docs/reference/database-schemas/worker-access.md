@@ -102,6 +102,11 @@ worker, including birthtime where supported, instead of repeating synchronous
 host filesystem checks. The binding belongs to each client, so reusing an actor
 does not change another client's authority. Close-checkpoint diagnostics inspect
 files asynchronously and recheck cleanup custody before publishing.
+Periodic WAL work carries its original file identity through worker opening and
+execution; host lifecycle guards stay in memory. Worker admission publication
+consumes the broker's prepared identity instead of rescanning the same file and
+aliases. Warm admission exchanges reuse their locally retained descriptor facts.
+Native opening, replacement, and retirement keep their existing custody checks.
 
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
