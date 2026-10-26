@@ -5,6 +5,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   composerFixture,
+  mention,
   people,
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
@@ -33,6 +34,22 @@ const labels: ChatMobilePeopleBodyProps["labels"] = {
   morePeople: (count) => count + " more people",
 };
 
+const human = (id: string, label: string) => ({
+  type: "human" as const,
+  id,
+  label,
+  identity: { type: "profile" as const, id },
+});
+const viewer = (
+  value: Pick<ReturnType<typeof human>, "identity" | "label">,
+  session = "agent:main:chat",
+) => ({
+  id: value.identity.id,
+  identity: value.identity,
+  name: value.label,
+  watchedSessions: [session],
+});
+
 it("projects native identities and mentions through the People body without sending or closing on rejection", async () => {
   const composer = composerFixture("chat", "Review this");
   const mentions = createChatMobilePeopleMentions(composer.mentionAccess);
@@ -41,12 +58,7 @@ it("projects native identities and mentions through the People body without send
   await vi.advanceTimersByTimeAsync(0);
   expect(mentions.status).toBe("ready");
   expect(composer.request).toHaveBeenCalledTimes(1);
-  const owner = {
-    type: "human" as const,
-    id: "owner",
-    label: "Avery Owner",
-    identity: { type: "profile" as const, id: "owner" },
-  };
+  const owner = human("owner", "Avery Owner");
   const alex = {
     identity: { type: "profile" as const, id: "profile-alex-online" },
     label: "Alex Rivera",
@@ -75,18 +87,8 @@ it("projects native identities and mentions through the People body without send
       },
       sessionKey: "agent:main:chat",
       viewers: [
-        {
-          id: "owner",
-          identity: owner.identity,
-          name: owner.label,
-          watchedSessions: ["agent:main:chat"],
-        },
-        {
-          id: "profile-alex-online",
-          identity: alex.identity,
-          name: alex.label,
-          watchedSessions: ["agent:main:chat"],
-        },
+        viewer(owner),
+        viewer(alex),
         { id: "elsewhere", name: "Elsewhere", watchedSessions: ["agent:main:other"] },
       ],
       mentionableUsers: mentions.read()?.result.users ?? [],
@@ -133,10 +135,7 @@ it("projects native identities and mentions through the People body without send
   participantMention.click();
   composer.refresh();
   await vi.advanceTimersByTimeAsync(0);
-  expect(composer.value()).toEqual({
-    draft: "Review @Alex ",
-    mentions: [{ profileId: "profile-alex-online", start: 7, end: 12 }],
-  });
+  composer.expectValue("Review @Alex ", [mention("profile-alex-online", 7, 12)]);
   expect(close).toHaveBeenCalledOnce();
   expect(composer.send).not.toHaveBeenCalled();
   composer.replaceOwner();
@@ -191,17 +190,8 @@ it("ignores retired activation results and preserves explicit failure and retry 
 });
 
 it("shows only concurrent viewers in the header, never a lone creator or visitor", () => {
-  const identity = { type: "profile" as const, id: "creator" };
-  const creator = { type: "human" as const, id: "creator", identity, label: "Creator" };
-  const viewers = [
-    { id: "creator", identity, name: "Creator", watchedSessions: ["chat"] },
-    {
-      id: "guest",
-      identity: { type: "profile" as const, id: "guest" },
-      name: "Guest",
-      watchedSessions: ["chat"],
-    },
-  ];
+  const creator = human("creator", "Creator");
+  const viewers = [viewer(creator, "chat"), viewer(human("guest", "Guest"), "chat")];
   const project = (active: typeof viewers) =>
     projectChatMobilePeople({
       session: { createdActor: creator, owner: { actor: creator } },

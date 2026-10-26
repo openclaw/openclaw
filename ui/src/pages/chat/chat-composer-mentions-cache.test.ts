@@ -15,6 +15,12 @@ import { createHumanMentionMenu } from "./components/chat-composer-mention-menu-
 afterEach(resetMentionComposerFixture);
 
 const fixture = () => composerFixture("chat");
+const profileError = () =>
+  new GatewayRequestError({
+    code: "UNAVAILABLE",
+    message: "Profile unavailable",
+    details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+  });
 
 async function staleFixture() {
   const view = fixture();
@@ -61,35 +67,18 @@ describe("mention query cache", () => {
   });
 
   it.each([
-    { failure: "network outage", error: new Error("Connection interrupted"), message: null },
-    {
-      failure: "directory unavailable",
-      error: new GatewayRequestError({ code: "UNAVAILABLE", message: "Directory unavailable" }),
-      message: null,
-    },
-    {
-      failure: "access revoked",
-      error: new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
-      message: "Mention access denied.",
-    },
-    {
-      failure: "profile unavailable",
-      error: new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Profile unavailable",
-        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
-      }),
-      message: "Profile unverified.",
-    },
-    {
-      failure: "invalid destination",
-      error: new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "Session was not found.",
-      }),
-      message: "Mention search rejected.",
-    },
-  ])("handles a background refresh failure: $failure", async ({ error, message }) => {
+    [new Error("Connection interrupted"), null],
+    [new GatewayRequestError({ code: "UNAVAILABLE", message: "Directory unavailable" }), null],
+    [
+      new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
+      "Mention access denied.",
+    ],
+    [profileError(), "Profile unverified."],
+    [
+      new GatewayRequestError({ code: "INVALID_REQUEST", message: "Session was not found." }),
+      "Mention search rejected.",
+    ],
+  ] as const)("handles a background refresh failure: %s", async (error, message) => {
     const view = await staleFixture();
     view.request.mockRejectedValueOnce(error);
     await view.search("Review @Al");
@@ -174,13 +163,7 @@ describe("mention query cache", () => {
   it("fences other pending successes when identity verification is lost", async () => {
     const view = fixture();
     const old = createDeferred<UsersMentionableResult>();
-    view.request.mockReturnValueOnce(old.promise).mockRejectedValueOnce(
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Profile unavailable",
-        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
-      }),
-    );
+    view.request.mockReturnValueOnce(old.promise).mockRejectedValueOnce(profileError());
     await view.search("@Al");
     await view.search("@Other");
     old.resolve(people);
@@ -288,10 +271,7 @@ it("shares native mention lookup with external insertion and retires captured ac
   expect(read?.insert("profile-alex-online")).toBe(true);
   view.refresh();
   await vi.advanceTimersByTimeAsync(0);
-  expect(view.value()).toEqual({
-    draft: "Before @Alex ",
-    mentions: [{ profileId: "profile-alex-online", start: 7, end: 12 }],
-  });
+  view.expectValue("Before @Alex ", [mention("profile-alex-online", 7, 12)]);
   expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([13, 13]);
   expect(view.send).not.toHaveBeenCalled();
   view.replaceOwner();
