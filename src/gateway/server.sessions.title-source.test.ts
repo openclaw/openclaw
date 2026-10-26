@@ -4,7 +4,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { withTitleProvider, provider } from "./dashboard-session-title.test-support.js";
-import { controlUiClient } from "./server.sessions.create.projects.test-support.js";
+import {
+  controlUiClient,
+  successfulSessionRequest,
+} from "./server.sessions.create.projects.test-support.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -25,12 +28,7 @@ it("names task-bearing sends and attachments while ignoring control-only message
       await fs.mkdir(skillDir, { recursive: true });
       await fs.writeFile(
         path.join(skillDir, "SKILL.md"),
-        `---
-name: route-proof
-description: Investigate request routing
----
-Handle the supplied task.
-`,
+        "---\nname: route-proof\ndescription: Investigate request routing\n---\nHandle the supplied task.\n",
       );
       testState.agentConfig = cfg.agents!.defaults;
       const context = {
@@ -62,14 +60,10 @@ Handle the supplied task.
         vi.waitFor(() => expect(entry(key)?.displayName).toBe("Repair request routing"), {
           timeout: 20_000,
         });
-      async function request(
+      const request = (
         method: Parameters<typeof directSessionReq>[0],
         params: Record<string, unknown>,
-      ) {
-        const result = await directSessionReq(method, params, options);
-        expect(result.ok, JSON.stringify(result.error)).toBe(true);
-        return result.payload;
-      }
+      ) => successfulSessionRequest(method, params, options);
       const create = (key: string, fields: Record<string, unknown> = {}) =>
         request("sessions.create", { agentId: "main", key, ...fields });
       const send = (sessionKey: string, message: string, idempotencyKey: string) =>

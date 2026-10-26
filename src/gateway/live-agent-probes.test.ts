@@ -17,6 +17,7 @@ import {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("live-agent-probes", () => {
@@ -71,14 +72,14 @@ describe("live-agent-probes", () => {
         exactReply: spec.name,
       });
     const claudeRetryPrompt = retryPrompt("claude-cli");
-    expect(claudeRetryPrompt).toContain(
+    for (const text of [
       "Preserve job.sessionTarget and job.sessionKey exactly as provided.",
-    );
-    expect(claudeRetryPrompt).toContain(
       "search/load MCP tools for `openclaw automations` or `automations`",
-    );
-    expect(claudeRetryPrompt).toContain("mcp__openclaw__automations");
-    expect(claudeRetryPrompt).toContain("Do not use Claude native `CronCreate`");
+      "mcp__openclaw__automations",
+      "Do not use Claude native `CronCreate`",
+    ]) {
+      expect(claudeRetryPrompt).toContain(text);
+    }
     expect(claudeRetryPrompt).not.toContain("openclaw-tools");
     expect(retryPrompt("future-agent")).toContain("ask me to retry");
     expect(retryPrompt("codex")).toContain(
@@ -97,16 +98,10 @@ describe("live-agent-probes", () => {
   });
 
   it("builds a cron probe spec when the process clock is outside the Date range", () => {
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-
-    try {
-      const spec = createLiveCronProbeSpec();
-      const args: { job?: { schedule?: { at?: string } } } = JSON.parse(spec.argsJson);
-      expect(spec.at).toBe("1970-01-01T00:00:00.000Z");
-      expect(args.job?.schedule?.at).toBe("1970-01-01T00:00:00.000Z");
-    } finally {
-      dateNowSpy.mockRestore();
-    }
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    const spec = createLiveCronProbeSpec();
+    const args: { job?: { schedule?: { at?: string } } } = JSON.parse(spec.argsJson);
+    expect([spec.at, args.job?.schedule?.at]).toEqual(Array(2).fill("1970-01-01T00:00:00.000Z"));
   });
 
   it.each([undefined, "current"])("validates cron cli job shape with target %s", (target) => {
