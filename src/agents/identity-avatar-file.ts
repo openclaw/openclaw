@@ -40,6 +40,7 @@ type OpenedLocalAgentAvatarFile = {
 type LocalAgentAvatarPath = {
   filePath: string;
   workspaceRoot: string;
+  stat: fs.BigIntStats;
 };
 
 /** Resolve one local avatar source while retaining its canonical workspace root. */
@@ -62,17 +63,17 @@ export function resolveLocalAgentAvatarPath(params: {
     return { ok: false, reason: "unsupported_extension" };
   }
   try {
-    const stat = fs.statSync(filePath);
+    const stat = fs.statSync(filePath, { bigint: true });
     if (!stat.isFile()) {
       return { ok: false, reason: "missing" };
     }
     if (stat.size > AVATAR_MAX_BYTES) {
       return { ok: false, reason: "too_large" };
     }
+    return { ok: true, value: { filePath, workspaceRoot, stat } };
   } catch {
     return { ok: false, reason: "missing" };
   }
-  return { ok: true, value: { filePath, workspaceRoot } };
 }
 
 function openResolvedLocalAgentAvatarFile(
@@ -114,6 +115,34 @@ function openResolvedLocalAgentAvatarFile(
 export type PreparedLocalAgentAvatarFile = Omit<OpenedLocalAgentAvatarFile, "fd"> & {
   body?: Buffer;
 };
+
+/** Re-resolve aliases as well as identity: a cached canonical path can outlive its source. */
+export function isLocalAgentAvatarFileCurrent(
+  input: LocalAgentAvatarRead,
+  file: PreparedLocalAgentAvatarFile,
+): boolean {
+  const resolved = resolveLocalAgentAvatarPath({
+    raw: input.source,
+    workspaceDir: input.workspaceDir,
+  });
+  if (!resolved.ok || resolved.value.filePath !== file.path) {
+    return false;
+  }
+  const { stat } = resolved.value;
+  // Match fs-safe's fractional-millisecond view of its pinned bigint observation.
+  const milliseconds = (ns: bigint) => {
+    const remainder = ((ns % 1_000_000_000n) + 1_000_000_000n) % 1_000_000_000n;
+    return Number((ns - remainder) / 1_000_000_000n) * 1_000 + Number(remainder) / 1_000_000;
+  };
+  return (
+    stat.nlink === 1n &&
+    stat.dev.toString() === file.stat.dev &&
+    stat.ino.toString() === file.stat.ino &&
+    Number(stat.size) === file.stat.size &&
+    milliseconds(stat.mtimeNs) === file.stat.mtimeMs &&
+    milliseconds(stat.ctimeNs) === file.stat.ctimeMs
+  );
+}
 
 const inlineFiles = new WeakMap<PreparedLocalAgentAvatarFile, string>();
 

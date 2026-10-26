@@ -85,6 +85,7 @@ it("encodes unchanged avatars once across list clients and refreshes changed fil
     );
   }
   expect(encode).toHaveBeenCalledTimes(1);
+  expect(pool.run).toHaveBeenCalledTimes(1);
 
   fs.renameSync(write("replacement.png", "changed"), file("avatar.png"));
   expect(await url("avatar.png")).toBe("data:image/png;base64,Y2hhbmdlZA==");
@@ -173,6 +174,7 @@ it("keeps the byte budget when a pending revalidation was evicted", async () => 
   const { write, prepare } = createWorkspace();
   sources.forEach((source) => write(source, body));
   await prepare(sources[0]!);
+  write(sources[0]!, Buffer.alloc(AVATAR_MAX_BYTES, 1));
   const started = createDeferred();
   const release = createDeferred();
   pool.run.mockImplementationOnce(async (input: LocalAgentAvatarRead) => {
@@ -204,8 +206,20 @@ it("coalesces cold work, reuses warm bodies, and revalidates edits, replacements
   fs.utimesSync(avatarPath, unchangedMtime, unchangedMtime);
   const originalIdentity = fs.statSync(avatarPath, { bigint: true });
   const originalFstatSync = fs.fstatSync;
+  const originalStatSync = fs.statSync;
   // fs-safe derives numeric metadata from the pinned descriptor's bigint observation.
   let ctimeMs = unchangedMtime.getTime();
+  vi.spyOn(fs, "statSync").mockImplementation((lookupPath, options) => {
+    if (options?.bigint) {
+      const stat = originalStatSync(lookupPath, { bigint: true });
+      if (stat.dev === originalIdentity.dev && stat.ino === originalIdentity.ino) {
+        stat.ctimeNs = BigInt(ctimeMs) * 1_000_000n;
+        stat.ctimeMs = BigInt(ctimeMs);
+      }
+      return stat;
+    }
+    return originalStatSync(lookupPath, options);
+  });
   vi.spyOn(fs, "fstatSync").mockImplementation((fd, options) => {
     if (options?.bigint) {
       const stat = originalFstatSync(fd, { bigint: true });
@@ -221,7 +235,7 @@ it("coalesces cold work, reuses warm bodies, and revalidates edits, replacements
   expect(duplicate).toBe(first);
   expect(pool.run).toHaveBeenCalledOnce();
   expect(await prepare()).toBe(first);
-  expect(pool.run).toHaveBeenCalledTimes(2);
+  expect(pool.run).toHaveBeenCalledTimes(1);
   fs.writeFileSync(avatarPath, "modified");
   fs.utimesSync(avatarPath, unchangedMtime, unchangedMtime);
   ctimeMs += 1;
@@ -245,9 +259,41 @@ it("revalidates cached metadata before acquiring bytes and after symlink or work
   fs.unlinkSync(file("avatar.png"));
   symlink("second.png");
   expectBody(await prepare(), "second");
+  expectBody(await prepare(), "second");
   hardlink("second.png");
+  expect(await prepare()).toEqual({ ok: false, reason: "unreadable" });
   expect(await prepare("avatar.png", false)).toEqual({ ok: false, reason: "unreadable" });
 
   const changed = createWorkspace("changed workspace");
   expectBody(await changed.prepare(), "changed workspace");
+});
+
+it("rejects a cached avatar moved outside its workspace and replaced by a symlink", async () => {
+  const { file, prepare } = createWorkspace("private avatar");
+  expectBody(await prepare(), "private avatar");
+  const outside = tempRoots.make("openclaw-avatar-outside-");
+  const moved = path.join(outside, "avatar.png");
+  fs.renameSync(file("avatar.png"), moved);
+  fs.symlinkSync(moved, file("avatar.png"));
+  expect(await prepare()).toEqual({ ok: false, reason: "outside_workspace" });
+});
+
+it("rechecks the workspace boundary even when the cached avatar identity is unchanged", async () => {
+  const first = createWorkspace("first");
+  const second = createWorkspace("second");
+  const aliases = tempRoots.make("openclaw-avatar-workspace-alias-");
+  const workspace = path.join(aliases, "workspace");
+  fs.symlinkSync(first.file("."), workspace, "dir");
+  const prepare = () =>
+    prepareLocalAgentAvatarFile({
+      cfg: { agents: { entries: { main: { workspace } } } },
+      agentId: "main",
+      source: first.file("avatar.png"),
+      readBody: true,
+    });
+  expectBody(await prepare(), "first");
+  expectBody(await prepare(), "first");
+  fs.unlinkSync(workspace);
+  fs.symlinkSync(second.file("."), workspace, "dir");
+  expect(await prepare()).toEqual({ ok: false, reason: "outside_workspace" });
 });
