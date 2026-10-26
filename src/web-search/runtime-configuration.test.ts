@@ -13,7 +13,6 @@ import { clearActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools
 import {
   createOAuthAuthProfileStore,
   createWebSearchTestProvider,
-  type WebSearchTestProviderParams,
 } from "../test-utils/web-provider-runtime.test-helpers.js";
 import {
   hasConfiguredWebSearchProvider as isConfigured,
@@ -35,22 +34,19 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolveRuntimeWebSearchProviders: providersMock,
 }));
 
-function createCustomSearchProvider(overrides: Partial<WebSearchTestProviderParams> = {}) {
-  return createWebSearchTestProvider({
-    pluginId: "custom-search",
-    id: "custom",
-    autoDetectOrder: 1,
-    credentialPath: "plugins.entries.custom-search.config.webSearch.apiKey",
-    ...overrides,
-  });
-}
-
-function useProvider(overrides: Partial<WebSearchTestProviderParams> = {}) {
-  providersMock.mockReturnValue([createCustomSearchProvider(overrides)]);
-}
+const provider = createWebSearchTestProvider({
+  pluginId: "custom-search",
+  id: "custom",
+  autoDetectOrder: 1,
+  credentialPath: "plugins.entries.custom-search.config.webSearch.apiKey",
+});
+const useProvider = (overrides: Partial<typeof provider> = {}) =>
+  providersMock.mockReturnValue([{ ...provider, ...overrides }]);
 
 const emptyStore = (): AuthProfileStore => ({ version: 1, profiles: {} });
 const prepare = (authStore?: AuthProfileStore) => prepareConfiguration({ config: {}, authStore });
+const agentDir = () => resolveDefaultAgentDir({});
+const publish = (store: AuthProfileStore) => setRuntimeAuthProfileStoreSnapshot(store, agentDir());
 const oauthStore = () =>
   createOAuthAuthProfileStore({
     provider: "xai",
@@ -80,27 +76,26 @@ describe("web search configuration presence", () => {
     const check = (config = {}) => prepareConfiguration({ config }, prepareAuthSource);
     useProvider({ authProviderId: "xai" });
     await expect(check()).resolves.toBe(false);
-    expect(prepareAuthSource).toHaveBeenCalledExactlyOnceWith(resolveDefaultAgentDir({}));
+    expect(prepareAuthSource).toHaveBeenCalledExactlyOnceWith(agentDir());
     expect(sourceProbe).not.toHaveBeenCalled();
     prepareAuthSource.mockClear();
     await expect(check({ tools: { web: { search: { provider: "custom" } } } })).resolves.toBe(true);
-    setRuntimeAuthProfileStoreSnapshot(emptyStore(), resolveDefaultAgentDir({}));
+    publish(emptyStore());
     await expect(check()).resolves.toBe(false);
     expect(prepareAuthSource).not.toHaveBeenCalled();
   });
 
   it("uses published auth stores without cold admission", async () => {
     const sourceProbe = vi.spyOn(authProfileSource, "hasAnyAuthProfileStoreSourceAsync");
-    const agentDir = resolveDefaultAgentDir({});
     useProvider({ authProviderId: "xai" });
-    setRuntimeAuthProfileStoreSnapshot(oauthStore(), agentDir);
+    publish(oauthStore());
     await expect(prepare()).resolves.toBe(true);
     expect(sourceProbe).not.toHaveBeenCalled();
     await expect(authProfileRuntimeMode.run({ kind: "env-only" }, () => prepare())).resolves.toBe(
       false,
     );
     sourceProbe.mockClear();
-    setRuntimeAuthProfileStoreSnapshot(emptyStore(), agentDir);
+    publish(emptyStore());
     await expect(prepare()).resolves.toBe(false);
     expect(sourceProbe).not.toHaveBeenCalled();
   });
@@ -109,26 +104,21 @@ describe("web search configuration presence", () => {
     ["absent", undefined, false],
     ["empty", "  ", false],
     ["inline", "test-search-key", true],
-    [
-      "unresolved env ref",
-      { source: "env", provider: "default", id: "MISSING_SEARCH_TEST_KEY" },
-      true,
-    ],
+    ["unresolved env ref", { source: "env", provider: "default", id: "UNSET_KEY" }, true],
     ["unresolved file ref", { source: "file", provider: "default", id: "/search/key" }, true],
   ] as const)("distinguishes %s configuration from provider health", (_name, value, configured) => {
-    const createTool = vi.fn(() => {
-      throw new Error("Configuration checks must not construct provider tools");
+    useProvider({
+      getConfiguredCredentialValue: () => value,
+      createTool: () => {
+        throw new Error("Configuration checks must not construct provider tools");
+      },
     });
-    useProvider({ getConfiguredCredentialValue: () => value, createTool });
     expect(isConfigured({ config: {}, authStore: emptyStore() })).toBe(configured);
-    expect(createTool).not.toHaveBeenCalled();
   });
 
   it("detects provider-owned env, fallback, and agent OAuth without executing providers", async () => {
-    vi.stubEnv("OPENCLAW_TEST_SEARCH_KEY", "test-search-key");
-    providersMock.mockReturnValue([
-      { ...createCustomSearchProvider(), envVars: ["OPENCLAW_TEST_SEARCH_KEY"] },
-    ]);
+    vi.stubEnv("CUSTOM_API_KEY", "test-search-key");
+    useProvider();
     expect(await prepare()).toBe(true);
     vi.unstubAllEnvs();
     useProvider({
