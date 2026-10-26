@@ -6,24 +6,15 @@ import { resolveGoogleMeetConfig } from "../config.js";
 import type { GoogleMeetRuntime } from "../runtime.js";
 import { captureStdout, meetApiFixtures } from "./fixtures.test-helpers.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
-const fetchGuardMocks = vi.hoisted(() => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
     response: await fetch(params.url, params.init),
     release: vi.fn(async () => {}),
   })),
 }));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
-  };
-});
 
 export function useCli() {
   let stdout: ReturnType<typeof captureStdout>;
@@ -50,9 +41,7 @@ export function useCli() {
   };
 }
 
-export function jsonResponse(value: unknown): Response {
-  return Response.json(value);
-}
+export const jsonResponse = (value: unknown): Response => Response.json(value);
 
 function requestUrl(input: RequestInfo | URL): URL {
   return new URL(typeof input === "string" || input instanceof URL ? input : input.url);
@@ -77,29 +66,25 @@ export function stubMeetArtifactsApi(
   options: { failSmartNoteDocumentBody?: boolean; participantDisplayName?: string } = {},
 ) {
   const fixtures: Record<string, unknown> = meetApiFixtures(options);
+  const documents: Record<string, string> = {
+    "/drive/v3/files/doc-1/export": "Transcript document body.",
+    "/drive/v3/files/notes-1/export": "Smart note document body.",
+  };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
-      const url = requestUrl(input);
-      if (fixtures[url.pathname]) {
-        return jsonResponse(fixtures[url.pathname]);
+      const { pathname } = requestUrl(input);
+      if (fixtures[pathname]) {
+        return jsonResponse(fixtures[pathname]);
       }
-      if (url.pathname === "/drive/v3/files/doc-1/export") {
-        return new Response("Transcript document body.", {
-          status: 200,
-          headers: { "Content-Type": "text/plain" },
-        });
+      if (pathname === "/drive/v3/files/notes-1/export" && options.failSmartNoteDocumentBody) {
+        return new Response("insufficientPermissions", { status: 403 });
       }
-      if (url.pathname === "/drive/v3/files/notes-1/export") {
-        if (options.failSmartNoteDocumentBody) {
-          return new Response("insufficientPermissions", { status: 403 });
-        }
-        return new Response("Smart note document body.", {
-          status: 200,
-          headers: { "Content-Type": "text/plain" },
-        });
-      }
-      return new Response("not found", { status: 404 });
+      const document = documents[pathname];
+      return new Response(document ?? "not found", {
+        status: document ? 200 : 404,
+        ...(document ? { headers: { "Content-Type": "text/plain" } } : {}),
+      });
     }),
   );
 }
