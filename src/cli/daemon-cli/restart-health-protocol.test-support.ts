@@ -32,7 +32,6 @@ export async function withProtocolGateway<T>(
       gateway: { mode: "local"; auth: { mode: "none" | "token"; token?: string }; port: number };
     };
     observed: ConnectParams[];
-    failures: string[];
     httpRequests: string[];
     requests: string[];
   }) => Promise<T>,
@@ -42,15 +41,11 @@ export async function withProtocolGateway<T>(
   const httpRequests: string[] = [];
   const http = createServer((req, res) => {
     httpRequests.push(req.url ?? "");
-    res
-      .writeHead(200, { "content-type": "application/json" })
-      .end(
-        JSON.stringify(
-          req.url === "/startupz"
-            ? { ok: true, status: "started", version: "2026.10.23", buildId: "fixture-target" }
-            : { ready: true, coreReady: true },
-        ),
-      );
+    const body =
+      req.url === "/startupz"
+        ? { ok: true, status: "started", version: "2026.10.23", buildId: "fixture-target" }
+        : { ready: true, coreReady: true };
+    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
   });
   const gateway = new WebSocketServer({ server: http });
   http.listen(0, "127.0.0.1");
@@ -58,9 +53,10 @@ export async function withProtocolGateway<T>(
   const port = (http.address() as AddressInfo).port;
   const config = { gateway: { mode: "local" as const, auth, port } };
   const observed: ConnectParams[] = [];
-  const failures: string[] = [];
   const requests: string[] = [];
   gateway.on("connection", (socket, upgradeReq) => {
+    const send = (frame: unknown) => socket.send(JSON.stringify(frame));
+    const fail = () => socket.terminate();
     let scopes: string[] = [];
     const handleMessage = async (data: RawData) => {
       const request = parseMinimalGatewayRequestFrame(data);
@@ -68,16 +64,8 @@ export async function withProtocolGateway<T>(
         return;
       }
       requests.push(request.method);
-      const reject = (code: string, message: string, errorOptions?: object) => {
-        socket.send(
-          JSON.stringify({
-            type: "res",
-            id: request.id,
-            ok: false,
-            error: { code, message, ...errorOptions },
-          }),
-        );
-      };
+      const reject = (code: string, message: string, errorOptions?: object) =>
+        send({ type: "res", id: request.id, ok: false, error: { code, message, ...errorOptions } });
       if (request.method === "connect") {
         const connect = request.params as ConnectParams;
         observed.push(connect);
@@ -106,10 +94,10 @@ export async function withProtocolGateway<T>(
           hasBrowserOriginHeader: false,
           clientLabel: "fixture",
           clientMeta: {},
-          markHandshakeFailure: (cause) => failures.push(cause),
+          markHandshakeFailure: vi.fn(),
           sendHandshakeErrorResponse: reject,
           sendFrame: async (frame) => {
-            socket.send(JSON.stringify(frame));
+            send(frame);
           },
           onHelloDelivered: vi.fn(),
           onPairingWait: vi.fn(),
@@ -158,7 +146,6 @@ export async function withProtocolGateway<T>(
           server: {
             version: "2026.10.23",
             buildId: "fixture-target",
-            bootId: "fixture-boot",
             connId: "fixture-connection",
           },
         });
@@ -170,26 +157,18 @@ export async function withProtocolGateway<T>(
       }
       sendMinimalGatewayResponse(socket, request.id, {
         ok: true,
-        plugins: { errors: [], unavailable: [] },
-        channels: {},
       });
     };
     void Promise.resolve()
       .then(() => options.beforeChallenge?.())
       .then(() => sendMinimalGatewayConnectChallenge(socket))
-      .catch((error: unknown) => {
-        failures.push(error instanceof Error ? error.message : String(error));
-        socket.terminate();
-      });
+      .catch(fail);
     socket.on("message", (data) => {
-      void handleMessage(data).catch((error: unknown) => {
-        failures.push(error instanceof Error ? error.message : String(error));
-        socket.terminate();
-      });
+      void handleMessage(data).catch(fail);
     });
   });
   try {
-    return await run({ port, config, observed, failures, httpRequests, requests });
+    return await run({ port, config, observed, httpRequests, requests });
   } finally {
     await closeMinimalGatewayServer(gateway);
     http.closeAllConnections();

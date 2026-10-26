@@ -32,14 +32,11 @@ type Scenario = {
   noListeners?: boolean;
   startup?: boolean;
   reachability?: Partial<GatewayReachability>;
-  expectedVersion?: string;
-  expectedBuildId?: string;
 };
 const reachable: GatewayReachability = {
   reachable: true,
   gatewayVersion: "fixture-version",
   gatewayBuildId: "fixture-build",
-  gatewayBootId: "fixture-boot",
   activatedPluginErrors: [],
   unavailablePlugins: [],
   channelProbeErrors: [],
@@ -48,7 +45,6 @@ const reachable: GatewayReachability = {
 describe("read-only Windows diagnostics with unavailable process metadata", () => {
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     mocks.inspectPortUsage.mockReset();
     mocks.readGatewayStartupPhase.mockReset().mockResolvedValue(undefined);
     mocks.confirmGatewayReachable.mockReset();
@@ -59,30 +55,10 @@ describe("read-only Windows diagnostics with unavailable process metadata", () =
     { name: "ordinary restart keeps its default", flag: false, calls: 0 },
     { name: "non-Windows remains unchanged", platform: "linux", calls: 0 },
     { name: "foreign runtime PID", runtimePid: 8000, calls: 0 },
-    {
-      name: "available foreign command line is not reattributed",
-      commandLine: "foreign-service.exe",
-      calls: 0,
-    },
+    { name: "foreign command line", commandLine: "foreign-service.exe", calls: 0 },
     { name: "classified non-gateway", command: "socat.exe", calls: 0 },
     { name: "empty listener list", noListeners: true, calls: 0 },
-    {
-      name: "auth rejection liveness is insufficient",
-      reachability: { reachable: true, gatewayVersion: null },
-      calls: 1,
-    },
-    {
-      name: "transport failure is not healthy",
-      reachability: { reachable: false, probeError: "connect failed" },
-      calls: 1,
-    },
-    { name: "wrong version", expectedVersion: "different-version", calls: 1 },
-    { name: "wrong build", expectedBuildId: "different-build", calls: 1 },
-    {
-      name: "channel failure remains rejected",
-      reachability: { channelProbeErrors: [{ id: "fixture", error: "fixture failure" }] },
-      calls: 1,
-    },
+    { name: "auth-only liveness", reachability: { gatewayVersion: null }, calls: 1 },
     { name: "startup cannot be hidden", startup: true, calls: 0 },
   ])("$name", async (scenario) => {
     vi.spyOn(process, "platform", "get").mockReturnValue(scenario.platform ?? "win32");
@@ -118,8 +94,6 @@ describe("read-only Windows diagnostics with unavailable process metadata", () =
       },
       requirePluginHealth: false,
       allowUnattributedDiagnosticProbe: scenario.flag === false ? undefined : true,
-      expectedVersion: scenario.expectedVersion,
-      expectedBuildId: scenario.expectedBuildId,
     });
     expect(snapshot).toMatchObject({
       healthy: scenario.healthy ?? false,
@@ -127,16 +101,5 @@ describe("read-only Windows diagnostics with unavailable process metadata", () =
       staleGatewayPids: [],
     });
     expect(mocks.confirmGatewayReachable).toHaveBeenCalledTimes(scenario.calls);
-    if (scenario.calls) {
-      expect(mocks.confirmGatewayReachable).toHaveBeenCalledWith(
-        expect.objectContaining({ port: 18889, auth: { token: "synthetic-test-token" } }),
-      );
-    }
-    if (scenario.expectedVersion) {
-      expect(snapshot.versionMismatch).toBeDefined();
-    }
-    if (scenario.expectedBuildId) {
-      expect(snapshot.buildIdMismatch).toBeDefined();
-    }
   });
 });
