@@ -294,7 +294,7 @@ describe("secrets apply", () => {
     });
 
     expect(await apply(plan)).toMatchObject({ mode: "write", changed: true });
-    expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalled();
+    expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledTimes(1);
 
     expect(await readJsonFile(fixture.configPath)).toHaveProperty(
       "models.providers.openai.apiKey",
@@ -460,10 +460,11 @@ describe("secrets apply", () => {
     const before = persisted();
     const plan = targetPlan(createAuthTarget("main", "openai:default", "openai"));
     publishStore(fixture.agentDir);
-    failNextRuntimeAuthSnapshotPublication();
+    const publicationFailure = failNextRuntimeAuthSnapshotPublication();
 
     await expect(apply(plan)).rejects.toThrow("auth profile runtime publication failed");
 
+    expect(publicationFailure).toHaveBeenCalledOnce();
     expect(persisted()).toEqual(before);
   });
 
@@ -606,6 +607,7 @@ describe("secrets apply", () => {
   });
 
   it("applies provider upserts and deletes from plan", async () => {
+    const { apiKey: _key, ...openai } = createOpenAiProviderConfig();
     await writeConfig({
       secrets: {
         providers: {
@@ -613,6 +615,7 @@ describe("secrets apply", () => {
           fileold: { source: "file", path: "/tmp/old-secrets.json", mode: "json" },
         },
       },
+      models: { providers: { openai } },
     });
 
     const plan = createPlan({
@@ -632,9 +635,9 @@ describe("secrets apply", () => {
     });
   });
 
-  it.each([undefined, ["Vault"]])("enables plugin owners with allowlist %j", async (allow) => {
+  it("enables plugin owners for plugin-managed exec provider upserts", async () => {
     await writeConfig({
-      plugins: { allow, entries: { vault: { hooks: { allowConversationAccess: false } } } },
+      plugins: { entries: { vault: { hooks: { allowConversationAccess: false } } } },
     });
 
     const nextConfig = await project(createPluginProviderPlan());
@@ -642,7 +645,6 @@ describe("secrets apply", () => {
       hooks: { allowConversationAccess: false },
       enabled: true,
     });
-    expect(nextConfig.plugins?.allow).toEqual(allow);
   });
 
   it.each([
@@ -704,6 +706,14 @@ describe("secrets apply", () => {
     expect(await readText(clawdbotEnvPath)).toBe(
       "OPENAI_API_KEY=sk-should-not-touch\nUNRELATED=legacy\n",
     );
+  });
+
+  it("preserves normalized restrictive plugin allowlist entries for plugin-managed exec provider upserts", async () => {
+    await writeConfig({ plugins: { allow: ["Vault"] } });
+
+    const nextConfig = await project(createPluginProviderPlan());
+    expect(nextConfig.plugins?.allow).toEqual(["Vault"]);
+    expect(nextConfig.plugins?.entries?.vault).toEqual({ enabled: true });
   });
 
   it("scrubs config and state .env files when the config path is external", async () => {
