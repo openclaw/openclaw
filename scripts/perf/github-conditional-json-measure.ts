@@ -83,9 +83,9 @@ try {
   await run(160);
   bytes = charged = requests = parses = 0;
   gc.length = 0;
-  JSON.parse = (...args: Parameters<typeof JSON.parse>) => {
+  JSON.parse = (text: string, reviver?: Parameters<typeof JSON.parse>[1]) => {
     parses++;
-    return parse(...args);
+    return reviver ? parse(text, reviver) : parse(text);
   };
   if (allocations) {
     inspector.connect();
