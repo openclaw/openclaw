@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -55,19 +54,29 @@ describe.skipIf(process.platform === "win32")("web CLI failure output completion
       async (child) => {
         child.stdout.pause();
         child.stdin.end();
+        let onReadable: () => void = () => {};
         try {
           // Deliberate backpressure starts at real output, not process startup.
           // The helper separately observes EOF and the natural terminal status.
-          while (child.stdout.readableLength === 0) {
-            await once(child.stdout, "readable");
-          }
+          await new Promise<void>((resolve) => {
+            onReadable = () => {
+              if (child.stdout.readableLength > 0) {
+                resolve();
+              }
+            };
+            child.stdout.on("readable", onReadable);
+            onReadable();
+          });
           reader.firstBufferedBytes = child.stdout.readableLength;
           const startedAt = performance.now();
-          while (performance.now() - startedAt < reader.requestedPauseMs) {
-            await delay(Math.ceil(reader.requestedPauseMs - (performance.now() - startedAt)));
+          let remaining = reader.requestedPauseMs;
+          while (remaining > 0) {
+            await delay(Math.ceil(remaining));
+            remaining = reader.requestedPauseMs - (performance.now() - startedAt);
           }
           reader.actualPauseMs = performance.now() - startedAt;
         } finally {
+          child.stdout.off("readable", onReadable);
           child.stdout.resume();
         }
       },
