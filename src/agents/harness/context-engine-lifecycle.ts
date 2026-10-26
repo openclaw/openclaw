@@ -259,11 +259,11 @@ async function assembleHarnessContextEngineWithinSourceScope(
     : params.maxOutputTokens;
   // Append-only replay policies keep persisted carriers in the assembled window;
   // dropping one here would change the prefix bound to later thinking signatures.
-  const messages = (
-    params.appendOnlyRuntimeContext
-      ? inputMessages
-      : stripRuntimeContextCustomMessages(inputMessages)
-  ).slice();
+  const projectedMessages = params.appendOnlyRuntimeContext
+    ? inputMessages
+    : stripRuntimeContextCustomMessages(inputMessages);
+  // Filtering already isolates the plugin's working array from authoritative history.
+  const messages = projectedMessages === inputMessages ? inputMessages.slice() : projectedMessages;
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(
     params,
     tokenBudget,

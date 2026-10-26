@@ -5,6 +5,7 @@ import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
 import { probeTreeClone, readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, expect, it, vi } from "vitest";
+import { captureThrown } from "../../test/helpers/capture-thrown.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
@@ -68,12 +69,7 @@ function interceptCopies(
 }
 
 function captureFailure(capture: () => unknown) {
-  try {
-    capture();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("Expected capture to fail");
+  return captureThrown(capture, "Expected capture to fail");
 }
 
 it.each(["changed bytes", "escaping link"])(

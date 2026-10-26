@@ -43,10 +43,10 @@ const snapshot: XAllowlistSnapshot = {
   },
 };
 
-async function mount() {
+async function mount(initialSnapshot = snapshot) {
   let registered: ControlUiPage | undefined;
   let notify = () => {};
-  const request = vi.fn().mockResolvedValue(snapshot);
+  const request = vi.fn().mockImplementation(async () => structuredClone(initialSnapshot));
   const connection = { connected: true, canAdmin: true };
   const host = {
     locale: "en",
@@ -108,6 +108,128 @@ async function mount() {
     },
   };
 }
+
+it("retains account and allowlist rows by their domain keys across fresh reordered snapshots", async () => {
+  const initial = structuredClone(snapshot);
+  initial.accounts.push({ accountId: "second", username: "second_bot" });
+  initial.entries.push({
+    userId: "789",
+    username: "second_maintainer",
+    configured: true,
+    editable: false,
+  });
+  const github = initial.verifiedFromGitHub!;
+  delete github.lastSyncAt;
+  github.entries.push({
+    xUserId: "987",
+    xHandle: "second_contributor",
+    githubLogin: "second-contributor",
+    permission: "push",
+    syncedAt: 1,
+  });
+  github.unresolvedHandles = ["missing_one", "missing_two"];
+  const formatDescriptor = Object.getOwnPropertyDescriptor(Intl.DateTimeFormat.prototype, "format");
+  if (!formatDescriptor?.get) {
+    throw new Error("Expected Intl.DateTimeFormat.format to be an accessor");
+  }
+  const format = vi.fn(function (this: Intl.DateTimeFormat): Intl.DateTimeFormat["format"] {
+    return formatDescriptor.get!.call(this);
+  });
+  Object.defineProperty(Intl.DateTimeFormat.prototype, "format", {
+    ...formatDescriptor,
+    get: format,
+  });
+  onTestFinished(() => {
+    Object.defineProperty(Intl.DateTimeFormat.prototype, "format", formatDescriptor);
+  });
+  const { container, request } = await mount(initial);
+  const account = container.querySelector("select")!;
+  const accounts = [...account.options];
+  const manualRows = [...container.querySelectorAll(".x-replies__list tbody tr")].slice(0, 2);
+  const githubRows = [...container.querySelectorAll(".x-replies__github tbody tr")];
+  expect(format).toHaveBeenCalledTimes(2);
+
+  const next = structuredClone(initial);
+  next.accounts.reverse();
+  next.entries.reverse();
+  const nextGitHub = next.verifiedFromGitHub!;
+  nextGitHub.entries.reverse();
+  nextGitHub.entries[0]!.syncedAt = 2;
+  nextGitHub.entries[0]!.xHandle = "updated_contributor";
+  nextGitHub.unresolvedHandles = ["missing_two", "missing_three"];
+  request.mockResolvedValueOnce(next);
+  container.querySelector<HTMLButtonElement>("header button")!.click();
+  await vi.waitFor(() => {
+    flush();
+    expect(container.textContent).toContain("@updated_contributor");
+    expect(container.querySelector('time[datetime="1970-01-01T00:00:00.002Z"]')).not.toBeNull();
+  });
+  expect(account.options[0]).toBe(accounts[1]);
+  expect(account.options[1]).toBe(accounts[0]);
+  expect(account.value).toBe("example");
+  const nextManualRows = container.querySelectorAll(".x-replies__list tbody tr");
+  expect(nextManualRows[0]).toBe(manualRows[1]);
+  expect(nextManualRows[1]).toBe(manualRows[0]);
+  const nextGitHubRows = container.querySelectorAll(".x-replies__github tbody tr");
+  expect(nextGitHubRows[0]).toBe(githubRows[1]);
+  expect(nextGitHubRows[1]).toBe(githubRows[0]);
+  expect(format).toHaveBeenCalledTimes(3);
+  expect(container.textContent).toContain("@missing_two, @missing_three");
+  expect(container.textContent).not.toContain("@missing_one");
+  expect(initial.accounts[0]!.accountId).toBe("example");
+  expect(github.entries[1]!.syncedAt).toBe(1);
+
+  const withoutGitHub = structuredClone(next);
+  delete withoutGitHub.verifiedFromGitHub;
+  const refresh = Promise.withResolvers<XAllowlistSnapshot>();
+  request.mockReturnValueOnce(refresh.promise);
+  container.querySelector<HTMLButtonElement>("header button")!.click();
+  flush();
+  expect(container.querySelector(".x-replies__list tbody tr")).toBe(nextManualRows[0]);
+  expect(container.querySelector(".x-replies__github tbody tr")).toBe(nextGitHubRows[0]);
+  expect(format).toHaveBeenCalledTimes(3);
+  refresh.resolve(withoutGitHub);
+  await vi.waitFor(() => {
+    flush();
+    expect(container.querySelector(".x-replies__github")).toBeNull();
+  });
+  request.mockResolvedValueOnce(structuredClone(next));
+  container.querySelector<HTMLButtonElement>("header button")!.click();
+  await vi.waitFor(() => {
+    flush();
+    expect(container.querySelector(".x-replies__github")?.textContent).toContain(
+      "@updated_contributor",
+    );
+  });
+});
+
+it("clears the previous account while switching and publishes only the accepted account", async () => {
+  const initial = structuredClone(snapshot);
+  initial.accounts.push({ accountId: "second", username: "second_bot" });
+  const { container, request } = await mount(initial);
+  const previousRow = container.querySelector(".x-replies__list tbody tr");
+  const pending = Promise.withResolvers<XAllowlistSnapshot>();
+  request.mockReturnValueOnce(pending.promise);
+  const account = container.querySelector("select")!;
+  account.value = "second";
+  account.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(request).toHaveBeenLastCalledWith("x.allowlist.list", { accountId: "second" });
+  flush();
+  expect(container.querySelector(".x-replies__list tbody tr")).toBeNull();
+  expect(account.disabled).toBe(true);
+  const next = structuredClone(initial);
+  next.accountId = "second";
+  next.entries[0]!.username = "successor_maintainer";
+  pending.resolve(next);
+  await vi.waitFor(() => {
+    flush();
+    expect(container.textContent).toContain("@successor_maintainer");
+    expect(account.disabled).toBe(false);
+  });
+  expect(account.value).toBe("second");
+  expect(container.querySelector(".x-replies__list tbody tr")).not.toBe(previousRow);
+  expect(container.textContent).not.toContain("@maintainer");
+});
 
 it("keeps serial admission, redacted failures, and the draft through a held retry", async () => {
   const { container, request } = await mount();

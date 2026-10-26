@@ -57,6 +57,27 @@ export const publicationBackends = ["local", "repository"] as const;
 export const forPublicationBackends = <T extends string>(changes: readonly T[]) =>
   publicationBackends.flatMap((backend) => changes.map((change) => ({ backend, change })));
 
+export function createPublicationRepositories(fork = false) {
+  const baseRepo = {
+    id: 10,
+    full_name: "openclaw/openclaw",
+    private: false,
+    archived: false,
+    owner: { type: "Organization" },
+    permissions: { push: true },
+  };
+  const headRepo = fork
+    ? {
+        ...baseRepo,
+        id: 20,
+        full_name: "contributor/openclaw",
+        owner: { type: "User" },
+        permissions: { push: false },
+      }
+    : baseRepo;
+  return { baseRepo, headRepo };
+}
+
 export function capturePublicationGuest(
   f: Awaited<ReturnType<typeof createRequesterPolicyFixture>>,
 ) {

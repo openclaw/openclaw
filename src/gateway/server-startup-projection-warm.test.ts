@@ -21,6 +21,7 @@ import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
 import * as rowReads from "./session-row-database-facts.js";
 import * as projections from "./session-row-projection.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 function observeProjectionDisposal(afterCreate?: () => Promise<void>) {
   const createProjection = projections.createSessionRowProjection;
@@ -55,18 +56,7 @@ async function createStartupState({ ui = false, anonymous = false } = {}) {
   state = await createOpenClawTestState({
     label: "startup-projection",
     layout: "home",
-    env: {
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      VITEST: "1",
-    },
+    env: { ...KERNEL_TEST_ENV },
   });
   await state.writeConfig({
     gateway: {

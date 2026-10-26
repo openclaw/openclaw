@@ -3,7 +3,7 @@ import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import {
   acquireStateDatabaseSchemaLease,
-  assertStateDatabaseAccessAllowed,
+  type captureStateDatabaseAccess,
   type StateDatabaseSchemaLease,
 } from "../../infra/gateway-state-owner.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
@@ -153,7 +153,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
   operationId: number;
   completion: "result" | "exit";
   databaseAuthority?: {
-    databasePath: string;
+    stateAccess: Awaited<ReturnType<typeof captureStateDatabaseAccess>>;
     creationPaths: readonly string[];
     maintenanceScope?: OpenClawDatabaseMaintenanceScope;
     assertCurrent(): void;
@@ -335,6 +335,16 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
               }
               authority?.assertCurrent();
             };
+            const assertStateAccess =
+              allowed && authority
+                ? await authority.stateAccess.prepareAccess({
+                    maintenanceScope: authority.maintenanceScope,
+                  })
+                : undefined;
+            if (assertStateAccess) {
+              assertCreationCurrent();
+              assertStateAccess();
+            }
             const metadata =
               allowed && authority
                 ? createSqliteDatabaseAdmissionRelay(assertCreationCurrent)
@@ -347,13 +357,13 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
               const assertAccess = () => {
                 assertCreationCurrent();
                 authority.maintenanceScope?.assertAdmission();
-                assertStateDatabaseAccessAllowed(authority.databasePath, {
+                assertStateAccess?.({
                   maintenanceScope: authority.maintenanceScope,
                   schemaLease,
                 });
               };
               metadata.bindDatabaseAuthority({
-                databasePath: resolveIdentityPathViaExistingAncestorSync(authority.databasePath),
+                databasePath: authority.stateAccess.canonicalPath,
                 assertRequest: assertCreationCurrent,
                 assertAccess,
                 assertCreate(location) {
@@ -365,7 +375,8 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 },
                 acquireSchema() {
                   assertAccess();
-                  const acquire = () => acquireStateDatabaseSchemaLease(authority.databasePath);
+                  const acquire = () =>
+                    acquireStateDatabaseSchemaLease(authority.stateAccess.canonicalPath);
                   const lease = authority.maintenanceScope
                     ? authority.maintenanceScope.run(acquire)
                     : acquire();
@@ -382,6 +393,10 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                   )
                 : undefined;
             try {
+              if (assertStateAccess) {
+                assertCreationCurrent();
+                assertStateAccess();
+              }
               worker.postMessage(
                 {
                   type: "admission",

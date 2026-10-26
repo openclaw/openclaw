@@ -4,15 +4,13 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { setupAnnotationCapture } from "./browser-panel-capture.test-support.ts";
 import {
-  createBrowserClient,
-  createBrowserPanelTestController,
   createInspectedNode,
   flushBrowserResponses,
   setupBrowserPanelTestCleanup,
-  type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
 import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { BrowserPanelChrome } from "./browser-panel-render.tsx";
+import { panelScenario } from "./browser-panel-stream.test-support.ts";
 
 setupBrowserPanelTestCleanup();
 const { receive: acceptAnnotation, stubCanvas } = setupAnnotationCapture();
@@ -49,20 +47,14 @@ function renderInput(controller: BrowserPanel): HTMLTextAreaElement {
 
 function setup<T>(mount: (controller: BrowserPanel) => T) {
   vi.useFakeTimers();
-  const { client, request } = createBrowserClient(async ({ path }) => {
-    if (path !== "/act") {
-      throw new Error(`Unexpected browser route: ${path}`);
-    }
-    return { result: true };
+  const { controller, actions } = panelScenario("tab-a", undefined, {
+    "/act": () => ({ result: true }),
   });
-  const controller = createBrowserPanelTestController(client, "tab-a");
-  const actions = () =>
-    request.mock.calls.map(([, envelope]) => (envelope as BrowserRequestEnvelope).body);
-  const clicks = () => actions().filter((body) => body?.kind === "clickCoords");
+  const clicks = () => actions("clickCoords");
   const scrolls = () =>
-    actions()
-      .filter((body) => body?.kind === "evaluate")
-      .map((body) => /window\.scrollBy\((-?\d+), (-?\d+)\)/.exec(String(body?.fn))?.slice(1));
+    actions("evaluate").map((body) =>
+      /window\.scrollBy\((-?\d+), (-?\d+)\)/.exec(String(body?.fn))?.slice(1),
+    );
   return { controller, clicks, scrolls, input: mount(controller) };
 }
 

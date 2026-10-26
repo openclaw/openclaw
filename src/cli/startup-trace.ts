@@ -9,6 +9,7 @@ import {
   supportsUpdateCanaryProgress,
   UPDATE_CANARY_PROGRESS_PREFIX,
 } from "../infra/update-candidate-canary-progress.js";
+import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 
 type GatewayStartupTraceSource = "entry" | "cli.main";
 type GatewayStartupTraceLineFormatter = (message: string) => string;
@@ -30,6 +31,7 @@ const CLI_STARTUP_TIMELINE_PHASE = "cli.startup";
 const STARTUP_PROGRESS_PHASES = new Set([
   "entry.run-main-import",
   "cli.main.gateway-run-select-environment",
+  "cli.main.gateway-run-select-environment-imports",
   "cli.main.gateway-run-imports",
   "cli.main.gateway-run-pre-bootstrap",
   "cli.main.gateway-run-bootstrap",
@@ -38,6 +40,15 @@ const STARTUP_PROGRESS_PHASES = new Set([
 const BOOTSTRAP_PROGRESS_PHASES = new Set([
   "cli.bootstrap.admission.database-readiness",
   "gateway.server-start-import",
+]);
+const ENVIRONMENT_PROGRESS_PHASES = new Set([
+  "cli.environment.imports",
+  "cli.environment.config-import",
+  "cli.environment.config-read",
+  "cli.environment.config-recovery",
+  "cli.environment.config.recovery.health-read",
+  "cli.environment.config-guard",
+  "cli.environment.pin-runtime-paths",
 ]);
 
 type GatewayBootstrapStep = {
@@ -53,8 +64,13 @@ const MAX_BOOTSTRAP_STEPS = 128;
 let bootstrapSteps: Map<string, GatewayBootstrapStep> | undefined = new Map();
 
 export function formatGatewayStartupMemoryUsage(): string {
+  const workers = sampleTrackedWorkerMemory({ refresh: false });
+  const workerHeap =
+    workers.workerHeapTotalBytes === undefined
+      ? ""
+      : ` workerHeapMb=${(workers.workerHeapTotalBytes / 1024 / 1024).toFixed(1)} workerHeapSource=cached`;
   // MiB: RSS includes worker isolates; the heap belongs to the main isolate.
-  return `rssMb=${(process.memoryUsage.rss() / 1024 / 1024).toFixed(1)} heapUsedMb=${(getHeapStatistics().used_heap_size / 1024 / 1024).toFixed(1)}`;
+  return `rssMb=${(process.memoryUsage.rss() / 1024 / 1024).toFixed(1)} heapUsedMb=${(getHeapStatistics().used_heap_size / 1024 / 1024).toFixed(1)} workers=${workers.workerCount} workerHeapSamples=${workers.workerHeapSampledCount}/${workers.workerCount}${workerHeap}`;
 }
 
 /** Collect process facts once; Gateway startup consumes them before serving. */
@@ -98,7 +114,8 @@ export async function measureGatewayBootstrapStep<T>(
   const progressEnabled =
     BOOTSTRAP_PROGRESS_PHASES.has(name) ||
     (isForegroundGatewayRunArgv(process.argv) &&
-      (name.startsWith("cli.bootstrap.") ||
+      (ENVIRONMENT_PROGRESS_PHASES.has(name) ||
+        name.startsWith("cli.bootstrap.") ||
         name === "cli.command.config-ready" ||
         name === "cli.command.config-guard-import"));
   if (!traceEnabled && !progressEnabled) {

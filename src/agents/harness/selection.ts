@@ -607,12 +607,11 @@ function withoutInternalHarnessAuthority(
 } {
   if (builtIn) {
     return {
-      // The built-in harness is the internal owner of this authority. Only
-      // plugin handoffs receive the projected public attempt shape below.
-      params: {
-        ...params,
+      // The caller hands us its fresh rest object; extend it without copying again.
+      // Only plugin handoffs need the private-state projection below.
+      params: Object.assign(params, {
         operationalRunInstance: params.admittedRunContext.operationalRunInstance,
-      } as import("./types.js").AgentHarnessAttemptParamsV2,
+      }) as import("./types.js").AgentHarnessAttemptParamsV2,
       closeHostCapabilities: () => {},
       setInputAttachmentReadAllowed: () => {},
       runWithHostScope: (run) => run(),

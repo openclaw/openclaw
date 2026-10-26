@@ -124,15 +124,14 @@ export function nativeAppServerOptions(
     ),
     ...extraEnv,
   };
+  const options = createAppServerOptions();
   return {
-    ...createAppServerOptions(),
+    ...options,
     start: {
-      transport: "stdio" as const,
+      ...options.start,
       command: native.command,
       commandSource: "config" as const,
-      args: ["app-server"],
       cwd: native.cwd,
-      headers: {},
       env,
       clearEnv: Object.keys(process.env).filter((key) => !(key in env)),
     },

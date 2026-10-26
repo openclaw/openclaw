@@ -48,6 +48,19 @@ export function shouldInspectQueuedDelivery(
   );
 }
 
+/** Resolves the platform attempt identity a recovered delivery must reconcile against. */
+export function recoveryPlatformAttemptId(entry: QueuedDelivery, claimedAttemptId?: string) {
+  return claimedAttemptId !== undefined
+    ? claimedAttemptId
+    : typeof entry.platformSendAttemptId === "string"
+      ? entry.platformSendAttemptId
+      : entry.recoveryState === "producer_claimed" && typeof entry.producerClaimId === "string"
+        ? entry.producerClaimId
+        : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
+          ? null
+          : undefined;
+}
+
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,
   /chat not found/i,

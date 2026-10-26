@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+import { makeProviderModelsConfigFixture } from "./test-helpers/provider-model-fixture.js";
 import {
   resolveAutomaticUtilityRuntimeOverride,
   resolveConfiguredSetupModelForAgent,
@@ -86,21 +86,12 @@ describe("resolveConfiguredSetupModelForAgent", () => {
             models: { "local-utility/tiny": { alias: "helper" } },
           },
         },
-        models: {
-          providers: {
-            "local-utility": {
-              baseUrl: "http://127.0.0.1:9/v1",
-              models: [
-                makeProviderModelFixture({
-                  id: "tiny",
-                  provider: "local-utility",
-                  api: "openai-completions",
-                  baseUrl: "http://127.0.0.1:9/v1",
-                }),
-              ],
-            },
-          },
-        },
+        models: makeProviderModelsConfigFixture({
+          id: "tiny",
+          provider: "local-utility",
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:9/v1",
+        }),
       };
       const original = structuredClone(cfg);
 

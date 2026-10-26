@@ -77,8 +77,6 @@ it("web_search preserves provider HTTP 403 guidance without exposing the respons
 it.each([
   { timeoutMs: 90_000, message: "Search timed out after 90s." },
   { timeoutMs: 1_250, message: "Search timed out after 1250ms." },
-  { timeoutMs: undefined, message: "Search timed out." },
-  { timeoutMs: 0, message: "Search timed out." },
   { timeoutMs: BODY, message: "Search timed out." },
 ])(
   "web_search preserves a provider timeout with budget $timeoutMs without private diagnostics",

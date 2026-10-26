@@ -59,6 +59,11 @@ export type ChatFastModeSelectState = {
   ultrafastSupported?: boolean;
 };
 
+export type ChatFastModePresentation = Pick<
+  ChatFastModeSelectState,
+  "active" | "currentOverride" | "label" | "supported"
+>;
+
 export type ChatFastModeTarget = Pick<
   GatewaySessionRow,
   "effectiveFastMode" | "fastMode" | "model" | "modelProvider" | "agentRuntime"

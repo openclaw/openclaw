@@ -21,6 +21,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { overbroadBootstrapProfile } from "./device-bootstrap-profile.test-support.js";
 import {
   clearDeviceBootstrapTokens,
   confirmDevicePairSetupCompletionDelivery,
@@ -830,18 +831,7 @@ describe("device bootstrap tokens", () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({
       baseDir,
-      profile: {
-        roles: ["node", "operator"],
-        scopes: [
-          "node.exec",
-          "operator.admin",
-          "operator.approvals",
-          "operator.pairing",
-          "operator.read",
-          "operator.talk.secrets",
-          "operator.write",
-        ],
-      },
+      profile: overbroadBootstrapProfile(),
     });
 
     await expect(

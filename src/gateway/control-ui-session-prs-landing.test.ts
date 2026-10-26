@@ -7,7 +7,10 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as worktreeGit from "../agents/worktrees/git.js";
 import { withGitWorkerContext } from "../infra/git-worker-context.js";
-import { readCheckoutGitRevision } from "./control-ui-session-prs-git.runtime.js";
+import {
+  readCheckoutGitRevision,
+  readPullRequestBranchFacts,
+} from "./control-ui-session-prs-git.runtime.js";
 import { resolveBranchLanding } from "./control-ui-session-prs-landing.js";
 
 const execFileAsync = promisify(execFile);
@@ -83,6 +86,47 @@ describe("resolveBranchLanding", () => {
       opens.mock.calls.filter(([file]) => file === path.join(root, ".git", "packed-refs")).length,
     ).toBeLessThanOrEqual(3);
   });
+
+  it.each([0, 100, 101, 10_000])(
+    "counts %i untracked files without materializing names beyond the content limit",
+    async (count) => {
+      const suffix = process.platform === "win32" ? ".txt" : "\n.txt";
+      const names = Array.from({ length: count }, (_, index) => ` file-${index}${suffix}`);
+      const inventory = names.length ? `${names.join("\0")}\0` : "";
+      for (const name of names.slice(0, 100)) {
+        await fs.writeFile(path.join(root, name), "one\ntwo");
+      }
+      const runGit = worktreeGit.runGit;
+      vi.spyOn(worktreeGit, "runGit").mockImplementation(async (...args) => {
+        const result = await runGit(...args);
+        return args[1][0] === "ls-files" ? { ...result, stdout: inventory } : result;
+      });
+      const split = vi.spyOn(String.prototype, "split");
+      const result = await readPullRequestBranchFacts({
+        root,
+        branch: "main",
+        mergedHeads: [],
+        comparison: {
+          complete: true,
+          statsBase: "HEAD",
+          creatable: true,
+          equalPushedTips: false,
+        },
+      });
+      const materialized = split.mock.results.reduce((total, call, index) => {
+        return split.mock.contexts[index] === inventory && call.type === "return"
+          ? Math.max(total, call.value.length)
+          : total;
+      }, 0);
+      split.mockRestore();
+
+      expect(result).toEqual({
+        creatable: true,
+        stats: { additions: Math.min(count, 100) * 2, deletions: 0, changedFiles: count },
+      });
+      expect(materialized).toBeLessThanOrEqual(101);
+    },
+  );
 
   it.each(["unrelated descendant", "other base", "unavailable merged head"])(
     "resolves an unpublished branch with %s against captured revisions",

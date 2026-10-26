@@ -138,8 +138,11 @@ Settled input and guest errors release their cell context and keep healthy worke
 available for reuse. Native failures, interrupted execution, and cancellation
 still retire the worker.
 
-Node keeps at most four completed workers warm. Surplus workers expire after
-30 seconds; one can remain warm for five minutes.
+Node keeps at most eight completed workers warm. Their combined nominal heap
+budget is 512 MiB at the default 64 MiB per worker, or 8 GiB when every worker
+uses the maximum 1 GiB configuration. This is not an RSS limit. Surplus workers
+expire after 30 seconds; one can remain warm for five minutes. Critical memory
+pressure retires all completed idle workers without discarding live continuations.
 GC storms above 600 major collections per minute across two consecutive windows
 of at least 10 seconds also retire warm workers. The pool admits at most one
 storm retirement per minute. Active cells and parked continuations drain through

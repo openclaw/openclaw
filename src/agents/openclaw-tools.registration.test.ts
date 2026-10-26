@@ -434,27 +434,24 @@ describe("gateway client capability tool filtering", () => {
   it("retains the requesting browser through coding tool assembly", async () => {
     const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
     const targets: unknown[] = [];
-    const call = vi
+    using _ = vi
       .spyOn(inProcessGateway, "callInProcessGatewayTool")
       .mockImplementation(async () => {
         targets.push(getGatewayToolCallerIdentity()?.gatewayUiCommandTarget);
         return { ok: true } as never;
       });
-    try {
-      const tools = createOpenClawCodingTools({
-        config: withDefaultRoster(undefined),
-        sessionKey: "agent:main:main",
-        clientCaps: ["ui-commands"],
-        gatewayUiCommandTarget,
-      });
-      await expectToolNamed(tools, "screen").execute("select", {
-        action: "navigate",
-        sessionKey: "agent:main:other",
-      });
-      expect(targets).toEqual([gatewayUiCommandTarget]);
-    } finally {
-      call.mockRestore();
-    }
+
+    const tools = createOpenClawCodingTools({
+      config: withDefaultRoster(undefined),
+      sessionKey: "agent:main:main",
+      clientCaps: ["ui-commands"],
+      gatewayUiCommandTarget,
+    });
+    await expectToolNamed(tools, "screen").execute("select", {
+      action: "navigate",
+      sessionKey: "agent:main:other",
+    });
+    expect(targets).toEqual([gatewayUiCommandTarget]);
   });
 
   it("exposes GitHub publication only from a prepared session capability", () => {
@@ -638,38 +635,35 @@ describe("gateway client capability tool filtering", () => {
       tools: resolveSandboxToolPolicyForAgent(cfg, "main"),
     });
     const callers: unknown[] = [];
-    const call = vi
+    using call = vi
       .spyOn(inProcessGateway, "callInProcessGatewayTool")
       .mockImplementation(async () => {
         callers.push(getGatewayToolCallerIdentity()?.sessionKey);
         return { requestId: "publication-1", status: "requested" } as never;
       });
-    try {
-      const tools = createOpenClawCodingTools({
-        config: cfg,
-        sessionKey,
-        sandbox,
-        githubPublicationAvailable: available,
-        senderIsOwner: false,
-        wrapBeforeToolCallHook: false,
-        toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey,
+      sandbox,
+      githubPublicationAvailable: available,
+      senderIsOwner: false,
+      wrapBeforeToolCallHook: false,
+      toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
+    });
+    expect(hasTool(tools, "github_publish")).toBe(expected);
+    if (expected && available) {
+      await expectToolNamed(tools, "github_publish").execute("publish-1", {
+        title: "Publish fix",
       });
-      expect(hasTool(tools, "github_publish")).toBe(expected);
-      if (expected && available) {
-        await expectToolNamed(tools, "github_publish").execute("publish-1", {
-          title: "Publish fix",
-        });
-        expect(call).toHaveBeenCalledWith("sessions.github.publish", {
-          sessionKey,
-          idempotencyKey: "publish-1",
-          title: "Publish fix",
-        });
-        expect(callers).toEqual([sessionKey]);
-      } else {
-        expect(call).not.toHaveBeenCalled();
-      }
-    } finally {
-      call.mockRestore();
+      expect(call).toHaveBeenCalledWith("sessions.github.publish", {
+        sessionKey,
+        idempotencyKey: "publish-1",
+        title: "Publish fix",
+      });
+      expect(callers).toEqual([sessionKey]);
+    } else {
+      expect(call).not.toHaveBeenCalled();
     }
   });
 

@@ -87,6 +87,8 @@ describe("memory path provenance", () => {
       ).resolves.toEqual({ curatedRoot, originClass });
     };
     await check("MEMORY.md", "agent", true);
+    vi.mocked(readMemoryArtifactProvenance).mockResolvedValueOnce(untrustedProvenance);
+    await check("MEMORY.md", "untrusted", true);
     await check("USER.md", "agent", true);
     await check("users/person/USER.md", "agent");
     await check("users/person/notes.md", "untrusted");
@@ -115,16 +117,5 @@ describe("memory path provenance", () => {
         }),
       ).resolves.toMatchObject({ originClass: "untrusted" });
     }
-  });
-
-  it("honors sticky untrusted provenance for runtime-written memory files", async () => {
-    const workspaceDir = tempDirs.make("memory-path-runtime-taint-");
-    const absolutePath = path.join(workspaceDir, "MEMORY.md");
-    await fs.writeFile(absolutePath, "network-authored memory", "utf8");
-    vi.mocked(readMemoryArtifactProvenance).mockResolvedValueOnce(untrustedProvenance);
-
-    await expect(
-      resolveMemoryPathClassification({ absolutePath, source: "memory", workspaceDir }),
-    ).resolves.toEqual({ curatedRoot: true, originClass: "untrusted" });
   });
 });
