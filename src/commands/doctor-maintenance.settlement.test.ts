@@ -21,7 +21,10 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import { projectPublicUpdateFailureIdentifiers } from "../infra/update-failure-public-identifiers.js";
-import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
+import {
+  readUpdatePhysicalDatabaseGenerationPair,
+  readUpdatePhysicalDatabaseGenerations,
+} from "../infra/update-physical-database-generations.js";
 import { redactPublicSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
@@ -98,8 +101,8 @@ function executeEvidence(pathname: string, sql: string) {
 function fingerprintReads() {
   // These SQLite fixtures exercise generation settlement without native engine inspection.
   vi.spyOn(databaseBackup, "readBackupEngine").mockReturnValue({ engine: "sqlite" });
-  vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
-    readUpdatePhysicalDatabaseGenerations(paths),
+  vi.spyOn(updateState, "readUpdateDatabaseGenerationPairIsolated").mockImplementation(
+    async (paths) => readUpdatePhysicalDatabaseGenerationPair(paths),
   );
 }
 
@@ -225,13 +228,19 @@ it.each([
     const barrier = cleanupBarrier();
     const databaseGenerations = { "/synthetic/doctor-state/state/openclaw.sqlite": null };
     let reads = 0;
-    vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async () => {
-      reads++;
-      if (reads === (phase === "admission" ? 1 : 2)) {
-        barrier.retain();
-      }
-      return databaseGenerations;
-    });
+    vi.spyOn(updateState, "readUpdateDatabaseGenerationPairIsolated").mockImplementation(
+      async () => {
+        reads++;
+        if (reads === (phase === "admission" ? 1 : 2)) {
+          barrier.retain();
+        }
+        return {
+          committed: databaseGenerations,
+          physical: databaseGenerations,
+          emptyReaderAlternates: {},
+        };
+      },
+    );
     let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
     const work = (async () => {
       maintenance = await beginWithGenerations(databaseGenerations, root);

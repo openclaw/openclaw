@@ -69,7 +69,7 @@ suite.define(() => {
       await gateway.resolveDeferred("config.set");
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saved");
+        .toContain("Apply changes");
     });
   });
 });

@@ -23,6 +23,7 @@ import {
 import {
   SKILL_AUTHORING_STANDARDS_PROMPT,
   SKILL_DO_NOT_CAPTURE_PROMPT,
+  SKILL_LEARNING_METHOD_PROMPT,
 } from "../../skills/workshop/skill-authoring-standards.js";
 import {
   resolveAllowedPluginToolNames,
@@ -74,7 +75,8 @@ function buildLearnPrompt(request: string, media: LearnMedia): string {
   }
   if (media.workshop) {
     lines.push(
-      `Write ${memory ? "skills " : ""}with skill_workshop: list and view related skills first, patch the one that covers this class of task, and create a new skill only when none does. When related skills cover the same class of task, merge them into one umbrella skill: patch the survivor, then archive the rest with absorbed_into. Put reusable scripts under scripts/ and reference them from the step that runs them. Pass a short reason.`,
+      `Write ${memory ? "skills " : ""}with skill_workshop: list and view related skills first, and make the fewest changes that cover what you found. Put reusable scripts under scripts/ and reference them from the step that runs them. Pass a short reason.`,
+      SKILL_LEARNING_METHOD_PROMPT,
     );
   }
   lines.push(...media.memoryGuidance);

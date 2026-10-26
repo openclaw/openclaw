@@ -79,6 +79,19 @@ evidence. This preserves the installed updater's original fingerprint format.
 Changed committed data or write evidence still refuses migration and automatic
 restoration. The candidate must contain this repair.
 
+Direct updates from extended-stable 2026.9.33 and 2026.9.34 are supported when
+the candidate contains the legacy database-generation adapter. Under maintenance
+custody, candidate Doctor verifies the older updater's entire physical database
+inventory and derives committed-content generations from the same observation.
+Migration attribution and final settlement use those committed generations;
+receipts sent back to the older updater retain its physical fingerprint format.
+Each Doctor interval verifies its input again. Changed data, intervening commits,
+replaced files, and tampered backups still refuse automatic restoration. The
+installed extended-stable updater does not need to contain this repair.
+The private rehearsal also preserves the source's legacy cron partition identity
+before migrating the copied state. An unmatched historical partition still needs
+an explicit Doctor selection.
+
 Within one database-generation observation, update and Doctor workers reuse a
 verified digest while the file's device, inode, size, and nanosecond birth,
 modification, and change times remain identical. Each family observation still
