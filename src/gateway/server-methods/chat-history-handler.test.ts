@@ -182,57 +182,51 @@ it("serves notices only to Control UI through worker history, startup, delta, an
   }));
 
 it.each(["chat.history", "chat.startup"] as const)(
-  "%s keeps selection session-only for an agent with an explicit default",
+  "%s projects the selected agent's model and verbose defaults",
   (method) =>
     withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
       const cfg = {
         agents: {
-          defaults: { model: "openai/gpt-5.6-sol" },
+          defaults: { model: "openai/gpt-5.6-sol", verboseDefault: "off" },
           ownership: "explicit",
-          entries: { main: {}, work: { model: "anthropic/claude-sonnet-4-6" } },
+          entries: {
+            main: {},
+            work: { model: "anthropic/claude-sonnet-4-6", verboseDefault: "full" },
+          },
         },
       } satisfies OpenClawConfig;
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
-      const scope = { agentId: "work", sessionKey: "agent:work:main", sessionId: "work-main" };
-      await sessions.upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const respond = await requestHistory(
-        method,
-        { agentId: scope.agentId, sessionKey: scope.sessionKey },
-        await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
-        { connect: { scopes: ["operator.admin"] } } as never,
-      );
-      expect(expectSuccess(respond).defaults).toMatchObject({
-        modelSelectionTarget: "session",
-      });
+      const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
+      for (const [agentId, verboseLevel] of [
+        ["work", "full"],
+        ["main", "off"],
+      ] as const) {
+        const scope = {
+          agentId,
+          sessionKey: `agent:${agentId}:main`,
+          sessionId: `${agentId}-main`,
+        };
+        await sessions.upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+        const client = adminClient(agentId);
+        const payload = expectSuccess(
+          await requestHistory(method, { sessionKey: scope.sessionKey }, context, client),
+        );
+        expect(payload).toMatchObject({ verboseLevel, sessionInfo: { verboseLevel } });
+        if (agentId === "work") {
+          const explicit = expectSuccess(
+            await requestHistory(
+              method,
+              { agentId, sessionKey: scope.sessionKey },
+              context,
+              client,
+            ),
+          );
+          expect(explicit.defaults).toMatchObject({ modelSelectionTarget: "session" });
+        }
+      }
     }),
 );
-
-it("chat.history reports the session agent's own verboseDefault", () =>
-  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
-    const cfg = {
-      agents: {
-        defaults: { verboseDefault: "off" },
-        entries: { main: {}, ops: { verboseDefault: "full" } },
-      },
-    } satisfies OpenClawConfig;
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
-    const client = { connect: { scopes: ["operator.admin"] } } as never;
-    for (const [agentId, expected] of [
-      ["ops", "full"],
-      ["main", "off"],
-    ] as const) {
-      const scope = { agentId, sessionKey: `agent:${agentId}:main`, sessionId: `${agentId}-main` };
-      await sessions.upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const payload = expectSuccess(
-        await requestHistory("chat.history", { sessionKey: scope.sessionKey }, context, client),
-      );
-      expect(payload.verboseLevel).toBe(expected);
-      expect(payload.sessionInfo).toMatchObject({ verboseLevel: expected });
-    }
-  }));
 
 it.each(["chat.history", "chat.startup"] as const)(
   "%s projects unbound canonical ACP metadata without host ACP reads",
@@ -506,22 +500,7 @@ it.each(["chat.history", "chat.startup"] as const)(
     const call = async (params: Record<string, unknown> = {}) => {
       const respond = vi.fn<RespondFn>();
       const stringify = JSON.stringify;
-      let historyArrayBytes = 0;
-      using serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
-        const result = stringify(...args);
-        if (
-          Array.isArray(args[0]) &&
-          args[0].some((value) => {
-            const record = asOptionalRecord(value);
-            return record?.role === "user" || asOptionalRecord(record?.message)?.role === "user";
-          }) &&
-          typeof result === "string" &&
-          result.includes(marker)
-        ) {
-          historyArrayBytes += Buffer.byteLength(result);
-        }
-        return result;
-      });
+      using serialization = vi.spyOn(JSON, "stringify");
       await requestHistory(
         method,
         { sessionKey: scope.sessionKey, ...params },
@@ -529,8 +508,17 @@ it.each(["chat.history", "chat.startup"] as const)(
         null,
         respond,
       );
-      serialization.mockRestore();
-      expect(historyArrayBytes).toBe(0);
+      expect(
+        serialization.mock.calls.some(
+          ([input]) =>
+            Array.isArray(input) &&
+            input.some((value) => {
+              const record = asOptionalRecord(value);
+              return record?.role === "user" || asOptionalRecord(record?.message)?.role === "user";
+            }) &&
+            stringify(input)?.includes(marker) === true,
+        ),
+      ).toBe(false);
       return expectSuccess(respond);
     };
     const inactive = await call();
