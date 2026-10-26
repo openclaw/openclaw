@@ -6,13 +6,16 @@ import {
   type NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DeviceTalk } from "./talk-device.tsx";
+import { nativeVoice } from "./talk.test-support.tsx";
 
 const capabilities: NativeDeviceSettingsCapability[] = [];
 afterEach(() => {
+  cleanupSolid();
+  vi.restoreAllMocks();
   capabilities.splice(0).forEach((capability) => capability.dispose());
   vi.unstubAllGlobals();
 });
@@ -189,4 +192,126 @@ it("shows rejected native edits and retries the desired value without replacing 
   expect(container.querySelector('[role="alert"]')).toBeNull();
   expect(container.querySelector('select[aria-label="Microphone"]')).toBe(microphone);
   expect(microphone.value).toBe("builtin");
+});
+
+it("retains a rejected native language edit and retries it visibly", async () => {
+  const snapshot = createNativeDeviceSettingsSnapshot();
+  const { capability, post } = installBridge(snapshot);
+  post.mockResolvedValue(snapshot);
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const { container: page } = mountDevice(capability);
+  const failed = Promise.withResolvers<unknown>();
+  post.mockReturnValueOnce(failed.promise);
+  const primary = await waitForSolid(() => {
+    const select = page.querySelector<HTMLSelectElement>('select[aria-label="Primary language"]');
+    expect(select).not.toBeNull();
+    return select!;
+  });
+  primary.value = "de-DE";
+  primary.dispatchEvent(new Event("change"));
+  failed.reject(new Error("Native language write unavailable"));
+  await waitForSolid(() => {
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Native language write unavailable",
+    );
+    expect(primary.value).toBe("de-DE");
+  });
+  expect(capability.snapshot?.voice.locale?.primary).toBe("en-US");
+  const accepted = createNativeDeviceSettingsSnapshot();
+  accepted.voice.locale.primary = "de-DE";
+  post.mockResolvedValueOnce(accepted);
+  page.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+  await waitForSolid(() => {
+    expect(capability.snapshot?.voice.locale?.primary).toBe("de-DE");
+    expect(primary.value).toBe("de-DE");
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+  });
+  expect(post).toHaveBeenCalledTimes(3);
+  expect(post).toHaveBeenNthCalledWith(2, {
+    type: "set",
+    key: "voice.locale.primary",
+    value: "de-DE",
+  });
+  expect(post).toHaveBeenNthCalledWith(3, {
+    type: "set",
+    key: "voice.locale.primary",
+    value: "de-DE",
+  });
+});
+
+it("preserves pending language additions across an older native acknowledgment and the next edit", async () => {
+  const snapshot = createNativeDeviceSettingsSnapshot();
+  snapshot.voice.locale.available.push(
+    { id: "fr-FR", name: "French" },
+    { id: "es-ES", name: "Spanish" },
+    { id: "it-IT", name: "Italian" },
+  );
+  const { settings: nativeDeviceSettings, publish: publishSnapshot } = nativeVoice(snapshot);
+  const completions: Array<() => void> = [];
+  nativeDeviceSettings.set.mockImplementation(
+    () =>
+      new Promise<void>((resolve) => {
+        completions.push(resolve);
+      }),
+  );
+  const settle = (index: number, error?: Error) => {
+    nativeDeviceSettings.set.mock.calls[index]?.[2]?.(error);
+    completions[index]?.();
+  };
+  const { container: page } = mountDevice(nativeDeviceSettings);
+  const add = (id: string) => {
+    const select = page.querySelector<HTMLSelectElement>('select[aria-label="Add language…"]')!;
+    select.value = id;
+    select.dispatchEvent(new Event("change"));
+  };
+  add("de-DE");
+  add("fr-FR");
+  expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
+    "voice.locale.additional",
+    ["de-DE", "fr-FR"],
+    expect.any(Function),
+  );
+  flush();
+  expect(page.querySelector('button[aria-label="Remove French"]')).not.toBeNull();
+  snapshot.voice.locale.additional = ["de-DE"];
+  settle(0);
+  publishSnapshot();
+  add("es-ES");
+  expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
+    "voice.locale.additional",
+    ["de-DE", "fr-FR", "es-ES"],
+    expect.any(Function),
+  );
+  const primary = page.querySelector<HTMLSelectElement>('select[aria-label="Primary language"]')!;
+  primary.value = "fr-FR";
+  primary.dispatchEvent(new Event("change"));
+  expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
+    "voice.locale.additional",
+    ["de-DE", "es-ES"],
+    expect.any(Function),
+  );
+  snapshot.voice.locale.additional = ["de-DE", "fr-FR"];
+  settle(1);
+  publishSnapshot();
+  expect(primary.value).toBe("fr-FR");
+  add("it-IT");
+  expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
+    "voice.locale.additional",
+    ["de-DE", "es-ES", "it-IT"],
+    expect.any(Function),
+  );
+  settle(completions.length - 1, new Error("Native edit failed"));
+  publishSnapshot();
+  await waitForSolid(() => {
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain("Native edit failed");
+    expect(page.querySelector('button[aria-label="Remove Spanish"]')).not.toBeNull();
+    expect(page.querySelector('button[aria-label="Remove Italian"]')).not.toBeNull();
+  });
+  page.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+  expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
+    "voice.locale.additional",
+    ["de-DE", "es-ES", "it-IT"],
+    expect.any(Function),
+  );
+  completions.forEach((complete) => complete());
 });

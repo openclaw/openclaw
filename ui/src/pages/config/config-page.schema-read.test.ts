@@ -79,6 +79,9 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
   // SAFETY: the mount helper fills unrelated page capabilities; these Gateway and Config owners are real.
   const context = { gateway, runtimeConfig } as ApplicationContext;
   const view = mountConfigPage(context, { pageId: "infrastructure" });
+  const port = () =>
+    view.page.querySelector<HTMLInputElement>('.config-content input[type="number"]');
+  const expectError = (message: string) => expect(view.page.textContent).toContain(message);
   try {
     await vi.dynamicImportSettled();
     await waitForSolid(() => {
@@ -86,9 +89,7 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
       expect(view.page.querySelector(".config-loading")).not.toBeNull();
     });
     first.reject(new Error("Synthetic schema service unavailable"));
-    await waitForSolid(() =>
-      expect(view.page.textContent).toContain("Synthetic schema service unavailable"),
-    );
+    await waitForSolid(() => expectError("Synthetic schema service unavailable"));
     publishConfigSource(context.theme);
     window.dispatchEvent(new Event("focus"));
     await waitForSolid(() => expect(reads).toBe(1));
@@ -100,32 +101,23 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
     retryButton.click();
     await waitForSolid(() => {
       expect(reads).toBe(2);
-      expect(view.page.textContent).toContain("Synthetic schema service unavailable");
+      expectError("Synthetic schema service unavailable");
     });
     retry.resolve(response);
     await waitForSolid(() =>
       expect(view.page.textContent).not.toContain("Synthetic schema service unavailable"),
     );
-    await waitForSolid(() =>
-      expect(view.page.querySelector('.config-content input[type="number"]')).not.toBeNull(),
-    );
-    const field = expectDefined(
-      view.page.querySelector<HTMLInputElement>('.config-content input[type="number"]'),
-      "loaded port field",
-    );
+    const field = await waitForSolid(() => expectDefined(port(), "loaded port field"));
     const revalidation = runtimeConfig.refreshSchema();
     await waitForSolid(() => {
       expect(reads).toBe(3);
-      expect(view.page.querySelector('.config-content input[type="number"]')).toBe(field);
-      expect(
-        field.disabled,
-        `ownerLoading=${runtimeConfig.state.configSchemaLoading}, ariaBusy=${view.page.querySelector(".config-content")?.getAttribute("aria-busy")}`,
-      ).toBe(true);
+      expect(port()).toBe(field);
+      expect(field.disabled).toBe(true);
     });
     refresh.reject(new Error("Synthetic schema refresh unavailable"));
     await revalidation;
     await waitForSolid(() => {
-      expect(view.page.querySelector('.config-content input[type="number"]')).toBe(field);
+      expect(port()).toBe(field);
       expect(field.disabled).toBe(false);
       expect(
         view.page.querySelector('.config-content .callout[role="alert"]')?.textContent,

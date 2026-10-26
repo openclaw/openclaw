@@ -83,17 +83,18 @@ it.each([
     });
     Object.assign(context, { router });
     const view = mountRouterOutlet({ router, retryContext: context });
+    const reportButton = () => {
+      const button = [...view.querySelectorAll<HTMLButtonElement>("button")].find(
+        (candidate) => candidate.textContent?.trim() === "Report update failure",
+      );
+      expect(button).toBeDefined();
+      expect(button!.disabled).toBe(false);
+      return button!;
+    };
     try {
       await router.navigate("updates", context);
       if (command === "report") {
-        const report = await waitForSolid(() => {
-          const button = [...view.querySelectorAll<HTMLButtonElement>("button")].find(
-            (candidate) => candidate.textContent?.trim() === "Report update failure",
-          );
-          expect(button).toBeDefined();
-          expect(button!.disabled).toBe(false);
-          return button!;
-        });
+        const report = await waitForSolid(reportButton);
         report.click();
         await vi.dynamicImportSettled();
         await waitForSolid(() =>
@@ -147,12 +148,7 @@ it.each([
         harness.update({
           client: client(vi.fn<RequestFn>(() => Promise.resolve({ lastRun: run }))),
         });
-        await waitForSolid(() => {
-          const report = [...view.querySelectorAll<HTMLButtonElement>("button")].find(
-            (button) => button.textContent?.trim() === "Report update failure",
-          );
-          expect(report?.disabled).toBe(false);
-        });
+        await waitForSolid(reportButton);
         preview.reject(new Error("Retired report preview failed"));
         await vi.dynamicImportSettled();
         expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
