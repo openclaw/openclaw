@@ -9,6 +9,7 @@ import {
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -16,7 +17,7 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
-import type { Model, UserMessage } from "../../../llm/types.js";
+import type { Context, UserMessage } from "../../../llm/types.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -47,6 +48,7 @@ import { convertToLlm } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "../../tool-search-catalog.js";
 import type { TranscriptPolicy } from "../../transcript-policy.types.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
@@ -80,18 +82,15 @@ const answer = makeAgentAssistantMessage({
   content: [{ type: "text", text: "I understand." }],
   timestamp: TS + 1,
 });
-const model = {
+const model = makeProviderModelFixture<"openai-completions">({
   id: "gpt-5.5",
   name: "GPT-5.5",
   api: "openai-completions",
   provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
   maxTokens: 4096,
-} satisfies Model<"openai-completions">;
+});
 const carrier = (content: string, timestamp = TS): AgentMessage => ({
   role: "custom",
   customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
@@ -112,15 +111,37 @@ function toolRound(round: number, api: "openai-completions" | "openai-responses"
       content: [{ type: "toolCall", id, name: "read", arguments: {} }],
       timestamp: TS + round,
     },
-    {
-      role: "toolResult",
-      toolCallId: id,
-      toolName: "read",
-      content: [{ type: "text", text: `result ${round}` }],
-      isError: false,
-      timestamp: TS + round,
-    },
+    makeTextToolResult(id, "read", `result ${round}`, false, TS + round),
   ];
+}
+
+async function captureNativeRequest(
+  api: "anthropic-messages" | "openai-responses",
+  context: Context,
+) {
+  if (api === "anthropic-messages") {
+    return (
+      await captureAnthropicRequest("transport", {
+        model: { id: "claude-opus-5" },
+        cacheRetention: "none",
+        context,
+      })
+    ).payload;
+  }
+  let payload: Record<string, unknown> | undefined;
+  const stream = await createOpenAIResponsesTransportStreamFn()(
+    { ...model, api, reasoning: true },
+    context,
+    {
+      apiKey: "fixture-transport-value",
+      onPayload(value) {
+        payload = value as Record<string, unknown>;
+        throw new Error("stop after payload capture");
+      },
+    },
+  );
+  expect((await stream.result()).stopReason).toBe("error");
+  return expectDefined(payload, "captured native Responses payload");
 }
 async function capture(
   api: "openai-completions" | "openai-responses",
@@ -214,27 +235,7 @@ describe("prompt-cache boundary regressions", () => {
                 }),
               ),
             };
-            if (api === "anthropic-messages") {
-              const request = await captureAnthropicRequest("transport", {
-                model: { id: "claude-opus-5" },
-                cacheRetention: "none",
-                context,
-              });
-              requests.push(request.payload);
-            } else {
-              const result = await createOpenAIResponsesTransportStreamFn()(
-                { ...model, api, reasoning: true },
-                context,
-                {
-                  apiKey: "fixture-transport-value",
-                  onPayload(payload) {
-                    requests.push(payload as Record<string, unknown>);
-                    throw new Error("stop after payload capture");
-                  },
-                },
-              );
-              expect((await result.result()).stopReason).toBe("error");
-            }
+            requests.push(await captureNativeRequest(api, context));
             clearToolSearchCatalog({ catalogRef });
             projection.commit();
             await persistSessionSystemPrompt(lease.state, (customType, data) =>
@@ -332,16 +333,7 @@ describe("prompt-cache boundary regressions", () => {
           user("First question"),
           failed,
           ...(contentKind === "completed-tool"
-            ? [
-                {
-                  role: "toolResult" as const,
-                  toolCallId: "call_fixture",
-                  toolName: "read",
-                  content: [{ type: "text" as const, text: "Read result" }],
-                  isError: false,
-                  timestamp: TS + 1,
-                },
-              ]
+            ? [makeTextToolResult("call_fixture", "read", "Read result", false, TS + 1)]
             : []),
           {
             ...answer,
@@ -360,35 +352,11 @@ describe("prompt-cache boundary regressions", () => {
           inHistorySystemUpdates: true,
           appendOnlyRuntimeContext: true,
         };
-        const captureRequest = async (history: AgentMessage[]) => {
-          const context = {
+        const captureRequest = (history: AgentMessage[]) =>
+          captureNativeRequest(api, {
             systemPrompt: "Stable system prompt",
             messages: convertToLlm(normalizeMessagesForLlmBoundary(history, boundaryOptions)),
-          };
-          if (api === "openai-responses") {
-            let payload: Record<string, unknown> | undefined;
-            const stream = await createOpenAIResponsesTransportStreamFn()(
-              { ...model, api, reasoning: true },
-              context,
-              {
-                apiKey: "fixture-transport-value",
-                onPayload(value) {
-                  payload = value as Record<string, unknown>;
-                  throw new Error("stop after payload capture");
-                },
-              },
-            );
-            expect((await stream.result()).stopReason).toBe("error");
-            return expectDefined(payload, "captured native Responses payload");
-          }
-          return (
-            await captureAnthropicRequest("transport", {
-              model: { id: "claude-opus-5" },
-              cacheRetention: "none",
-              context,
-            })
-          ).payload;
-        };
+          });
         const firstBoundary = convertToLlm(
           normalizeMessagesForLlmBoundary(messages, boundaryOptions),
         );
@@ -562,23 +530,21 @@ describe("prompt-cache boundary regressions", () => {
   });
 
   it("keeps batched steering context with its owning user through Responses conversion", async () => {
-    const firstSteering = user("first steering user", TS + 60000);
-    attachSteeringRuntimeContext(firstSteering, {
-      text: "first steering context",
-      fragments: [{ kind: "conversation-data", text: "first steering context" }],
-    });
-    const secondSteering = user("second steering user", TS + 120000);
-    attachSteeringRuntimeContext(secondSteering, {
-      text: "second steering context",
-      fragments: [{ kind: "conversation-data", text: "second steering context" }],
+    const steering = ["first", "second"].map((label, index) => {
+      const message = user(`${label} steering user`, TS + (index + 1) * 60000);
+      const text = `${label} steering context`;
+      attachSteeringRuntimeContext(message, {
+        text,
+        fragments: [{ kind: "conversation-data", text }],
+      });
+      return message;
     });
 
     const request = await capture("openai-responses", [
       carrier("original context"),
       user("original question"),
       { ...answer, api: "openai-responses", provider: model.provider, model: model.id },
-      firstSteering,
-      secondSteering,
+      ...steering,
     ]);
     const input = JSON.stringify(request.input);
     const orderedText = [
