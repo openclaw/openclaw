@@ -64,7 +64,6 @@ it.each([
           apiKey: "synthetic-inference-key",
           models: [
             modelDefinition("model", {
-              name: "Selected model",
               reasoning: false,
               contextWindow: 8192,
               maxTokens: 1024,

@@ -1,19 +1,9 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test-support.js";
-import {
-  repairRejectedCompactionReplayInSessionManager,
-  repairRejectedThinkingReplayInSessionManager,
-} from "./thinking-replay-repair.js";
+import { asAppendMessage } from "./transcript-rewrite.test-support.js";
 
-type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
-
-function asAppendMessage(message: unknown): AppendMessage {
-  return message as AppendMessage;
-}
-
-function rejectedThinkingAssistant(text?: string): AppendMessage {
+function rejectedThinkingAssistant(text?: string): Parameters<SessionManager["appendMessage"]>[0] {
   return asAppendMessage({
     role: "assistant",
     content: [
@@ -24,118 +14,83 @@ function rejectedThinkingAssistant(text?: string): AppendMessage {
   });
 }
 
-function branchMessages(sessionManager: SessionManager): AgentMessage[] {
-  return sessionManager
+function createSession(...messages: Parameters<SessionManager["appendMessage"]>[0][]) {
+  const sessionManager = SessionManager.inMemory();
+  sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
+  for (const message of messages) {
+    sessionManager.appendMessage(message);
+  }
+  return sessionManager;
+}
+
+function branchMessages(manager: SessionManager) {
+  return manager
     .getBranch()
     .filter((entry) => entry.type === "message")
     .map((entry) => entry.message);
 }
 
-function branchAssistantContents(sessionManager: SessionManager): unknown[] {
-  return branchMessages(sessionManager)
-    .filter((message): message is Extract<AgentMessage, { role: "assistant" }> => {
-      return message.role === "assistant";
-    })
-    .map((message) => message.content);
-}
+it("preserves downstream branch suffix entries after rewriting the first repaired assistant", async () => {
+  const sessionManager = createSession(
+    rejectedThinkingAssistant("first answer"),
+    asAppendMessage({ role: "user", content: "follow-up", timestamp: 3 }),
+    asAppendMessage(timestampedTextAssistant("follow-up answer", 4)),
+    rejectedThinkingAssistant(),
+  );
 
-function createSession(assistant: AppendMessage) {
-  const sessionManager = SessionManager.inMemory();
-  sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-  sessionManager.appendMessage(assistant);
-  return sessionManager;
-}
-
-describe("repairRejectedThinkingReplayInSessionManager", () => {
-  it("keeps thinking-only assistant turns as omitted-reasoning placeholders", async () => {
-    const sessionManager = createSession(rejectedThinkingAssistant());
-
-    const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
-
-    expect(result).toMatchObject({ repaired: true });
-    expect(branchAssistantContents(sessionManager)).toEqual([
-      [{ type: "text", text: "[assistant reasoning omitted]" }],
-    ]);
-  });
-
-  it("preserves downstream branch suffix entries after rewriting the first repaired assistant", async () => {
-    const sessionManager = createSession(rejectedThinkingAssistant("first answer"));
-    sessionManager.appendMessage(
-      asAppendMessage({ role: "user", content: "follow-up", timestamp: 3 }),
-    );
-    sessionManager.appendMessage(asAppendMessage(timestampedTextAssistant("follow-up answer", 4)));
-
-    const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
-
-    expect(result).toMatchObject({ repaired: true });
-    expect(branchMessages(sessionManager).map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-    ]);
-    expect(branchAssistantContents(sessionManager)).toEqual([
-      [{ type: "text", text: "first answer" }],
-      [{ type: "text", text: "follow-up answer" }],
-    ]);
-  });
-
-  it("does not rewrite sessions without active-branch thinking blocks", async () => {
-    const sessionManager = createSession(
-      asAppendMessage(timestampedTextAssistant("visible answer", 2)),
-    );
-
-    const beforeLeafId = sessionManager.getLeafId();
-    const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
-
-    expect(result).toMatchObject({
-      repaired: false,
-      reason: "no thinking blocks on active branch",
-    });
-    expect(sessionManager.getLeafId()).toBe(beforeLeafId);
-  });
+  const { repairRejectedThinkingReplayInSessionManager: repairThinking } =
+    await import("./thinking-replay-repair.js");
+  expect(await repairThinking({ sessionManager })).toMatchObject({ repaired: true });
+  expect(
+    branchMessages(sessionManager).map((message) =>
+      message.role === "assistant" || message.role === "user"
+        ? { role: message.role, content: message.content }
+        : message,
+    ),
+  ).toEqual([
+    { role: "user", content: "first" },
+    { role: "assistant", content: [{ type: "text", text: "first answer" }] },
+    { role: "user", content: "follow-up" },
+    { role: "assistant", content: [{ type: "text", text: "follow-up answer" }] },
+    { role: "assistant", content: [{ type: "text", text: "[assistant reasoning omitted]" }] },
+  ]);
+  const beforeLeafId = sessionManager.getLeafId();
+  expect(await repairThinking({ sessionManager })).toMatchObject({ repaired: false });
+  expect(sessionManager.getLeafId()).toBe(beforeLeafId);
 });
-
-describe("repairRejectedCompactionReplayInSessionManager", () => {
-  it("rewrites from the checkpoint identity that supplied the rejected request", async () => {
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
-    for (const [data, id, timestamp] of [
-      ["rejected-ciphertext", "cmp_rejected", 2],
-      ["newer-ciphertext", "cmp_newer", 4],
-    ] as const) {
-      sessionManager.appendMessage(
-        asAppendMessage({
-          role: "assistant",
-          content: [{ type: "text", text: id }],
-          providerReplay: {
-            v: 1,
-            type:
-              id === "cmp_rejected"
-                ? "openai-responses-retained-compaction"
-                : "openai-responses-compaction",
-            data,
-            id,
-            replayIndex: 0,
-          },
-          timestamp,
-        }),
-      );
-      sessionManager.appendMessage(
-        asAppendMessage({ role: "user", content: `after ${id}`, timestamp: timestamp + 1 }),
-      );
-    }
-
-    expect(
-      await repairRejectedCompactionReplayInSessionManager({
-        sessionManager,
-        checkpoint: { data: "rejected-ciphertext", id: "cmp_rejected" },
+it("rewrites from the checkpoint identity that supplied the rejected request", async () => {
+  const { repairRejectedCompactionReplayInSessionManager: repairCompaction } =
+    await import("./thinking-replay-repair.js");
+  const sessionManager = createSession();
+  const checkpoint = { data: "rejected-ciphertext", id: "cmp_rejected" };
+  for (const [data, id, timestamp] of [
+    ["rejected-ciphertext", "cmp_rejected", 2],
+    ["newer-ciphertext", "cmp_newer", 4],
+  ] as const) {
+    sessionManager.appendMessage(
+      asAppendMessage({
+        ...timestampedTextAssistant(id, timestamp),
+        providerReplay: {
+          v: 1,
+          type:
+            id === "cmp_rejected"
+              ? "openai-responses-retained-compaction"
+              : "openai-responses-compaction",
+          data,
+          id,
+          replayIndex: 0,
+        },
       }),
-    ).toMatchObject({ repaired: true });
-    expect(
-      branchMessages(sessionManager)
-        .filter((message) => message.role === "assistant")
-        .map((message) => message.providerReplay),
-    ).toEqual([undefined, undefined]);
-  });
+    );
+    sessionManager.appendMessage(
+      asAppendMessage({ role: "user", content: `after ${id}`, timestamp: timestamp + 1 }),
+    );
+  }
+
+  expect(await repairCompaction({ sessionManager, checkpoint })).toMatchObject({ repaired: true });
+  expect(
+    branchMessages(sessionManager)
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.providerReplay),
+  ).toEqual([undefined, undefined]);
 });
