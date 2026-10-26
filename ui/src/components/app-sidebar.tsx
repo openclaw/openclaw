@@ -29,6 +29,15 @@ import { createSidebarPeople } from "./sidebar-people.ts";
 export { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 
 const sidebarOwners = new WeakMap<HTMLElement, AppSidebarOwner>();
+// Testing a projection's own keys would subscribe every reader to property presence.
+const sidebarPreferenceKeys = new Set<PropertyKey>([
+  "sidebarAgentsMode",
+  "sessionsGrouping",
+  "sessionsShowPreview",
+  "sidebarLiveActivity",
+  "sessionInvolvingMeFilterActive",
+  "sessionOwnerFilterId",
+]);
 
 export function getAppSidebarOwner(host: HTMLElement): AppSidebarOwner | undefined {
   return sidebarOwners.get(host);
@@ -240,7 +249,7 @@ function AppSidebarContent(
           return readSessionMutationAccess;
         }
         if (getObserver()) {
-          if (current === owner && Object.hasOwn(preferences, key)) {
+          if (current === owner && sidebarPreferenceKeys.has(key)) {
             return Reflect.get(preferences, key);
           }
           presentationRevision();
