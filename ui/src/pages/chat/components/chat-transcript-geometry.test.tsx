@@ -87,7 +87,7 @@ it("reserves only the matching width and appearance, including text scale, width
   layout.paneWidth = 1100;
   layout.rowGutter = 166;
   const reserve = (version = 0) => {
-    layout.configureRows(props, "gutter", version);
+    layout.configureRows(props, "gutter", version !== 0);
     return layout.rowMinimum(0);
   };
   expect(reserve()).toBe(300);
@@ -157,7 +157,7 @@ it("batches measured footprints after reveal and idle without publishing boot me
       widgetLayout: createChatWidgetLayout()(cache, host, target),
     }),
     "gutter",
-    0,
+    false,
   );
   layout.rowWidth = 768;
   layout.paneWidth = 1100;

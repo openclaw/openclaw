@@ -212,7 +212,7 @@ export function projectChatTranscript(
     !hasLiveContent &&
     (!props.historyPagination?.hasMore || search.open);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(props, chatItems);
-  transcript.layout.configureRows(props, avatarPlacement, recovery.revision);
+  transcript.layout.configureRows(props, avatarPlacement, searchFiltering || recovery.revision > 0);
   const showLoadingSkeleton = props.loading && transcriptItems.length === 0 && !hasTypingActors;
   const presented =
     typeof props.presented === "object" ? props.presented.isPresented() : (props.presented ?? true);

@@ -44,10 +44,10 @@ export class TranscriptLayoutOwner {
   rowGutter = 0;
   private recordingRows = false;
 
-  configureRows(props: ChatThreadProps, avatarPlacement: string, recoveryRevision: number): void {
+  configureRows(props: ChatThreadProps, avatarPlacement: string, transient: boolean): void {
     this.ready = !props.loading;
-    // Full-message expansions are transient; the snapshot cannot restore them.
-    this.rowLayout = recoveryRevision === 0 ? props.widgetLayout : undefined;
+    // Expanded and filtered rows are transient; the snapshot cannot restore them.
+    this.rowLayout = transient ? undefined : props.widgetLayout;
     const theme = props.applicationContext?.theme;
     const font = theme?.settings;
     const presentation = JSON.stringify([
