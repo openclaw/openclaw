@@ -19,14 +19,9 @@ function sendResult(messageId: string, threadId = "thread") {
   };
 }
 
-function expectTextCall(
-  index: number,
-  thread: string,
-  text: unknown,
-  options: Record<string, unknown>,
-) {
+function expectTextCall(index: number, text: unknown, options: Record<string, unknown>) {
   expect(mockSendText.mock.calls[index]?.slice(0, 3)).toEqual([
-    thread,
+    "thread",
     text,
     expect.objectContaining(options),
   ]);
@@ -41,22 +36,12 @@ describe("zalouser send helpers", () => {
   });
 
   it.each([
-    {
-      name: "formats image captions in markdown mode",
-      caption: "_cap_",
-      text: "cap",
-      styles: [{ start: 0, len: 3, st: TextStyle.Italic }],
-    },
-    {
-      name: "does not retain an empty raw markdown caption",
-      caption: "```\n```",
-      text: "",
-      styles: undefined,
-    },
-  ])("$name", async ({ caption, text, styles }) => {
-    mockSendText.mockResolvedValueOnce(sendResult("mid-2", "thread-2"));
-    await sendImageZalouser("thread-2", imageUrl, { ...imageOptions, caption });
-    expectTextCall(0, "thread-2", text, {
+    ["_cap_", "cap", [{ start: 0, len: 3, st: TextStyle.Italic }]],
+    ["```\n```", "", undefined],
+  ] as const)("formats image caption %j", async (caption, text, styles) => {
+    mockSendText.mockResolvedValueOnce(sendResult("mid-2"));
+    await sendImageZalouser("thread", imageUrl, { ...imageOptions, caption });
+    expectTextCall(0, text, {
       ...imageOptions,
       caption: undefined,
       mediaUrl: imageUrl,
@@ -131,7 +116,7 @@ describe("zalouser send helpers", () => {
       expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(
         parseZalouserTextStyles(text).text,
       );
-      expectTextCall(0, "thread", newline ? `${"a".repeat(1995)}\n\n` : expect.any(String), {
+      expectTextCall(0, newline ? `${"a".repeat(1995)}\n\n` : expect.any(String), {
         ...options,
         ...(newline
           ? { textStyles: [{ start: 0, len: 1995, st: TextStyle.Bold }] }
@@ -139,7 +124,6 @@ describe("zalouser send helpers", () => {
       });
       expectTextCall(
         1,
-        "thread",
         newline ? "second paragraph" : expect.any(String),
         newline ? { ...options, textStyles: undefined } : { mediaUrl: undefined },
       );
