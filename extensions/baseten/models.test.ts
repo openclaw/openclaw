@@ -1,4 +1,3 @@
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { expect, it } from "vitest";
 import * as catalog from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -8,15 +7,8 @@ const sparseFeatures = ["tools", "reasoning", "json_mode", "structured_outputs"]
 const liveRow = (id: string, fields: object = {}) => ({ id, object: "model", ...fields });
 
 it("keeps manifest thinking controls and declared capabilities in runtime catalogs", () => {
-  const declaredModels = buildManifestModelProviderConfig({
-    providerId: "baseten",
-    catalog: { ...manifest.modelCatalog.providers.baseten, models: catalog.BASETEN_MODEL_CATALOG },
-  }).models;
   const runtime = new Map(catalog.buildStaticBasetenModels().map((model) => [model.id, model]));
-  const defaultModel = declaredModels.find((model) => model.id === FLASH);
-
-  expect.soft(defaultModel?.compat?.supportedReasoningEfforts).toContain("max");
-  for (const model of declaredModels) {
+  for (const model of catalog.BASETEN_MODEL_CATALOG) {
     expect.soft(runtime.get(model.id)?.compat, model.id).toEqual({
       supportsStore: false,
       supportsDeveloperRole: false,
@@ -28,6 +20,7 @@ it("keeps manifest thinking controls and declared capabilities in runtime catalo
       ...model.compat,
     });
   }
+  expect(catalog.buildBasetenModelCompat(FLASH).supportedReasoningEfforts).toContain("max");
 });
 
 it("projects authenticated live rows while retaining curated capability metadata", () => {
@@ -117,8 +110,6 @@ it("keeps System One models out of every conversational discovery path", () => {
   expect(catalog.projectBasetenLiveModels(ids.map((id) => liveRow(id)))).toEqual([]);
   for (const id of ids) {
     expect(catalog.resolveBasetenDynamicModel(id)).toBeUndefined();
-  }
-  for (const id of ids) {
     const row = manifest.modelCatalog.providers.baseten.models.find((model) => model.id === id);
     expect(row).toMatchObject({
       inference: {
