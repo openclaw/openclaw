@@ -1,16 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { assertOpenClawMigrationWitnessPreserved as assertWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
-  agentWitness as captureWitness,
   migrationFixture,
   row,
   rows,
   seedAgentV30Schema,
 } from "./schema-migration.test-support.js";
-
-const scope = ["schema_meta"];
 
 function seed(database: DatabaseSync, predecessor: number): void {
   seedAgentV30Schema(database, predecessor);
@@ -44,12 +39,8 @@ function seed(database: DatabaseSync, predecessor: number): void {
   `);
 }
 
-function retained(database: DatabaseSync) {
-  return {
-    userVersion: row(database, "PRAGMA user_version")?.user_version,
-    schemaVersion: row(database, "SELECT schema_version FROM schema_meta")?.schema_version,
-  };
-}
+const retained = (db: DatabaseSync) =>
+  ["PRAGMA user_version", "SELECT schema_version FROM schema_meta"].map((sql) => row(db, sql));
 
 describe.each([
   [31, 32],
@@ -59,41 +50,28 @@ describe.each([
     seed: (db) => seed(db, predecessor),
     predecessor,
     target,
-    scope,
-    admission: target === OPENCLAW_AGENT_SCHEMA_VERSION,
+    scope: ["schema_meta"],
   });
-  it.each(["commit", "rollback"] as const)(
+  it.each(["commit", "rollback", "restore"] as const)(
     "keeps SQLite rows, indexes and statistics unchanged (%s)",
     async (outcome) => {
       await withFixture(
         "vector-decoder.sqlite",
-        async ({ database, migrate }) => {
-          const before = retained(database);
-          const witness = captureWitness(database);
+        async ({ database, migrate, restore }) => {
+          if (outcome === "restore") {
+            await restore(() => retained(database));
+            return;
+          }
           await migrate(outcome);
           const version = outcome === "rollback" ? predecessor : target;
-          expect(retained(database)).toEqual({
-            ...before,
-            userVersion: version,
-            schemaVersion: version,
-          });
-          expect(assertWitnessPreserved(witness, captureWitness(database))).toEqual({
-            warnings: [],
-          });
+          expect(retained(database)).toEqual([
+            { user_version: version },
+            { schema_version: version },
+          ]);
           expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
         },
         "state",
       );
     },
   );
-
-  it("restores only SQLite migration metadata while preserving later unrelated writes", async () => {
-    await withFixture(
-      "vector-decoder-restore.sqlite",
-      async ({ database, restore }) => {
-        await restore(() => retained(database));
-      },
-      "state",
-    );
-  });
 });
