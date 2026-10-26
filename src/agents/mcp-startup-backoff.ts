@@ -197,13 +197,7 @@ export function createMcpStartupBackoff(params: {
 }) {
   const key = JSON.stringify([...params.identity, ...(params.runScoped ? [randomUUID()] : [])]);
   // Native OAuth credentials belong to the server/principal, not an agent workspace.
-  const [, , requester, serverName, fingerprint] = params.identity;
-  const authorizationKey = JSON.stringify([
-    requester,
-    serverName,
-    fingerprint,
-    "oauth-authorization",
-  ]);
+  const authorizationKey = JSON.stringify([...params.identity.slice(2), "oauth-authorization"]);
   return {
     get: () => getMcpStartupBackoff(key, params.signal, params.recoveryRetryMs, authorizationKey),
     connect: (connect: () => Promise<void>) =>
