@@ -400,6 +400,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-tool-pin-measure.ts!",
   "scripts/perf/sidebar-presentation-measure.ts!",
   "scripts/perf/sidebar-fact-sharing-measure.ts!",
+  "scripts/perf/session-partition-metrics-measure.ts!",
   "scripts/perf/source-kind-progress-equality-measure.ts!",
   "scripts/perf/sqlite-reclamation-retention.ts!",
   "scripts/perf/state-db-cache-admission-measure.ts!",
