@@ -461,6 +461,15 @@ it.each([
     ],
   },
   {
+    name: "persisted model catalog reader",
+    entrypoints: ["src/agents/plugin-model-catalog-read.worker.ts"],
+    dynamic: false,
+    deferredOwners: [
+      "src/state/openclaw-agent-db-readonly.ts",
+      "src/state/openclaw-agent-db-borrower.ts",
+    ],
+  },
+  {
     name: "Ollama config metadata",
     entrypoints: ["extensions/ollama/src/defaults.ts", "extensions/ollama/provider-policy-api.ts"],
     dynamic: false,

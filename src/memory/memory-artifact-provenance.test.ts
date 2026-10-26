@@ -4,7 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import * as pluginState from "../plugin-state/plugin-state-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   clearMemoryArtifactProvenance as clear,
@@ -64,7 +67,9 @@ test("lists one workspace in order and preserves corruption", async ({ tempRoot 
     await seed(workspaceDir, relativePath);
   }
   await seed(path.join(tempRoot, "other"), "memory/other.md");
-  const { db } = openOpenClawStateDatabase();
+  // Raw fault injection models cold storage, outside the resident owner's lifetime.
+  await closeOpenClawStateDatabaseAsync();
+  let { db } = openOpenClawStateDatabase();
   const update = (assignment: string, condition = "") =>
     // sqlite-allow-raw -- Seed ordering, expiry, and corruption at the storage boundary.
     db
@@ -77,11 +82,15 @@ test("lists one workspace in order and preserves corruption", async ({ tempRoot 
   `);
   const selected = await list({ workspaceDir });
   expect(selected.map((entry) => entry.relativePath)).toEqual(expectedPaths);
+  await closeOpenClawStateDatabaseAsync();
+  ({ db } = openOpenClawStateDatabase());
   update(
     "value_json = '{malformed'",
     "AND (expires_at = 1 OR json_extract(value_json, '$.relativePath') = 'memory/other.md')",
   );
   await expect(list({ workspaceDir })).resolves.toEqual(selected);
+  await closeOpenClawStateDatabaseAsync();
+  ({ db } = openOpenClawStateDatabase());
   update("value_json = '{malformed'", "AND json_valid(value_json)");
   await expect(list({ workspaceDir })).rejects.toMatchObject({ code: "PLUGIN_STATE_CORRUPT" });
 });

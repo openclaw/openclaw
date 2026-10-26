@@ -8,14 +8,17 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { publishEncodedSessionTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
+import type {
+  SessionColdArchive,
+  SessionColdChunkMetadata,
+  SessionColdPlan,
+  SessionColdPrepared,
+} from "./session-accessor.sqlite-archive-types.js";
 import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
-import {
-  hashSessionColdChunks,
-  type SessionColdChunkMetadata,
-} from "./session-cold-storage-chunks.js";
+import { hashSessionColdChunks } from "./session-cold-storage-chunks.js";
 import {
   decodeSessionColdRecords,
   MAX_COLD_ARCHIVE_BYTES,
@@ -24,8 +27,6 @@ import {
   sessionColdRecordSchema,
   type SessionColdRecord,
 } from "./session-cold-storage-codec.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
-import type { SessionColdPlan, SessionColdPrepared } from "./session-cold-storage.types.js";
 import { selectSessionTranscriptFtsRows } from "./session-transcript-fts.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 

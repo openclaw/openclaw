@@ -1749,6 +1749,7 @@ src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-group-ownership.ts
 src/process/windows-command-line.ts
 src/process/windows-command.ts
+src/projects/project-checkout.ts
 src/proxy-capture/child-transport.ts
 src/proxy-capture/cli-contract.ts
 src/proxy-capture/env.ts

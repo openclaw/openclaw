@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import {
   createSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
@@ -8,6 +9,14 @@ import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("keeps worker admission requests independent of host lock-record loading", () => {
+  expect(
+    findSourceImportBackedges("src/infra/sqlite-writer-admission-client.ts", [
+      "src/infra/gateway-state-owner-record.ts",
+    ]),
+  ).toEqual([]);
+});
 
 it.each(["current", "revoked after grant"] as const)(
   "clears a prior refusal only after fresh live authority (%s)",
