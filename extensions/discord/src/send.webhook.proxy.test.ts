@@ -86,11 +86,7 @@ describe("Discord webhook transport", () => {
         new Promise<Response>((resolve, reject) => {
           const signal = init?.signal ?? undefined;
           requestSignal = signal;
-          signal?.addEventListener(
-            "abort",
-            () => reject(signal.reason as Error),
-            { once: true },
-          );
+          signal?.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
           void resolve;
         }),
     );
