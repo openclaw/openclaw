@@ -88,7 +88,7 @@ function observeReaderRelease() {
   vi.spyOn(readWorker, "captureOpenClawStateReadSource").mockImplementation(() => {
     const capturedSource = captureSource();
     return {
-      ...capturedSource,
+      createTransport: (...args) => capturedSource.createTransport(...args),
       own(close) {
         const unregister = capturedSource.own(close);
         return () => {
