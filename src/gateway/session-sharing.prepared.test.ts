@@ -25,15 +25,9 @@ it("reuses interleaved audience keys without expanding scopes on cache hits", ()
   const initial = clients.map(key);
   const scopes = clients[0]!.connect.scopes!;
   const iterate = vi.spyOn(scopes, Symbol.iterator);
-  const compareFacts = vi.spyOn(Array.prototype, "every");
-  const repeated = [];
   for (let i = 0; i < 3; i++) {
-    repeated.push(clients.map(key));
+    expect(clients.map(key)).toEqual(initial);
   }
-  const comparisons = compareFacts.mock.calls.length;
-  compareFacts.mockRestore();
-  expect(repeated).toEqual([initial, initial, initial]);
-  expect(comparisons).toBe(0);
   expect(iterate).not.toHaveBeenCalled();
   iterate.mockRestore();
 

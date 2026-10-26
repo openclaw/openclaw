@@ -11,6 +11,9 @@
  * preparing sharing once per list and requesting its key without a revision.
  * --owner <base> --compare-owner <candidate> --pairs 5 runs counterbalanced
  * AB/BA pairs in one process; repeat separately with --allocations.
+ * Opt-in allocation regression (Node 26): --allocations --pairs 5 --events 3000
+ * --max-bytes-per-audience 2560 checks the median sampled bytes per preparation.
+ * Use one owner per budget run; this is a sampled allocation gate, not a unit test.
  * Acceptance: identical digest, lower CPU/allocation, unchanged live authority.
  */
 import assert from "node:assert/strict";
@@ -34,6 +37,7 @@ const { values } = parseArgs({
     events: { type: "string", default: "3000" },
     workload: { type: "string", default: "events" },
     allocations: { type: "boolean", default: false },
+    "max-bytes-per-audience": { type: "string" },
   },
 });
 const events = Number(values.events);
@@ -42,6 +46,13 @@ const workload = values.workload;
 assert(workload === "events" || workload === "rows");
 const pairs = Number(values.pairs ?? (values["compare-owner"] ? "5" : "1"));
 assert(Number.isSafeInteger(pairs) && pairs > 0);
+const allocationBudget = values["max-bytes-per-audience"];
+if (allocationBudget !== undefined) {
+  assert(values.allocations && workload === "events" && !values["compare-owner"]);
+  assert(Number.isFinite(Number(allocationBudget)) && Number(allocationBudget) > 0);
+  assert(pairs >= 5, "Allocation regression requires at least five samples");
+}
+const allocations: number[] = [];
 const ownerPaths = values["compare-owner"]
   ? [values.owner, values["compare-owner"]]
   : [values.owner];
@@ -182,6 +193,7 @@ async function measure(owner: (typeof owners)[number], pair: number, arm: string
     const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
       node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
     sampledBytes = sum(profile.head);
+    allocations.push(sampledBytes / (events * clients.length));
     inspector.disconnect();
   }
   member = false;
@@ -220,4 +232,13 @@ for (let pair = 1; pair <= pairs; pair++) {
   for (const owner of order) {
     await measure(owner, pair, owner === owners[0] ? "base" : "candidate");
   }
+}
+if (allocationBudget !== undefined) {
+  const ordered = allocations.toSorted((a, b) => a - b);
+  const middle = Math.floor(ordered.length / 2);
+  const median = (ordered[middle]! + ordered[Math.floor((ordered.length - 1) / 2)]!) / 2;
+  assert(
+    median <= Number(allocationBudget),
+    `Median sampled allocation ${median.toFixed(1)} bytes/audience exceeds ${allocationBudget}`,
+  );
 }
