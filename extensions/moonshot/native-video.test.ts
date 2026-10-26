@@ -1,3 +1,4 @@
+import { text } from "node:stream/consumers";
 import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -107,19 +108,12 @@ it("measures caller replacements and rejects an oversized non-video body", async
 it("sends ordered video_url content through the real Chat Completions transport", async () => {
   let requestBody: unknown;
   await withServer(
-    (request, response) => {
-      let body = "";
-      request.setEncoding("utf8");
-      request.on("data", (chunk: string) => {
-        body += chunk;
-      });
-      request.on("end", () => {
-        requestBody = JSON.parse(body);
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        response.end(
-          `data: {"id":"chatcmpl-test","object":"chat.completion.chunk","model":"kimi-k3","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`,
-        );
-      });
+    async (request, response) => {
+      requestBody = JSON.parse(await text(request));
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: {"id":"chatcmpl-test","object":"chat.completion.chunk","model":"kimi-k3","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n`,
+      );
     },
     async (origin) => {
       const provider = await registerSingleProviderPlugin(plugin);
@@ -152,7 +146,7 @@ it("sends ordered video_url content through the real Chat Completions transport"
         content: [
           { type: "text", text: "before" },
           { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
-          { type: "video", mimeType: "video/mp4", data: "dmlkZW8=" },
+          { type: "video", mimeType: "video/mp4", data: "YWFhYWFhYWFhYWFhYWFhYQ==" },
           { type: "text", text: "after" },
         ],
         timestamp: 1,
@@ -168,14 +162,12 @@ it("sends ordered video_url content through the real Chat Completions transport"
       expect(caller, streamResult).toHaveBeenCalledOnce();
       const body = JSON.stringify(callerPayload);
       expect(body).not.toMatch(/__openclaw|\/private\//u);
-      expect(body).toContain("data:video/mp4;base64,dmlkZW8=");
+      expect(body).toContain(MP4_A);
       expect(requestBody, streamResult).toBeDefined();
-      expect(requestBody).toHaveProperty("messages.0.content", [
-        { type: "text", text: "before" },
-        { type: "image_url", image_url: { url: "data:image/png;base64,aW1hZ2U=" } },
-        { type: "video_url", video_url: { url: "data:video/mp4;base64,dmlkZW8=" } },
-        { type: "text", text: "after" },
-      ]);
+      expect(requestBody).toHaveProperty(
+        "messages.0.content",
+        genericPayload().messages[0]!.content,
+      );
     },
   );
 });

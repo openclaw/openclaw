@@ -8,7 +8,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -18,8 +18,12 @@ import {
   MOONSHOT_DEFAULT_MODEL_REF,
 } from "./provider-catalog.js";
 
-async function registeredSetup(methodId: string) {
-  const provider = await registerSingleProviderPlugin(plugin);
+let provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
+beforeAll(async () => {
+  provider = await registerSingleProviderPlugin(plugin);
+});
+
+async function applyConfig(methodId: string, config: OpenClawConfig) {
   const runNonInteractive = provider.auth.find(
     (method) => method.id === methodId,
   )?.runNonInteractive;
@@ -27,22 +31,20 @@ async function registeredSetup(methodId: string) {
     throw new Error("expected registered Moonshot noninteractive auth");
   }
   const toApiKeyCredential = vi.fn(() => null);
-  return async (config: OpenClawConfig) => {
-    const result = await runNonInteractive({
-      authChoice: methodId === "api-key-cn" ? "moonshot-api-key-cn" : "moonshot-api-key",
-      config,
-      baseConfig: config,
-      opts: {},
-      runtime: createRuntimeEnv(),
-      resolveApiKey: async () => ({ key: "stored-test-key", source: "profile" }),
-      toApiKeyCredential,
-    });
-    expect(toApiKeyCredential).not.toHaveBeenCalled();
-    if (!result) {
-      throw new Error("expected Moonshot setup result");
-    }
-    return result;
-  };
+  const result = await runNonInteractive({
+    authChoice: methodId === "api-key-cn" ? "moonshot-api-key-cn" : "moonshot-api-key",
+    config,
+    baseConfig: config,
+    opts: {},
+    runtime: createRuntimeEnv(),
+    resolveApiKey: async () => ({ key: "stored-test-key", source: "profile" }),
+    toApiKeyCredential,
+  });
+  expect(toApiKeyCredential).not.toHaveBeenCalled();
+  if (!result) {
+    throw new Error("expected Moonshot setup result");
+  }
+  return result;
 }
 
 describe("moonshot provider plugin", () => {
@@ -52,12 +54,11 @@ describe("moonshot provider plugin", () => {
   ])(
     "applies the replace-mode manifest default on the %s endpoint",
     async (_name, methodId, baseUrl) => {
-      const applyConfig = await registeredSetup(methodId);
-      const config = await applyConfig({ models: { mode: "replace" } });
-      const provider = config.models?.providers?.moonshot;
+      const config = await applyConfig(methodId, { models: { mode: "replace" } });
+      const catalog = config.models?.providers?.moonshot;
       expect(MOONSHOT_DEFAULT_MODEL_ID).toBe(manifest.modelCatalog.providers.moonshot.defaultModel);
-      expect(provider?.baseUrl).toBe(baseUrl);
-      expect(provider?.models.map((model) => model.id)).toEqual([MOONSHOT_DEFAULT_MODEL_ID]);
+      expect(catalog?.baseUrl).toBe(baseUrl);
+      expect(catalog?.models.map((model) => model.id)).toEqual([MOONSHOT_DEFAULT_MODEL_ID]);
       expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
         MOONSHOT_DEFAULT_MODEL_REF,
       );
@@ -68,37 +69,17 @@ describe("moonshot provider plugin", () => {
   );
 
   it("leaves ordinary catalogs runtime-owned", async () => {
-    const applyConfig = await registeredSetup("api-key");
     for (const mode of [undefined, "merge"] as const) {
-      const config = await applyConfig({ models: { mode } });
+      const config = await applyConfig("api-key", { models: { mode } });
       expect(config.models?.providers?.moonshot?.models).toEqual([]);
       expect(config.agents?.defaults?.models?.[MOONSHOT_DEFAULT_MODEL_REF]).toEqual({
         alias: "Kimi",
       });
-      expect(await applyConfig(config)).toEqual(config);
+      expect(await applyConfig("api-key", config)).toEqual(config);
     }
   });
 
-  it("disables native video for a userinfo route", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const model = {
-      id: "kimi-k3",
-      provider: "moonshot",
-      api: "openai-completions",
-      baseUrl: "https://u@api.moonshot.ai/v1",
-      input: ["text", "image", "video"],
-    } as unknown as Model;
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: model.provider,
-      modelId: model.id,
-      model,
-    } as never);
-
-    expect(((normalized ?? model).input as string[]).includes("video")).toBe(false);
-  });
-
-  it("declares shipped Moonshot provider aliases in runtime and manifest metadata", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
+  it("declares shipped Moonshot provider aliases in runtime and manifest metadata", () => {
     expect(provider.aliases).toEqual(["moonshotai", "moonshot-ai"]);
     expect(manifest.providerAuthAliases).toEqual({
       moonshotai: "moonshot",
@@ -106,8 +87,7 @@ describe("moonshot provider plugin", () => {
     });
   });
 
-  it("rewrites duplicate tool-call ids with OpenAI-style ids for Moonshot replay", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
+  it("rewrites duplicate tool-call ids with OpenAI-style ids for Moonshot replay", () => {
     const policy = provider.buildReplayPolicy?.({
       provider: "moonshot",
       modelApi: "openai-completions",
@@ -124,8 +104,7 @@ describe("moonshot provider plugin", () => {
     expect(policy).not.toHaveProperty("dropReasoningFromHistory");
   });
 
-  it("keeps inherited object keys outside the always-thinking model family", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
+  it("keeps inherited object keys outside the always-thinking model family", () => {
     const ref = { provider: "moonshot", modelId: "constructor" };
     const captured = createCapturedThinkingConfigStream();
     expect(provider.isModernModelRef?.(ref)).toBe(false);
@@ -141,31 +120,33 @@ describe("moonshot provider plugin", () => {
     );
   });
 
-  it.each(["kimi-k3", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])(
-    "enables native video for %s on the native route",
-    async (id) => {
-      const provider = await registerSingleProviderPlugin(plugin);
-      const model = {
-        id,
-        provider: "moonshot",
-        api: "openai-completions",
-        baseUrl: "https://api.moonshot.ai/v1",
-        input: ["text", "image"],
-      } as unknown as Model;
-      const normalized = provider.normalizeResolvedModel?.({
-        provider: model.provider,
-        modelId: model.id,
-        model,
-      } as never);
+  it.each([
+    ["kimi-k3", MOONSHOT_BASE_URL, true],
+    ["kimi-k3.1-pro", MOONSHOT_BASE_URL, true],
+    ["kimi-k3.1-pro-highspeed", MOONSHOT_BASE_URL, true],
+    ["kimi-k3", "https://u@api.moonshot.ai/v1", false],
+  ] as const)("normalizes native video for %s at %s (enabled: %s)", (id, baseUrl, enabled) => {
+    const model = {
+      id,
+      provider: "moonshot",
+      api: "openai-completions",
+      baseUrl,
+      input: enabled ? ["text", "image"] : ["text", "image", "video"],
+    } as unknown as Model;
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: model.provider,
+      modelId: model.id,
+      model,
+    } as never);
 
-      expect((normalized ?? model).input).toEqual(["text", "image", "video"]);
-    },
-  );
+    expect((normalized ?? model).input).toEqual(
+      enabled ? ["text", "image", "video"] : ["text", "image"],
+    );
+  });
 
   it.each(["kimi-k3", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])(
     "exposes %s as an always-max-thinking modern model",
     async (id) => {
-      const provider = await registerSingleProviderPlugin(plugin);
       const model = { api: "openai-completions", provider: "moonshot", id } as const;
       const ref = { provider: model.provider, modelId: model.id };
       const captured = createCapturedThinkingConfigStream();
