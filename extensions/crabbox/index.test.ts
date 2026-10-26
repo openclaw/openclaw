@@ -15,6 +15,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import * as managedBinary from "./src/crabbox-managed-binary.js";
 import { crabboxState, openWarmImageStore } from "./src/crabbox-state.test-support.js";
+import { warmImage, warmRecord } from "./src/crabbox-warm-scenarios.test-support.js";
 import {
   commandResult,
   nodeEnrollmentFixture,
@@ -22,12 +23,7 @@ import {
 } from "./src/crabbox-worker-provider.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const CLASSLESS = {
-  binary: "/mock/crabbox",
-  idleTimeout: "12s",
-  provider: "aws",
-  ttl: "24h",
-};
+const CLASSLESS = { binary: "/mock/crabbox", idleTimeout: "12s", provider: "aws", ttl: "24h" };
 const PROFILE = { ...CLASSLESS, class: "standard" };
 const jsonResult = (value: unknown) => commandResult({ stdout: JSON.stringify(value) });
 
@@ -138,13 +134,11 @@ it.each([
       executionMode,
       beginNodeEnrollment: async () => {
         const fixture = nodeEnrollmentFixture("fixture-setup-code", "Classless worker", wait);
-        const { mode, setupCode, setupId: _id, ...common } = fixture;
-        return {
-          ...common,
-          ...(executionMode === "worker-turn"
-            ? { mode, setupCode, setupId: "fixture-setup-id" }
-            : { mode: "resume" as const, deviceId: "device-classless" }),
-        };
+        if (executionMode === "worker-turn") {
+          return fixture;
+        }
+        const { mode: _mode, setupCode: _code, setupId: _id, ...common } = fixture;
+        return { ...common, mode: "resume" as const, deviceId: "device-classless" };
       },
     });
     const id = lease.leaseId;
@@ -153,15 +147,9 @@ it.each([
     await expect(provider.inspect({ leaseId: id, profile })).resolves.toEqual(active);
     await expect(provider.destroy({ leaseId: id, profile })).resolves.toBeUndefined();
     const calls = runCommand.mock.calls.map(([argv]) => argv);
-    expect(calls.filter((argv) => argv[1] !== "heartbeat").map((argv) => argv[1])).toEqual([
-      "providers",
-      ...(backend === "aws" ? ["config"] : []),
-      "warmup",
-      "inspect",
-      "run",
-      "inspect",
-      "stop",
-    ]);
+    expect(calls.filter((argv) => argv[1] !== "heartbeat").map((argv) => argv[1])).toEqual(
+      `providers ${backend === "aws" ? "config " : ""}warmup inspect run inspect stop`.split(" "),
+    );
     expect(calls.flat()).not.toContain("--class");
     expect(calls.at(-1)).toEqual([PROFILE.binary, "stop", "--provider", backend, "--id", id]);
     expect(runCommand.mock.lastCall?.[1]).toMatchObject({
@@ -244,20 +232,16 @@ it.each(["binary acquisition", "image deletion"])("joins aborted %s on stop", as
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-maintenance-generation-"));
   const store = openWarmImageStore();
   const old = Date.now() - 14 * 24 * 60 * 60 * 1_000;
-  store.register("expired", {
-    version: 3,
-    allocations: {},
-    image: {
-      checkpointId: "chk_expired",
-      kind: "aws-ebs-snapshot",
-      state: "available",
-      createdAtMs: old,
-      preparationKey: null,
-      cacheKey: null,
-      purpose: null,
-      lastDemandAtMs: old,
-    },
-  });
+  store.register(
+    "expired",
+    warmRecord({
+      image: warmImage("chk_expired", {
+        kind: "aws-ebs-snapshot",
+        createdAtMs: old,
+        lastDemandAtMs: old,
+      }),
+    }),
+  );
   const started = createDeferred<AbortSignal>();
   const finish = createDeferred<void>();
   async function pause(signal?: AbortSignal) {
