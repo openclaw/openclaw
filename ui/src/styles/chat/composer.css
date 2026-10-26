@@ -550,6 +550,7 @@
 
 /* Bars-only meter; the stop-voice pill button supplies the chrome around it. */
 .agent-chat__voice-activity {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -566,11 +567,28 @@
   background: color-mix(in srgb, var(--accent) 88%, var(--text));
   box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 30%, transparent);
   opacity: 0.9;
-  transform: scaleY(var(--talk-bar-scale, 0.18));
+  transform: scaleY(0.18);
   transform-origin: center;
-  transition:
-    transform 90ms linear,
-    opacity var(--duration-fast) ease;
+}
+
+.agent-chat__voice-activity-canvas {
+  position: absolute;
+  display: none;
+  left: -8px;
+  top: -8px;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .agent-chat__voice-activity:has(> .agent-chat__voice-activity-canvas[data-ready])
+    > .agent-chat__voice-activity-bar {
+    visibility: hidden;
+    transform: none;
+  }
+
+  .agent-chat__voice-activity-canvas[data-ready] {
+    display: block;
+  }
 }
 
 .agent-chat__dictation-status {
@@ -610,45 +628,6 @@
     animation-timing-function: linear;
     animation-iteration-count: infinite;
     animation-direction: normal;
-  }
-}
-
-.agent-chat__dictation-status--finalizing .agent-chat__voice-activity-bar {
-  background: var(--muted);
-  box-shadow: none;
-}
-
-.agent-chat__voice-activity[data-status="connecting"] .agent-chat__voice-activity-bar {
-  animation: agent-chat-voice-connecting 1.05s ease-in-out infinite;
-  animation-delay: var(--talk-bar-delay);
-}
-
-.agent-chat__voice-activity[data-status="thinking"] .agent-chat__voice-activity-bar {
-  animation: agent-chat-voice-thinking 0.9s ease-in-out infinite;
-  animation-delay: var(--talk-bar-delay);
-}
-
-@keyframes agent-chat-voice-connecting {
-  0%,
-  100% {
-    opacity: 0.42;
-    transform: scaleY(0.2);
-  }
-  50% {
-    opacity: 0.9;
-    transform: scaleY(0.58);
-  }
-}
-
-@keyframes agent-chat-voice-thinking {
-  0%,
-  100% {
-    opacity: 0.4;
-    transform: scaleY(0.24);
-  }
-  45% {
-    opacity: 1;
-    transform: scaleY(0.92);
   }
 }
 
