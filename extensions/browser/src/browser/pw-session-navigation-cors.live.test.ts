@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { chromium, type Browser } from "playwright-core";
@@ -19,8 +19,16 @@ describe.skipIf(!isLiveTestEnabled())(
     let sourceUrl: string;
     let targetUrl: string;
     const methods: string[] = [];
+    const heldResponses = new Set<ServerResponse>();
     let documents = 0;
     const source = createServer((req, res) => {
+      if (req.url === "/stream") {
+        res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" });
+        res.write("<!doctype html><title>Committed action stream</title><body>ready</body>");
+        heldResponses.add(res);
+        res.on("close", () => heldResponses.delete(res));
+        return;
+      }
       const allowed = req.url === "/allowed";
       res.writeHead(200, { "Content-Type": "text/html" }).end(
         `<title>Source</title><button onclick="probe()">Probe</button><script>
@@ -59,6 +67,9 @@ describe.skipIf(!isLiveTestEnabled())(
       });
     }, 30_000);
     afterAll(async () => {
+      for (const response of heldResponses) {
+        response.destroy();
+      }
       await browser?.close();
       for (const server of [source, target]) {
         server.closeAllConnections();
@@ -134,5 +145,27 @@ describe.skipIf(!isLiveTestEnabled())(
         await page.close();
       }
     });
+    it("settles a committed action stream before releasing navigation ownership", async () => {
+      const page = await browser.newPage();
+      try {
+        await page.goto(sourceUrl);
+        await withPageNavigationRequestGuard({
+          page,
+          ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+          action: async () => {
+            await page.evaluate((url) => {
+              location.href = url;
+            }, sourceUrl + "/stream");
+          },
+        });
+
+        expect(page.url()).toBe(sourceUrl + "/stream");
+        expect(await page.title()).toBe("Committed action stream");
+        await page.goto(sourceUrl + "/after-stream");
+        expect(page.url()).toBe(sourceUrl + "/after-stream");
+      } finally {
+        await page.close();
+      }
+    }, 30_000);
   },
 );

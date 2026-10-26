@@ -64,6 +64,7 @@ export type NavigationDocumentRequest = {
 };
 export type NavigationAuthorityFenceDisposeOptions = {
   stopLoading?: boolean;
+  stopLoadingOnMainFrameCommit?: boolean;
 };
 
 /** Fence every Chromium redirect hop, including separately hosted iframe targets. */
@@ -79,6 +80,7 @@ export async function installNavigationAuthorityFence(
   const assertCurrent = policy.assertNavigationCurrent ?? (() => {});
   const session = await page.context().newCDPSession(page);
   let mainFrameId: string | undefined;
+  let mainFrameCommitted = false;
   const states = new Map<NavigationTargetSession, TargetState>();
   const inFlight = new Set<Promise<void>>();
   let stateChanged = createDeferred<void>();
@@ -288,6 +290,7 @@ export async function installNavigationAuthorityFence(
     "Network.loadingFinished",
     "Network.loadingFailed",
     "Fetch.requestPaused",
+    "Page.frameNavigated",
     "Target.attachedToTarget",
     "Target.receivedMessageFromTarget",
     "Target.detachedFromTarget",
@@ -456,8 +459,17 @@ export async function installNavigationAuthorityFence(
     }
   };
   const ready = (async () => {
+    await session.send("Page.enable");
     const tree = await session.send("Page.getFrameTree");
     mainFrameId = tree.frameTree.frame.id;
+    const mainFrameNavigated = (event: { frame: { id: string } }) => {
+      if (event.frame.id === mainFrameId) {
+        mainFrameCommitted = true;
+        notify();
+      }
+    };
+    rootEvents.on("Page.frameNavigated", mainFrameNavigated);
+    removers.add(() => rootEvents.off("Page.frameNavigated", mainFrameNavigated));
     await prepare(rootTarget);
     while (initialization.size > 0) {
       await Promise.all(initialization);
@@ -530,7 +542,7 @@ export async function installNavigationAuthorityFence(
       // A same-target round trip establishes an event-delivery barrier before
       // the first idle-state decision tears down interception.
       await bounded(session.send("Runtime.evaluate", { expression: "void 0" }));
-      if (options.stopLoading) {
+      if (options.stopLoading || (options.stopLoadingOnMainFrameCommit && mainFrameCommitted)) {
         // A Playwright navigation timeout can leave a committed document's
         // response open indefinitely. The caller owns that timed-out load, so
         // settle it before waiting for Network.loadingFailed and preserve the

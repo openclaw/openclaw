@@ -150,6 +150,29 @@ describe("navigation authority fence lifecycle", () => {
     expect(send).toHaveBeenCalledWith("Page.stopLoading", undefined);
   });
 
+  it("stops a committed main-frame action document without stopping subframe ownership", async () => {
+    const main = await fence();
+    main.session.emit("Network.requestWillBeSent", {
+      requestId: "streaming-document",
+      type: "Document",
+      frameId: "main",
+    });
+    main.session.emit("Page.frameNavigated", { frame: { id: "main" } });
+    await expect(main.dispose({ stopLoadingOnMainFrameCommit: true })).resolves.toBeUndefined();
+    expect(main.send).toHaveBeenCalledWith("Page.stopLoading", undefined);
+
+    const child = await fence();
+    child.session.emit("Network.requestWillBeSent", {
+      requestId: "subframe-document",
+      type: "Document",
+      frameId: "child",
+    });
+    child.session.emit("Page.frameNavigated", { frame: { id: "child" } });
+    child.session.emit("Network.loadingFinished", { requestId: "subframe-document" });
+    await expect(child.dispose({ stopLoadingOnMainFrameCommit: true })).resolves.toBeUndefined();
+    expect(child.send).not.toHaveBeenCalledWith("Page.stopLoading", undefined);
+  });
+
   it("removes the paused-request listener before detachment releases interception", async () => {
     let detached = false;
     const { session, errors, dispose } = await fence({

@@ -335,7 +335,13 @@ export async function withPageNavigationRequestGuard<T>(
   while (inFlight.size > 0) {
     await Promise.allSettled(inFlight);
   }
-  const authorityCleanupError = await removeAuthorityFence?.();
+  // The action can resolve after its main document commits but before that
+  // response finishes (for example, location.href to streaming HTML). Settle
+  // only that committed main-frame load; subframe redirect chains retain their
+  // interception owner until their authority checks finish.
+  const authorityCleanupError = await removeAuthorityFence?.({
+    stopLoadingOnMainFrameCommit: true,
+  });
   const cleanupError = authorityCleanupError;
 
   // Request-policy denial wins over locator/action/cleanup errors. Only successful
