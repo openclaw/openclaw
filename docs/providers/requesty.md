@@ -12,14 +12,21 @@ OpenAI-compatible endpoint and API key, with per-request pricing and prompt cach
 | Property      | Value                                    |
 | ------------- | ---------------------------------------- |
 | Provider      | `requesty`                               |
-| Distribution  | Bundled with OpenClaw                    |
+| Distribution  | Official external provider plugin        |
 | Auth          | `REQUESTY_API_KEY`                       |
 | API           | OpenAI-compatible                        |
 | Base URL      | `https://router.requesty.ai/v1/`         |
 | Model catalog | Auto-discovered via `/v1/models/managed` |
 
-Requesty ships with OpenClaw as a bundled provider plugin. No separate plugin
-installation is required; it updates together with OpenClaw.
+Requesty is maintained in [openclaw/requesty](https://github.com/openclaw/requesty) and installed on demand from OpenClaw's official provider catalog. Its runtime is not bundled with the core package. Existing model references stay `requesty/*`; after updating from a bundled release, verify the plugin is installed and loaded before selecting one of those models.
+
+## Install
+
+```bash
+openclaw plugins install requesty
+```
+
+You can also choose Requesty during onboarding, which offers the catalog-backed installation before API-key setup.
 
 ## Setup
 
@@ -46,7 +53,7 @@ installation is required; it updates together with OpenClaw.
   </Step>
 </Steps>
 
-Onboarding preserves your model entries and leaves generated catalog rows to discovery. With `models.mode: "replace"`, it also writes the built-in catalog because that mode skips discovery.
+Onboarding preserves your model entries and leaves generated catalog rows to discovery. With `models.mode: "replace"`, it also writes the plugin's static catalog because that mode skips discovery.
 
 ## Non-interactive example
 

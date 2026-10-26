@@ -64,7 +64,6 @@ The following defaults reuse the corresponding files in [`ui/public/provider-ico
 | `pixverse`              | `ProviderIcon-pixverse.svg`     |
 | `qianfan`               | `ProviderIcon-qianfan.svg`      |
 | `qwen`                  | `ProviderIcon-alibaba.svg`      |
-| `requesty`              | `ProviderIcon-requesty.svg`     |
 | `runway`                | `ProviderIcon-runway.svg`       |
 | `stepfun`               | `ProviderIcon-stepfun.svg`      |
 | `synthetic`             | `ProviderIcon-synthetic.svg`    |

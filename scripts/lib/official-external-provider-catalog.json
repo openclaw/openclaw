@@ -1675,6 +1675,56 @@
       }
     },
     {
+      "name": "@openclaw/requesty-provider",
+      "description": "OpenClaw Requesty provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "requesty",
+          "label": "Requesty"
+        },
+        "providers": [
+          {
+            "id": "requesty",
+            "name": "Requesty",
+            "docs": "/providers/requesty",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "REQUESTY_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "requesty-api-key",
+                "choiceLabel": "Requesty API key",
+                "choiceHint": "Unified LLM Gateway (30+ providers)",
+                "groupId": "requesty",
+                "groupLabel": "Requesty",
+                "groupHint": "Unified LLM Gateway (30+ providers)",
+                "optionKey": "requestyApiKey",
+                "cliFlag": "--requesty-api-key",
+                "cliOption": "--requesty-api-key <key>",
+                "cliDescription": "Requesty API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "npmSpec": "@openclaw/requesty-provider@2026.10.7",
+          "defaultChoice": "npm",
+          "expectedIntegrity": "sha512-A6g76wq4bCNX9gniX5F1EjuKVmhR2bt9P4oVDVFBo17TBQYoq/vEQcLzHKzZv18NJTERu2LJJRLPbgxHaM1hGQ==",
+          "minHostVersion": ">=2026.10.7"
+        }
+      }
+    },
+    {
       "name": "@openclaw/fireworks-provider",
       "description": "OpenClaw Fireworks provider plugin",
       "source": "official",

@@ -37,6 +37,21 @@ describe("official external plugin catalog", () => {
     }
   });
 
+  it("routes Requesty setup to its versioned official external package", () => {
+    const entry = findPackage("@openclaw/requesty-provider");
+    expect(entry).toBeDefined();
+    expect(findEntry("requesty")).toBe(entry);
+    expect(resolveInstall(entry!)).toEqual({
+      npmSpec: "@openclaw/requesty-provider@2026.10.7",
+      defaultChoice: "npm",
+      expectedIntegrity:
+        "sha512-A6g76wq4bCNX9gniX5F1EjuKVmhR2bt9P4oVDVFBo17TBQYoq/vEQcLzHKzZv18NJTERu2LJJRLPbgxHaM1hGQ==",
+      minHostVersion: ">=2026.10.7",
+    });
+    expect(providerOwners({ providerIds: new Set(["requesty"]) })).toEqual(["requesty"]);
+    expect(providerEnvOwners({ REQUESTY_API_KEY: "synthetic-key" })).toEqual(["requesty"]);
+  });
+
   it("keeps Fish Audio's legacy id migration-only across npm and ClawHub routes", () => {
     const entry = findPackage("@openclaw/fish-audio-speech");
     expect(entry).toBeDefined();

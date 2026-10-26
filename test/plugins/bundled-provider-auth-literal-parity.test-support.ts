@@ -19,7 +19,7 @@ const SENTINEL_API_KEY = "parity-sentinel-api-key";
 const OWNER_TESTED_PLUGIN_IDS = new Set(
   `abliteration baseten byteplus cerebras clawrouter cohere deepseek featherless fireworks gmi groq
   huggingface kilocode kimi longcat meta mistral novita nvidia opencode opencode-go
-  openrouter qianfan radius requesty synthetic together venice vercel-ai-gateway volcengine github-copilot`.split(
+  openrouter qianfan radius synthetic together venice vercel-ai-gateway volcengine github-copilot`.split(
     /\s+/,
   ),
 );
