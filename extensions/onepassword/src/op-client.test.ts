@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { OnePasswordError } from "./errors.js";
 import { OpClient } from "./op-client.js";
@@ -16,8 +17,9 @@ const runner = vi.mocked(runExec);
 let root = "";
 let opBin = "";
 let interpreter = "";
-let interpreterRoot: string | undefined;
 let tokenFile = "";
+const suiteDirs = useAutoCleanupTempDirTracker(afterAll);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const fixtureAuth = ["fixture", "auth"].join("-");
 const value = ["right", "fixture"].join("-");
 const request = { item: "Token", vault: "Automation", field: "credential" };
@@ -27,22 +29,13 @@ const read = (instance = client()) => instance.getItem(request);
 const respond = (field: Record<string, string>) =>
   runner.mockResolvedValue({ stdout: JSON.stringify(field), stderr: "" });
 
-beforeAll(async () => {
+beforeAll(() => {
   // Only the immutable interpreter is shared; executable and token trust stay per-test.
-  // openclaw-temp-dir: allow plugin tests cannot import the core-only tracker.
-  interpreterRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onepassword-node-"));
-  interpreter = createTrustedNodeFixture(interpreterRoot);
-});
-
-afterAll(async () => {
-  if (interpreterRoot) {
-    await fs.rm(interpreterRoot, { recursive: true, force: true });
-  }
+  interpreter = createTrustedNodeFixture(suiteDirs.make("openclaw-onepassword-node-"));
 });
 
 beforeEach(async () => {
-  // openclaw-temp-dir: allow plugin tests cannot import the core-only tracker.
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onepassword-"));
+  root = tempDirs.make("openclaw-onepassword-");
   runner.mockReset();
   vi.spyOn(os, "homedir").mockReturnValue(root);
   opBin = path.join(root, process.platform === "win32" ? "op.exe" : "op");
@@ -51,10 +44,7 @@ beforeEach(async () => {
   await fs.writeFile(tokenFile, `  ${fixtureAuth}\n`, { mode: 0o600 });
 });
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await fs.rm(root, { recursive: true, force: true });
-});
+afterEach(() => vi.restoreAllMocks());
 
 it("constructs one cache-disabled request with minimal environment and trims the token", async () => {
   respond({ id: "new", label: "credential", value });
