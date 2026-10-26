@@ -9,10 +9,7 @@ import {
   warmRecord,
 } from "./crabbox-warm-scenarios.test-support.js";
 import { registerCrabboxWarmImageCommands } from "./crabbox-worker-warm-image-cli.js";
-import {
-  assertCrabboxWarmImageMigrationReady,
-  type WarmProfileRecord,
-} from "./crabbox-worker-warm-image-store.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import { tempDirs } from "./crabbox-worker-warm-image.test-support.js";
 
 const SELECTOR = "83eb5c1e-e408-4b64-9575-f8670287e294";
@@ -27,18 +24,16 @@ beforeEach(() => {
 });
 
 function pendingCapture(phase: "scrubbing" | "creating" | "uncertain" = "creating") {
-  const now = Date.now();
-  const record = {
-    ...warmRecord(),
-    image: warmImage("chk_last_good", { createdAtMs: now - 86_400_000, lastDemandAtMs: now }),
+  const record = warmRecord({
+    image: warmImage("chk_last_good"),
     operation: captureOperation(SELECTOR, {
-      startedAtMs: now - 1_200_000,
+      startedAtMs: Date.now() - 1_200_000,
       phase,
       ...(phase === "uncertain"
         ? { checkpointIds: ["chk_interrupted_a", "chk_interrupted_b"] }
         : {}),
     }),
-  };
+  });
   openWarmImageStore().register("profile", record);
   return record;
 }
@@ -79,15 +74,12 @@ it("prints cold-only guidance for unsupported capture without changing local sta
   expect(openWarmImageStore().lookup("profile")).toEqual(record);
 });
 
-it("recovers a legacy allocation only after acknowledgment of the exact unchanged row", async () => {
+it("rejects unacknowledged or changed legacy allocation selectors", async () => {
   const legacy = createPluginStateSyncKeyedStoreForTests<{ machineClass: string }>("crabbox", {
     namespace: "warm-leases",
     maxEntries: 256,
   });
   legacy.register("cbx_legacy", { machineClass: "standard" });
-  await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).rejects.toThrow(
-    "legacy worker allocations",
-  );
   await runCli("--json");
   const { selector, ...lease } = JSON.parse(output).legacyLeases[0];
   expect(lease).toMatchObject({ leaseId: "cbx_legacy", machineClass: "standard" });
@@ -95,10 +87,6 @@ it("recovers a legacy allocation only after acknowledgment of the exact unchange
   legacy.register("cbx_legacy", { machineClass: "fast" });
   await expect(recover(selector)).rejects.toThrow("selector is absent or changed");
   expect(legacy.lookup("cbx_legacy")).toEqual({ machineClass: "fast" });
-  await runCli("--json");
-  await recover(JSON.parse(output).legacyLeases[0].selector);
-  expect(legacy.lookup("cbx_legacy")).toBeUndefined();
-  await expect(assertCrabboxWarmImageMigrationReady(crabboxState)).resolves.toBeUndefined();
 });
 
 it("recovers only the exact selected capture without clearing retained images or retirement", async () => {

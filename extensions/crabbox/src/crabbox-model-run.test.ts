@@ -75,7 +75,7 @@ it.each(["0x10", "1e3", "0b101", "0o17"])(
   },
 );
 
-it("upgrades an outdated executable before capability and credential use", async () => {
+it("runs an upgraded native job with a host-only proxy grant and sentinel-only app environment", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-model-managed-"));
   const binary = resolveManagedCrabboxBinaryPath();
   await fs.mkdir(path.dirname(binary), { recursive: true });
@@ -83,27 +83,19 @@ it("upgrades an outdated executable before capability and credential use", async
   mocks.version.mockImplementation(async ([candidate]: string[]) =>
     result(candidate === "crabbox-fixture" ? "0.76.0" : CRABBOX_MIN_VERSION),
   );
-  nativeResult(result("done"));
-
-  await run();
-  expect(process.exitCode).toBe(0);
-  expect(mocks.run.mock.calls.map(([argv]) => argv[0])).toEqual([binary, binary]);
-  expect(mocks.withEgress).toHaveBeenCalledOnce();
-});
-
-it("delegates one native job with a host-only proxy grant and sentinel-only app environment", async () => {
   let remoteInput = "";
   mocks.run.mockImplementation(async (argv: string[], params: CommandOptions) => {
     if (argv.includes("--help")) {
       return result(capabilityHelp);
     }
-    expect(argv).toEqual(
-      (
-        "crabbox-fixture egress run --id cbx_owned --allow api.example.com " +
+    expect(argv).toEqual([
+      binary,
+      ...(
+        "egress run --id cbx_owned --allow api.example.com " +
         "--upstream-proxy-env CRABBOX_MODEL_PROXY --no-sync --no-hydrate " +
         "--script-stdin -- node test-app.js"
       ).split(" "),
-    );
+    ]);
     expect(params).toMatchObject({
       env: { CRABBOX_MODEL_PROXY: egress.hostEnv.HTTPS_PROXY, CRABBOX_ENV_ALLOW: "," },
     });
@@ -115,7 +107,8 @@ it("delegates one native job with a host-only proxy grant and sentinel-only app 
   });
   await run();
   expect(process.exitCode).toBe(7);
-  expect(mocks.run).toHaveBeenCalledTimes(2);
+  expect(mocks.run.mock.calls.map(([argv]) => argv[0])).toEqual([binary, binary]);
+  expect(mocks.withEgress).toHaveBeenCalledOnce();
 
   const fixture = `const fs = require('fs'); console.log(JSON.stringify({
       key: process.env.OPENAI_API_KEY, baseUrl: process.env.OPENAI_BASE_URL,

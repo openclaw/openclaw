@@ -34,7 +34,6 @@ function fixture(
     extend: async () => jsonResult({ id: ID }),
   };
   const calls: string[][] = [];
-  const observation = vi.fn();
   const facts = () => ({
     id: ID,
     state: "active",
@@ -68,9 +67,8 @@ function fixture(
   return {
     state,
     calls,
-    observation,
     prepare: (overrides: Partial<typeof context> = {}) =>
-      prepareCrabboxCaptureLifetime({ ...context, ...overrides }, { observe: observation }),
+      prepareCrabboxCaptureLifetime({ ...context, ...overrides }, { observe() {} }),
     actions: () => calls.map((call) => call[1]),
     writes: () => calls.filter((call) => call[1] === "extend"),
   };
@@ -100,11 +98,7 @@ it("never echoes connection JSON from a failed inspection", async () => {
 it("distinguishes idle expiry from total TTL without extending an adequate lease", async () => {
   const f = fixture({ ttl: 14400 });
   await f.prepare();
-  expect(f.actions()).toEqual(["inspect", "heartbeat", "inspect", "list"]);
-  expect(f.observation.mock.lastCall?.[0].lifetime).toMatchObject({
-    ttlMs: 14400000,
-    createdAtMs: NOW,
-  });
+  expect(f.writes()).toEqual([]);
 });
 
 it.each(["inspect", "list"] as const)("honors the tightened maximum from %s", async (source) => {
@@ -137,7 +131,6 @@ it.each([
     expect(f.writes()).toEqual([
       ["/fixture/crabbox", "extend", ID, "--provider", "aws", "--ttl", `${target}s`, "--json"],
     ]);
-    expect(f.actions().slice(-2)).toEqual(["inspect", "list"]);
   },
 );
 

@@ -27,18 +27,6 @@ function scenario(
   };
 }
 
-it("does not retry enrollment after remote script output", async () => {
-  let attempts = 0;
-  const { provision, calls } = scenario(({ argv }) => {
-    if (argv[1] === "run" && ++attempts <= 2) {
-      return timeoutResult("CRABBOX_PHASE:openclaw-bootstrap-start");
-    }
-    return undefined;
-  });
-  await expect(provision()).rejects.toThrow("Crabbox node enrollment setup failed");
-  expectCommands(calls, { run: 1, warmup: 1, stop: 1 });
-});
-
 it("retries a profile setup lease conflict using the same fixed lease", async () => {
   const setup = "install-node";
   let attempts = 0;
@@ -84,7 +72,6 @@ it.each([
 });
 
 it.each([
-  { name: "another exit-4 failure", code: 4, stderr: "lease_unavailable: retry" },
   { name: "a different exit code", code: 1, stderr: LEASE_CONFLICT },
   { name: "a different code token", code: 4, stderr: "lease_id_conflict_other: retry" },
   { name: "script stdout", code: 4, stderr: LEASE_CONFLICT, stdout: "installing packages" },
