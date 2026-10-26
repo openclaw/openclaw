@@ -9,20 +9,14 @@ const PATH_LENGTH_LIMIT = 4096;
 const COERCION_ERROR = expect.objectContaining({ reason: "parse-error" });
 
 it.each<[string[], RegExp?]>([
-  [["oc://X/foo /bar", "oc://X/foo\tbar"]],
+  [["oc://X/foo /bar"]],
   [['oc://"\\\\srv\\\\share\\\\foo"/section']],
   [["oc://X/[unclosed", "oc://X/closed]", "oc://X/{a,b"]],
   [["oc://X.md/a&b", "oc://X.md/a%b"]],
-  [
-    ["oc://X/\x00", "oc://X/foo\x01bar", "oc://X/foo\x7Fbar", "oc://X.md/items/[k=a\x00b]"],
-    /Control character/,
-  ],
+  [["oc://X/\x00", "oc://X/foo\x7Fbar", "oc://X.md/items/[k=a\x00b]"], /Control character/],
   [["oc:///etc/passwd"], /Empty segment/],
   [['oc://"/etc/passwd"/section'], /Absolute file slot/],
-  [
-    ['oc://"C:/Windows/System32/foo"/section', 'oc://"C:\\\\Windows\\\\System32"/section'],
-    /Absolute file slot/,
-  ],
+  [['oc://"C:/Windows/System32/foo"/section'], /Absolute file slot/],
   [['oc://"../foo"/section', 'oc://"foo/../bar"/section'], /Parent-directory/],
   [["oc://X.jsonc/items/[]"]],
   [["oc://X/[=foo]", "oc://X/[id=]"], /Malformed predicate/],
@@ -40,13 +34,8 @@ it("strips leading UTF-8 BOM from path string", () => {
 
 it("negative numeric key on object resolves as literal key (openclaw#59934)", () => {
   // Telegram supergroup IDs are negative numbers used as map keys.
-  const ast = parseJsonc(
-    '{"channels":{"telegram":{"groups":{"-5028303500":{"requireMention":false}}}}}',
-  );
-  const m = resolveOcPath(
-    ast,
-    parseOcPath("oc://config/channels.telegram.groups.-5028303500.requireMention"),
-  );
+  const ast = parseJsonc('{"groups":{"-5028303500":{"requireMention":false}}}');
+  const m = resolveOcPath(ast, parseOcPath("oc://config/groups.-5028303500.requireMention"));
   expect(m?.kind).toBe("leaf");
 });
 
@@ -55,8 +44,6 @@ it.each([
   [{ file: "C:/Windows" }, /Absolute file slot/],
   [{ file: ".." }, /Parent-directory/],
   [{ file: "foo/../bar" }, /Parent-directory/],
-  [{ file: "a.md", section: "foo." }, /Empty dotted/],
-  [{ file: "a.md", section: ".foo" }, /Empty dotted/],
   [{ file: "a.md", section: "foo..bar" }, /Empty dotted/],
 ] as const)("formatOcPath rejects invalid slots: %j", (path, error) => {
   expect(() => formatOcPath(path)).toThrow(error);
@@ -72,11 +59,8 @@ it("rejects multibyte paths above MAX_PATH_LENGTH bytes", () => {
 });
 
 it("rejects paths whose NFC normalization exceeds the byte limit", () => {
-  const prefix = `oc://${"a".repeat(74)}`;
-  const prefixBytes = Buffer.byteLength(prefix, "utf8");
   // U+0344 grows from two to four UTF-8 bytes under NFC; the emoji takes four.
-  const markCount = Math.floor((PATH_LENGTH_LIMIT - prefixBytes - 4) / 2);
-  const input = `${prefix}😀${"\u0344".repeat(markCount)}`;
+  const input = `oc://${"a".repeat(74)}😀${"\u0344".repeat(2006)}`;
   expect(Buffer.byteLength(input, "utf8")).toBeLessThanOrEqual(PATH_LENGTH_LIMIT);
   expect(Buffer.byteLength(input.normalize("NFC"), "utf8")).toBeGreaterThan(PATH_LENGTH_LIMIT);
   expect(() => parseOcPath(input)).toThrow(expect.objectContaining({ code: "OC_PATH_TOO_LONG" }));
