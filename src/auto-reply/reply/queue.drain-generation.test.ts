@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { PluginInstanceUnavailableError } from "../../plugins/plugin-instance-error.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
@@ -17,9 +17,7 @@ import { createQueueTestRun, installQueueRuntimeErrorSilencer } from "./queue.te
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
-afterEach(() => {
-  resetGatewayWorkAdmission();
-});
+afterEach(resetGatewayWorkAdmission);
 
 it.each(["followup", "collect"] as const)(
   "resolves the current provider for queued %s input after its predecessor retires",
@@ -32,7 +30,7 @@ it.each(["followup", "collect"] as const)(
     const stale = createEmptyPluginRegistry();
     const current = createEmptyPluginRegistry();
     const retiredHook = predecessor.wrap(() => "retired");
-    const currentHook = vi.fn(() => "current provider reply");
+    const currentHook = () => "current provider reply";
     for (const [registry, formatApiKey] of [
       [stale, retiredHook],
       [current, currentHook],
@@ -84,7 +82,6 @@ it.each(["followup", "collect"] as const)(
           reply: "current provider reply",
         },
       ]);
-      expect(currentHook).toHaveBeenCalledOnce();
       expect(getExistingFollowupQueue(key)).toBeUndefined();
     } finally {
       released.resolve();

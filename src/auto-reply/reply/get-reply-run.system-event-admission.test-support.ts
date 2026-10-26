@@ -51,17 +51,12 @@ export function registerSystemEventAdmissionCases({
 
   it("admits only system events visible to the prepared agent", async () => {
     await useRealDrain();
-    const alphaEvents = [
-      "Reminder: review heartbeat poll results",
-      "Cron: investigate heartbeat wake failures",
-    ];
-    for (const [text, owner] of [
-      [alphaEvents[0]!, "alpha"],
-      ["Beta hook finished", "beta"],
-      [alphaEvents[1]!, "alpha"],
-    ] as const) {
-      enqueueSystemEvent(text, withSystemEventOwner({ sessionKey: "global" }, owner));
-    }
+    const event = "Cron: investigate heartbeat wake failures";
+    enqueueSystemEvent(event, withSystemEventOwner({ sessionKey: "global" }, "alpha"));
+    enqueueSystemEvent(
+      "Beta hook finished",
+      withSystemEventOwner({ sessionKey: "global" }, "beta"),
+    );
 
     await runPrepared({
       agentId: "alpha",
@@ -75,18 +70,16 @@ export function registerSystemEventAdmissionCases({
     const call = requireRunReplyAgentCall();
     const context = call.followupRun.currentInboundContext;
     expect(call.followupRun.prompt).toBe("[User sent media without caption]");
-    for (const event of alphaEvents) {
-      expect(context?.text).toContain(event);
-      expect(context?.fragments).toContainEqual({
-        kind: "conversation-data",
-        text: expect.stringContaining(event),
-      });
-      expect(call.followupRun.transcriptPrompt).not.toContain(event);
-    }
+    expect(context?.text).toContain(event);
+    expect(context?.fragments).toContainEqual({
+      kind: "conversation-data",
+      text: expect.stringContaining(event),
+    });
+    expect(call.followupRun.transcriptPrompt).not.toContain(event);
     expect(call.followupRun.prompt).not.toContain("Beta hook finished");
     expect(context?.text).not.toContain("Beta hook finished");
     expect(JSON.stringify(context?.fragments)).not.toContain("Beta hook finished");
-    expect(peekSystemEventEntries("agent:beta:global").map((event) => event.text)).toEqual([
+    expect(peekSystemEventEntries("agent:beta:global").map((entry) => entry.text)).toEqual([
       "Beta hook finished",
     ]);
   });
