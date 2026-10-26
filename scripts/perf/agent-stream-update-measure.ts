@@ -4,6 +4,8 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --mode timing
  * Repeat with --mode allocation; timing under the sampler is diagnostic only.
  * --snapshots false exercises partial-free text deltas instead of checkpoints.
+ * --async-fragments true --events 4 --turns 5000 --warmup 250 replays async tool fragments
+ * followed by a text tail; compare allocation and CPU per committed fragment.
  * Accept lower allocation/update with stable CPU and identical delivery counts;
  * this measures the real agent loop, not whole-Gateway throughput or latency.
  */
@@ -15,6 +17,7 @@ import { parseArgs } from "node:util";
 import { runAgentLoop } from "../../packages/agent-core/src/agent-loop.js";
 import {
   config,
+  makeCall,
   makeAssistantMessage,
   makeTool,
   user,
@@ -26,15 +29,21 @@ const { values } = parseArgs({
     mode: { type: "string", default: "timing" },
     events: { type: "string", default: "20000" },
     turns: { type: "string", default: "10" },
+    warmup: { type: "string", default: "1" },
     snapshots: { type: "string", default: "true" },
+    "async-fragments": { type: "string", default: "false" },
   },
 });
 const events = Number(values.events);
 const turns = Number(values.turns);
+const warmup = Number(values.warmup);
 assert(Number.isSafeInteger(events) && events > 0);
 assert(Number.isSafeInteger(turns) && turns > 0);
+assert(Number.isSafeInteger(warmup) && warmup > 0);
 assert(values.mode === "timing" || values.mode === "allocation");
 assert(values.snapshots === "true" || values.snapshots === "false");
+assert(values["async-fragments"] === "true" || values["async-fragments"] === "false");
+const asyncFragments = values["async-fragments"] === "true";
 const snapshots = values.snapshots === "true";
 const message = makeAssistantMessage(
   snapshots ? [{ type: "thinking", thinking: "synthetic thought" }] : [],
@@ -47,8 +56,29 @@ const finalMessage = snapshots
   : makeAssistantMessage([{ type: "text", text: "x".repeat(events) }]);
 const history = Array.from({ length: 1000 }, (_, index) => user(`synthetic ${index}`, index));
 const tools = Array.from({ length: 40 }, (_, index) => makeTool(`synthetic_${index}`));
+const calls = asyncFragments
+  ? Array.from({ length: events }, (_, index) => ({
+      ...makeCall(`synthetic_${index % tools.length}`, `call-${index}`),
+      async: true,
+    }))
+  : [];
+const fragments = calls.map((call, index) => ({
+  type: "toolcall_end" as const,
+  contentIndex: index,
+  toolCall: call,
+  partial: {
+    ...makeAssistantMessage(calls.slice(0, index + 1)),
+    responseId: "synthetic-response",
+  },
+}));
+const fragmentTail = {
+  ...makeAssistantMessage([...calls, { type: "text", text: "done" }]),
+  responseId: "synthetic-response",
+  stopReason: "stop" as const,
+};
 let deliveries = 0;
 async function run() {
+  let responseCount = 0;
   await runAgentLoop(
     [user()],
     { systemPrompt: "synthetic probe", messages: history, tools },
@@ -59,19 +89,26 @@ async function run() {
       }
     },
     undefined,
-    () => ({
-      async *[Symbol.asyncIterator]() {
-        yield { type: "start", partial: message } as const;
-        for (let index = 0; index < events; index++) {
-          yield update;
-        }
-        yield { type: "done", reason: "stop", message: finalMessage } as const;
-      },
-      result: async () => finalMessage,
-    }),
+    () => {
+      const toolResponse = asyncFragments && responseCount === 0;
+      const updates = responseCount++ === 0 ? events : 0;
+      const result = toolResponse ? fragmentTail : finalMessage;
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "start", partial: message } as const;
+          for (let index = 0; index < updates; index++) {
+            yield toolResponse ? fragments[index] : update;
+          }
+          yield { type: "done", reason: "stop", message: result } as const;
+        },
+        result: async () => result,
+      };
+    },
   );
 }
-await run();
+for (let turn = 0; turn < warmup; turn++) {
+  await run();
+}
 deliveries = 0;
 globalThis.gc?.();
 const allocation = values.mode === "allocation";
@@ -105,8 +142,10 @@ console.log(
   JSON.stringify({
     mode: values.mode,
     snapshots,
+    asyncFragments,
     events,
     turns,
+    warmup,
     deliveries,
     hostLoad,
     elapsedMs,
