@@ -240,6 +240,69 @@ describe("installPackageDir rollback", () => {
     };
   }
 
+  it.each(["commit", "rollback", "internal failure"] as const)(
+    "awaits original durable authority before %s touches the shared install",
+    async (action) => {
+      const { sourceDir, targetDir } = await createFixture("awaited-settlement-owner");
+      const refusal = new Error("durable install owner replaced");
+      let owned = true;
+      let published = false;
+      let backupDir = "";
+      const prepareSettlement = vi.fn(async () => {
+        await Promise.resolve();
+        if (!owned) {
+          throw refusal;
+        }
+      });
+      afterRename((_from, to) => {
+        if (samePath(to, targetDir)) {
+          published = true;
+          if (action === "internal failure") {
+            owned = false;
+          }
+        }
+      });
+      const result = await installPackageDir(
+        requestDeferredPackageDirInstall(
+          {
+            ...updateOptions(sourceDir, targetDir),
+            afterBackup: backupHook((directory) => {
+              backupDir = directory;
+            }),
+            beforePersistentApply: () => {
+              if (published && action === "internal failure") {
+                throw new Error("publication cancelled");
+              }
+            },
+          },
+          () => {},
+          prepareSettlement,
+        ),
+      );
+      expect(published).toBe(true);
+      const identity = await fs.lstat(targetDir, { bigint: true });
+      if (action === "internal failure") {
+        expect(result).toMatchObject({
+          ok: false,
+          recoveryIncomplete: true,
+          error: expect.stringContaining(refusal.message),
+        });
+      } else {
+        const transaction = expectDefined(
+          resolvePackageDirInstallTransaction(result),
+          "deferred transaction",
+        );
+        owned = false;
+        await expect(transaction[action]()).rejects.toBe(refusal);
+        owned = true;
+        await expect(transaction[action]()).rejects.toBe(refusal);
+      }
+      expect(prepareSettlement).toHaveBeenCalledOnce();
+      await expectPackage(targetDir, "new", identity);
+      await expectText(backupDir, "old");
+    },
+  );
+
   it.each(["commit", "rollback"] as const)(
     "rejects %s under a successor lease after the original install owner retires",
     async (action) => {

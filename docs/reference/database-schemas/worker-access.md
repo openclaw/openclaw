@@ -4269,6 +4269,12 @@ cleanup lease, which excludes their shared writers until deletion settles.
 Each effect guard still rereads config files, includes, and environment substitutions,
 using the protected migration rows for validation. Source identity and durable
 lease checks remain live; prepared rows are not retained permission to delete.
+Runtime plugin, setup, and Claw package callers use the async lifecycle lease.
+Publication and shared-directory compensation await the original durable owner,
+then apply its synchronous liveness guard at the effect. A refused owner cannot
+resume settlement under a successor; caller cancellation does not remove the
+original owner's authority to undo its accepted publication. Native bootstrap,
+offline update, and synchronous SDK callers retain their native lease contract.
 Stored formats and update behavior are unchanged.
 
 Gateway cleanup of retired plugin artifacts first inspects managed and

@@ -37,13 +37,8 @@ import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   runAfterPluginLifecycleCommit,
   runOutsidePluginLifecycleLease,
-  withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
 } from "../plugins/plugin-lifecycle-lease.js";
-import {
-  captureGatewayRootWorkAdmissionContinuationScope,
-  runOutsideGatewayRootWorkAdmission,
-  runWithGatewayReloadWaitingRoot,
-} from "../process/gateway-work-admission.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
@@ -51,6 +46,7 @@ import {
   candidateApplications,
   createObservedCandidate,
   isConfigReloadSuperseded,
+  runWithCandidateWaitingRoots,
   settleCandidateApplications,
   transferCandidateApplications,
 } from "./config-reload-candidates.js";
@@ -130,16 +126,22 @@ export function startGatewayConfigReloader(
     run: (ownership: GatewayConfigReloadTransactionOwnership) => Promise<T>,
   ): Promise<T> =>
     runOutsidePluginLifecycleLease(() =>
-      withPluginLifecycleLease({ signal: lifecycle.signal, processBound: true }, async (lease) => {
-        // Restart preparation outlives its requesting mutation but still owns a process lease.
-        const current = {
-          ...ownership,
-          assertInvokerOwned: () => lease.assertCurrent(),
-          checkpoint: () => checkpointOwned(() => lease.assertCurrent()),
-        };
-        await current.checkpoint();
-        return run(current);
-      }),
+      withPluginLifecycleLeaseAsync(
+        { signal: lifecycle.signal, processBound: true },
+        async (lease) => {
+          // Restart preparation outlives its requesting mutation but still owns a process lease.
+          const current = {
+            ...ownership,
+            assertInvokerOwned: () => lease.assertCurrent(),
+            checkpoint: async () => {
+              await lease.assertOwned();
+              await checkpointOwned(() => lease.assertCurrent());
+            },
+          };
+          await current.checkpoint();
+          return run(current);
+        },
+      ),
     );
   let watcherReload: Promise<void> | undefined;
   const activeReloads = new Set<Promise<unknown>>();
@@ -664,23 +666,6 @@ export function startGatewayConfigReloader(
     }
   };
 
-  const runWithCandidateWaitingRoots = <T>(
-    run: () => Promise<T>,
-    candidate?: GatewayConfigReloadCandidate | null,
-  ): Promise<T> => {
-    const invoke =
-      captureGatewayRootWorkAdmissionContinuationScope()?.run ?? runOutsideGatewayRootWorkAdmission;
-    let transaction = () => invoke(run);
-    for (const application of candidateApplications(candidate)) {
-      const continuation = application.runTransaction;
-      if (continuation) {
-        const next = transaction;
-        transaction = () => continuation(() => runWithGatewayReloadWaitingRoot(next));
-      }
-    }
-    return transaction();
-  };
-
   const runAcceptedTransaction = async (
     run: () => Promise<void>,
     candidate?: GatewayConfigReloadCandidate,
@@ -1014,11 +999,15 @@ export function startGatewayConfigReloader(
     // must use the same order, including when its timer inherited a writer's context.
     // Reload's protected writes stay in this process; package installers own separate leases.
     const reload = runOutsidePluginLifecycleLease(() =>
-      withPluginLifecycleLease({ signal: lifecycle.signal, processBound: true }, async (lease) => {
-        enteredReload = true;
-        leaseRetryDelayMs = 0;
-        await runReload(() => lease.assertCurrent());
-      }),
+      withPluginLifecycleLeaseAsync(
+        { signal: lifecycle.signal, processBound: true },
+        async (lease) => {
+          enteredReload = true;
+          leaseRetryDelayMs = 0;
+          await lease.assertOwned();
+          await runReload(() => lease.assertCurrent());
+        },
+      ),
     ).catch((error: unknown) => {
       if (stopped) {
         return;

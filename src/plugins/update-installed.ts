@@ -38,7 +38,7 @@ import {
   resolveTrustedSourceLinkedOfficialClawHubInstall as resolveOfficialClawHubInstall,
   resolveTrustedSourceLinkedOfficialNpmInstall as resolveOfficialNpmInstall,
 } from "./official-external-install-records.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
 import {
   buildClawHubTrustSkippedOutcome,
@@ -97,14 +97,15 @@ export async function updateNpmInstalledPlugins(
   if (params.dryRun) {
     return await runInstalledPluginUpdate(params);
   }
-  return await withPluginLifecycleLease({}, (lease) =>
-    withPluginInstallTransactions(params, () => lease.assertOwned(), runInstalledPluginUpdate),
+  return await withPluginLifecycleLeaseAsync({}, (lease) =>
+    withPluginInstallTransactions(params, lease, runInstalledPluginUpdate),
   );
 }
 
 async function runInstalledPluginUpdate(
   params: UpdateInstalledPluginsParams,
   assertCurrent?: () => void,
+  prepareEffect?: () => void | Promise<void>,
 ): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
   const retainOnUnavailable = params.retainOnUnavailable === true;
@@ -360,7 +361,8 @@ async function runInstalledPluginUpdate(
           pluginId,
           record,
           logger,
-          beforePersistentEffect: assertCurrent,
+          beforePersistentApply: assertCurrent,
+          beforePersistentEffect: params.beforePersistentEffect,
         })) || changed;
     }
     const recordSourceFailure = async (
@@ -705,6 +707,8 @@ async function runInstalledPluginUpdate(
     ranNpmInstaller,
     logger,
     transactionState,
-    beforePersistentEffect: assertCurrent,
+    prepareEffect,
+    beforePersistentApply: assertCurrent,
+    beforePersistentEffect: params.beforePersistentEffect,
   });
 }
