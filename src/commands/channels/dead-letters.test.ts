@@ -54,6 +54,19 @@ describe("channel dead-letter commands", () => {
     });
   });
 
+  it("escapes terminal controls in human-readable scope output", async () => {
+    await withTempState(async () => {
+      await channelsDeadLettersListCommand({
+        channel: "telegram\u001b[31m\nforged",
+        account: "ops\t\u001b[2J",
+      });
+
+      const output = runtime.log.mock.calls.map(([value]) => String(value)).join("\n");
+      expect(output).not.toMatch(/\p{Cc}/u);
+      expect(output).toContain("telegram[31m\\nforged/ops\\t[2J");
+    });
+  });
+
   it("resubmits through the queue API and reports completed events as terminal", async () => {
     await withTempState(async () => {
       const queue = createChannelIngressQueue<{ text: string }>({ channelId: "line" });
@@ -120,3 +133,4 @@ describe("channel dead-letter commands", () => {
     });
   });
 });
+
