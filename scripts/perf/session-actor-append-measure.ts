@@ -83,6 +83,7 @@ async function workload(phased: boolean, count: number, measure: boolean) {
       input: {
         scope: {
           agentId: "main",
+          storePath: "/synthetic/bench.db",
           sessionKey: `agent:main:bench-${index % 64}`,
           sessionId: `session-${index % 64}`,
         },
