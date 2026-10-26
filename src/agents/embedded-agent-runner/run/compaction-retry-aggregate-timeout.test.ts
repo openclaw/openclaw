@@ -32,26 +32,24 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
     vi.useRealTimers();
   });
 
-  it("keeps waiting while compaction retry work remains active", async () => {
-    const retry = createDeferredCore();
-    const result = waitForRetry({
-      waitForCompactionRetry: () => retry.promise,
-      isCompactionRetryStillActive: () => true,
-    });
-    await vi.advanceTimersByTimeAsync(170_000);
-    retry.resolve();
-    await expectSettled(result, false);
-  });
-
-  it("times out after an idle timeout window", async () => {
-    let compactionInFlight = true;
-    setTimeout(() => {
-      compactionInFlight = false;
-    }, 90_000);
-    const result = waitForRetry({ isCompactionRetryStillActive: () => compactionInFlight });
-    await vi.advanceTimersByTimeAsync(120_000);
-    await expectSettled(result, true);
-  });
+  it.each([true, false])(
+    "extends active work, then settles (retry completes: %s)",
+    async (completes) => {
+      const retry = createDeferredCore();
+      let active = true;
+      const result = waitForRetry({
+        waitForCompactionRetry: () => retry.promise,
+        isCompactionRetryStillActive: () => active,
+      });
+      await vi.advanceTimersByTimeAsync(170_000);
+      active = false;
+      if (completes) {
+        retry.resolve();
+      }
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expectSettled(result, !completes);
+    },
+  );
 
   it("caps aggregate timeout before scheduling", async () => {
     using timeoutSpy = vi.spyOn(globalThis, "setTimeout");
