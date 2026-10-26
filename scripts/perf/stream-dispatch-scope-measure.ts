@@ -87,7 +87,7 @@ const tool: ToolSearchCatalogEntry = {
     label: "Synthetic",
     description: "Synthetic tool",
     parameters: Type.Object({}),
-    execute: async () => ({ content: [] }),
+    execute: async () => ({ content: [], details: {} }),
   },
 };
 const toolContext: ToolSearchToolContext = {
