@@ -47,11 +47,9 @@ async function fixture() {
     updatedAt: 1,
     incognito: true as const,
   };
-  const result = await storage.mutate(
-    { type: "session.entry.create", input: { entry } },
-    authority,
-  );
-  expect(result.kind).toBe("committed");
+  expect(
+    (await storage.mutate({ type: "session.entry.create", input: { entry } }, authority)).kind,
+  ).toBe("committed");
   return {
     owner,
     patch: (patch: Partial<SessionEntry>) =>

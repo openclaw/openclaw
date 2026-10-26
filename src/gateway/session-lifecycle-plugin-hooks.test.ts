@@ -58,17 +58,12 @@ it.for([
     });
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName, handler }]));
     // Observe completion without replacing either lifetime owner or polling its count.
-    const continuations = [
-      vi.spyOn(admission, "runWithGatewayIndependentRootWorkContinuation"),
-      vi.spyOn(admission, "runWithGatewayDetachedWorkContinuation"),
-    ];
+    const continuation = vi.spyOn(admission, "runWithGatewayDetachedWorkContinuation");
     const joinContinuations = () =>
       Promise.allSettled(
-        continuations.flatMap((spy) =>
-          spy.mock.results
-            .filter((result) => result.type === "return")
-            .map((result) => result.value),
-        ),
+        continuation.mock.results
+          .filter((result) => result.type === "return")
+          .map((result) => result.value),
       );
     const params = {
       cfg: {},

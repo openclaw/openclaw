@@ -95,12 +95,10 @@ export function shouldRetryToolReadProbe(
   ) {
     return false;
   }
-  if (retryableOutput(params)) {
-    return true;
-  }
   return (
-    params.provider === "mistral" &&
-    /nonce[ab]=|testmarker[ab]=/.test(normalizeLowercaseStringOrEmpty(params.text))
+    retryableOutput(params) ||
+    (params.provider === "mistral" &&
+      /nonce[ab]=|testmarker[ab]=/.test(normalizeLowercaseStringOrEmpty(params.text)))
   );
 }
 
