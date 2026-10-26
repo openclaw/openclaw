@@ -78,7 +78,21 @@ it.each(["spawn", "spawn-execa"] as const)(
       // Reservations reject on the next microtask. Synchronous delivery fills
       // the real admission count without invoking either native launch path.
       for (let id = 1; id <= 257; id += 1) {
-        receive({ type, id, argv: ["synthetic-command"], options: {} });
+        receive(
+          type === "spawn"
+            ? {
+                type,
+                id,
+                argv: ["synthetic-command"],
+                options: { stdio: ["ignore", "ignore", "ignore"] },
+              }
+            : {
+                type,
+                id,
+                argv: ["synthetic-command"],
+                options: { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+              },
+        );
       }
       await setImmediate();
       const responses = boundary.send.mock.calls.map(([message]) => message);

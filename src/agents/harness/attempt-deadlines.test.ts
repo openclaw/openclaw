@@ -39,9 +39,9 @@ function expectTimeout(onTimeout: ReturnType<typeof vi.fn>, kind: "execution" | 
 it.each([
   ["timer", 0, false],
   ["timer", 0, true],
-  ["clock", 0],
-  ["timer", 90_000],
-  ["timer", -90_000],
+  ["clock", 0, false],
+  ["timer", 90_000, false],
+  ["timer", -90_000, false],
 ] as const)("expires via %s across a %ims clock jump (legacy: %s)", (expiry, jumpMs, legacy) => {
   vi.advanceTimersByTime(20_000);
   vi.setSystemTime(20_000 + jumpMs);
