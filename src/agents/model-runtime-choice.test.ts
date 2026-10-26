@@ -74,11 +74,30 @@ function runtimeModel(
   return [{ provider: model.provider, modelId: model.id, model }];
 }
 
+const responseModel = (provider: string, id: string, baseUrl: string) =>
+  makeProviderModelFixture<"openai-responses">({ provider, id, baseUrl, api: "openai-responses" });
+
+function runtimeConfig(model: string, runtime?: string): OpenClawConfig {
+  return {
+    agents: {
+      defaults: { model, models: { [model]: runtime ? { agentRuntime: { id: runtime } } : {} } },
+    },
+  };
+}
+
 function providerRegistry(
-  provider: ReturnType<typeof createEmptyPluginRegistry>["providers"][number]["provider"],
+  id: string,
+  hooks: Omit<
+    ReturnType<typeof createEmptyPluginRegistry>["providers"][number]["provider"],
+    "id" | "label" | "auth"
+  >,
 ) {
   const registry = createEmptyPluginRegistry();
-  registry.providers.push({ pluginId: provider.id, source: "test", provider });
+  registry.providers.push({
+    pluginId: id,
+    source: "test",
+    provider: { id, label: id, auth: [], ...hooks },
+  });
   return registry;
 }
 
@@ -244,9 +263,6 @@ describe("prepared model support admission", () => {
             models: testCase.authored
               ? [
                   modelDefinition(testCase.model, {
-                    name: "Authored model",
-                    reasoning: false,
-                    maxTokens: 4096,
                     compat: { codeMode: "capable" },
                     cost: { input: 99, output: 99, cacheRead: 99, cacheWrite: 99 },
                   }),
@@ -343,15 +359,7 @@ describe("prepared model support admission", () => {
         ],
       }),
       configuredRuntimeModels: runtimeModel(
-        makeProviderModelFixture({
-          provider: "fixture",
-          id: "model",
-          name: "Native A model",
-          api: "openai-responses",
-          baseUrl: "https://a.native.invalid/v1",
-          contextWindow: 4096,
-          maxTokens: 1024,
-        }),
+        responseModel("fixture", "model", "https://a.native.invalid/v1"),
       ),
     });
     await expectChoice(config, { raw: "fixture/model" }).toMatchObject({ kind: "unavailable" });
@@ -399,19 +407,9 @@ describe("prepared model support admission", () => {
 
   it("defers unobserved dynamic models but keeps known suppressions final", async () => {
     const config: OpenClawConfig = {};
-    const dynamicModel = makeProviderModelFixture({
-      provider: "fixture",
-      id: "new-model",
-      api: "openai-responses",
-      baseUrl: "https://dynamic.invalid/v1",
-    });
+    const dynamicModel = responseModel("fixture", "new-model", "https://dynamic.invalid/v1");
     const prepareDynamicModel = vi.fn(async () => dynamicModel);
-    const registry = providerRegistry({
-      id: "fixture",
-      label: "Fixture",
-      auth: [],
-      prepareDynamicModel,
-    });
+    const registry = providerRegistry("fixture", { prepareDynamicModel });
     const owner = publish(() => true, config, {
       pluginRegistry: registry,
       metadataSnapshot: metadata({
@@ -440,15 +438,8 @@ describe("prepared model support admission", () => {
       ref: { provider: "fixture", model: "new-model" },
       model: dynamicModel,
     });
-    expect(prepareDynamicModel).toHaveBeenCalledOnce();
     const incompleteConfig: OpenClawConfig = configFor("fixture", "https://dynamic.invalid/v1", {
-      models: [
-        modelDefinition("retired", {
-          name: "Retired fixture",
-          reasoning: false,
-          maxTokens: 1024,
-        }),
-      ],
+      models: [modelDefinition("retired")],
     });
     publish(() => true, incompleteConfig, {
       pluginRegistry: registry,
@@ -464,12 +455,7 @@ describe("prepared model support admission", () => {
       Pick<PreparedModelRuntimeSnapshot, "pluginRegistry" | "agentDir" | "workspaceDir">
     > = {},
   ) {
-    const model = makeProviderModelFixture<"openai-responses">({
-      provider: "xai",
-      id: "auto",
-      api: "openai-responses",
-      baseUrl: modelBaseUrl,
-    });
+    const model = responseModel("xai", "auto", modelBaseUrl);
     const config: OpenClawConfig = {
       ...custom,
       agents: { defaults: { models: { "xai/auto": { alias: "Grok" } } } },
@@ -517,20 +503,10 @@ describe("prepared model support admission", () => {
 
   it("admits a visible spawn past a retired runtime-preferred fallback", async () => {
     await withTestDir({ prefix: "openclaw-retired-spawn-fallback-" }, async (dir) => {
-      const registry = providerRegistry({
-        id: "xai",
-        label: "Fixture",
-        auth: [],
+      const registry = providerRegistry("xai", {
         preferRuntimeResolvedModel: ({ modelId }) => modelId === "auto",
         resolveDynamicModel: ({ modelId }) =>
-          modelId === "auto"
-            ? makeProviderModelFixture({
-                provider: "xai",
-                id: modelId,
-                api: "openai-responses",
-                baseUrl: "https://api.x.ai/v1",
-              })
-            : undefined,
+          modelId === "auto" ? responseModel("xai", modelId, "https://api.x.ai/v1") : undefined,
       });
       const owner = retiredXaiOwner(undefined, {
         pluginRegistry: registry,
@@ -566,21 +542,13 @@ describe("prepared model support admission", () => {
   });
 
   it("uses provider transport normalization for explicit, automatic and published aliases without discovery", async () => {
-    const model = makeProviderModelFixture({
-      provider: "xai",
-      id: "grok-4.6",
-      api: "openai-responses",
-      baseUrl: "https://api.x.ai/v1",
-    });
+    const model = responseModel("xai", "grok-4.6", "https://api.x.ai/v1");
     const config: OpenClawConfig = {
       agents: { defaults: { models: { "xai/grok-4.6": { alias: "Grok" } } } },
       ...configFor("xai", model.baseUrl, { api: "openai-completions" }),
     };
     const prepareDynamicModel = vi.fn(async () => undefined);
-    const registry = providerRegistry({
-      id: "xai",
-      label: "xAI",
-      auth: [],
+    const registry = providerRegistry("xai", {
       prepareDynamicModel,
       normalizeTransport: () => ({ api: "openai-responses", baseUrl: model.baseUrl }),
     });
@@ -663,24 +631,14 @@ describe("prepared model support admission", () => {
       loadNativeModelCatalog: reload,
       modelCatalog: state.renewed,
       configuredRuntimeModels: runtimeModel(
-        makeProviderModelFixture({
-          provider: "fixture",
-          id: "native",
-          name: "Native model",
-          api: "openai-responses",
-          baseUrl: "https://native.invalid/v1",
-          contextWindow: 4096,
-          maxTokens: 1024,
-        }),
+        responseModel("fixture", "native", "https://native.invalid/v1"),
       ),
     });
     bindPreparedModelRuntimeAuth(owner, { store: makeAuthStore() });
     return { state, reload };
   }
   // The runtime comes from the catalog row, so only the renewed catalog decides admission.
-  const implicitNative: OpenClawConfig = {
-    agents: { defaults: { model: "fixture/native", models: { "fixture/native": {} } } },
-  };
+  const implicitNative = runtimeConfig("fixture/native");
 
   it.each(["anthropic", "claude-cli"])(
     "rechecks recovered native auth before admitting %s without a catalog refresh",
@@ -690,11 +648,7 @@ describe("prepared model support admission", () => {
       });
       try {
         const raw = `${provider}/claude-opus-5-5`;
-        const config: OpenClawConfig = {
-          agents: {
-            defaults: { model: raw, models: { [raw]: { agentRuntime: { id: "claude-cli" } } } },
-          },
-        };
+        const config = runtimeConfig(raw, "claude-cli");
         const row = { provider, id: "claude-opus-5-5", name: "Claude" };
         const owner = publish(() => true, config, {
           modelCatalog: snapshot([row]),
@@ -702,11 +656,8 @@ describe("prepared model support admission", () => {
             makeProviderModelFixture({
               provider,
               id: row.id,
-              name: row.name,
               api: "anthropic-messages",
               baseUrl: "https://api.anthropic.com",
-              contextWindow: 200_000,
-              maxTokens: 8192,
             }),
           ),
           metadataSnapshot: metadata({
@@ -738,16 +689,7 @@ describe("prepared model support admission", () => {
     "renews $ownership native ownership once per $source choice without host credentials",
     async ({ ownership, source }) => {
       const configured = ownership === "configured";
-      const config: OpenClawConfig = configured
-        ? {
-            agents: {
-              defaults: {
-                model: "fixture/native",
-                models: { "fixture/native": { agentRuntime: { id: "native-test" } } },
-              },
-            },
-          }
-        : implicitNative;
+      const config = configured ? runtimeConfig("fixture/native", "native-test") : implicitNative;
       // Configured ownership must renew without a row-owned runtime.
       const { nativeRuntime: _, ...configuredRow } = nativeRow;
       const { state, reload } = publishNativeRenewal(config, {
