@@ -82,21 +82,27 @@ async function freePort() {
       server.listen(0, "127.0.0.1", resolve);
     });
     const port = server.address().port;
-    await new Promise((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
-    if (port >= 40000) return port;
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    if (port >= 40000) {
+      return port;
+    }
   }
   throw new Error("No loopback port >=40000 available");
 }
 
 function workerCounts(untilNs) {
   const byScript = {};
-  for (const name of readdirSync(output).filter((name) => /^workers-\d+-\d+\.jsonl$/.test(name))) {
+  for (const name of readdirSync(output).filter((file) => /^workers-\d+-\d+\.jsonl$/.test(file))) {
     for (const line of readFileSync(path.join(output, name), "utf8").trim().split("\n")) {
-      if (!line) continue;
+      if (!line) {
+        continue;
+      }
       const event = JSON.parse(line);
-      if (untilNs && BigInt(event.atNs) > BigInt(untilNs)) continue;
+      if (untilNs && BigInt(event.atNs) > BigInt(untilNs)) {
+        continue;
+      }
       const count = (byScript[event.script] ??= { created: 0, exited: 0, alive: 0 });
       if (event.kind === "create") {
         count.created++;
@@ -126,7 +132,11 @@ function sampleBoot(child) {
       clearTimeout(timer);
       child.off("message", onMessage);
       child.off("exit", onExit);
-      error ? reject(error) : resolve(value);
+      if (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      } else {
+        resolve(value);
+      }
     };
     const onMessage = (message) => {
       if (
@@ -141,7 +151,9 @@ function sampleBoot(child) {
     child.on("message", onMessage);
     child.once("exit", onExit);
     child.send({ channel: "openclaw.plugin-preparation-boot", action: "sample" }, (error) => {
-      if (error) finish(error);
+      if (error) {
+        finish(error);
+      }
     });
   });
 }
@@ -187,13 +199,19 @@ let childError;
 child.on("error", (error) => {
   childError = error;
 });
-const exited = new Promise((resolve) => child.once("close", resolve));
+const exited = new Promise((resolve) => {
+  child.once("close", resolve);
+});
 const alive = () => child.exitCode === null && child.signalCode === null && !childError;
 let forcedKill;
 const stopOwnedChild = () => {
-  if (alive()) child.kill("SIGTERM");
+  if (alive()) {
+    child.kill("SIGTERM");
+  }
   forcedKill ??= setTimeout(() => {
-    if (alive()) child.kill("SIGKILL");
+    if (alive()) {
+      child.kill("SIGKILL");
+    }
   }, 2_000);
 };
 const watchdog = setTimeout(stopOwnedChild, 180_000);
@@ -236,7 +254,9 @@ try {
   let resources;
   for (let attempt = 0; attempt < 20; attempt++) {
     resources = await readGatewayResources(child, { includeWorkers: true, collectGarbage: false });
-    if (!resources.workers?.workerMemoryMissing?.length) break;
+    if (!resources.workers?.workerMemoryMissing?.length) {
+      break;
+    }
     await delay(250);
   }
   const shutdown = await stopGatewayGracefully(child, 30_000);
