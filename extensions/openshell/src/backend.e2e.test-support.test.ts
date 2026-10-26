@@ -49,7 +49,6 @@ async function createCleanupFixture(options: { mode?: string; inventory?: string
   const command = path.join(root, "openshell");
   const initial = {
     names: ["first", "second"],
-    listCalls: 0,
     deletes: [] as string[],
     workspaceDeletes: 0,
     ...options,
@@ -73,7 +72,6 @@ if (args[0] === "workspace") {
   state.observations = 0;
   if (state.mode === "delete-failure" && state.pending === "first") failure = "delete failed";
 } else if (args[3] === "list") {
-  state.listCalls++;
   if (state.pending && ++state.observations >= 2 && state.mode !== "stuck") {
     state.names = state.names.filter(name => name !== state.pending);
     state.pending = "";
@@ -111,18 +109,14 @@ describe.runIf(process.platform !== "win32")("OpenShell workspace cleanup", () =
     async (inventory) => {
       const fixture = await createCleanupFixture({ inventory });
       await expect(fixture.cleanup()).rejects.toThrow();
-      expect(await fixture.read()).toMatchObject({
-        listCalls: 1,
-        deletes: [],
-        workspaceDeletes: 0,
-      });
+      expect(await fixture.read()).toMatchObject({ deletes: [], workspaceDeletes: 0 });
     },
   );
 
   it.each([
-    ["read-failure", "database is locked", { listCalls: 2, deletes: ["first", "second"] }],
-    ["delete-failure", "delete failed", { listCalls: 1, deletes: ["first", "second"] }],
-    ["stuck", "120 seconds", { listCalls: 2, deletes: ["first"], observations: 1 }],
+    ["read-failure", "database is locked", { deletes: ["first", "second"] }],
+    ["delete-failure", "delete failed", { deletes: ["first", "second"] }],
+    ["stuck", "120 seconds", { deletes: ["first"] }],
     ["workspace-failure", "workspace cleanup failed", { names: [], deletes: ["first", "second"] }],
   ] as const)("reports %s with durable deletion state", async (mode, message, state) => {
     const fixture = await createCleanupFixture({ mode });

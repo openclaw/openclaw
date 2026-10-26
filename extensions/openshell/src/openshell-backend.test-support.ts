@@ -49,20 +49,9 @@ export function resetOpenShellBackendMocks() {
     configPath: "/tmp/openclaw-openshell-test-ssh-config",
     host: "openshell-test",
   });
-  sandboxMocks.cleanupPreparedExec.mockResolvedValue(undefined);
   sandboxMocks.prepareSshSandboxExec.mockImplementation(
-    async (params: {
-      session: { command: string; configPath: string; host: string };
-      tty?: boolean;
-    }) => ({
-      argv: [
-        params.session.command,
-        "-F",
-        params.session.configPath,
-        ...(params.tty ? ["-tt", "-o", "RequestTTY=force"] : ["-T", "-o", "RequestTTY=no"]),
-        params.session.host,
-        "'/bin/sh' '/tmp/openclaw-synthetic-staging/run.sh'",
-      ],
+    async ({ session, tty }: { session: { host: string }; tty?: boolean }) => ({
+      argv: [session.host, ...(tty ? ["-tt"] : [])],
       cleanup: sandboxMocks.cleanupPreparedExec,
     }),
   );
@@ -71,9 +60,7 @@ export function resetOpenShellBackendMocks() {
       const remoteCommand = params.remoteCommand
         .replaceAll("'/sandbox", `'${sandboxMocks.remoteRoot}`)
         .replaceAll("'/agent", `'${sandboxMocks.remoteAgentRoot}`);
-      const result = spawnSync("sh", ["-c", remoteCommand], {
-        input: params.stdin,
-      });
+      const result = spawnSync("sh", ["-c", remoteCommand], { input: params.stdin });
       if (result.error) {
         throw result.error;
       }
