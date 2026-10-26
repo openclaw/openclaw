@@ -53,6 +53,7 @@ describe("memory index", () => {
     memoryFullRetryDirty: boolean;
     awaitManagerIdle: () => Promise<void>;
     syncPublishedIndexInBackground: (params: { reason: string }) => Promise<void>;
+    waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
   };
   const serving = (manager: Manager) => manager as unknown as ServingFields;
   const provider = (manager: Manager) =>
@@ -68,6 +69,11 @@ describe("memory index", () => {
   function keywordConfig(options: Parameters<typeof createCfg>[0] = {}) {
     providerFixture.forceNoProvider = true;
     return createCfg({ provider: "none", minScore: 0, ...options });
+  }
+  async function syncedKeyword(options: Parameters<typeof createCfg>[0] = {}) {
+    const manager = await getPersistentManager(keywordConfig(options));
+    await manager.sync({ reason: "test", force: true });
+    return manager;
   }
   const matchingHit = (
     fields: Partial<Awaited<ReturnType<Manager["search"]>>[number]> = {
@@ -218,35 +224,13 @@ describe("memory index", () => {
   });
 
   it("falls back to keyword results after bounded query embedding retries are exhausted with unset provider", async () => {
-    const cfg = createCfg({});
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-
-    let queryCalls = 0;
-    (
-      manager as unknown as {
-        provider: EmbeddingProvider;
-      }
-    ).provider = {
-      id: "mock",
-      model: "mock-embed",
-      embed: async () => {
-        queryCalls += 1;
-        throw new Error("TypeError: fetch failed | other side closed");
-      },
-      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
-      close: async () => {},
-    };
-    (
-      manager as unknown as {
-        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
-      }
-    ).waitForEmbeddingRetry = async () => {};
-
-    const results = await manager.search("alpha");
-
-    expect(queryCalls).toBe(3);
-    expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+    const manager = await syncedManager();
+    using query = vi
+      .spyOn(provider(manager), "embed")
+      .mockRejectedValue(new Error("TypeError: fetch failed | other side closed"));
+    serving(manager).waitForEmbeddingRetry = async () => {};
+    expectFixtureHit(await manager.search("alpha"));
+    expect(query).toHaveBeenCalledTimes(3);
   });
 
   it("keeps a healthy local provider active when the caller cancels search", async () => {
@@ -452,16 +436,7 @@ describe("memory index", () => {
   });
 
   it("searches the published index without flushing dirty sessions", async () => {
-    providerFixture.forceNoProvider = true;
-    const manager = await getPersistentManager(
-      createCfg({
-        provider: "none",
-        sources: ["memory", "sessions"],
-        sessionMemory: true,
-        minScore: 0,
-      }),
-    );
-    await manager.sync({ reason: "test", force: true });
+    const manager = await syncedKeyword({ sources: ["memory", "sessions"], sessionMemory: true });
     const content = "Quiet-period transcript canary is ORCHID-83.";
     await seedMemoryIndexSessionTranscript({
       sessionId: "search-sync",
@@ -478,9 +453,8 @@ describe("memory index", () => {
     servingFields.dirty = false;
     servingFields.sessionsDirty = true;
     servingFields.sessionsDirtyFiles = new Set(entries.map((entry) => entry.sessionFile));
-    const getSpy = vi.spyOn(MemoryIndexManager, "get");
-
-    try {
+    {
+      using getSpy = vi.spyOn(MemoryIndexManager, "get");
       const publishedResults = await manager.search("zebra", { maxResults: 5, minScore: 0 });
       expect(publishedResults.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
       await expect(manager.search("ORCHID-83", { minScore: 0 })).resolves.toEqual([]);
@@ -489,8 +463,6 @@ describe("memory index", () => {
       expect(servingFields.sessionsDirtyFiles).toEqual(
         new Set(entries.map((entry) => entry.sessionFile)),
       );
-    } finally {
-      getSpy.mockRestore();
     }
 
     await manager.sync({ reason: "test", force: true });
@@ -502,10 +474,7 @@ describe("memory index", () => {
   });
 
   it("keeps search usable while maintenance syncs a full memory retry", async () => {
-    const manager = await getPersistentManager(
-      keywordConfig({ sources: ["memory", "sessions"], sessionMemory: true }),
-    );
-    await manager.sync({ reason: "test", force: true });
+    const manager = await syncedKeyword({ sources: ["memory", "sessions"], sessionMemory: true });
     const searchCurrent = () =>
       manager.search("current dirty search sync", { maxResults: 5, minScore: 0 });
     const content = "Current memory appears only after the dirty search sync.";
