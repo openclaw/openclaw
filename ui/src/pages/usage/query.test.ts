@@ -7,6 +7,7 @@ import {
   buildQuerySuggestions,
   buildSessionsCsv,
   removeQueryToken,
+  setQueryTokensForKey,
 } from "./query.ts";
 import type { UsageSessionEntry } from "./types.ts";
 import { buildUsageFilterOptions } from "./view.test-support.ts";
@@ -56,6 +57,24 @@ it("limits suggestions before matching while preserving raw option spelling", ()
   }
   expect(suggest("constructor:")).toEqual([]);
   expect(suggest("has:err")).toEqual([{ label: "has:errors", value: "has:errors" }]);
+});
+
+it("quotes newly selected multiword values so they parse as one term", () => {
+  const query = setQueryTokensForKey("provider:local ", "model", ["Local Model"]);
+  expect(query).toBe('provider:local model:"Local Model" ');
+  expect(extractQueryTerms(query).map(({ key, value }) => ({ key, value }))).toEqual([
+    { key: "provider", value: "local" },
+    { key: "model", value: "Local Model" },
+  ]);
+  // Reselecting keeps the existing quoted term instead of appending a duplicate.
+  expect(setQueryTokensForKey(query, "model", ["Local Model"])).toBe(query);
+
+  const options = buildUsageFilterOptions([
+    { key: "session-1", model: "Local Model", usage: null },
+  ]);
+  expect(buildQuerySuggestions("model:Loc", extractQueryTerms("model:Loc"), options)).toEqual([
+    { label: "model:Local Model", value: 'model:"Local Model"' },
+  ]);
 });
 
 const csvForLabel = (label: string, usage: UsageSessionEntry["usage"] = null) =>
