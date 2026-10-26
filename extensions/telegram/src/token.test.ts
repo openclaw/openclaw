@@ -48,32 +48,6 @@ describe("resolveTelegramToken", () => {
     workspace = undefined;
   });
 
-  it.runIf(process.platform !== "win32")(
-    "marks symlinked tokenFile paths configured-unavailable",
-    () => {
-      vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-      const tokenFile = createTokenFile("token.txt");
-      const tokenLink = path.join(path.dirname(tokenFile), "token-link.txt");
-      fs.symlinkSync(tokenFile, tokenLink);
-
-      const result = resolveTelegramToken(
-        config({ tokenFile: tokenLink, botToken: "fallback-token" }),
-      );
-      expect(result).toEqual({
-        token: "",
-        source: "tokenFile",
-        credentialDiagnostics: [
-          {
-            code: "CREDENTIAL_FILE_UNAVAILABLE",
-            path: "channels.telegram.tokenFile",
-            reason: "symlink",
-          },
-        ],
-      });
-      expect(JSON.stringify(result)).not.toContain(tokenLink);
-    },
-  );
-
   it("applies account file, account config, channel file, channel config, then env precedence", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
     const accountTokenFile = createTokenFile("account-token.txt", "account-file-token\n");

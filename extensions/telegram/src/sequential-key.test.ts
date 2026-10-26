@@ -4,27 +4,26 @@ import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import { resolveTelegramForumFlag } from "./bot/helpers.js";
 import { getTelegramSequentialConstraints, getTelegramSequentialKey } from "./sequential-key.js";
 
-const mockChat = (
-  chat: Pick<Chat, "id"> & Partial<Pick<Chat, "type" | "is_forum" | "is_direct_messages">>,
-): Chat => chat as Chat;
-const mockMessage = (message: Pick<Message, "chat"> & Partial<Message>): Message =>
+const mockMessage = (message: Partial<Message> = {}): Message =>
   ({
     message_id: 1,
     date: 0,
+    chat: { id: 123, type: "private" },
     ...message,
   }) as Message;
+const messageContext = (message: Partial<Message> = {}) => ({ message: mockMessage(message) });
 const forumMessage = (text: string) =>
   mockMessage({
-    chat: mockChat({ id: -100, type: "supergroup", is_forum: true }),
+    chat: { id: -100, type: "supergroup", is_forum: true, title: "Forum" },
     is_topic_message: true,
     message_thread_id: 5907,
     text,
   });
 const groupMessage = (id: number, extra: Partial<Message> = {}) =>
-  mockMessage({ chat: mockChat({ id, type: "supergroup" }), ...extra });
+  mockMessage({ chat: { id, type: "supergroup", title: "Group" }, ...extra });
 const callback = (id: number, data: string | undefined) => {
   assert(data, "expected callback data");
-  return { update: { callback_query: { message: mockMessage({ chat: mockChat({ id }) }), data } } };
+  return { update: { callback_query: { message: groupMessage(id), data } } };
 };
 
 const addressed = (text: string) => ({
@@ -37,31 +36,16 @@ describe("getTelegramSequentialKey", () => {
     [
       {
         me: { has_topics_enabled: true } as never,
-        message: mockMessage({
-          chat: mockChat({ id: 123, type: "private" }),
-          message_thread_id: 9,
-        }),
+        ...messageContext({ message_thread_id: 9 }),
       },
       "telegram:123:topic:9",
     ],
     [addressed("/stop@some_other_bot"), "telegram:-100:topic:5907"],
     [addressed("/stop@openclaw_bot!"), "telegram:-100:control"],
-    // Interrupt commands keep the chat-wide control lane. `/approve` in particular must
-    // never queue behind the run that is blocked waiting on its own approval request.
-    [
-      {
-        message: mockMessage({
-          chat: mockChat({ id: 123 }),
-          text: "/approve exec:def456 allow-once",
-        }),
-      },
-      "telegram:123:control",
-    ],
+    // Approval cannot queue behind the run waiting on it.
+    [messageContext({ text: "/approve exec:def456 allow-once" }), "telegram:123:control"],
     [{ message: forumMessage("/new sync tars") }, "telegram:-100:topic:5907"],
-    [
-      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/btw what is the time?" }) },
-      "telegram:123:btw:1",
-    ],
+    [messageContext({ text: "/btw what is the time?" }), "telegram:123:btw:1"],
     [
       callback(
         654,
@@ -110,11 +94,12 @@ describe("getTelegramSequentialKey", () => {
 describe("getTelegramSequentialConstraints", () => {
   it("bridges a channel Direct Messages message with its reaction without coupling topics", () => {
     const message = mockMessage({
-      chat: mockChat({
+      chat: {
         id: -1002,
         type: "supergroup",
         is_direct_messages: true,
-      } as Chat),
+        title: "Direct Messages",
+      } as Chat,
       message_id: 77,
       message_thread_id: 999,
       direct_messages_topic: { topic_id: 9, user: { id: 1 } as never },
@@ -139,10 +124,6 @@ describe("getTelegramSequentialConstraints", () => {
   });
 
   it("does not add a bridge lane outside forum chats", () => {
-    expect(
-      getTelegramSequentialConstraints({
-        message: mockMessage({ chat: mockChat({ id: 123, type: "private" }) }),
-      }),
-    ).toBe("telegram:123");
+    expect(getTelegramSequentialConstraints(messageContext())).toBe("telegram:123");
   });
 });

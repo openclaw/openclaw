@@ -6,6 +6,7 @@ import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
 import { telegramSetupPlugin } from "../setup-plugin-api.js";
 import { inspectTelegramAccount } from "./account-inspect.js";
+import { resolveTelegramToken } from "./token.js";
 
 function telegramConfig(
   telegram: NonNullable<OpenClawConfig["channels"]>["telegram"],
@@ -140,21 +141,29 @@ it.runIf(process.platform !== "win32")(
     fs.writeFileSync(tokenFile, "123:token\n", "utf8");
     fs.symlinkSync(tokenFile, tokenLink);
 
-    const cfg = telegramConfig({ tokenFile: tokenLink });
+    const cfg = telegramConfig({ tokenFile: tokenLink, botToken: "fallback-token" });
     const account = inspectTelegramAccount({ cfg, accountId: "default" });
     expect(account).toMatchObject({
       tokenSource: "tokenFile",
       tokenStatus: "configured_unavailable",
       token: "",
     });
-    expect(account.credentialDiagnostics).toEqual([
+    const diagnostics = [
       {
         code: "CREDENTIAL_FILE_UNAVAILABLE",
         path: "channels.telegram.tokenFile",
         reason: "symlink",
       },
-    ]);
+    ];
+    expect(account.credentialDiagnostics).toEqual(diagnostics);
     expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(tokenLink);
+    const resolved = resolveTelegramToken(cfg);
+    expect(resolved).toEqual({
+      token: "",
+      source: "tokenFile",
+      credentialDiagnostics: diagnostics,
+    });
+    expect(JSON.stringify(resolved)).not.toContain(tokenLink);
     fs.rmSync(dir, { recursive: true, force: true });
   },
 );
