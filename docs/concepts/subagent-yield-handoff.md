@@ -19,6 +19,11 @@ This design applies equally to an orchestrator spawned from an interactive
 session and one spawned from an isolated cron run. Cron owns delivery of the
 scheduled result, while the registry owns the nested orchestrator's continuation.
 
+An accepted yield stops new steering immediately. Tool calls in the same model
+response settle before the execution ends, preserving each call's own result.
+Stop, timeouts, and permission revocation can still cancel those calls while
+they settle. The handoff does not start another model request.
+
 ## Ownership through the handoff
 
 | Phase                | Owner                                         | Required handoff                                                                                                                                                       |
