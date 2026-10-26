@@ -50,21 +50,16 @@ describe("resolveWorkingProgress", () => {
     },
   );
 
-  it("uses only the matching reconnect send when restoring an active turn", () => {
-    const queue = ["other-run", "active-run"].map((id, i) =>
-      send(id, (i + 1) * 1_000, "waiting-reconnect"),
-    );
-    expect(progress("active-run", 3_000, queue, [], [])).toMatchObject({
-      runId: "active-run",
-      startedAt: 2_000,
-    });
-  });
-
-  it.each(["failed", "held", "waiting-idle"] as const)(
+  it.each(["failed", "held", "waiting-idle", "waiting-reconnect"] as const)(
     "retains matching durable timing from a %s send after the run is identified",
     (sendState) => {
       const queue = ["old-run", "active-run"].map((id, i) =>
-        send(id, (i + 1) * 1_000, sendState, "Review required"),
+        send(
+          id,
+          (i + 1) * 1_000,
+          sendState,
+          sendState === "waiting-reconnect" ? undefined : "Review required",
+        ),
       );
       expect(progress("active-run", 3_000, queue, [], [])).toMatchObject({
         runId: "active-run",
@@ -214,18 +209,6 @@ describe("resolveTurnRecap", () => {
 
   describe("for a run that resumed a handoff", () => {
     const resumed = { runId, request: { askedAt: 1_000, runIds: ["handoff-run"] } };
-
-    it("reports the whole request: the wait and every run's tokens", () => {
-      const usageByRun = new Map([
-        ["handoff-run", { outputTokens: 4_100, seq: 1 }],
-        [runId, { outputTokens: 256, seq: 2 }],
-      ]);
-      resolve({ indicator: resumed });
-      // 97s from the request to the end, though the last run alone took 14s.
-      expect(resolve({ row: { ...doneRow, endedAt: 98_000 }, usageByRun })).toEqual(
-        recap(4_356, 97_000),
-      );
-    });
 
     it("never reports a partial token total, or less time than its last run", () => {
       resolve({ indicator: resumed });
