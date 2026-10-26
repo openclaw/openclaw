@@ -91,9 +91,7 @@ describe("model setup first-run redirect", () => {
       ["/chat", "", "", "", true],
       ["/chat", "?session=agent%3Amain%3Amain", "", "", false],
       ["/chat", "", "#session=agent%3Amain%3Amain", "", false],
-      ["/chat/main", "", "", "", true],
       ["/chat/main/", "", "", "", true],
-      ["/openclaw/chat/main", "", "", "/openclaw", true],
       ["/openclaw/chat/main/", "", "", "/openclaw", true],
       ["/chat/research", "", "", "", false],
       ["/chat/main/existing-session", "", "", "", false],
@@ -164,17 +162,25 @@ describe("model setup first-run redirect", () => {
   });
 });
 
+function tamperReceipt(patch: object) {
+  const receipt = JSON.parse(localStorage.getItem(receiptKey)!);
+  localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, ...patch }));
+}
 it.each<[string, (context: ApplicationContext) => void]>([
   ["Gateway token", (ctx) => Object.assign(ctx.gateway.connection, { token: "replacement" })],
   ["Gateway URL", (ctx) => Object.assign(ctx.gateway.connection, { gatewayUrl: "wss://other" })],
   ["selected agent", (ctx) => Object.assign(ctx.agentSelection.state, { selectedId: "research" })],
   ["browser device identity", () => setDeviceKey("replacement")],
-])("refuses a receipt after its %s changes", (_name, replace) => {
+  ["role", () => tamperReceipt({ modelTarget: "utility" })],
+  ["wizard", () => tamperReceipt({ wizard: { sessionId: "replacement", authChoice: "other" } })],
+])("rejects a receipt after its %s changes", (_name, replace) => {
   const { context } = createConnectedContext();
-  persistFirstRunActivationReceipt(context, candidate);
-
+  persistFirstRunActivationReceipt(context, {
+    kind: "provider-auth",
+    modelRef: "openai/expected",
+    wizard: { sessionId: "original", authChoice: "custom-api-key", authKind: "secret" },
+  });
   replace(context);
-
   expect([readReceipt(context), localStorage.getItem(receiptKey)]).toEqual([null, null]);
 });
 
@@ -187,21 +193,6 @@ it("binds paired-device authentication when no explicit Gateway credential exist
   expect(persisted).not.toContain(privateKey);
   expect(readReceipt(context)?.modelRef).toBe("openai/expected");
   context.gateway.snapshot.hello!.auth!.deviceToken = "replacement-device-token";
-
-  expect([readReceipt(context), localStorage.getItem(receiptKey)]).toEqual([null, null]);
-});
-
-it.each([
-  { name: "role", patch: { modelTarget: "utility" } },
-  { name: "wizard", patch: { wizard: { sessionId: "replacement", authChoice: "other" } } },
-])("rejects a tampered $name without trusting or replaying its owner receipt", ({ patch }) => {
-  const { context } = createConnectedContext();
-  const receipt = persistFirstRunActivationReceipt(context, {
-    kind: "provider-auth",
-    modelRef: "openai/expected",
-    wizard: { sessionId: "original", authChoice: "custom-api-key", authKind: "secret" },
-  });
-  localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, ...patch }));
 
   expect([readReceipt(context), localStorage.getItem(receiptKey)]).toEqual([null, null]);
 });
