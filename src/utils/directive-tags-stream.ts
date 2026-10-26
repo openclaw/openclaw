@@ -112,7 +112,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
         settledMarker = !hasUnsettledDirectiveMarker(source);
         visibleMarker = hasUnsettledDirectiveMarker(visible);
         identity = visible === source;
-        ownership = findCodeOwnership(source);
+        ownership = undefined;
         previousChar = source.slice(-1);
         return { text: visible, delta: null };
       }
@@ -158,7 +158,7 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
       settledMarker = !hasUnsettledDirectiveMarker(source);
       visibleMarker = hasUnsettledDirectiveMarker(visible);
       identity = visible === source;
-      ownership = findCodeOwnership(source);
+      ownership = undefined;
       if (identity) {
         return input;
       }

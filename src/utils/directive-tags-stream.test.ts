@@ -82,7 +82,7 @@ describe("inline directive display stream", () => {
     for (const chunks of [
       ["![`[[reply_to_current]]`", "](/image.png)"],
       ["![", "`", "[[reply_to_current]]", "`", "](/image.png)"],
-      Array.from({ length: source.length }, (_, index) => source[index]),
+      Array.from({ length: source.length }, (_, index) => source.charAt(index)),
     ]) {
       const projection = createLiveAssistantTextProjection({});
       let text = "";
