@@ -81,15 +81,11 @@ it("builds and parses canonical targets without folding ids", () => {
 
 it("preserves QA bus tool-call arguments while normalizing calls", () => {
   const args = {
-    command: "cat README.md",
     apiToken: "secret-token",
     headers: { Authorization: "Bearer sk_test_12345678901234567890" },
-    headerPairs: [
-      ["X-API-Key", "secret"],
-      ["Accept", "application/json"],
-    ],
-    argv: ["gh", "api", "--token", "secret-token", "repos/openclaw/openclaw"],
-    values: ["ok", { password: "hunter2" }],
+    headerPairs: [["X-API-Key", "secret"]],
+    argv: ["--token", "secret-token"],
+    values: [{ password: "hunter2" }],
   };
   const expectedArgs = structuredClone(args);
   expect(

@@ -1,49 +1,43 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createQuestionReactionTargetStore } from "./question-gateway-runtime.js";
 
-type RegisterChannelDelivery =
-  typeof import("../infra/question-channel-runtime.js").registerQuestionChannelDelivery;
-type ResolveReaction =
-  typeof import("./question-gateway-runtime.js").questionGatewayRuntime.resolveReaction;
-
-const binding = {
-  questionId: "ask_0123456789abcdef0123456789abcdef",
-  optionValues: ["One", "Two"],
-};
+type Options = Parameters<typeof createQuestionReactionTargetStore>[0];
+const questionId = "ask_0123456789abcdef0123456789abcdef";
+const binding = { questionId, optionValues: ["One", "Two"] };
 const identity = { accountId: "default", messageId: "message-1" };
-const resolveDefaults = { identities: [identity], optionIndex: 0, cfg: {}, senderId: "sender-1" };
-const staleMessage = `test: stale question reaction ignored id=${binding.questionId}`;
-type StoreOptions = Parameters<typeof createQuestionReactionTargetStore>[0];
+const gatewayUrl = "ws://127.0.0.1:1234";
+const resolveDefaults = { identities: [identity], cfg: {}, senderId: "sender-1", gatewayUrl };
+const staleMessage = `test: stale question reaction ignored id=${questionId}`;
 
-function createStore(
-  overrides: Pick<StoreOptions, "ttlMs" | "registerChannelDelivery" | "resolveReaction"> = {},
-) {
-  return createQuestionReactionTargetStore({
+function fixture(overrides: Pick<Options, "ttlMs" | "registerChannelDelivery"> = {}) {
+  const resolveReaction = vi.fn<NonNullable<Options["resolveReaction"]>>();
+  const logDebug = vi.fn();
+  const store = createQuestionReactionTargetStore({
     channel: "test",
     channelDisplayName: "Test",
-    buildKey: (target: typeof identity) => {
-      const accountId = target.accountId.trim();
-      const messageId = target.messageId.trim();
-      return accountId && messageId ? `${accountId}:${messageId}` : null;
-    },
-    registerChannelDelivery: vi.fn<RegisterChannelDelivery>(),
+    buildKey: ({ accountId, messageId }: typeof identity) => `${accountId}:${messageId}`,
+    registerChannelDelivery: vi.fn<NonNullable<Options["registerChannelDelivery"]>>(),
+    resolveReaction,
     ...overrides,
   });
+  const resolve = (optionIndex = 0) =>
+    expect(store.resolve({ ...resolveDefaults, optionIndex, logDebug })).resolves.toBe(true);
+  return {
+    store,
+    resolveReaction,
+    logDebug,
+    register: () => store.register(binding, identity),
+    resolve,
+  };
 }
-type Store = ReturnType<typeof createStore>;
-function resolve(store: Store, params: Partial<Parameters<Store["resolve"]>[0]> = {}) {
-  return expect(store.resolve({ ...resolveDefaults, ...params })).resolves.toBe(true);
-}
-
 afterEach(() => vi.useRealTimers());
 
 it("replaces target timers without letting the old timer delete the new target", () => {
   vi.useFakeTimers();
-  const store = createStore({ ttlMs: 1_000 });
-
-  expect(store.register(binding, identity)).toBe(true);
+  const { store, register } = fixture({ ttlMs: 1_000 });
+  expect(register()).toBe(true);
   vi.advanceTimersByTime(500);
-  expect(store.register(binding, identity)).toBe(true);
+  expect(register()).toBe(true);
   vi.advanceTimersByTime(500);
   expect(store.has([identity])).toBe(true);
   vi.advanceTimersByTime(500);
@@ -51,67 +45,47 @@ it("replaces target timers without letting the old timer delete the new target",
 });
 
 it("registers the exact delivery id and honors synchronous finalization", async () => {
-  const registerChannelDelivery = vi.fn<RegisterChannelDelivery>((params) => {
-    void params.finalize("answered");
+  const { register, resolve, resolveReaction, logDebug } = fixture({
+    registerChannelDelivery: ({ questionId: id, deliveryId, finalize }) => {
+      expect([id, deliveryId]).toEqual([questionId, "test-reaction:default:message-1"]);
+      void finalize("answered");
+    },
   });
-  const resolveReaction = vi.fn<ResolveReaction>();
-  const store = createStore({ registerChannelDelivery, resolveReaction });
-  const logDebug = vi.fn();
-
-  expect(store.register(binding, identity)).toBe(true);
-  expect(registerChannelDelivery).toHaveBeenCalledWith(
-    expect.objectContaining({
-      questionId: binding.questionId,
-      deliveryId: "test-reaction:default:message-1",
-    }),
-  );
-  await resolve(store, { logDebug });
+  expect(register()).toBe(true);
+  await resolve();
   expect(resolveReaction).not.toHaveBeenCalled();
   expect(logDebug).toHaveBeenCalledWith(staleMessage);
 });
 
 it("resolves once, terminalizes the target, and consumes later duplicates", async () => {
-  const resolveReaction = vi.fn<ResolveReaction>().mockResolvedValue({
+  const { register, resolve, resolveReaction, logDebug } = fixture();
+  resolveReaction.mockResolvedValue({
     status: "answered",
     questionId: "choice",
     optionValue: "Two",
   });
-  const store = createStore({ resolveReaction });
-  store.register(binding, identity);
-
-  const resolveParams = {
-    ...resolveDefaults,
-    optionIndex: 1,
-    gatewayUrl: "ws://127.0.0.1:1234",
-    logDebug: vi.fn(),
-  };
-  await resolve(store, resolveParams);
-  await resolve(store, resolveParams);
-
+  register();
+  await resolve(1);
+  await resolve(1);
   expect(resolveReaction).toHaveBeenCalledExactlyOnceWith({
     cfg: {},
-    questionId: binding.questionId,
+    questionId,
     optionValue: "Two",
     senderId: "sender-1",
-    gatewayUrl: "ws://127.0.0.1:1234",
+    gatewayUrl,
     clientDisplayName: "Test question (sender-1)",
   });
-  expect(resolveParams.logDebug).toHaveBeenCalledWith(staleMessage);
+  expect(logDebug).toHaveBeenCalledWith(staleMessage);
 });
 
 it("consumes out-of-range choices and resolver failures without losing diagnostics", async () => {
-  const resolveReaction = vi.fn<ResolveReaction>().mockRejectedValue(new Error("gateway down"));
-  const store = createStore({ resolveReaction });
-  const logDebug = vi.fn();
-  store.register(binding, identity);
-
-  await resolve(store, { optionIndex: 3, logDebug });
-  await resolve(store, { logDebug });
-
-  expect(logDebug).toHaveBeenCalledWith(
-    `test: out-of-range question reaction ignored id=${binding.questionId}`,
-  );
-  expect(logDebug).toHaveBeenCalledWith(
-    `test: question reaction failed id=${binding.questionId}: Error: gateway down`,
-  );
+  const { register, resolve, resolveReaction, logDebug } = fixture();
+  resolveReaction.mockRejectedValue(new Error("gateway down"));
+  register();
+  await resolve(3);
+  await resolve();
+  expect(logDebug.mock.calls).toEqual([
+    [`test: out-of-range question reaction ignored id=${questionId}`],
+    [`test: question reaction failed id=${questionId}: Error: gateway down`],
+  ]);
 });
