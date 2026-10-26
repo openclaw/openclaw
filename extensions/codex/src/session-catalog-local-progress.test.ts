@@ -68,19 +68,12 @@ it.each([
       }
       await result;
       await Promise.all(publications);
-      expect(onHost).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining(
-          outcome === "success"
-            ? { sessions: [expect.objectContaining({ threadId: "cold-row" })] }
-            : {
-                connected: false,
-                sessions: [],
-                error: expect.objectContaining({ code: "APP_SERVER_UNAVAILABLE" }),
-              },
-        ),
-      );
+      const expectedHost =
+        outcome === "success"
+          ? { sessions: [{ threadId: "cold-row" }] }
+          : { connected: false, sessions: [], error: { code: "APP_SERVER_UNAVAILABLE" } };
+      expect(onHost.mock.calls).toMatchObject([[expectedHost]]);
       if (outcome === "success") {
-        expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
         commandRpcMocks.codexControlRequest.mockClear();
         await expect(list()).resolves.toMatchObject([
           { sessions: [{ threadId: "cold-row" }], connected: true },

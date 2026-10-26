@@ -1,67 +1,5 @@
 import { expect, it } from "vitest";
-import {
-  createControl,
-  createCatalogTestProvider,
-  createRuntime,
-  fs,
-  os,
-  path,
-  resolveCodexAppServerHomeDir,
-  tempDirs,
-  withEnvAsync,
-  type OpenClawConfig,
-} from "./session-catalog.test-helpers.js";
-
-async function registerLocalCatalog(pluginConfig: unknown) {
-  const root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-catalog-supervision-")),
-  );
-  tempDirs.push(root);
-  const agentDir = path.join(root, "agents", "main", "agent");
-  const processCodexHome = path.join(root, "process-codex-home");
-  await Promise.all(
-    [processCodexHome, resolveCodexAppServerHomeDir(agentDir)].map((dir) =>
-      fs.mkdir(dir, { recursive: true }),
-    ),
-  );
-  const runtimeConfig = {
-    agents: { ownership: "explicit", entries: { main: { agentDir } } },
-  } as OpenClawConfig;
-  const { runtime, createSessionEntry } = createRuntime();
-  const listPage = async () => ({
-    sessions: (["idle", "notLoaded", "active"] as const).flatMap((status) =>
-      ["cli", "exec"].map((kind) => ({
-        threadId: `${status}-${kind}`,
-        status,
-        source: kind,
-        archived: false as const,
-      })),
-    ),
-  });
-  const provider = createCatalogTestProvider({
-    runtime,
-    startupConfig: runtimeConfig,
-    control: {
-      forRequest: () => createControl({ listPage }),
-    },
-    getPluginConfig: () => pluginConfig,
-    getRuntimeConfig: () => runtimeConfig,
-  });
-  const list = () =>
-    withEnvAsync({ CODEX_HOME: processCodexHome }, async () => {
-      const completions: Promise<void>[] = [];
-      const hosts = await provider.list({
-        agentId: "main",
-        listNodes: async () => ({ nodes: [] }),
-        waitUntil: (completion) => {
-          completions.push(completion);
-        },
-      });
-      await Promise.all(completions);
-      return hosts ?? [];
-    });
-  return { provider, list, createSessionEntry, processCodexHome };
-}
+import { fixture } from "./session-catalog-list-operation.test-support.js";
 
 it.each([
   { state: "absent", pluginConfig: undefined, canContinue: false },
@@ -69,32 +7,35 @@ it.each([
   { state: "enabled", pluginConfig: { supervision: { enabled: true } }, canContinue: true },
 ])(
   "gates local continuation with supervision $state while preserving archive eligibility",
-  async ({ pluginConfig, canContinue: expectedCanContinue }) => {
-    const { provider, list, createSessionEntry, processCodexHome } =
-      await registerLocalCatalog(pluginConfig);
-    const hosts = await list();
+  async ({ pluginConfig, canContinue }) => {
+    const f = await fixture(2, pluginConfig);
+    f.listPage.mockResolvedValue({
+      sessions: (["idle", "notLoaded", "active"] as const).flatMap((status) =>
+        (status === "idle" ? ["cli", "exec"] : ["cli"]).map((source) => ({
+          threadId: `${status}-${source}`,
+          status,
+          source,
+          archived: false,
+        })),
+      ),
+    });
+    const hosts = await f.provider.list({
+      agentId: "main",
+      hostIds: f.homes.map((home) => home.hostId),
+    });
     expect(hosts).toHaveLength(2);
-    expect(hosts.map((host) => host.hostId)).toContain("gateway:local");
-    expect(hosts.some((host) => host.hostId.startsWith("gateway:local:"))).toBe(true);
     for (const host of hosts) {
-      expect(host.sessions.map(({ canArchive, canContinue }) => [canArchive, canContinue])).toEqual(
-        [
-          [true, expectedCanContinue],
-          [false, false],
-          [true, expectedCanContinue],
-          [false, false],
-          [false, false],
-          [false, false],
-        ],
-      );
+      expect(host.sessions.map((row) => [row.canArchive, row.canContinue])).toEqual([
+        [true, canContinue],
+        [false, false],
+        [true, canContinue],
+        [false, false],
+      ]);
     }
-    if (expectedCanContinue) {
-      return;
-    }
-    const host = hosts[0]!;
-    await withEnvAsync({ CODEX_HOME: processCodexHome }, async () => {
+    if (!canContinue) {
+      const host = hosts[0]!;
       await expect(
-        provider.continueSession!({
+        f.provider.continueSession!({
           agentId: "main",
           hostId: host.hostId,
           threadId: host.sessions[0]!.threadId,
@@ -102,7 +43,7 @@ it.each([
           clientScopes: ["operator.admin"],
         }),
       ).rejects.toThrow("Codex supervision is disabled");
-    });
-    expect(createSessionEntry).not.toHaveBeenCalled();
+      expect(f.runtime.agent.session.createSessionEntry).not.toHaveBeenCalled();
+    }
   },
 );

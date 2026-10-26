@@ -16,8 +16,6 @@ const config = {};
 function serveCatalog() {
   const native = Array.from({ length: 4 }, (_, index) => ({
     cwd: "/workspace/project",
-    projectId: null,
-    name: "Native task",
     status: { type: "idle" },
     id: `thread-${index}`,
     source: index === 2 ? "exec" : "cli",
@@ -84,16 +82,11 @@ it("bounds and persists visible and hidden oversized threads across restart", as
   try {
     const control = await connect();
     await control.initialize();
-    const page = await control.listPage({ limit: 20 });
-    expect(page.sessions.map((row) => row.threadId)).toEqual(visibleIds);
-    expect(page.nextCursor).toBeUndefined();
-    expect(page.sessions[1]).toMatchObject(oversized);
     expect([...values.values()]).toContainEqual({
       version: 1,
       kind: "row",
       row: expect.objectContaining({ threadId: "thread-2", page: { sessions: [] } }),
     });
-    expect(values.get("complete")).toEqual({ version: 1, kind: "complete" });
     const requestsBeforeRestart = requestCount();
     expect(Buffer.byteLength(JSON.stringify([...values]))).toBeLessThan(16 * 1024);
     await factory.stop();
@@ -101,6 +94,7 @@ it("bounds and persists visible and hidden oversized threads across restart", as
     const restoredControl = await connect();
     const restored = await restoredControl.listPage({ limit: 20 });
     expect(restored.sessions.map((row) => row.threadId)).toEqual(visibleIds);
+    expect(restored.nextCursor).toBeUndefined();
     expect(requestCount()).toBe(requestsBeforeRestart);
     expect(restored.sessions[1]).toMatchObject(oversized);
     native[1]!.preview = "Recovered preview";

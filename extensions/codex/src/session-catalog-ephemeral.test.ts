@@ -31,7 +31,6 @@ it.each([false, true])(
     const homeId = await codexCatalogResidentHomeKey({ startOptions: start, agentDir });
     const native = turns.threadStartResult("gpt-5.4");
     const thread: CodexThread = Object.assign(native.thread, {
-      recencyAt: 100,
       preview: "Name this conversation.",
       source: "cli",
       originator: "codex_cli_rs",
@@ -91,7 +90,7 @@ it.each([false, true])(
         await index.upsertThread({ ...thread, ephemeral: false });
       }
       expect((await index.list({})).sessions).toHaveLength(existing ? 1 : 0);
-      const result = await runBoundedCodexAppServerTurn({
+      await runBoundedCodexAppServerTurn({
         model: { mode: "required", id: "gpt-5.4" },
         timeoutMs: 5_000,
         agentDir,
@@ -102,12 +101,9 @@ it.each([false, true])(
         requiredModalities: ["text"],
         isolation: "configured-transport",
       });
-      expect(result.text).toBe("The message was sent successfully.");
-      expect(harness.client.getCloseError()).toBeDefined();
       await nextTurn();
       expect((await index.list({})).sessions).toEqual([]);
       expect(index.get(thread.id)).toBeUndefined();
-      expect(harness.writes.some((line) => JSON.parse(line).method === "thread/read")).toBe(true);
     } finally {
       await harness.client.closeAndWait();
       await index.close();

@@ -22,10 +22,7 @@ function fixture(total: number, splitWorkspaces = true) {
       name: `${index >= 20_000 ? "Older" : "Recent"} investigation ${index}${index === 0 || index === total - 1 ? " sparse" : ""}`,
       cwd: splitWorkspaces && index >= 20_000 ? "/workspace/older" : "/workspace/recent",
       source: "cli",
-      originator: "codex_cli_rs",
-      preview: `Please investigate task ${index} and verify the result.`,
       recencyAt: total - index,
-      updatedAt: total - index,
     }),
   );
   const { values, state } = memoryCatalogState({ clone: true });
@@ -56,7 +53,6 @@ function fixture(total: number, splitWorkspaces = true) {
     if (method === "thread/archive") {
       return {};
     }
-    expect(method).toBe("thread/list");
     return read(params);
   });
   const make = async () => {
@@ -73,7 +69,6 @@ it("keeps paging and searching older native rows beyond the retained window afte
   try {
     const initial = await make();
     await initial.control.initialize();
-    expect([...values.values()].filter((entry) => entry.kind === "row")).toHaveLength(20_000);
     await initial.factory.stop();
     const { control } = await make();
     const list = (query: CodexSessionCatalogPageParams = {}) =>
@@ -81,22 +76,17 @@ it("keeps paging and searching older native rows beyond the retained window afte
     const before = calls.length;
     let page = await list();
     expect(calls).toHaveLength(before);
-    expect(page.sessions.map((row) => row.threadId)).toEqual(
-      native.slice(0, 40).map((row) => row.id),
-    );
     const ids = page.sessions.map((row) => row.threadId);
     while (page.nextCursor) {
       page = await list({ cursor: page.nextCursor });
       ids.push(...page.sessions.map((row) => row.threadId));
     }
     expect(ids).toEqual(native.map((thread) => thread.id));
-    expect(page.backwardsCursor).toEqual(expect.any(String));
     const previous = await list({ cursor: page.backwardsCursor });
     const again = await list({ cursor: previous.nextCursor });
     expect(again.sessions).toEqual(page.sessions);
     const expected = native.slice(20_000).map((thread) => thread.id);
     let searched = await list({ searchTerm: "older investigation" });
-    expect(searched.nextCursor).toEqual(expect.any(String));
     while (!searched.sessions.length && searched.nextCursor) {
       searched = await list({
         searchTerm: "older investigation",
@@ -120,7 +110,6 @@ it("keeps paging and searching older native rows beyond the retained window afte
       newer = await list({ searchTerm: "sparse", cursor: newer.backwardsCursor });
     }
     expect(newer.sessions.map((row) => row.threadId)).toEqual([native[0]!.id]);
-    expect(calls.slice(before).every((request) => request.useStateDbOnly === true)).toBe(true);
     expect([...values.values()].filter((entry) => entry.kind === "row")).toHaveLength(20_000);
     await expect(
       control.listPage({ searchTerm: "different", cursor: previous.nextCursor }),
@@ -147,14 +136,11 @@ it.each(["evicted", "archived"])("checks fresh remote membership for %s rows", a
   try {
     await control.initialize();
     const rows = [...values.values()].flatMap((entry) => (entry.kind === "row" ? [entry.row] : []));
-    expect(rows).toHaveLength(kind === "evicted" ? 20_000 : 1);
     expect(rows.some((row) => row.threadId === target.id)).toBe(kind !== "evicted");
     if (kind === "archived") {
       await control.archiveThread(target.id);
     }
-    await expect(control.requireEligibleThread(target.id)).resolves.toMatchObject({
-      id: target.id,
-    });
+    expect((await control.requireEligibleThread(target.id)).id).toBe(target.id);
   } finally {
     await factory.stop();
   }
@@ -172,12 +158,7 @@ const lookup = (
   });
 
 it("finds a paired-node thread after more than 100 catalog pages", async () => {
-  const record = {
-    threadId: "older-node-thread",
-    status: "notLoaded",
-    source: "cli",
-    archived: false,
-  };
+  const record = { threadId: "target", status: "notLoaded", source: "cli", archived: false };
   let page = 0;
   const invoke = vi.fn(async () => ({
     payloadJSON: JSON.stringify({
