@@ -407,8 +407,8 @@ it("recovers an orphan after its owner releases retained run metadata", async ()
       expect(loadSessionEntry({ sessionKey })).toMatchObject({
         abortedLastRun: true,
         restartRecoveryDeliverySourceRunId: runId,
-        lifecycleRunId: undefined,
       });
+      expect(loadSessionEntry({ sessionKey })?.lifecycleRunId).toBeUndefined();
     } finally {
       releaseQueue?.("abandoned");
       clearAgentRunContext(runId, lifecycleGeneration);
