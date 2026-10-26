@@ -81,6 +81,7 @@ const REAL_PNG = Buffer.from(
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const tokenAuth = { mode: "token", token: "test-token", allowTailscale: false } as const;
 const sharedAuth = { ...tokenAuth, token: "shared-token" };
+const authenticated = { auth: tokenAuth, headers: { authorization: "Bearer test-token" } };
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 
@@ -118,11 +119,9 @@ function expectStatus(result: { handled: boolean; res: ServerResponse }, code = 
   expect(result).toMatchObject({ handled: true, res: { statusCode: code } });
 }
 
-function expectNotFoundResponse(params: {
-  handled: boolean;
-  res: ReturnType<typeof makeMockHttpResponse>["res"];
-  end: ReturnType<typeof makeMockHttpResponse>["end"];
-}) {
+type HttpReply = Awaited<ReturnType<typeof runRequest>>;
+
+function expectNotFoundResponse(params: HttpReply) {
   expectStatus(params, 404);
   expect(params.end).toHaveBeenCalledWith("Not Found");
 }
@@ -231,23 +230,16 @@ function readMedia(
   );
 }
 
-async function runTrustedProxyAssistantMediaRequest(params: {
-  filePath: string;
-  headers?: IncomingMessage["headers"];
-}) {
-  return await readMedia(params.filePath, "", {
+function trustedProxyRequest(headers?: IncomingMessage["headers"]) {
+  return {
     auth: setupTrustedProxyAuth(),
     trustedProxies: ["10.0.0.1"],
     remoteAddress: "10.0.0.1",
-    headers: createTrustedProxyHeaders(params.headers),
-  });
+    headers: createTrustedProxyHeaders(headers),
+  };
 }
 
-function expectMissingOperatorReadResponse(params: {
-  handled: boolean;
-  res: ReturnType<typeof makeMockHttpResponse>["res"];
-  end: ReturnType<typeof makeMockHttpResponse>["end"];
-}) {
+function expectMissingOperatorReadResponse(params: HttpReply) {
   expectStatus(params, 403);
   expect(responseJson(params.end)).toEqual({
     ok: false,
@@ -615,20 +607,22 @@ it("accepts shared-gateway issuer tagged device tokens on assistant media reques
 
 it("rejects trusted-proxy assistant media requests from disallowed browser origins", async () => {
   const filePath = await createMediaFile();
-  const reply = await runTrustedProxyAssistantMediaRequest({
+  const reply = await readMedia(
     filePath,
-    headers: { origin: "https://evil.example" },
-  });
+    "",
+    trustedProxyRequest({ origin: "https://evil.example" }),
+  );
   expectStatus(reply, 401);
   expect(reply.text).toContain("Unauthorized");
 });
 
 it("rejects trusted-proxy assistant media file reads without operator.read scope", async () => {
   const filePath = await createMediaFile();
-  const reply = await runTrustedProxyAssistantMediaRequest({
+  const reply = await readMedia(
     filePath,
-    headers: { "x-openclaw-scopes": "operator.approvals" },
-  });
+    "",
+    trustedProxyRequest({ "x-openclaw-scopes": "operator.approvals" }),
+  );
   expectMissingOperatorReadResponse(reply);
 });
 
@@ -672,8 +666,6 @@ it.each(["/openclaw/"])(
       if (!pathname.startsWith("/share/")) {
         const links = preloads.map((href) => `<${href}>; rel=modulepreload; crossorigin`);
         expect(reply.headers.Link, pathname).toEqual(links);
-      }
-      if (!pathname.startsWith("/share/")) {
         expect(body, pathname).toContain(`<script>${script}</script>`);
         const csp = reply.headers["Content-Security-Policy"];
         const hash = createHash("sha256").update(script, "utf8").digest("base64");
@@ -943,8 +935,7 @@ it("sets least-privilege route-bound cookies for multiple external plugin tabs",
 
   const reply = await runBootstrapConfigRequest({
     rootPath: tmp,
-    auth: tokenAuth,
-    headers: { authorization: "Bearer test-token" },
+    ...authenticated,
     config: { agents: { defaults: { workspace: tmp } } },
   });
 
@@ -1069,8 +1060,7 @@ it("serves configured avatar metadata without waiting for workspace identity", a
   const pending = runAvatarRequest({
     url: "/avatar/main?meta=1",
     config: createAvatarConfig("/tmp/avatar-workspace", avatar),
-    auth: tokenAuth,
-    headers: { authorization: "Bearer test-token" },
+    ...authenticated,
   });
   try {
     const winner = await Promise.race([
@@ -1101,8 +1091,7 @@ it("preserves authenticated avatar HEAD metadata under a base path", async () =>
     url: "/openclaw/avatar/main",
     basePath: "/openclaw",
     config: createAvatarConfig(tmp, "avatar.svg"),
-    auth: tokenAuth,
-    headers: { authorization: "Bearer test-token" },
+    ...authenticated,
   };
   const head = await runAvatarRequest({ ...params, method: "HEAD" });
   expectStatus(head);
@@ -1182,10 +1171,7 @@ it("rejects trusted-proxy avatar metadata requests without operator.read scope",
   expectMissingOperatorReadResponse(
     await runAvatarRequest({
       url: "/avatar/main?meta=1",
-      auth: setupTrustedProxyAuth(),
-      trustedProxies: ["10.0.0.1"],
-      remoteAddress: "10.0.0.1",
-      headers: createTrustedProxyHeaders({ "x-openclaw-scopes": "" }),
+      ...trustedProxyRequest({ "x-openclaw-scopes": "" }),
       config: createAvatarConfig(os.tmpdir(), "https://example.com/avatar.png"),
     }),
   );
