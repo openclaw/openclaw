@@ -242,6 +242,9 @@ const unrelated = "extensions/unrelated";
 const selectedCases: [string[], string[]][] = [
   [["ui/src/leaf.ts", `${unrelated}/README.md`], []],
   [["src/leaf.ts", `${unrelated}/README.md`], smokeRoots],
+  [["src/leaf.test.ts", "packages/example/leaf.spec.mts"], []],
+  [["src/leaf.test.ts", `${alpha}/index.test.ts`], [alpha]],
+  [["src/leaf.test.ts", "packages/example/leaf.ts"], smokeRoots],
   [[`${alpha}/index.ts`, `${unrelated}/README.md`], [alpha]],
   [[`${alpha}/test/fixtures/README.md`], [alpha]],
   [[`${alpha}/prompts/runtime.md`], [alpha]],

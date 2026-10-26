@@ -8,7 +8,9 @@ import type {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { setSignalRuntime } from "../runtime.js";
-import type { SignalEventHandlerDeps } from "./event-handler.types.js";
+import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
+
+export type SignalEnvelope = NonNullable<SignalReceivePayload["envelope"]>;
 
 export type TestDispatchResult = {
   queuedFinal: boolean;

@@ -62,6 +62,26 @@ const repositoryScriptEntries = [
   "scripts/ci-shard-timings-refresh.mts!",
   // The scheduled-run execution context design invokes this development replay by path.
   "scripts/dev/cron-context-replay.mts!",
+  // Maintained measurement commands invoke these roots by path; computed child
+  // launches already projected by knip-dynamic-consumers remain owned there.
+  "scripts/perf/approval-replay-burst-probe.mjs!",
+  "scripts/perf/embedded-subscribe-events-measure.ts!",
+  "scripts/perf/harness-selection-copy-measure.ts!",
+  "scripts/perf/session-catalog-pairing-measure.ts!",
+  "scripts/perf/session-delete-phases-loader.mjs!",
+  "scripts/perf/sqlite-owner-dispatch-measure.mjs!",
+  "scripts/perf/sqlite-wal-scan-measure.mjs!",
+  "scripts/perf/state-engine-schema-bench.ts!",
+  "scripts/perf/state-read-worker-bench.ts!",
+  "scripts/perf/worktree-snapshot-measure.ts!",
+  // Source headers invoke these measurements; the Gateway driver loads its IPC preload.
+  "scripts/perf/code-mode-worker-burst-measure.ts!",
+  "scripts/perf/codex-inference-terminal-measure.ts!",
+  "scripts/perf/provider-prompt-state-worker-measure.mjs!",
+  "scripts/perf/session-involvement-measure.ts!",
+  "scripts/perf/state-read-boot-bench.ts!",
+  "scripts/perf/state-read-gateway-boot-preload.mjs!",
+  "scripts/perf/state-read-gateway-boot.ts!",
   // #183131 invokes this fresh-process cron flake workload by path.
   "scripts/perf/repeat-cron-test.mjs!",
   // Its header documents the paired operator-role currency-check benchmark.

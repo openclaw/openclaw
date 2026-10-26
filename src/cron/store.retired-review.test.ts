@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import { expect, it } from "vitest";
+import { writeCronJobScratchForTest } from "../../test/helpers/cron/scratch-store.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
 import { prepareCronOwnerWriteRefusal } from "../config/io.cron-owner-refusal.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { writeCronJobScratch } from "./scratch-store.js";
 import { saveCronJobsStore } from "./store.js";
 import { createReloadCronJob } from "./store.test-support.js";
 import { withCronStore } from "./store.worker.test-support.js";
@@ -33,7 +33,7 @@ it.each([
       await state.save({ version: 1, jobs: [job("retired"), job("keep")] });
       await saveCronJobsStore(otherStorePath, { version: 1, jobs: [job("retired")] });
       for (const target of [storePath, otherStorePath]) {
-        await writeCronJobScratch({
+        await writeCronJobScratchForTest({
           storePath: target,
           jobId: "retired",
           content: "old scratch",

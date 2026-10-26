@@ -1,5 +1,8 @@
 /** Durable malformed-cron recovery records stored in the shared SQLite database. */
-import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  isArtifactPreservingStateRead,
+} from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../types-shared.js";
@@ -16,7 +19,11 @@ export async function loadCronQuarantinedJobs(
   const reply = await executeExistingOpenClawStateRead(
     { env: context.environment, path: context.admission.databasePath },
     { type: "cron.quarantine", storeKey },
-    { context, current: true },
+    {
+      context,
+      // Full inspection shares its report snapshot; mutable maintenance reads current rows.
+      current: !isArtifactPreservingStateRead("agent", context.admission.databasePath),
+    },
   );
   return reply?.entries ?? [];
 }

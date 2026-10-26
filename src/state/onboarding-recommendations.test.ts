@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import {
@@ -7,7 +7,6 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
-import { OnboardingRecommendationMatchesSchema } from "./onboarding-recommendations.contract.js";
 import {
   createOnboardingRecommendationsStore,
   type OnboardingRecommendationMatch,
@@ -174,43 +173,55 @@ test("updates pending matches without changing the inventory identity", async (s
   expect(updated).toEqual({ ...record, matches: [retryMatch], updatedAt: 3_000 });
 });
 
-test("validates writes once and reads independent canonical records", async (store, state) => {
-  const parse = vi.spyOn(OnboardingRecommendationMatchesSchema, "parse");
-  try {
-    const offeredMatches = [{ ...matches[0]!, ignored: "not persisted" }];
-    const original = await writeOffer(store, { matches: offeredMatches });
-    expect(original.matches).toEqual(matches);
-    expect(parse).toHaveBeenCalledTimes(1);
-    const written = await store.updatePending({
-      expected: original,
-      matches: [{ ...matches[0]!, reason: "Updated recommendation" }],
-    });
-    expect(parse).toHaveBeenCalledTimes(2);
-    await closeOpenClawStateDatabaseAsync();
-    parse.mockClear();
-    const { workspaceKey } = resolveWorkspaceStateIdentity(state.workspaceDir);
-    const read = () =>
-      withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) =>
-          readOnboardingRecommendationsInDatabase(db, `onboarding.recommendations.${workspaceKey}`),
-        { env: state.env },
-      );
-    const first = read();
-    expect(first).toEqual(written);
-    first!.matches[0]!.candidate.displayName = "Caller mutation";
-    expect(read()).toEqual(written);
-    expect(parse).not.toHaveBeenCalled();
-
-    const invalid = {
+test("reads write inputs once and returns independent canonical records", async (store, state) => {
+  let reasonReads = 0;
+  const offeredMatches = [
+    {
       ...matches[0]!,
-      candidate: { ...matches[0]!.candidate, downloads: Number.NaN },
-    };
-    expect(() => writeOffer(store, { matches: [invalid] })).toThrow();
-    expect(() => store.updatePending({ expected: original, matches: [invalid] })).toThrow();
-    expect(await store.read()).toEqual(written);
-  } finally {
-    parse.mockRestore();
-  }
+      ignored: "not persisted",
+      get reason() {
+        reasonReads++;
+        return matches[0]!.reason;
+      },
+    },
+  ];
+  const original = await writeOffer(store, { matches: offeredMatches });
+  expect(original.matches).toEqual(matches);
+  expect(reasonReads).toBe(1);
+  const written = await store.updatePending({
+    expected: original,
+    matches: [
+      {
+        ...matches[0]!,
+        get reason() {
+          reasonReads++;
+          return "Updated recommendation";
+        },
+      },
+    ],
+  });
+  expect(reasonReads).toBe(2);
+  await closeOpenClawStateDatabaseAsync();
+  const { workspaceKey } = resolveWorkspaceStateIdentity(state.workspaceDir);
+  const read = () =>
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) =>
+        readOnboardingRecommendationsInDatabase(db, `onboarding.recommendations.${workspaceKey}`),
+      { env: state.env },
+    );
+  const first = read();
+  expect(first).toEqual(written);
+  first!.matches[0]!.candidate.displayName = "Caller mutation";
+  expect(read()).toEqual(written);
+  expect(reasonReads).toBe(2);
+
+  const invalid = {
+    ...matches[0]!,
+    candidate: { ...matches[0]!.candidate, downloads: Number.NaN },
+  };
+  expect(() => writeOffer(store, { matches: [invalid] })).toThrow();
+  expect(() => store.updatePending({ expected: original, matches: [invalid] })).toThrow();
+  expect(await store.read()).toEqual(written);
 });
 
 test("does not overwrite a concurrently replaced pending offer", async (store) => {

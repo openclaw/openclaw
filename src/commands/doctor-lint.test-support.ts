@@ -1,5 +1,5 @@
 // SQLite fixtures for Doctor lint read-only state checks.
-import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -38,11 +38,26 @@ export function snapshotDoctorLintSqliteFamily(databasePath: string): Array<{
   path: string;
   sha256: string;
 }> {
-  return ["", "-journal", "-shm", "-wal"]
-    .map((suffix) => `${databasePath}${suffix}`)
-    .filter((candidate) => fs.existsSync(candidate))
-    .map((candidate) => ({
-      path: candidate,
-      sha256: createHash("sha256").update(fs.readFileSync(candidate)).digest("hex"),
-    }));
+  // Closing raw descriptors in the writer's process releases its SQLite POSIX locks.
+  return JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        "-e",
+        `const { createHash } = require("node:crypto");
+         const fs = require("node:fs");
+         const databasePath = process.argv[1];
+         const family = ["", "-journal", "-shm", "-wal"]
+           .map((suffix) => databasePath + suffix)
+           .filter((candidate) => fs.existsSync(candidate))
+           .map((candidate) => ({
+             path: candidate,
+             sha256: createHash("sha256").update(fs.readFileSync(candidate)).digest("hex"),
+           }));
+         process.stdout.write(JSON.stringify(family));`,
+        databasePath,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    ),
+  );
 }

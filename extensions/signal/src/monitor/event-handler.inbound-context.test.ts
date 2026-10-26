@@ -14,12 +14,9 @@ import {
   captureNextSignalDispatch,
   type DispatchInboundMessageMockParams,
 } from "./event-handler.inbound-context.test-support.js";
-import type { TestDispatchResult } from "./event-handler.test-harness.js";
-import type {
-  SignalDataMessage,
-  SignalEnvelope,
-  SignalEventHandlerDeps,
-} from "./event-handler.types.js";
+import type { SignalEnvelope, TestDispatchResult } from "./event-handler.test-harness.js";
+import type { SignalDataMessage, SignalEventHandlerDeps } from "./event-handler.types.js";
+
 vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
 let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;

@@ -72,7 +72,7 @@ export function selectAffectedBoundaryPackages(
           (file.startsWith("scripts/") ||
             (file.startsWith("extensions/") && !extensionIds.includes(owner ?? ""))))) &&
         SOURCE.test(file) &&
-        (includeTestSources || !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file))) ||
+        !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file)) ||
       /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|tsconfig[^/]*\.json)$/u.test(file) ||
       /^scripts\/(?:lib\/plugin-sdk-|(?:prepare|check|compile)-extension.*boundary)/u.test(file)
     ) {

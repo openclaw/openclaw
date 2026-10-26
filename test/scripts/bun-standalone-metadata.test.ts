@@ -64,7 +64,6 @@ function ownerSource(relative: string, functionName?: string, typed = false): st
         statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
       if (
         ((declaration?.type === "FunctionDeclaration" ||
-          declaration?.type === "ClassDeclaration" ||
           declaration?.type === "TSTypeAliasDeclaration") &&
           (!functionName || declaration.id?.name === functionName)) ||
         (functionName &&

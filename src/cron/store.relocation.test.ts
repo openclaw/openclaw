@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
+import { writeCronJobScratchForTest } from "../../test/helpers/cron/scratch-store.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   openOpenClawStateDatabase,
@@ -13,7 +14,6 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
-import { writeCronJobScratch } from "./scratch-store.js";
 import {
   loadCronStore,
   loadCronJobsStore,
@@ -95,7 +95,7 @@ it("keeps an external config directory in public SDK default selection", async (
         writeConfigMachineState("cron.store", storePath);
         expect((await loadCronJobsStore()).jobs).toEqual([job]);
         await expect(
-          writeCronJobScratch({ storePath, jobId: job.id, content: "Retained scratch" }),
+          writeCronJobScratchForTest({ storePath, jobId: job.id, content: "Retained scratch" }),
         ).resolves.toMatchObject({ ok: true });
         expect(
           await readCronScratchSnapshot(storePath, {
@@ -162,7 +162,7 @@ it("keeps SDK jobs, scratch and scheduled dedupe reachable after a stopped state
       const job = createReloadCronJob({ id: "relocated-job", name: "Retained job" });
       await saveCronStore(sourcePath, { version: 1, jobs: [job] });
       expect(
-        await writeCronJobScratch({
+        await writeCronJobScratchForTest({
           storePath: sourcePath,
           jobId: job.id,
           content: "- [ ] retained scratch",
@@ -266,7 +266,7 @@ it.each(["scratch", "scratch-read", "quarantine"] as const)(
         await withStateMigrationBackupForTest({ env: state.envVars }, async () => {
           if (operation === "scratch") {
             await expect(
-              writeCronJobScratch({ storePath, jobId: job.id, content: "Retained scratch" }),
+              writeCronJobScratchForTest({ storePath, jobId: job.id, content: "Retained scratch" }),
             ).resolves.toMatchObject({ ok: true, currentRevision: 1 });
           } else if (operation === "scratch-read") {
             await expect(

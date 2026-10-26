@@ -3,8 +3,12 @@ import {
   assertCronJobScratchContent,
   type CronJobScratchWriteResult,
 } from "../../../src/cron/scratch-contract.js";
+import { writeCronJobScratchByKey } from "../../../src/cron/scratch-store.js";
 import { writeCronJobScratchInDatabase } from "../../../src/cron/scratch-write.kernel.js";
-import { resolveCronStoreKeyInDatabase } from "../../../src/cron/store/paths.js";
+import {
+  prepareMutableCronStoreKey,
+  resolveCronStoreKeyInDatabase,
+} from "../../../src/cron/store/paths.js";
 import { getCronStoreKysely } from "../../../src/cron/store/schema.js";
 import { executeSqliteQuerySync } from "../../../src/infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../../../src/infra/sqlite-post-commit.js";
@@ -12,6 +16,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../../src/state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../../src/state/openclaw-state-worker-context.js";
 
 /** Synchronous scratch fixtures use the canonical writer and commit receipts. */
 export function writeCronJobScratchForMaintenance(params: {
@@ -87,4 +92,19 @@ export function deleteCronJobScratch(
     options,
     { operationLabel: "cron.scratch.delete" },
   );
+}
+
+/** Writes through the existing actor while retaining the original caller's admission. */
+export async function writeCronJobScratchForTest(
+  params: Omit<Parameters<typeof writeCronJobScratchByKey>[0], "storeKey"> & { storePath: string },
+  admission?: Parameters<typeof writeCronJobScratchByKey>[1],
+): Promise<CronJobScratchWriteResult> {
+  const captured = { ...params };
+  const context = admission?.context ?? captureOpenClawStateWorkerContext(captured.options);
+  const storeKey = await prepareMutableCronStoreKey(
+    captured.storePath,
+    context,
+    captured.options?.env,
+  );
+  return writeCronJobScratchByKey({ ...captured, storeKey }, { ...admission, context });
 }

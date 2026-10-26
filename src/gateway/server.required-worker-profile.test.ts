@@ -19,6 +19,7 @@ import { prepareSqliteTranscriptReadScope } from "../config/sessions/session-acc
 import { parseSessionEntryJson } from "../config/sessions/session-accessor.sqlite-status.js";
 import { canonicalSessionValidationQuery } from "../config/sessions/session-canonical-key.js";
 import { validateCanonicalSessionRowEntry } from "../config/sessions/session-canonical-row.js";
+import { SqliteSessionMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -579,7 +580,12 @@ test.each(["unchanged", "caller", "runtime"] as const)(
           spawnedCwd: worktree.path,
         });
       } else {
-        await expect(pending).rejects.toThrow("Session changed during worker admission");
+        if (change === "runtime") {
+          // A changed callback target rejects before separate prepared-source authority.
+          await expect(pending).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
+        } else {
+          await expect(pending).rejects.toThrow("Session changed during worker admission");
+        }
         expect(dispatch).not.toHaveBeenCalled();
         const entry = loadSessionEntry({ ...identity, storePath });
         expect(entry).not.toHaveProperty("worktree");

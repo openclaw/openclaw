@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-mutation.js";
+import { writeCronJobScratchForTest } from "../../../test/helpers/cron/scratch-store.js";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as cronSchedule from "../schedule.js";
-import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
+import { readCronJobScratchState } from "../scratch-store.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -172,7 +173,7 @@ describe("cron service ops persist rollback", () => {
     async (outcome) => {
       const removed = await createJob({ name: "deleted agent job", agentId: "doomed" });
       expect(
-        await writeCronJobScratch({
+        await writeCronJobScratchForTest({
           storePath,
           jobId: removed.id,
           content: "deleted agent scratch",
