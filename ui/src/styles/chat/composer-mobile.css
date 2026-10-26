@@ -35,6 +35,11 @@
   }
 
   .agent-chat__disabled-banner-detail {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .agent-chat__disabled-banner-title + .agent-chat__disabled-banner-detail {
     grid-column: 1 / 3;
     grid-row: 2;
   }
