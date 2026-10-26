@@ -18,13 +18,9 @@ import {
 const { writeSqliteSession } = setupSessionHistoryFixtures();
 
 const sessionId = "actor-session";
-const sessionTarget = {
-  agentId: "main",
-  sessionId,
-  sessionKey: "agent:main:dashboard:incognito-history",
-  storePath: "/synthetic/incognito.sqlite",
-};
+const sessionTarget = { agentId: "main", sessionId, sessionKey: "key", storePath: "/unused" };
 const { upstreamPrompt, settledMessages } = settledFixture();
+const snapshot = { header: { type: "session", id: sessionId }, messages: settledMessages };
 const foreignError = new Error("History capability belongs to another actor target");
 const owner = {
   assertCurrent(target: Parameters<CodexSessionContextReader>[0]) {
@@ -32,31 +28,17 @@ const owner = {
       throw foreignError;
     }
   },
-  read: vi.fn(async () => ({
-    header: { type: "session", id: sessionId },
-    messages: settledMessages,
-  })),
+  read: vi.fn(async () => snapshot),
   validate: vi.fn(async (_snapshot: CodexSessionContextSnapshot) => {}),
   retain: <T>(operation: () => Promise<T>) => operation(),
 };
-const history = {
-  agentId: sessionTarget.agentId,
-  sessionId: sessionTarget.sessionId,
-  sessionFile: `sqlite:main:${sessionTarget.sessionId}:${sessionTarget.storePath}`,
-  mirroredMessages: settledMessages,
-  settledMessages,
-  turnId: "settled",
-};
+const history = { mirroredMessages: settledMessages, settledMessages, turnId: "settled" };
 const reader = createCodexSessionContextReader(owner);
-const target = { ...history, ...sessionTarget, sessionTarget };
+const target = { ...history, sessionId, sessionFile: "/unused", sessionTarget };
 beforeEach(() => [owner.read, owner.validate].forEach((mock) => mock.mockReset()));
 
 it("passes the requested target to the bound capability before acquiring history", async () => {
-  const foreignTarget = {
-    ...target,
-    agentId: "other",
-    sessionTarget: { ...target.sessionTarget, agentId: "other" },
-  };
+  const foreignTarget = { ...target, sessionTarget: { ...sessionTarget, agentId: "other" } };
 
   await expect(projectHistory(foreignTarget, undefined, reader)).rejects.toBe(foreignError);
   expect(owner.read).not.toHaveBeenCalled();

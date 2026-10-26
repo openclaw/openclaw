@@ -5,7 +5,6 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { HealthCheck, OpenClawConfig } from "openclaw/plugin-sdk/health";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -29,6 +28,7 @@ const managedStore: AuthProfileStore = {
   version: 1,
   profiles: { "openai:default": { type: "oauth", provider: "openai", ...credentials } },
 };
+const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
 const checks: HealthCheck[] = [];
 registerCodexManagedAppServerDoctorChecks({
@@ -42,28 +42,24 @@ function recoveryCheck() {
 }
 const healthCheck = recoveryCheck();
 
-async function doctorState(applyEnv = true) {
-  const state = await createOpenClawTestState({ label: "codex-profile-recovery", applyEnv });
+async function doctorState() {
+  const state = await createOpenClawTestState({ applyEnv: false });
   onTestFinished(() => state.cleanup());
   const detect = (cfg = config) =>
-    healthCheck.detect({
-      mode: "fix" as const,
-      cfg,
-      env: state.env,
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    });
+    healthCheck.detect({ mode: "fix", cfg, env: state.env, runtime });
   return { state, detect };
 }
 const warning = (text: string, fixHint: string) =>
   expect.objectContaining({ severity: "warning", message: expect.stringContaining(text), fixHint });
 
-it("reports the retired native profile in Doctor and startup without importing credentials", async () => {
+it("reports missing agent-local profiles without importing native credentials, then recovers", async () => {
   const { state, detect } = await doctorState();
+  await expect(detect({})).resolves.toEqual([]);
+  await state.writeAuthProfiles(managedStore, "worker");
   const clock = createGatewaySchedulerClock();
   const host = createTestGatewayScheduler(clock.clock);
   const scheduler = createTestPluginServiceScheduler(host);
   onTestFinished(() => scheduler.stop().then(() => host.stop()));
-  setRuntimeConfigSnapshot(config);
   const nativeHome = path.join(state.home, ".codex");
   await fs.mkdir(nativeHome, { recursive: true });
   const nativeAuth =
@@ -72,12 +68,14 @@ it("reports the retired native profile in Doctor and startup without importing c
   const findings = await detect();
   expect(findings).toEqual([warning("2026.9.5", IMPORT_COMMAND)]);
   expect(findings[0]?.message).toContain("native Codex login");
+  expect(findings[0]?.message).toContain("Affected agents: main.");
   expect(findings[0]?.message).not.toMatch(/HTTP 401|re-authenticate/);
+  state.applyEnv();
+  setRuntimeConfigSnapshot(config);
   const captured = createCapturedPluginRegistration({ config });
-  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
-  captured.api.registerService = (service) => services.push(service);
+  const services = vi.spyOn(captured.api, "registerService");
   plugin.register(captured.api);
-  const recovery = services.find((service) => service.id === CHECK_ID);
+  const recovery = services.mock.calls.find(([service]) => service.id === CHECK_ID)?.[0];
   assert(recovery, "Gateway startup must register the same recovery check");
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   await recovery.start({ config, stateDir: state.stateDir, logger, scheduler });
@@ -95,22 +93,9 @@ it("reports the retired native profile in Doctor and startup without importing c
   expect(logger.warn).not.toHaveBeenCalled();
 });
 
-it("honors shared state ownership and agent-local profiles without warning on unpinned native login", async () => {
-  const { state, detect } = await doctorState(false);
-  await expect(detect({})).resolves.toEqual([]);
-  await state.writeAuthProfiles(managedStore, "worker");
-  const localFindings = await detect();
-  expect(localFindings).toHaveLength(1);
-  expect(localFindings[0]?.message).toContain("Affected agents: main.");
-
-  await state.writeAuthProfiles(managedStore);
-  await expect(detect()).resolves.toEqual([]);
-});
-
 it("reports an unreadable store separately from the retired native overlay", async () => {
   const { state, detect } = await doctorState();
-  await fs.mkdir(state.agentDir("worker"), { recursive: true });
-  await fs.writeFile(path.join(state.agentDir("worker"), "openclaw-agent.sqlite"), "not sqlite");
+  await state.writeText("agents/worker/agent/openclaw-agent.sqlite", "not sqlite");
   const findings = await detect();
   expect(findings).toEqual([
     warning("unreadable", "openclaw doctor --fix"),
