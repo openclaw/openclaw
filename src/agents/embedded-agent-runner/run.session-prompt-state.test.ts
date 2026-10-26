@@ -132,6 +132,33 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
   });
 }
 
+type PromptState = Awaited<ReturnType<typeof createState>>;
+
+async function recordedState(overrides: Partial<UserTurnTranscriptRecorder> = {}) {
+  const recorder = createRecorder(overrides);
+  const persistedCallback = vi.fn();
+  return Object.assign(
+    await createState({
+      userTurnTranscriptRecorder: recorder,
+      onUserMessagePersisted: persistedCallback,
+    }),
+    { recorder, persistedCallback },
+  );
+}
+
+function expectInternalPrompt(state: PromptState, override: string) {
+  expect(state.activePrompt).toEqual({ override, persisted: true, internal: true });
+  expect(state.suppressNextUserMessagePersistence).toBe(true);
+}
+
+async function expectCollected(references: WeakRef<object>[]) {
+  const control = new WeakRef({ unowned: true });
+  await nextTurn();
+  queryObjects(WeakRef);
+  expect(control.deref()).toBeUndefined();
+  expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+}
+
 function replaySafeAttempt(assistant: ReturnType<typeof buildEmbeddedRunnerAssistant> | undefined) {
   return makeEmbeddedRunnerAttempt({
     assistantTexts: [],
@@ -141,14 +168,11 @@ function replaySafeAttempt(assistant: ReturnType<typeof buildEmbeddedRunnerAssis
   });
 }
 
-function terminal(
-  sessionPromptState: Awaited<ReturnType<typeof createState>>,
-  input: Parameters<typeof makeTerminalInput>[0],
-) {
+function terminal(sessionPromptState: PromptState, input: Parameters<typeof makeTerminalInput>[0]) {
   return resolveEmbeddedRunTerminal({ ...makeTerminalInput(input), sessionPromptState });
 }
 function retryAssistant(
-  state: Awaited<ReturnType<typeof createState>>,
+  state: PromptState,
   assistant: Parameters<typeof replaySafeAttempt>[0],
   retryState?: ReturnType<typeof createEmbeddedRunTerminalRetryState>,
 ) {
@@ -175,11 +199,7 @@ describe("embedded run session prompt state", () => {
         onUserMessagePersisted: state.onUserMessagePersisted,
       });
     }
-    const control = new WeakRef({ unowned: true });
-    await nextTurn();
-    queryObjects(WeakRef);
-    expect(control.deref()).toBeUndefined();
-    expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+    await expectCollected(references);
     expect(retainedCallbacks).toHaveLength(20);
   });
 
@@ -196,11 +216,7 @@ describe("embedded run session prompt state", () => {
       retainedContinuations.push(state.continuation!);
       payloads.push(new WeakRef(state.continuation!.messages));
     }
-    const control = new WeakRef({ unowned: true });
-    await nextTurn();
-    queryObjects(WeakRef);
-    expect(control.deref()).toBeUndefined();
-    expect(payloads.filter((reference) => reference.deref())).toHaveLength(0);
+    await expectCollected(payloads);
     expect(retainedContinuations.every(({ prompt, messages }) => !prompt && !messages.length)).toBe(
       true,
     );
@@ -335,11 +351,7 @@ describe("embedded run session prompt state", () => {
             const acceptance = acceptCompactionSuccessor({
               currentTarget: target,
               currentSessionFile: state.sessionFile,
-              expectedEntry: {
-                sessionId: expectedEntry.sessionId,
-                lifecycleRevision: expectedEntry.lifecycleRevision,
-                activeWriterRunId: expectedEntry.activeWriterRunId,
-              },
+              expectedEntry,
               assertActive: assertAdmittedActive,
               result: {
                 ok: true,
@@ -403,14 +415,8 @@ describe("embedded run session prompt state", () => {
     await using state = await createState();
     state.activateInternalPrompt("  finish the reasoning exactly  ");
     state.activateCompactionContinuation("continue after compaction");
-    const activePrompt = {
-      override: "  finish the reasoning exactly  \n\ncontinue after compaction",
-      persisted: true,
-      internal: true,
-    };
     await expect(retryAssistant(state, undefined)).resolves.toEqual({ action: "retry" });
-    expect(state.activePrompt).toEqual(activePrompt);
-    expect(state.suppressNextUserMessagePersistence).toBe(true);
+    expectInternalPrompt(state, "  finish the reasoning exactly  \n\ncontinue after compaction");
   });
 
   it("retains compaction continuation across reasoning and empty retries", async () => {
@@ -510,11 +516,7 @@ describe("embedded run session prompt state", () => {
 
     state.continueFromCurrentTranscript({ includeToolFailureInstruction: true });
 
-    expect(state.activePrompt).toEqual({
-      override: CONTINUE_AFTER_TOOL_FAILURE_PROMPT,
-      persisted: true,
-      internal: true,
-    });
+    expectInternalPrompt(state, CONTINUE_AFTER_TOOL_FAILURE_PROMPT);
   });
 
   it.each([
@@ -575,12 +577,8 @@ describe("embedded run session prompt state", () => {
     };
     const persistApproved = vi.fn(async () => undefined);
     const persistBlocked = vi.fn(async () => persisted(blockedMessage, "msg-user-blocked"));
-    const recorder = createRecorder({ persistApproved, persistBlocked });
-    const onUserMessagePersisted = vi.fn();
-    await using state = await createState({
-      userTurnTranscriptRecorder: recorder,
-      onUserMessagePersisted,
-    });
+    await using state = await recordedState({ persistApproved, persistBlocked });
+    const { recorder, persistedCallback } = state;
 
     state.onUserMessagePersisted(blockedMessage);
     await state.waitForCurrentUserMessagePersistence();
@@ -590,24 +588,19 @@ describe("embedded run session prompt state", () => {
     expect(recorder.markRuntimePersistencePending).toHaveBeenCalledOnce();
     expect(recorder.markBlocked).not.toHaveBeenCalled();
     expect(recorder.markRuntimePersisted).not.toHaveBeenCalled();
-    expect(onUserMessagePersisted).toHaveBeenCalledWith(blockedMessage);
+    expect(persistedCallback).toHaveBeenCalledWith(blockedMessage);
     expect(state.activePrompt.persisted).toBe(true);
   });
 
   it("keeps the original prompt when canonical persistence appends nothing", async () => {
     const persistApproved = vi.fn(async () => undefined);
-    const recorder = createRecorder({ persistApproved });
-    const onUserMessagePersisted = vi.fn();
-    await using state = await createState({
-      userTurnTranscriptRecorder: recorder,
-      onUserMessagePersisted,
-    });
+    await using state = await recordedState({ persistApproved });
 
     state.onUserMessagePersisted(makeUserMessage());
     await state.prepareCompactedTranscriptRetry(assertActive);
 
     expect(persistApproved).toHaveBeenCalledOnce();
-    expect(onUserMessagePersisted).not.toHaveBeenCalled();
+    expect(state.persistedCallback).not.toHaveBeenCalled();
     expect(state.activePrompt).toEqual({ persisted: false, internal: false });
     expect(state.suppressNextUserMessagePersistence).toBe(false);
   });
@@ -626,12 +619,8 @@ describe("embedded run session prompt state", () => {
       const persistence =
         createDeferred<Awaited<ReturnType<UserTurnTranscriptRecorder["persistApproved"]>>>();
       const persistApproved = vi.fn(() => persistence.promise);
-      const recorder = createRecorder({ persistApproved });
-      const onUserMessagePersisted = vi.fn();
-      await using state = await createState({
-        userTurnTranscriptRecorder: recorder,
-        onUserMessagePersisted,
-      });
+      await using state = await recordedState({ persistApproved });
+      const { recorder, persistedCallback } = state;
 
       state.onUserMessagePersisted(persistedMessage);
       let retryPrepared = false;
@@ -655,17 +644,12 @@ describe("embedded run session prompt state", () => {
         expect(state.suppressNextUserMessagePersistence).toBe(false);
       } else {
         await retryPromise;
-        expect(state.activePrompt).toEqual({
-          override: CONTINUE_FROM_TRANSCRIPT_PROMPT,
-          persisted: true,
-          internal: true,
-        });
-        expect(state.suppressNextUserMessagePersistence).toBe(true);
+        expectInternalPrompt(state, CONTINUE_FROM_TRANSCRIPT_PROMPT);
       }
       expect(persistApproved).toHaveBeenCalledOnce();
       expect(recorder.markRuntimePersistencePending).toHaveBeenCalledOnce();
       expect(recorder.markRuntimePersisted).not.toHaveBeenCalled();
-      expect(onUserMessagePersisted).toHaveBeenCalledWith(persistedMessage);
+      expect(persistedCallback).toHaveBeenCalledWith(persistedMessage);
     },
   );
 
@@ -677,11 +661,6 @@ describe("embedded run session prompt state", () => {
 
     await state.prepareCompactedTranscriptRetry(assertActive);
 
-    expect(state.activePrompt).toEqual({
-      override: reasoningContinuation,
-      persisted: true,
-      internal: true,
-    });
-    expect(state.suppressNextUserMessagePersistence).toBe(true);
+    expectInternalPrompt(state, reasoningContinuation);
   });
 });

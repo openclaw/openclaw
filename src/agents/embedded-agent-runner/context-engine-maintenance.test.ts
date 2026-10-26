@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -103,25 +103,18 @@ function sessionParams(sessionId: string) {
   };
 }
 
-function rewriteRequest() {
+function rewriteRequest(role: "user" | "assistant" = "user", content = "updated", timestamp = 1) {
   return {
     replacements: [
       {
         entryId: "entry-1",
-        message: castAgentMessage({ role: "user", content: "updated", timestamp: 1 }),
+        message: castAgentMessage({ role, content, timestamp }),
       },
     ],
   };
 }
 
-function assistantReplacements() {
-  return [
-    {
-      entryId: "entry-1",
-      message: castAgentMessage({ role: "assistant", content: "done", timestamp: 2 }),
-    },
-  ];
-}
+const assistantRequest = () => rewriteRequest("assistant", "done", 2);
 
 describe("runContextEngineMaintenance", () => {
   beforeEach(() => {
@@ -313,9 +306,7 @@ describe("runContextEngineMaintenance", () => {
         });
         await Promise.resolve();
         const maintain = vi.fn<Maintain>(async ({ runtimeContext }) => {
-          await runtimeContext?.rewriteTranscriptEntries?.({
-            replacements: assistantReplacements(),
-          });
+          await runtimeContext?.rewriteTranscriptEntries?.(assistantRequest());
           return unchanged;
         });
         const backgroundEngine = createBackgroundMaintenanceEngine(maintain);
@@ -335,7 +326,7 @@ describe("runContextEngineMaintenance", () => {
         await waitForSessionMaintenance(sessionKey);
         expect(rewriteMock).toHaveBeenCalledWith({
           sessionManager: sessionManagerFixture.current,
-          replacements: assistantReplacements(),
+          replacements: assistantRequest().replacements,
         });
 
         releaseForeground.resolve();
@@ -431,18 +422,11 @@ describe("runContextEngineMaintenance", () => {
           expect(secondEngine["dispose"]).toHaveBeenCalledTimes(1);
 
           trigger();
-          let timeout: ReturnType<typeof setTimeout> | undefined;
-          const settled = await Promise.race([
-            waitForSessionMaintenance(sessionKey).then(() => true),
-            new Promise<false>((resolve) => {
-              timeout = setTimeout(() => resolve(false), 500);
-            }),
-          ]);
-          if (timeout) {
-            clearTimeout(timeout);
-          }
-
-          expect(settled).toBe(true);
+          await withTestTimeout(
+            waitForSessionMaintenance(sessionKey),
+            500,
+            "maintenance did not settle",
+          );
           expect(observedSignal?.aborted).toBe(true);
           expectCalls(1, firstMaintain);
           expectCalls(0, secondMaintain);
@@ -612,9 +596,7 @@ describe("runContextEngineMaintenance", () => {
           events.push("maintenance-start");
           await allowRewrite.promise;
           events.push("maintenance-before-rewrite");
-          await runtimeContext?.rewriteTranscriptEntries?.({
-            replacements: assistantReplacements(),
-          });
+          await runtimeContext?.rewriteTranscriptEntries?.(assistantRequest());
           events.push("maintenance-after-rewrite");
           return unchanged;
         });
