@@ -62,6 +62,7 @@ const enModelControls = {
       clearSavedAccess: "Clear saved Access",
       fast: "Fast",
       ultrafast: "Ultrafast",
+      ultrafastUnavailable: "Ultrafast is not available for this model",
       tierDowngrade: "{requested} requested, currently served as {served}",
       tierRejected: "{requested} requested, currently unavailable",
       switchTitle: "Switch to {new}?",

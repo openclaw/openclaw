@@ -377,6 +377,7 @@ export type CronServiceState = {
     }[];
     /** Requested rows are detached and frozen once for this list generation. */
     readJobs: WeakMap<CronJob, CronJob>;
+    searchText: WeakMap<CronJob, string>;
   };
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */

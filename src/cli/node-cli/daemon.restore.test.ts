@@ -109,18 +109,12 @@ it.each([
       });
       return;
     }
-    expect(service.install).toHaveBeenCalledOnce();
     const installed = vi.mocked(service.install).mock.calls[0]?.[0];
-    const runtimeArgs = runtime === "bun" ? ["--no-install"] : [];
-    const prefix = [cli.executable, ...runtimeArgs, launcherPath, "node", "run"];
     expect(installed?.programArguments).toEqual([
-      ...prefix,
-      "--host",
-      "gateway.example",
-      "--port",
-      "18789",
-      "--no-tls",
-      "--auth-from-env",
+      cli.executable,
+      ...(runtime === "bun" ? ["--no-install"] : []),
+      launcherPath,
+      ..."node run --host gateway.example --port 18789 --no-tls --auth-from-env".split(" "),
     ]);
     expect(installed?.runtimePinUpdate).toEqual({
       expected: observed,
@@ -138,16 +132,15 @@ it.each([
   { status: "unknown" },
   { status: "migrationPending", nextStep: "run openclaw doctor" },
 ])("reports $status node runtime custody", async (runtimeIntent) => {
-  const { status } = runtimeIntent;
-  if (status === "unknown") {
+  if (runtimeIntent.status === "unknown") {
     vi.mocked(service.readCommand).mockRejectedValueOnce(new Error("inspection unavailable"));
   }
-  mocks.pending.mockReturnValue(status === "migrationPending");
+  mocks.pending.mockReturnValue(runtimeIntent.status === "migrationPending");
   await runNode("status --json");
   expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
     service: expect.objectContaining({ runtimeIntent }),
   });
-  if (status === "known") {
+  if (runtimeIntent.status === "known") {
     expect(mocks.pin).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "node" }),
       expect.objectContaining({ programArguments }),

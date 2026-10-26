@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { createMediaQueryList } from "../../test-helpers/media-query.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -18,6 +19,13 @@ import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-sett
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { setChatRunOwner } from "./history-merge.ts";
 import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
+
+beforeEach(() => {
+  // jsdom has no Web Animations API; the browser suite owns motion proof.
+  vi.stubGlobal("matchMedia", (query: string) =>
+    createMediaQueryList(query, query === "(prefers-reduced-motion: reduce)"),
+  );
+});
 
 async function createControlsFixture(
   scope: string,

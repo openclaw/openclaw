@@ -197,9 +197,11 @@ function updateTextareaOverflow(
     state.hasScrollbarGutter = false;
     if (scrollable && hasNativeTextareaContentSizing(el)) {
       const style = getComputedStyle(el);
+      // Hiding a reserved gutter cannot free width for intrinsic sizing.
       state.hasScrollbarGutter =
+        !style.getPropertyValue("scrollbar-gutter").includes("stable") &&
         el.offsetWidth - el.clientWidth >
-        Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.borderRightWidth);
+          Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.borderRightWidth);
     }
     const changed = state.height !== clientHeight;
     state.height = clientHeight;
