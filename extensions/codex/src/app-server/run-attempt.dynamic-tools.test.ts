@@ -569,7 +569,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
           if (outcome === "error") {
             throw new Error("hidden failure");
           }
-          return { content: [{ type: "text" as const, text: "hidden output" }] };
+          return { content: [{ type: "text" as const, text: "hidden output" }], details: {} };
         });
       }
       const visibleTool = {
