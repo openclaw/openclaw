@@ -722,6 +722,56 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
       return { fixtureSkills: inventorySize, matchingSkills: inventorySize };
     },
   },
+  {
+    ...fixture,
+    id: "data-agent-skills-scope-filtered",
+    route: pathForAgentPanel("main", "skills"),
+    expected: "Selecting another agent preserves the filter and shows its matching skill.",
+    rowSelector: ".agent-skill-row",
+    createRequestHandlers: agentSelectionScenario(0).createRequestHandlers,
+    prepare: async (page) => {
+      await countRows(page, ".agent-skill-row", inventorySize);
+      await page.locator('input[name="agent-skills-filter"]').fill(skillQuery);
+      await countRows(page, ".agent-skill-row:not([hidden])", 1);
+      await page.locator(".settings-sidebar__agent .agent-select__trigger").click();
+      await countRows(page, "[data-agent-option]", agentCount);
+      await countRows(
+        page,
+        '[data-agent-option] .identity-avatar__text[data-avatar="🧪"]',
+        agentCount,
+      );
+      await frames(page);
+    },
+    run: async (page, gateway) => {
+      const params = { agentId: "data-agent-0299" };
+      const before = (await gateway.getRequests("skills.status", params, { exactParams: true }))
+        .length;
+      await page.locator('[data-agent-option][value="data-agent-0299"]').click();
+      await gateway.waitForRequest("skills.status", { after: before, match: params, exactParams: true });
+      await page.waitForFunction(
+        (query) =>
+          document.querySelector<HTMLInputElement>('input[name="agent-skills-filter"]')?.value ===
+            query &&
+          document
+            .querySelector(".settings-sidebar__agent .agent-select__trigger")
+            ?.textContent?.includes("Data agent 0299"),
+        skillQuery,
+      );
+      await countRows(page, ".agent-skill-row:not([hidden])", 1);
+      await frames(page);
+      const skillStatusRequests =
+        (await gateway.getRequests("skills.status", params, { exactParams: true })).length - before;
+      if (skillStatusRequests !== 1) {
+        throw new Error("The new Skills scope did not settle exactly one report request");
+      }
+      return {
+        fixtureSkills: inventorySize,
+        matchingSkills: 1,
+        selectedAgent: params.agentId,
+        skillStatusRequests,
+      };
+    },
+  },
   skillsRefreshScenario(0),
   skillsRefreshScenario(100),
   {
