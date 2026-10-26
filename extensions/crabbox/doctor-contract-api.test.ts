@@ -51,18 +51,15 @@ const legacyImages = () =>
     overflowPolicy: "reject-new",
   });
 
-function input(
-  context: PluginDoctorStateMigrationContext = { openPluginStateKeyedStore: openStore },
-) {
-  return { config: {}, env, stateDir, oauthDir: "unused", context };
-}
-
 async function reopen() {
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
 }
 
 const lookup = (key = "profile") => openCrabboxWarmImageStore(crabboxState, env).lookup(key);
+const input = (
+  openPluginStateKeyedStore: PluginDoctorStateMigrationContext["openPluginStateKeyedStore"] = openStore,
+) => ({ config: {}, env, stateDir, oauthDir: "unused", context: { openPluginStateKeyedStore } });
 const migrate = () => migration.migrateLegacyState(input());
 const detect = () => migration.detectLegacyState(input());
 
@@ -96,19 +93,17 @@ function v2Case(operation: object) {
     allocations: { cbx_v2: allocation },
     operation,
   };
-  const migratedAllocation = {
-    ...allocation,
-    ...unknownPreparation,
-    demandAtMs: null,
-    imageGeneration: null,
-  };
-  const expected = {
-    ...record,
-    version: 3,
-    image: { ...migratedImage, runtimeIdentity },
-    allocations: { cbx_v2: migratedAllocation },
-  };
-  return [record, expected] as const;
+  return [
+    record,
+    {
+      ...record,
+      version: 3,
+      image: { ...migratedImage, runtimeIdentity },
+      allocations: {
+        cbx_v2: { ...allocation, ...unknownPreparation, demandAtMs: null, imageGeneration: null },
+      },
+    },
+  ] as const;
 }
 
 it.each([
@@ -157,10 +152,11 @@ it("reports every unresolved legacy lease with executable acknowledged recovery 
   const command = `openclaw crabbox warm-images --recover ${lease!.selector} --acknowledge-provider-cleanup`;
   expect((await detect())?.preview.join("\n")).toContain(command);
   const { changes, warnings } = await migrate();
+  const warning = warnings.join("\n");
   expect(changes).toEqual([]);
-  expect(warnings.join("\n")).toContain("1 legacy Crabbox lease row(s)");
-  expect(warnings.join("\n")).toContain(command);
-  expect(warnings.join("\n")).toContain("stop the original Gateway/capture processes");
+  expect(warning).toContain("1 legacy Crabbox lease row(s)");
+  expect(warning).toContain(command);
+  expect(warning).toContain("stop the original Gateway/capture processes");
   expect(await store.lookup("cbx_legacy")).toEqual({ machineClass: "tiny" });
 });
 
@@ -196,11 +192,9 @@ it.each(["changed", "write-failed", "metadata-conflict"])(
         await store.register(args[0], failure === "changed" ? newer : image, { ttlMs: 60_000 });
         return compareAndApply(...args);
       });
-    const context: PluginDoctorStateMigrationContext = { openPluginStateKeyedStore: openStore };
-    vi.spyOn(context, "openPluginStateKeyedStore").mockImplementation((options) =>
-      options.namespace === "warm-images" ? store : openStore(options),
+    const result = await migration.migrateLegacyState(
+      input((options) => (options.namespace === "warm-images" ? store : openStore(options))),
     );
-    const result = await migration.migrateLegacyState(input(context));
     const retried = failure === "metadata-conflict";
     expect([result.changes.length, result.warnings.length, publication.mock.calls.length]).toEqual(
       retried ? [1, 0, 2] : [0, 1, 1],
