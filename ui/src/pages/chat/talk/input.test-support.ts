@@ -17,27 +17,32 @@ export class MockAudioBufferSource {
   readonly stop = vi.fn();
 }
 
+class MockAudioContextBase {
+  readonly destination = {};
+  readonly close = vi.fn(async () => undefined);
+  createMediaStreamSource = mockAudioNode;
+  createScriptProcessor(): MockAudioProcessor {
+    return { ...mockAudioNode(), onaudioprocess: null };
+  }
+  createGain() {
+    return { ...mockAudioNode(), gain: { value: 1 } };
+  }
+}
+
 export function createPcmAudioContext(
   processors: MockAudioProcessor[],
   sinks: MockAudioSink[],
   sources: MockAudioBufferSource[],
 ) {
-  return class {
-    readonly destination = {};
-    readonly close = vi.fn(async () => undefined);
-
-    createMediaStreamSource() {
-      return mockAudioNode();
-    }
-
-    createScriptProcessor() {
-      const processor: MockAudioProcessor = { ...mockAudioNode(), onaudioprocess: null };
+  return class extends MockAudioContextBase {
+    override createScriptProcessor() {
+      const processor = super.createScriptProcessor();
       processors.push(processor);
       return processor;
     }
 
-    createGain() {
-      const sink = { ...mockAudioNode(), gain: { value: 1 } };
+    override createGain() {
+      const sink = super.createGain();
       sinks.push(sink);
       return sink;
     }
@@ -64,19 +69,8 @@ export function createPcmAudioContext(
   };
 }
 
-export class MockDictationAudioContext {
-  readonly destination = {};
+export class MockDictationAudioContext extends MockAudioContextBase {
   readonly sampleRate = 8000;
-  readonly close = vi.fn(async () => undefined);
-  createMediaStreamSource = mockAudioNode;
-
-  createScriptProcessor(): MockAudioProcessor {
-    return { ...mockAudioNode(), onaudioprocess: null };
-  }
-
-  createGain() {
-    return { ...mockAudioNode(), gain: { value: 1 } };
-  }
 
   createAnalyser() {
     return {
@@ -133,12 +127,7 @@ export async function prepareRealtimeTalkTestInput(
 export function useRealtimeTalkMicrophoneFixture(): void {
   beforeEach(() => {
     vi.stubGlobal("navigator", {
-      mediaDevices: {
-        getUserMedia: vi.fn(async () => {
-          const track = Object.assign(new EventTarget(), { stop: vi.fn() });
-          return { getTracks: () => [track], getAudioTracks: () => [track] };
-        }),
-      },
+      mediaDevices: { getUserMedia: vi.fn(async () => audioFixture().stream) },
     });
   });
   afterEach(() => vi.unstubAllGlobals());
