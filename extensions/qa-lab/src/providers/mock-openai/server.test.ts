@@ -1099,52 +1099,43 @@ describe("qa mock openai server", () => {
     }
   });
 
-  it("advances repo-contract followthrough when transcript text is newer than extracted tool output", async () => {
-    const server = await startMockServer();
-
-    const prompt =
-      "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
-
-    const response = await streamOpenAi(
-      server,
-      userInputs(
-        prompt,
-        makeToolOutput(
-          "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
-        ),
-        "# Execution style\n\nStay brief, honest, and action-first.\n",
-      ),
-    );
-
-    expect(await response.text()).toContain(
-      '"arguments":"{\\"path\\":\\"FOLLOWTHROUGH_INPUT.md\\"}"',
-    );
-  });
-
-  it("advances personal task followthrough when transcript text is newer than extracted tool output", async () => {
-    const server = await startMockServer();
-
-    const prompt =
-      "Personal task followthrough check. Read PERSONAL_TASK_LEDGER.md and FOLLOWTHROUGH_NOTE.md first. Then write ./personal-task-status.txt and reply with three labeled lines: Pending, Blocked, Done.";
-
-    const firstBody = await readOpenAiPromptResponseText(server, prompt);
-    expect(firstBody).toContain('"arguments":"{\\"path\\":\\"PERSONAL_TASK_LEDGER.md\\"}"');
-    expect(firstBody).not.toContain("repo/package.json");
-
-    const response = await streamOpenAi(
-      server,
-      userInputs(
-        prompt,
-        makeToolOutput(
-          "# Personal task ledger\n\nRequired status contract:\n1. Read PERSONAL_TASK_LEDGER.md.\n2. Read FOLLOWTHROUGH_NOTE.md.\n3. Write ./personal-task-status.txt.\n",
-        ),
+  it.each([
+    {
+      name: "repo-contract",
+      prompt:
+        "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.",
+      evidence:
+        "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
+      transcript: "# Execution style\n\nStay brief, honest, and action-first.\n",
+      expected: ['"arguments":"{\\"path\\":\\"FOLLOWTHROUGH_INPUT.md\\"}"'],
+      firstPath: undefined,
+    },
+    {
+      name: "personal task",
+      prompt:
+        "Personal task followthrough check. Read PERSONAL_TASK_LEDGER.md and FOLLOWTHROUGH_NOTE.md first. Then write ./personal-task-status.txt and reply with three labeled lines: Pending, Blocked, Done.",
+      evidence:
+        "# Personal task ledger\n\nRequired status contract:\n1. Read PERSONAL_TASK_LEDGER.md.\n2. Read FOLLOWTHROUGH_NOTE.md.\n3. Write ./personal-task-status.txt.\n",
+      transcript:
         "Task: prepare a local OpenClaw PR readiness note.\nPending: wait for maintainer feedback before publishing.\nBlocked: publishing needs explicit user approval.\nDone: local evidence captured in personal-task-status.txt.\n",
-      ),
-    );
-
-    const body = await response.text();
-    expectIncludes(body, '"name":"write"', "personal-task-status.txt");
-  });
+      expected: ['"name":"write"', "personal-task-status.txt"],
+      firstPath: "PERSONAL_TASK_LEDGER.md",
+    },
+  ])(
+    "advances $name followthrough when transcript text is newer than extracted tool output",
+    async ({ prompt, evidence, transcript, expected, firstPath }) => {
+      const server = await startMockServer();
+      if (firstPath) {
+        const first = await readOpenAiPromptResponseText(server, prompt);
+        expect(first).toContain(`"arguments":"{\\"path\\":\\"${firstPath}\\"}"`);
+        expect(first).not.toContain("repo/package.json");
+      }
+      expectIncludes(
+        await streamOpenAiText(server, userInputs(prompt, makeToolOutput(evidence), transcript)),
+        ...expected,
+      );
+    },
+  );
 
   it("reports personal failure recovery with a retry boundary", async () => {
     const server = await startMockServer();
@@ -1272,13 +1263,15 @@ describe("qa mock openai server", () => {
         input: `<conversation>\n${markerPrefix}-${session}\nretain current work\n</conversation>\n\nCreate a structured summary.`,
       });
 
-      const first = await expectOpenAiNonStreamingResponsesJson(server, requestFor("session-a"));
-      if (reasoningOnly) {
-        expect(JSON.stringify(first)).toContain("reasoning_compaction_summary_fault");
-        expect(JSON.stringify(first)).not.toContain(recoveredMarker);
-      } else {
-        expect(outputText(first)).toBe("");
-      }
+      const expectFault = (response: unknown) => {
+        if (reasoningOnly) {
+          expect(JSON.stringify(response)).toContain("reasoning_compaction_summary_fault");
+          expect(JSON.stringify(response)).not.toContain(recoveredMarker);
+        } else {
+          expect(outputText(response)).toBe("");
+        }
+      };
+      expectFault(await expectOpenAiNonStreamingResponsesJson(server, requestFor("session-a")));
       const recovered = await expectOpenAiNonStreamingResponsesJson(
         server,
         requestFor("session-a"),
@@ -1294,16 +1287,7 @@ describe("qa mock openai server", () => {
         "## Pending user asks",
         "## Exact identifiers",
       );
-      const independent = await expectOpenAiNonStreamingResponsesJson(
-        server,
-        requestFor("session-b"),
-      );
-      if (reasoningOnly) {
-        expect(JSON.stringify(independent)).toContain("reasoning_compaction_summary_fault");
-        expect(JSON.stringify(independent)).not.toContain(recoveredMarker);
-      } else {
-        expect(outputText(independent)).toBe("");
-      }
+      expectFault(await expectOpenAiNonStreamingResponsesJson(server, requestFor("session-b")));
 
       const requests = requireArray(
         await getJson(server, "/debug/requests"),
@@ -2212,17 +2196,13 @@ describe("qa mock openai server", () => {
   });
 
   it.each([
-    {
-      fixture: "single",
-      expectedQuestionId: "deploy_target",
-      expectedMultiSelect: undefined,
-    },
-    { fixture: "multi", expectedQuestionId: "checks", expectedMultiSelect: true },
-  ])("plans the $fixture ask_user Telegram fixture", async (entry) => {
+    ["single", "deploy_target", false],
+    ["multi", "checks", true],
+  ] as const)("plans the %s ask_user Telegram fixture", async (fixture, id, multiSelect) => {
     const server = await startMockServer();
     const response = await readResponse(
       server,
-      `tool search qa check target=ask_user ask_user_fixture=${entry.fixture}. Ask the question.`,
+      `tool search qa check target=ask_user ask_user_fixture=${fixture}. Ask the question.`,
     );
 
     const call = outputItem(await response.json());
@@ -2232,8 +2212,8 @@ describe("qa mock openai server", () => {
     expect(call.name).toBe("ask_user");
     expect(args.questions).toHaveLength(1);
     expect(args.questions?.[0]).toMatchObject({
-      id: entry.expectedQuestionId,
-      ...(entry.expectedMultiSelect ? { multiSelect: true } : {}),
+      id,
+      ...(multiSelect ? { multiSelect: true } : {}),
     });
   });
 
@@ -2363,22 +2343,18 @@ describe("qa mock openai server", () => {
   });
 
   it.each([
-    {
-      name: "baseline",
-      options: undefined,
-      ids: ["claude-opus-4-8", "gpt-5.6-luna", "gpt-4o-transcribe"],
-    },
-    {
-      name: "selected target-era",
-      options: { modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"] },
-      ids: ["gpt-5.5", "gpt-5.5-alt", "gpt-image-1"],
-    },
-  ])("advertises $name models on /v1/models", async ({ options, ids }) => {
+    ["baseline", undefined, ["claude-opus-4-8", "gpt-5.6-luna", "gpt-4o-transcribe"]],
+    [
+      "selected target-era",
+      { modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"] },
+      ["gpt-5.5", "gpt-5.5-alt", "gpt-image-1"],
+    ],
+  ] as const)("advertises %s models on /v1/models", async (_name, options, ids) => {
     const server = await startMockServer(options);
     const body = (await fetchOkJson(`${server.baseUrl}/v1/models`)) as {
       data: Array<{ id: string }>;
     };
-    expect(body.data.map((entry) => entry.id)).toEqual(expect.arrayContaining(ids));
+    expect(body.data.map((entry) => entry.id)).toEqual(expect.arrayContaining([...ids]));
   });
 
   it("transcribes channel audio trigger variants", async () => {
