@@ -5,9 +5,15 @@ import { createMicrophoneMeter } from "./microphone-meter.ts";
 
 const observation = vi.hoisted(() => ({
   intersect: undefined as IntersectionObserverCallback | undefined,
+  resize: undefined as (() => void) | undefined,
 }));
 vi.mock("../../../lib/reactive/observers.ts", () => ({
-  observeResize: () => () => {},
+  observeResize: (_elements: readonly Element[], callback: () => void) => {
+    observation.resize = callback;
+    return () => {
+      observation.resize = undefined;
+    };
+  },
   observeIntersection: (_elements: readonly Element[], callback: IntersectionObserverCallback) => {
     observation.intersect = callback;
     return () => {
@@ -87,6 +93,7 @@ function mount(
     },
   });
   meter.setLevel(level);
+  observation.resize?.();
   return {
     clock,
     drawImage,

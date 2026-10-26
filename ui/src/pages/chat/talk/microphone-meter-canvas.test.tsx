@@ -76,3 +76,48 @@ it("keeps the host and bars while replacing only the status/source canvas lifeti
     }
   }
 });
+
+it("uses CSS while connecting and adopts the live source when the meter becomes active", async () => {
+  const connectingSource = new RealtimeTalkLevelSignal();
+  connectingSource.set(0.2);
+  const [source, setSource] = createSignal(connectingSource);
+  const [status, setStatus] = createSignal<RealtimeTalkStatus>("connecting");
+  const view = mountSolid(() => <MicrophoneActivity status={status()} inputLevel={source()} />);
+  try {
+    await waitForSolid(() =>
+      expect(
+        view.container.querySelector("openclaw-microphone-activity")?.getAttribute("data-level"),
+      ).toBe("0.2"),
+    );
+    expect(renderer.create).not.toHaveBeenCalled();
+    const host = view.container.querySelector("openclaw-microphone-activity");
+    const bars = Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"));
+    connectingSource.set(0.6);
+    expect(host?.getAttribute("data-level")).toBe("0.6");
+
+    setStatus("listening");
+    await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(1));
+    const active = renderer.create.mock.results[0].value;
+    expect(active.setLevel).toHaveBeenLastCalledWith(0.6);
+    expect(Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(
+      bars,
+    );
+
+    setStatus("connecting");
+    await waitForSolid(() => expect(active.dispose).toHaveBeenCalledOnce());
+    expect(renderer.create).toHaveBeenCalledTimes(1);
+    const replacement = new RealtimeTalkLevelSignal();
+    replacement.set(0.35);
+    setSource(replacement);
+    await waitForSolid(() => expect(host?.getAttribute("data-level")).toBe("0.35"));
+    connectingSource.set(0.9);
+    expect(host?.getAttribute("data-level")).toBe("0.35");
+
+    setStatus("thinking");
+    await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(2));
+    expect(renderer.create.mock.calls[1][3]).toBe("thinking");
+    expect(renderer.create.mock.results[1].value.setLevel).toHaveBeenLastCalledWith(0.35);
+  } finally {
+    view.unmount();
+  }
+});

@@ -57,7 +57,11 @@ export function MicrophoneActivity(props: MicrophoneActivityProps) {
     >
       <Repeat count={7}>
         {(index) => (
-          <span ref={(element) => (bars[index] = element)} class="agent-chat__voice-activity-bar" />
+          <span
+            ref={(element) => (bars[index] = element)}
+            class="agent-chat__voice-activity-bar"
+            style={{ "--talk-bar-delay": `${index * -70}ms` }}
+          />
         )}
       </Repeat>
       <Show when={canvasLifetime()} keyed>

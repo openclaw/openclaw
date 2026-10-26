@@ -579,7 +579,25 @@
   pointer-events: none;
 }
 
+@keyframes agent-chat-voice-connecting {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scaleY(0.2);
+  }
+
+  50% {
+    opacity: 0.9;
+    transform: scaleY(0.58);
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
+  .agent-chat__voice-activity[data-status="connecting"] .agent-chat__voice-activity-bar {
+    animation: agent-chat-voice-connecting 1.05s ease-in-out infinite;
+    animation-delay: var(--talk-bar-delay);
+  }
+
   .agent-chat__voice-activity:has(> .agent-chat__voice-activity-canvas[data-ready])
     > .agent-chat__voice-activity-bar {
     visibility: hidden;

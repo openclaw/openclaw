@@ -80,7 +80,7 @@ export function createMicrophoneMeter(
     frame = 0;
   };
   const schedule = () => {
-    if (!frame && presenting()) {
+    if (!frame && geometry.length && presenting()) {
       frame = window.requestAnimationFrame(draw);
     }
   };
@@ -212,7 +212,8 @@ export function createMicrophoneMeter(
     () => stopResolution?.(),
   ];
   observeResolution();
-  refresh();
+  // ResizeObserver supplies initial geometry; eager setup would allocate and
+  // paint both bitmaps again when that first observation arrives.
   return {
     setLevel(next: number) {
       if (animated || level === next) {

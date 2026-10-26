@@ -21,19 +21,17 @@ export function MicrophoneMeterCanvas(props: MicrophoneMeterCanvasProps) {
     if (!host || !canvas) {
       return undefined;
     }
-    const renderer = createMicrophoneMeter(
-      host,
-      canvas,
-      props.readBars(),
-      initialStatus,
-      reducedMotion,
-    );
+    // Connecting is brief and uses the CSS bars without allocating a bitmap.
+    const renderer =
+      initialStatus === "connecting"
+        ? undefined
+        : createMicrophoneMeter(host, canvas, props.readBars(), initialStatus, reducedMotion);
     const setLevel = (level: number) => {
       const value = String(level);
       if (host.dataset.level !== value) {
         host.dataset.level = value;
       }
-      renderer.setLevel(level);
+      renderer?.setLevel(level);
     };
     // The owner's subscription immediately supplies its current level.
     const stop = initialSource?.subscribe(setLevel);
@@ -42,7 +40,7 @@ export function MicrophoneMeterCanvas(props: MicrophoneMeterCanvasProps) {
     }
     return () => {
       stop?.();
-      renderer.dispose();
+      renderer?.dispose();
     };
   });
   return (
