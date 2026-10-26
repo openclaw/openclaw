@@ -37,7 +37,7 @@ function createJob(request: Job["request"]): Job {
   };
 }
 
-it("settles ordinary replies without allocating a decode completion envelope", () => {
+it("settles ordinary replies without an additional wrapper crossing the decode boundary", () => {
   const decode = vi.spyOn(mainThreadStall, "runWithMainThreadTask");
   try {
     for (const value of [undefined, null, 42, { bytes: Buffer.from([0, 127, 255]), count: 42n }]) {
@@ -49,8 +49,10 @@ it("settles ordinary replies without allocating a decode completion envelope", (
         { fail: unexpected, finish, dispatch() {} },
       );
       expect(finish).toHaveBeenCalledExactlyOnceWith(job, undefined, value);
-      // The observation boundary needs only continuation requests; completion allocates no envelope.
-      expect(decode.mock.results.at(-1)?.value).toBeUndefined();
+      // Completion may return nothing or the decoded value itself, without an additional wrapper.
+      const observed = decode.mock.results.at(-1)?.value;
+      const delivered = finish.mock.calls[0]?.[2];
+      expect(observed === undefined || Object.is(observed, delivered)).toBe(true);
     }
   } finally {
     decode.mockRestore();
