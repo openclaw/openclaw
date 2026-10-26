@@ -459,6 +459,10 @@ Permissions. The Permissions row shows the current access mode. Open the top-rig
 open context usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
 permission to change session settings. A reported model-call total remains visible
 when no cost breakdown is available. Missing usage is shown as unknown.
+
+Choose **Chat actions** (⋮) → **Dashboard** to open the current session's
+[dashboard](/web/dashboards) in an embedded Control UI WebView. It requires a
+connected Gateway and uses the same operator identity as the app.
 Tap the model name to open a compact menu above the composer, search by model name,
 ID, or provider, and expand provider groups. Search accepts multiple terms and small
 typos in words of at least four letters, including swapped adjacent letters. Every
