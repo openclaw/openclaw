@@ -113,13 +113,10 @@ it.each([390, 2048])("fits skill rows at %ipx", async (width) => {
   await afterLayout();
   const dropdown = query(".agent-chat__capability-menu");
   const menu = query(".oc-menu", dropdown);
-  expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
+  const scroll = query(".agent-chat__capability-menu-scroll", menu);
+  expect(scroll.scrollHeight).toBeGreaterThan(scroll.clientHeight);
   for (const row of dropdown.querySelectorAll<HTMLElement>('[data-value^="skill:"]')) {
-    expectInside(
-      rect(".agent-chat__capability-menu-label", row),
-      row.getBoundingClientRect(),
-      true,
-    );
+    expectInside(rect(".oc-menu-item__label", row), row.getBoundingClientRect(), true);
   }
   expect(menu.scrollWidth).toBeLessThanOrEqual(menu.clientWidth);
   expect(menu.getBoundingClientRect().right).toBeLessThanOrEqual(width);

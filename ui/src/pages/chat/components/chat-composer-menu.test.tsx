@@ -193,8 +193,13 @@ it("retains the focused capability row and management link through catalog refre
       capabilityMenu: { ...previous.capabilityMenu!, ...capability },
     }));
   await waitForSolid(() => expect(checkbox("Focused skill")).toBeTruthy());
-  for (const name of ["Broken", "Private"]) {
-    expect(view.getByRole("menuitem", { name, hidden: true }).hasAttribute("disabled")).toBe(true);
+  for (const [name, description] of [
+    ["Broken", "deps missing"],
+    ["Private", "not available for this agent"],
+  ]) {
+    expect(
+      view.getByRole("menuitem", { name, description, hidden: true }).hasAttribute("disabled"),
+    ).toBe(true);
   }
   const row = view.container.querySelector<HTMLButtonElement>('[data-value="skill:focused"]')!;
   await waitForSolid(() =>

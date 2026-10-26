@@ -2770,7 +2770,7 @@ describe("chat attachment picker", () => {
     if (!camera) {
       throw new Error("Missing camera capture dialog");
     }
-    const cameraButton = await getAttachmentMenuOption(container, t("chat.composer.takePhoto"));
+    const cameraButton = await getAttachmentMenuOption(container, t("chat.composer.cameraInput"));
     const show = vi.spyOn(camera, "show").mockImplementation(() => undefined);
     const fileClick = vi.spyOn(HTMLInputElement.prototype, "click");
     expect(container.querySelector(".agent-chat__camera-input")).not.toBeNull();

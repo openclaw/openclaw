@@ -63,7 +63,11 @@ function skillRows(
           skill: true,
           checked: skill.enabled,
           disabled: unavailable || menu.mutationBlockedReason !== null,
-          title: menu.mutationBlockedReason,
+          title: skill.missingDeps
+            ? t("chat.composer.menu.depsMissing")
+            : skill.blocked
+              ? t("chat.composer.menu.skillBlocked")
+              : menu.mutationBlockedReason,
         }),
         ...(unavailable ? { type: undefined, checked: undefined, details: undefined } : {}),
       });
