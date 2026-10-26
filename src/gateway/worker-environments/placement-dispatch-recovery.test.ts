@@ -20,7 +20,11 @@ import {
   seedStartingPlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
-import { makeClaimInput, WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
+import {
+  expectPlacement,
+  makeClaimInput,
+  WORKER_PROTOCOL_FEATURES,
+} from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -80,8 +84,7 @@ describe("worker placement restart recovery", () => {
         }
 
         if (scenario === "idle") {
-          expect(placements.get(REQUEST.sessionId)).toMatchObject({
-            state: "reclaimed",
+          expectPlacement(placements, "reclaimed", {
             terminalReason: null,
             recoveryError: null,
             turnClaim: null,
@@ -92,8 +95,7 @@ describe("worker placement restart recovery", () => {
             scenario === "claimed turn" && mode === "startup"
               ? "Active worker turn claim cannot be proven live after gateway restart"
               : `cloud worker disappeared: ${error}`;
-          expect(placements.get(REQUEST.sessionId)).toMatchObject({
-            state: "failed",
+          expectPlacement(placements, "failed", {
             terminalReason: expectedError,
             recoveryError: expectedError,
             turnClaim: null,
@@ -157,8 +159,7 @@ describe("worker placement restart recovery", () => {
       destroy.mockClear();
       await expect(recovery.reclaim(REQUEST)).rejects.toThrow("provider deletion unavailable");
       expect(destroy).toHaveBeenCalledOnce();
-      expect(placements.get(REQUEST.sessionId)).toMatchObject({
-        state: "failed",
+      expectPlacement(placements, "failed", {
         environmentId: ready.environmentId,
         recoveryError: expect.stringContaining("teardown failed"),
       });
@@ -202,8 +203,7 @@ describe("worker placement restart recovery", () => {
         await harness.service.reconcileActive(environment.environmentId);
       }
 
-      expect(harness.placements.current()).toMatchObject({
-        state: "failed",
+      expectPlacement(placements, "failed", {
         environmentId: environment.environmentId,
         activeOwnerEpoch: environment.ownerEpoch,
         recoveryError: expect.stringContaining("node role revoked before stop confirmation"),
@@ -277,15 +277,12 @@ describe("worker placement restart recovery", () => {
         await harness.service.reconcile();
       }
       if (error) {
-        expect(harness.placements.current()).toMatchObject({
-          state: "failed",
-          recoveryError: expect.stringContaining(error),
-        });
+        expectPlacement(placements, "failed", { recoveryError: expect.stringContaining(error) });
         expect(harness.environments.startTunnel).not.toHaveBeenCalled();
         expect(harness.environments.destroy).toHaveBeenCalledWith(environment.environmentId);
         expect(harness.log).not.toContain("placement:adopted");
       } else {
-        expect(harness.placements.current()).toMatchObject({ state: "active", executionMode });
+        expectPlacement(placements, "active", { executionMode });
         expect(supports).toHaveBeenCalledWith("durable-provider", "remote-exec");
         expect(harness.environments.destroy).not.toHaveBeenCalled();
         if (nodeBacked) {
@@ -336,10 +333,7 @@ describe("worker placement restart recovery", () => {
         "current worker launch contract",
       );
 
-      expect(harness.placements.current()).toMatchObject({
-        state: "failed",
-        environmentId: harness.ready.environmentId,
-      });
+      expectPlacement(placements, "failed", { environmentId: harness.ready.environmentId });
       expect(harness.environments.attachSession).not.toHaveBeenCalled();
       expect(harness.environments.stopTunnel).not.toHaveBeenCalledWith(
         unrelatedEnvironment.environmentId,
@@ -372,8 +366,7 @@ describe("worker placement restart recovery", () => {
       harness.log.push("environment:reconcile");
     });
 
-    expect(harness.placements.current()).toMatchObject({
-      state: "active",
+    expectPlacement(placements, "active", {
       environmentId: harness.ready.environmentId,
       activeOwnerEpoch: harness.attached.ownerEpoch,
       workerBundleHash: harness.ready.bootstrapReceipt?.bundleHash,
@@ -402,8 +395,7 @@ describe("worker placement restart recovery", () => {
 
     await harness.service.resumeProvisioning(provisioning, async () => {});
 
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
+    expectPlacement(placements, "failed", {
       recoveryError: expect.stringContaining("execution mode"),
     });
     expect(harness.environments.attachSession).not.toHaveBeenCalled();
@@ -512,7 +504,7 @@ describe("worker placement restart recovery", () => {
 
     await harness.service.reconcile();
 
-    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+    expectPlacement(placements, "failed");
   });
 
   it("tears down provisioning when the recovery authority barrier rejects", async () => {
@@ -526,10 +518,7 @@ describe("worker placement restart recovery", () => {
 
     await harness.service.resumeProvisioning(provisioning, async () => {});
 
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      recoveryError: message,
-    });
+    expectPlacement(placements, "failed", { recoveryError: message });
     expect(harness.environments.attachSession).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
@@ -635,8 +624,7 @@ describe("worker placement restart recovery", () => {
 
       await harness.service.resumeProvisioning(provisioning, async () => {});
 
-      expect(harness.placements.current()).toMatchObject({
-        state: "failed",
+      expectPlacement(placements, "failed", {
         environmentId: provisioning.environmentId,
         recoveryError: expect.stringContaining("failed"),
       });
@@ -664,8 +652,7 @@ describe("worker placement restart recovery", () => {
 
     await restartedHarness.service.reconcile();
 
-    expect(restartedHarness.placements.current()).toMatchObject({
-      state: "failed",
+    expectPlacement(restartedStore, "failed", {
       recoveryError: "Pending cloud workspace result lost its worker: session-1",
     });
     expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
@@ -688,7 +675,7 @@ describe("worker placement restart recovery", () => {
 
     await harness.service.reconcile();
 
-    expect(harness.placements.current()).toMatchObject({ state: "reclaimed" });
+    expectPlacement(placements, "reclaimed");
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
@@ -844,7 +831,7 @@ describe("worker placement restart recovery", () => {
       await recovered.service.reconcile(restart ? "startup" : undefined);
 
       expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
-      expect(recovered.placements.current()).toMatchObject({ state: "reclaimed", turnClaim: null });
+      expectPlacement(restartedStore, "reclaimed", { turnClaim: null });
       expect(recovered.environments.startTunnel).not.toHaveBeenCalled();
       expect(recovered.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
       expect(await fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).toBe(

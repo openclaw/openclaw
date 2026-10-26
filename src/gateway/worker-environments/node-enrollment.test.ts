@@ -24,15 +24,10 @@ import {
   createArtifactTransferHttpCallback,
   handleArtifactTransferHttpRequest,
 } from "./artifact-transfer-http.js";
-import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
+import { useNodeBootstrapArtifactFixtures } from "./node-bootstrap-artifact.test-support.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
-
-// mock-isolation: enrollment authority fixtures do not resolve synthetic packages from npm.
-vi.mock("./node-bootstrap-install-lock.js", () => ({
-  prepareNodeBootstrapInstallLock: async () => undefined,
-}));
 
 vi.mock("../../infra/device-bootstrap.js", () => ({
   revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
@@ -80,7 +75,7 @@ describe("worker node enrollment", () => {
   let store: WorkerEnvironmentStore;
   let transfer: ReturnType<typeof createWorkerBootstrapArtifactTransferService>;
   let managers: ReturnType<typeof createWorkerNodeEnrollmentManager>[];
-  let artifactProviders: ReturnType<typeof createNodeBootstrapArtifactProvider>[];
+  const bootstrapArtifacts = useNodeBootstrapArtifactFixtures();
 
   const artifact = () => ({
     tarballPath: path.join(root, "node-runtime.tgz"),
@@ -144,55 +139,12 @@ describe("worker node enrollment", () => {
     };
   };
 
-  const createArtifactProvider = async () => {
-    const packageRoot = path.join(root, "gateway");
-    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-    const files = {
-      "package.json": JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module" }),
-      "openclaw.mjs": 'import "./dist/entry.js";',
-      "node-version.mjs": "export const supported = true;",
-      "node-sqlite.mjs": "export const probe = true;",
-      "node-host-launcher.mjs": "export const launcher = true;",
-      "node-runtime-update.mjs": "export const update = true;",
-      "node-runtime-recovery.mjs": "export const recovery = true;",
-      ...Object.fromEntries(
-        [
-          "cli-parent-lifetime",
-          "cli-root-options",
-          "cli-invocation",
-          "node-runtime-env",
-          "node-compile-cache",
-          "gateway-run-argv",
-          "gateway-shutdown-budget",
-        ].map((name) => [name + ".mjs", "export {};"]),
-      ),
-      "dist/entry.js": "export const ready = true;",
-      "dist/build-info.json": JSON.stringify({
-        version: "2026.8.1",
-        buildId: "gateway-source-build",
-      }),
-    };
-    await Promise.all(
-      Object.entries(files).map(([name, content]) =>
-        fs.writeFile(path.join(packageRoot, name), content),
-      ),
-    );
-    const provider = createNodeBootstrapArtifactProvider({
-      packageRoot,
-      runningBuildId: "gateway-source-build",
-      plugins: [],
-    });
-    artifactProviders.push(provider);
-    return provider;
-  };
-
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-node-enrollment-"));
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     transfer = createWorkerBootstrapArtifactTransferService();
     managers = [];
-    artifactProviders = [];
     await fs.writeFile(artifact().tarballPath, "x");
     await fs.writeFile(bundle().tarballPath, "worker");
   });
@@ -201,7 +153,6 @@ describe("worker node enrollment", () => {
     for (const manager of managers) {
       manager.stop();
     }
-    await Promise.all(artifactProviders.map((provider) => provider.close()));
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -222,7 +173,7 @@ describe("worker node enrollment", () => {
 
   it("prepares requested-state artifacts without enrollment or transfer grants", async () => {
     const record = await createRequested();
-    const provider = await createArtifactProvider();
+    const { provider } = await bootstrapArtifacts.fixture();
     const manager = createManager({
       prepareArtifact: async (_record, signal) => await provider.prepare(signal),
     });
@@ -245,7 +196,7 @@ describe("worker node enrollment", () => {
     "cancels requested-state preflight on %s while its shared producer drains",
     async (reason) => {
       const record = await createRequested();
-      const provider = await createArtifactProvider();
+      const { provider } = await bootstrapArtifacts.fixture();
       const stagingRoot = path.join(root, "held-artifact");
       await fs.mkdir(stagingRoot);
       const entered = createDeferredCore();
