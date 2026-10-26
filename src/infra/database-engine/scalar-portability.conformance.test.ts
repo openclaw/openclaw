@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { DebugProxyCaptureKernel } from "../../proxy-capture/store.kernel.js";
-import type { CaptureSessionRecord } from "../../proxy-capture/types.js";
 import {
   readSkillUsageInDatabase,
   recordSkillUsageInDatabase,
@@ -69,31 +68,23 @@ for (const engine of ["sqlite", "postgres"] as const) {
             blobDir: database.path,
             runWrite: (operation) => runOpenClawStateWriteTransaction(operation, { database }),
           });
-          const session: CaptureSessionRecord = {
-            id: "scalar-capture-session",
-            startedAt: 200,
-            mode: "implicit",
-            sourceScope: "openclaw",
-            sourceProcess: "synthetic-initial",
-          };
-          capture.upsertSession(session);
-          capture.upsertSession({
-            ...session,
-            startedAt: 100,
-            mode: "proxy",
-            endedAt: 250,
-            sourceProcess: "synthetic-earlier",
-            proxyUrl: "http://synthetic.invalid",
-          });
-          capture.upsertSession({
-            ...session,
-            startedAt: 300,
-            mode: "replacement",
-            sourceProcess: "synthetic-latest",
-          });
+          const id = "scalar-capture-session";
+          for (const session of [
+            { startedAt: 200, mode: "implicit", sourceProcess: "synthetic-initial" },
+            {
+              startedAt: 100,
+              mode: "proxy",
+              endedAt: 250,
+              sourceProcess: "synthetic-earlier",
+              proxyUrl: "http://synthetic.invalid",
+            },
+            { startedAt: 300, mode: "replacement", sourceProcess: "synthetic-latest" },
+          ]) {
+            capture.upsertSession({ id, sourceScope: "openclaw", ...session });
+          }
           expect(capture.listSessions()).toEqual([
             {
-              id: session.id,
+              id,
               startedAt: 100,
               endedAt: null,
               mode: "proxy",

@@ -18,6 +18,7 @@ import { admitStoreSearch } from "./search-admission.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const cacheRow = (scope: string, key: string, value_json: string) => ({ scope, key, value_json });
 
 it("backs up a schema-36 store without requiring the later cold archive chunk table", async () => {
   const descriptor = await loadAgentPortDescriptor(36);
@@ -49,27 +50,24 @@ it.each([21, currentVersion])(
     const descriptor = await loadAgentPortDescriptor();
     const historical = version === 21;
     const retained = historical
-      ? [{ scope: "retained", key: "key", value_json: '{"value":1}' }]
+      ? [cacheRow("retained", "key", '{"value":1}')]
       : [
-          {
-            scope: USAGE_COST_PARTITION_SCOPE,
-            key: usageCostPartitionKey('session-"snow:雪', "2026-10-01"),
-            value_json: '{"current":true}',
-          },
-          { scope: "talk-client-voice-sessions", key: "voice", value_json: '{"status":"closed"}' },
+          cacheRow(
+            USAGE_COST_PARTITION_SCOPE,
+            usageCostPartitionKey('session-"snow:雪', "2026-10-01"),
+            '{"current":true}',
+          ),
+          cacheRow("talk-client-voice-sessions", "voice", '{"status":"closed"}'),
         ];
     {
       using db = openNodeSqliteDatabase(source);
       if (historical) {
         seedOpenClawAgentSchemaV21(db);
       } else {
-        db.exec(
-          descriptor.sqlite +
-            `
+        db.exec(`${descriptor.sqlite}
       PRAGMA user_version = ${currentVersion};
       INSERT INTO schema_meta VALUES ('primary', 'agent', ${currentVersion}, 'main', NULL, 1, 1);
-    `,
-        );
+    `);
       }
       const insert = db.prepare(
         "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",
