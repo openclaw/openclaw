@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
-  AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2 as AttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -8,32 +8,27 @@ import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-too
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import {
-  createCopilotAgentHarness as createCopilotAgentHarnessImpl,
-  type CopilotSessionBinding,
+  createCopilotAgentHarness as createHarness,
+  type CopilotSessionBinding as Binding,
 } from "./harness.js";
-import { createCopilotTestHostCapabilities } from "./src/host-capability.test-support.js";
+import { createCopilotTestHostCapabilities as createTestHost } from "./src/host-capability.test-support.js";
 
 type CanonicalAttemptResult = Extract<AgentHarnessAttemptResult, { terminal: unknown }>;
 
 export function makeSessionStoreMock() {
-  const entries = new Map<string, CopilotSessionBinding>();
+  const entries = new Map<string, Binding>();
   return {
     entries,
     store: {
-      register: vi.fn(async (key: string, value: CopilotSessionBinding) => {
-        entries.set(key, value);
-      }),
+      register: vi.fn(async (key: string, value: Binding) => void entries.set(key, value)),
       lookup: vi.fn(async (key: string) => entries.get(key)),
       delete: vi.fn(async (key: string) => entries.delete(key)),
     },
   };
 }
 
-export function asAttemptParams(value: Record<string, unknown>): AgentHarnessAttemptParams {
-  return {
-    hostCapabilities: createCopilotTestHostCapabilities(),
-    ...value,
-  } as unknown as AgentHarnessAttemptParams;
+export function asAttemptParams(value: Record<string, unknown>): AttemptParams {
+  return { hostCapabilities: createTestHost(), ...value } as unknown as AttemptParams;
 }
 
 export function asCompleteAttemptResult(value: Record<string, unknown>): CanonicalAttemptResult {
@@ -55,10 +50,8 @@ export function asCompleteAttemptResult(value: Record<string, unknown>): Canonic
   } as CanonicalAttemptResult;
 }
 
-export function createCopilotAgentHarness(
-  options?: Parameters<typeof createCopilotAgentHarnessImpl>[0],
-) {
-  const harness = createCopilotAgentHarnessImpl(options);
+export function createCopilotAgentHarness(options?: Parameters<typeof createHarness>[0]) {
+  const harness = createHarness(options);
   if (typeof harness.compact !== "function") {
     return harness;
   }
@@ -71,8 +64,8 @@ export function createCopilotAgentHarness(
   return {
     ...harness,
     compact: (
-      params: AgentHarnessCompactParams &
-        Partial<Pick<AgentHarnessCompactParams<2>, "hostCapabilities">>,
+      params: Omit<Parameters<typeof compact>[0], "hostCapabilities"> &
+        Partial<Pick<Parameters<typeof compact>[0], "hostCapabilities">>,
     ) => {
       if (params.hostCapabilities) {
         return compact({ ...params, hostCapabilities: params.hostCapabilities });
@@ -106,7 +99,7 @@ export function createCopilotAgentHarness(
   };
 }
 
-export function asFinalizationAttempt(params: AgentHarnessAttemptParams) {
+export function asFinalizationAttempt(params: AttemptParams) {
   const { hostCapabilities: _hostCapabilities, ...attempt } = params;
   return attempt;
 }
