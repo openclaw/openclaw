@@ -147,7 +147,11 @@ it.each([false, true])(
 
     const finished = vi.fn();
     void settled?.then(finished);
-    void (rejectPrompt ? prompt.reject(new Error("prompt failed")) : prompt.resolve());
+    if (rejectPrompt) {
+      prompt.reject(new Error("prompt failed"));
+    } else {
+      prompt.resolve();
+    }
     await Promise.resolve();
     expect(finished).not.toHaveBeenCalled();
 
