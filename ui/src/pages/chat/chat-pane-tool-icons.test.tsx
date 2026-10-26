@@ -3,11 +3,13 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import * as iconLoader from "../plugins/icon-loader.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
-import "./chat-pane.tsx";
+import { ChatPaneView } from "./chat-pane.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -43,7 +45,7 @@ it("renders plugin artwork for accepted history absent from the capped session l
   });
   const client = expectDefined(fixture.context.gateway.snapshot.client, "pane Gateway client");
   const originalRequest = client.request.bind(client);
-  vi.spyOn(client, "request").mockImplementation(async (method, ...args) => {
+  const request = vi.spyOn(client, "request").mockImplementation(async (method, ...args) => {
     if (method === "tools.effective") {
       return {
         agentId: "main",
@@ -90,14 +92,21 @@ it("renders plugin artwork for accepted history absent from the capped session l
   vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
   const container = document.body.appendChild(createApplicationContextProvider(fixture.context));
   onTestFinished(() => container.remove());
-  container.append(
-    Object.assign(document.createElement("openclaw-chat-pane"), {
-      paneId: "tool-icons",
-      sessionKey,
-      active: true,
-    }),
+  const view = mountSolid(
+    () => (
+      <ApplicationProvider value={fixture.context}>
+        <ChatPaneView paneId="tool-icons" sessionKey={sessionKey} active />
+      </ApplicationProvider>
+    ),
+    { container },
   );
+  onTestFinished(view.unmount);
   await waitForSolid(() => {
-    expect(container.querySelector('img[src="blob:tool-icon"]')).not.toBeNull();
+    expect(request).toHaveBeenCalledWith(
+      "tools.effective",
+      { sessionKey, agentId: "main" },
+      expect.anything(),
+    );
+    expect(view.container.querySelector('img[src="blob:tool-icon"]')).not.toBeNull();
   });
 });
