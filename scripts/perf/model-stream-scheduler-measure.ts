@@ -3,9 +3,8 @@
  * scripts/perf/model-stream-scheduler-measure.ts --streams 8 --events 2000.
  * Add --allocations for a separate sampled-allocation pass; its GC/CPU is diagnostic.
  * Eight concurrent provider iterators exercise readiness and the shared event budget.
- * No model service is contacted. Use transcript-broadcast-measure.ts with
- * --http-continuation --allocations --heap-sampling-interval 32768 and a synthetic
- * Team-shaped fixture for unredacted Gateway attribution (allocation-soak.heapprofile).
+ * No model service is contacted. Use --events 20000 for the counterbalanced
+ * timing and allocation comparisons.
  */
 import assert from "node:assert/strict";
 import { Session, type HeapProfiler } from "node:inspector/promises";
