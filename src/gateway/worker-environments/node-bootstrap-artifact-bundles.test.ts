@@ -25,6 +25,12 @@ vi.mock("./node-bootstrap-artifact-worker.js", async () => {
 });
 
 const { fixture, createProvider } = useNodeBootstrapArtifactFixtures();
+const cjsPackage = (name: string, extra: Record<string, unknown> = {}) => ({
+  name,
+  version: "1.2.3",
+  main: "index.cjs",
+  ...extra,
+});
 
 async function runNode(root: string) {
   const { stdout } = await promisify(execFile)(process.execPath, [path.join(root, "openclaw.mjs")]);
@@ -52,38 +58,27 @@ describe("node bootstrap bundled dependency ownership", () => {
     });
     const bundledRoot = path.join(packageRoot, "node_modules", name);
     await writeFiles(bundledRoot, {
-      "package.json": {
-        name,
-        version: "1.2.3",
-        main: "index.cjs",
+      "package.json": cjsPackage(name, {
         dependencies: { "transitive-runtime": "^1.2.3" },
         optionalDependencies: { "unavailable-platform-runtime": "1.0.0" },
-      },
+      }),
       "index.cjs":
         'exports.marker = "bundle-transitive"; exports.run = () => require("transitive-runtime");',
-      "node_modules/transitive-runtime/package.json": {
-        name: "transitive-runtime",
-        version: "1.2.3",
-        main: "index.cjs",
+      "node_modules/transitive-runtime/package.json": cjsPackage("transitive-runtime", {
         dependencies: { "@fixture/codec": "2.0.0" },
-      },
+      }),
       "node_modules/transitive-runtime/index.cjs":
         'module.exports = require("@fixture/codec").value;',
-      "node_modules/transitive-runtime/node_modules/@fixture/codec/package.json": {
-        name,
+      "node_modules/transitive-runtime/node_modules/@fixture/codec/package.json": cjsPackage(name, {
         version: "2.0.0",
-        main: "index.cjs",
         dependencies: { "leaf-runtime": "1.2.3" },
-      },
+      }),
       "node_modules/transitive-runtime/node_modules/@fixture/codec/index.cjs":
         'exports.marker = "nearer-decoy"; exports.value = require("leaf-runtime");',
       "node_modules/transitive-runtime/node_modules/@fixture/codec/node_modules/leaf-runtime/package.json":
-        {
-          name: "leaf-runtime",
-          version: "1.2.3",
-          main: "index.cjs",
+        cjsPackage("leaf-runtime", {
           dependencies: { "@fixture/codec": "1.2.3" },
-        },
+        }),
       "node_modules/transitive-runtime/node_modules/@fixture/codec/node_modules/leaf-runtime/index.cjs":
         'module.exports = require("@fixture/codec").marker;',
     });
@@ -94,11 +89,9 @@ describe("node bootstrap bundled dependency ownership", () => {
     await fs.mkdir(cycleModules, { recursive: true });
     await fs.symlink(bundledRoot, path.join(cycleModules, "codec"), "junction");
     await writeFiles(packageRoot, {
-      "node_modules/transitive-runtime/package.json": {
-        name: "transitive-runtime",
+      "node_modules/transitive-runtime/package.json": cjsPackage("transitive-runtime", {
         version: "2.0.0",
-        main: "index.cjs",
-      },
+      }),
       "node_modules/transitive-runtime/index.cjs": 'module.exports = "root-decoy";',
       "dist/entry.js": `import codec from "${name}"; console.log(codec.run());`,
     });
@@ -149,18 +142,11 @@ describe("node bootstrap bundled dependency ownership", () => {
     });
     const bundledRoot = path.join(packageRoot, "node_modules", name);
     await writeFiles(bundledRoot, {
-      "package.json": {
-        name,
-        version: "1.2.3",
-        type: "commonjs",
-        main: "./src/index.js",
-      },
+      "package.json": cjsPackage(name, { type: "commonjs", main: "./src/index.js" }),
       "src/index.js": 'module.exports = require("codec-internal");',
-      "src/node_modules/codec-internal/package.json": {
-        name: "codec-internal",
-        version: "1.2.3",
+      "src/node_modules/codec-internal/package.json": cjsPackage("codec-internal", {
         main: "./index.js",
-      },
+      }),
       "src/node_modules/codec-internal/index.js": 'module.exports = "bundled-internal";',
     });
     await write(packageRoot, "dist/entry.js", `import result from "${name}"; console.log(result);`);
