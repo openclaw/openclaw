@@ -140,6 +140,8 @@ describe("production lint suppressions", () => {
         "extensions/codex/session-history-worker-runtime.ts|no-warning-comments|1",
         "extensions/codex/src/app-server/run-attempt-turn-request.ts|preserve-caught-error|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
+        // Markdown rendering sorts fresh private arrays without copying them again.
+        "extensions/discord/src/markdown.ts|unicorn/no-array-sort|2",
         "extensions/discord/src/outbound-adapter.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
         // Ranking sorts private intermediate arrays; shared page order still uses a copy.
         "extensions/knowledge/src/memory-index.ts|unicorn/no-array-sort|7",
@@ -147,9 +149,15 @@ describe("production lint suppressions", () => {
         "extensions/memory-core/src/memory/manager-embedding-ops.ts|unicorn/no-array-fill-with-reference-type|1",
         "extensions/nostr/src/nostr-profile-url-safety.ts|no-warning-comments|1",
         "extensions/qa-lab/src/gateway-child-setup.ts|preserve-caught-error|1",
+        // Chronological history reverses only fresh slice results, preserving API response arrays.
+        "extensions/slack/src/monitor/message-handler/prepare-dm-history.ts|unicorn/no-array-reverse|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
+        "extensions/slack/src/monitor/thread.ts|unicorn/no-array-reverse|1",
         // The renderer sorts only fresh Set-spread/filter arrays, preserving caller-owned entities.
         "extensions/telegram/src/bot/inbound-text-entities.ts|unicorn/no-array-sort|3",
+        // Thread assembly orders fresh Map-spread arrays without mutating posts or caller inputs.
+        "extensions/x/src/thread.ts|unicorn/no-array-reverse|1",
+        "extensions/x/src/thread.ts|unicorn/no-array-sort|2",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
         "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs|typescript/unbound-method|2",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",
