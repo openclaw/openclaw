@@ -2,10 +2,8 @@ import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { LruCache } from "../infra/lru-cache.js";
-import {
-  COMMAND_PALETTE_SHORTCUTS,
-  createKeyboardShortcutMatcher,
-} from "../shared/keyboard-shortcuts.js";
+import { KEYBOARD_SHORTCUT_MATCHER_SOURCE } from "../shared/keyboard-shortcuts.generated.js";
+import { COMMAND_PALETTE_SHORTCUTS } from "../shared/keyboard-shortcuts.js";
 import { WIDGET_THEME_MESSAGE_TYPE } from "../shared/widget-theme.js";
 import { buildSandboxWidgetScrollBridgeHtml } from "./sandbox-widget-scroll-bridge.js";
 
@@ -48,7 +46,7 @@ function buildSandboxShortcutBridgeHtml(): string {
   const fields=["key","code","keyCode","isComposing","metaKey","ctrlKey","altKey","shiftKey"];
   const getters=fields.map(name=>descriptor(KeyboardEvent.prototype,name).get);
   const combos=${JSON.stringify(COMMAND_PALETTE_SHORTCUTS)};
-  const matcher=(${createKeyboardShortcutMatcher.toString()})();
+  const matcher=(${KEYBOARD_SHORTCUT_MATCHER_SOURCE})();
   const applePlatform=matcher.isApplePlatform();
   let nonce="";
   let returnFocus=null;
